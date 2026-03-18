@@ -1,0 +1,63 @@
+// Shared enums used across multiple modules
+
+enum UserRole {
+  CUSTOMER
+  SELLER
+  SELLER_STAFF
+  ADMIN
+  SUPPORT
+  AFFILIATE
+  FRANCHISE
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum SellerStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum FileClassification {
+  PRODUCT_IMAGE
+  PRODUCT_DOCUMENT
+  KYC_DOCUMENT
+  QC_EVIDENCE
+  SELLER_LOGO
+  RETURN_EVIDENCE
+  GENERAL
+}
+
+enum ProductStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum VariantStatus {
+  DRAFT
+  ACTIVE
+  OUT_OF_STOCK
+  DISABLED
+  ARCHIVED
+}
+
+enum ModerationStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+}

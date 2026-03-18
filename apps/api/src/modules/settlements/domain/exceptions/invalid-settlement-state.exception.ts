@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class InvalidSettlementStateException extends DomainException { constructor() { super('Invalid settlement state', 'INVALID_SETTLEMENT_STATE'); } }

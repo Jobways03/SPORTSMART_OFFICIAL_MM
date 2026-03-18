@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class SettlementRunNotFoundException extends DomainException { constructor() { super('Settlement run not found', 'SETTLEMENT_RUN_NOT_FOUND'); } }

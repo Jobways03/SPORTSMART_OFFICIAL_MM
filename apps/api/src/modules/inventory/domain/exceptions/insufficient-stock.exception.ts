@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class InsufficientStockException extends DomainException { constructor() { super('Insufficient stock', 'INSUFFICIENT_STOCK'); } }

@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class RefundNotAllowedException extends DomainException { constructor() { super('Refund not allowed', 'REFUND_NOT_ALLOWED'); } }

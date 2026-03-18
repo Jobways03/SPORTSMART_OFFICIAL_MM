@@ -1,0 +1,27 @@
+{
+  "name": "sportsmart-marketplace",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "format": "turbo run format"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma"
+    ]
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^7.0.11",
+    "turbo": "^2.0.0"
+  },
+  "dependencies": {
+    "nodemailer": "^8.0.2"
+  }
+}

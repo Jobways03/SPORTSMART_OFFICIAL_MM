@@ -1,0 +1,60 @@
+// ============================================
+// Commission Module - owned tables
+// ============================================
+
+enum CommissionType {
+  PERCENTAGE
+  FIXED
+  PERCENTAGE_PLUS_FIXED
+  FIXED_PLUS_PERCENTAGE
+}
+
+model CommissionSetting {
+  id                    String         @id @default("global")
+  commissionType        CommissionType @default(PERCENTAGE) @map("commission_type")
+  commissionValue       Decimal        @default(20) @map("commission_value") @db.Decimal(10, 2)
+  secondCommissionValue Decimal        @default(0) @map("second_commission_value") @db.Decimal(10, 2)
+  fixedCommissionType   String         @default("Product") @map("fixed_commission_type")
+  enableMaxCommission   Boolean        @default(false) @map("enable_max_commission")
+  maxCommissionAmount   Decimal?       @map("max_commission_amount") @db.Decimal(10, 2)
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+
+  @@map("commission_settings")
+}
+
+model CommissionRecord {
+  id                   String         @id @default(uuid())
+  orderItemId          String         @unique @map("order_item_id")
+  subOrderId           String         @map("sub_order_id")
+  masterOrderId        String         @map("master_order_id")
+  sellerId             String         @map("seller_id")
+  productId            String         @map("product_id")
+  productTitle         String         @map("product_title")
+  orderNumber          String         @map("order_number")
+  sellerName           String         @map("seller_name")
+  unitPrice            Decimal        @map("unit_price") @db.Decimal(10, 2)
+  quantity             Int
+  totalPrice           Decimal        @map("total_price") @db.Decimal(10, 2)
+  commissionType       CommissionType @map("commission_type")
+  commissionRate       String         @map("commission_rate")
+  unitCommission       Decimal        @map("unit_commission") @db.Decimal(10, 2)
+  totalCommission      Decimal        @map("total_commission") @db.Decimal(10, 2)
+  adminEarning         Decimal        @map("admin_earning") @db.Decimal(10, 2)
+  productEarning       Decimal        @map("product_earning") @db.Decimal(10, 2)
+  refundedAdminEarning Decimal        @default(0) @map("refunded_admin_earning") @db.Decimal(10, 2)
+  vatOnCommission      Decimal        @default(0) @map("vat_on_commission") @db.Decimal(10, 2)
+  taxCommission        Decimal        @default(0) @map("tax_commission") @db.Decimal(10, 2)
+  shippingCommission   Decimal        @default(0) @map("shipping_commission") @db.Decimal(10, 2)
+  createdAt            DateTime       @default(now()) @map("created_at")
+
+  orderItem   OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  subOrder    SubOrder    @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  seller      Seller      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId])
+  @@index([masterOrderId])
+  @@index([subOrderId])
+  @@index([orderItemId])
+  @@map("commission_records")
+}

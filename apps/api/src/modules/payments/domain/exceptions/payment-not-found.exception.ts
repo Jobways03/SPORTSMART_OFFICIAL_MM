@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class PaymentNotFoundException extends DomainException { constructor() { super('Payment not found', 'PAYMENT_NOT_FOUND'); } }

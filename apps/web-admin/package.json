@@ -1,0 +1,14 @@
+{
+  "name": "@sportsmart/web-admin",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3003",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "react-quill-new": "^3.8.3"
+  }
+}

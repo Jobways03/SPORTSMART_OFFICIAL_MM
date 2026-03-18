@@ -1,0 +1,1338 @@
+# Seller Profile Management — Frontend Implementation Specification
+
+---
+
+
+## 1. Overview
+
+This module provides the complete seller-facing profile management experience within the **web-seller** Next.js application (port 3002). It enables authenticated sellers to view, edit, and maintain their business profile including identity details, store contact information, physical address, rich-text store descriptions, return/shipping policies, profile image, and shop logo.
+
+The module integrates with 6 backend endpoints, handles two distinct interaction patterns (form-based text updates and file-based media uploads), and enforces status-based access restrictions that mirror backend authorization rules.
+
+**Target users:** Registered sellers with ACTIVE, INACTIVE, or PENDING_APPROVAL status.
+**Blocked users:** Sellers with SUSPENDED or DEACTIVATED status receive read-only access with contextual messaging.
+
+---
+
+## 2. Module Responsibilities
+
+The frontend module is responsible for:
+
+- Fetching and displaying the complete seller profile on page load
+- Prefilling all form fields with current profile data
+- Providing sectioned, scannable form layout for profile editing
+- Validating all editable fields before submission
+- Submitting only changed fields via PATCH to the profile API
+- Handling profile image and shop logo upload/replace/remove via separate media APIs
+- Displaying profile completion percentage with visual progress indicator
+- Tracking dirty state and warning on unsaved navigation
+- Rendering rich text content in editors for descriptions and policy
+- Enforcing authorization-aware field editability based on seller status
+- Providing consistent error feedback at field, section, and page levels
+- Supporting responsive layout across mobile, tablet, and desktop
+
+The frontend is **not** responsible for:
+- HTML sanitization (backend handles this)
+- Profile completion calculation (backend returns computed value)
+- Status transitions (backend enforces business rules)
+- Image processing or transformation (Cloudinary handles this)
+
+---
+
+## 3. Seller Profile Page Structure
+
+### 3.1 Page Layout
+
+┌─────────────────────────────────────────────────────┐
+│  Page Header                                        │
+│  "My Profile"                                       │
+│  "Manage your seller account and store details"     │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Profile Completion Bar  [██████████░░] 85%  │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  ┌──────────────────┐  ┌──────────────────────┐     │
+│  │  Profile Image   │  │  Shop Logo           │     │
+│  │  Upload Card     │  │  Upload Card         │     │
+│  └──────────────────┘  └──────────────────────┘     │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Account Details Card                        │    │
+│  │  (sellerName, shopName, email, phone)        │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Store Address Card                          │    │
+│  │  (address, city, state, country, zip)        │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Store Description Card                      │    │
+│  │  (short desc editor, detailed desc editor)   │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Seller Policy Card                          │    │
+│  │  (policy editor)                             │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  [Save Changes]          Status: ACTIVE ●    │    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+
+### 3.2 Section Card Pattern
+
+Every section follows a consistent card structure:
+- **Card header**: Section title (e.g., "Account Details") with optional subtitle
+- **Card body**: Form fields arranged in a responsive grid
+- **Field pattern**: Label above input, validation message below input, optional helper text between label and input
+- **Visual separator**: Cards separated by consistent vertical spacing (24px desktop, 16px mobile)
+
+### 3.3 Responsive Breakpoints
+
+| Breakpoint | Layout |
+|---|---|
+| Desktop (>=1024px) | Two-column grid for media cards; single-column stacked cards for form sections; fields in 2-column grid within cards where logical |
+| Tablet (768-1023px) | Single-column cards; fields in 2-column grid within cards |
+| Mobile (<768px) | Single-column everything; full-width fields; media cards stacked vertically |
+
+### 3.4 Page Load Sequence
+
+1. Render page shell with skeleton placeholders for every section
+2. Fire GET /api/v1/seller/profile with auth token
+3. On success: hydrate all form fields, media previews, status badge, completion bar
+4. On failure: hide skeletons, show full-page error state with "Retry" button
+5. Track initialProfileData snapshot for dirty-state comparison
+
+---
+
+## 4. Account Details Section Specification
+
+### 4.1 Fields
+
+| Field | Input Type | Editable | Required |
+|---|---|---|---|
+| email | Text input | **No** — read-only display | N/A |
+| sellerName | Text input | Yes | Yes |
+| sellerShopName | Text input | Yes | Yes |
+| sellerContactCountryCode | Select dropdown | Yes | Yes (paired with phone) |
+| sellerContactNumber | Text input | Yes | Yes (paired with country code) |
+
+### 4.2 Email Display
+
+- Render as a styled read-only text field with a subtle lock icon or muted background
+- Do not render as a disabled <input> (screen readers announce disabled inputs poorly)
+- Use a <div> or <span> styled to match the field grid, with aria-label="Email address (read-only)"
+- Value comes from profile fetch, never editable
+- If email is null/empty (should not happen), display "—" placeholder
+
+### 4.3 Phone Input Group
+
+The country code and contact number must render as a visually unified phone input:
+
+┌──────────┬────────────────────────────────┐
+│  +91  ▼  │  9876543210                    │
+└──────────┴────────────────────────────────┘
+
+- Country code select: Dropdown with common codes. Values include the + prefix (e.g., +91, +1, +44). Searchable/filterable if more than 15 options.
+- Contact number input: type="tel", inputMode="numeric", auto-strips non-digit characters on change
+- Both fields share a single label: "Contact Number"
+- Validation message appears below the combined group, not between the two inputs
+- **Cross-field rule**: If either field has a value, both become required. If both are empty, both are optional. This mirrors the backend cross-validation.
+
+### 4.4 Validation Rules
+
+**sellerName:**
+- Trim whitespace before validation
+- Required: "Seller name is required"
+- Min 2 characters: "Seller name must be at least 2 characters"
+- Max 100 characters: "Seller name must not exceed 100 characters"
+- Pattern /^[a-zA-Z][a-zA-Z\s.\-]*$/: "Seller name must start with a letter and contain only letters, spaces, dots, or hyphens"
+- Reject all-whitespace: "Seller name is required" (after trim, length becomes 0)
+
+**sellerShopName:**
+- Trim whitespace before validation
+- Required: "Shop name is required"
+- Min 2 characters: "Shop name must be at least 2 characters"
+- Max 150 characters: "Shop name must not exceed 150 characters"
+- Pattern /^[a-zA-Z0-9][a-zA-Z0-9\s.\-&']*$/: "Shop name must start with a letter or number and contain only letters, numbers, spaces, dots, hyphens, ampersands, or apostrophes"
+- Reject all-whitespace: "Shop name is required"
+
+**sellerContactCountryCode:**
+- Required if sellerContactNumber has a value: "Country code is required with phone number"
+- Must match /^\+\d{1,4}$/: "Invalid country code format"
+- If selected from dropdown, format validation is implicit
+
+**sellerContactNumber:**
+- Required if sellerContactCountryCode has a value: "Phone number is required with country code"
+- Strip all non-digit characters before validation and submission
+- After stripping, must match /^\d+$/: "Phone number must contain only digits"
+- Min 7 digits: "Phone number must be at least 7 digits"
+- Max 15 digits: "Phone number must not exceed 15 digits"
+- Reject all-whitespace/all-symbol input: "Phone number is required"
+
+### 4.5 Validation Timing
+
+- **On blur**: Validate the blurred field immediately. For the phone group, validate cross-field dependency only when both fields have been touched.
+- **On submit**: Validate all fields. Show first error for each invalid field.
+- **On correction**: Clear field error as soon as the user modifies the field value (optimistic clearing). Re-validate on next blur.
+
+---
+
+## 5. Store Address Section Specification
+
+### 5.1 Fields
+
+| Field | Input Type | Required |
+|---|---|---|
+| storeAddress | Textarea (3-4 rows) | Yes |
+| city | Text input | Yes |
+| state | Text input | Yes |
+| country | Text input | Yes |
+| sellerZipCode | Text input | Yes |
+
+### 5.2 Layout
+
+- storeAddress: Full width within the card
+- city and state: Side by side (2-column) on desktop/tablet, stacked on mobile
+- country and sellerZipCode: Side by side (2-column) on desktop/tablet, stacked on mobile
+
+### 5.3 Validation Rules
+
+**storeAddress:**
+- Trim whitespace
+- Required: "Store address is required"
+- Min 5 characters: "Store address must be at least 5 characters"
+- Max 500 characters: "Store address must not exceed 500 characters"
+- Reject all-whitespace: "Store address is required"
+
+**city:**
+- Trim whitespace
+- Required: "City is required"
+- Min 2 characters: "City must be at least 2 characters"
+- Max 100 characters: "City must not exceed 100 characters"
+- Pattern /^[a-zA-Z][a-zA-Z\s\-.']*$/: "City must start with a letter and contain only letters, spaces, hyphens, dots, or apostrophes"
+- Reject numeric-only: caught by pattern (must start with letter)
+
+**state:**
+- Same rules as city with label substituted: "State is required", etc.
+- Pattern /^[a-zA-Z][a-zA-Z\s\-.']*$/
+
+**country:**
+- Trim whitespace
+- Required: "Country is required"
+- Min 2 characters: "Country must be at least 2 characters"
+- Max 100 characters: "Country must not exceed 100 characters"
+- Pattern /^[a-zA-Z][a-zA-Z\s]*$/: "Country must contain only letters and spaces"
+
+**sellerZipCode:**
+- Trim whitespace
+- Required: "ZIP/PIN code is required"
+- Min 3 characters: "ZIP/PIN code must be at least 3 characters"
+- Max 20 characters: "ZIP/PIN code must not exceed 20 characters"
+- Pattern /^[a-zA-Z0-9\s\-]+$/: "ZIP/PIN code must contain only letters, numbers, spaces, or hyphens"
+
+### 5.4 Future Enhancement Note
+
+If country/state dropdowns are introduced later, the spec supports swapping text inputs for select components without structural changes. The validation patterns already reject invalid values. Dependent state-on-country filtering would require a lookup dataset and useEffect to reset state when country changes.
+
+---
+
+## 6. Store Description Section Specification
+
+### 6.1 Fields
+
+| Field | Input Type | Max Plain Text Length |
+|---|---|---|
+| shortStoreDescription | Rich text editor | 500 characters |
+| detailedStoreDescription | Rich text editor | 10,000 characters |
+
+### 6.2 Layout
+
+- Both editors stacked vertically within the card
+- shortStoreDescription editor: Shorter default height (~120px min-height)
+- detailedStoreDescription editor: Taller default height (~250px min-height)
+- Each editor has its own label, optional helper text, character count indicator, and validation message area
+
+### 6.3 Editor Configuration
+
+**Allowed formatting (matches backend sanitizer allowlist):**
+- Bold, Italic, Underline, Strikethrough
+- Headings (H1-H6) — consider limiting to H2-H4 in toolbar for UX simplicity
+- Bullet list, Ordered list
+- Blockquote
+- Links (auto-applied: rel="nofollow noopener", target="_blank" by backend)
+
+**Disallowed (do not expose in toolbar):**
+- Images, Videos, Embeds
+- Tables
+- Font size/color/family
+- Code blocks
+- Horizontal rules
+
+**Toolbar layout:**
+[B] [I] [U] [S] | [H2] [H3] | [UL] [OL] | [Blockquote] | [Link]
+
+### 6.4 Validation Rules
+
+**shortStoreDescription:**
+- Required: "Short store description is required"
+- Empty detection: Strip all HTML tags, decode &nbsp; to space, trim. If result length === 0, treat as empty.
+- Max 500 characters (plain text after tag stripping): "Short description must not exceed 500 characters"
+- Display live character count: {currentPlainTextLength} / 500
+- Count color: default gray, warning amber at 450+, error red at 500+
+
+**detailedStoreDescription:**
+- Required: "Detailed store description is required"
+- Same empty-detection logic as short description
+- Max 10,000 characters (plain text): "Detailed description must not exceed 10,000 characters"
+- Display live character count: {currentPlainTextLength} / 10,000
+
+### 6.5 Content Empty Detection (Critical)
+
+Rich text editors produce HTML even when visually empty. Common "empty" outputs:
+
+<p></p>
+<p><br></p>
+<p>&nbsp;</p>
+<p>   </p>
+
+The frontend **must** implement a isEditorContentEmpty(html) utility:
+
+1. Strip all HTML tags using regex or DOM parser
+2. Replace all &nbsp; with space
+3. Trim the result
+4. Return result.length === 0
+
+This function must be called:
+- Before submission to prevent sending empty content
+- For dirty-state comparison (empty-to-empty is not dirty)
+- For character count display
+
+### 6.6 Paste Handling
+
+- On paste from Word/Google Docs: The editor should strip unsupported formatting. Most rich text libraries (Tiptap, React Quill) have paste-transform plugins. Configure to retain only allowed tags.
+- On paste of plain text: Wrap in <p> tags automatically (default editor behavior).
+- On paste of content exceeding max length: Allow the paste but show the character count error immediately. Do not silently truncate.
+
+---
+
+## 7. Seller Policy Section Specification
+
+### 7.1 Field
+
+| Field | Input Type | Max Plain Text Length |
+|---|---|---|
+| sellerPolicy | Rich text editor | 10,000 characters |
+
+### 7.2 Layout & Editor
+
+- Same editor component, toolbar, and configuration as the store description editors
+- Default height: ~200px min-height
+- Label: "Seller Policy"
+- Helper text: "Describe your return, refund, shipping, and exchange policies"
+
+### 7.3 Validation Rules
+
+- Required: "Seller policy is required"
+- Same empty-detection logic as descriptions
+- Max 10,000 characters (plain text): "Policy content must not exceed 10,000 characters"
+- Character count display: {currentPlainTextLength} / 10,000
+
+### 7.4 Behavioral Parity
+
+All edge cases, paste handling, and empty-detection rules from Section 6 apply identically here. The same editor component and validation utility should be reused.
+
+---
+
+## 8. Seller Profile Image Section Specification
+
+### 8.1 Display States
+
+| State | Rendering |
+|---|---|
+| No image exists | Placeholder avatar (user silhouette icon) in a rounded container, "Upload Profile Image" button below |
+| Image exists | Current image rendered in rounded container (e.g., 150x150px circle crop), "Replace" and "Remove" buttons below |
+| Upload in progress | Overlay spinner on the image container, buttons disabled, "Uploading..." text |
+| Upload failed | Previous image (or placeholder) remains, error toast/message shown |
+| Remove in progress | Overlay spinner, "Removing..." text |
+
+### 8.2 Visual Design
+
+┌─────────────────────────┐
+│                         │
+│    ┌───────────┐        │
+│    │           │        │
+│    │  (image)  │        │  "Profile Image"
+│    │           │        │  "JPG, PNG, or WEBP. Max 5MB."
+│    └───────────┘        │  "Recommended: 400x400px"
+│                         │
+│  [Upload Image]         │
+│  [Remove]  (if exists)  │
+│                         │
+└─────────────────────────┘
+
+- Image container: 120-150px, circular clip for profile image
+- Placeholder: Gray background with centered user icon
+- Guideline text: Muted/secondary color, small font
+
+### 8.3 Upload Flow
+
+1. Seller clicks "Upload Image" (or "Replace" if image exists)
+2. Browser native file picker opens with accept="image/jpeg,image/png,image/webp"
+3. User selects a file
+4. **Frontend pre-validation** (before API call):
+   - File exists (not null/undefined)
+   - File type is one of: image/jpeg, image/png, image/webp
+   - File size <= 5MB (5 x 1024 x 1024 bytes)
+   - If any check fails, show error message below the upload area. Do NOT call API.
+5. If validation passes:
+   - Set upload state to uploading
+   - Show spinner overlay on image container
+   - Disable Upload/Replace/Remove buttons
+   - Create FormData with field name profileImage
+   - Call PATCH /api/v1/seller/profile/media/profile-image with Authorization header
+6. **On success (200)**:
+   - Extract sellerProfileImageUrl from response
+   - Update image preview to new URL (append ?t={timestamp} cache-buster if needed)
+   - Update profileCompletionPercentage from response
+   - Show success toast: "Profile image uploaded successfully"
+   - Reset upload state
+7. **On failure**:
+   - Keep previous image (or placeholder) visible — do NOT flash or clear
+   - Show error toast with backend message or fallback: "Failed to upload image. Please try again."
+   - Reset upload state, re-enable buttons
+   - If 400: Display specific validation message from backend
+   - If 401: Redirect to login
+   - If 403: Show "You do not have permission to upload images"
+
+### 8.4 Remove Flow
+
+1. Seller clicks "Remove"
+2. **Optional**: Show a brief confirmation (inline "Are you sure? [Yes] [Cancel]" rather than a modal to avoid disruption)
+3. Set remove state to removing
+4. Show spinner overlay, disable buttons
+5. Call DELETE /api/v1/seller/profile/media/profile-image with auth header
+6. **On success (200)**:
+   - Replace image preview with placeholder
+   - Update profileCompletionPercentage from response
+   - Show success toast: "Profile image removed"
+   - Reset state
+7. **On failure**:
+   - Keep current image visible
+   - Show error toast
+   - Reset state
+
+### 8.5 Frontend File Validation Rules
+
+| Check | Error Message |
+|---|---|
+| No file selected | "Please select an image file" |
+| Invalid type | "Only JPG, PNG, and WEBP images are allowed" |
+| File too large | "Image must be smaller than 5MB" |
+| File is 0 bytes | "Selected file appears to be empty" |
+
+### 8.6 Same-File Re-selection
+
+If the user selects the same file again (e.g., after a failed upload), the file input's onChange may not fire because the value hasn't changed. Solution: Reset the file input's value to "" after each selection attempt (whether success or failure). This ensures re-selecting the same file triggers the handler.
+
+    inputRef.current.value = "";
+
+### 8.7 Upload Button Debouncing
+
+Disable the upload/replace button immediately on click and keep it disabled until the upload completes or fails. This prevents duplicate uploads from rapid double-clicks.
+
+---
+
+## 9. Seller Shop Logo Section Specification
+
+### 9.1 Display States
+
+Identical state machine to profile image (Section 8.1), with these differences:
+- Container shape: Rounded rectangle (not circle) — logos are typically rectangular
+- Container size: 150x80px or similar landscape-friendly ratio
+- Placeholder: Store/shop icon instead of user silhouette
+- Field name in FormData: shopLogo
+
+### 9.2 Visual Design
+
+┌─────────────────────────┐
+│                         │
+│    ┌─────────────┐      │
+│    │             │      │  "Shop Logo"
+│    │   (logo)    │      │  "JPG, PNG, or WEBP. Max 5MB."
+│    │             │      │  "Recommended: 400x200px"
+│    └─────────────┘      │
+│                         │
+│  [Upload Logo]          │
+│  [Remove]  (if exists)  │
+│                         │
+└─────────────────────────┘
+
+### 9.3 API Endpoints
+
+- Upload: PATCH /api/v1/seller/profile/media/shop-logo — field name: shopLogo
+- Delete: DELETE /api/v1/seller/profile/media/shop-logo
+
+### 9.4 All Other Behavior
+
+Upload flow, remove flow, validation rules, same-file handling, button debouncing, error handling, and state management are identical to the profile image specification (Section 8). Reuse the same upload component with configurable props:
+
+| Prop | Profile Image Value | Shop Logo Value |
+|---|---|---|
+| label | "Profile Image" | "Shop Logo" |
+| fieldName | profileImage | shopLogo |
+| uploadEndpoint | .../media/profile-image | .../media/shop-logo |
+| deleteEndpoint | .../media/profile-image | .../media/shop-logo |
+| shape | circle | rectangle |
+| placeholderIcon | user | store |
+| recommendedSize | "400x400px" | "400x200px" |
+| currentUrl | sellerProfileImageUrl | sellerShopLogoUrl |
+
+---
+
+## 10. Seller Status Display / Edit Specification
+
+### 10.1 Display Behavior (Seller View)
+
+Seller status is **read-only** for the seller. It is displayed as a status badge, not an editable control.
+
+| Status | Badge Color | Badge Text | Additional UI |
+|---|---|---|---|
+| ACTIVE | Green | "Active" | None |
+| INACTIVE | Gray/Yellow | "Inactive" | Info banner: "Some features are limited while your account is inactive" |
+| PENDING_APPROVAL | Amber | "Pending Approval" | Info banner: "Your account is under review" |
+| SUSPENDED | Red | "Suspended" | Warning banner: "Your account is suspended. Profile editing is disabled." |
+| DEACTIVATED | Dark Gray | "Deactivated" | Error banner: "Your account has been deactivated. Contact support for assistance." |
+
+### 10.2 Badge Placement
+
+- Positioned in the page header area next to the page title, or in the save-changes footer bar
+- Always visible without scrolling on desktop
+- Small pill/chip style: colored background with contrasting text
+
+### 10.3 Status-Based UI Restrictions
+
+| Status | Form Fields | Rich Text Editors | Media Upload | Save Button |
+|---|---|---|---|---|
+| ACTIVE | All editable | All editable | Enabled | Enabled when dirty |
+| INACTIVE | Contact & address editable | Disabled with message | Disabled with message | Enabled for allowed fields |
+| PENDING_APPROVAL | All editable | All editable | Enabled | Enabled when dirty |
+| SUSPENDED | All read-only | All read-only | Disabled | Hidden or disabled with message |
+| DEACTIVATED | All read-only | All read-only | Disabled | Hidden or disabled with message |
+
+When fields are restricted:
+- Render inputs as visually disabled (grayed background, no cursor change)
+- Add aria-disabled="true" and tabIndex={-1} — do not use HTML disabled attribute on all fields as it removes them from form data
+- Show a contextual banner at the top of restricted sections: "Editing is restricted for your current account status"
+- Media upload buttons: Replace with static text "Upload unavailable" or hide entirely for SUSPENDED/DEACTIVATED
+
+### 10.4 No Admin Edit Capability
+
+The seller-facing frontend must never render a status dropdown, status toggle, or any control that implies the seller can change their own status. This is exclusively an admin action. If future admin views need status editing, that belongs in the web-admin app, not web-seller.
+
+---
+
+## 11. Save Changes Behavior
+
+### 11.1 Button Specifications
+
+- **Label**: "Save Changes" (default), "Saving..." (during submission)
+- **Position**: Bottom of the page, within a sticky footer bar on long pages or at the end of the last card section
+- **Width**: Auto-width on desktop, full-width on mobile
+
+### 11.2 Button States
+
+| State | Visual | Behavior |
+|---|---|---|
+| No changes (clean) | Muted/disabled appearance | Click does nothing; aria-disabled="true" |
+| Has valid changes | Primary color, enabled | Submits form |
+| Has invalid changes | Primary color but form shows errors | Scrolls to first error on click |
+| Submitting | Loading spinner inside button, disabled | Prevents re-submission |
+| Success | Brief green flash or checkmark | Returns to clean state |
+
+### 11.3 Submission Flow
+
+1. User clicks "Save Changes"
+2. Run full form validation on all fields (not just dirty ones — ensures no field was left in an invalid state)
+3. **If validation fails**:
+   - Show all field-level error messages
+   - Scroll the viewport to the first field with an error
+   - Focus that field
+   - Do not call the API
+4. **If validation passes**:
+   - Compute the diff: compare current form values against initialProfileData snapshot
+   - Build payload containing **only changed fields**
+   - If diff is empty (no actual changes despite dirty tracking), show info toast "No changes to save" and reset dirty state. Do not call API.
+   - Set button to loading state
+   - Call PATCH /api/v1/seller/profile with the diff payload
+5. **On success (200)**:
+   - Update initialProfileData snapshot with the response data
+   - Reset dirty state to clean
+   - Show success toast: "Profile updated successfully"
+   - Update profileCompletionPercentage and isProfileCompleted from response
+   - Reset button to default state
+6. **On validation error (400)**:
+   - Parse message array from response
+   - Map backend field errors to their respective form fields where possible
+   - For unmappable errors, show them in a general error area at the top of the form
+   - Preserve all user input — do NOT reset the form
+   - Reset button to default state
+7. **On auth error (401)**: Redirect to login
+8. **On forbidden (403)**: Show error toast with backend message ("Account is suspended" etc.)
+9. **On server error (500/502)**: Show error toast: "Something went wrong. Please try again."
+10. **On network error**: Show error toast: "Unable to reach the server. Check your connection."
+
+### 11.4 Save vs Media Upload Independence
+
+The "Save Changes" button handles **only** text/form field updates. Media uploads and deletes are independent operations that happen immediately when the user interacts with upload/remove buttons. The Save button does not batch media operations.
+
+This means:
+- A seller can upload an image without clicking Save
+- A seller can change text fields without affecting images
+- The profile completion percentage updates independently after each operation
+- The page should reflect the latest completion percentage from whichever API responded most recently
+
+---
+
+## 12. State Management Expectations
+
+### 12.1 State Definitions
+
+profileState: {
+  // Fetch state
+  isLoading: boolean           // true during initial GET /seller/profile
+  fetchError: string | null    // error message if fetch failed
+
+  // Profile data snapshot (last saved/fetched state)
+  initialData: SellerProfile | null
+
+  // Form state (current editable values)
+  formData: {
+    sellerName: string
+    sellerShopName: string
+    sellerContactCountryCode: string
+    sellerContactNumber: string
+    storeAddress: string
+    city: string
+    state: string
+    country: string
+    sellerZipCode: string
+    shortStoreDescription: string      // HTML string
+    detailedStoreDescription: string   // HTML string
+    sellerPolicy: string               // HTML string
+  }
+
+  // Dirty tracking
+  isDirty: boolean             // derived: any formData field differs from initialData
+  dirtyFields: Set<string>     // which specific fields changed
+
+  // Validation
+  fieldErrors: Record<string, string>   // field name -> error message
+
+  // Submission
+  isSaving: boolean            // true during PATCH /seller/profile
+  saveError: string | null     // general save error
+
+  // Media states (independent from form)
+  profileImage: {
+    url: string | null
+    isUploading: boolean
+    isRemoving: boolean
+    error: string | null
+  }
+  shopLogo: {
+    url: string | null
+    isUploading: boolean
+    isRemoving: boolean
+    error: string | null
+  }
+
+  // Profile metadata (read-only display)
+  email: string
+  status: SellerStatus
+  profileCompletionPercentage: number
+  isProfileCompleted: boolean
+
+  // UI state
+  successToast: string | null
+}
+
+### 12.2 Dirty State Tracking
+
+Dirty state must compare **current form values** against **initial data**, not just track whether any keystroke occurred. This prevents false positives:
+
+- User types "foo" then deletes it back to original -> not dirty
+- User changes field then reverts exactly -> not dirty
+- User changes any field to a new value -> dirty
+
+For rich text fields, compare the HTML string directly. The backend returns sanitized HTML; the editor will produce equivalent HTML. Minor whitespace differences between editor output and stored HTML are acceptable as "not dirty" only if the plain-text content is identical. If implementing exact HTML comparison is fragile, fall back to always treating any editor interaction as dirty (acceptable trade-off).
+
+### 12.3 Field Error Clearing
+
+When a field's value changes after an error was set:
+- Clear that field's error immediately (optimistic)
+- The error will reappear on next blur or submit if the value is still invalid
+- Do NOT clear errors for other fields when one field changes
+
+### 12.4 Profile Completion Sync
+
+The profileCompletionPercentage value must be updated from:
+- Initial profile fetch response
+- Profile PATCH response (data.profileCompletionPercentage)
+- Profile image upload response (data.profileCompletionPercentage)
+- Profile image delete response (data.profileCompletionPercentage)
+- Shop logo upload response (data.profileCompletionPercentage)
+- Shop logo delete response (data.profileCompletionPercentage)
+
+Always use the value from the **most recent API response**. Do not compute this on the frontend.
+
+### 12.5 Navigation Guard
+
+Implement an unsaved-changes warning:
+- If isDirty === true and the user attempts to navigate away (route change or browser back/close), show a confirmation: "You have unsaved changes. Are you sure you want to leave?"
+- Use beforeunload event for browser close/refresh
+- Use Next.js router events or useEffect cleanup for in-app navigation
+- Do NOT block navigation for media upload/remove operations (those are already saved)
+- After successful save, isDirty resets to false, so the guard is automatically removed
+
+---
+
+## 13. API Integration Expectations
+
+### 13.1 GET /api/v1/seller/profile
+
+| Aspect | Detail |
+|---|---|
+| Trigger | Page mount (once) |
+| Auth | Authorization: Bearer {accessToken} |
+| Success (200) | Hydrate all form fields, media previews, status, completion |
+| 401 | Redirect to /login |
+| Network error | Show full-page error with retry button |
+| Retry | On retry button click, re-call the endpoint |
+
+**Response data mapping:**
+
+| Response Field | Maps To |
+|---|---|
+| sellerId | stored but not displayed in form |
+| email | read-only display |
+| sellerName | form field |
+| sellerShopName | form field |
+| sellerContactCountryCode | form field (dropdown) |
+| sellerContactNumber | form field |
+| storeAddress | form field |
+| city | form field |
+| state | form field |
+| country | form field |
+| sellerZipCode | form field |
+| shortStoreDescription | rich text editor content |
+| detailedStoreDescription | rich text editor content |
+| sellerPolicy | rich text editor content |
+| sellerProfileImageUrl | image preview src |
+| sellerShopLogoUrl | logo preview src |
+| status | status badge |
+| profileCompletionPercentage | progress bar |
+| isProfileCompleted | optional badge/indicator |
+
+**Null handling:** All nullable fields (sellerContactCountryCode, sellerContactNumber, storeAddress, city, state, country, sellerZipCode, shortStoreDescription, detailedStoreDescription, sellerPolicy, sellerProfileImageUrl, sellerShopLogoUrl) may be null. Map null to:
+- Text fields: "" (empty string)
+- Rich text editors: "" (empty string — editor renders empty)
+- Image URLs: null (render placeholder)
+
+### 13.2 PATCH /api/v1/seller/profile
+
+| Aspect | Detail |
+|---|---|
+| Trigger | "Save Changes" button click after validation |
+| Auth | Authorization: Bearer {accessToken} |
+| Content-Type | application/json |
+| Payload | Only changed fields (diff against initial data) |
+| Success (200) | Update initial data snapshot, show success toast, reset dirty state |
+| 400 | Map field errors to form, show general errors in banner |
+| 401 | Redirect to /login |
+| 403 | Show toast with backend message |
+| 422 | Treat same as 400 |
+| 500/502 | Show generic error toast |
+
+**Payload construction rules:**
+- Include only fields where formData[field] !== initialData[field]
+- Send trimmed values for text fields
+- Send raw HTML for rich text fields (backend sanitizes)
+- Never include: email, status, profileCompletionPercentage, isProfileCompleted, image URLs
+- If country code changed but phone number didn't (and phone has a value), include both sellerContactCountryCode and sellerContactNumber in payload to satisfy cross-field validation. Vice versa.
+
+### 13.3 PATCH /api/v1/seller/profile/media/profile-image
+
+| Aspect | Detail |
+|---|---|
+| Trigger | File selected and passes frontend validation |
+| Auth | Authorization: Bearer {accessToken} |
+| Content-Type | multipart/form-data (auto-set by FormData) |
+| Payload | FormData with field profileImage containing the file |
+| Success (200) | Update image preview URL and completion percentage |
+| 400 | Show validation error (bad type, too large, corrupt) |
+| 401 | Redirect to /login |
+| 403 | Show permission error |
+| 502 | Show "Upload service unavailable" error |
+
+### 13.4 DELETE /api/v1/seller/profile/media/profile-image
+
+| Aspect | Detail |
+|---|---|
+| Trigger | "Remove" button click (after optional confirmation) |
+| Auth | Authorization: Bearer {accessToken} |
+| Success (200) | Replace image with placeholder, update completion percentage |
+| 401 | Redirect to /login |
+| 403 | Show permission error |
+| 500 | Show generic error, keep current image |
+
+### 13.5 PATCH /api/v1/seller/profile/media/shop-logo
+
+Identical to 13.3 with field name shopLogo and endpoint path /media/shop-logo.
+
+### 13.6 DELETE /api/v1/seller/profile/media/shop-logo
+
+Identical to 13.4 with endpoint path /media/shop-logo.
+
+### 13.7 Refetch vs Optimistic Update Strategy
+
+**Strategy: Optimistic update from response data, no refetch.**
+
+- After any successful API call, update local state using the response data object
+- Do NOT re-call GET /seller/profile after every mutation
+- This avoids unnecessary network requests and eliminates flicker
+- The profile completion percentage in the response is authoritative — always use it
+- If any mutation response is missing expected fields (defensive), then trigger a full refetch as fallback
+
+---
+
+## 14. Rich Text Editor Handling Rules
+
+### 14.1 Editor Library
+
+Use a React-compatible rich text editor. Recommended options:
+- **React Quill** (simpler, well-known, adequate for this use case)
+- **Tiptap** (more modern, better extensibility)
+
+Whichever is chosen, it must:
+- Accept initial HTML content
+- Produce HTML output on change
+- Support a configurable toolbar
+- Handle paste sanitization
+- Expose a way to get plain-text content for character counting
+
+### 14.2 Storing Editor Value
+
+- Store the HTML string directly in form state: formData.shortStoreDescription = "<p>Hello <strong>world</strong></p>"
+- On each editor change event, update the form state
+- Do NOT store editor internal state objects (Delta for Quill, JSON for Tiptap) — the backend expects and returns HTML
+
+### 14.3 Empty Content Detection
+
+Implement a shared utility function used by all three editor fields:
+
+function isEditorEmpty(html: string): boolean {
+  1. If html is falsy (null, undefined, ""), return true
+  2. Strip all HTML tags: html.replace(/<[^>]*>/g, '')
+  3. Replace &nbsp; with space: result.replace(/&nbsp;/g, ' ')
+  4. Trim whitespace
+  5. Return result.length === 0
+}
+
+This must be called:
+- During validation (reject empty content)
+- During dirty-state comparison (empty-to-empty is not dirty)
+- For conditional UI (e.g., showing "No description yet" placeholder in read-only mode)
+
+### 14.4 Character Count
+
+function getPlainTextLength(html: string): number {
+  1. Strip all HTML tags
+  2. Replace &nbsp; with space
+  3. Trim
+  4. Return length
+}
+
+Display this count live below each editor. Update on every change event.
+
+### 14.5 Prefilling Editor Content
+
+When hydrating editors from the fetched profile:
+- Pass the HTML string directly as the editor's initial value
+- The backend returns sanitized HTML — it is safe to render
+- If the value is null, pass "" to the editor
+- Do NOT re-sanitize on the frontend (double sanitization can break formatting)
+
+### 14.6 Paste Handling Configuration
+
+Configure the editor to strip unsupported tags on paste:
+- For React Quill: Use the clipboard.matchVisual option and custom matchers
+- For Tiptap: Configure parseOptions to drop unsupported nodes
+
+At minimum, pasted <img>, <table>, <style>, <script>, <div> (convert to <p>), and <font> tags should be stripped or converted.
+
+### 14.7 Editor Initialization Failure
+
+If the editor component fails to mount (rare but possible with SSR or missing dependencies):
+- Show a fallback <textarea> with a warning: "Rich text editor unavailable. You can enter plain text."
+- The backend accepts plain text without HTML tags — it will be stored as-is
+- Log the error for debugging
+
+---
+
+## 15. Authorization-Aware UI Rules
+
+### 15.1 Seller Capabilities
+
+A seller can:
+- View all their own profile data
+- Edit: sellerName, sellerShopName, sellerContactCountryCode, sellerContactNumber, storeAddress, city, state, country, sellerZipCode, shortStoreDescription, detailedStoreDescription, sellerPolicy
+- Upload, replace, and remove their own profile image and shop logo
+- View their own status (read-only)
+- View their profile completion percentage (read-only)
+
+A seller cannot:
+- Edit their email
+- Change their own status
+- View other sellers' profiles
+- Access admin-level profile controls
+
+### 15.2 Status-Restricted Capabilities
+
+**INACTIVE sellers:**
+- Can edit: sellerName, sellerShopName, sellerContactCountryCode, sellerContactNumber, storeAddress, city, state, country, sellerZipCode
+- Cannot edit: shortStoreDescription, detailedStoreDescription, sellerPolicy
+- Cannot: upload/replace/remove images
+- UI: Rich text editors rendered as read-only HTML display (not editable editors). Media sections show "Available when account is active" message.
+
+**SUSPENDED / DEACTIVATED sellers:**
+- Entire form is read-only
+- Save button hidden or disabled with explanatory text
+- Media actions disabled
+- Prominent banner at page top explaining the restriction
+
+### 15.3 Frontend Enforcement vs Backend Trust
+
+Frontend restrictions are UX enhancements, not security. The backend enforces all authorization rules and will reject unauthorized requests with 403. The frontend should:
+- Hide/disable unauthorized controls for clean UX
+- Still handle 403 responses gracefully in case of any mismatch
+- Never assume frontend-only restrictions are sufficient
+
+---
+
+## 16. Error Handling Strategy
+
+### 16.1 Error Levels
+
+| Level | Where | Example |
+|---|---|---|
+| Field-level | Below the specific input | "Seller name must be at least 2 characters" |
+| Section-level | Top of the section card | "Please fix the errors below" (optional, for sections with multiple field errors) |
+| Page-level toast | Top-right floating notification | "Profile updated successfully" / "Failed to save profile" |
+| Page-level banner | Below page header, above all sections | "Your account is suspended. Profile editing is disabled." |
+| Full-page error | Replaces entire page content | "Failed to load profile. [Retry]" |
+
+### 16.2 Error Message Standards
+
+- Always user-friendly, never technical (no "500 Internal Server Error", no stack traces)
+- Always actionable when possible ("Please try again", "Check your connection", "Contact support")
+- Field errors use sentence case, end without period for inline display
+- Toast messages use sentence case, end without period
+- Banners use full sentences with periods.
+
+### 16.3 Backend Error Mapping
+
+Backend error responses follow this shape:
+{
+  "success": false,
+  "message": ["Error message 1", "Error message 2"],
+  "code": "BAD_REQUEST",
+  "timestamp": "..."
+}
+
+**Mapping strategy:**
+- If message array contains strings that match known field validation patterns, map to the appropriate field's error state
+- Pattern matching examples:
+  - Contains "seller name" -> map to sellerName field
+  - Contains "phone" or "contact number" -> map to sellerContactNumber field
+  - Contains "country code" -> map to sellerContactCountryCode field
+  - Contains "short description" -> map to shortStoreDescription field
+  - Contains "detailed description" -> map to detailedStoreDescription field
+  - Contains "policy" -> map to sellerPolicy field
+- Unmapped messages display in a general error banner or toast
+
+### 16.4 HTTP Status Handling
+
+| Status | Action |
+|---|---|
+| 200 | Success flow |
+| 400 | Parse and display validation errors |
+| 401 | Clear auth state, redirect to /login |
+| 403 | Show permission error toast with backend message |
+| 404 | Show "Profile not found" error (shouldn't happen for own profile) |
+| 422 | Treat same as 400 |
+| 429 | Show "Too many requests. Please wait a moment." |
+| 500 | Show "Something went wrong. Please try again later." |
+| 502 | Show "Service temporarily unavailable. Please try again." |
+| Network error | Show "Unable to reach the server. Please check your internet connection." |
+| Timeout | Show "Request timed out. Please try again." |
+
+### 16.5 Toast Behavior
+
+- Position: Top-right corner, floating above page content
+- Duration: Success toasts auto-dismiss after 4 seconds. Error toasts persist until manually dismissed.
+- Stacking: If multiple toasts appear, stack vertically (newest on top)
+- Animation: Slide in from right, fade out on dismiss
+- Max visible: 3 toasts. Older toasts auto-dismiss if limit exceeded.
+
+---
+
+## 17. Edge Cases
+
+### 17.1 Profile Fetch Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Profile fetch returns all null optional fields | Render all inputs empty, media placeholders shown, completion at 15% |
+| Profile fetch returns partial data (some fields null) | Prefill available fields, leave others empty |
+| Profile fetch returns unexpected extra fields | Ignore unknown fields, do not crash |
+| Profile fetch takes >5 seconds | Show skeleton/loading state the entire time; no timeout error unless >15 seconds |
+| Profile fetch fails with network error | Full-page error with "Retry" button |
+| Profile fetch returns 401 | Redirect to login immediately |
+| Multiple rapid page navigations trigger multiple fetches | Cancel/ignore stale requests using AbortController |
+| Profile fetch returns HTML with XSS in text fields | Text fields auto-escape via React rendering. Rich text editors render sanitized HTML (backend already sanitized). |
+
+### 17.2 Form Editing Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Seller types then deletes back to original value | Dirty state resets to false for that field |
+| Seller clears a required field and navigates away | Unsaved changes warning fires (dirty state is true) |
+| Seller pastes extremely long text | Field shows max-length error, input is not truncated (let user fix it) |
+| Seller enters Unicode/emoji in name fields | Pattern validation rejects characters outside allowed range |
+| Seller enters RTL text | Input displays correctly (CSS direction: auto or unicode-bidi), validation still applies |
+| Multiple blur events fire rapidly on tab through fields | Each field validates independently, no race conditions |
+| Form state and initial data go out of sync after media upload | Only profileCompletionPercentage and image URLs update; form field initial data stays stable |
+
+### 17.3 Phone Input Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Seller enters phone with spaces: "987 654 3210" | Strip non-digits before validation -> "9876543210" (valid) |
+| Seller enters phone with dashes: "987-654-3210" | Strip non-digits -> "9876543210" (valid) |
+| Seller enters phone with parens: "(987) 654-3210" | Strip non-digits -> "9876543210" (valid) |
+| Seller enters country code without phone | Error: "Phone number is required with country code" (only if seller had no previous phone stored) |
+| Seller enters phone without country code | Error: "Country code is required with phone number" (only if no previous code stored) |
+| Seller clears both country code and phone | Both become empty — valid (both optional when empty together) |
+| Seller clears phone but keeps country code | If initial data had a phone number, this is a change. On submit, backend validates cross-field rule. Show frontend error preemptively. |
+
+### 17.4 Rich Text Editor Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Editor contains <p><br></p> | isEditorEmpty() returns true; validation error shown |
+| Editor contains <p>&nbsp;&nbsp;&nbsp;</p> | isEditorEmpty() returns true (after replace and trim) |
+| Editor contains <p>  </p> | isEditorEmpty() returns true |
+| Paste from Word adds <o:p>, mso-* styles | Editor paste handler strips these; if not, backend sanitizer removes them |
+| Editor content exceeds character limit after paste | Character count turns red, error shown, submission blocked |
+| Backend returns broken HTML (unclosed tags) | Editor should handle gracefully (most editors auto-fix); if rendering fails, fall back to plain text display |
+| Seller switches between sections while editor is mid-edit | Editor state preserved in form state; no data loss |
+| Two editors mounted simultaneously | Each has independent state; changes in one do not affect the other |
+| Editor is focused when save is triggered | Editor blur event fires first, updating form state, then validation runs with latest content |
+
+### 17.5 Image Upload Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Seller selects file then cancels file picker | No action taken; no error shown |
+| Seller selects 0-byte file | Frontend catches: "Selected file appears to be empty" |
+| Seller selects 6MB file | Frontend catches: "Image must be smaller than 5MB" |
+| Seller selects .gif file | Frontend catches: "Only JPG, PNG, and WEBP images are allowed" |
+| Seller renames .txt to .jpg | Frontend MIME check passes (browser reports based on extension), but backend magic-bytes check rejects: "Invalid or corrupted image file" — show this error |
+| Upload succeeds but image URL returns 404 initially (CDN propagation delay) | Show the new URL; if image doesn't load after 3 seconds, show a "Image processing..." placeholder and retry loading after 2 seconds (one retry) |
+| Upload request times out | Show error: "Upload timed out. Please try again." Keep previous image visible. |
+| Seller clicks "Remove" on placeholder (no image) | Button should not be visible when no image exists. If somehow clicked (race condition), backend returns 200 idempotently — handle gracefully |
+| Seller uploads image, then immediately clicks Remove before upload completes | Disable Remove button during upload. If somehow triggered, queue the remove after upload completes. |
+| Seller navigates away during upload | Upload continues in background (fire-and-forget). No crash. Profile will reflect new image on next visit. Unsaved changes guard does NOT trigger for in-progress uploads (only form dirty state). |
+| Two media uploads triggered simultaneously (profile image + shop logo) | Both should work independently. They use separate state and endpoints. Parallel requests are fine. |
+
+### 17.6 Save Changes Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Double-click on Save | Button disables immediately on first click; second click ignored |
+| Save while media upload in progress | Save proceeds — it only sends form fields, not media. Both can happen concurrently. |
+| Save succeeds but completion percentage changed (e.g., newly filled fields) | Update the progress bar from the save response |
+| Save returns 400 with multiple field errors | All errors mapped to their respective fields simultaneously |
+| Save returns 403 for INACTIVE seller trying to update rich text | Show toast: "Content updates are not available while account is inactive". Do not clear form. |
+| Save returns 400 for empty patch (all fields identical to initial) | Frontend should prevent this by checking diff before sending. If it somehow reaches backend: show the error message. |
+| Network drops during save | Show error toast. Form state and all user input preserved. Button returns to enabled state. |
+| Server returns 200 but response body is malformed | Log the error. Show generic success toast but do NOT update initial data snapshot (keep dirty state as-is to prevent data loss). Trigger a background refetch. |
+
+### 17.7 Status Display Edge Cases
+
+| Case | Behavior |
+|---|---|
+| Backend returns unknown status value | Display raw value as badge text with neutral gray color. Log a warning. |
+| Status changes between page load and save | If save returns a 403 that didn't exist at load time, show the error and trigger a refetch to update status badge and UI restrictions. |
+| Seller's status changes to SUSPENDED while they are editing | On next API call (save/upload), they'll receive 403. Show the error, refetch profile, and apply SUSPENDED restrictions. |
+
+---
+
+## 18. Testing Scenarios
+
+### 18.1 Profile Fetch Tests
+
+1. Verify skeleton/loading state renders on mount before data arrives
+2. Verify all fields populate correctly after successful fetch
+3. Verify null fields render as empty inputs/placeholders (no "null" text)
+4. Verify image URLs render previews when present
+5. Verify image placeholders render when URLs are null
+6. Verify completion percentage bar reflects fetched value
+7. Verify status badge renders with correct color and text
+8. Verify full-page error renders on fetch failure
+9. Verify retry button triggers a new fetch
+10. Verify 401 response redirects to login page
+
+### 18.2 Form Prefill Tests
+
+11. Verify sellerName prefills with fetched value
+12. Verify sellerShopName prefills with fetched value
+13. Verify country code dropdown selects the fetched value
+14. Verify phone number input shows fetched value
+15. Verify address textarea shows fetched value
+16. Verify city, state, country, zip inputs show fetched values
+17. Verify short description editor loads with fetched HTML content
+18. Verify detailed description editor loads with fetched HTML content
+19. Verify policy editor loads with fetched HTML content
+20. Verify email displays as read-only with fetched value
+
+### 18.3 Field Validation Tests
+
+21. Verify sellerName rejects empty/whitespace-only input
+22. Verify sellerName rejects strings shorter than 2 characters
+23. Verify sellerName rejects strings longer than 100 characters
+24. Verify sellerName rejects names starting with non-letter
+25. Verify sellerName accepts valid names with dots, hyphens, spaces
+26. Verify sellerShopName rejects invalid patterns
+27. Verify sellerShopName accepts alphanumeric with &, ', ., -
+28. Verify phone number strips non-digits and validates length
+29. Verify phone number rejects fewer than 7 digits
+30. Verify phone number rejects more than 15 digits
+31. Verify country code and phone cross-field requirement
+32. Verify address rejects fewer than 5 characters
+33. Verify city rejects numeric-only input
+34. Verify zip code rejects invalid format
+35. Verify rich text empty detection catches <p><br></p>
+36. Verify rich text character count updates live
+37. Verify character count error at max limit
+
+### 18.4 Dirty State Tracking Tests
+
+38. Verify isDirty is false on initial load
+39. Verify isDirty becomes true when any field changes
+40. Verify isDirty returns to false when field reverts to initial value
+41. Verify Save button is disabled when not dirty
+42. Verify Save button is enabled when dirty
+43. Verify dirty state resets after successful save
+44. Verify dirty state persists after failed save
+45. Verify navigation away with dirty state shows confirmation dialog
+46. Verify navigation away without dirty state shows no dialog
+
+### 18.5 Save Changes Tests
+
+47. Verify save sends only changed fields in payload
+48. Verify save does not send email, status, or image fields
+49. Verify save button shows loading state during submission
+50. Verify save button disables during submission
+51. Verify success toast appears after successful save
+52. Verify initial data updates after successful save
+53. Verify form preserves input after failed save
+54. Verify field errors map from 400 response
+55. Verify 403 response shows appropriate permission message
+56. Verify empty diff (no real changes) shows info toast without API call
+
+### 18.6 Image Upload Tests
+
+57. Verify file picker opens on upload button click
+58. Verify frontend rejects non-image file types
+59. Verify frontend rejects files over 5MB
+60. Verify frontend rejects 0-byte files
+61. Verify upload spinner appears during upload
+62. Verify upload buttons disable during upload
+63. Verify preview updates to new image after successful upload
+64. Verify completion percentage updates after upload
+65. Verify previous image remains after failed upload
+66. Verify error message appears after failed upload
+67. Verify same-file re-selection works (input value reset)
+
+### 18.7 Image Remove/Replace Tests
+
+68. Verify remove button only visible when image exists
+69. Verify remove confirmation (if implemented) prevents accidental removal
+70. Verify placeholder appears after successful removal
+71. Verify completion percentage decreases after removal
+72. Verify image remains after failed removal
+73. Verify replace flow (upload while image exists) works correctly
+74. Verify idempotent remove (no image -> 200) handles gracefully
+
+### 18.8 Rich Text Editor Tests
+
+75. Verify editor renders with toolbar
+76. Verify bold, italic, underline, lists, blockquote, link work
+77. Verify disallowed formatting (images, tables) not in toolbar
+78. Verify paste from Word strips unsupported formatting
+79. Verify editor content persists across section interactions
+80. Verify editor value syncs to form state on each change
+81. Verify empty editor content detected correctly before submit
+
+### 18.9 Section-Level Error Mapping Tests
+
+82. Verify backend field errors appear below the correct input
+83. Verify unmapped backend errors appear in general error area
+84. Verify field error clears when user modifies the field
+85. Verify multiple simultaneous field errors display correctly
+86. Verify scrolling to first error field on validation failure
+
+### 18.10 Responsive Layout Tests
+
+87. Verify media cards display side-by-side on desktop
+88. Verify media cards stack on mobile
+89. Verify form fields use 2-column grid on desktop where specified
+90. Verify all fields go full-width on mobile
+91. Verify Save button goes full-width on mobile
+92. Verify rich text editors are usable on mobile (toolbar wraps or scrolls)
+93. Verify status banner is readable on all breakpoints
+
+### 18.11 Accessibility Tests
+
+94. Verify all inputs have associated <label> elements
+95. Verify focus order follows visual layout (top to bottom, left to right)
+96. Verify error messages are linked to inputs via aria-describedby
+97. Verify read-only email field has appropriate ARIA attributes
+98. Verify status badge has aria-label for screen readers
+99. Verify image upload buttons have descriptive text (not just icons)
+100. Verify disabled fields have aria-disabled and explanatory text
+101. Verify toasts have role="alert" or aria-live="polite"
+102. Verify rich text editors are keyboard-navigable
+103. Verify file input has accessible label for screen readers
+104. Verify progress bar has role="progressbar" with aria-valuenow
+
+### 18.12 Authorization-Aware UI Tests
+
+105. Verify ACTIVE seller sees all fields editable
+106. Verify INACTIVE seller sees rich text editors as read-only
+107. Verify INACTIVE seller sees media upload disabled with message
+108. Verify SUSPENDED seller sees entire form read-only with banner
+109. Verify DEACTIVATED seller sees entire form read-only with banner
+110. Verify status badge renders correctly for each status value
+
+### 18.13 Network Failure Tests
+
+111. Verify profile fetch failure shows retry option
+112. Verify save failure preserves form state
+113. Verify upload failure keeps previous image
+114. Verify delete failure keeps current image
+115. Verify offline state shows appropriate error message
+116. Verify timeout shows timeout-specific error message
+
+### 18.14 End-to-End Flow Tests
+
+117. Load page -> verify skeleton -> data loads -> fields prefilled -> edit name -> save -> verify success toast -> verify name updated
+118. Load page -> upload profile image -> verify preview -> remove image -> verify placeholder
+119. Load page -> edit multiple fields across sections -> save -> verify all changed -> verify completion updated
+120. Load page -> edit field -> navigate away -> verify confirmation dialog -> cancel -> verify still on page -> confirm -> verify navigation
+
+---
+
+## 19. Common Mistakes to Avoid
+
+1. **Treating blank rich text HTML as valid content.** <p><br></p> looks empty to the user but passes a naive value !== "" check. Always strip tags and check plain text length.
+
+2. **Allowing "Save Changes" with no actual changes.** Comparing against initial data must be the gatekeeper. A user clicking into a field and clicking out (without changing the value) should not enable Save.
+
+3. **Showing editable controls for read-only or restricted fields.** Email must never render as an editable <input>. Status must never render as a dropdown for sellers. SUSPENDED sellers must never see enabled form inputs.
+
+4. **Losing user input after validation failure or API error.** Never reset the form on error. The user's typed values must survive any failure. Only reset on successful save.
+
+5. **Replacing image preview before upload success is confirmed.** Never show the new image optimistically during upload. Show a spinner/loading state instead. Only swap the preview after the API returns 200 with the new URL.
+
+6. **Not handling image remove state properly.** After clicking Remove, the UI must show a loading state. If the remove fails, the previous image must still be displayed. If the remove succeeds, the placeholder must replace the image immediately.
+
+7. **Not syncing profile completion after every API response.** Every mutation endpoint (profile PATCH, image upload, image delete) returns profileCompletionPercentage. The progress bar must update from every response.
+
+8. **Submitting all fields instead of only changed fields.** Sending unchanged fields wastes bandwidth and can trigger unexpected validation. Compute the diff and send only what changed.
+
+9. **Firing multiple save/upload requests simultaneously from the same button.** Buttons must disable immediately on click and stay disabled until the operation completes.
+
+10. **No unsaved changes protection.** Users will lose form data if they accidentally navigate away or refresh. The beforeunload handler and router guard are essential.
+
+11. **Breaking mobile layout with side-by-side inputs that don't wrap.** All 2-column layouts must collapse to single-column on mobile. Editors and textareas must not overflow their containers.
+
+12. **Exposing raw backend error codes or technical messages to the seller.** "DOMAIN_ERROR", "BAD_REQUEST", stack traces, or field names like sellerContactCountryCode should never appear in the UI. Map all errors to user-friendly messages.
+
+13. **Mixing media upload state with form save state.** Image uploads and form saves are independent operations with independent loading states. A save in progress should not block an upload, and vice versa.
+
+14. **Not resetting the file input value after selection.** This causes the onChange handler to not fire when the user selects the same file twice (e.g., after a failed upload).
+
+15. **Initializing rich text editors with null instead of empty string.** Many editors crash or show "null" as text content if initialized with null. Always coerce null to "".
+
+16. **Not canceling stale API requests on unmount.** If the user navigates away before the profile fetch completes, the response handler may try to update unmounted component state. Use AbortController or check mounted state.
+
+17. **Rendering editors server-side.** Rich text editors (React Quill, Tiptap) are client-only. Use dynamic(() => import(...), { ssr: false }) in Next.js to avoid SSR errors.
+
+18. **Using disabled attribute on read-only fields for SUSPENDED/DEACTIVATED states.** HTML disabled removes fields from form submission and has poor screen reader support. Use readOnly or aria-disabled with visual styling instead.
+
+---
+
+## 20. Production Best Practices
+
+### 20.1 Architecture
+
+- **Component isolation**: Build a reusable MediaUploadCard component shared between profile image and shop logo. Build a reusable RichTextEditorField component shared across all three editors. Build a reusable FormSection card wrapper.
+- **State colocation**: Keep all profile state in a single parent component or custom hook (useSellerProfile). Avoid splitting state across unrelated contexts.
+- **Separation of concerns**: API calls in a service file (profile.service.ts), validation in a utility file (profile-validators.ts), state logic in a custom hook, and pure rendering in components.
+
+### 20.2 Performance
+
+- **Lazy-load rich text editors**: Editors are heavy. Use Next.js dynamic imports with ssr: false. Show a loading placeholder until the editor mounts.
+- **Debounce character count updates**: If the editor fires change events rapidly (every keystroke), debounce the character count calculation by 150-300ms. Validation can still fire on blur.
+- **Avoid re-rendering the entire form on single field changes**: Use local state per field or useCallback/useMemo to prevent cascading re-renders when one input changes.
+- **Image preview with object-fit: cover**: Prevents layout shift from different image aspect ratios.
+
+### 20.3 Security
+
+- **Never render unsanitized HTML outside of the rich text editor context.** The backend sanitizes content, but when displaying saved HTML elsewhere (e.g., in a profile preview widget), use a controlled rendering method or a sanitizer like DOMPurify as a defense-in-depth measure.
+- **Auth token handling**: Read the access token from the same storage mechanism used by the auth module (sessionStorage per the existing implementation). Never log tokens. Never include tokens in error reports.
+- **File validation is defense-in-depth, not security**: The backend validates file type with magic bytes. Frontend validation is for UX (fast feedback). Do not rely on frontend checks alone.
+
+### 20.4 Accessibility
+
+- Every form field must have a visible <label> element with htmlFor matching the input's id
+- Error messages must be linked to inputs via aria-describedby
+- Focus must be managed: after failed submission, focus the first invalid field
+- The progress bar must use role="progressbar" with aria-valuenow, aria-valuemin="0", aria-valuemax="100"
+- Toast notifications must use role="alert" for errors and role="status" for success
+- Color must not be the only indicator (e.g., error fields need an icon or text, not just a red border)
+- Keyboard users must be able to trigger file upload via Enter/Space on the upload button
+- Tab order must be logical: header -> media cards -> account details -> address -> descriptions -> policy -> save button
+
+### 20.5 Error Recovery
+
+- Implement **automatic retry with exponential backoff** only for the initial profile fetch (1 retry after 2 seconds). For all mutation endpoints (save, upload, delete), do not auto-retry — let the user trigger retry manually.
+- After any 401 response, clear auth state and redirect to /login with a returnTo query parameter so the user returns to the profile page after re-authentication.
+- After a network error on save, keep a "Retry" affordance in the error toast or near the save button, rather than requiring the user to click Save again (which they may hesitate to do after an error).
+
+### 20.6 User Experience Polish
+
+- **Success feedback**: Use a brief green checkmark animation on the Save button after successful save (300ms), then return to normal state.
+- **Completion progress motivation**: When isProfileCompleted transitions from false to true (100%), show a celebratory toast: "Your profile is complete!" with a distinct visual style.
+- **Section anchors**: If the page is long, consider a sticky sidebar or top nav with anchor links to each section (desktop only).
+- **Autosave consideration**: For this module, explicit save is preferred over autosave. Sellers expect to review changes before committing. Autosave may cause confusion with rich text editors that produce intermediate HTML states during editing.
+
+---
+
+This specification is complete and implementation-ready. Every section, field, interaction, state, error condition, and edge case has been defined with enough detail for a frontend engineer to implement without ambiguity. The spec aligns precisely with the existing backend API contracts (endpoints, payload shapes, validation rules, status codes, and response formats) already implemented and tested.

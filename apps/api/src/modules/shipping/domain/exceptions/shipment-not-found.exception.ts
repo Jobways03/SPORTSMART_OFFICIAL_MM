@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class ShipmentNotFoundException extends DomainException { constructor() { super('Shipment not found', 'SHIPMENT_NOT_FOUND'); } }

@@ -1,0 +1,125 @@
+// ============================================
+// Admin Module - owned tables
+// ============================================
+
+enum AdminRole {
+  SUPER_ADMIN
+  SELLER_ADMIN
+  SELLER_SUPPORT
+  SELLER_OPERATIONS
+}
+
+enum AdminStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum SellerVerificationStatus {
+  NOT_VERIFIED
+  VERIFIED
+  REJECTED
+  UNDER_REVIEW
+}
+
+model Admin {
+  id              String      @id @default(uuid())
+  name            String
+  email           String      @unique
+  passwordHash    String      @map("password_hash")
+  role            AdminRole   @default(SELLER_ADMIN)
+  status          AdminStatus @default(ACTIVE)
+  isSeeded        Boolean     @default(false) @map("is_seeded")
+  lastLoginAt     DateTime?   @map("last_login_at")
+  failedLoginAttempts Int     @default(0) @map("failed_login_attempts")
+  lockUntil       DateTime?   @map("lock_until")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  sessions            AdminSession[]
+  actionAuditLogs     AdminActionAuditLog[]
+  impersonationLogs   AdminImpersonationLog[]
+  adminMessages       AdminSellerMessage[]
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+  @@map("admins")
+}
+
+model AdminSession {
+  id           String    @id @default(uuid())
+  adminId      String    @map("admin_id")
+  refreshToken String    @map("refresh_token")
+  userAgent    String?   @map("user_agent")
+  ipAddress    String?   @map("ip_address")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([refreshToken])
+  @@map("admin_sessions")
+}
+
+model AdminActionAuditLog {
+  id          String   @id @default(uuid())
+  adminId     String   @map("admin_id")
+  sellerId    String?  @map("seller_id")
+  actionType  String   @map("action_type")
+  oldValue    Json?    @map("old_value")
+  newValue    Json?    @map("new_value")
+  reason      String?
+  metadata    Json?
+  ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([sellerId])
+  @@index([actionType])
+  @@index([createdAt])
+  @@map("admin_action_audit_logs")
+}
+
+model AdminImpersonationLog {
+  id          String    @id @default(uuid())
+  adminId     String    @map("admin_id")
+  sellerId    String    @map("seller_id")
+  tokenId     String?   @map("token_id")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  endedAt     DateTime? @map("ended_at")
+  isActive    Boolean   @default(true) @map("is_active")
+  ipAddress   String?   @map("ip_address")
+  userAgent   String?   @map("user_agent")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([sellerId])
+  @@index([isActive])
+  @@map("admin_impersonation_logs")
+}
+
+model AdminSellerMessage {
+  id          String   @id @default(uuid())
+  sellerId    String   @map("seller_id")
+  sentByAdminId String @map("sent_by_admin_id")
+  subject     String
+  message     String
+  channel     String   @default("EMAIL")
+  status      String   @default("SENT")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  admin Admin @relation(fields: [sentByAdminId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId])
+  @@index([sentByAdminId])
+  @@index([createdAt])
+  @@map("admin_seller_messages")
+}

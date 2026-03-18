@@ -1,0 +1,1 @@
+import { DomainException } from '@core/exceptions/domain.exception'; export class ShipmentCreationFailedException extends DomainException { constructor() { super('Shipment creation failed', 'SHIPMENT_CREATION_FAILED'); } }

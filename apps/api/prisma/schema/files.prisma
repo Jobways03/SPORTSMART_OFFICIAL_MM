@@ -1,0 +1,33 @@
+// ============================================
+// Files Module - owned tables
+// ============================================
+
+model FileMetadata {
+  id             String             @id @default(uuid())
+  fileName       String             @map("file_name")
+  mimeType       String             @map("mime_type")
+  sizeBytes      Int                @map("size_bytes")
+  classification FileClassification
+  storageKey     String             @unique @map("storage_key")
+  uploadedBy     String             @map("uploaded_by")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  attachments FileAttachment[]
+
+  @@index([uploadedBy])
+  @@index([classification])
+  @@map("file_metadata")
+}
+
+model FileAttachment {
+  id         String   @id @default(uuid())
+  fileId     String   @map("file_id")
+  resource   String
+  resourceId String   @map("resource_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  file FileMetadata @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([resource, resourceId])
+  @@map("file_attachments")
+}

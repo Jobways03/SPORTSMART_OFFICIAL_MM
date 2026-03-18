@@ -1,0 +1,11 @@
+// Main Prisma schema entry point
+// All module schemas are split into separate files for logical ownership
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

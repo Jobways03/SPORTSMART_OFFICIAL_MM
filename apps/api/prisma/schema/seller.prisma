@@ -1,0 +1,89 @@
+// ============================================
+// Seller Module - owned tables
+// ============================================
+
+model Seller {
+  id                  String       @id @default(uuid())
+  sellerName          String       @map("seller_name")
+  sellerShopName      String       @map("seller_shop_name")
+  email               String       @unique
+  phoneNumber         String       @unique @map("phone_number")
+  passwordHash        String       @map("password_hash")
+  status              SellerStatus @default(PENDING_APPROVAL)
+  failedLoginAttempts Int          @default(0) @map("failed_login_attempts")
+  lockUntil           DateTime?    @map("lock_until")
+  lastLoginAt         DateTime?    @map("last_login_at")
+
+  // Profile fields
+  sellerContactCountryCode    String?  @map("seller_contact_country_code")
+  sellerContactNumber         String?  @map("seller_contact_number")
+  storeAddress                String?  @map("store_address")
+  city                        String?
+  state                       String?
+  country                     String?
+  sellerZipCode               String?  @map("seller_zip_code")
+  shortStoreDescription       String?  @map("short_store_description")
+  detailedStoreDescription    String?  @map("detailed_store_description")
+  sellerPolicy                String?  @map("seller_policy")
+  sellerProfileImageUrl       String?  @map("seller_profile_image_url")
+  sellerProfileImagePublicId  String?  @map("seller_profile_image_public_id")
+  sellerShopLogoUrl           String?  @map("seller_shop_logo_url")
+  sellerShopLogoPublicId      String?  @map("seller_shop_logo_public_id")
+  profileCompletionPercentage Int      @default(0) @map("profile_completion_percentage")
+  isEmailVerified             Boolean  @default(false) @map("is_email_verified")
+  verificationStatus          SellerVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
+  isProfileCompleted          Boolean  @default(false) @map("is_profile_completed")
+  lastProfileUpdatedAt        DateTime? @map("last_profile_updated_at")
+
+  isDeleted           Boolean      @default(false) @map("is_deleted")
+  deletedAt           DateTime?    @map("deleted_at")
+
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  sessions          SellerSession[]
+  passwordResetOtps SellerPasswordResetOtp[]
+  products          Product[]
+  subOrders         SubOrder[]
+  commissionRecords CommissionRecord[]
+
+  @@index([status])
+  @@index([isProfileCompleted])
+  @@map("sellers")
+}
+
+model SellerSession {
+  id           String    @id @default(uuid())
+  sellerId     String    @map("seller_id")
+  refreshToken String    @map("refresh_token")
+  userAgent    String?   @map("user_agent")
+  ipAddress    String?   @map("ip_address")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId])
+  @@index([refreshToken])
+  @@map("seller_sessions")
+}
+
+model SellerPasswordResetOtp {
+  id          String    @id @default(uuid())
+  sellerId    String    @map("seller_id")
+  otpHash     String    @map("otp_hash")
+  purpose     String    @default("PASSWORD_RESET")
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5) @map("max_attempts")
+  verifiedAt  DateTime? @map("verified_at")
+  resetToken  String?   @unique @map("reset_token")
+  usedAt      DateTime? @map("used_at")
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId])
+  @@map("seller_password_reset_otps")
+}

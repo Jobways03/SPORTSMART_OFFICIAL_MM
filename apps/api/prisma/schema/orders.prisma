@@ -1,0 +1,150 @@
+// ============================================
+// Orders Module - owned tables
+// ============================================
+
+enum OrderPaymentStatus {
+  PENDING
+  PAID
+  VOIDED
+  CANCELLED
+}
+
+enum OrderFulfillmentStatus {
+  UNFULFILLED
+  FULFILLED
+  DELIVERED
+}
+
+enum OrderAcceptStatus {
+  OPEN
+  ACCEPTED
+  REJECTED
+}
+
+enum OrderPaymentMethod {
+  COD
+}
+
+model CustomerAddress {
+  id           String   @id @default(uuid())
+  customerId   String   @map("customer_id")
+  fullName     String   @map("full_name")
+  phone        String
+  addressLine1 String   @map("address_line_1")
+  addressLine2 String?  @map("address_line_2")
+  city         String
+  state        String
+  postalCode   String   @map("postal_code")
+  country      String   @default("India")
+  isDefault    Boolean  @default(false) @map("is_default")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  customer User @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+model Cart {
+  id         String   @id @default(uuid())
+  customerId String   @unique @map("customer_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  customer User       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items    CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String  @id @default(uuid())
+  cartId    String  @map("cart_id")
+  productId String  @map("product_id")
+  variantId String? @map("variant_id")
+  quantity  Int     @default(1)
+
+  cart    Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@unique([cartId, productId, variantId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model MasterOrder {
+  id                      String             @id @default(uuid())
+  orderNumber             String             @unique @map("order_number")
+  customerId              String             @map("customer_id")
+  shippingAddressSnapshot Json               @map("shipping_address_snapshot")
+  totalAmount             Decimal            @map("total_amount") @db.Decimal(10, 2)
+  paymentMethod           OrderPaymentMethod @default(COD) @map("payment_method")
+  paymentStatus           OrderPaymentStatus @default(PENDING) @map("payment_status")
+  verified                Boolean            @default(false)
+  verifiedAt              DateTime?          @map("verified_at")
+  itemCount               Int                @map("item_count")
+  createdAt               DateTime           @default(now()) @map("created_at")
+  updatedAt               DateTime           @updatedAt @map("updated_at")
+
+  customer          User               @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  subOrders         SubOrder[]
+  commissionRecords CommissionRecord[]
+
+  @@index([customerId])
+  @@index([orderNumber])
+  @@map("master_orders")
+}
+
+model SubOrder {
+  id                String               @id @default(uuid())
+  masterOrderId     String               @map("master_order_id")
+  sellerId          String               @map("seller_id")
+  subTotal          Decimal              @map("sub_total") @db.Decimal(10, 2)
+  paymentStatus     OrderPaymentStatus   @default(PENDING) @map("payment_status")
+  fulfillmentStatus OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
+  acceptStatus      OrderAcceptStatus    @default(OPEN) @map("accept_status")
+  deliveredAt          DateTime?            @map("delivered_at")
+  returnWindowEndsAt   DateTime?            @map("return_window_ends_at")
+  commissionProcessed  Boolean              @default(false) @map("commission_processed")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  masterOrder       MasterOrder        @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  items             OrderItem[]
+  commissionRecords CommissionRecord[]
+
+  @@index([masterOrderId])
+  @@index([sellerId])
+  @@map("sub_orders")
+}
+
+model OrderItem {
+  id           String   @id @default(uuid())
+  subOrderId   String   @map("sub_order_id")
+  productId    String   @map("product_id")
+  variantId    String?  @map("variant_id")
+  productTitle String   @map("product_title")
+  variantTitle String?  @map("variant_title")
+  sku          String?
+  imageUrl     String?  @map("image_url")
+  unitPrice    Decimal  @map("unit_price") @db.Decimal(10, 2)
+  quantity     Int
+  totalPrice   Decimal  @map("total_price") @db.Decimal(10, 2)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  subOrder         SubOrder           @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  commissionRecord CommissionRecord?
+
+  @@index([subOrderId])
+  @@map("order_items")
+}
+
+model OrderSequence {
+  id         Int @id @default(1)
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("order_sequence")
+}
