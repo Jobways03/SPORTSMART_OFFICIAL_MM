@@ -313,9 +313,97 @@ export const sellerProductService = {
     });
   },
 
+  reorderVariantImages(token: string, productId: string, variantId: string, imageIds: string[]): Promise<ApiResponse<void>> {
+    return apiClient<void>(`/seller/products/${productId}/variants/${variantId}/images/reorder`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ imageIds }),
+    });
+  },
+
   getOptions(): Promise<ApiResponse<any>> {
     return apiClient<any>('/catalog/options', {
       method: 'GET',
+    });
+  },
+
+  // Catalog browsing & mapping
+  browseCatalog(token: string, params: { page?: number; limit?: number; search?: string }): Promise<ApiResponse<any>> {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    return apiClient<any>(`/seller/catalog/browse?${qs}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
+
+  mapToProduct(token: string, payload: any): Promise<ApiResponse<any>> {
+    return apiClient<any>('/seller/catalog/map', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getMyMappedProducts(token: string, params: { page?: number; limit?: number; search?: string }): Promise<ApiResponse<any>> {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    return apiClient<any>(`/seller/catalog/my-products?${qs}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
+
+  updateMapping(token: string, mappingId: string, payload: any): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/seller/catalog/mapping/${mappingId}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  removeMapping(token: string, mappingId: string): Promise<ApiResponse<void>> {
+    return apiClient<void>(`/seller/catalog/mapping/${mappingId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
+
+  bulkUpdateStock(token: string, updates: { mappingId: string; stockQty: number }[]): Promise<ApiResponse<any>> {
+    return apiClient<any>('/seller/catalog/mapping/bulk-stock', {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ updates }),
+    });
+  },
+
+  // Service areas
+  getServiceAreas(token: string, params: { page?: number; limit?: number }): Promise<ApiResponse<any>> {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    return apiClient<any>(`/seller/service-areas?${qs}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  },
+
+  addServiceAreas(token: string, pincodes: string[]): Promise<ApiResponse<any>> {
+    return apiClient<any>('/seller/service-areas', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ pincodes }),
+    });
+  },
+
+  removeServiceArea(token: string, pincode: string): Promise<ApiResponse<void>> {
+    return apiClient<void>(`/seller/service-areas/${pincode}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
     });
   },
 };

@@ -31,6 +31,8 @@ html {
 body {
   min-height: 100vh;
   font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
 }
 
 input, textarea, select, button {

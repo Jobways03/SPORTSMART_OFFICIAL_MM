@@ -3,22 +3,22 @@
 // ============================================
 
 model Category {
-  id          String     @id @default(uuid())
+  id          String   @id @default(uuid())
   name        String
-  slug        String     @unique
+  slug        String   @unique
   description String?
-  imageUrl    String?    @map("image_url")
-  parentId    String?    @map("parent_id")
-  level       Int        @default(0)
-  sortOrder   Int        @default(0) @map("sort_order")
-  isActive    Boolean    @default(true) @map("is_active")
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
+  imageUrl    String?  @map("image_url")
+  parentId    String?  @map("parent_id")
+  level       Int      @default(0)
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children Category[] @relation("CategoryHierarchy")
 
-  products              Product[]
+  products                Product[]
   categoryOptionTemplates CategoryOptionTemplate[]
 
   @@index([parentId])
@@ -45,6 +45,7 @@ model OptionDefinition {
   id          String   @id @default(uuid())
   name        String   @unique
   displayName String   @map("display_name")
+  type        String   @default("GENERIC") // COLOR, SIZE, GENERIC
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
@@ -92,7 +93,8 @@ model CategoryOptionTemplate {
 
 model Product {
   id               String           @id @default(uuid())
-  sellerId         String           @map("seller_id")
+  productCode      String?          @unique @map("product_code") // Auto-generated PRD-XXXXXX
+  sellerId         String?          @map("seller_id")
   title            String
   slug             String           @unique
   shortDescription String?          @map("short_description")
@@ -104,32 +106,38 @@ model Product {
   moderationNote   String?          @map("moderation_note")
   hasVariants      Boolean          @default(false) @map("has_variants")
 
+  // Platform pricing (customer-facing price, admin-controlled)
+  platformPrice Decimal? @map("platform_price") @db.Decimal(10, 2)
+
   // Simple product fields (used when hasVariants = false)
-  basePrice        Decimal?         @map("base_price") @db.Decimal(10, 2)
-  compareAtPrice   Decimal?         @map("compare_at_price") @db.Decimal(10, 2)
-  costPrice        Decimal?         @map("cost_price") @db.Decimal(10, 2)
-  baseSku          String?          @map("base_sku")
-  baseStock        Int?             @map("base_stock")
-  baseBarcode      String?          @map("base_barcode")
+  basePrice      Decimal? @map("base_price") @db.Decimal(10, 2)
+  compareAtPrice Decimal? @map("compare_at_price") @db.Decimal(10, 2)
+  costPrice      Decimal? @map("cost_price") @db.Decimal(10, 2)
+  baseSku        String?  @map("base_sku")
+  baseStock      Int?     @map("base_stock")
+  baseBarcode    String?  @map("base_barcode")
 
   // Shipping
-  weight           Decimal?         @db.Decimal(10, 3)
-  weightUnit       String?          @default("kg") @map("weight_unit")
-  length           Decimal?         @db.Decimal(10, 2)
-  width            Decimal?         @db.Decimal(10, 2)
-  height           Decimal?         @db.Decimal(10, 2)
-  dimensionUnit    String?          @default("cm") @map("dimension_unit")
+  weight        Decimal? @db.Decimal(10, 3)
+  weightUnit    String?  @default("kg") @map("weight_unit")
+  length        Decimal? @db.Decimal(10, 2)
+  width         Decimal? @db.Decimal(10, 2)
+  height        Decimal? @db.Decimal(10, 2)
+  dimensionUnit String?  @default("cm") @map("dimension_unit")
 
   // Policy
-  returnPolicy     String?          @map("return_policy")
-  warrantyInfo     String?          @map("warranty_info")
+  returnPolicy String? @map("return_policy")
+  warrantyInfo String? @map("warranty_info")
 
-  isDeleted        Boolean          @default(false) @map("is_deleted")
-  deletedAt        DateTime?        @map("deleted_at")
-  createdAt        DateTime         @default(now()) @map("created_at")
-  updatedAt        DateTime         @updatedAt @map("updated_at")
+  // Duplicate detection
+  potentialDuplicateOf String? @map("potential_duplicate_of")
 
-  seller   Seller    @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  isDeleted Boolean   @default(false) @map("is_deleted")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  seller   Seller?   @relation(fields: [sellerId], references: [id], onDelete: SetNull)
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   brand    Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
 
@@ -143,6 +151,7 @@ model Product {
   collectionMaps ProductCollectionMap[]
   discounts      DiscountProduct[]
   cartItems      CartItem[]
+  sellerMappings SellerProductMapping[]
 
   @@index([sellerId])
   @@index([categoryId])
@@ -186,15 +195,21 @@ model ProductOptionValue {
 model ProductVariant {
   id             String        @id @default(uuid())
   productId      String        @map("product_id")
+  masterSku      String?       @unique @map("master_sku") // Auto-generated PRD-XXXXXX-BLU-08
   title          String?
   sku            String?
   barcode        String?
   price          Decimal       @db.Decimal(10, 2)
+  platformPrice  Decimal?      @map("platform_price") @db.Decimal(10, 2)
   compareAtPrice Decimal?      @map("compare_at_price") @db.Decimal(10, 2)
   costPrice      Decimal?      @map("cost_price") @db.Decimal(10, 2)
   stock          Int           @default(0)
   weight         Decimal?      @db.Decimal(10, 3)
   weightUnit     String?       @default("kg") @map("weight_unit")
+  length         Decimal?      @db.Decimal(10, 2)
+  width          Decimal?      @db.Decimal(10, 2)
+  height         Decimal?      @db.Decimal(10, 2)
+  dimensionUnit  String?       @default("cm") @map("dimension_unit")
   status         VariantStatus @default(DRAFT)
   sortOrder      Int           @default(0) @map("sort_order")
   isDeleted      Boolean       @default(false) @map("is_deleted")
@@ -202,10 +217,11 @@ model ProductVariant {
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")
 
-  product      Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  optionValues ProductVariantOptionValue[]
-  images       ProductVariantImage[]
-  cartItems    CartItem[]
+  product        Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  optionValues   ProductVariantOptionValue[]
+  images         ProductVariantImage[]
+  cartItems      CartItem[]
+  sellerMappings SellerProductMapping[]
 
   @@index([productId])
   @@index([sku])
@@ -333,4 +349,11 @@ model ProductStatusHistory {
 
   @@index([productId])
   @@map("product_status_history")
+}
+
+model ProductCodeSequence {
+  id         Int @id @default(1)
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("product_code_sequence")
 }

@@ -16,6 +16,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
+import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
@@ -24,8 +25,10 @@ import {
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import { SellerAuthGuard } from '../../../../../core/guards';
 import { ProductSlugService } from '../../../application/services/product-slug.service';
+import { ProductCodeService } from '../../../application/services/product-code.service';
 import { ProductOwnershipService } from '../../../application/services/product-ownership.service';
 import { ReApprovalService } from '../../../application/services/re-approval.service';
+import { DuplicateDetectionService } from '../../../application/services/duplicate-detection.service';
 import { CreateProductDto } from '../../dtos/create-product.dto';
 import { UpdateProductDto } from '../../dtos/update-product.dto';
 
@@ -37,8 +40,11 @@ export class SellerProductsController {
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
     private readonly slugService: ProductSlugService,
+    private readonly productCodeService: ProductCodeService,
     private readonly ownershipService: ProductOwnershipService,
     private readonly reApprovalService: ReApprovalService,
+    private readonly duplicateDetectionService: DuplicateDetectionService,
+    private readonly eventBus: EventBusService,
   ) {
     this.logger.setContext('SellerProductsController');
   }
@@ -64,7 +70,11 @@ export class SellerProductsController {
       );
     }
 
+    // Sellers CANNOT set platformPrice
+    delete (dto as any).platformPrice;
+
     const slug = await this.slugService.generateUniqueSlug(dto.title);
+    const productCode = await this.productCodeService.generateProductCode();
 
     // Handle categoryName → find or create category
     let resolvedCategoryId = dto.categoryId;
@@ -100,6 +110,7 @@ export class SellerProductsController {
       const newProduct = await tx.product.create({
         data: {
           sellerId,
+          productCode,
           title: dto.title,
           slug,
           shortDescription: dto.shortDescription,
@@ -190,6 +201,74 @@ export class SellerProductsController {
 
     this.logger.log(`Product created: ${product.id} by seller ${sellerId}`);
 
+    // ── Phase 11 / T3: Auto-create SellerProductMapping for the creator ──
+    // When a seller creates their own product, they are automatically mapped
+    // as a seller for that product. This connects the old creation flow with
+    // the new platform-controlled catalog model.
+    try {
+      const sellerProfile = await this.prisma.seller.findUnique({
+        where: { id: sellerId },
+        select: {
+          storeAddress: true,
+          sellerZipCode: true,
+        },
+      });
+
+      if (product.hasVariants) {
+        // For variant products, create mappings for inline variants
+        const createdVariants = await this.prisma.productVariant.findMany({
+          where: { productId: product.id, isDeleted: false },
+          select: { id: true, price: true, stock: true },
+        });
+
+        if (createdVariants.length > 0) {
+          for (const variant of createdVariants) {
+            await this.prisma.sellerProductMapping.create({
+              data: {
+                sellerId,
+                productId: product.id,
+                variantId: variant.id,
+                stockQty: variant.stock ?? 0,
+                settlementPrice: variant.price ? Number(variant.price) : (product.basePrice ? Number(product.basePrice) : undefined),
+                pickupAddress: sellerProfile?.storeAddress || null,
+                pickupPincode: sellerProfile?.sellerZipCode || null,
+                dispatchSla: 2,
+                approvalStatus: 'PENDING_APPROVAL',
+                isActive: false,
+              },
+            });
+          }
+          this.logger.log(
+            `Auto-created ${createdVariants.length} seller mapping(s) for variant product ${product.id} (pending approval)`,
+          );
+        }
+      } else {
+        // For simple products, create a single product-level mapping
+        await this.prisma.sellerProductMapping.create({
+          data: {
+            sellerId,
+            productId: product.id,
+            variantId: null,
+            stockQty: product.baseStock ?? 0,
+            settlementPrice: product.basePrice ? Number(product.basePrice) : undefined,
+            pickupAddress: sellerProfile?.storeAddress || null,
+            pickupPincode: sellerProfile?.sellerZipCode || null,
+            dispatchSla: 2,
+            approvalStatus: 'PENDING_APPROVAL',
+            isActive: false,
+          },
+        });
+        this.logger.log(
+          `Auto-created seller mapping for simple product ${product.id} (pending approval)`,
+        );
+      }
+    } catch (mappingError) {
+      // Log but don't fail product creation if mapping fails
+      this.logger.warn(
+        `Failed to auto-create seller mapping for product ${product.id}: ${mappingError}`,
+      );
+    }
+
     // Fetch full product
     const fullProduct = await this.prisma.product.findUnique({
       where: { id: product.id },
@@ -199,12 +278,13 @@ export class SellerProductsController {
         variants: true,
         category: true,
         brand: true,
+        sellerMappings: true,
       },
     });
 
     return {
       success: true,
-      message: 'Product created successfully',
+      message: 'Product created successfully. You have been automatically mapped as a seller for this product.',
       data: fullProduct,
     };
   }
@@ -370,7 +450,8 @@ export class SellerProductsController {
     // Validate ownership
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    // Build update data
+    // Build update data — sellers CANNOT set platformPrice
+    delete (dto as any).platformPrice;
     const updateData: any = {};
     if (dto.title !== undefined) {
       updateData.title = dto.title;
@@ -543,7 +624,10 @@ export class SellerProductsController {
       where: { id: productId },
       include: {
         images: true,
-        variants: { where: { isDeleted: false } },
+        variants: {
+          where: { isDeleted: false },
+          include: { images: true },
+        },
       },
     });
 
@@ -568,7 +652,12 @@ export class SellerProductsController {
       throw new BadRequestAppException('Product must have a category');
     }
 
-    if (product.images.length === 0) {
+    // For variant products, accept either product-level or variant-level images
+    const hasProductImages = product.images.length > 0;
+    const hasVariantImages = product.hasVariants &&
+      product.variants.some((v) => v.images.length > 0);
+
+    if (!hasProductImages && !hasVariantImages) {
       throw new BadRequestAppException('Product must have at least 1 image');
     }
 
@@ -594,12 +683,27 @@ export class SellerProductsController {
       }
     }
 
+    // Run duplicate detection
+    let potentialDuplicates: any[] = [];
+    try {
+      potentialDuplicates = await this.duplicateDetectionService.findPotentialDuplicates({
+        title: product.title,
+        brandId: product.brandId ?? undefined,
+        categoryId: product.categoryId ?? undefined,
+      });
+    } catch (err) {
+      this.logger.warn(`Duplicate detection failed for product ${productId}: ${err}`);
+    }
+
+    const bestMatchId = potentialDuplicates.length > 0 ? potentialDuplicates[0].productId : null;
+
     await this.prisma.$transaction(async (tx) => {
       await tx.product.update({
         where: { id: productId },
         data: {
           status: 'SUBMITTED',
           moderationStatus: 'PENDING',
+          ...(bestMatchId ? { potentialDuplicateOf: bestMatchId } : {}),
         },
       });
 
@@ -614,10 +718,30 @@ export class SellerProductsController {
       });
     });
 
+    // Emit event for admin notification
+    try {
+      await this.eventBus.publish({
+        eventName: 'catalog.listing.submitted_for_qc',
+        aggregate: 'Product',
+        aggregateId: productId,
+        occurredAt: new Date(),
+        payload: {
+          productId,
+          productTitle: product.title,
+          sellerId,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to emit catalog.listing.submitted_for_qc event: ${err}`);
+    }
+
     return {
       success: true,
       message: 'Product submitted for review',
-      data: null,
+      data: {
+        product: { id: productId },
+        potentialDuplicates,
+      },
     };
   }
 }

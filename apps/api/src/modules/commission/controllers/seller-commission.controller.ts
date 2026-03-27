@@ -23,12 +23,17 @@ export class SellerCommissionController {
     @Query('search') search?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('status') status?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
     const where: any = { sellerId: req.sellerId };
+
+    if (status && ['PENDING', 'SETTLED', 'REFUNDED'].includes(status)) {
+      where.status = status;
+    }
 
     if (dateFrom || dateTo) {
       where.createdAt = {};

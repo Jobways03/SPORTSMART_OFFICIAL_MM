@@ -255,6 +255,9 @@ export class SellerProductVariantsController {
       orderBy: { sortOrder: 'asc' },
     });
 
+    // ── Phase 11 / T3: Auto-create seller mappings for generated variants ──
+    await this.autoCreateVariantMappings(sellerId, productId, variants);
+
     this.logger.log(
       `Generated ${variants.length} variants (manual options) for product ${productId}`,
     );
@@ -357,6 +360,9 @@ export class SellerProductVariantsController {
       orderBy: { sortOrder: 'asc' },
     });
 
+    // ── Phase 11 / T3: Auto-create seller mappings for generated variants ──
+    await this.autoCreateVariantMappings(sellerId, productId, variants);
+
     this.logger.log(
       `Generated ${variants.length} variants for product ${productId}`,
     );
@@ -379,6 +385,9 @@ export class SellerProductVariantsController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
+    // Sellers CANNOT set platformPrice
+    delete (dto as any).platformPrice;
+
     const variant = await this.prisma.productVariant.findFirst({
       where: { id: variantId, productId, isDeleted: false },
     });
@@ -395,6 +404,10 @@ export class SellerProductVariantsController {
     if (dto.stock !== undefined) updateData.stock = dto.stock;
     if (dto.weight !== undefined) updateData.weight = dto.weight;
     if (dto.weightUnit !== undefined) updateData.weightUnit = dto.weightUnit;
+    if (dto.length !== undefined) updateData.length = dto.length;
+    if (dto.width !== undefined) updateData.width = dto.width;
+    if (dto.height !== undefined) updateData.height = dto.height;
+    if (dto.dimensionUnit !== undefined) updateData.dimensionUnit = dto.dimensionUnit;
     if (dto.status !== undefined) updateData.status = dto.status;
     if (dto.barcode !== undefined) updateData.barcode = dto.barcode;
     if (dto.title !== undefined) updateData.title = dto.title;
@@ -462,6 +475,87 @@ export class SellerProductVariantsController {
       message: `${results.length} variants updated successfully`,
       data: results,
     };
+  }
+
+  // ── Phase 11 / T3: Auto-create seller mappings for generated variants ──
+  // When a seller generates variants for their own product, automatically
+  // create SellerProductMapping entries so the product appears in the
+  // storefront with seller stock/fulfillment data.
+  private async autoCreateVariantMappings(
+    sellerId: string,
+    productId: string,
+    variants: any[],
+  ): Promise<void> {
+    try {
+      // Verify the product belongs to this seller (only auto-map for own products)
+      const product = await this.prisma.product.findUnique({
+        where: { id: productId },
+        select: { sellerId: true, basePrice: true },
+      });
+
+      if (!product || product.sellerId !== sellerId) {
+        return; // Only auto-map for products the seller owns
+      }
+
+      const sellerProfile = await this.prisma.seller.findUnique({
+        where: { id: sellerId },
+        select: {
+          storeAddress: true,
+          sellerZipCode: true,
+        },
+      });
+
+      // Remove existing product-level mapping (null variantId) if it exists,
+      // since we are now creating per-variant mappings
+      await this.prisma.sellerProductMapping.deleteMany({
+        where: { sellerId, productId, variantId: null },
+      });
+
+      // Get existing variant mappings for this seller + product
+      const existingMappings = await this.prisma.sellerProductMapping.findMany({
+        where: { sellerId, productId },
+        select: { variantId: true },
+      });
+      const existingVariantIds = new Set(
+        existingMappings.map((m) => m.variantId),
+      );
+
+      let created = 0;
+      for (const variant of variants) {
+        if (existingVariantIds.has(variant.id)) continue; // Skip already-mapped variants
+
+        await this.prisma.sellerProductMapping.create({
+          data: {
+            sellerId,
+            productId,
+            variantId: variant.id,
+            stockQty: variant.stock ?? 0,
+            settlementPrice: variant.price
+              ? Number(variant.price)
+              : product.basePrice
+                ? Number(product.basePrice)
+                : undefined,
+            pickupAddress: sellerProfile?.storeAddress || null,
+            pickupPincode: sellerProfile?.sellerZipCode || null,
+            dispatchSla: 2,
+            approvalStatus: 'PENDING_APPROVAL',
+            isActive: false,
+          },
+        });
+        created++;
+      }
+
+      if (created > 0) {
+        this.logger.log(
+          `Auto-created ${created} seller mapping(s) for variants of product ${productId}`,
+        );
+      }
+    } catch (err) {
+      // Log but don't fail variant generation if mapping creation fails
+      this.logger.warn(
+        `Failed to auto-create seller mappings for product ${productId}: ${err}`,
+      );
+    }
   }
 
   @Delete(':variantId')

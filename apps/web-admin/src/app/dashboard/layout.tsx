@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { adminAuthService } from '@/services/admin-auth.service';
+import { adminProductsService } from '@/services/admin-products.service';
 import './dashboard.css';
 
 interface AdminInfo {
@@ -37,6 +38,7 @@ export default function DashboardLayout({
   const [admin, setAdmin] = useState<AdminInfo | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pendingMappingsCount, setPendingMappingsCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,6 +54,35 @@ export default function DashboardLayout({
       router.replace('/login');
     }
   }, [router]);
+
+  // Fetch pending mappings count for badge
+  useEffect(() => {
+    if (!admin) return;
+    adminProductsService.getPendingMappings({ limit: 0 })
+      .then(res => {
+        if (res.data?.pagination?.total !== undefined) {
+          setPendingMappingsCount(res.data.pagination.total);
+        } else if (res.data?.total !== undefined) {
+          setPendingMappingsCount(res.data.total);
+        }
+      })
+      .catch(() => {});
+
+    // Refresh every 60 seconds
+    const interval = setInterval(() => {
+      adminProductsService.getPendingMappings({ limit: 0 })
+        .then(res => {
+          if (res.data?.pagination?.total !== undefined) {
+            setPendingMappingsCount(res.data.pagination.total);
+          } else if (res.data?.total !== undefined) {
+            setPendingMappingsCount(res.data.total);
+          }
+        })
+        .catch(() => {});
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [admin]);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -93,6 +124,7 @@ export default function DashboardLayout({
     { href: '/dashboard/products', label: 'Products', icon: '&#128230;' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },
+    { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
     { href: '/dashboard/storefront', label: 'Storefront', icon: '&#127998;' },
   ];
 
@@ -184,6 +216,22 @@ export default function DashboardLayout({
                 dangerouslySetInnerHTML={{ __html: item.icon }}
               />
               {item.label}
+              {item.href === '/dashboard/products' && pendingMappingsCount > 0 && (
+                <span style={{
+                  marginLeft: 'auto',
+                  background: '#f59e0b',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: '2px 7px',
+                  borderRadius: 10,
+                  minWidth: 18,
+                  textAlign: 'center',
+                  lineHeight: '16px',
+                }}>
+                  {pendingMappingsCount > 99 ? '99+' : pendingMappingsCount}
+                </span>
+              )}
             </Link>
           ))}
         </div>

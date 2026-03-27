@@ -1,407 +1,623 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { adminProductsService } from '@/services/admin-products.service';
+import { adminSellersService, SellerListItem } from '@/services/admin-sellers.service';
 import { ApiError } from '@/lib/api-client';
 import '../product-form.css';
 import RichTextEditor from '@/components/RichTextEditor';
 
-interface CategoryOption {
+// ----- Types -----
+
+interface CategoryNode {
+  id: string;
+  name: string;
+  children?: CategoryNode[];
+}
+
+interface Brand {
   id: string;
   name: string;
 }
 
-interface BrandOption {
+interface FlatCategory {
   id: string;
   name: string;
+  depth: number;
 }
+
+interface Toast {
+  type: 'success' | 'error';
+  message: string;
+}
+
+// ----- Helpers -----
+
+function flattenCategories(nodes: CategoryNode[], depth = 0): FlatCategory[] {
+  const result: FlatCategory[] = [];
+  for (const node of nodes) {
+    result.push({ id: node.id, name: node.name, depth });
+    if (node.children && node.children.length > 0) {
+      result.push(...flattenCategories(node.children, depth + 1));
+    }
+  }
+  return result;
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+// ----- Component -----
 
 export default function CreateProductPage() {
   const router = useRouter();
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
-  // Categories & Brands
-  const [categories, setCategories] = useState<CategoryOption[]>([]);
-  const [brands, setBrands] = useState<BrandOption[]>([]);
+  // Form state (single object like seller page)
+  const [form, setForm] = useState({
+    sellerEmail: '',
+    title: '',
+    categoryId: '',
+    categoryName: '',
+    brandId: '',
+    brandName: '',
+    shortDescription: '',
+    description: '',
+    hasVariants: false,
+    basePrice: '',
+    compareAtPrice: '',
+    costPrice: '',
+    baseSku: '',
+    baseStock: '',
+    baseBarcode: '',
+    weight: '',
+    weightUnit: 'kg',
+    length: '',
+    width: '',
+    height: '',
+    dimensionUnit: 'cm',
+    returnPolicy: '',
+    warrantyInfo: '',
+    tags: [] as string[],
+    seoMetaTitle: '',
+    seoMetaDescription: '',
+    seoHandle: '',
+  });
 
-  // Form fields
-  const [sellerEmail, setSellerEmail] = useState('');
-  const [title, setTitle] = useState('');
-  const [shortDescription, setShortDescription] = useState('');
-  const [description, setDescription] = useState('');
-  const [categoryId, setCategoryId] = useState('');
-  const [brandId, setBrandId] = useState('');
-  const [categoryName, setCategoryName] = useState('');
-  const [brandName, setBrandName] = useState('');
-  const [basePrice, setBasePrice] = useState('');
-  const [compareAtPrice, setCompareAtPrice] = useState('');
-  const [costPrice, setCostPrice] = useState('');
-  const [baseSku, setBaseSku] = useState('');
-  const [baseStock, setBaseStock] = useState('');
-  const [baseBarcode, setBaseBarcode] = useState('');
-  const [weight, setWeight] = useState('');
-  const [weightUnit, setWeightUnit] = useState('kg');
-  const [length, setLength] = useState('');
-  const [width, setWidth] = useState('');
-  const [height, setHeight] = useState('');
-  const [dimensionUnit, setDimensionUnit] = useState('cm');
-  const [returnPolicy, setReturnPolicy] = useState('');
-  const [warrantyInfo, setWarrantyInfo] = useState('');
-
-  // Tags
-  const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const [seoHandleEdited, setSeoHandleEdited] = useState(false);
 
-  // SEO
-  const [metaTitle, setMetaTitle] = useState('');
-  const [metaDescription, setMetaDescription] = useState('');
-  const [handle, setHandle] = useState('');
+  // Data state
+  const [categories, setCategories] = useState<FlatCategory[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [activeSellers, setActiveSellers] = useState<SellerListItem[]>([]);
 
-  const loadCatalogData = useCallback(async () => {
-    try {
-      const [catRes, brandRes] = await Promise.all([
-        adminProductsService.getCategories(),
-        adminProductsService.getBrands(),
-      ]);
-      if (catRes.data) {
-        const cats = Array.isArray(catRes.data) ? catRes.data : (catRes.data as any).categories || [];
-        setCategories(cats);
-      }
-      if (brandRes.data) {
-        const brs = Array.isArray(brandRes.data) ? brandRes.data : (brandRes.data as any).brands || [];
-        setBrands(brs);
-      }
-    } catch {
-      // Silently fail, dropdowns will be empty
-    }
-  }, []);
+  // UI state
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [toast, setToast] = useState<Toast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // ----- Load categories, brands, and sellers -----
 
   useEffect(() => {
-    loadCatalogData();
-  }, [loadCatalogData]);
+    async function loadData() {
+      try {
+        const [catRes, brandRes] = await Promise.all([
+          adminProductsService.getCategories(),
+          adminProductsService.getBrands(),
+        ]);
+        if (catRes.data) {
+          const nodes = Array.isArray(catRes.data) ? catRes.data : (catRes.data as any).categories || [];
+          setCategories(flattenCategories(nodes));
+        }
+        if (brandRes.data) {
+          const brandList = Array.isArray(brandRes.data) ? brandRes.data : (brandRes.data as any).brands || [];
+          setBrands(brandList);
+        }
+      } catch {
+        // Non-critical — dropdowns will just be empty
+      }
 
-  const addTag = () => {
+      try {
+        const sellersRes = await adminSellersService.listSellers({ status: 'ACTIVE', limit: 100 });
+        if (sellersRes.data?.sellers) {
+          setActiveSellers(sellersRes.data.sellers);
+        }
+      } catch {
+        // Non-critical
+      }
+    }
+    loadData();
+  }, []);
+
+  // ----- Toast helper -----
+
+  const showToast = useCallback((type: 'success' | 'error', message: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ type, message });
+    toastTimer.current = setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  // ----- Form helpers -----
+
+  const updateField = useCallback(
+    (field: string, value: string | boolean) => {
+      setForm(prev => {
+        const next = { ...prev, [field]: value };
+        // Auto-generate SEO handle from title
+        if (field === 'title' && !seoHandleEdited) {
+          next.seoHandle = slugify(value as string);
+        }
+        return next;
+      });
+      // Clear field error on change
+      setErrors(prev => {
+        if (prev[field]) {
+          const next = { ...prev };
+          delete next[field];
+          return next;
+        }
+        return prev;
+      });
+    },
+    [seoHandleEdited],
+  );
+
+  const addTag = useCallback(() => {
     const tag = tagInput.trim();
-    if (tag && !tags.includes(tag)) {
-      setTags([...tags, tag]);
+    if (tag && !form.tags.includes(tag)) {
+      setForm(prev => ({ ...prev, tags: [...prev.tags, tag] }));
     }
     setTagInput('');
-  };
+  }, [tagInput, form.tags]);
 
-  const removeTag = (tag: string) => {
-    setTags(tags.filter(t => t !== tag));
-  };
+  const removeTag = useCallback((tag: string) => {
+    setForm(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
+  }, []);
 
-  const handleTagKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault();
-      addTag();
+  // ----- Validation -----
+
+  function validate(): boolean {
+    const errs: Record<string, string> = {};
+    if (!form.sellerEmail.trim()) {
+      errs.sellerEmail = 'Seller is required';
     }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sellerEmail.trim()) {
-      setError('Seller email is required.');
-      return;
+    if (!form.title.trim()) {
+      errs.title = 'Title is required';
     }
-    if (!title.trim()) {
-      setError('Product title is required.');
-      return;
+    if (!form.hasVariants) {
+      if (!form.basePrice || isNaN(Number(form.basePrice)) || Number(form.basePrice) <= 0) {
+        errs.basePrice = 'Price is required and must be greater than 0';
+      }
+      if (form.baseStock === '' || isNaN(Number(form.baseStock)) || Number(form.baseStock) < 0) {
+        errs.baseStock = 'Stock is required and must be 0 or more';
+      }
     }
+    setErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
 
-    setSubmitting(true);
-    setError('');
-    setSuccess('');
+  // ----- Build payload -----
 
-    const payload: Record<string, unknown> = {
-      sellerEmail: sellerEmail.trim(),
-      title: title.trim(),
+  function buildPayload() {
+    const payload: any = {
+      sellerEmail: form.sellerEmail.trim(),
+      title: form.title.trim(),
+      hasVariants: form.hasVariants,
     };
 
-    if (shortDescription.trim()) payload.shortDescription = shortDescription.trim();
-    if (description.trim()) payload.description = description.trim();
-    if (categoryId) payload.categoryId = categoryId;
-    else if (categoryName.trim()) payload.categoryName = categoryName.trim();
-    if (brandId) payload.brandId = brandId;
-    else if (brandName.trim()) payload.brandName = brandName.trim();
-    if (basePrice) payload.basePrice = parseFloat(basePrice);
-    if (compareAtPrice) payload.compareAtPrice = parseFloat(compareAtPrice);
-    if (costPrice) payload.costPrice = parseFloat(costPrice);
-    if (baseSku.trim()) payload.baseSku = baseSku.trim();
-    if (baseStock) payload.baseStock = parseInt(baseStock, 10);
-    if (baseBarcode.trim()) payload.baseBarcode = baseBarcode.trim();
-    if (weight) payload.weight = parseFloat(weight);
-    if (weightUnit) payload.weightUnit = weightUnit;
-    if (length) payload.length = parseFloat(length);
-    if (width) payload.width = parseFloat(width);
-    if (height) payload.height = parseFloat(height);
-    if (dimensionUnit) payload.dimensionUnit = dimensionUnit;
-    if (returnPolicy.trim()) payload.returnPolicy = returnPolicy.trim();
-    if (warrantyInfo.trim()) payload.warrantyInfo = warrantyInfo.trim();
-    if (tags.length > 0) payload.tags = tags;
+    if (form.categoryId) payload.categoryId = form.categoryId;
+    else if (form.categoryName?.trim()) payload.categoryName = form.categoryName.trim();
+    if (form.brandId) payload.brandId = form.brandId;
+    else if (form.brandName?.trim()) payload.brandName = form.brandName.trim();
+    if (form.shortDescription.trim()) payload.shortDescription = form.shortDescription.trim();
+    if (form.description.trim()) payload.description = form.description.trim();
 
-    const seo: Record<string, string> = {};
-    if (metaTitle.trim()) seo.metaTitle = metaTitle.trim();
-    if (metaDescription.trim()) seo.metaDescription = metaDescription.trim();
-    if (handle.trim()) seo.handle = handle.trim();
+    // Always send pricing/inventory — used as defaults for variants too
+    if (form.basePrice) payload.basePrice = Number(form.basePrice);
+    if (form.compareAtPrice) payload.compareAtPrice = Number(form.compareAtPrice);
+    if (form.costPrice) payload.costPrice = Number(form.costPrice);
+    if (form.baseSku.trim()) payload.baseSku = form.baseSku.trim();
+    if (form.baseStock !== '') payload.baseStock = Number(form.baseStock);
+    if (form.baseBarcode.trim()) payload.baseBarcode = form.baseBarcode.trim();
+
+    if (form.weight) payload.weight = Number(form.weight);
+    payload.weightUnit = form.weightUnit;
+    if (form.length) payload.length = Number(form.length);
+    if (form.width) payload.width = Number(form.width);
+    if (form.height) payload.height = Number(form.height);
+    payload.dimensionUnit = form.dimensionUnit;
+
+    if (form.returnPolicy.trim()) payload.returnPolicy = form.returnPolicy.trim();
+    if (form.warrantyInfo.trim()) payload.warrantyInfo = form.warrantyInfo.trim();
+
+    if (form.tags.length > 0) payload.tags = form.tags;
+
+    const seo: any = {};
+    if (form.seoMetaTitle.trim()) seo.metaTitle = form.seoMetaTitle.trim();
+    if (form.seoMetaDescription.trim()) seo.metaDescription = form.seoMetaDescription.trim();
+    if (form.seoHandle.trim()) seo.handle = form.seoHandle.trim();
     if (Object.keys(seo).length > 0) payload.seo = seo;
 
+    return payload;
+  }
+
+  // ----- Submit handler -----
+
+  async function handleSave() {
+    if (!validate()) {
+      showToast('error', 'Please fix the errors before saving.');
+      return;
+    }
+
+    setSaving(true);
     try {
+      const payload = buildPayload();
       const res = await adminProductsService.createProduct(payload);
-      if (res.data) {
-        setSuccess('Product created successfully.');
-        setTimeout(() => {
-          router.push(`/dashboard/products/${res.data!.id}/edit`);
-        }, 1000);
+
+      if (res.data?.id) {
+        showToast('success', 'Product created successfully.');
+        setTimeout(() => router.push(`/dashboard/products/${res.data!.id}/edit`), 800);
+      } else {
+        showToast('success', 'Product saved as draft.');
+        setTimeout(() => router.push('/dashboard/products'), 800);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        router.replace('/login');
-        return;
+      if (err instanceof ApiError) {
+        if (err.status === 401) {
+          router.replace('/login');
+          return;
+        }
+        showToast('error', err.message || 'Failed to create product.');
+        if (err.body.errors) {
+          const fieldErrors: Record<string, string> = {};
+          for (const e of err.body.errors) {
+            fieldErrors[e.field] = e.message;
+          }
+          setErrors(prev => ({ ...prev, ...fieldErrors }));
+        }
+      } else {
+        showToast('error', 'An unexpected error occurred.');
       }
-      setError(err instanceof ApiError ? err.message : 'Failed to create product');
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
-  };
+  }
+
+  // ----- Render -----
 
   return (
     <div className="product-form-page">
-      <Link href="/dashboard/products" className="product-form-back">
-        &#8592; Back to Products
-      </Link>
+      {/* Toast */}
+      {toast && (
+        <div className={`toast ${toast.type}`}>{toast.message}</div>
+      )}
 
+      {/* Header */}
       <div className="product-form-header">
-        <h1>Create Product</h1>
+        <div>
+          <Link href="/dashboard/products" className="product-form-back">
+            &larr; Back to Products
+          </Link>
+          <h1>Create Product</h1>
+        </div>
       </div>
 
-      {error && <div className="product-form-alert error">{error}</div>}
-      {success && <div className="product-form-alert success">{success}</div>}
-
-      <form onSubmit={handleSubmit}>
-        {/* Seller Email */}
-        <div className="product-form-section">
-          <h2>Seller</h2>
-          <div className="form-group">
-            <label>Seller Email <span className="required">*</span></label>
-            <input
-              type="email"
-              placeholder="seller@example.com"
-              value={sellerEmail}
-              onChange={e => setSellerEmail(e.target.value)}
-              required
-            />
-            <div className="field-hint">The product will be created under this seller&apos;s account.</div>
+      {/* Section 1: Seller (admin-specific) */}
+      <div className="form-card">
+        <div className="form-card-title">SELLER</div>
+        <div className="form-grid">
+          <div className="form-group full-width">
+            <label className="form-label">
+              Seller Email <span className="required">*</span>
+            </label>
+            <select
+              className="form-select"
+              value={form.sellerEmail}
+              onChange={e => updateField('sellerEmail', e.target.value)}
+            >
+              <option value="">Select an active seller</option>
+              {activeSellers.map(s => (
+                <option key={s.sellerId} value={s.email}>
+                  {s.sellerName} — {s.email} ({s.sellerShopName})
+                </option>
+              ))}
+            </select>
+            {errors.sellerEmail && <span className="form-error">{errors.sellerEmail}</span>}
+            <span className="form-hint">The product will be created under this seller&apos;s account.</span>
           </div>
         </div>
+      </div>
 
-        {/* Basic Info */}
-        <div className="product-form-section">
-          <h2>Basic Information</h2>
-          <div className="form-group">
-            <label>Product Title <span className="required">*</span></label>
+      {/* Section 2: Basic Info */}
+      <div className="form-card">
+        <div className="form-card-title">BASIC INFORMATION</div>
+        <div className="form-grid">
+          <div className="form-group full-width">
+            <label className="form-label">
+              Title <span className="required">*</span>
+            </label>
             <input
               type="text"
-              placeholder="Enter product title"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              required
+              className="form-input"
+              value={form.title}
+              onChange={e => updateField('title', e.target.value)}
+              placeholder="Product title"
+              maxLength={200}
             />
+            {errors.title && <span className="form-error">{errors.title}</span>}
           </div>
+
           <div className="form-group">
-            <label>Short Description</label>
+            <label className="form-label">Category</label>
+            <input
+              type="text"
+              className="form-input"
+              list="category-list"
+              value={form.categoryId ? categories.find(c => c.id === form.categoryId)?.name || form.categoryName || '' : form.categoryName || ''}
+              onChange={e => {
+                const typed = e.target.value;
+                const match = categories.find(c => c.name.toLowerCase() === typed.toLowerCase());
+                if (match) {
+                  setForm(prev => ({ ...prev, categoryId: match.id, categoryName: '' }));
+                } else {
+                  setForm(prev => ({ ...prev, categoryId: '', categoryName: typed }));
+                }
+              }}
+              placeholder="Type or select category"
+            />
+            <datalist id="category-list">
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.name} />
+              ))}
+            </datalist>
+            <span className="form-hint">Type a new category or select from existing</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Brand</label>
+            <input
+              type="text"
+              className="form-input"
+              list="brand-list"
+              value={form.brandId ? brands.find(b => b.id === form.brandId)?.name || form.brandName || '' : form.brandName || ''}
+              onChange={e => {
+                const typed = e.target.value;
+                const match = brands.find(b => b.name.toLowerCase() === typed.toLowerCase());
+                if (match) {
+                  setForm(prev => ({ ...prev, brandId: match.id, brandName: '' }));
+                } else {
+                  setForm(prev => ({ ...prev, brandId: '', brandName: typed }));
+                }
+              }}
+              placeholder="Type or select brand"
+            />
+            <datalist id="brand-list">
+              {brands.map(b => (
+                <option key={b.id} value={b.name} />
+              ))}
+            </datalist>
+            <span className="form-hint">Type a new brand or select from existing</span>
+          </div>
+
+          <div className="form-group full-width">
+            <label className="form-label">Short Description</label>
             <textarea
-              placeholder="Brief description of the product"
-              value={shortDescription}
-              onChange={e => setShortDescription(e.target.value)}
-              style={{ minHeight: 60 }}
+              className="form-textarea"
+              value={form.shortDescription}
+              onChange={e => updateField('shortDescription', e.target.value)}
+              placeholder="Brief description (shown in product cards)"
+              maxLength={300}
+            />
+            <span className="form-hint">{form.shortDescription.length}/300</span>
+          </div>
+
+          <div className="form-group full-width">
+            <label className="form-label">Description</label>
+            <RichTextEditor
+              value={form.description}
+              onChange={(val) => updateField('description', val)}
+              placeholder="Full product description"
+              minHeight={200}
             />
           </div>
-          <div className="form-group">
-            <label>Full Description</label>
-            <RichTextEditor value={description} onChange={setDescription} placeholder="Detailed product description" minHeight={200} />
-          </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Category</label>
-              <input
-                type="text"
-                list="category-list"
-                value={categoryName}
-                onChange={e => {
-                  const typed = e.target.value;
-                  setCategoryName(typed);
-                  const match = categories.find(c => c.name.toLowerCase() === typed.toLowerCase());
-                  if (match) setCategoryId(match.id);
-                  else setCategoryId('');
-                }}
-                placeholder="Type or select category"
-              />
-              <datalist id="category-list">
-                {categories.map(c => <option key={c.id} value={c.name} />)}
-              </datalist>
-              <div className="field-hint">Type a new category or select from existing</div>
-            </div>
-            <div className="form-group">
-              <label>Brand</label>
-              <input
-                type="text"
-                list="brand-list"
-                value={brandName}
-                onChange={e => {
-                  const typed = e.target.value;
-                  setBrandName(typed);
-                  const match = brands.find(b => b.name.toLowerCase() === typed.toLowerCase());
-                  if (match) setBrandId(match.id);
-                  else setBrandId('');
-                }}
-                placeholder="Type or select brand"
-              />
-              <datalist id="brand-list">
-                {brands.map(b => <option key={b.id} value={b.name} />)}
-              </datalist>
-              <div className="field-hint">Type a new brand or select from existing</div>
-            </div>
-          </div>
+        </div>
+      </div>
+
+      {/* Section 3: Product Type & Pricing */}
+      <div className="form-card">
+        <div className="form-card-title">PRODUCT TYPE &amp; PRICING</div>
+
+        <div className="form-checkbox-group">
+          <input
+            type="checkbox"
+            id="hasVariants"
+            checked={form.hasVariants}
+            onChange={e => updateField('hasVariants', e.target.checked)}
+          />
+          <label htmlFor="hasVariants">This product has variants (e.g., sizes, colors)</label>
         </div>
 
-        {/* Pricing */}
-        <div className="product-form-section">
-          <h2>Pricing</h2>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Base Price</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0.00"
-                value={basePrice}
-                onChange={e => setBasePrice(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Compare At Price</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0.00"
-                value={compareAtPrice}
-                onChange={e => setCompareAtPrice(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Cost Price</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="0.00"
-                value={costPrice}
-                onChange={e => setCostPrice(e.target.value)}
-              />
-            </div>
+        {form.hasVariants && (
+          <div className="info-box">
+            These values will be applied as defaults to all generated variants. You can edit individual variants later.
           </div>
-          <div className="form-row">
+        )}
+
+          <div className="form-grid">
             <div className="form-group">
-              <label>SKU</label>
+              <label className="form-label">
+                Price <span className="required">*</span>
+              </label>
+              <div className="input-with-prefix">
+                <span className="input-prefix">&#8377;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={form.basePrice}
+                  onChange={e => updateField('basePrice', e.target.value)}
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+              {errors.basePrice && <span className="form-error">{errors.basePrice}</span>}
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Compare at Price</label>
+              <div className="input-with-prefix">
+                <span className="input-prefix">&#8377;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={form.compareAtPrice}
+                  onChange={e => updateField('compareAtPrice', e.target.value)}
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+              <span className="form-hint">Original price (shown as strikethrough)</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Cost Price</label>
+              <div className="input-with-prefix">
+                <span className="input-prefix">&#8377;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={form.costPrice}
+                  onChange={e => updateField('costPrice', e.target.value)}
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+              <span className="form-hint">For profit calculation (not shown to customers)</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">SKU</label>
               <input
                 type="text"
-                placeholder="Stock Keeping Unit"
-                value={baseSku}
-                onChange={e => setBaseSku(e.target.value)}
+                className="form-input"
+                value={form.baseSku}
+                onChange={e => updateField('baseSku', e.target.value)}
+                placeholder="Stock keeping unit"
               />
+              <span className="form-hint" style={{ color: '#dc2626', fontWeight: 500 }}>
+                NOTE: SKU is mandatory if you want to fulfill orders using Shiprocket Shipping.
+              </span>
             </div>
+
             <div className="form-group">
-              <label>Stock</label>
+              <label className="form-label">
+                Stock <span className="required">*</span>
+              </label>
               <input
                 type="number"
-                min="0"
+                className="form-input"
+                value={form.baseStock}
+                onChange={e => updateField('baseStock', e.target.value)}
                 placeholder="0"
-                value={baseStock}
-                onChange={e => setBaseStock(e.target.value)}
+                min="0"
+                step="1"
               />
+              {errors.baseStock && <span className="form-error">{errors.baseStock}</span>}
             </div>
+
             <div className="form-group">
-              <label>Barcode</label>
+              <label className="form-label">Barcode</label>
               <input
                 type="text"
-                placeholder="UPC, EAN, etc."
-                value={baseBarcode}
-                onChange={e => setBaseBarcode(e.target.value)}
+                className="form-input"
+                value={form.baseBarcode}
+                onChange={e => updateField('baseBarcode', e.target.value)}
+                placeholder="UPC, EAN, ISBN, etc."
               />
             </div>
           </div>
-        </div>
+      </div>
 
-        {/* Shipping */}
-        <div className="product-form-section">
-          <h2>Shipping</h2>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Weight</label>
+      {/* Section 4: Shipping */}
+      <div className="form-card">
+        <div className="form-card-title">SHIPPING</div>
+        <div className="form-grid">
+          <div className="form-group">
+            <label className="form-label">Weight</label>
+            <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="number"
-                step="0.01"
+                className="form-input"
+                style={{ flex: 1 }}
+                value={form.weight}
+                onChange={e => updateField('weight', e.target.value)}
+                placeholder="0"
                 min="0"
-                placeholder="0.00"
-                value={weight}
-                onChange={e => setWeight(e.target.value)}
+                step="0.01"
               />
-            </div>
-            <div className="form-group">
-              <label>Weight Unit</label>
-              <select value={weightUnit} onChange={e => setWeightUnit(e.target.value)}>
+              <select
+                className="form-select"
+                value={form.weightUnit}
+                onChange={e => updateField('weightUnit', e.target.value)}
+                style={{ width: 80 }}
+              >
                 <option value="kg">kg</option>
                 <option value="g">g</option>
                 <option value="lb">lb</option>
-                <option value="oz">oz</option>
               </select>
             </div>
           </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Length</label>
+
+          <div className="form-group">
+            <label className="form-label">Dimensions (L x W x H)</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input
                 type="number"
-                step="0.01"
+                className="form-input"
+                style={{ flex: 1 }}
+                value={form.length}
+                onChange={e => updateField('length', e.target.value)}
+                placeholder="L"
                 min="0"
-                placeholder="0.00"
-                value={length}
-                onChange={e => setLength(e.target.value)}
+                step="0.1"
               />
-            </div>
-            <div className="form-group">
-              <label>Width</label>
+              <span style={{ color: 'var(--color-text-secondary)' }}>&times;</span>
               <input
                 type="number"
-                step="0.01"
+                className="form-input"
+                style={{ flex: 1 }}
+                value={form.width}
+                onChange={e => updateField('width', e.target.value)}
+                placeholder="W"
                 min="0"
-                placeholder="0.00"
-                value={width}
-                onChange={e => setWidth(e.target.value)}
+                step="0.1"
               />
-            </div>
-            <div className="form-group">
-              <label>Height</label>
+              <span style={{ color: 'var(--color-text-secondary)' }}>&times;</span>
               <input
                 type="number"
-                step="0.01"
+                className="form-input"
+                style={{ flex: 1 }}
+                value={form.height}
+                onChange={e => updateField('height', e.target.value)}
+                placeholder="H"
                 min="0"
-                placeholder="0.00"
-                value={height}
-                onChange={e => setHeight(e.target.value)}
+                step="0.1"
               />
-            </div>
-            <div className="form-group">
-              <label>Dimension Unit</label>
-              <select value={dimensionUnit} onChange={e => setDimensionUnit(e.target.value)}>
+              <select
+                className="form-select"
+                value={form.dimensionUnit}
+                onChange={e => updateField('dimensionUnit', e.target.value)}
+                style={{ width: 80 }}
+              >
                 <option value="cm">cm</option>
                 <option value="in">in</option>
                 <option value="m">m</option>
@@ -409,102 +625,129 @@ export default function CreateProductPage() {
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Tags */}
-        <div className="product-form-section">
-          <h2>Tags</h2>
-          <div className="form-group">
-            <label>Product Tags</label>
-            <div className="tags-input-wrap">
-              {tags.map(tag => (
-                <span key={tag} className="tag-item">
-                  {tag}
-                  <button type="button" className="tag-remove" onClick={() => removeTag(tag)}>&times;</button>
-                </span>
-              ))}
-              <input
-                className="tags-input"
-                type="text"
-                placeholder="Add tag and press Enter"
-                value={tagInput}
-                onChange={e => setTagInput(e.target.value)}
-                onKeyDown={handleTagKeyDown}
-                onBlur={addTag}
-              />
-            </div>
-            <div className="field-hint">Press Enter or comma to add a tag.</div>
-          </div>
+      {/* Section 5: Tags */}
+      <div className="form-card">
+        <div className="form-card-title">TAGS</div>
+        <div className="tags-input-group">
+          <input
+            type="text"
+            className="form-input"
+            value={tagInput}
+            onChange={e => setTagInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                addTag();
+              }
+            }}
+            placeholder="Add a tag"
+          />
+          <button type="button" onClick={addTag}>Add</button>
         </div>
+        {form.tags.length > 0 && (
+          <div className="tags-list">
+            {form.tags.map(tag => (
+              <span key={tag} className="tag-chip">
+                {tag}
+                <button type="button" onClick={() => removeTag(tag)}>&times;</button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
 
-        {/* SEO */}
-        <div className="product-form-section">
-          <h2>SEO</h2>
-          <div className="form-group">
-            <label>Meta Title</label>
+      {/* Section 6: SEO */}
+      <div className="form-card">
+        <div className="form-card-title">SEO (SEARCH ENGINE OPTIMIZATION)</div>
+        <div className="form-grid">
+          <div className="form-group full-width">
+            <label className="form-label">Handle (URL slug)</label>
             <input
               type="text"
-              placeholder="Page title for search engines"
-              value={metaTitle}
-              onChange={e => setMetaTitle(e.target.value)}
-            />
-          </div>
-          <div className="form-group">
-            <label>Meta Description</label>
-            <textarea
-              placeholder="Description for search engines"
-              value={metaDescription}
-              onChange={e => setMetaDescription(e.target.value)}
-              style={{ minHeight: 60 }}
-            />
-          </div>
-          <div className="form-group">
-            <label>URL Handle</label>
-            <input
-              type="text"
+              className="form-input"
+              value={form.seoHandle}
+              onChange={e => {
+                setSeoHandleEdited(true);
+                updateField('seoHandle', e.target.value);
+              }}
               placeholder="product-url-slug"
-              value={handle}
-              onChange={e => setHandle(e.target.value)}
             />
+            <span className="form-hint">Auto-generated from title. Edit to customize.</span>
           </div>
-        </div>
 
-        {/* Policy */}
-        <div className="product-form-section">
-          <h2>Policy</h2>
-          <div className="form-group">
-            <label>Return Policy</label>
-            <textarea
-              placeholder="Describe the return policy for this product"
-              value={returnPolicy}
-              onChange={e => setReturnPolicy(e.target.value)}
-              style={{ minHeight: 60 }}
+          <div className="form-group full-width">
+            <label className="form-label">Meta Title</label>
+            <input
+              type="text"
+              className="form-input"
+              value={form.seoMetaTitle}
+              onChange={e => updateField('seoMetaTitle', e.target.value)}
+              placeholder="SEO meta title"
+              maxLength={70}
             />
           </div>
-          <div className="form-group">
-            <label>Warranty Information</label>
-            <textarea
-              placeholder="Warranty details"
-              value={warrantyInfo}
-              onChange={e => setWarrantyInfo(e.target.value)}
-              style={{ minHeight: 60 }}
-            />
-          </div>
-        </div>
 
-        {/* Actions */}
-        <div className="product-form-actions">
-          <Link href="/dashboard/products" className="product-form-btn" style={{ textDecoration: 'none' }}>
-            Cancel
-          </Link>
-          <button
-            type="submit"
-            className="product-form-btn product-form-btn-primary"
-            disabled={submitting}
-          >
-            {submitting ? 'Saving...' : 'Save'}
-          </button>
+          <div className="form-group full-width">
+            <label className="form-label">Meta Description</label>
+            <textarea
+              className="form-textarea"
+              value={form.seoMetaDescription}
+              onChange={e => updateField('seoMetaDescription', e.target.value)}
+              placeholder="SEO meta description"
+              maxLength={160}
+            />
+            <span className="form-hint">{form.seoMetaDescription.length}/160</span>
+          </div>
         </div>
-      </form>
+      </div>
+
+      {/* Section 7: Policies */}
+      <div className="form-card">
+        <div className="form-card-title">POLICIES</div>
+        <div className="form-grid">
+          <div className="form-group full-width">
+            <label className="form-label">Return Policy</label>
+            <textarea
+              className="form-textarea"
+              value={form.returnPolicy}
+              onChange={e => updateField('returnPolicy', e.target.value)}
+              placeholder="Describe your return policy"
+            />
+          </div>
+
+          <div className="form-group full-width">
+            <label className="form-label">Warranty Info</label>
+            <textarea
+              className="form-textarea"
+              value={form.warrantyInfo}
+              onChange={e => updateField('warrantyInfo', e.target.value)}
+              placeholder="Describe warranty coverage"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Action Buttons (sticky footer) */}
+      <div className="form-actions">
+        <button
+          type="button"
+          className="form-btn"
+          onClick={() => router.push('/dashboard/products')}
+          disabled={saving}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="form-btn primary"
+          onClick={handleSave}
+          disabled={saving}
+        >
+          {saving ? 'Saving...' : 'Create Product'}
+        </button>
+      </div>
     </div>
   );
 }

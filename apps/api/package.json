@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "start": "nest start",
+    "dev": "nest start --watch",
     "start:dev": "nest start --watch",
     "build": "nest build",
     "lint": "eslint \"src/**/*.ts\"",

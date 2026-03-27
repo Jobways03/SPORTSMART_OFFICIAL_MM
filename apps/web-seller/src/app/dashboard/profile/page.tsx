@@ -58,6 +58,7 @@ interface FormData {
   sellerContactCountryCode: string;
   sellerContactNumber: string;
   storeAddress: string;
+  locality: string;
   city: string;
   state: string;
   country: string;
@@ -84,6 +85,7 @@ function profileToFormData(p: SellerProfileData): FormData {
     sellerContactCountryCode: p.sellerContactCountryCode || '+91',
     sellerContactNumber: p.sellerContactNumber || p.phoneNumber || '',
     storeAddress: p.storeAddress || '',
+    locality: (p as any).locality || '',
     city: p.city || '',
     state: p.state || '',
     country: p.country || 'India',
@@ -102,6 +104,7 @@ function profileToInitialData(p: SellerProfileData): FormData {
     sellerContactCountryCode: p.sellerContactCountryCode || '',
     sellerContactNumber: p.sellerContactNumber || '',
     storeAddress: p.storeAddress || '',
+    locality: (p as any).locality || '',
     city: p.city || '',
     state: p.state || '',
     country: p.country || '',
@@ -154,7 +157,7 @@ function isContentRestricted(status: string): boolean {
 }
 
 function isMediaRestricted(status: string): boolean {
-  return status === 'INACTIVE' || status === 'SUSPENDED' || status === 'DEACTIVATED';
+  return status === 'SUSPENDED' || status === 'DEACTIVATED';
 }
 
 // --- Component ---
@@ -171,7 +174,7 @@ export default function SellerProfilePage() {
   const [formData, setFormData] = useState<FormData>({
     sellerName: '', sellerShopName: '',
     sellerContactCountryCode: '', sellerContactNumber: '',
-    storeAddress: '', city: '', state: '', country: '', sellerZipCode: '',
+    storeAddress: '', locality: '', city: '', state: '', country: '', sellerZipCode: '',
     shortStoreDescription: '', detailedStoreDescription: '', sellerPolicy: '',
   });
   const [initialFormData, setInitialFormData] = useState<FormData | null>(null);
@@ -192,6 +195,61 @@ export default function SellerProfilePage() {
   // Completion
   const [completion, setCompletion] = useState(0);
   const [isComplete, setIsComplete] = useState(false);
+
+  // Pincode auto-fill state
+  const [pincodeData, setPincodeData] = useState<{ district: string; state: string; places: { name: string; type: string; delivery: string }[] } | null>(null);
+  const [pincodeLoading, setPincodeLoading] = useState(false);
+  const [pincodeError, setPincodeError] = useState('');
+  const [selectedPlace, setSelectedPlace] = useState('');
+  const [pincodeAutoFilled, setPincodeAutoFilled] = useState(false);
+
+  async function lookupPincode(pincode: string) {
+    if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
+      setPincodeData(null);
+      setPincodeError('');
+      setPincodeAutoFilled(false);
+      setSelectedPlace('');
+      return;
+    }
+
+    setPincodeLoading(true);
+    setPincodeError('');
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+      const res = await fetch(`${API_BASE}/api/v1/pincodes/${pincode}`);
+      const data = await res.json();
+
+      if (data.success && data.data) {
+        setPincodeData(data.data);
+        setPincodeAutoFilled(true);
+        setSelectedPlace('');
+        setFormData(prev => ({
+          ...prev,
+          city: data.data.district,
+          state: data.data.state,
+          locality: '',
+        }));
+        // Clear any city/state errors
+        setErrors(prev => {
+          const next = { ...prev };
+          delete next.city;
+          delete next.state;
+          return next;
+        });
+      } else {
+        setPincodeError('Invalid pincode');
+        setPincodeData(null);
+        setPincodeAutoFilled(false);
+        setSelectedPlace('');
+      }
+    } catch {
+      setPincodeError('Failed to lookup pincode');
+      setPincodeData(null);
+      setPincodeAutoFilled(false);
+    } finally {
+      setPincodeLoading(false);
+    }
+  }
 
   // Email verification
   const [isEmailVerified, setIsEmailVerified] = useState(false);
@@ -279,6 +337,8 @@ export default function SellerProfilePage() {
   useEffect(() => {
     if (token) fetchProfile();
   }, [token, fetchProfile]);
+
+  // No auto-lookup on load — only show dropdown when user changes pincode
 
   // --- Email verification ---
   useEffect(() => {
@@ -1188,48 +1248,39 @@ export default function SellerProfilePage() {
 
           <div className="form-grid-2">
             <div className="profile-form-group">
-              <label htmlFor="city">City</label>
+              <label htmlFor="sellerZipCode">ZIP / PIN Code</label>
               <input
-                id="city"
+                id="sellerZipCode"
                 type="text"
-                value={formData.city}
-                onChange={e => updateField('city', e.target.value)}
-                onBlur={() => handleBlur('city')}
-                aria-invalid={!!errors.city}
-                aria-describedby={errors.city ? 'city-error' : undefined}
+                value={formData.sellerZipCode}
+                onChange={e => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                  updateField('sellerZipCode', val);
+                  lookupPincode(val);
+                }}
+                onBlur={() => handleBlur('sellerZipCode')}
+                aria-invalid={!!errors.sellerZipCode}
+                aria-describedby={errors.sellerZipCode ? 'zip-error' : undefined}
                 disabled={readonly || isSaving}
-                placeholder="City"
-                autoComplete="address-level2"
+                placeholder="ZIP / PIN code"
+                autoComplete="postal-code"
+                maxLength={6}
               />
-              {errors.city && (
-                <span id="city-error" className="profile-field-error" role="alert">
-                  {errors.city}
+              {pincodeLoading && (
+                <span className="profile-field-hint" style={{ color: '#6b7280', fontSize: 12 }}>Looking up pincode...</span>
+              )}
+              {pincodeError && (
+                <span className="profile-field-error" role="alert" style={{ color: '#dc2626' }}>{pincodeError}</span>
+              )}
+              {pincodeData && !pincodeError && !pincodeLoading && (
+                <span style={{ color: '#16a34a', fontSize: 12 }}>{pincodeData.district}, {pincodeData.state}</span>
+              )}
+              {errors.sellerZipCode && (
+                <span id="zip-error" className="profile-field-error" role="alert">
+                  {errors.sellerZipCode}
                 </span>
               )}
             </div>
-            <div className="profile-form-group">
-              <label htmlFor="state">State</label>
-              <input
-                id="state"
-                type="text"
-                value={formData.state}
-                onChange={e => updateField('state', e.target.value)}
-                onBlur={() => handleBlur('state')}
-                aria-invalid={!!errors.state}
-                aria-describedby={errors.state ? 'state-error' : undefined}
-                disabled={readonly || isSaving}
-                placeholder="State / Province"
-                autoComplete="address-level1"
-              />
-              {errors.state && (
-                <span id="state-error" className="profile-field-error" role="alert">
-                  {errors.state}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="form-grid-2">
             <div className="profile-form-group">
               <label htmlFor="country">Country</label>
               <input
@@ -1250,27 +1301,89 @@ export default function SellerProfilePage() {
                 </span>
               )}
             </div>
+          </div>
+
+          <div className="form-grid-2">
             <div className="profile-form-group">
-              <label htmlFor="sellerZipCode">ZIP / PIN Code</label>
+              <label htmlFor="city">City / District</label>
               <input
-                id="sellerZipCode"
+                id="city"
                 type="text"
-                value={formData.sellerZipCode}
-                onChange={e => updateField('sellerZipCode', e.target.value)}
-                onBlur={() => handleBlur('sellerZipCode')}
-                aria-invalid={!!errors.sellerZipCode}
-                aria-describedby={errors.sellerZipCode ? 'zip-error' : undefined}
+                value={formData.city}
+                onChange={e => {
+                  updateField('city', e.target.value);
+                  if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                }}
+                onBlur={() => handleBlur('city')}
+                aria-invalid={!!errors.city}
+                aria-describedby={errors.city ? 'city-error' : undefined}
                 disabled={readonly || isSaving}
-                placeholder="ZIP / PIN code"
-                autoComplete="postal-code"
+                readOnly={pincodeAutoFilled}
+                placeholder="City"
+                autoComplete="address-level2"
+                style={pincodeAutoFilled ? { background: '#f0fdf4', borderColor: '#86efac' } : undefined}
               />
-              {errors.sellerZipCode && (
-                <span id="zip-error" className="profile-field-error" role="alert">
-                  {errors.sellerZipCode}
+              {errors.city && (
+                <span id="city-error" className="profile-field-error" role="alert">
+                  {errors.city}
+                </span>
+              )}
+            </div>
+            <div className="profile-form-group">
+              <label htmlFor="state">State</label>
+              <input
+                id="state"
+                type="text"
+                value={formData.state}
+                onChange={e => {
+                  updateField('state', e.target.value);
+                  if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                }}
+                onBlur={() => handleBlur('state')}
+                aria-invalid={!!errors.state}
+                aria-describedby={errors.state ? 'state-error' : undefined}
+                disabled={readonly || isSaving}
+                placeholder="State / Province"
+                autoComplete="address-level1"
+                style={pincodeAutoFilled ? { background: '#f0fdf4', borderColor: '#86efac' } : undefined}
+              />
+              {errors.state && (
+                <span id="state-error" className="profile-field-error" role="alert">
+                  {errors.state}
                 </span>
               )}
             </div>
           </div>
+
+          {pincodeData && pincodeData.places && pincodeData.places.length > 0 && (
+            <div className="profile-form-group">
+              <label htmlFor="locality">Locality</label>
+              <select
+                id="locality"
+                value={formData.locality || selectedPlace}
+                onChange={e => { setSelectedPlace(e.target.value); updateField('locality', e.target.value); }}
+                disabled={readonly || isSaving}
+                style={pincodeAutoFilled ? { background: '#f0fdf4', borderColor: '#86efac' } : undefined}
+              >
+                <option value="">Select your locality</option>
+                {pincodeData.places.map((place, idx) => (
+                  <option key={idx} value={place.name}>{place.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {!pincodeData && formData.locality && (
+            <div className="profile-form-group">
+              <label htmlFor="locality">Locality</label>
+              <input
+                id="locality"
+                type="text"
+                value={formData.locality}
+                readOnly
+                style={{ background: '#f9fafb' }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Store Description */}

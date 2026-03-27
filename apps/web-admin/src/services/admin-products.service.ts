@@ -16,6 +16,7 @@ export interface ProductListItem {
   seller: { id: string; sellerName: string; sellerShopName: string; email: string; } | null;
   category: { id: string; name: string; } | null;
   brand: { id: string; name: string; } | null;
+  potentialDuplicateOf: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -26,6 +27,7 @@ export interface ProductListResponse {
 }
 
 export interface ProductDetail extends ProductListItem {
+  sellerId: string | null;
   shortDescription: string | null;
   description: string | null;
   categoryId: string | null;
@@ -56,6 +58,7 @@ export interface ListProductsParams {
   moderationStatus?: string;
   categoryId?: string;
   sellerId?: string;
+  hasSellers?: string;
 }
 
 export const adminProductsService = {
@@ -113,6 +116,38 @@ export const adminProductsService = {
     });
   },
 
+  // Duplicate detection & merge
+  mergeProduct(sourceProductId: string, targetProductId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/products/${sourceProductId}/merge-into/${targetProductId}`, {
+      method: 'POST',
+    });
+  },
+
+  getDuplicateInfo(productId: string): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/admin/products/${productId}/duplicate-info`);
+  },
+
+  // Seller mapping approval endpoints
+  getSellerMappings(productId: string): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/admin/products/${productId}/seller-mappings`);
+  },
+
+  approveMappings(mappingId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/seller-mappings/${mappingId}/approve`, { method: 'POST' });
+  },
+
+  stopMapping(mappingId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/seller-mappings/${mappingId}/stop`, { method: 'POST' });
+  },
+
+  getPendingMappings(params: { page?: number; limit?: number } = {}): Promise<ApiResponse<any>> {
+    const query = new URLSearchParams();
+    if (params.page) query.set('page', String(params.page));
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return apiClient<any>(`/admin/seller-mappings/pending${qs ? `?${qs}` : ''}`);
+  },
+
   // Public catalog endpoints (no auth)
   getCategories(): Promise<ApiResponse<any>> {
     return apiClient('/catalog/categories');
@@ -120,6 +155,12 @@ export const adminProductsService = {
 
   getBrands(search?: string): Promise<ApiResponse<any>> {
     return apiClient(`/catalog/brands${search ? `?search=${search}` : ''}`);
+  },
+
+  getOptions(): Promise<ApiResponse<any>> {
+    return apiClient<any>('/catalog/options', {
+      method: 'GET',
+    });
   },
 
   // Variant methods
@@ -214,5 +255,12 @@ export const adminProductsService = {
 
   deleteVariantImage(productId: string, variantId: string, imageId: string): Promise<ApiResponse> {
     return apiClient(`/admin/products/${productId}/variants/${variantId}/images/${imageId}`, { method: 'DELETE' });
+  },
+
+  reorderVariantImages(productId: string, variantId: string, imageIds: string[]): Promise<ApiResponse> {
+    return apiClient(`/admin/products/${productId}/variants/${variantId}/images/reorder`, {
+      method: 'PATCH',
+      body: JSON.stringify({ imageIds }),
+    });
   },
 };

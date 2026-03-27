@@ -3,6 +3,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
+import { EmailService } from '../../../../integrations/email/email.service';
 
 interface SendMessageInput {
   adminId: string;
@@ -19,6 +20,7 @@ export class AdminSendSellerMessageUseCase {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AdminAuditService,
+    private readonly emailService: EmailService,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('AdminSendSellerMessageUseCase');
@@ -61,8 +63,40 @@ export class AdminSendSellerMessageUseCase {
       },
     });
 
-    // TODO: Integrate actual email/SMS/notification sending here
-    this.logger.warn(`[DEV] Message to seller ${seller.email}: "${subject.trim()}"`);
+    // Send email to seller
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background: #1a56db; padding: 20px; text-align: center;">
+          <h1 style="color: #fff; margin: 0; font-size: 22px;">SPORTSMART</h1>
+          <p style="color: #dbeafe; margin: 4px 0 0; font-size: 13px;">Seller Portal</p>
+        </div>
+        <div style="padding: 24px; border: 1px solid #e5e7eb; border-top: none;">
+          <p style="margin: 0 0 8px; color: #374151;">Hi <strong>${seller.sellerName}</strong>,</p>
+          <p style="margin: 0 0 16px; color: #374151;">You have a new message from the SPORTSMART admin team:</p>
+          <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+            <p style="margin: 0 0 8px; font-weight: 600; color: #111827;">${subject.trim()}</p>
+            <p style="margin: 0; color: #374151; white-space: pre-wrap;">${message.trim()}</p>
+          </div>
+          <p style="margin: 0; font-size: 13px; color: #6b7280;">
+            If you have questions, log in to your seller dashboard or reply to this email.
+          </p>
+        </div>
+        <div style="padding: 16px; text-align: center; font-size: 12px; color: #9ca3af;">
+          &copy; SPORTSMART Marketplace
+        </div>
+      </div>
+    `;
+
+    const emailSent = await this.emailService.send({
+      to: seller.email,
+      subject: `SPORTSMART: ${subject.trim()}`,
+      html: emailHtml,
+      text: `Hi ${seller.sellerName},\n\nYou have a new message from the SPORTSMART admin team:\n\nSubject: ${subject.trim()}\n\n${message.trim()}\n\n— SPORTSMART Marketplace`,
+    });
+
+    if (!emailSent) {
+      this.logger.warn(`Email delivery failed for seller ${seller.email}, message logged to DB only`);
+    }
 
     await this.auditService.log({
       adminId,

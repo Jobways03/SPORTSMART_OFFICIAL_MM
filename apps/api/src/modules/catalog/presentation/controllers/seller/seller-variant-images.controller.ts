@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Delete,
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   UploadedFile,
@@ -97,33 +99,40 @@ export class SellerVariantImagesController {
       );
     }
 
-    // Count existing variant images to set sortOrder
-    const existingImages = await this.prisma.productVariantImage.count({
-      where: { variantId },
-    });
+    // Find sibling variants that share the same color value
+    const siblingVariantIds = await this.findColorSiblingVariantIds(productId, variantId);
 
-    const sortOrder = existingImages;
+    // Create image records for all sibling variants (color-grouped)
+    const createdImages = [];
+    for (const vId of siblingVariantIds) {
+      const existingCount = await this.prisma.productVariantImage.count({
+        where: { variantId: vId },
+      });
 
-    const image = await this.prisma.productVariantImage.create({
-      data: {
-        variantId,
-        url: uploadResult.secureUrl,
-        publicId: uploadResult.publicId,
-        sortOrder,
-      },
-    });
+      const image = await this.prisma.productVariantImage.create({
+        data: {
+          variantId: vId,
+          url: uploadResult.secureUrl,
+          publicId: uploadResult.publicId,
+          sortOrder: existingCount,
+        },
+      });
+      createdImages.push(image);
+    }
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
     this.logger.log(
-      `Image uploaded for variant ${variantId} of product ${productId}: ${image.id}`,
+      `Image uploaded for variant ${variantId} (shared with ${siblingVariantIds.length} variants) of product ${productId}`,
     );
 
     return {
       success: true,
-      message: 'Variant image uploaded successfully',
-      data: image,
+      message: siblingVariantIds.length > 1
+        ? `Variant image uploaded and shared across ${siblingVariantIds.length} color variants`
+        : 'Variant image uploaded successfully',
+      data: createdImages[0],
     };
   }
 
@@ -146,10 +155,23 @@ export class SellerVariantImagesController {
       throw new NotFoundAppException('Variant image not found');
     }
 
-    // Delete from DB
-    await this.prisma.productVariantImage.delete({
-      where: { id: imageId },
-    });
+    // Find and delete matching images from all color-sibling variants
+    const siblingVariantIds = await this.findColorSiblingVariantIds(productId, variantId);
+
+    if (image.publicId) {
+      // Delete all variant image records sharing the same publicId (same Cloudinary asset)
+      await this.prisma.productVariantImage.deleteMany({
+        where: {
+          variantId: { in: siblingVariantIds },
+          publicId: image.publicId,
+        },
+      });
+    } else {
+      // Fallback: delete only this specific image
+      await this.prisma.productVariantImage.delete({
+        where: { id: imageId },
+      });
+    }
 
     // Delete from Cloudinary (best-effort)
     if (image.publicId) {
@@ -164,7 +186,7 @@ export class SellerVariantImagesController {
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
     this.logger.log(
-      `Image deleted from variant ${variantId} of product ${productId}: ${imageId}`,
+      `Image deleted from variant ${variantId} (and color siblings) of product ${productId}: ${imageId}`,
     );
 
     return {
@@ -172,5 +194,82 @@ export class SellerVariantImagesController {
       message: 'Variant image deleted successfully',
       data: null,
     };
+  }
+
+  @Patch('reorder')
+  @HttpCode(HttpStatus.OK)
+  async reorderVariantImages(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+    @Body() body: { imageIds: string[] },
+  ) {
+    const sellerId = (req as any).sellerId;
+    await this.ownershipService.validateOwnership(sellerId, productId);
+
+    if (!body.imageIds || !Array.isArray(body.imageIds) || body.imageIds.length === 0) {
+      throw new AppException('imageIds array is required', 'BAD_REQUEST');
+    }
+
+    await this.prisma.$transaction(
+      body.imageIds.map((id, index) =>
+        this.prisma.productVariantImage.updateMany({
+          where: { id, variantId },
+          data: { sortOrder: index },
+        }),
+      ),
+    );
+
+    return {
+      success: true,
+      message: 'Variant images reordered successfully',
+      data: null,
+    };
+  }
+
+  /**
+   * Finds all variant IDs for the same product that share the same COLOR option value.
+   * If the product has no COLOR option, returns only the given variantId.
+   */
+  private async findColorSiblingVariantIds(
+    productId: string,
+    variantId: string,
+  ): Promise<string[]> {
+    // Find the color option value of the current variant
+    const currentColorOption = await this.prisma.productVariantOptionValue.findFirst({
+      where: {
+        variantId,
+        optionValue: {
+          optionDefinition: { type: 'COLOR' },
+        },
+      },
+      select: { optionValueId: true },
+    });
+
+    // No color option — just return this variant
+    if (!currentColorOption) {
+      return [variantId];
+    }
+
+    // Find all sibling variants of this product with the same color value
+    const siblings = await this.prisma.productVariantOptionValue.findMany({
+      where: {
+        optionValueId: currentColorOption.optionValueId,
+        variant: {
+          productId,
+          isDeleted: false,
+        },
+      },
+      select: { variantId: true },
+    });
+
+    const ids = siblings.map((s) => s.variantId);
+
+    // Ensure the current variant is always included
+    if (!ids.includes(variantId)) {
+      ids.push(variantId);
+    }
+
+    return ids;
   }
 }

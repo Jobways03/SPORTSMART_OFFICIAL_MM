@@ -1,14 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
+import { apiClient } from '@/lib/api-client';
 import './dashboard.css';
 
 const navItems = [
   { label: 'Home', href: '/dashboard', icon: '🏠' },
-  { label: 'Orders', href: '/dashboard/orders', icon: '📋', badge: '0' },
+  { label: 'Orders', href: '/dashboard/orders', icon: '📋', hasPendingBadge: true },
   { label: 'Products', href: '/dashboard/products', icon: '📦' },
+  { label: 'Inventory', href: '/dashboard/inventory', icon: '📊' },
   { label: 'Commission', href: '/dashboard/commission', icon: '💰' },
   { label: 'Customers', href: '/dashboard/customers', icon: '👥' },
   { label: 'Marketing', href: '/dashboard/marketing', icon: '📣' },
@@ -26,6 +28,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter();
   const pathname = usePathname();
   const [adminName, setAdminName] = useState('');
+  const [pendingOrderCount, setPendingOrderCount] = useState(0);
+
+  const fetchPendingOrderCount = useCallback(async () => {
+    try {
+      const res = await apiClient<{ orders: any[]; pagination: { total: number } }>(
+        '/admin/orders?orderStatus=PLACED&limit=1'
+      );
+      if (res.data?.pagination?.total !== undefined) {
+        setPendingOrderCount(res.data.pagination.total);
+      }
+    } catch {
+      // Silently fail — badge just won't show
+    }
+  }, []);
 
   useEffect(() => {
     const token = sessionStorage.getItem('adminAccessToken');
@@ -40,7 +56,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         setAdminName(admin.name || 'Admin');
       }
     } catch {}
-  }, [router]);
+
+    // Fetch pending order count for sidebar badge
+    fetchPendingOrderCount();
+    // Refresh every 60 seconds
+    const interval = setInterval(fetchPendingOrderCount, 60000);
+    return () => clearInterval(interval);
+  }, [router, fetchPendingOrderCount]);
 
   const handleLogout = () => {
     sessionStorage.clear();
@@ -69,7 +91,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               >
                 <span className="sidebar-item-icon">{item.icon}</span>
                 {item.label}
-                {item.badge && <span className="sidebar-item-badge">{item.badge}</span>}
+                {'hasPendingBadge' in item && item.hasPendingBadge && pendingOrderCount > 0 && (
+                  <span className="sidebar-item-badge" style={{ background: '#ef4444', color: '#fff' }}>
+                    {pendingOrderCount > 99 ? '99+' : pendingOrderCount}
+                  </span>
+                )}
               </Link>
               {item.label === 'Products' && isActive('/dashboard/products') && (
                 <Link

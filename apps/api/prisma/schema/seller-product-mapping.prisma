@@ -1,0 +1,53 @@
+// ============================================
+// Seller-Product Mapping Module
+// Links sellers to global products for multi-seller fulfillment
+// ============================================
+
+model SellerProductMapping {
+  id        String  @id @default(uuid())
+  sellerId  String  @map("seller_id")
+  productId String  @map("product_id")
+  variantId String? @map("variant_id")
+
+  // Inventory
+  stockQty          Int @default(0) @map("stock_qty")
+  reservedQty       Int @default(0) @map("reserved_qty")
+  lowStockThreshold Int @default(5) @map("low_stock_threshold")
+
+  // Seller's internal reference
+  sellerInternalSku String? @map("seller_internal_sku")
+
+  // Pricing (seller side — not customer-facing)
+  settlementPrice Decimal? @map("settlement_price") @db.Decimal(10, 2)
+  procurementCost Decimal? @map("procurement_cost") @db.Decimal(10, 2)
+
+  // Fulfillment
+  pickupAddress String?  @map("pickup_address")
+  pickupPincode String?  @map("pickup_pincode")
+  latitude      Decimal? @db.Decimal(10, 7)
+  longitude     Decimal? @db.Decimal(10, 7)
+  dispatchSla   Int      @default(2) @map("dispatch_sla") // days to dispatch
+
+  // Status & priority
+  approvalStatus      MappingApprovalStatus @default(PENDING_APPROVAL) @map("approval_status")
+  isActive            Boolean @default(true) @map("is_active")
+  operationalPriority Int     @default(0) @map("operational_priority") // higher = preferred
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  seller       Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  product      Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant      ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  reservations StockReservation[]
+
+  @@unique([sellerId, productId, variantId])
+  @@index([sellerId])
+  @@index([productId])
+  @@index([variantId])
+  @@index([pickupPincode])
+  @@index([isActive])
+  @@index([approvalStatus])
+  @@map("seller_product_mappings")
+}

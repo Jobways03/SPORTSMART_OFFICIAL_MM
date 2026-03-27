@@ -1,4 +1,60 @@
 // ============================================
 // Settlements Module - owned tables
-// Models defined when settlements module is implemented
 // ============================================
+
+enum SettlementCycleStatus {
+  DRAFT
+  PREVIEWED
+  APPROVED
+  PAID
+}
+
+enum SellerSettlementStatus {
+  PENDING
+  APPROVED
+  PAID
+}
+
+model SettlementCycle {
+  id          String                @id @default(uuid())
+  periodStart DateTime              @map("period_start")
+  periodEnd   DateTime              @map("period_end")
+  status      SettlementCycleStatus @default(DRAFT) @map("status")
+  totalAmount Decimal               @default(0) @map("total_amount") @db.Decimal(12, 2)
+  totalMargin Decimal               @default(0) @map("total_margin") @db.Decimal(12, 2)
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+
+  sellerSettlements SellerSettlement[]
+
+  @@index([status])
+  @@index([periodStart, periodEnd])
+  @@map("settlement_cycles")
+}
+
+model SellerSettlement {
+  id                    String                 @id @default(uuid())
+  cycleId               String                 @map("cycle_id")
+  sellerId              String                 @map("seller_id")
+  sellerName            String                 @map("seller_name")
+  totalOrders           Int                    @default(0) @map("total_orders")
+  totalItems            Int                    @default(0) @map("total_items")
+  totalPlatformAmount   Decimal                @default(0) @map("total_platform_amount") @db.Decimal(12, 2)
+  totalSettlementAmount Decimal                @default(0) @map("total_settlement_amount") @db.Decimal(12, 2)
+  totalPlatformMargin   Decimal                @default(0) @map("total_platform_margin") @db.Decimal(12, 2)
+  status                SellerSettlementStatus @default(PENDING) @map("status")
+  paidAt                DateTime?              @map("paid_at")
+  utrReference          String?                @map("utr_reference")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+
+  cycle             SettlementCycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  commissionRecords CommissionRecord[]
+
+  @@unique([cycleId, sellerId])
+  @@index([cycleId])
+  @@index([sellerId])
+  @@index([status])
+  @@map("seller_settlements")
+}

@@ -11,14 +11,18 @@ enum OrderPaymentStatus {
 
 enum OrderFulfillmentStatus {
   UNFULFILLED
+  PACKED
+  SHIPPED
   FULFILLED
   DELIVERED
+  CANCELLED
 }
 
 enum OrderAcceptStatus {
   OPEN
   ACCEPTED
   REJECTED
+  CANCELLED
 }
 
 enum OrderPaymentMethod {
@@ -32,6 +36,7 @@ model CustomerAddress {
   phone        String
   addressLine1 String   @map("address_line_1")
   addressLine2 String?  @map("address_line_2")
+  locality     String?
   city         String
   state        String
   postalCode   String   @map("postal_code")
@@ -84,6 +89,9 @@ model MasterOrder {
   paymentStatus           OrderPaymentStatus @default(PENDING) @map("payment_status")
   verified                Boolean            @default(false)
   verifiedAt              DateTime?          @map("verified_at")
+  orderStatus             OrderStatus        @default(PLACED) @map("order_status")
+  verifiedBy              String?            @map("verified_by")
+  verificationRemarks     String?            @map("verification_remarks")
   itemCount               Int                @map("item_count")
   createdAt               DateTime           @default(now()) @map("created_at")
   updatedAt               DateTime           @updatedAt @map("updated_at")
@@ -94,22 +102,27 @@ model MasterOrder {
 
   @@index([customerId])
   @@index([orderNumber])
+  @@index([orderStatus])
   @@map("master_orders")
 }
 
 model SubOrder {
-  id                String               @id @default(uuid())
-  masterOrderId     String               @map("master_order_id")
-  sellerId          String               @map("seller_id")
-  subTotal          Decimal              @map("sub_total") @db.Decimal(10, 2)
-  paymentStatus     OrderPaymentStatus   @default(PENDING) @map("payment_status")
-  fulfillmentStatus OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
-  acceptStatus      OrderAcceptStatus    @default(OPEN) @map("accept_status")
-  deliveredAt          DateTime?            @map("delivered_at")
-  returnWindowEndsAt   DateTime?            @map("return_window_ends_at")
-  commissionProcessed  Boolean              @default(false) @map("commission_processed")
-  createdAt         DateTime             @default(now()) @map("created_at")
-  updatedAt         DateTime             @updatedAt @map("updated_at")
+  id                  String                 @id @default(uuid())
+  masterOrderId       String                 @map("master_order_id")
+  sellerId            String                 @map("seller_id")
+  subTotal            Decimal                @map("sub_total") @db.Decimal(10, 2)
+  paymentStatus       OrderPaymentStatus     @default(PENDING) @map("payment_status")
+  fulfillmentStatus   OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
+  acceptStatus        OrderAcceptStatus      @default(OPEN) @map("accept_status")
+  acceptDeadlineAt    DateTime?              @map("accept_deadline_at")
+  rejectionReason     String?                @map("rejection_reason")
+  rejectionNote       String?                @map("rejection_note")
+  expectedDispatchDate DateTime?             @map("expected_dispatch_date")
+  deliveredAt         DateTime?              @map("delivered_at")
+  returnWindowEndsAt  DateTime?              @map("return_window_ends_at")
+  commissionProcessed Boolean                @default(false) @map("commission_processed")
+  createdAt           DateTime               @default(now()) @map("created_at")
+  updatedAt           DateTime               @updatedAt @map("updated_at")
 
   masterOrder       MasterOrder        @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
   seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
@@ -129,17 +142,34 @@ model OrderItem {
   productTitle String   @map("product_title")
   variantTitle String?  @map("variant_title")
   sku          String?
+  masterSku    String?  @map("master_sku")
   imageUrl     String?  @map("image_url")
   unitPrice    Decimal  @map("unit_price") @db.Decimal(10, 2)
   quantity     Int
   totalPrice   Decimal  @map("total_price") @db.Decimal(10, 2)
   createdAt    DateTime @default(now()) @map("created_at")
 
-  subOrder         SubOrder           @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
   commissionRecord CommissionRecord?
 
   @@index([subOrderId])
   @@map("order_items")
+}
+
+model OrderReassignmentLog {
+  id                String   @id @default(uuid())
+  subOrderId        String   @map("sub_order_id")
+  masterOrderId     String   @map("master_order_id")
+  fromSellerId      String   @map("from_seller_id")
+  toSellerId        String?  @map("to_seller_id")
+  reason            String
+  successful        Boolean
+  newSubOrderId     String?  @map("new_sub_order_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([masterOrderId])
+  @@index([subOrderId])
+  @@map("order_reassignment_logs")
 }
 
 model OrderSequence {

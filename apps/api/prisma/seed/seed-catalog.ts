@@ -87,20 +87,23 @@ const BRANDS = [
   { name: 'Cosco' },
 ];
 
-const OPTION_DEFINITIONS: { name: string; displayName: string; values: string[] }[] = [
+const OPTION_DEFINITIONS: { name: string; displayName: string; type: string; values: string[] }[] = [
   {
     name: 'Size',
     displayName: 'Size',
+    type: 'SIZE',
     values: ['5 UK', '6 UK', '7 UK', '8 UK', '9 UK', '10 UK', '11 UK', 'S', 'M', 'L', 'XL', 'XXL'],
   },
   {
     name: 'Color',
     displayName: 'Color',
+    type: 'COLOR',
     values: ['Red', 'Blue', 'Black', 'White', 'Green', 'Yellow', 'Orange', 'Grey', 'Navy', 'Pink'],
   },
   {
     name: 'Material',
     displayName: 'Material',
+    type: 'GENERIC',
     values: ['Cotton', 'Polyester', 'Nylon', 'Leather', 'Mesh', 'Synthetic', 'Rubber'],
   },
 ];
@@ -182,8 +185,8 @@ async function seedOptionsAndValues(): Promise<Map<string, string>> {
   for (const def of OPTION_DEFINITIONS) {
     const optDef = await prisma.optionDefinition.upsert({
       where: { name: def.name },
-      create: { name: def.name, displayName: def.displayName },
-      update: {},
+      create: { name: def.name, displayName: def.displayName, type: def.type },
+      update: { type: def.type },
     });
     optionNameToId.set(def.name, optDef.id);
     console.log(`  Option: ${def.name} (${def.values.length} values)`);

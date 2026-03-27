@@ -1,14 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { MasterSkuService } from './master-sku.service';
 
 @Injectable()
 export class VariantGeneratorService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly masterSkuService: MasterSkuService,
+  ) {}
 
   /**
    * Generates variants from a Cartesian product of option value groups.
    * Each sub-array in optionValueGroups represents values for one option dimension.
    * E.g. [['red-id','blue-id'], ['S-id','M-id','L-id']] => 6 variants
+   *
+   * Automatically pulls default pricing/shipping values from the parent product.
    */
   async generateVariants(
     productId: string,
@@ -17,6 +23,39 @@ export class VariantGeneratorService {
     // Compute Cartesian product
     const combinations = this.cartesianProduct(optionValueGroups);
 
+    // Fetch product defaults for pricing/shipping
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: {
+        productCode: true,
+        basePrice: true,
+        platformPrice: true,
+        compareAtPrice: true,
+        costPrice: true,
+        baseSku: true,
+        baseStock: true,
+        weight: true,
+        weightUnit: true,
+        length: true,
+        width: true,
+        height: true,
+        dimensionUnit: true,
+      },
+    });
+
+    const defaults = {
+      price: product?.basePrice ? Number(product.basePrice) : 0,
+      compareAtPrice: product?.compareAtPrice ? Number(product.compareAtPrice) : null,
+      costPrice: product?.costPrice ? Number(product.costPrice) : null,
+      stock: product?.baseStock ?? 0,
+      weight: product?.weight ? Number(product.weight) : null,
+      weightUnit: product?.weightUnit || 'kg',
+      length: product?.length ? Number(product.length) : null,
+      width: product?.width ? Number(product.width) : null,
+      height: product?.height ? Number(product.height) : null,
+      dimensionUnit: product?.dimensionUnit || 'cm',
+    };
+
     // Fetch display values for auto-generated titles
     const allValueIds = optionValueGroups.flat();
     const optionValues = await this.prisma.optionValue.findMany({
@@ -24,6 +63,14 @@ export class VariantGeneratorService {
       select: { id: true, displayValue: true },
     });
     const valueMap = new Map(optionValues.map((v) => [v.id, v.displayValue]));
+
+    // Generate master SKUs for each combination
+    const productCode = product?.productCode || productId.substring(0, 8);
+    const masterSkus: string[] = [];
+    for (const combo of combinations) {
+      const sku = await this.masterSkuService.generateMasterSku(productCode, combo);
+      masterSkus.push(sku);
+    }
 
     // Create variants in a transaction
     await this.prisma.$transaction(async (tx) => {
@@ -34,9 +81,19 @@ export class VariantGeneratorService {
         const variant = await tx.productVariant.create({
           data: {
             productId,
+            masterSku: masterSkus[i],
             title,
-            price: 0,
-            stock: 0,
+            price: defaults.price,
+            platformPrice: product?.platformPrice ? Number(product.platformPrice) : null,
+            compareAtPrice: defaults.compareAtPrice,
+            costPrice: defaults.costPrice,
+            stock: defaults.stock,
+            weight: defaults.weight,
+            weightUnit: defaults.weightUnit,
+            length: defaults.length,
+            width: defaults.width,
+            height: defaults.height,
+            dimensionUnit: defaults.dimensionUnit,
             sortOrder: i,
           },
         });

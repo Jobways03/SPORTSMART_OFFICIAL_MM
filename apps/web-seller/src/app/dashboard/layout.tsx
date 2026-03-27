@@ -103,12 +103,16 @@ export default function DashboardLayout({
   const isEmailUnverified = seller.isEmailVerified === false;
   const canAccessProducts = seller.status === 'ACTIVE' && seller.isEmailVerified === true;
 
+  const isActive = seller.status === 'ACTIVE';
+
   const navItems = [
     { href: '/dashboard', label: 'Dashboard', icon: '&#9776;' },
     { href: '/dashboard/profile', label: 'My Profile', icon: '&#128100;' },
-    { href: '/dashboard/products', label: 'Products', icon: '&#128230;', disabled: !canAccessProducts },
-    { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;', disabled: false },
-    { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: false },
+    { href: '/dashboard/catalog', label: 'Browse Catalog', icon: '&#128270;', disabled: !isActive, description: 'Find and map existing products' },
+    { href: '/dashboard/catalog/my-products', label: 'My Products', icon: '&#128230;', disabled: !isActive, description: 'View all your mapped products' },
+    { href: '/dashboard/products', label: 'Submit Product', icon: '&#128221;', disabled: !isActive, description: 'Create your own product listing' },
+    { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;', disabled: !isActive },
+    { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },
     { href: '#', label: 'Analytics', icon: '&#128200;', disabled: true },
   ];
 
@@ -198,7 +202,9 @@ export default function DashboardLayout({
                 !item.disabled && (
                   item.href === '/dashboard'
                     ? pathname === '/dashboard'
-                    : pathname.startsWith(item.href)
+                    : item.href === '/dashboard/catalog'
+                      ? pathname === '/dashboard/catalog'
+                      : pathname.startsWith(item.href)
                 ) ? ' active' : ''
               }`}
               style={item.disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
@@ -253,7 +259,7 @@ export default function DashboardLayout({
             fontSize: 14,
             fontWeight: 500,
           }}>
-            Your account is pending admin approval. You cannot add products yet.
+            Your account is pending admin approval. Please complete your profile details to proceed with account review.
           </div>
         )}
         {!isPending && isEmailUnverified && (

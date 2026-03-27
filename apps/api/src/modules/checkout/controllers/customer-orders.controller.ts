@@ -1,11 +1,9 @@
 import {
   Controller,
-  Get,
   Post,
   Patch,
   Body,
   Param,
-  Query,
   UseGuards,
   Req,
 } from '@nestjs/common';
@@ -23,6 +21,8 @@ import {
 export class CustomerOrdersController {
   constructor(private readonly prisma: PrismaService) {}
 
+  // Legacy place-order endpoint (POST /customer/orders)
+  // The primary place-order flow is via POST /customer/checkout/place-order
   @Post()
   async placeOrder(@Req() req: any, @Body() body: { addressId: string }) {
     const { addressId } = body;
@@ -141,7 +141,7 @@ export class CustomerOrdersController {
         itemCount += item.quantity;
       }
 
-      // Create master order
+      // Create master order with status PLACED (awaits admin verification)
       const masterOrder = await tx.masterOrder.create({
         data: {
           orderNumber,
@@ -150,6 +150,7 @@ export class CustomerOrdersController {
           totalAmount,
           paymentMethod: 'COD',
           paymentStatus: 'PENDING',
+          orderStatus: 'PLACED',
           itemCount,
         },
       });
@@ -175,6 +176,7 @@ export class CustomerOrdersController {
             productTitle: item.product.title,
             variantTitle: item.variant?.title || null,
             sku: item.variant?.sku || item.product.baseSku || null,
+            masterSku: item.variant?.sku || item.product.baseSku || null,
             imageUrl,
             unitPrice: price,
             quantity: item.quantity,
@@ -182,7 +184,7 @@ export class CustomerOrdersController {
           };
         });
 
-        const subOrder = await tx.subOrder.create({
+        await tx.subOrder.create({
           data: {
             masterOrderId: masterOrder.id,
             sellerId,
@@ -196,7 +198,6 @@ export class CustomerOrdersController {
           },
           include: { items: true },
         });
-
       }
 
       // Decrement stock
@@ -227,74 +228,7 @@ export class CustomerOrdersController {
     };
   }
 
-  @Get()
-  async listOrders(
-    @Req() req: any,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
-
-    const [orders, total] = await Promise.all([
-      this.prisma.masterOrder.findMany({
-        where: { customerId: req.userId },
-        include: {
-          subOrders: {
-            include: {
-              items: true,
-              seller: { select: { sellerShopName: true } },
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limitNum,
-      }),
-      this.prisma.masterOrder.count({ where: { customerId: req.userId } }),
-    ]);
-
-    return {
-      success: true,
-      message: 'Orders retrieved',
-      data: {
-        orders,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum),
-        },
-      },
-    };
-  }
-
-  @Get(':orderNumber')
-  async getOrder(@Req() req: any, @Param('orderNumber') orderNumber: string) {
-    const order = await this.prisma.masterOrder.findFirst({
-      where: { orderNumber, customerId: req.userId },
-      include: {
-        subOrders: {
-          include: {
-            items: true,
-            seller: { select: { sellerShopName: true } },
-          },
-        },
-      },
-    });
-
-    if (!order) {
-      throw new NotFoundAppException('Order not found');
-    }
-
-    return {
-      success: true,
-      message: 'Order retrieved',
-      data: order,
-    };
-  }
-
+  // PATCH /customer/orders/:orderNumber/cancel
   @Patch(':orderNumber/cancel')
   async cancelOrder(
     @Req() req: any,
@@ -335,7 +269,7 @@ export class CustomerOrdersController {
       // Update master order
       await tx.masterOrder.update({
         where: { id: order.id },
-        data: { paymentStatus: 'CANCELLED' },
+        data: { paymentStatus: 'CANCELLED', orderStatus: 'CANCELLED' },
       });
 
       // Update all sub-orders
@@ -345,7 +279,6 @@ export class CustomerOrdersController {
           data: {
             paymentStatus: 'CANCELLED',
             acceptStatus: 'REJECTED',
-            // Prevent commission processor from creating commission
             commissionProcessed: true,
           },
         });

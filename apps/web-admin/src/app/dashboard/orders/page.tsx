@@ -10,17 +10,19 @@ interface SubOrder {
   paymentStatus: string;
   fulfillmentStatus: string;
   acceptStatus: string;
-  seller: { sellerShopName: string } | null;
+  seller: { id: string; sellerName: string; sellerShopName: string; email: string } | null;
   items: { productTitle: string; quantity: number }[];
 }
 
 interface Order {
   id: string;
   orderNumber: string;
+  orderStatus: string;
   totalAmount: number;
   paymentStatus: string;
   paymentMethod: string;
   itemCount: number;
+  verified: boolean;
   createdAt: string;
   customer: { firstName: string; lastName: string; email: string };
   subOrders: SubOrder[];
@@ -31,21 +33,94 @@ interface OrdersResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
+const ORDER_STATUS_OPTIONS = [
+  { value: '', label: 'All Statuses' },
+  { value: 'PLACED', label: 'Placed' },
+  { value: 'PENDING_VERIFICATION', label: 'Pending Verification' },
+  { value: 'VERIFIED', label: 'Verified' },
+  { value: 'ROUTED_TO_SELLER', label: 'Routed to Seller' },
+  { value: 'SELLER_ACCEPTED', label: 'Seller Accepted' },
+  { value: 'DISPATCHED', label: 'Dispatched' },
+  { value: 'DELIVERED', label: 'Delivered' },
+  { value: 'CANCELLED', label: 'Cancelled' },
+  { value: 'EXCEPTION_QUEUE', label: 'Exception Queue' },
+];
+
+const orderStatusColor = (status: string): string => {
+  switch (status) {
+    case 'PLACED': return '#d97706';
+    case 'PENDING_VERIFICATION': return '#d97706';
+    case 'VERIFIED': return '#2563eb';
+    case 'ROUTED_TO_SELLER': return '#7c3aed';
+    case 'SELLER_ACCEPTED': return '#16a34a';
+    case 'DISPATCHED': return '#0d9488';
+    case 'DELIVERED': return '#15803d';
+    case 'CANCELLED': return '#dc2626';
+    case 'EXCEPTION_QUEUE': return '#dc2626';
+    default: return '#6b7280';
+  }
+};
+
+const orderStatusLabel = (status: string): string => {
+  switch (status) {
+    case 'PLACED': return 'Placed';
+    case 'PENDING_VERIFICATION': return 'Pending Verification';
+    case 'VERIFIED': return 'Verified';
+    case 'ROUTED_TO_SELLER': return 'Routed';
+    case 'SELLER_ACCEPTED': return 'Accepted';
+    case 'DISPATCHED': return 'Dispatched';
+    case 'DELIVERED': return 'Delivered';
+    case 'CANCELLED': return 'Cancelled';
+    case 'EXCEPTION_QUEUE': return 'Exception';
+    default: return status;
+  }
+};
+
+const fulfillmentLabel = (status: string) => {
+  switch (status) {
+    case 'DELIVERED': return 'Delivered';
+    case 'FULFILLED': return 'Out for Delivery';
+    case 'SHIPPED': return 'Shipped';
+    case 'PACKED': return 'Packed';
+    case 'CANCELLED': return 'Cancelled';
+    default: return 'Unfulfilled';
+  }
+};
+
 export default function AdminOrdersPage() {
   const router = useRouter();
   const [data, setData] = useState<OrdersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
 
+  // Filters
+  const [orderStatusFilter, setOrderStatusFilter] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState('');
+  const [fulfillmentFilter, setFulfillmentFilter] = useState('');
+  const [acceptFilter, setAcceptFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+
   const fetchOrders = (p: number) => {
     setLoading(true);
-    apiClient<OrdersResponse>(`/admin/orders?page=${p}&limit=20`)
+    const params = new URLSearchParams({ page: String(p), limit: '20' });
+    if (orderStatusFilter) params.append('orderStatus', orderStatusFilter);
+    if (paymentFilter) params.append('paymentStatus', paymentFilter);
+    if (fulfillmentFilter) params.append('fulfillmentStatus', fulfillmentFilter);
+    if (acceptFilter) params.append('acceptStatus', acceptFilter);
+    if (searchQuery) params.append('search', searchQuery);
+
+    apiClient<OrdersResponse>(`/admin/orders?${params.toString()}`)
       .then((res) => { if (res.data) setData(res.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchOrders(page); }, [page]);
+  useEffect(() => { fetchOrders(page); }, [page, orderStatusFilter, paymentFilter, fulfillmentFilter, acceptFilter]);
+
+  const handleSearch = () => {
+    setPage(1);
+    fetchOrders(1);
+  };
 
   const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
   const formatDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -62,11 +137,72 @@ export default function AdminOrdersPage() {
     }}>{text}</span>
   );
 
+  const orderStatusBadge = (status: string) => {
+    const color = orderStatusColor(status);
+    const label = orderStatusLabel(status);
+    const isWarning = status === 'PLACED' || status === 'EXCEPTION_QUEUE';
+    return (
+      <span style={{
+        fontSize: 11,
+        fontWeight: 600,
+        padding: '2px 8px',
+        borderRadius: 4,
+        background: color + '18',
+        color,
+        whiteSpace: 'nowrap',
+        border: isWarning ? `1px solid ${color}40` : 'none',
+      }}>{label}</span>
+    );
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700 }}>Orders</h1>
         {data && <span style={{ fontSize: 13, color: '#6b7280' }}>{data.pagination.total} total</span>}
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={orderStatusFilter} onChange={(e) => { setOrderStatusFilter(e.target.value); setPage(1); }} style={selectStyle}>
+          {ORDER_STATUS_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+        <select value={paymentFilter} onChange={(e) => { setPaymentFilter(e.target.value); setPage(1); }} style={selectStyle}>
+          <option value="">All Payment</option>
+          <option value="PENDING">Pending</option>
+          <option value="PAID">Paid</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+        <select value={fulfillmentFilter} onChange={(e) => { setFulfillmentFilter(e.target.value); setPage(1); }} style={selectStyle}>
+          <option value="">All Fulfillment</option>
+          <option value="UNFULFILLED">Unfulfilled</option>
+          <option value="PACKED">Packed</option>
+          <option value="SHIPPED">Shipped</option>
+          <option value="FULFILLED">Out for Delivery</option>
+          <option value="DELIVERED">Delivered</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+        <select value={acceptFilter} onChange={(e) => { setAcceptFilter(e.target.value); setPage(1); }} style={selectStyle}>
+          <option value="">All Accept</option>
+          <option value="OPEN">Open</option>
+          <option value="ACCEPTED">Accepted</option>
+          <option value="REJECTED">Rejected</option>
+        </select>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <input
+            type="text"
+            placeholder="Search order / customer..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            style={{ padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, width: 200 }}
+          />
+          <button onClick={handleSearch} style={{ padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#f9fafb', fontSize: 13, cursor: 'pointer' }}>
+            Search
+          </button>
+        </div>
       </div>
 
       {loading && !data ? (
@@ -83,45 +219,82 @@ export default function AdminOrdersPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
-                  <th style={thStyle}>ORDER ID</th>
-                  <th style={thStyle}>STORE ORDER ID</th>
-                  <th style={thStyle}>SELLER</th>
-                  <th style={thStyle}>PAYMENT MODE</th>
-                  <th style={thStyle}>PAYMENT STATUS</th>
+                  <th style={thStyle}>ORDER #</th>
+                  <th style={thStyle}>CUSTOMER</th>
+                  <th style={thStyle}>SELLER(S)</th>
                   <th style={thStyle}>ORDER STATUS</th>
-                  <th style={thStyle}>ORDER ACCEPT</th>
+                  <th style={thStyle}>PAYMENT</th>
+                  <th style={thStyle}>FULFILLMENT</th>
+                  <th style={thStyle}>ACCEPT</th>
                   <th style={thStyle}>DATE</th>
-                  <th style={thStyle}>ORDER AMOUNT</th>
+                  <th style={thStyle}>AMOUNT</th>
                 </tr>
               </thead>
               <tbody>
-                {data.orders.flatMap((order) =>
-                  order.subOrders.map((so) => (
+                {data.orders.map((order) => {
+                  const sellers = order.subOrders
+                    .map((so) => so.seller?.sellerShopName || '-')
+                    .filter((v, i, a) => a.indexOf(v) === i);
+                  const fulfillmentStatuses = order.subOrders.map((so) => so.fulfillmentStatus);
+                  const acceptStatuses = order.subOrders.map((so) => so.acceptStatus);
+
+                  return (
                     <tr
-                      key={so.id}
+                      key={order.id}
                       onClick={() => router.push(`/dashboard/orders/${order.id}`)}
                       style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer' }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                     >
-                      <td style={tdStyle}><span style={{ fontFamily: 'monospace', fontSize: 12 }}>{so.id.slice(0, 8)}...</span></td>
                       <td style={tdStyle}><strong style={{ color: '#2563eb' }}>{order.orderNumber}</strong></td>
-                      <td style={tdStyle}>{so.seller?.sellerShopName || '-'}</td>
-                      <td style={tdStyle}>{order.paymentMethod}</td>
                       <td style={tdStyle}>
-                        {badge(so.paymentStatus, so.paymentStatus === 'PAID' ? '#16a34a' : '#d97706')}
+                        <div style={{ fontWeight: 500 }}>{order.customer.firstName} {order.customer.lastName}</div>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>{order.customer.email}</div>
                       </td>
                       <td style={tdStyle}>
-                        {badge(so.fulfillmentStatus, so.fulfillmentStatus === 'FULFILLED' ? '#16a34a' : '#6366f1')}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          {sellers.map((s, idx) => (
+                            <span key={idx} style={{ fontSize: 12, color: '#374151' }}>{s}</span>
+                          ))}
+                        </div>
                       </td>
                       <td style={tdStyle}>
-                        {badge(so.acceptStatus, so.acceptStatus === 'ACCEPTED' ? '#16a34a' : so.acceptStatus === 'REJECTED' ? '#dc2626' : '#6b7280')}
+                        {orderStatusBadge(order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED'))}
+                      </td>
+                      <td style={tdStyle}>
+                        {badge(order.paymentStatus, order.paymentStatus === 'PAID' ? '#16a34a' : order.paymentStatus === 'CANCELLED' ? '#dc2626' : '#d97706')}
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          {[...new Set(fulfillmentStatuses)].map((fs, idx) => (
+                            <span key={idx}>
+                              {badge(
+                                fulfillmentLabel(fs),
+                                fs === 'DELIVERED' ? '#7c3aed'
+                                : fs === 'FULFILLED' ? '#16a34a'
+                                : fs === 'SHIPPED' ? '#2563eb'
+                                : fs === 'PACKED' ? '#d97706'
+                                : fs === 'CANCELLED' ? '#dc2626'
+                                : '#6366f1'
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          {[...new Set(acceptStatuses)].map((as2, idx) => (
+                            <span key={idx}>
+                              {badge(as2, as2 === 'ACCEPTED' ? '#16a34a' : as2 === 'REJECTED' ? '#dc2626' : '#6b7280')}
+                            </span>
+                          ))}
+                        </div>
                       </td>
                       <td style={tdStyle}>{formatDate(order.createdAt)}</td>
-                      <td style={tdStyle}>{formatPrice(Number(so.subTotal))}</td>
+                      <td style={tdStyle}><strong>{formatPrice(Number(order.totalAmount))}</strong></td>
                     </tr>
-                  ))
-                )}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -138,6 +311,15 @@ export default function AdminOrdersPage() {
     </div>
   );
 }
+
+const selectStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  border: '1px solid #d1d5db',
+  borderRadius: 6,
+  fontSize: 13,
+  background: '#fff',
+  cursor: 'pointer',
+};
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',

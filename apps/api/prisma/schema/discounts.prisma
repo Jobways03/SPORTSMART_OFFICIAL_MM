@@ -45,42 +45,42 @@ enum BxgyGetDiscountType {
 }
 
 model Discount {
-  id                  String              @id @default(uuid())
-  code                String?             @unique
+  id                  String                 @id @default(uuid())
+  code                String?                @unique
   title               String?
   type                DiscountType
-  method              DiscountMethod      @default(CODE)
-  valueType           DiscountValueType   @default(PERCENTAGE) @map("value_type")
-  value               Decimal             @default(0) @db.Decimal(10, 2)
-  appliesTo           DiscountAppliesTo   @default(ALL_PRODUCTS) @map("applies_to")
-  eligibility         String              @default("ALL_CUSTOMERS")
+  method              DiscountMethod         @default(CODE)
+  valueType           DiscountValueType      @default(PERCENTAGE) @map("value_type")
+  value               Decimal                @default(0) @db.Decimal(10, 2)
+  appliesTo           DiscountAppliesTo      @default(ALL_PRODUCTS) @map("applies_to")
+  eligibility         String                 @default("ALL_CUSTOMERS")
   minRequirement      DiscountMinRequirement @default(NONE) @map("min_requirement")
-  minRequirementValue Decimal?            @map("min_requirement_value") @db.Decimal(10, 2)
-  maxUses             Int?                @map("max_uses")
-  onePerCustomer      Boolean             @default(false) @map("one_per_customer")
-  combineProduct      Boolean             @default(false) @map("combine_product")
-  combineOrder        Boolean             @default(false) @map("combine_order")
-  combineShipping     Boolean             @default(false) @map("combine_shipping")
-  startsAt            DateTime            @map("starts_at")
-  endsAt              DateTime?           @map("ends_at")
-  status              DiscountStatus      @default(ACTIVE)
-  usedCount           Int                 @default(0) @map("used_count")
+  minRequirementValue Decimal?               @map("min_requirement_value") @db.Decimal(10, 2)
+  maxUses             Int?                   @map("max_uses")
+  onePerCustomer      Boolean                @default(false) @map("one_per_customer")
+  combineProduct      Boolean                @default(false) @map("combine_product")
+  combineOrder        Boolean                @default(false) @map("combine_order")
+  combineShipping     Boolean                @default(false) @map("combine_shipping")
+  startsAt            DateTime               @map("starts_at")
+  endsAt              DateTime?              @map("ends_at")
+  status              DiscountStatus         @default(ACTIVE)
+  usedCount           Int                    @default(0) @map("used_count")
 
   // Buy X Get Y fields
-  buyType             String?             @map("buy_type")       // MIN_QUANTITY or MIN_AMOUNT
-  buyValue            Decimal?            @map("buy_value") @db.Decimal(10, 2)
-  buyItemsFrom        String?             @map("buy_items_from") // SPECIFIC_PRODUCTS or SPECIFIC_COLLECTIONS
-  getQuantity         Int?                @map("get_quantity")
-  getItemsFrom        String?             @map("get_items_from")
-  getDiscountType     BxgyGetDiscountType? @map("get_discount_type")
-  getDiscountValue    Decimal?            @map("get_discount_value") @db.Decimal(10, 2)
-  maxUsesPerOrder     Int?                @map("max_uses_per_order")
+  buyType          String?              @map("buy_type") // MIN_QUANTITY or MIN_AMOUNT
+  buyValue         Decimal?             @map("buy_value") @db.Decimal(10, 2)
+  buyItemsFrom     String?              @map("buy_items_from") // SPECIFIC_PRODUCTS or SPECIFIC_COLLECTIONS
+  getQuantity      Int?                 @map("get_quantity")
+  getItemsFrom     String?              @map("get_items_from")
+  getDiscountType  BxgyGetDiscountType? @map("get_discount_type")
+  getDiscountValue Decimal?             @map("get_discount_value") @db.Decimal(10, 2)
+  maxUsesPerOrder  Int?                 @map("max_uses_per_order")
 
-  createdAt           DateTime            @default(now()) @map("created_at")
-  updatedAt           DateTime            @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  products            DiscountProduct[]
-  collections         DiscountCollection[]
+  products    DiscountProduct[]
+  collections DiscountCollection[]
 
   @@index([code])
   @@index([status])
@@ -88,10 +88,10 @@ model Discount {
 }
 
 model DiscountProduct {
-  id         String   @id @default(uuid())
-  discountId String   @map("discount_id")
-  productId  String   @map("product_id")
-  scope      String   @default("APPLIES") // APPLIES, BUY, GET
+  id         String @id @default(uuid())
+  discountId String @map("discount_id")
+  productId  String @map("product_id")
+  scope      String @default("APPLIES") // APPLIES, BUY, GET
 
   discount Discount @relation(fields: [discountId], references: [id], onDelete: Cascade)
   product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -103,10 +103,10 @@ model DiscountProduct {
 }
 
 model DiscountCollection {
-  id           String   @id @default(uuid())
-  discountId   String   @map("discount_id")
-  collectionId String   @map("collection_id")
-  scope        String   @default("APPLIES") // APPLIES, BUY, GET
+  id           String @id @default(uuid())
+  discountId   String @map("discount_id")
+  collectionId String @map("collection_id")
+  scope        String @default("APPLIES") // APPLIES, BUY, GET
 
   discount   Discount          @relation(fields: [discountId], references: [id], onDelete: Cascade)
   collection ProductCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)

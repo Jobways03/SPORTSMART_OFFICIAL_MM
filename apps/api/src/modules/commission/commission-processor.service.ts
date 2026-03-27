@@ -10,7 +10,7 @@ export class CommissionProcessorService implements OnModuleInit {
   onModuleInit() {
     // Check every 15 seconds for sub-orders past return window
     setInterval(() => this.processCommissions(), 15_000);
-    this.logger.log('Commission processor started (15s interval)');
+    this.logger.log('Commission processor started (15s interval) — Model 1 margin-based');
   }
 
   async processCommissions() {
@@ -21,28 +21,17 @@ export class CommissionProcessorService implements OnModuleInit {
           commissionProcessed: false,
           returnWindowEndsAt: { lte: new Date() },
           paymentStatus: { not: 'CANCELLED' },
+          // Only process commission when master order payment is PAID
+          masterOrder: { paymentStatus: 'PAID' },
         },
         include: {
           items: true,
-          masterOrder: { select: { orderNumber: true } },
-          seller: { select: { sellerShopName: true } },
+          masterOrder: { select: { orderNumber: true, paymentStatus: true } },
+          seller: { select: { id: true, sellerShopName: true } },
         },
       });
 
       if (subOrders.length === 0) return;
-
-      let settings = await this.prisma.commissionSetting.findUnique({
-        where: { id: 'global' },
-      });
-      if (!settings) {
-        settings = await this.prisma.commissionSetting.create({
-          data: { id: 'global' },
-        });
-      }
-
-      const cType = settings.commissionType;
-      const cVal = Number(settings.commissionValue);
-      const cVal2 = Number(settings.secondCommissionValue);
 
       for (const so of subOrders) {
         await this.prisma.$transaction(async (tx) => {
@@ -56,38 +45,37 @@ export class CommissionProcessorService implements OnModuleInit {
             });
             if (existing) continue;
 
-            const up = Number(item.unitPrice);
-            let unitCommission = 0;
-            let rateLabel = '';
+            // Look up the SellerProductMapping for the settlement price
+            const mapping = await tx.sellerProductMapping.findFirst({
+              where: {
+                sellerId: so.sellerId,
+                productId: item.productId,
+                ...(item.variantId ? { variantId: item.variantId } : { variantId: null }),
+              },
+            });
 
-            if (cType === 'PERCENTAGE') {
-              unitCommission = up * (cVal / 100);
-              rateLabel = `${cVal.toFixed(2)} %`;
-            } else if (cType === 'FIXED') {
-              unitCommission = cVal;
-              rateLabel = `${cVal.toFixed(2)} FIXED`;
-            } else if (cType === 'PERCENTAGE_PLUS_FIXED') {
-              unitCommission = up * (cVal / 100) + cVal2;
-              rateLabel = `${cVal.toFixed(2)} % + ${cVal2.toFixed(2)} FIXED`;
-            } else if (cType === 'FIXED_PLUS_PERCENTAGE') {
-              const remaining = up - cVal;
-              const pctPart = remaining > 0 ? remaining * (cVal2 / 100) : 0;
-              unitCommission = cVal + pctPart;
-              rateLabel = `${cVal.toFixed(2)} FIXED + ${cVal2.toFixed(2)} %`;
-            }
+            // platformPrice = what the customer paid (stored as unitPrice in the OrderItem)
+            const platformPrice = Number(item.unitPrice);
 
-            if (
-              settings!.enableMaxCommission &&
-              settings!.maxCommissionAmount
-            ) {
-              const maxCap = Number(settings!.maxCommissionAmount);
-              if (unitCommission > maxCap) unitCommission = maxCap;
-            }
+            // settlementPrice = what the seller gets per unit (from the mapping)
+            // Fallback: if no mapping or no settlementPrice, use 80% of platformPrice as a safe default
+            const settlementPrice = mapping?.settlementPrice
+              ? Number(mapping.settlementPrice)
+              : Math.round(platformPrice * 0.8 * 100) / 100;
 
-            unitCommission = Math.round(unitCommission * 100) / 100;
-            const totalCommission = unitCommission * item.quantity;
+            const quantity = item.quantity;
+
+            // Per-unit margin
+            const unitMargin = Math.round((platformPrice - settlementPrice) * 100) / 100;
+
+            // Totals
+            const totalPlatformAmount = Math.round(platformPrice * quantity * 100) / 100;
+            const totalSettlementAmount = Math.round(settlementPrice * quantity * 100) / 100;
+            const platformMargin = Math.round((totalPlatformAmount - totalSettlementAmount) * 100) / 100;
+
+            // Populate legacy fields for backward compatibility
             const totalItemPrice = Number(item.totalPrice);
-            const productEarning = totalItemPrice - totalCommission;
+            const rateLabel = `Margin: ${((unitMargin / platformPrice) * 100).toFixed(1)}%`;
 
             await tx.commissionRecord.create({
               data: {
@@ -97,17 +85,28 @@ export class CommissionProcessorService implements OnModuleInit {
                 sellerId: so.sellerId,
                 productId: item.productId,
                 productTitle: item.productTitle,
+                variantTitle: item.variantTitle || null,
                 orderNumber,
                 sellerName,
-                unitPrice: up,
-                quantity: item.quantity,
+
+                // Model 1 fields
+                platformPrice,
+                settlementPrice,
+                quantity,
+                totalPlatformAmount,
+                totalSettlementAmount,
+                platformMargin,
+                status: 'PENDING',
+
+                // Legacy fields (mapped from new logic)
+                unitPrice: platformPrice,
                 totalPrice: totalItemPrice,
-                commissionType: cType,
+                commissionType: 'MARGIN_BASED',
                 commissionRate: rateLabel,
-                unitCommission,
-                totalCommission,
-                adminEarning: totalCommission,
-                productEarning,
+                unitCommission: unitMargin,
+                totalCommission: platformMargin,
+                adminEarning: platformMargin,
+                productEarning: totalSettlementAmount,
               },
             });
           }

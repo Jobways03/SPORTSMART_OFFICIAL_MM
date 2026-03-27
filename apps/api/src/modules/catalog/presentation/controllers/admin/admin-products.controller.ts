@@ -16,6 +16,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
+import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
@@ -23,6 +24,7 @@ import {
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import { AdminAuthGuard } from '../../../../../core/guards';
 import { ProductSlugService } from '../../../application/services/product-slug.service';
+import { ProductCodeService } from '../../../application/services/product-code.service';
 import { AdminCreateProductDto } from '../../dtos/admin-create-product.dto';
 import { UpdateProductDto } from '../../dtos/update-product.dto';
 import { AdminRejectProductDto } from '../../dtos/admin-reject-product.dto';
@@ -37,6 +39,8 @@ export class AdminProductsController {
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
     private readonly slugService: ProductSlugService,
+    private readonly productCodeService: ProductCodeService,
+    private readonly eventBus: EventBusService,
   ) {
     this.logger.setContext('AdminProductsController');
   }
@@ -51,6 +55,7 @@ export class AdminProductsController {
     @Query('moderationStatus') moderationStatus?: string,
     @Query('categoryId') categoryId?: string,
     @Query('sellerId') sellerId?: string,
+    @Query('hasSellers') hasSellers?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '10', 10) || 10));
@@ -63,6 +68,15 @@ export class AdminProductsController {
     if (moderationStatus) where.moderationStatus = moderationStatus;
     if (categoryId) where.categoryId = categoryId;
     if (sellerId) where.sellerId = sellerId;
+
+    // Only show products that have seller involvement (created by seller OR has seller mappings)
+    if (hasSellers === 'true') {
+      where.OR = [
+        ...(where.OR || []),
+        { sellerId: { not: null } },
+        { sellerMappings: { some: {} } },
+      ];
+    }
 
     if (search) {
       where.OR = [
@@ -90,6 +104,10 @@ export class AdminProductsController {
             where: { isDeleted: false },
             select: { stock: true },
           },
+          sellerMappings: {
+            where: { approvalStatus: 'APPROVED', isActive: true },
+            select: { stockQty: true, reservedQty: true },
+          },
           _count: { select: { variants: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -100,15 +118,17 @@ export class AdminProductsController {
     ]);
 
     const mapped = products.map((p: any) => {
-      const totalVariantStock = p.variants?.reduce((sum: number, v: any) => sum + (v.stock || 0), 0) ?? 0;
+      // Aggregate stock from approved seller mappings
+      const sellerStock = p.sellerMappings?.reduce((sum: number, m: any) => sum + Math.max(0, (m.stockQty || 0) - (m.reservedQty || 0)), 0) ?? 0;
       return {
         ...p,
         variantCount: p._count?.variants ?? 0,
-        totalStock: p.hasVariants ? totalVariantStock : (p.baseStock ?? 0),
+        totalStock: sellerStock,
         primaryImageUrl: p.images?.[0]?.url ?? null,
         _count: undefined,
         images: undefined,
         variants: undefined,
+        sellerMappings: undefined,
       };
     });
 
@@ -153,6 +173,9 @@ export class AdminProductsController {
                 },
               },
             },
+            images: {
+              orderBy: { sortOrder: 'asc' },
+            },
           },
           orderBy: { sortOrder: 'asc' },
         },
@@ -196,20 +219,23 @@ export class AdminProductsController {
   async createProduct(@Req() req: Request, @Body() dto: AdminCreateProductDto) {
     const adminId = (req as any).adminId;
 
-    // Look up seller by email
-    const seller = await this.prisma.seller.findUnique({
-      where: { email: dto.sellerEmail },
-      select: { id: true, status: true },
-    });
+    // Look up seller by email (optional — platform products don't need a seller)
+    let seller: { id: string; status: string } | null = null;
+    if (dto.sellerEmail) {
+      seller = await this.prisma.seller.findUnique({
+        where: { email: dto.sellerEmail },
+        select: { id: true, status: true },
+      });
 
-    if (!seller) {
-      throw new NotFoundAppException(
-        `Seller with email ${dto.sellerEmail} not found`,
-      );
-    }
+      if (!seller) {
+        throw new NotFoundAppException(
+          `Seller with email ${dto.sellerEmail} not found`,
+        );
+      }
 
-    if (seller.status !== 'ACTIVE') {
-      throw new AppException('Seller account is not active', 'BAD_REQUEST');
+      if (seller.status !== 'ACTIVE') {
+        throw new AppException('Seller account is not active', 'BAD_REQUEST');
+      }
     }
 
     // Find or create category by name
@@ -237,11 +263,13 @@ export class AdminProductsController {
     }
 
     const slug = await this.slugService.generateUniqueSlug(dto.title);
+    const productCode = await this.productCodeService.generateProductCode();
 
     const product = await this.prisma.$transaction(async (tx) => {
       const newProduct = await tx.product.create({
         data: {
-          sellerId: seller.id,
+          sellerId: seller?.id || null,
+          productCode,
           title: dto.title,
           slug,
           shortDescription: dto.shortDescription,
@@ -249,6 +277,8 @@ export class AdminProductsController {
           categoryId,
           brandId,
           hasVariants: dto.hasVariants,
+          moderationStatus: 'APPROVED',
+          platformPrice: dto.platformPrice,
           basePrice: dto.basePrice,
           baseSku: dto.baseSku,
           baseStock: dto.baseStock,
@@ -324,8 +354,76 @@ export class AdminProductsController {
     });
 
     this.logger.log(
-      `Product created by admin ${adminId}: ${product.id} for seller ${seller.id}`,
+      `Product created by admin ${adminId}: ${product.id}${seller ? ` for seller ${seller.id}` : ' (platform product)'}`,
     );
+
+    // ── Phase 11 / T3: Auto-create SellerProductMapping for the assigned seller ──
+    if (seller) {
+    try {
+      const sellerProfile = await this.prisma.seller.findUnique({
+        where: { id: seller.id },
+        select: {
+          storeAddress: true,
+          sellerZipCode: true,
+        },
+      });
+
+      if (product.hasVariants) {
+        const createdVariants = await this.prisma.productVariant.findMany({
+          where: { productId: product.id, isDeleted: false },
+          select: { id: true, price: true, stock: true },
+        });
+
+        for (const variant of createdVariants) {
+          await this.prisma.sellerProductMapping.create({
+            data: {
+              sellerId: seller.id,
+              productId: product.id,
+              variantId: variant.id,
+              stockQty: variant.stock ?? 0,
+              settlementPrice: variant.price
+                ? Number(variant.price)
+                : product.basePrice
+                  ? Number(product.basePrice)
+                  : undefined,
+              pickupAddress: sellerProfile?.storeAddress || null,
+              pickupPincode: sellerProfile?.sellerZipCode || null,
+              dispatchSla: 2,
+              isActive: true,
+            },
+          });
+        }
+        if (createdVariants.length > 0) {
+          this.logger.log(
+            `Auto-created ${createdVariants.length} seller mapping(s) for admin-created variant product ${product.id}`,
+          );
+        }
+      } else {
+        await this.prisma.sellerProductMapping.create({
+          data: {
+            sellerId: seller.id,
+            productId: product.id,
+            variantId: null,
+            stockQty: product.baseStock ?? 0,
+            settlementPrice: product.basePrice
+              ? Number(product.basePrice)
+              : undefined,
+            pickupAddress: sellerProfile?.storeAddress || null,
+            pickupPincode: sellerProfile?.sellerZipCode || null,
+            dispatchSla: 2,
+            isActive: true,
+          },
+        });
+        this.logger.log(
+          `Auto-created seller mapping for admin-created simple product ${product.id}`,
+        );
+      }
+    } catch (mappingError) {
+      this.logger.warn(
+        `Failed to auto-create seller mapping for admin product ${product.id}: ${mappingError}`,
+      );
+    }
+    } // end if (seller)
 
     const fullProduct = await this.prisma.product.findUnique({
       where: { id: product.id },
@@ -343,12 +441,13 @@ export class AdminProductsController {
             email: true,
           },
         },
+        sellerMappings: true,
       },
     });
 
     return {
       success: true,
-      message: 'Product created successfully',
+      message: 'Product created successfully. Seller has been automatically mapped.',
       data: fullProduct,
     };
   }
@@ -404,6 +503,7 @@ export class AdminProductsController {
     if (dto.description !== undefined) updateData.description = dto.description;
     if (dto.hasVariants !== undefined) updateData.hasVariants = dto.hasVariants;
     if (dto.basePrice !== undefined) updateData.basePrice = dto.basePrice;
+    if (dto.platformPrice !== undefined) updateData.platformPrice = dto.platformPrice;
     if (dto.compareAtPrice !== undefined) updateData.compareAtPrice = dto.compareAtPrice;
     if (dto.costPrice !== undefined) updateData.costPrice = dto.costPrice;
     if (dto.baseSku !== undefined) updateData.baseSku = dto.baseSku;
@@ -572,6 +672,24 @@ export class AdminProductsController {
 
     this.logger.log(`Product ${productId} approved by admin ${adminId}`);
 
+    // Emit event for email notifications
+    try {
+      await this.eventBus.publish({
+        eventName: 'catalog.listing.approved',
+        aggregate: 'Product',
+        aggregateId: productId,
+        occurredAt: new Date(),
+        payload: {
+          productId,
+          productTitle: product.title,
+          sellerId: product.sellerId,
+          adminId,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to emit catalog.listing.approved event: ${err}`);
+    }
+
     return {
       success: true,
       message: 'Product approved and activated successfully',
@@ -625,6 +743,25 @@ export class AdminProductsController {
     });
 
     this.logger.log(`Product ${productId} rejected by admin ${adminId}`);
+
+    // Emit event for email notifications
+    try {
+      await this.eventBus.publish({
+        eventName: 'catalog.listing.rejected',
+        aggregate: 'Product',
+        aggregateId: productId,
+        occurredAt: new Date(),
+        payload: {
+          productId,
+          productTitle: product.title,
+          sellerId: product.sellerId,
+          reason: dto.reason,
+          adminId,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to emit catalog.listing.rejected event: ${err}`);
+    }
 
     return {
       success: true,
@@ -708,9 +845,14 @@ export class AdminProductsController {
 
     // Validate allowed transitions
     const allowedTransitions: Record<string, string[]> = {
-      ACTIVE: ['SUSPENDED', 'ARCHIVED'],
+      DRAFT: ['ACTIVE', 'ARCHIVED'],
+      SUBMITTED: ['ACTIVE', 'ARCHIVED'],
+      APPROVED: ['ACTIVE', 'SUSPENDED', 'ARCHIVED'],
+      ACTIVE: ['SUSPENDED', 'ARCHIVED', 'DRAFT'],
       SUSPENDED: ['ACTIVE', 'ARCHIVED'],
-      ARCHIVED: ['ACTIVE'],
+      ARCHIVED: ['ACTIVE', 'DRAFT'],
+      REJECTED: ['DRAFT'],
+      CHANGES_REQUESTED: ['DRAFT'],
     };
 
     const allowed = allowedTransitions[product.status];
@@ -748,6 +890,222 @@ export class AdminProductsController {
       success: true,
       message: `Product status updated to ${dto.status}`,
       data: null,
+    };
+  }
+
+  @Post(':productId/merge-into/:targetProductId')
+  @HttpCode(HttpStatus.OK)
+  async mergeProduct(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('targetProductId') targetProductId: string,
+  ) {
+    const adminId = (req as any).adminId;
+
+    // 1. Validate both products exist
+    const [sourceProduct, targetProduct] = await Promise.all([
+      this.prisma.product.findFirst({
+        where: { id: productId, isDeleted: false },
+        include: {
+          variants: { where: { isDeleted: false }, select: { id: true, price: true, stock: true } },
+        },
+      }),
+      this.prisma.product.findFirst({
+        where: { id: targetProductId, isDeleted: false },
+      }),
+    ]);
+
+    if (!sourceProduct) {
+      throw new NotFoundAppException('Source product not found');
+    }
+    if (!targetProduct) {
+      throw new NotFoundAppException('Target product not found');
+    }
+
+    if (sourceProduct.id === targetProduct.id) {
+      throw new BadRequestAppException('Cannot merge a product into itself');
+    }
+
+    // 2. The source product is the seller-submitted one — get the seller
+    if (!sourceProduct.sellerId) {
+      throw new BadRequestAppException('Source product has no associated seller');
+    }
+
+    const sellerId = sourceProduct.sellerId;
+
+    // 3. Get seller profile for mapping
+    const sellerProfile = await this.prisma.seller.findUnique({
+      where: { id: sellerId },
+      select: { storeAddress: true, sellerZipCode: true },
+    });
+
+    const mappingsCreated: any[] = [];
+
+    await this.prisma.$transaction(async (tx) => {
+      // 4. Create SellerProductMapping entries for seller -> target product
+      if (sourceProduct.hasVariants && sourceProduct.variants.length > 0) {
+        // Get target product variants to map to
+        const targetVariants = await tx.productVariant.findMany({
+          where: { productId: targetProductId, isDeleted: false },
+          select: { id: true, price: true, stock: true },
+        });
+
+        if (targetVariants.length > 0) {
+          // Map to target variants
+          for (const tv of targetVariants) {
+            const mapping = await tx.sellerProductMapping.create({
+              data: {
+                sellerId,
+                productId: targetProductId,
+                variantId: tv.id,
+                stockQty: 0,
+                settlementPrice: tv.price ? Number(tv.price) : undefined,
+                pickupAddress: sellerProfile?.storeAddress || null,
+                pickupPincode: sellerProfile?.sellerZipCode || null,
+                dispatchSla: 2,
+                isActive: true,
+              },
+            });
+            mappingsCreated.push(mapping);
+          }
+        } else {
+          // No target variants — create product-level mapping
+          const mapping = await tx.sellerProductMapping.create({
+            data: {
+              sellerId,
+              productId: targetProductId,
+              variantId: null,
+              stockQty: sourceProduct.baseStock ?? 0,
+              settlementPrice: sourceProduct.basePrice ? Number(sourceProduct.basePrice) : undefined,
+              pickupAddress: sellerProfile?.storeAddress || null,
+              pickupPincode: sellerProfile?.sellerZipCode || null,
+              dispatchSla: 2,
+              isActive: true,
+            },
+          });
+          mappingsCreated.push(mapping);
+        }
+      } else {
+        // Simple product — create product-level mapping
+        const mapping = await tx.sellerProductMapping.create({
+          data: {
+            sellerId,
+            productId: targetProductId,
+            variantId: null,
+            stockQty: sourceProduct.baseStock ?? 0,
+            settlementPrice: sourceProduct.basePrice ? Number(sourceProduct.basePrice) : undefined,
+            pickupAddress: sellerProfile?.storeAddress || null,
+            pickupPincode: sellerProfile?.sellerZipCode || null,
+            dispatchSla: 2,
+            isActive: true,
+          },
+        });
+        mappingsCreated.push(mapping);
+      }
+
+      // 5. Soft-delete the source product
+      await tx.product.update({
+        where: { id: productId },
+        data: {
+          isDeleted: true,
+          deletedAt: new Date(),
+          status: 'ARCHIVED',
+        },
+      });
+
+      // Soft-delete source variants
+      await tx.productVariant.updateMany({
+        where: { productId },
+        data: { isDeleted: true, deletedAt: new Date() },
+      });
+
+      // 6. Create status history entry
+      await tx.productStatusHistory.create({
+        data: {
+          productId,
+          fromStatus: sourceProduct.status,
+          toStatus: 'ARCHIVED',
+          changedBy: adminId,
+          reason: `Merged into product ${targetProductId}`,
+        },
+      });
+    });
+
+    this.logger.log(
+      `Product ${productId} merged into ${targetProductId} by admin ${adminId}. ${mappingsCreated.length} mapping(s) created.`,
+    );
+
+    return {
+      success: true,
+      message: `Product merged into existing product. ${mappingsCreated.length} seller mapping(s) created.`,
+      data: {
+        sourceProductId: productId,
+        targetProductId,
+        mappingsCreated: mappingsCreated.length,
+      },
+    };
+  }
+
+  @Get(':productId/duplicate-info')
+  @HttpCode(HttpStatus.OK)
+  async getDuplicateInfo(@Param('productId') productId: string) {
+    const product = await this.prisma.product.findFirst({
+      where: { id: productId, isDeleted: false },
+      select: { potentialDuplicateOf: true },
+    });
+
+    if (!product) {
+      throw new NotFoundAppException('Product not found');
+    }
+
+    if (!product.potentialDuplicateOf) {
+      return {
+        success: true,
+        message: 'No potential duplicate found',
+        data: null,
+      };
+    }
+
+    const duplicate = await this.prisma.product.findFirst({
+      where: { id: product.potentialDuplicateOf, isDeleted: false },
+      include: {
+        category: { select: { id: true, name: true } },
+        brand: { select: { id: true, name: true } },
+        images: { orderBy: { sortOrder: 'asc' }, take: 3 },
+        seller: {
+          select: {
+            id: true,
+            sellerName: true,
+            sellerShopName: true,
+          },
+        },
+      },
+    });
+
+    if (!duplicate) {
+      return {
+        success: true,
+        message: 'Potential duplicate product no longer exists',
+        data: null,
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Duplicate info retrieved',
+      data: {
+        id: duplicate.id,
+        productCode: duplicate.productCode,
+        title: duplicate.title,
+        status: duplicate.status,
+        moderationStatus: duplicate.moderationStatus,
+        basePrice: duplicate.basePrice,
+        hasVariants: duplicate.hasVariants,
+        brandName: duplicate.brand?.name ?? null,
+        categoryName: duplicate.category?.name ?? null,
+        images: duplicate.images,
+        seller: duplicate.seller,
+      },
     };
   }
 }

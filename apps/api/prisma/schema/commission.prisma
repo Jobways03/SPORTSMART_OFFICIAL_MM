@@ -7,11 +7,18 @@ enum CommissionType {
   FIXED
   PERCENTAGE_PLUS_FIXED
   FIXED_PLUS_PERCENTAGE
+  MARGIN_BASED
+}
+
+enum CommissionRecordStatus {
+  PENDING
+  SETTLED
+  REFUNDED
 }
 
 model CommissionSetting {
   id                    String         @id @default("global")
-  commissionType        CommissionType @default(PERCENTAGE) @map("commission_type")
+  commissionType        CommissionType @default(MARGIN_BASED) @map("commission_type")
   commissionValue       Decimal        @default(20) @map("commission_value") @db.Decimal(10, 2)
   secondCommissionValue Decimal        @default(0) @map("second_commission_value") @db.Decimal(10, 2)
   fixedCommissionType   String         @default("Product") @map("fixed_commission_type")
@@ -23,38 +30,57 @@ model CommissionSetting {
 }
 
 model CommissionRecord {
-  id                   String         @id @default(uuid())
-  orderItemId          String         @unique @map("order_item_id")
-  subOrderId           String         @map("sub_order_id")
-  masterOrderId        String         @map("master_order_id")
-  sellerId             String         @map("seller_id")
-  productId            String         @map("product_id")
-  productTitle         String         @map("product_title")
-  orderNumber          String         @map("order_number")
-  sellerName           String         @map("seller_name")
-  unitPrice            Decimal        @map("unit_price") @db.Decimal(10, 2)
-  quantity             Int
-  totalPrice           Decimal        @map("total_price") @db.Decimal(10, 2)
-  commissionType       CommissionType @map("commission_type")
-  commissionRate       String         @map("commission_rate")
-  unitCommission       Decimal        @map("unit_commission") @db.Decimal(10, 2)
-  totalCommission      Decimal        @map("total_commission") @db.Decimal(10, 2)
-  adminEarning         Decimal        @map("admin_earning") @db.Decimal(10, 2)
-  productEarning       Decimal        @map("product_earning") @db.Decimal(10, 2)
-  refundedAdminEarning Decimal        @default(0) @map("refunded_admin_earning") @db.Decimal(10, 2)
-  vatOnCommission      Decimal        @default(0) @map("vat_on_commission") @db.Decimal(10, 2)
-  taxCommission        Decimal        @default(0) @map("tax_commission") @db.Decimal(10, 2)
-  shippingCommission   Decimal        @default(0) @map("shipping_commission") @db.Decimal(10, 2)
-  createdAt            DateTime       @default(now()) @map("created_at")
+  id                   String                 @id @default(uuid())
+  orderItemId          String                 @unique @map("order_item_id")
+  subOrderId           String                 @map("sub_order_id")
+  masterOrderId        String                 @map("master_order_id")
+  sellerId             String                 @map("seller_id")
+  productId            String                 @map("product_id")
+  productTitle         String                 @map("product_title")
+  variantTitle         String?                @map("variant_title")
+  orderNumber          String                 @map("order_number")
+  sellerName           String                 @map("seller_name")
 
-  orderItem   OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-  subOrder    SubOrder    @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
-  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
-  seller      Seller      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  // Model 1 pricing fields
+  platformPrice        Decimal                @map("platform_price") @db.Decimal(10, 2)
+  settlementPrice      Decimal                @map("settlement_price") @db.Decimal(10, 2)
+  quantity             Int
+  totalPlatformAmount  Decimal                @map("total_platform_amount") @db.Decimal(10, 2)
+  totalSettlementAmount Decimal               @map("total_settlement_amount") @db.Decimal(10, 2)
+  platformMargin       Decimal                @map("platform_margin") @db.Decimal(10, 2)
+
+  // Legacy fields (kept for backward compatibility, mapped from new logic)
+  unitPrice            Decimal                @map("unit_price") @db.Decimal(10, 2)
+  totalPrice           Decimal                @map("total_price") @db.Decimal(10, 2)
+  commissionType       CommissionType         @map("commission_type")
+  commissionRate       String                 @map("commission_rate")
+  unitCommission       Decimal                @map("unit_commission") @db.Decimal(10, 2)
+  totalCommission      Decimal                @map("total_commission") @db.Decimal(10, 2)
+  adminEarning         Decimal                @map("admin_earning") @db.Decimal(10, 2)
+  productEarning       Decimal                @map("product_earning") @db.Decimal(10, 2)
+  refundedAdminEarning Decimal                @default(0) @map("refunded_admin_earning") @db.Decimal(10, 2)
+  vatOnCommission      Decimal                @default(0) @map("vat_on_commission") @db.Decimal(10, 2)
+  taxCommission        Decimal                @default(0) @map("tax_commission") @db.Decimal(10, 2)
+  shippingCommission   Decimal                @default(0) @map("shipping_commission") @db.Decimal(10, 2)
+
+  // Settlement status
+  status               CommissionRecordStatus @default(PENDING) @map("status")
+  settlementId         String?                @map("settlement_id")
+
+  createdAt            DateTime               @default(now()) @map("created_at")
+
+  orderItem        OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  masterOrder      MasterOrder       @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  seller           Seller            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  sellerSettlement SellerSettlement?  @relation(fields: [settlementId], references: [id])
 
   @@index([sellerId])
   @@index([masterOrderId])
   @@index([subOrderId])
   @@index([orderItemId])
+  @@index([status])
+  @@index([settlementId])
+  @@index([createdAt])
   @@map("commission_records")
 }

@@ -38,6 +38,10 @@ export default function VariantDetailPage() {
     stock: '',
     weight: '',
     weightUnit: 'g',
+    length: '',
+    width: '',
+    height: '',
+    dimensionUnit: 'cm',
   });
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
@@ -60,6 +64,10 @@ export default function VariantDetailPage() {
       stock: String(v.stock ?? 0),
       weight: v.weight ?? '',
       weightUnit: v.weightUnit || 'g',
+      length: (v as any).length ?? '',
+      width: (v as any).width ?? '',
+      height: (v as any).height ?? '',
+      dimensionUnit: (v as any).dimensionUnit || 'cm',
     });
   }, []);
 
@@ -129,6 +137,13 @@ export default function VariantDetailPage() {
       if (form.weight) payload.weight = Number(form.weight);
       else payload.weight = null;
       payload.weightUnit = form.weightUnit;
+      if (form.length) payload.length = Number(form.length);
+      else payload.length = null;
+      if (form.width) payload.width = Number(form.width);
+      else payload.width = null;
+      if (form.height) payload.height = Number(form.height);
+      else payload.height = null;
+      payload.dimensionUnit = form.dimensionUnit;
 
       await sellerProductService.updateVariant(token, productId, variantId, payload);
       showToast('success', 'Variant updated successfully.');
@@ -182,6 +197,23 @@ export default function VariantDetailPage() {
     await loadProduct();
     setUploadingImage(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleMoveImage(imageId: string, direction: 'up' | 'down') {
+    const sorted = [...variantImages].sort((a: any, b: any) => a.sortOrder - b.sortOrder);
+    const idx = sorted.findIndex((img: any) => img.id === imageId);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const newOrder = sorted.map((img: any) => img.id);
+    [newOrder[idx], newOrder[swapIdx]] = [newOrder[swapIdx], newOrder[idx]];
+    try {
+      const token = sessionStorage.getItem('accessToken') || '';
+      await sellerProductService.reorderVariantImages(token, productId, variantId, newOrder);
+      await loadProduct();
+    } catch {
+      showToast('error', 'Failed to reorder images.');
+    }
   }
 
   async function handleDeleteImage(imageId: string) {
@@ -246,9 +278,30 @@ export default function VariantDetailPage() {
             <div className="form-card-title">VARIANT IMAGE</div>
             <p className="variant-detail-hint">Edit variant image here</p>
 
-            {variantImages.length > 0 && (
+            {(() => {
+              const colorOv = (currentVariant.optionValues || []).find((ov: any) => {
+                const name = ov.optionValue?.optionDefinition?.name || ov.optionName || '';
+                return name.toLowerCase() === 'color' || name.toLowerCase() === 'colour';
+              });
+              const colorValue = colorOv?.optionValue?.displayValue || colorOv?.displayValue;
+              if (colorValue) {
+                return (
+                  <div style={{
+                    background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
+                    padding: '8px 12px', marginBottom: 12, fontSize: 13, color: '#1e40af',
+                  }}>
+                    Images are shared across all <strong>{colorValue}</strong> variants
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            {variantImages.length > 0 && (() => {
+              const sorted = [...variantImages].sort((a: any, b: any) => a.sortOrder - b.sortOrder);
+              return (
               <div className="image-grid" style={{ marginBottom: 12 }}>
-                {variantImages.map(img => (
+                {sorted.map((img, idx) => (
                   <div key={img.id}>
                     <div className="image-card">
                       <img src={img.url} alt={variantLabel} />
@@ -262,10 +315,17 @@ export default function VariantDetailPage() {
                         </button>
                       </div>
                     </div>
+                    {sorted.length > 1 && (
+                      <div className="image-move-buttons">
+                        <button disabled={idx === 0} onClick={() => handleMoveImage(img.id, 'up')} title="Move left">&larr;</button>
+                        <button disabled={idx === sorted.length - 1} onClick={() => handleMoveImage(img.id, 'down')} title="Move right">&rarr;</button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-            )}
+              );
+            })()}
             <div
               className="image-upload-area"
               onClick={() => fileInputRef.current?.click()}
@@ -468,6 +528,53 @@ export default function VariantDetailPage() {
                 min="0"
                 step="0.01"
               />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Dimensions (L x W x H)</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="number"
+                  className="form-input"
+                  style={{ flex: 1 }}
+                  value={form.length}
+                  onChange={e => setForm(prev => ({ ...prev, length: e.target.value }))}
+                  placeholder="L"
+                  min="0"
+                  step="0.1"
+                />
+                <span style={{ color: '#9ca3af' }}>&times;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  style={{ flex: 1 }}
+                  value={form.width}
+                  onChange={e => setForm(prev => ({ ...prev, width: e.target.value }))}
+                  placeholder="W"
+                  min="0"
+                  step="0.1"
+                />
+                <span style={{ color: '#9ca3af' }}>&times;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  style={{ flex: 1 }}
+                  value={form.height}
+                  onChange={e => setForm(prev => ({ ...prev, height: e.target.value }))}
+                  placeholder="H"
+                  min="0"
+                  step="0.1"
+                />
+                <select
+                  className="form-select"
+                  value={form.dimensionUnit}
+                  onChange={e => setForm(prev => ({ ...prev, dimensionUnit: e.target.value }))}
+                  style={{ width: 70 }}
+                >
+                  <option value="cm">cm</option>
+                  <option value="in">in</option>
+                  <option value="m">m</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>

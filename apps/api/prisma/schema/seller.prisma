@@ -15,37 +15,41 @@ model Seller {
   lastLoginAt         DateTime?    @map("last_login_at")
 
   // Profile fields
-  sellerContactCountryCode    String?  @map("seller_contact_country_code")
-  sellerContactNumber         String?  @map("seller_contact_number")
-  storeAddress                String?  @map("store_address")
+  sellerContactCountryCode    String?                  @map("seller_contact_country_code")
+  sellerContactNumber         String?                  @map("seller_contact_number")
+  storeAddress                String?                  @map("store_address")
+  locality                    String?
   city                        String?
   state                       String?
   country                     String?
-  sellerZipCode               String?  @map("seller_zip_code")
-  shortStoreDescription       String?  @map("short_store_description")
-  detailedStoreDescription    String?  @map("detailed_store_description")
-  sellerPolicy                String?  @map("seller_policy")
-  sellerProfileImageUrl       String?  @map("seller_profile_image_url")
-  sellerProfileImagePublicId  String?  @map("seller_profile_image_public_id")
-  sellerShopLogoUrl           String?  @map("seller_shop_logo_url")
-  sellerShopLogoPublicId      String?  @map("seller_shop_logo_public_id")
-  profileCompletionPercentage Int      @default(0) @map("profile_completion_percentage")
-  isEmailVerified             Boolean  @default(false) @map("is_email_verified")
+  sellerZipCode               String?                  @map("seller_zip_code")
+  shortStoreDescription       String?                  @map("short_store_description")
+  detailedStoreDescription    String?                  @map("detailed_store_description")
+  sellerPolicy                String?                  @map("seller_policy")
+  sellerProfileImageUrl       String?                  @map("seller_profile_image_url")
+  sellerProfileImagePublicId  String?                  @map("seller_profile_image_public_id")
+  sellerShopLogoUrl           String?                  @map("seller_shop_logo_url")
+  sellerShopLogoPublicId      String?                  @map("seller_shop_logo_public_id")
+  profileCompletionPercentage Int                      @default(0) @map("profile_completion_percentage")
+  isEmailVerified             Boolean                  @default(false) @map("is_email_verified")
   verificationStatus          SellerVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
-  isProfileCompleted          Boolean  @default(false) @map("is_profile_completed")
-  lastProfileUpdatedAt        DateTime? @map("last_profile_updated_at")
+  isProfileCompleted          Boolean                  @default(false) @map("is_profile_completed")
+  lastProfileUpdatedAt        DateTime?                @map("last_profile_updated_at")
 
-  isDeleted           Boolean      @default(false) @map("is_deleted")
-  deletedAt           DateTime?    @map("deleted_at")
+  isDeleted Boolean   @default(false) @map("is_deleted")
+  deletedAt DateTime? @map("deleted_at")
 
-  createdAt           DateTime     @default(now()) @map("created_at")
-  updatedAt           DateTime     @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  sessions          SellerSession[]
-  passwordResetOtps SellerPasswordResetOtp[]
-  products          Product[]
-  subOrders         SubOrder[]
-  commissionRecords CommissionRecord[]
+  sessions           SellerSession[]
+  passwordResetOtps  SellerPasswordResetOtp[]
+  products           Product[]
+  productMappings    SellerProductMapping[]
+  serviceAreas       SellerServiceArea[]
+  subOrders          SubOrder[]
+  commissionRecords  CommissionRecord[]
+  sellerSettlements  SellerSettlement[]
 
   @@index([status])
   @@index([isProfileCompleted])

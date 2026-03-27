@@ -43,6 +43,14 @@ interface OptionEntry {
   isEditing: boolean;
 }
 
+interface PredefinedOption {
+  id: string;
+  name: string;
+  displayName: string;
+  type: string;
+  values: { id: string; value: string; displayValue: string }[];
+}
+
 // ----- Helpers -----
 
 function flattenCategories(nodes: CategoryNode[], depth = 0): FlatCategory[] {
@@ -154,6 +162,7 @@ export default function EditProductPage() {
 
   // Variant options state
   const [productOptions, setProductOptions] = useState<OptionEntry[]>([]);
+  const [predefinedOptions, setPredefinedOptions] = useState<PredefinedOption[]>([]);
   const [generatingVariants, setGeneratingVariants] = useState(false);
 
   // Image state
@@ -255,6 +264,14 @@ export default function EditProductPage() {
       } catch {
         // Non-critical
       }
+
+      // Load predefined options
+      sellerProductService.getOptions().then(res => {
+        if (res.data) {
+          const opts = Array.isArray(res.data) ? res.data : [];
+          setPredefinedOptions(opts);
+        }
+      }).catch(() => {});
     }
 
     loadData();
@@ -384,25 +401,21 @@ export default function EditProductPage() {
     try {
       const token = sessionStorage.getItem('accessToken') || '';
       const payload = buildPayload();
-      const res = await sellerProductService.updateProduct(token, productId, payload);
-
-      if (res.data) {
-        setProduct(res.data);
-        populateForm(res.data);
-      }
+      await sellerProductService.updateProduct(token, productId, payload);
 
       if (submitForReview) {
         try {
           await sellerProductService.submitForReview(token, productId);
-          showToast('success', 'Product saved and submitted for review.');
-          // Reload to get updated status
-          await loadProduct();
+          showToast('success', 'Product submitted for review. Your SKU mapping will go live after admin approval.');
         } catch {
           showToast('success', 'Product saved. Failed to submit for review.');
         }
       } else {
         showToast('success', 'Product updated successfully.');
       }
+
+      // Always do a full reload to get complete data including variant images
+      await loadProduct();
     } catch (err) {
       if (err instanceof ApiError) {
         showToast('error', err.message || 'Failed to update product.');
@@ -971,7 +984,19 @@ export default function EditProductPage() {
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: '#374151' }}>Options</div>
 
-          {productOptions.map((opt, optIdx) => (
+          {productOptions.map((opt, optIdx) => {
+            // Find the matching predefined option for this entry
+            const matchedPredefined = predefinedOptions.find(
+              po => po.name.toLowerCase() === opt.name.toLowerCase() || po.displayName.toLowerCase() === opt.name.toLowerCase()
+            );
+            // Get predefined values not already selected
+            const availablePredefinedValues = matchedPredefined
+              ? matchedPredefined.values.filter(pv => !opt.values.includes(pv.displayValue))
+              : [];
+            // Options already used in other entries
+            const usedOptionNames = productOptions.filter((_, i) => i !== optIdx).map(o => o.name.toLowerCase());
+
+            return (
             <div key={optIdx} className="option-card">
               {opt.isEditing ? (
                 /* Editing mode */
@@ -979,13 +1004,36 @@ export default function EditProductPage() {
                   <div className="option-card-edit-header">
                     <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
                       <label className="form-label">Option name</label>
-                      <input
-                        type="text"
+                      <select
                         className="form-input"
-                        value={opt.name}
-                        onChange={e => updateOptionName(optIdx, e.target.value)}
-                        placeholder="e.g. Size, Color, Material"
-                      />
+                        value={predefinedOptions.some(po => po.name.toLowerCase() === opt.name.toLowerCase() || po.displayName.toLowerCase() === opt.name.toLowerCase()) ? opt.name : '__custom__'}
+                        onChange={e => {
+                          const val = e.target.value;
+                          if (val === '__custom__') {
+                            updateOptionName(optIdx, '');
+                          } else {
+                            updateOptionName(optIdx, val);
+                          }
+                        }}
+                      >
+                        <option value="" disabled>Select an option</option>
+                        {predefinedOptions
+                          .filter(po => !usedOptionNames.includes(po.name.toLowerCase()))
+                          .map(po => (
+                            <option key={po.id} value={po.displayName}>{po.displayName}</option>
+                          ))}
+                        <option value="__custom__">+ Custom option</option>
+                      </select>
+                      {(!predefinedOptions.some(po => po.name.toLowerCase() === opt.name.toLowerCase() || po.displayName.toLowerCase() === opt.name.toLowerCase()) && opt.name !== '') && (
+                        <input
+                          type="text"
+                          className="form-input"
+                          style={{ marginTop: 8 }}
+                          value={opt.name}
+                          onChange={e => updateOptionName(optIdx, e.target.value)}
+                          placeholder="Enter custom option name"
+                        />
+                      )}
                     </div>
                     <button
                       type="button"
@@ -1018,13 +1066,40 @@ export default function EditProductPage() {
                         </button>
                       </div>
                     ))}
+
+                    {/* Dropdown to add predefined values */}
+                    {availablePredefinedValues.length > 0 && (
+                      <select
+                        className="form-input"
+                        style={{ marginTop: 8 }}
+                        value=""
+                        onChange={e => {
+                          const selected = e.target.value;
+                          if (selected) {
+                            // Replace the last empty value or add new
+                            const lastIdx = opt.values.length - 1;
+                            if (lastIdx >= 0 && opt.values[lastIdx].trim() === '') {
+                              updateOptionValue(optIdx, lastIdx, selected);
+                            } else {
+                              updateOptionValue(optIdx, opt.values.length, selected);
+                            }
+                          }
+                        }}
+                      >
+                        <option value="">Add from predefined values...</option>
+                        {availablePredefinedValues.map(pv => (
+                          <option key={pv.id} value={pv.displayValue}>{pv.displayValue}</option>
+                        ))}
+                      </select>
+                    )}
+
                     <button
                       type="button"
                       className="add-option-btn"
                       style={{ marginTop: 8 }}
                       onClick={() => addOptionValue(optIdx)}
                     >
-                      + Add another value
+                      + Add custom value
                     </button>
                   </div>
 
@@ -1059,7 +1134,8 @@ export default function EditProductPage() {
                 </div>
               )}
             </div>
-          ))}
+          );
+          })}
 
           <button
             type="button"

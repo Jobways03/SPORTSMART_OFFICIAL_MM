@@ -1,0 +1,84 @@
+// ============================================
+// Serviceability & Location Engine
+// Pincode database + Seller service areas
+// ============================================
+
+model PincodeDatabase {
+  id        String   @id @default(uuid())
+  pincode   String   @unique
+  city      String?
+  state     String?
+  country   String   @default("IN")
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  zone      String? // NORTH, SOUTH, EAST, WEST, CENTRAL
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([city])
+  @@index([state])
+  @@index([zone])
+  @@map("pincode_database")
+}
+
+model SellerServiceArea {
+  id        String   @id @default(uuid())
+  sellerId  String   @map("seller_id")
+  pincode   String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([sellerId, pincode])
+  @@index([sellerId])
+  @@index([pincode])
+  @@map("seller_service_areas")
+}
+
+// ============================================
+// Stock Reservation — holds inventory during checkout
+// ============================================
+
+model StockReservation {
+  id        String   @id @default(uuid())
+  mappingId String   @map("mapping_id")
+  quantity  Int
+  status    String   @default("RESERVED") // RESERVED, CONFIRMED, RELEASED, EXPIRED
+  orderId   String?  @map("order_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  mapping SellerProductMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+
+  @@index([mappingId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("stock_reservations")
+}
+
+// ============================================
+// Allocation Audit Log — records every allocation decision
+// ============================================
+
+model AllocationLog {
+  id                 String   @id @default(uuid())
+  productId          String   @map("product_id")
+  variantId          String?  @map("variant_id")
+  customerPincode    String   @map("customer_pincode")
+  allocatedSellerId  String?  @map("allocated_seller_id")
+  allocatedMappingId String?  @map("allocated_mapping_id")
+  allocationReason   String?  @map("allocation_reason")
+  distanceKm         Decimal? @map("distance_km") @db.Decimal(10, 2)
+  score              Decimal? @db.Decimal(10, 4)
+  isReallocated      Boolean  @default(false) @map("is_reallocated")
+  orderId            String?  @map("order_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([allocatedSellerId])
+  @@index([orderId])
+  @@map("allocation_logs")
+}

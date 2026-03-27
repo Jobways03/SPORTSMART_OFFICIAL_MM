@@ -23,6 +23,24 @@ import {
 export class CartController {
   constructor(private readonly prisma: PrismaService) {}
 
+  // ── Helper: aggregated available stock from approved seller mappings ──────────
+  private async getAggregatedStock(
+    productId: string,
+    variantId?: string | null,
+  ): Promise<number> {
+    const where: any = { productId, isActive: true, approvalStatus: 'APPROVED' };
+    if (variantId) where.variantId = variantId;
+
+    const result = await this.prisma.sellerProductMapping.aggregate({
+      where,
+      _sum: { stockQty: true, reservedQty: true },
+    });
+
+    const totalStock = result._sum.stockQty ?? 0;
+    const totalReserved = result._sum.reservedQty ?? 0;
+    return Math.max(0, totalStock - totalReserved);
+  }
+
   @Get()
   async getCart(@Req() req: any) {
     const cart = await this.prisma.cart.findUnique({
@@ -36,6 +54,7 @@ export class CartController {
                 title: true,
                 slug: true,
                 basePrice: true,
+                platformPrice: true,
                 baseStock: true,
                 baseSku: true,
                 hasVariants: true,
@@ -45,9 +64,6 @@ export class CartController {
                   select: { url: true },
                   take: 1,
                 },
-                seller: {
-                  select: { id: true, sellerShopName: true },
-                },
               },
             },
             variant: {
@@ -55,6 +71,7 @@ export class CartController {
                 id: true,
                 title: true,
                 price: true,
+                platformPrice: true,
                 stock: true,
                 sku: true,
                 status: true,
@@ -78,34 +95,43 @@ export class CartController {
     }
 
     let totalAmount = 0;
-    const items = cart.items.map((item) => {
-      const price = item.variant
-        ? Number(item.variant.price)
-        : Number(item.product.basePrice || 0);
-      const lineTotal = price * item.quantity;
-      totalAmount += lineTotal;
+    const items = await Promise.all(
+      cart.items.map(async (item) => {
+        // T2: Use platformPrice (fall back to basePrice/variant price)
+        const price = item.variant
+          ? Number(item.variant.platformPrice ?? item.variant.price)
+          : Number(item.product.platformPrice ?? item.product.basePrice ?? 0);
+        const lineTotal = price * item.quantity;
+        totalAmount += lineTotal;
 
-      const imageUrl = item.variant?.images?.[0]?.url
-        || item.product.images?.[0]?.url
-        || null;
+        const imageUrl =
+          item.variant?.images?.[0]?.url ||
+          item.product.images?.[0]?.url ||
+          null;
 
-      return {
-        id: item.id,
-        productId: item.productId,
-        variantId: item.variantId,
-        quantity: item.quantity,
-        productTitle: item.product.title,
-        variantTitle: item.variant?.title || null,
-        slug: item.product.slug,
-        sku: item.variant?.sku || item.product.baseSku,
-        imageUrl,
-        unitPrice: price,
-        lineTotal,
-        stock: item.variant ? item.variant.stock : (item.product.baseStock ?? 0),
-        sellerShopName: item.product.seller?.sellerShopName || null,
-        sellerId: item.product.seller?.id || null,
-      };
-    });
+        // T2: Calculate available stock from seller mappings (not product.baseStock)
+        const availableStock = await this.getAggregatedStock(
+          item.productId,
+          item.variantId,
+        );
+
+        return {
+          id: item.id,
+          productId: item.productId,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          productTitle: item.product.title,
+          variantTitle: item.variant?.title || null,
+          slug: item.product.slug,
+          sku: item.variant?.sku || item.product.baseSku,
+          imageUrl,
+          unitPrice: price,
+          lineTotal,
+          stock: availableStock,
+          outOfStock: availableStock === 0,
+        };
+      }),
+    );
 
     return {
       success: true,
@@ -140,7 +166,7 @@ export class CartController {
       throw new NotFoundAppException('Product not found or not available');
     }
 
-    // Validate stock
+    // Validate variant exists if specified
     if (variantId) {
       const variant = await this.prisma.productVariant.findFirst({
         where: { id: variantId, productId, isDeleted: false },
@@ -148,13 +174,31 @@ export class CartController {
       if (!variant) {
         throw new NotFoundAppException('Variant not found or not available');
       }
-      if (variant.stock < quantity) {
-        throw new BadRequestAppException('Insufficient stock');
-      }
-    } else {
-      if ((product.baseStock ?? 0) < quantity) {
-        throw new BadRequestAppException('Insufficient stock');
-      }
+    }
+
+    // T1: Check aggregated stock from seller mappings instead of product.baseStock
+    const availableStock = await this.getAggregatedStock(productId, variantId);
+
+    // Check existing cart item quantity + new quantity
+    const existingCart = await this.prisma.cart.findUnique({
+      where: { customerId: req.userId },
+    });
+    let existingQty = 0;
+    if (existingCart) {
+      const existingItem = await this.prisma.cartItem.findFirst({
+        where: {
+          cartId: existingCart.id,
+          productId,
+          variantId: variantId || null,
+        },
+      });
+      if (existingItem) existingQty = existingItem.quantity;
+    }
+
+    if (availableStock < existingQty + quantity) {
+      throw new BadRequestAppException(
+        `Insufficient stock. Available: ${availableStock}, In cart: ${existingQty}, Requested: ${quantity}`,
+      );
     }
 
     // Upsert cart
@@ -213,6 +257,17 @@ export class CartController {
     if (quantity <= 0) {
       await this.prisma.cartItem.delete({ where: { id: itemId } });
       return { success: true, message: 'Item removed from cart' };
+    }
+
+    // T1: Validate against aggregated stock
+    const availableStock = await this.getAggregatedStock(
+      item.productId,
+      item.variantId,
+    );
+    if (availableStock < quantity) {
+      throw new BadRequestAppException(
+        `Insufficient stock. Available: ${availableStock}, Requested: ${quantity}`,
+      );
     }
 
     await this.prisma.cartItem.update({

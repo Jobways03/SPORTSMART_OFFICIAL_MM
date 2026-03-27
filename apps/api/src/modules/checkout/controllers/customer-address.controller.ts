@@ -40,6 +40,7 @@ export class CustomerAddressController {
       phone: string;
       addressLine1: string;
       addressLine2?: string;
+      locality?: string;
       city: string;
       state: string;
       postalCode: string;
@@ -69,6 +70,7 @@ export class CustomerAddressController {
         phone,
         addressLine1,
         addressLine2: body.addressLine2 || null,
+        locality: body.locality || null,
         city,
         state,
         postalCode,

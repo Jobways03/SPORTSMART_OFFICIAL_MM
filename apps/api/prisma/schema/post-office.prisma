@@ -1,0 +1,25 @@
+// ============================================
+// Post Office / Pincode Database
+// Complete India pincode directory with 165K+ entries
+// ============================================
+
+model PostOffice {
+  id           String  @id @default(uuid())
+  circleName   String  @map("circle_name")
+  regionName   String  @map("region_name")
+  divisionName String  @map("division_name")
+  officeName   String  @map("office_name")
+  pincode      String
+  officeType   String  @map("office_type")    // BO, SO, HO
+  delivery     String                          // Delivery, Non-Delivery
+  district     String
+  state        String
+  latitude     Decimal? @db.Decimal(12, 7)
+  longitude    Decimal? @db.Decimal(12, 7)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([pincode])
+  @@index([district])
+  @@index([state])
+  @@map("post_offices")
+}

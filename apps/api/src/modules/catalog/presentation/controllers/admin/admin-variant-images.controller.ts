@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Delete,
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Req,
   UploadedFile,
@@ -92,30 +94,36 @@ export class AdminVariantImagesController {
       );
     }
 
-    // Count existing variant images to set sortOrder
-    const existingImages = await this.prisma.productVariantImage.count({
-      where: { variantId },
-    });
+    // Find sibling variants that share the same color value
+    const siblingVariantIds = await this.findColorSiblingVariantIds(productId, variantId);
 
-    const sortOrder = existingImages;
+    const createdImages = [];
+    for (const vId of siblingVariantIds) {
+      const existingCount = await this.prisma.productVariantImage.count({
+        where: { variantId: vId },
+      });
 
-    const image = await this.prisma.productVariantImage.create({
-      data: {
-        variantId,
-        url: uploadResult.secureUrl,
-        publicId: uploadResult.publicId,
-        sortOrder,
-      },
-    });
+      const image = await this.prisma.productVariantImage.create({
+        data: {
+          variantId: vId,
+          url: uploadResult.secureUrl,
+          publicId: uploadResult.publicId,
+          sortOrder: existingCount,
+        },
+      });
+      createdImages.push(image);
+    }
 
     this.logger.log(
-      `Image uploaded for variant ${variantId} of product ${productId} by admin ${adminId}: ${image.id}`,
+      `Image uploaded for variant ${variantId} (shared with ${siblingVariantIds.length} variants) of product ${productId} by admin ${adminId}`,
     );
 
     return {
       success: true,
-      message: 'Variant image uploaded successfully',
-      data: image,
+      message: siblingVariantIds.length > 1
+        ? `Variant image uploaded and shared across ${siblingVariantIds.length} color variants`
+        : 'Variant image uploaded successfully',
+      data: createdImages[0],
     };
   }
 
@@ -137,10 +145,20 @@ export class AdminVariantImagesController {
       throw new NotFoundAppException('Variant image not found');
     }
 
-    // Delete from DB
-    await this.prisma.productVariantImage.delete({
-      where: { id: imageId },
-    });
+    const siblingVariantIds = await this.findColorSiblingVariantIds(productId, variantId);
+
+    if (image.publicId) {
+      await this.prisma.productVariantImage.deleteMany({
+        where: {
+          variantId: { in: siblingVariantIds },
+          publicId: image.publicId,
+        },
+      });
+    } else {
+      await this.prisma.productVariantImage.delete({
+        where: { id: imageId },
+      });
+    }
 
     // Delete from Cloudinary (best-effort)
     if (image.publicId) {
@@ -152,7 +170,7 @@ export class AdminVariantImagesController {
     }
 
     this.logger.log(
-      `Image deleted from variant ${variantId} of product ${productId} by admin ${adminId}: ${imageId}`,
+      `Image deleted from variant ${variantId} (and color siblings) of product ${productId} by admin ${adminId}: ${imageId}`,
     );
 
     return {
@@ -160,5 +178,70 @@ export class AdminVariantImagesController {
       message: 'Variant image deleted successfully',
       data: null,
     };
+  }
+
+  @Patch('reorder')
+  @HttpCode(HttpStatus.OK)
+  async reorderVariantImages(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+    @Body() body: { imageIds: string[] },
+  ) {
+    if (!body.imageIds || !Array.isArray(body.imageIds) || body.imageIds.length === 0) {
+      throw new AppException('imageIds array is required', 'BAD_REQUEST');
+    }
+
+    await this.prisma.$transaction(
+      body.imageIds.map((id, index) =>
+        this.prisma.productVariantImage.updateMany({
+          where: { id, variantId },
+          data: { sortOrder: index },
+        }),
+      ),
+    );
+
+    return {
+      success: true,
+      message: 'Variant images reordered successfully',
+      data: null,
+    };
+  }
+
+  private async findColorSiblingVariantIds(
+    productId: string,
+    variantId: string,
+  ): Promise<string[]> {
+    const currentColorOption = await this.prisma.productVariantOptionValue.findFirst({
+      where: {
+        variantId,
+        optionValue: {
+          optionDefinition: { type: 'COLOR' },
+        },
+      },
+      select: { optionValueId: true },
+    });
+
+    if (!currentColorOption) {
+      return [variantId];
+    }
+
+    const siblings = await this.prisma.productVariantOptionValue.findMany({
+      where: {
+        optionValueId: currentColorOption.optionValueId,
+        variant: {
+          productId,
+          isDeleted: false,
+        },
+      },
+      select: { variantId: true },
+    });
+
+    const ids = siblings.map((s) => s.variantId);
+    if (!ids.includes(variantId)) {
+      ids.push(variantId);
+    }
+
+    return ids;
   }
 }

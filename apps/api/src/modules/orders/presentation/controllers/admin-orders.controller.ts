@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Query, Body, UseGuards, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard } from '../../../../core/guards';
 import { OrdersService } from '../../application/services/orders.service';
@@ -15,12 +15,13 @@ export class AdminOrdersController {
     @Query('paymentStatus') paymentStatus?: string,
     @Query('fulfillmentStatus') fulfillmentStatus?: string,
     @Query('acceptStatus') acceptStatus?: string,
+    @Query('orderStatus') orderStatus?: string,
     @Query('search') search?: string,
   ) {
     const data = await this.ordersService.listOrders({
       page: Math.max(1, parseInt(page || '1', 10) || 1),
       limit: Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20)),
-      paymentStatus, fulfillmentStatus, acceptStatus, search,
+      paymentStatus, fulfillmentStatus, acceptStatus, orderStatus, search,
     });
     return { success: true, message: 'Orders retrieved', data };
   }
@@ -31,10 +32,15 @@ export class AdminOrdersController {
     return { success: true, message: 'Order retrieved', data };
   }
 
-  @Patch(':id/verify')
-  async verifyOrder(@Param('id') id: string) {
-    const data = await this.ordersService.verifyOrder(id);
-    return { success: true, message: 'Order verified successfully', data };
+  // POST /admin/orders/:orderId/verify — verify order, run allocation, route to sellers
+  @Post(':id/verify')
+  async verifyOrder(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Body() body: { remarks?: string },
+  ) {
+    const data = await this.ordersService.verifyOrder(id, req.userId, body.remarks);
+    return { success: true, message: 'Order verified and routed to sellers', data };
   }
 
   @Patch(':id/reject-order')

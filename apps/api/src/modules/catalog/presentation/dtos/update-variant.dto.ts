@@ -13,6 +13,11 @@ export class UpdateVariantDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  platformPrice?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   compareAtPrice?: number;
 
   @IsOptional()
@@ -37,6 +42,25 @@ export class UpdateVariantDto {
   @IsOptional()
   @IsString()
   weightUnit?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  length?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  width?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  height?: number;
+
+  @IsOptional()
+  @IsString()
+  dimensionUnit?: string;
 
   @IsOptional()
   @IsString()

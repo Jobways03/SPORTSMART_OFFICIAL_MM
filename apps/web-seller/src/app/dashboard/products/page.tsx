@@ -137,7 +137,21 @@ export default function ProductsPage() {
     }
   };
 
-  const formatStatus = (status: string) => status.replace(/_/g, ' ');
+  const formatStatus = (status: string) => {
+    const displayMap: Record<string, string> = {
+      DRAFT: 'Draft',
+      SUBMITTED: 'Pending Review',
+      APPROVED: 'Approved',
+      ACTIVE: 'Active',
+      SUSPENDED: 'Inactive',
+      ARCHIVED: 'Archived',
+      REJECTED: 'Rejected',
+      CHANGES_REQUESTED: 'Changes Requested',
+      PENDING: 'Pending',
+      IN_REVIEW: 'In Review',
+    };
+    return displayMap[status] || status.replace(/_/g, ' ');
+  };
 
   const formatPrice = (price: string | null) => {
     if (!price) return null;
@@ -177,14 +191,25 @@ export default function ProductsPage() {
   return (
     <div className="products-page">
       <div className="products-header">
-        <h1>
-          Products
-          {!loading && (
-            <span className="products-header-count">({pagination.total})</span>
-          )}
-        </h1>
+        <div>
+          <h1>
+            My Submitted Products
+            {!loading && (
+              <span className="products-header-count">({pagination.total})</span>
+            )}
+          </h1>
+          <p style={{
+            fontSize: 13,
+            color: '#6b7280',
+            marginTop: 4,
+            fontWeight: 400,
+          }}>
+            Products you have created go through admin moderation before going live.
+            You are automatically mapped as a seller for approved products.
+          </p>
+        </div>
         <Link href="/dashboard/products/new" className="products-add-btn">
-          + ADD PRODUCT
+          + CREATE PRODUCT
         </Link>
       </div>
 

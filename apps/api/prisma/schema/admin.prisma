@@ -23,23 +23,23 @@ enum SellerVerificationStatus {
 }
 
 model Admin {
-  id              String      @id @default(uuid())
-  name            String
-  email           String      @unique
-  passwordHash    String      @map("password_hash")
-  role            AdminRole   @default(SELLER_ADMIN)
-  status          AdminStatus @default(ACTIVE)
-  isSeeded        Boolean     @default(false) @map("is_seeded")
-  lastLoginAt     DateTime?   @map("last_login_at")
-  failedLoginAttempts Int     @default(0) @map("failed_login_attempts")
-  lockUntil       DateTime?   @map("lock_until")
-  createdAt       DateTime    @default(now()) @map("created_at")
-  updatedAt       DateTime    @updatedAt @map("updated_at")
+  id                  String      @id @default(uuid())
+  name                String
+  email               String      @unique
+  passwordHash        String      @map("password_hash")
+  role                AdminRole   @default(SELLER_ADMIN)
+  status              AdminStatus @default(ACTIVE)
+  isSeeded            Boolean     @default(false) @map("is_seeded")
+  lastLoginAt         DateTime?   @map("last_login_at")
+  failedLoginAttempts Int         @default(0) @map("failed_login_attempts")
+  lockUntil           DateTime?   @map("lock_until")
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
 
-  sessions            AdminSession[]
-  actionAuditLogs     AdminActionAuditLog[]
-  impersonationLogs   AdminImpersonationLog[]
-  adminMessages       AdminSellerMessage[]
+  sessions          AdminSession[]
+  actionAuditLogs   AdminActionAuditLog[]
+  impersonationLogs AdminImpersonationLog[]
+  adminMessages     AdminSellerMessage[]
 
   @@index([email])
   @@index([role])
@@ -65,17 +65,17 @@ model AdminSession {
 }
 
 model AdminActionAuditLog {
-  id          String   @id @default(uuid())
-  adminId     String   @map("admin_id")
-  sellerId    String?  @map("seller_id")
-  actionType  String   @map("action_type")
-  oldValue    Json?    @map("old_value")
-  newValue    Json?    @map("new_value")
-  reason      String?
-  metadata    Json?
-  ipAddress   String?  @map("ip_address")
-  userAgent   String?  @map("user_agent")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id         String   @id @default(uuid())
+  adminId    String   @map("admin_id")
+  sellerId   String?  @map("seller_id")
+  actionType String   @map("action_type")
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  reason     String?
+  metadata   Json?
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
 
   admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
@@ -87,16 +87,16 @@ model AdminActionAuditLog {
 }
 
 model AdminImpersonationLog {
-  id          String    @id @default(uuid())
-  adminId     String    @map("admin_id")
-  sellerId    String    @map("seller_id")
-  tokenId     String?   @map("token_id")
-  startedAt   DateTime  @default(now()) @map("started_at")
-  endedAt     DateTime? @map("ended_at")
-  isActive    Boolean   @default(true) @map("is_active")
-  ipAddress   String?   @map("ip_address")
-  userAgent   String?   @map("user_agent")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  id        String    @id @default(uuid())
+  adminId   String    @map("admin_id")
+  sellerId  String    @map("seller_id")
+  tokenId   String?   @map("token_id")
+  startedAt DateTime  @default(now()) @map("started_at")
+  endedAt   DateTime? @map("ended_at")
+  isActive  Boolean   @default(true) @map("is_active")
+  ipAddress String?   @map("ip_address")
+  userAgent String?   @map("user_agent")
+  createdAt DateTime  @default(now()) @map("created_at")
 
   admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
@@ -107,14 +107,14 @@ model AdminImpersonationLog {
 }
 
 model AdminSellerMessage {
-  id          String   @id @default(uuid())
-  sellerId    String   @map("seller_id")
-  sentByAdminId String @map("sent_by_admin_id")
-  subject     String
-  message     String
-  channel     String   @default("EMAIL")
-  status      String   @default("SENT")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id            String   @id @default(uuid())
+  sellerId      String   @map("seller_id")
+  sentByAdminId String   @map("sent_by_admin_id")
+  subject       String
+  message       String
+  channel       String   @default("EMAIL")
+  status        String   @default("SENT")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   admin Admin @relation(fields: [sentByAdminId], references: [id], onDelete: Cascade)
 

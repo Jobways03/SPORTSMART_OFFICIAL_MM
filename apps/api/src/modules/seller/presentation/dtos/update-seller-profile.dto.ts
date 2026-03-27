@@ -49,6 +49,10 @@ export class UpdateSellerProfileDto {
 
   @IsOptional()
   @IsString()
+  locality?: string;
+
+  @IsOptional()
+  @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(2, { message: 'City must be at least 2 characters' })
   @MaxLength(100, { message: 'City must not exceed 100 characters' })

@@ -268,14 +268,13 @@ export default function CreateProductPage() {
     if (form.shortDescription.trim()) payload.shortDescription = form.shortDescription.trim();
     if (form.description.trim()) payload.description = form.description.trim();
 
-    if (!form.hasVariants) {
-      if (form.basePrice) payload.basePrice = Number(form.basePrice);
-      if (form.compareAtPrice) payload.compareAtPrice = Number(form.compareAtPrice);
-      if (form.costPrice) payload.costPrice = Number(form.costPrice);
-      if (form.baseSku.trim()) payload.baseSku = form.baseSku.trim();
-      if (form.baseStock !== '') payload.baseStock = Number(form.baseStock);
-      if (form.baseBarcode.trim()) payload.baseBarcode = form.baseBarcode.trim();
-    }
+    // Always send pricing/inventory — used as defaults for variants too
+    if (form.basePrice) payload.basePrice = Number(form.basePrice);
+    if (form.compareAtPrice) payload.compareAtPrice = Number(form.compareAtPrice);
+    if (form.costPrice) payload.costPrice = Number(form.costPrice);
+    if (form.baseSku.trim()) payload.baseSku = form.baseSku.trim();
+    if (form.baseStock !== '') payload.baseStock = Number(form.baseStock);
+    if (form.baseBarcode.trim()) payload.baseBarcode = form.baseBarcode.trim();
 
     if (form.weight) payload.weight = Number(form.weight);
     payload.weightUnit = form.weightUnit;
@@ -315,7 +314,7 @@ export default function CreateProductPage() {
       if (submitForReview && res.data?.id) {
         try {
           await sellerProductService.submitForReview(token, res.data.id);
-          showToast('success', 'Product created and submitted for review.');
+          showToast('success', 'Product submitted for review. Your SKU mapping will go live after admin approval.');
         } catch {
           showToast('success', 'Product created as draft. Failed to submit for review.');
         }
@@ -506,12 +505,12 @@ export default function CreateProductPage() {
           <label htmlFor="hasVariants">This product has variants (e.g., sizes, colors)</label>
         </div>
 
-        {form.hasVariants ? (
+        {form.hasVariants && (
           <div className="info-box">
-            Variants will be managed after the product is created. Save as draft first, then
-            generate variants from the edit page.
+            These values will be applied as defaults to all generated variants. You can edit individual variants later.
           </div>
-        ) : (
+        )}
+
           <div className="form-grid">
             <div className="form-group">
               <label className="form-label">
@@ -607,7 +606,6 @@ export default function CreateProductPage() {
               />
             </div>
           </div>
-        )}
       </div>
 
       {/* Section 3: Shipping */}

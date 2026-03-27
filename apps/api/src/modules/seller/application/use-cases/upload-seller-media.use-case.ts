@@ -72,9 +72,10 @@ export class UploadSellerMediaUseCase {
       throw new NotFoundAppException('Seller profile not found');
     }
 
-    if (seller.status !== 'ACTIVE') {
+    const uploadAllowedStatuses = ['ACTIVE', 'PENDING_APPROVAL', 'INACTIVE'];
+    if (!uploadAllowedStatuses.includes(seller.status)) {
       throw new ForbiddenAppException(
-        'Media uploads are only available for active accounts',
+        'Media uploads are not available for suspended or deactivated accounts',
       );
     }
 

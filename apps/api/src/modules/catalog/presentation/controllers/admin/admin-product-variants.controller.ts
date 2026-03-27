@@ -374,12 +374,17 @@ export class AdminProductVariantsController {
 
     const updateData: any = {};
     if (dto.price !== undefined) updateData.price = dto.price;
+    if (dto.platformPrice !== undefined) updateData.platformPrice = dto.platformPrice;
     if (dto.compareAtPrice !== undefined) updateData.compareAtPrice = dto.compareAtPrice;
     if (dto.costPrice !== undefined) updateData.costPrice = dto.costPrice;
     if (dto.sku !== undefined) updateData.sku = dto.sku;
     if (dto.stock !== undefined) updateData.stock = dto.stock;
     if (dto.weight !== undefined) updateData.weight = dto.weight;
     if (dto.weightUnit !== undefined) updateData.weightUnit = dto.weightUnit;
+    if (dto.length !== undefined) updateData.length = dto.length;
+    if (dto.width !== undefined) updateData.width = dto.width;
+    if (dto.height !== undefined) updateData.height = dto.height;
+    if (dto.dimensionUnit !== undefined) updateData.dimensionUnit = dto.dimensionUnit;
     if (dto.status !== undefined) updateData.status = dto.status;
     if (dto.barcode !== undefined) updateData.barcode = dto.barcode;
     if (dto.title !== undefined) updateData.title = dto.title;

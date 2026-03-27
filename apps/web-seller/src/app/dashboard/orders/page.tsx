@@ -11,6 +11,7 @@ interface SubOrder {
   paymentStatus: string;
   fulfillmentStatus: string;
   acceptStatus: string;
+  acceptDeadlineAt: string | null;
   items: { productTitle: string; quantity: number; totalPrice: number }[];
   masterOrder: {
     orderNumber: string;
@@ -25,6 +26,46 @@ interface OrdersResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
+function DeadlineCountdown({ deadline }: { deadline: string }) {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 30000); // update every 30s
+    return () => clearInterval(timer);
+  }, []);
+
+  const deadlineDate = new Date(deadline);
+  const diffMs = deadlineDate.getTime() - now.getTime();
+
+  if (diffMs <= 0) {
+    return (
+      <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626' }}>
+        EXPIRED — auto-rejecting
+      </span>
+    );
+  }
+
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  const isUrgent = diffMs < 2 * 60 * 60 * 1000; // within 2 hours
+  const color = isUrgent ? '#dc2626' : '#d97706';
+
+  let label: string;
+  if (hours >= 1) {
+    label = `Accept within ${hours}h ${minutes}m`;
+  } else {
+    label = `Accept within ${minutes}m`;
+  }
+
+  return (
+    <span style={{ fontSize: 11, fontWeight: 600, color, display: 'block', marginTop: 2 }}>
+      {label}
+    </span>
+  );
+}
+
 export default function SellerOrdersPage() {
   const router = useRouter();
   const [data, setData] = useState<OrdersResponse | null>(null);
@@ -32,10 +73,25 @@ export default function SellerOrdersPage() {
   const [page, setPage] = useState(1);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  // Filters
+  const [fulfillmentFilter, setFulfillmentFilter] = useState('');
+  const [acceptFilter, setAcceptFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Reject modal state
+  const [rejectModal, setRejectModal] = useState<{ subOrderId: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectNote, setRejectNote] = useState('');
+
   const fetchOrders = (p: number) => {
     setLoading(true);
     const token = sessionStorage.getItem('accessToken');
-    fetch(`${API_BASE}/api/v1/seller/orders?page=${p}&limit=20`, {
+    const params = new URLSearchParams({ page: String(p), limit: '20' });
+    if (fulfillmentFilter) params.append('fulfillmentStatus', fulfillmentFilter);
+    if (acceptFilter) params.append('acceptStatus', acceptFilter);
+    if (searchQuery) params.append('search', searchQuery);
+
+    fetch(`${API_BASE}/api/v1/seller/orders?${params.toString()}`, {
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -47,9 +103,14 @@ export default function SellerOrdersPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchOrders(page); }, [page]);
+  useEffect(() => { fetchOrders(page); }, [page, fulfillmentFilter, acceptFilter]);
 
-  const handleAction = async (e: React.MouseEvent, subOrderId: string, action: 'accept' | 'reject') => {
+  const handleSearch = () => {
+    setPage(1);
+    fetchOrders(1);
+  };
+
+  const handleAction = async (e: React.MouseEvent, subOrderId: string, action: string, body?: object) => {
     e.stopPropagation();
     setActionLoading(subOrderId);
     const token = sessionStorage.getItem('accessToken');
@@ -60,12 +121,41 @@ export default function SellerOrdersPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        body: body ? JSON.stringify(body) : undefined,
       });
       fetchOrders(page);
     } catch {
       // ignore
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleRejectConfirm = async (e: React.MouseEvent) => {
+    if (!rejectModal) return;
+    e.stopPropagation();
+    setActionLoading(rejectModal.subOrderId);
+    const token = sessionStorage.getItem('accessToken');
+    try {
+      await fetch(`${API_BASE}/api/v1/seller/orders/${rejectModal.subOrderId}/reject`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          reason: rejectReason || undefined,
+          note: rejectNote || undefined,
+        }),
+      });
+      fetchOrders(page);
+    } catch {
+      // ignore
+    } finally {
+      setActionLoading(null);
+      setRejectModal(null);
+      setRejectReason('');
+      setRejectNote('');
     }
   };
 
@@ -84,11 +174,70 @@ export default function SellerOrdersPage() {
     }}>{text}</span>
   );
 
+  const fulfillmentLabel = (status: string) => {
+    switch (status) {
+      case 'DELIVERED': return 'Delivered';
+      case 'SHIPPED': return 'Shipped';
+      case 'PACKED': return 'Packed';
+      case 'FULFILLED': return 'Fulfilled';
+      case 'CANCELLED': return 'Cancelled';
+      default: return 'Packing';
+    }
+  };
+
+  const nextFulfillmentAction = (so: SubOrder): { label: string; status: string } | null => {
+    if (so.acceptStatus !== 'ACCEPTED') return null;
+    switch (so.fulfillmentStatus) {
+      case 'UNFULFILLED': return { label: 'Mark Packed', status: 'PACKED' };
+      case 'PACKED': return { label: 'Mark Shipped', status: 'SHIPPED' };
+      default: return null; // After SHIPPED, seller is done - delivery confirmed by admin
+    }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700 }}>Orders</h1>
         {data && <span style={{ fontSize: 13, color: '#6b7280' }}>{data.pagination.total} total</span>}
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select
+          value={fulfillmentFilter}
+          onChange={(e) => { setFulfillmentFilter(e.target.value); setPage(1); }}
+          style={selectStyle}
+        >
+          <option value="">All Fulfillment</option>
+          <option value="UNFULFILLED">Packing</option>
+          <option value="PACKED">Packed</option>
+          <option value="SHIPPED">Shipped</option>
+          <option value="DELIVERED">Delivered</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+        <select
+          value={acceptFilter}
+          onChange={(e) => { setAcceptFilter(e.target.value); setPage(1); }}
+          style={selectStyle}
+        >
+          <option value="">All Accept Status</option>
+          <option value="OPEN">Open</option>
+          <option value="ACCEPTED">Accepted</option>
+          <option value="REJECTED">Rejected</option>
+        </select>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <input
+            type="text"
+            placeholder="Search order number..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            style={{ padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, width: 180 }}
+          />
+          <button onClick={handleSearch} style={{ padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#f9fafb', fontSize: 13, cursor: 'pointer' }}>
+            Search
+          </button>
+        </div>
       </div>
 
       {loading && !data ? (
@@ -133,33 +282,68 @@ export default function SellerOrdersPage() {
                       {badge(so.paymentStatus, so.paymentStatus === 'PAID' ? '#16a34a' : '#d97706')}
                     </td>
                     <td style={tdStyle}>
-                      {badge(so.fulfillmentStatus, so.fulfillmentStatus === 'DELIVERED' ? '#7c3aed' : so.fulfillmentStatus === 'FULFILLED' ? '#16a34a' : '#6366f1')}
+                      {badge(
+                        fulfillmentLabel(so.fulfillmentStatus),
+                        so.fulfillmentStatus === 'DELIVERED' ? '#7c3aed'
+                        : so.fulfillmentStatus === 'FULFILLED' ? '#16a34a'
+                        : so.fulfillmentStatus === 'SHIPPED' ? '#2563eb'
+                        : so.fulfillmentStatus === 'PACKED' ? '#d97706'
+                        : so.fulfillmentStatus === 'CANCELLED' ? '#dc2626'
+                        : '#6366f1'
+                      )}
                     </td>
                     <td style={tdStyle}>
-                      {badge(so.acceptStatus, so.acceptStatus === 'ACCEPTED' ? '#16a34a' : so.acceptStatus === 'REJECTED' ? '#dc2626' : '#6b7280')}
+                      <div>
+                        {badge(so.acceptStatus, so.acceptStatus === 'ACCEPTED' ? '#16a34a' : so.acceptStatus === 'REJECTED' ? '#dc2626' : '#6b7280')}
+                        {so.acceptStatus === 'OPEN' && so.acceptDeadlineAt && (
+                          <DeadlineCountdown deadline={so.acceptDeadlineAt} />
+                        )}
+                      </div>
                     </td>
                     <td style={tdStyle}>{formatPrice(Number(so.subTotal))}</td>
                     <td style={tdStyle}>
-                      {so.acceptStatus === 'OPEN' ? (
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button
-                            onClick={(e) => handleAction(e, so.id, 'accept')}
-                            disabled={actionLoading === so.id}
-                            style={{ padding: '4px 12px', fontSize: 12, fontWeight: 600, border: 'none', background: '#16a34a', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
-                          >
-                            Accept
-                          </button>
-                          <button
-                            onClick={(e) => handleAction(e, so.id, 'reject')}
-                            disabled={actionLoading === so.id}
-                            style={{ padding: '4px 12px', fontSize: 12, fontWeight: 600, border: 'none', background: '#dc2626', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      ) : (
-                        <span style={{ fontSize: 12, color: '#9ca3af' }}>-</span>
-                      )}
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {so.acceptStatus === 'OPEN' && (
+                          <>
+                            <button
+                              onClick={(e) => handleAction(e, so.id, 'accept')}
+                              disabled={actionLoading === so.id}
+                              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#16a34a', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
+                            >
+                              Accept
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setRejectModal({ subOrderId: so.id }); }}
+                              disabled={actionLoading === so.id}
+                              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#dc2626', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )}
+                        {(() => {
+                          const next = nextFulfillmentAction(so);
+                          if (!next) return null;
+                          return (
+                            <button
+                              onClick={(e) => handleAction(e, so.id, 'status', { status: next.status })}
+                              disabled={actionLoading === so.id}
+                              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#2563eb', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
+                            >
+                              {next.label}
+                            </button>
+                          );
+                        })()}
+                        {so.acceptStatus === 'ACCEPTED' && so.fulfillmentStatus === 'SHIPPED' && (
+                          <span style={{ fontSize: 11, color: '#2563eb', fontWeight: 500 }}>Awaiting delivery confirmation</span>
+                        )}
+                        {so.acceptStatus === 'ACCEPTED' && so.fulfillmentStatus === 'DELIVERED' && (
+                          <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>Delivered</span>
+                        )}
+                        {so.acceptStatus !== 'OPEN' && !nextFulfillmentAction(so) && so.fulfillmentStatus !== 'SHIPPED' && so.fulfillmentStatus !== 'DELIVERED' && (
+                          <span style={{ fontSize: 12, color: '#9ca3af' }}>-</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -176,9 +360,85 @@ export default function SellerOrdersPage() {
           )}
         </>
       )}
+
+      {/* Reject Modal */}
+      {rejectModal && (
+        <div
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 1000,
+          }}
+          onClick={() => { setRejectModal(null); setRejectReason(''); setRejectNote(''); }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, padding: 28, width: 420,
+              maxWidth: '90vw', boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 4px 0', fontSize: 18, fontWeight: 700 }}>Reject Order</h3>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 20px 0' }}>
+              Please provide a reason for rejecting this order.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Reason
+            </label>
+            <select
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, marginBottom: 16, background: '#fff' }}
+            >
+              <option value="">Select a reason...</option>
+              <option value="OUT_OF_STOCK">Out of Stock</option>
+              <option value="CANNOT_SHIP">Cannot Ship to Location</option>
+              <option value="LOCATION_ISSUE">Location Issue</option>
+              <option value="OTHER">Other</option>
+            </select>
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Note (optional)
+            </label>
+            <textarea
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              placeholder="Additional details..."
+              rows={3}
+              style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, marginBottom: 20, resize: 'vertical', fontFamily: 'inherit' }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                onClick={() => { setRejectModal(null); setRejectReason(''); setRejectNote(''); }}
+                style={{ padding: '8px 18px', fontSize: 13, fontWeight: 600, border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectConfirm}
+                disabled={!!actionLoading}
+                style={{ padding: '8px 18px', fontSize: 13, fontWeight: 700, border: 'none', background: '#dc2626', color: '#fff', borderRadius: 6, cursor: 'pointer' }}
+              >
+                {actionLoading ? 'Rejecting...' : 'Confirm Reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const selectStyle: React.CSSProperties = {
+  padding: '6px 12px',
+  border: '1px solid #d1d5db',
+  borderRadius: 6,
+  fontSize: 13,
+  background: '#fff',
+  cursor: 'pointer',
+};
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',

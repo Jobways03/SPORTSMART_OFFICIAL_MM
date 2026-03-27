@@ -80,6 +80,7 @@ export class AdminCommissionController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('commissionType') commissionType?: string,
+    @Query('status') status?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
@@ -93,6 +94,10 @@ export class AdminCommissionController {
 
     if (commissionType) {
       where.commissionType = commissionType;
+    }
+
+    if (status && ['PENDING', 'SETTLED', 'REFUNDED'].includes(status)) {
+      where.status = status;
     }
 
     if (dateFrom || dateTo) {
@@ -134,6 +139,40 @@ export class AdminCommissionController {
           total,
           totalPages: Math.ceil(total / limitNum),
         },
+      },
+    };
+  }
+
+  /* ── Summary (aggregate margin data) ── */
+
+  @Get('summary')
+  async getSummary() {
+    const [totalRecords, platformAgg, settlementAgg, marginAgg, pendingAgg, settledAgg] =
+      await Promise.all([
+        this.prisma.commissionRecord.count(),
+        this.prisma.commissionRecord.aggregate({
+          _sum: { totalPlatformAmount: true },
+        }),
+        this.prisma.commissionRecord.aggregate({
+          _sum: { totalSettlementAmount: true },
+        }),
+        this.prisma.commissionRecord.aggregate({
+          _sum: { platformMargin: true },
+        }),
+        this.prisma.commissionRecord.count({ where: { status: 'PENDING' } }),
+        this.prisma.commissionRecord.count({ where: { status: 'SETTLED' } }),
+      ]);
+
+    return {
+      success: true,
+      message: 'Commission summary retrieved',
+      data: {
+        totalRecords,
+        pendingCount: pendingAgg,
+        settledCount: settledAgg,
+        totalPlatformRevenue: Number(platformAgg._sum.totalPlatformAmount || 0),
+        totalSellerPayouts: Number(settlementAgg._sum.totalSettlementAmount || 0),
+        totalPlatformMargin: Number(marginAgg._sum.platformMargin || 0),
       },
     };
   }

@@ -94,6 +94,11 @@ export class CreateProductDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  platformPrice?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   basePrice?: number;
 
   @IsOptional()

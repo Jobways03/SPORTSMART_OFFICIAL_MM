@@ -52,6 +52,11 @@ export class UpdateProductDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  platformPrice?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   compareAtPrice?: number;
 
   @IsOptional()
