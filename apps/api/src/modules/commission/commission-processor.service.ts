@@ -1,11 +1,18 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
+import { RedisService } from '../../bootstrap/cache/redis.service';
+
+const LOCK_KEY = 'lock:commission-processor';
+const LOCK_TTL = 30; // 30 seconds lock
 
 @Injectable()
 export class CommissionProcessorService implements OnModuleInit {
   private readonly logger = new Logger(CommissionProcessorService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+  ) {}
 
   onModuleInit() {
     // Check every 15 seconds for sub-orders past return window
@@ -14,6 +21,10 @@ export class CommissionProcessorService implements OnModuleInit {
   }
 
   async processCommissions() {
+    // Distributed lock: prevent multiple instances from processing the same sub-orders
+    const acquired = await this.redis.acquireLock(LOCK_KEY, LOCK_TTL);
+    if (!acquired) return; // Another instance is already processing
+
     try {
       const subOrders = await this.prisma.subOrder.findMany({
         where: {
@@ -123,6 +134,8 @@ export class CommissionProcessorService implements OnModuleInit {
       }
     } catch (err) {
       this.logger.error('Commission processing error', err);
+    } finally {
+      await this.redis.releaseLock(LOCK_KEY);
     }
   }
 }

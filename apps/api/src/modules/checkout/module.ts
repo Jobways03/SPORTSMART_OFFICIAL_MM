@@ -2,12 +2,13 @@ import { Module } from '@nestjs/common';
 import { CustomerAddressController } from './controllers/customer-address.controller';
 import { CustomerOrdersController } from './controllers/customer-orders.controller';
 import { CheckoutController } from './controllers/checkout.controller';
+import { CheckoutSessionService } from './application/services/checkout-session.service';
 import { UserAuthGuard } from '../../core/guards';
 import { CatalogModule } from '../catalog/module';
 
 @Module({
   imports: [CatalogModule],
   controllers: [CustomerAddressController, CustomerOrdersController, CheckoutController],
-  providers: [UserAuthGuard],
+  providers: [UserAuthGuard, CheckoutSessionService],
 })
 export class CheckoutModule {}

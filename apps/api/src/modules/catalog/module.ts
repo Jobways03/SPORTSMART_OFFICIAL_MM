@@ -13,6 +13,7 @@ import { ReApprovalService } from './application/services/re-approval.service';
 import { ServiceabilityService } from './application/services/serviceability.service';
 import { SellerAllocationService } from './application/services/seller-allocation.service';
 import { DuplicateDetectionService } from './application/services/duplicate-detection.service';
+import { CatalogCacheService } from './application/services/catalog-cache.service';
 
 // Guards
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
@@ -75,10 +76,11 @@ import { AdminSellerMappingsController } from './presentation/controllers/admin/
     ServiceabilityService,
     SellerAllocationService,
     DuplicateDetectionService,
+    CatalogCacheService,
     SellerAuthGuard,
     AdminAuthGuard,
     CloudinaryAdapter,
   ],
-  exports: [CatalogPublicFacade, SellerAllocationService],
+  exports: [CatalogPublicFacade, SellerAllocationService, CatalogCacheService],
 })
 export class CatalogModule {}

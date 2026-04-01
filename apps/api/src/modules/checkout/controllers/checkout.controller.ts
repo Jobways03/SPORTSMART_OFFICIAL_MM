@@ -19,57 +19,11 @@ import {
   StockReservationResult,
 } from '../../catalog/application/services/seller-allocation.service';
 import { EventBusService } from '../../../bootstrap/events/event-bus.service';
-
-// ── In-memory checkout session store ──────────────────────────────────────
-// In production this would be stored in Redis or a DB table.
-// Sessions auto-expire after 15 minutes.
-
-interface CheckoutItemAllocation {
-  cartItemId: string;
-  productId: string;
-  variantId: string | null;
-  productTitle: string;
-  variantTitle: string | null;
-  imageUrl: string | null;
-  sku: string | null;
-  quantity: number;
-  unitPrice: number;
-  lineTotal: number;
-  serviceable: boolean;
-  unserviceableReason?: string;
-  allocatedSellerId: string | null;
-  allocatedSellerName: string | null;
-  allocatedMappingId: string | null;
-  estimatedDeliveryDays: number | null;
-  reservationId: string | null;
-}
-
-interface CheckoutSession {
-  customerId: string;
-  addressId: string;
-  addressSnapshot: Record<string, any>;
-  items: CheckoutItemAllocation[];
-  totalAmount: number;
-  serviceableAmount: number;
-  itemCount: number;
-  allServiceable: boolean;
-  unserviceableCount: number;
-  createdAt: Date;
-  expiresAt: Date;
-}
-
-// Module-level session store (survives across requests within the same process)
-const checkoutSessions = new Map<string, CheckoutSession>();
-
-// Clean up expired sessions periodically
-setInterval(() => {
-  const now = new Date();
-  for (const [key, session] of checkoutSessions.entries()) {
-    if (session.expiresAt < now) {
-      checkoutSessions.delete(key);
-    }
-  }
-}, 60_000);
+import {
+  CheckoutSessionService,
+  CheckoutSession,
+  CheckoutItemAllocation,
+} from '../application/services/checkout-session.service';
 
 @ApiTags('Checkout')
 @Controller('customer/checkout')
@@ -77,6 +31,7 @@ setInterval(() => {
 export class CheckoutController {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly sessionService: CheckoutSessionService,
     private readonly allocationService: SellerAllocationService,
     private readonly eventBus: EventBusService,
   ) {}
@@ -147,7 +102,7 @@ export class CheckoutController {
     }
 
     // 3. Release any existing reservations from a previous checkout attempt
-    const existingSession = checkoutSessions.get(req.userId);
+    const existingSession = await this.sessionService.get(req.userId);
     if (existingSession) {
       for (const item of existingSession.items) {
         if (item.reservationId) {
@@ -158,7 +113,7 @@ export class CheckoutController {
           }
         }
       }
-      checkoutSessions.delete(req.userId);
+      await this.sessionService.delete(req.userId);
     }
 
     // 4. Allocate sellers for each cart item
@@ -295,7 +250,7 @@ export class CheckoutController {
       });
     }
 
-    // 5. Store checkout session
+    // 5. Store checkout session in Redis (auto-expires via TTL)
     const session: CheckoutSession = {
       customerId: req.userId,
       addressId,
@@ -315,11 +270,11 @@ export class CheckoutController {
       itemCount,
       allServiceable: unserviceableCount === 0,
       unserviceableCount,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
+      createdAt: new Date().toISOString(),
+      expiresAt: this.sessionService.buildExpiresAt(),
     };
 
-    checkoutSessions.set(req.userId, session);
+    await this.sessionService.save(req.userId, session);
 
     return {
       success: true,
@@ -334,7 +289,7 @@ export class CheckoutController {
         allServiceable: session.allServiceable,
         unserviceableCount: session.unserviceableCount,
         addressSnapshot: session.addressSnapshot,
-        expiresAt: session.expiresAt.toISOString(),
+        expiresAt: session.expiresAt,
       },
     };
   }
@@ -342,7 +297,7 @@ export class CheckoutController {
   // ── GET /customer/checkout/summary ──────────────────────────────────
   @Get('summary')
   async getCheckoutSummary(@Req() req: any) {
-    const session = checkoutSessions.get(req.userId);
+    const session = await this.sessionService.get(req.userId);
 
     if (!session) {
       throw new NotFoundAppException(
@@ -351,8 +306,8 @@ export class CheckoutController {
     }
 
     // Check if session has expired
-    if (session.expiresAt < new Date()) {
-      checkoutSessions.delete(req.userId);
+    if (new Date(session.expiresAt) < new Date()) {
+      await this.sessionService.delete(req.userId);
       throw new BadRequestAppException(
         'Checkout session has expired — please initiate checkout again',
       );
@@ -369,7 +324,7 @@ export class CheckoutController {
         allServiceable: session.allServiceable,
         unserviceableCount: session.unserviceableCount,
         addressSnapshot: session.addressSnapshot,
-        expiresAt: session.expiresAt.toISOString(),
+        expiresAt: session.expiresAt,
       },
     };
   }
@@ -378,7 +333,7 @@ export class CheckoutController {
   // T8: Allow removing unserviceable items from cart during checkout
   @Post('remove-unserviceable')
   async removeUnserviceableItems(@Req() req: any) {
-    const session = checkoutSessions.get(req.userId);
+    const session = await this.sessionService.get(req.userId);
 
     if (!session) {
       throw new NotFoundAppException(
@@ -386,8 +341,8 @@ export class CheckoutController {
       );
     }
 
-    if (session.expiresAt < new Date()) {
-      checkoutSessions.delete(req.userId);
+    if (new Date(session.expiresAt) < new Date()) {
+      await this.sessionService.delete(req.userId);
       throw new BadRequestAppException(
         'Checkout session has expired — please initiate checkout again',
       );
@@ -417,7 +372,7 @@ export class CheckoutController {
     session.allServiceable = true;
     session.unserviceableCount = 0;
 
-    checkoutSessions.set(req.userId, session);
+    await this.sessionService.save(req.userId, session);
 
     return {
       success: true,
@@ -439,7 +394,7 @@ export class CheckoutController {
     @Req() req: any,
     @Body() body: { paymentMethod?: string },
   ) {
-    const session = checkoutSessions.get(req.userId);
+    const session = await this.sessionService.get(req.userId);
 
     if (!session) {
       throw new NotFoundAppException(
@@ -447,8 +402,8 @@ export class CheckoutController {
       );
     }
 
-    if (session.expiresAt < new Date()) {
-      checkoutSessions.delete(req.userId);
+    if (new Date(session.expiresAt) < new Date()) {
+      await this.sessionService.delete(req.userId);
       throw new BadRequestAppException(
         'Checkout session has expired — please initiate checkout again',
       );
@@ -566,7 +521,7 @@ export class CheckoutController {
     });
 
     // Remove checkout session
-    checkoutSessions.delete(req.userId);
+    await this.sessionService.delete(req.userId);
 
     // T3: Publish domain events for order creation
     try {

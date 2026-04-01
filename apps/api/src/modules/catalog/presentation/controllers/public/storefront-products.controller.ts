@@ -8,13 +8,17 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
+import { CatalogCacheService } from '../../../application/services/catalog-cache.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { Prisma } from '@prisma/client';
 
 @ApiTags('Storefront')
 @Controller('storefront/products')
 export class StorefrontProductsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cache: CatalogCacheService,
+  ) {}
 
   // ─── T1: Product Listing API (aggregated stock) ───────────────────────
 
@@ -105,95 +109,95 @@ export class StorefrontProductsController {
         break;
     }
 
-    // Execute count + data in parallel
-    const countQuery = Prisma.sql`
-      SELECT COUNT(DISTINCT p.id)::int AS total
-      FROM products p
-      ${whereClause}
-    `;
+    const result = await this.cache.getOrSetProductList(
+      { page: pageNum, limit: limitNum, search, categoryId, brandId, sortBy, minPrice, maxPrice },
+      async () => {
+      // Execute count + data in parallel
+      const countQuery = Prisma.sql`
+        SELECT COUNT(DISTINCT p.id)::int AS total
+        FROM products p
+        ${whereClause}
+      `;
 
-    const dataQuery = Prisma.sql`
-      SELECT
-        p.id,
-        p.product_code AS "productCode",
-        p.title,
-        p.slug,
-        p.short_description AS "shortDescription",
-        c.name AS "categoryName",
-        b.name AS "brandName",
-        COALESCE(p.platform_price, p.base_price)::numeric AS "platformPrice",
-        p.compare_at_price::numeric AS "compareAtPrice",
-        p.has_variants AS "hasVariants",
-        COALESCE(
-          (
-            SELECT pi.url FROM product_images pi
-            WHERE pi.product_id = p.id
-            ORDER BY pi.is_primary DESC, pi.sort_order ASC
-            LIMIT 1
-          ),
-          (
-            SELECT pvi.url FROM product_variant_images pvi
-            JOIN product_variants pv ON pv.id = pvi.variant_id
-            WHERE pv.product_id = p.id AND pv.is_deleted = false
-            ORDER BY pvi.sort_order ASC
-            LIMIT 1
-          )
-        ) AS "primaryImageUrl",
-        COALESCE(agg.total_available_stock, 0)::int AS "totalAvailableStock",
-        COALESCE(agg.seller_count, 0)::int AS "sellerCount",
-        COALESCE(vc.variant_count, 0)::int AS "variantCount"
-      FROM products p
-      LEFT JOIN categories c ON c.id = p.category_id
-      LEFT JOIN brands b ON b.id = p.brand_id
-      LEFT JOIN LATERAL (
+      const dataQuery = Prisma.sql`
         SELECT
-          SUM(GREATEST(spm.stock_qty - spm.reserved_qty, 0))::int AS total_available_stock,
-          COUNT(DISTINCT spm.seller_id)::int AS seller_count
-        FROM seller_product_mappings spm
-        WHERE spm.product_id = p.id
-          AND spm.is_active = true
-          AND spm.approval_status = 'APPROVED'
-          AND (spm.stock_qty - spm.reserved_qty) > 0
-      ) agg ON true
-      LEFT JOIN LATERAL (
-        SELECT COUNT(*)::int AS variant_count
-        FROM product_variants pv
-        WHERE pv.product_id = p.id
-          AND pv.is_deleted = false
-      ) vc ON true
-      ${whereClause}
-      ${orderByClause}
-      LIMIT ${limitNum} OFFSET ${offset}
-    `;
+          p.id,
+          p.product_code AS "productCode",
+          p.title,
+          p.slug,
+          p.short_description AS "shortDescription",
+          c.name AS "categoryName",
+          b.name AS "brandName",
+          COALESCE(p.platform_price, p.base_price)::numeric AS "platformPrice",
+          p.compare_at_price::numeric AS "compareAtPrice",
+          p.has_variants AS "hasVariants",
+          COALESCE(
+            (
+              SELECT pi.url FROM product_images pi
+              WHERE pi.product_id = p.id
+              ORDER BY pi.is_primary DESC, pi.sort_order ASC
+              LIMIT 1
+            ),
+            (
+              SELECT pvi.url FROM product_variant_images pvi
+              JOIN product_variants pv ON pv.id = pvi.variant_id
+              WHERE pv.product_id = p.id AND pv.is_deleted = false
+              ORDER BY pvi.sort_order ASC
+              LIMIT 1
+            )
+          ) AS "primaryImageUrl",
+          COALESCE(agg.total_available_stock, 0)::int AS "totalAvailableStock",
+          COALESCE(agg.seller_count, 0)::int AS "sellerCount",
+          COALESCE(vc.variant_count, 0)::int AS "variantCount"
+        FROM products p
+        LEFT JOIN categories c ON c.id = p.category_id
+        LEFT JOIN brands b ON b.id = p.brand_id
+        LEFT JOIN LATERAL (
+          SELECT
+            SUM(GREATEST(spm.stock_qty - spm.reserved_qty, 0))::int AS total_available_stock,
+            COUNT(DISTINCT spm.seller_id)::int AS seller_count
+          FROM seller_product_mappings spm
+          WHERE spm.product_id = p.id
+            AND spm.is_active = true
+            AND spm.approval_status = 'APPROVED'
+            AND (spm.stock_qty - spm.reserved_qty) > 0
+        ) agg ON true
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS variant_count
+          FROM product_variants pv
+          WHERE pv.product_id = p.id
+            AND pv.is_deleted = false
+        ) vc ON true
+        ${whereClause}
+        ${orderByClause}
+        LIMIT ${limitNum} OFFSET ${offset}
+      `;
 
-    const [countResult, products] = await Promise.all([
-      this.prisma.$queryRaw<{ total: number }[]>(countQuery),
-      this.prisma.$queryRaw<any[]>(dataQuery),
-    ]);
+      const [countResult, products] = await Promise.all([
+        this.prisma.$queryRaw<{ total: number }[]>(countQuery),
+        this.prisma.$queryRaw<any[]>(dataQuery),
+      ]);
 
-    const total = countResult[0]?.total ?? 0;
+      const total = countResult[0]?.total ?? 0;
 
-    const mapped = products.map((p) => ({
-      id: p.id,
-      productCode: p.productCode,
-      title: p.title,
-      slug: p.slug,
-      shortDescription: p.shortDescription,
-      categoryName: p.categoryName,
-      brandName: p.brandName,
-      platformPrice: p.platformPrice ? Number(p.platformPrice) : null,
-      compareAtPrice: p.compareAtPrice ? Number(p.compareAtPrice) : null,
-      primaryImageUrl: p.primaryImageUrl,
-      totalAvailableStock: p.totalAvailableStock,
-      sellerCount: p.sellerCount,
-      hasVariants: p.hasVariants,
-      variantCount: p.variantCount,
-    }));
+      const mapped = products.map((p) => ({
+        id: p.id,
+        productCode: p.productCode,
+        title: p.title,
+        slug: p.slug,
+        shortDescription: p.shortDescription,
+        categoryName: p.categoryName,
+        brandName: p.brandName,
+        platformPrice: p.platformPrice ? Number(p.platformPrice) : null,
+        compareAtPrice: p.compareAtPrice ? Number(p.compareAtPrice) : null,
+        primaryImageUrl: p.primaryImageUrl,
+        totalAvailableStock: p.totalAvailableStock,
+        sellerCount: p.sellerCount,
+        hasVariants: p.hasVariants,
+        variantCount: p.variantCount,
+      }));
 
-    return {
-      success: true,
-      message: 'Products retrieved successfully',
-      data: {
+      return {
         products: mapped,
         pagination: {
           page: pageNum,
@@ -201,7 +205,13 @@ export class StorefrontProductsController {
           total,
           totalPages: Math.ceil(total / limitNum),
         },
-      },
+      };
+    });
+
+    return {
+      success: true,
+      message: 'Products retrieved successfully',
+      data: result,
     };
   }
 

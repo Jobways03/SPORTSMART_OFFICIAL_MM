@@ -1,6 +1,7 @@
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
+import * as compression from 'compression';
 
 import { AppModule } from './app.module';
 import { EnvService } from './bootstrap/env/env.service';
@@ -24,6 +25,12 @@ async function bootstrap() {
     type: VersioningType.URI,
     defaultVersion: '1',
   });
+
+  // ── Performance: gzip/deflate compression (60-70% bandwidth reduction) ──
+  app.use(compression({
+    threshold: 1024,  // Only compress responses > 1KB
+    level: 6,         // Balanced speed vs compression ratio
+  }));
 
   app.use(
     helmet({
