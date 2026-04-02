@@ -1024,7 +1024,7 @@ export default function EditProductPage() {
                           ))}
                         <option value="__custom__">+ Custom option</option>
                       </select>
-                      {(!predefinedOptions.some(po => po.name.toLowerCase() === opt.name.toLowerCase() || po.displayName.toLowerCase() === opt.name.toLowerCase()) && opt.name !== '') && (
+                      {!predefinedOptions.some(po => po.name.toLowerCase() === opt.name.toLowerCase() || po.displayName.toLowerCase() === opt.name.toLowerCase()) && (
                         <input
                           type="text"
                           className="form-input"
@@ -1032,6 +1032,7 @@ export default function EditProductPage() {
                           value={opt.name}
                           onChange={e => updateOptionName(optIdx, e.target.value)}
                           placeholder="Enter custom option name"
+                          autoFocus
                         />
                       )}
                     </div>
