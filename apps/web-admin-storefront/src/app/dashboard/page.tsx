@@ -128,16 +128,16 @@ export default function DashboardHome() {
           {/* Product Performance Section */}
           {productPerf && productPerf.topByRevenue.length > 0 && (
             <div style={{ marginBottom: 32 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: '#fff' }}>Top Products by Revenue</h3>
+              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: '#1f2937' }}>Top Products by Revenue</h3>
               <div style={{
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.1)',
+                background: '#fff',
+                border: '1px solid #e5e7eb',
                 borderRadius: 10,
                 overflow: 'hidden',
               }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                    <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                       <th style={sfTh}>Product</th>
                       <th style={sfTh}>Code</th>
                       <th style={sfTh}>Orders</th>
@@ -148,7 +148,7 @@ export default function DashboardHome() {
                   </thead>
                   <tbody>
                     {productPerf.topByRevenue.map((p) => (
-                      <tr key={p.productId} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <tr key={p.productId} style={{ borderBottom: '1px solid #f3f4f6' }}>
                         <td style={sfTd}>{p.title?.substring(0, 40) || '--'}</td>
                         <td style={sfTd}>{p.productCode || '--'}</td>
                         <td style={sfTd}>{p.totalOrders}</td>
@@ -166,16 +166,16 @@ export default function DashboardHome() {
           {/* Seller Performance Section */}
           {sellerPerf.length > 0 && (
             <div style={{ marginBottom: 32 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: '#fff' }}>Top Sellers by Revenue</h3>
+              <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12, color: '#1f2937' }}>Top Sellers by Revenue</h3>
               <div style={{
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.1)',
+                background: '#fff',
+                border: '1px solid #e5e7eb',
                 borderRadius: 10,
                 overflow: 'hidden',
               }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                    <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                       <th style={sfTh}>Seller</th>
                       <th style={sfTh}>Shop</th>
                       <th style={sfTh}>Orders</th>
@@ -188,7 +188,7 @@ export default function DashboardHome() {
                   </thead>
                   <tbody>
                     {sellerPerf.map((s) => (
-                      <tr key={s.sellerId} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <tr key={s.sellerId} style={{ borderBottom: '1px solid #f3f4f6' }}>
                         <td style={sfTd}>{s.sellerName}</td>
                         <td style={sfTd}>{s.sellerShopName}</td>
                         <td style={sfTd}>{s.totalOrders}</td>
@@ -203,8 +203,8 @@ export default function DashboardHome() {
                             borderRadius: 4,
                             fontSize: 11,
                             fontWeight: 600,
-                            background: s.isActive ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
-                            color: s.isActive ? '#4ade80' : '#f87171',
+                            background: s.isActive ? '#dcfce7' : '#fee2e2',
+                            color: s.isActive ? '#16a34a' : '#dc2626',
                           }}>
                             {s.isActive ? 'Active' : 'Inactive'}
                           </span>
@@ -272,14 +272,14 @@ const sfTh: React.CSSProperties = {
   padding: '10px 14px',
   fontSize: 11,
   fontWeight: 600,
-  color: 'rgba(255,255,255,0.5)',
+  color: '#6b7280',
   textTransform: 'uppercase',
   letterSpacing: 0.5,
 };
 
 const sfTd: React.CSSProperties = {
   padding: '10px 14px',
-  color: 'rgba(255,255,255,0.85)',
+  color: '#374151',
 };
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {

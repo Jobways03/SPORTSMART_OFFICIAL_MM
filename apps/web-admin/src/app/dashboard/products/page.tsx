@@ -402,8 +402,8 @@ export default function ProductsPage() {
                       <span style={{ fontWeight: 500 }}>{mapping.seller?.sellerName || 'Unknown'}</span>
                     </td>
                     <td>
-                      <span style={{ fontFamily: 'monospace', fontSize: 12, color: mapping.sellerInternalSku ? '#374151' : '#9ca3af' }}>
-                        {mapping.sellerInternalSku || '\u2014'}
+                      <span style={{ fontFamily: 'monospace', fontSize: 12, color: (mapping.sellerInternalSku || mapping.variant?.sku) ? '#374151' : '#9ca3af' }}>
+                        {mapping.sellerInternalSku || mapping.variant?.sku || '\u2014'}
                       </span>
                     </td>
                     <td>

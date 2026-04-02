@@ -296,16 +296,43 @@ export default function EditProductPage() {
   // Seller mappings state
   interface SellerMapping {
     id: string;
-    seller: { id: string; sellerName: string; sellerShopName: string } | null;
-    variant: { id: string; masterSku: string; title: string } | null;
+    seller: { id: string; sellerName: string; sellerShopName: string; sellerZipCode?: string } | null;
+    variant: { id: string; masterSku: string; title: string; sku?: string } | null;
     stockQty: number;
+    reservedQty: number;
+    availableQty: number;
     sellerInternalSku: string | null;
+    pickupPincode: string | null;
+    dispatchSla: number;
     approvalStatus: string;
     isActive: boolean;
+    mappingDisplayStatus: string;
+    updatedAt: string;
   }
   const [sellerMappings, setSellerMappings] = useState<SellerMapping[]>([]);
   const [sellerMappingsLoading, setSellerMappingsLoading] = useState(false);
   const [mappingActionLoading, setMappingActionLoading] = useState<string | null>(null);
+
+  function formatTimeAgo(dateStr: string) {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+
+  function getMappingStatusStyle(status: string) {
+    switch (status) {
+      case 'ACTIVE': return { background: '#dcfce7', color: '#15803d' };
+      case 'INACTIVE': return { background: '#f3f4f6', color: '#6b7280' };
+      case 'OUT_OF_STOCK': return { background: '#fee2e2', color: '#dc2626' };
+      case 'LOW_STOCK': return { background: '#fef9c3', color: '#a16207' };
+      default: return { background: '#f3f4f6', color: '#6b7280' };
+    }
+  }
 
   const loadSellerMappings = useCallback(async () => {
     setSellerMappingsLoading(true);
@@ -1782,8 +1809,8 @@ export default function EditProductPage() {
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '8px 10px', color: m.sellerInternalSku ? '#374151' : '#9ca3af', fontFamily: 'monospace' }}>
-                        {m.sellerInternalSku || '\u2014'}
+                      <td style={{ padding: '8px 10px', color: (m.sellerInternalSku || m.variant?.sku) ? '#374151' : '#9ca3af', fontFamily: (m.sellerInternalSku || m.variant?.sku) ? 'monospace' : 'inherit', fontSize: 12 }}>
+                        {m.sellerInternalSku || m.variant?.sku || '\u2014'}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>{m.stockQty}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center' }}>
