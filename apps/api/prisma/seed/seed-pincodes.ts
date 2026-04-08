@@ -5,7 +5,7 @@ import * as path from 'path';
 const prisma = new PrismaClient();
 
 const BATCH_SIZE = 1000;
-const CSV_PATH = path.join('/Users/cg-sd-se-tl-001/Desktop', 'pincodes.csv');
+const CSV_PATH = path.join(__dirname, 'pincodes.csv');
 
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];

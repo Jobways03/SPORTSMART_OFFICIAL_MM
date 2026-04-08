@@ -97,14 +97,44 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                   </span>
                 )}
               </Link>
-              {item.label === 'Products' && isActive('/dashboard/products') && (
-                <Link
-                  href="/dashboard/products/collections"
-                  className={`sidebar-item${pathname.includes('/collections') ? ' active' : ''}`}
-                  style={{ paddingLeft: 44, fontSize: 13 }}
-                >
-                  Collections
-                </Link>
+              {item.label === 'Products' && pathname.startsWith('/dashboard/products') && (
+                <>
+                  <Link
+                    href="/dashboard/products/collections"
+                    className={`sidebar-item${pathname.includes('/collections') ? ' active' : ''}`}
+                    style={{ paddingLeft: 44, fontSize: 13 }}
+                  >
+                    Collections
+                  </Link>
+                  <Link
+                    href="/dashboard/products/brands"
+                    className={`sidebar-item${pathname === '/dashboard/products/brands' || pathname.startsWith('/dashboard/products/brands/') ? ' active' : ''}`}
+                    style={{ paddingLeft: 44, fontSize: 13 }}
+                  >
+                    Brands
+                  </Link>
+                  <Link
+                    href="/dashboard/products/categories"
+                    className={`sidebar-item${pathname === '/dashboard/products/categories' ? ' active' : ''}`}
+                    style={{ paddingLeft: 44, fontSize: 13 }}
+                  >
+                    Categories
+                  </Link>
+                  <Link
+                    href="/dashboard/products/category-attributes"
+                    className={`sidebar-item${pathname.includes('/category-attributes') ? ' active' : ''}`}
+                    style={{ paddingLeft: 44, fontSize: 13 }}
+                  >
+                    Category Attributes
+                  </Link>
+                  <Link
+                    href="/dashboard/products/storefront-filters"
+                    className={`sidebar-item${pathname.includes('/storefront-filters') ? ' active' : ''}`}
+                    style={{ paddingLeft: 44, fontSize: 13 }}
+                  >
+                    Storefront Filters
+                  </Link>
+                </>
               )}
             </div>
           ))}

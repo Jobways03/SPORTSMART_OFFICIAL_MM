@@ -4,6 +4,8 @@ import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
+import FilterSidebar from '@/components/FilterSidebar';
+import ActiveFilterChips from '@/components/ActiveFilterChips';
 import { apiClient } from '@/lib/api-client';
 
 interface Product {
@@ -36,10 +38,47 @@ function HomeContent() {
   const categoryId = searchParams.get('categoryId') || '';
   const brandId = searchParams.get('brandId') || '';
   const sortBy = searchParams.get('sortBy') || '';
+  const minPrice = searchParams.get('minPrice') || '';
+  const maxPrice = searchParams.get('maxPrice') || '';
   const currentPage = parseInt(searchParams.get('page') || '1', 10);
   const [products, setProducts] = useState<Product[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
+
+  // Parse active metafield filters from URL: filter[material]=cotton,polyester
+  const activeFilters: Record<string, string[]> = {};
+  searchParams.forEach((value, key) => {
+    const match = key.match(/^filter\[(\w+)\]$/);
+    if (match) {
+      activeFilters[match[1]] = value.split(',').filter(Boolean);
+    }
+  });
+
+  // Build URL params helper
+  const buildParams = (overrides?: {
+    filters?: Record<string, string[]>;
+    minP?: string; maxP?: string;
+    page?: number; sort?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (searchQuery) params.set('search', searchQuery);
+    if (categoryId) params.set('categoryId', categoryId);
+    if (brandId) params.set('brandId', brandId);
+    const s = overrides?.sort ?? sortBy;
+    if (s) params.set('sortBy', s);
+    const mnP = overrides?.minP ?? minPrice;
+    const mxP = overrides?.maxP ?? maxPrice;
+    if (mnP) params.set('minPrice', mnP);
+    if (mxP) params.set('maxPrice', mxP);
+    const pg = overrides?.page ?? undefined;
+    if (pg && pg > 1) params.set('page', String(pg));
+    // Metafield filters
+    const filtersToUse = overrides?.filters ?? activeFilters;
+    for (const [key, values] of Object.entries(filtersToUse)) {
+      if (values.length > 0) params.set(`filter[${key}]`, values.join(','));
+    }
+    return params;
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -50,6 +89,12 @@ function HomeContent() {
     if (categoryId) params.set('categoryId', categoryId);
     if (brandId) params.set('brandId', brandId);
     if (sortBy) params.set('sortBy', sortBy);
+    if (minPrice) params.set('minPrice', minPrice);
+    if (maxPrice) params.set('maxPrice', maxPrice);
+    // Include metafield filters
+    for (const [key, values] of Object.entries(activeFilters)) {
+      if (values.length > 0) params.set(`filter[${key}]`, values.join(','));
+    }
 
     apiClient<{ products: Product[]; pagination: Pagination }>(`/storefront/products?${params}`)
       .then((res) => {
@@ -60,7 +105,43 @@ function HomeContent() {
         setProducts([]);
       })
       .finally(() => setLoading(false));
-  }, [searchQuery, categoryId, brandId, sortBy, currentPage]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams.toString()]);
+
+  // Filter handlers
+  const handleFilterChange = (key: string, values: string[]) => {
+    const newFilters = { ...activeFilters, [key]: values };
+    if (values.length === 0) delete newFilters[key];
+    const params = buildParams({ filters: newFilters, page: 1 });
+    const qs = params.toString();
+    router.push(qs ? `/?${qs}` : '/');
+  };
+
+  const handlePriceChange = (min: string, max: string) => {
+    const params = buildParams({ minP: min, maxP: max, page: 1 });
+    const qs = params.toString();
+    router.push(qs ? `/?${qs}` : '/');
+  };
+
+  const handleRemoveFilter = (key: string, value: string) => {
+    const current = activeFilters[key] || [];
+    const next = current.filter((v) => v !== value);
+    handleFilterChange(key, next);
+  };
+
+  const handleRemovePrice = () => {
+    handlePriceChange('', '');
+  };
+
+  const handleClearAll = () => {
+    const params = new URLSearchParams();
+    if (searchQuery) params.set('search', searchQuery);
+    if (categoryId) params.set('categoryId', categoryId);
+    if (brandId) params.set('brandId', brandId);
+    if (sortBy) params.set('sortBy', sortBy);
+    const qs = params.toString();
+    router.push(qs ? `/?${qs}` : '/');
+  };
 
   const getDisplayPrice = (product: Product): number | null => {
     return product.platformPrice ?? product.basePrice ?? null;
@@ -77,12 +158,7 @@ function HomeContent() {
   };
 
   const goToPage = (page: number) => {
-    const params = new URLSearchParams();
-    if (searchQuery) params.set('search', searchQuery);
-    if (categoryId) params.set('categoryId', categoryId);
-    if (brandId) params.set('brandId', brandId);
-    if (sortBy) params.set('sortBy', sortBy);
-    if (page > 1) params.set('page', String(page));
+    const params = buildParams({ page });
     const qs = params.toString();
     router.push(qs ? `/?${qs}` : '/');
   };
@@ -165,6 +241,22 @@ function HomeContent() {
       )}
 
       <div id="products" className="products-section">
+        <div className="products-layout">
+          {/* Filter Sidebar */}
+          <FilterSidebar
+            categoryId={categoryId || undefined}
+            search={searchQuery || undefined}
+            activeFilters={activeFilters}
+            minPrice={minPrice || undefined}
+            maxPrice={maxPrice || undefined}
+            brandId={brandId || undefined}
+            onFilterChange={handleFilterChange}
+            onPriceChange={handlePriceChange}
+            onClearAll={handleClearAll}
+          />
+
+          {/* Main content area */}
+          <div className="products-main">
         <div className="products-section-header">
           <h2>{searchQuery ? `Results for "${searchQuery}"` : 'All Products'}</h2>
           <div className="products-header-right">
@@ -175,11 +267,7 @@ function HomeContent() {
               className="products-sort"
               value={sortBy}
               onChange={(e) => {
-                const params = new URLSearchParams();
-                if (searchQuery) params.set('search', searchQuery);
-                if (categoryId) params.set('categoryId', categoryId);
-                if (brandId) params.set('brandId', brandId);
-                if (e.target.value) params.set('sortBy', e.target.value);
+                const params = buildParams({ sort: e.target.value, page: 1 });
                 const qs = params.toString();
                 router.push(qs ? `/?${qs}` : '/');
               }}
@@ -193,6 +281,16 @@ function HomeContent() {
             </select>
           </div>
         </div>
+
+        {/* Active filter chips */}
+        <ActiveFilterChips
+          activeFilters={activeFilters}
+          minPrice={minPrice || undefined}
+          maxPrice={maxPrice || undefined}
+          onRemoveFilter={handleRemoveFilter}
+          onRemovePrice={handleRemovePrice}
+          onClearAll={handleClearAll}
+        />
 
         {loading ? (
           <div className="products-loading">
@@ -249,6 +347,8 @@ function HomeContent() {
             {renderPagination()}
           </>
         )}
+          </div>{/* .products-main */}
+        </div>{/* .products-layout */}
       </div>
     </>
   );

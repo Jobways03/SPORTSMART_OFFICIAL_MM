@@ -20,6 +20,7 @@ model Category {
 
   products                Product[]
   categoryOptionTemplates CategoryOptionTemplate[]
+  metafieldDefinitions    MetafieldDefinition[]
 
   @@index([parentId])
   @@index([slug])
@@ -152,6 +153,7 @@ model Product {
   discounts      DiscountProduct[]
   cartItems      CartItem[]
   sellerMappings SellerProductMapping[]
+  metafields     ProductMetafield[]
 
   @@index([sellerId])
   @@index([categoryId])
@@ -356,4 +358,110 @@ model ProductCodeSequence {
   lastNumber Int @default(0) @map("last_number")
 
   @@map("product_code_sequence")
+}
+
+// ── Metafield Definitions ───────────────────────────────────────────────
+// Defines what attributes a category (or custom merchant-level) supports.
+// Analogous to Shopify's MetafieldDefinition.
+
+model MetafieldDefinition {
+  id          String        @id @default(uuid())
+  namespace   String        // e.g. "taxonomy", "custom"
+  key         String        // e.g. "material", "care_instructions"
+  name        String        // Human-readable: "Material"
+  description String?
+  type        MetafieldType
+
+  // For SINGLE_SELECT / MULTI_SELECT: predefined choices
+  // Stored as JSON array of { value, label, sortOrder, colorHex? }
+  validations Json?         // e.g. { min, max, regex }
+  choices     Json?         // e.g. [{ value: "cotton", label: "Cotton" }]
+
+  // Ownership
+  ownerType   String        @default("CATEGORY") @map("owner_type") // CATEGORY or CUSTOM
+  categoryId  String?       @map("category_id")  // null for CUSTOM (merchant-level)
+
+  // Display
+  pinned      Boolean       @default(false)
+  sortOrder   Int           @default(0) @map("sort_order")
+  isRequired  Boolean       @default(false) @map("is_required")
+  isActive    Boolean       @default(true) @map("is_active")
+
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  category        Category?            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  metafieldValues ProductMetafield[]
+  filterConfigs   StorefrontFilter[]
+
+  @@unique([namespace, key, categoryId])
+  @@index([categoryId])
+  @@index([ownerType])
+  @@index([namespace, key])
+  @@map("metafield_definitions")
+}
+
+// ── Product Metafield Values ────────────────────────────────────────────
+// Stores the actual metafield value for a specific product.
+
+model ProductMetafield {
+  id                    String   @id @default(uuid())
+  productId             String   @map("product_id")
+  metafieldDefinitionId String   @map("metafield_definition_id")
+
+  // Value storage — use the appropriate column based on type
+  valueText     String?   @map("value_text")
+  valueNumeric  Decimal?  @map("value_numeric") @db.Decimal(15, 4)
+  valueBoolean  Boolean?  @map("value_boolean")
+  valueDate     DateTime? @map("value_date")
+  valueJson     Json?     @map("value_json")    // DIMENSION, WEIGHT, VOLUME, MULTI_SELECT, JSON
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product              Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+  metafieldDefinition  MetafieldDefinition  @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, metafieldDefinitionId])
+  @@index([productId])
+  @@index([metafieldDefinitionId])
+  @@index([metafieldDefinitionId, valueText])
+  @@index([metafieldDefinitionId, valueNumeric])
+  @@index([metafieldDefinitionId, valueBoolean])
+  @@map("product_metafields")
+}
+
+// ── Storefront Filter Configuration ─────────────────────────────────────
+// Admins configure which metafields/built-in fields become storefront filters.
+
+model StorefrontFilter {
+  id                    String   @id @default(uuid())
+  metafieldDefinitionId String?  @map("metafield_definition_id")
+
+  // Built-in filter type (when metafieldDefinitionId is null)
+  builtInType           String?  @map("built_in_type") // "price_range", "brand", "availability", "variant_option"
+
+  // Display
+  label         String
+  filterType    String   @map("filter_type") // "checkbox", "price_range", "boolean_toggle", "color_swatch", "text_input"
+  sortOrder     Int      @default(0) @map("sort_order")
+  isActive      Boolean  @default(true) @map("is_active")
+
+  // Scope
+  scopeType     String?  @map("scope_type")  // "CATEGORY", "COLLECTION", "GLOBAL"
+  scopeId       String?  @map("scope_id")    // categoryId or collectionId
+
+  // Behavior
+  collapsed     Boolean  @default(false)
+  showCounts    Boolean  @default(true) @map("show_counts")
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  metafieldDefinition MetafieldDefinition? @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([metafieldDefinitionId])
+  @@index([scopeType, scopeId])
+  @@index([isActive, sortOrder])
+  @@map("storefront_filters")
 }

@@ -44,6 +44,14 @@ import { AdminProductVariantsController } from './presentation/controllers/admin
 import { AdminProductImagesController } from './presentation/controllers/admin/admin-product-images.controller';
 import { AdminVariantImagesController } from './presentation/controllers/admin/admin-variant-images.controller';
 import { AdminSellerMappingsController } from './presentation/controllers/admin/admin-seller-mappings.controller';
+import { AdminMetafieldDefinitionsController } from './presentation/controllers/admin/admin-metafield-definitions.controller';
+import { AdminProductMetafieldsController } from './presentation/controllers/admin/admin-product-metafields.controller';
+import { AdminStorefrontFiltersController } from './presentation/controllers/admin/admin-storefront-filters.controller';
+import { AdminCategoriesController } from './presentation/controllers/admin/admin-categories.controller';
+import { AdminBrandsController } from './presentation/controllers/admin/admin-brands.controller';
+
+// Controllers - Public (Filters)
+import { StorefrontFiltersController } from './presentation/controllers/public/storefront-filters.controller';
 
 @Module({
   controllers: [
@@ -64,6 +72,12 @@ import { AdminSellerMappingsController } from './presentation/controllers/admin/
     AdminProductImagesController,
     AdminVariantImagesController,
     AdminSellerMappingsController,
+    AdminMetafieldDefinitionsController,
+    AdminProductMetafieldsController,
+    AdminStorefrontFiltersController,
+    AdminCategoriesController,
+    AdminBrandsController,
+    StorefrontFiltersController,
   ],
   providers: [
     CatalogPublicFacade,

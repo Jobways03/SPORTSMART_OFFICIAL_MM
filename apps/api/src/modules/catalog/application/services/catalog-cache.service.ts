@@ -19,19 +19,15 @@ export class CatalogCacheService {
 
   /** Get or compute cached product list result */
   async getOrSetProductList<T>(
-    params: {
-      page: number;
-      limit: number;
-      search?: string;
-      categoryId?: string;
-      brandId?: string;
-      sortBy?: string;
-      minPrice?: string;
-      maxPrice?: string;
-    },
+    params: Record<string, any>,
     factory: () => Promise<T>,
   ): Promise<T> {
-    const key = `${PREFIX}products:${params.page}:${params.limit}:${params.search || ''}:${params.categoryId || ''}:${params.brandId || ''}:${params.sortBy || ''}:${params.minPrice || ''}:${params.maxPrice || ''}`;
+    // Build cache key from all params to ensure uniqueness
+    const parts = Object.entries(params)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v ?? ''}`)
+      .join(':');
+    const key = `${PREFIX}products:${parts}`;
     return this.redis.getOrSet(key, TTL.PRODUCT_LIST, factory);
   }
 

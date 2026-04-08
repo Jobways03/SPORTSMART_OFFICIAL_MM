@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { adminProductsService, ProductDetail } from '@/services/admin-products.service';
+import { adminMetafieldsService } from '@/services/admin-metafields.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
@@ -132,6 +133,17 @@ export default function EditProductPage() {
   // Status change
   const [statusAction, setStatusAction] = useState('');
   const [statusChanging, setStatusChanging] = useState(false);
+
+  // Metafield state
+  interface MetafieldEntry {
+    definition: { id: string; namespace: string; key: string; name: string; description: string | null; type: string; choices: any[] | null; isRequired: boolean; sortOrder: number; ownerType?: string };
+    metafieldId: string | null;
+    value: any;
+    hasValue: boolean;
+  }
+  const [metafields, setMetafields] = useState<MetafieldEntry[]>([]);
+  const [metafieldsLoading, setMetafieldsLoading] = useState(false);
+  const [metafieldsSaving, setMetafieldsSaving] = useState(false);
 
   // Variant options state
   const [productOptions, setProductOptions] = useState<OptionEntry[]>([]);
@@ -397,6 +409,151 @@ export default function EditProductPage() {
     loadData();
     loadProduct();
   }, [loadProduct]);
+
+  // Load metafields when product is loaded OR when category changes in form
+  useEffect(() => {
+    if (!productId) return;
+
+    const currentCategoryId = form.categoryId;
+    const savedCategoryId = product?.categoryId;
+
+    // If category changed from what's saved, fetch definitions for the NEW category
+    // and merge with any existing saved values
+    if (currentCategoryId && currentCategoryId !== savedCategoryId) {
+      setMetafieldsLoading(true);
+      Promise.all([
+        adminMetafieldsService.getDefinitionsForCategory(currentCategoryId),
+        adminMetafieldsService.getProductMetafields(productId),
+      ])
+        .then(([defRes, valRes]) => {
+          const definitions = defRes.data?.definitions || [];
+          const existingValues = valRes.data?.metafields || [];
+          // Build a map of existing values by definition key
+          const valueMap = new Map<string, any>();
+          for (const mv of existingValues) {
+            valueMap.set(mv.definition.key, mv);
+          }
+          // Merge: show all definitions for new category, carry over matching values
+          const merged: MetafieldEntry[] = definitions.map((def: any) => {
+            const existing = valueMap.get(def.key);
+            return {
+              definition: {
+                id: def.id,
+                namespace: def.namespace,
+                key: def.key,
+                name: def.name,
+                description: def.description,
+                type: def.type,
+                choices: def.choices,
+                isRequired: def.isRequired,
+                sortOrder: def.sortOrder,
+                ownerType: def.ownerType,
+              },
+              metafieldId: existing?.metafieldId || null,
+              value: existing?.value ?? null,
+              hasValue: !!existing?.hasValue,
+            };
+          });
+          setMetafields(merged);
+        })
+        .catch(() => {})
+        .finally(() => setMetafieldsLoading(false));
+    } else {
+      // Normal load: use the product's saved category
+      setMetafieldsLoading(true);
+      adminMetafieldsService.getProductMetafields(productId)
+        .then((res) => {
+          if (res.data?.metafields) {
+            setMetafields(res.data.metafields);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setMetafieldsLoading(false));
+    }
+  }, [productId, product?.categoryId, form.categoryId]);
+
+  const handleSaveMetafields = async () => {
+    const entries = metafields.filter((m) => m.value !== null && m.value !== undefined && m.value !== '');
+    if (entries.length === 0) return;
+    setMetafieldsSaving(true);
+    try {
+      await adminMetafieldsService.upsertProductMetafields(productId, entries.map((m) => ({
+        definitionId: m.definition.id,
+        value: m.value,
+      })));
+      showToast('success', 'Category attributes saved');
+      // Reload metafields
+      const res = await adminMetafieldsService.getProductMetafields(productId);
+      if (res.data?.metafields) setMetafields(res.data.metafields);
+    } catch {
+      showToast('error', 'Failed to save attributes');
+    }
+    setMetafieldsSaving(false);
+  };
+
+  const updateMetafieldValue = (defId: string, value: any) => {
+    setMetafields((prev) => prev.map((m) =>
+      m.definition.id === defId ? { ...m, value, hasValue: value !== null && value !== '' } : m
+    ));
+  };
+
+  // Add new choice to a metafield definition and select it
+  const [addingChoiceFor, setAddingChoiceFor] = useState<string | null>(null);
+  const [newChoiceLabel, setNewChoiceLabel] = useState('');
+
+  const handleAddNewChoice = async (defId: string, isMulti: boolean) => {
+    if (!newChoiceLabel.trim()) return;
+    const label = newChoiceLabel.trim();
+    const value = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+    // Update definition choices via API
+    const def = metafields.find(m => m.definition.id === defId)?.definition;
+    if (!def) return;
+    const existingChoices = Array.isArray(def.choices) ? def.choices : [];
+
+    // Check for duplicate value or label (case-insensitive)
+    const isDuplicate = existingChoices.some((c: any) =>
+      c.value === value || c.label?.toLowerCase() === label.toLowerCase()
+    );
+    if (isDuplicate) {
+      setAddingChoiceFor(null);
+      setNewChoiceLabel('');
+      // Just select the existing value instead
+      const existing = existingChoices.find((c: any) => c.value === value || c.label?.toLowerCase() === label.toLowerCase());
+      if (existing) {
+        if (isMulti) {
+          const current = Array.isArray(metafields.find(m => m.definition.id === defId)?.value) ? metafields.find(m => m.definition.id === defId)!.value as string[] : [];
+          if (!current.includes(existing.value)) updateMetafieldValue(defId, [...current, existing.value]);
+        } else {
+          updateMetafieldValue(defId, existing.value);
+        }
+      }
+      return;
+    }
+
+    const newChoices = [...existingChoices, { value, label }];
+
+    try {
+      await adminMetafieldsService.updateDefinition(defId, { choices: newChoices });
+      // Update local definition choices
+      setMetafields(prev => prev.map(m => {
+        if (m.definition.id !== defId) return m;
+        const updatedDef = { ...m.definition, choices: newChoices };
+        // Also select the new value
+        let newValue;
+        if (isMulti) {
+          const current = Array.isArray(m.value) ? m.value : [];
+          newValue = [...current, value];
+        } else {
+          newValue = value;
+        }
+        return { ...m, definition: updatedDef, value: newValue, hasValue: true };
+      }));
+    } catch {}
+
+    setAddingChoiceFor(null);
+    setNewChoiceLabel('');
+  };
 
   // ----- Computed -----
 
@@ -1139,6 +1296,238 @@ export default function EditProductPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Category metafields (Shopify-style) ── */}
+      {metafields.filter(m => m.definition.ownerType === 'CATEGORY' || !m.definition.ownerType).length > 0 && (
+        <div style={{ background: '#f6f6f7', border: '1px solid #e1e3e5', borderRadius: 10, padding: '20px 24px', marginBottom: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#1a1a1a' }}>Category metafields</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {form.categoryName && (
+                <span style={{ fontSize: 12, color: '#616161', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 6, padding: '3px 10px' }}>
+                  <strong>{product?.title || form.title}</strong> in {form.categoryName}
+                </span>
+              )}
+              <button type="button" onClick={handleSaveMetafields} disabled={metafieldsSaving} style={{
+                padding: '5px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: 'none',
+                background: '#1a1a1a', color: '#fff', cursor: metafieldsSaving ? 'not-allowed' : 'pointer',
+                opacity: metafieldsSaving ? 0.6 : 1,
+              }}>
+                {metafieldsSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+
+          {metafieldsLoading ? (
+            <p style={{ fontSize: 13, color: '#8c8c8c' }}>Loading...</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+              {metafields.filter(m => m.definition.ownerType === 'CATEGORY' || !m.definition.ownerType).map((mf) => {
+                const def = mf.definition;
+                return (
+                  <div key={def.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '12px 0', borderBottom: '1px solid #ebebeb', gap: 12 }}>
+                    {/* Label */}
+                    <div style={{ width: 180, flexShrink: 0, paddingTop: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{def.name}</span>
+                    </div>
+                    {/* Input */}
+                    <div style={{ flex: 1 }}>
+                      {/* ── Text / URL ── */}
+                      {['SINGLE_LINE_TEXT', 'URL', 'FILE_REFERENCE', 'MULTI_LINE_TEXT'].includes(def.type) && (
+                        <input
+                          type={def.type === 'URL' ? 'url' : 'text'}
+                          value={mf.value || ''}
+                          onChange={(e) => updateMetafieldValue(def.id, e.target.value)}
+                          placeholder=""
+                          style={mfInputStyle}
+                        />
+                      )}
+
+                      {/* ── Number ── */}
+                      {['NUMBER_INTEGER', 'NUMBER_DECIMAL', 'RATING'].includes(def.type) && (
+                        <input
+                          type="number"
+                          step={def.type === 'NUMBER_INTEGER' ? '1' : '0.01'}
+                          value={mf.value ?? ''}
+                          onChange={(e) => updateMetafieldValue(def.id, e.target.value ? Number(e.target.value) : null)}
+                          style={mfInputStyle}
+                        />
+                      )}
+
+                      {/* ── Boolean ── */}
+                      {def.type === 'BOOLEAN' && (
+                        <select
+                          value={mf.value === true || mf.value === 'true' ? 'true' : mf.value === false || mf.value === 'false' ? 'false' : ''}
+                          onChange={(e) => updateMetafieldValue(def.id, e.target.value === '' ? null : e.target.value === 'true')}
+                          style={mfInputStyle}
+                        >
+                          <option value=""></option>
+                          <option value="true">Yes</option>
+                          <option value="false">No</option>
+                        </select>
+                      )}
+
+                      {/* ── Date ── */}
+                      {def.type === 'DATE' && (
+                        <input
+                          type="date"
+                          value={mf.value ? String(mf.value).substring(0, 10) : ''}
+                          onChange={(e) => updateMetafieldValue(def.id, e.target.value || null)}
+                          style={mfInputStyle}
+                        />
+                      )}
+
+                      {/* ── Color (swatch chips inside input) ── */}
+                      {def.type === 'COLOR' && (
+                        <div style={{ ...mfInputStyle, display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', cursor: 'text' }}>
+                          {mf.value && (
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 4, background: '#f0f0f0', borderRadius: 4, padding: '2px 8px 2px 3px', fontSize: 12,
+                            }}>
+                              <span style={{ width: 14, height: 14, borderRadius: 3, background: mf.value, border: '1px solid #ccc', display: 'inline-block' }} />
+                              {mf.value}
+                              <button type="button" onClick={() => updateMetafieldValue(def.id, null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, color: '#888', padding: 0, marginLeft: 2 }}>x</button>
+                            </span>
+                          )}
+                          <input
+                            type="text"
+                            value={!mf.value ? '' : ''}
+                            onChange={(e) => updateMetafieldValue(def.id, e.target.value)}
+                            placeholder=""
+                            style={{ border: 'none', outline: 'none', flex: 1, fontSize: 13, background: 'transparent', minWidth: 40 }}
+                          />
+                        </div>
+                      )}
+
+                      {/* ── Single select (chip inside input) ── */}
+                      {def.type === 'SINGLE_SELECT' && (
+                        <div style={{ position: 'relative' }}>
+                          <div style={{ ...mfInputStyle, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', flexWrap: 'wrap', minHeight: 36, cursor: 'text' }}>
+                            {mf.value && (
+                              <span style={mfChipStyle}>
+                                {(def.choices || []).find((c: any) => c.value === mf.value)?.label || mf.value}
+                                <button type="button" onClick={() => updateMetafieldValue(def.id, null)} style={mfChipRemoveStyle}>x</button>
+                              </span>
+                            )}
+                            {!mf.value && addingChoiceFor !== def.id && (
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value === '__add_new__') { setAddingChoiceFor(def.id); setNewChoiceLabel(''); e.target.value = ''; return; }
+                                  updateMetafieldValue(def.id, e.target.value || null);
+                                }}
+                                style={{ border: 'none', outline: 'none', flex: 1, fontSize: 13, background: 'transparent', cursor: 'pointer', color: '#888' }}
+                              >
+                                <option value=""></option>
+                                {(def.choices || []).map((c: any) => (
+                                  <option key={c.value} value={c.value}>{c.label || c.value}</option>
+                                ))}
+                                <option value="__add_new__">+ Add new value...</option>
+                              </select>
+                            )}
+                            {addingChoiceFor === def.id && (
+                              <div style={{ display: 'flex', gap: 4, flex: 1, alignItems: 'center' }}>
+                                <input
+                                  type="text"
+                                  value={newChoiceLabel}
+                                  onChange={(e) => setNewChoiceLabel(e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddNewChoice(def.id, false); } if (e.key === 'Escape') setAddingChoiceFor(null); }}
+                                  placeholder="Type new value..."
+                                  autoFocus
+                                  style={{ border: 'none', outline: 'none', flex: 1, fontSize: 13, background: 'transparent' }}
+                                />
+                                <button type="button" onClick={() => handleAddNewChoice(def.id, false)} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Add</button>
+                                <button type="button" onClick={() => setAddingChoiceFor(null)} style={{ border: 'none', background: 'none', color: '#9ca3af', fontSize: 14, cursor: 'pointer' }}>x</button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Multi select (chips inside input) ── */}
+                      {def.type === 'MULTI_SELECT' && (
+                        <div style={{ ...mfInputStyle, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', flexWrap: 'wrap', minHeight: 36, cursor: 'text' }}>
+                          {Array.isArray(mf.value) && mf.value.map((v: string) => (
+                            <span key={v} style={mfChipStyle}>
+                              {(def.choices || []).find((c: any) => c.value === v)?.label || v}
+                              <button type="button" onClick={() => {
+                                const next = (mf.value as string[]).filter((x: string) => x !== v);
+                                updateMetafieldValue(def.id, next.length > 0 ? next : null);
+                              }} style={mfChipRemoveStyle}>x</button>
+                            </span>
+                          ))}
+                          {addingChoiceFor === def.id ? (
+                            <div style={{ display: 'flex', gap: 4, flex: 1, alignItems: 'center', minWidth: 140 }}>
+                              <input
+                                type="text"
+                                value={newChoiceLabel}
+                                onChange={(e) => setNewChoiceLabel(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddNewChoice(def.id, true); } if (e.key === 'Escape') setAddingChoiceFor(null); }}
+                                placeholder="Type new value..."
+                                autoFocus
+                                style={{ border: 'none', outline: 'none', flex: 1, fontSize: 13, background: 'transparent' }}
+                              />
+                              <button type="button" onClick={() => handleAddNewChoice(def.id, true)} style={{ border: 'none', background: '#2563eb', color: '#fff', borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Add</button>
+                              <button type="button" onClick={() => setAddingChoiceFor(null)} style={{ border: 'none', background: 'none', color: '#9ca3af', fontSize: 14, cursor: 'pointer' }}>x</button>
+                            </div>
+                          ) : (
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value === '__add_new__') { setAddingChoiceFor(def.id); setNewChoiceLabel(''); e.target.value = ''; return; }
+                                if (!e.target.value) return;
+                                const current = Array.isArray(mf.value) ? mf.value : [];
+                                if (!current.includes(e.target.value)) {
+                                  updateMetafieldValue(def.id, [...current, e.target.value]);
+                                }
+                                e.target.value = '';
+                              }}
+                              style={{ border: 'none', outline: 'none', flex: 1, fontSize: 13, background: 'transparent', cursor: 'pointer', minWidth: 60, color: '#888' }}
+                            >
+                              <option value=""></option>
+                              {(def.choices || []).filter((c: any) => !Array.isArray(mf.value) || !mf.value.includes(c.value)).map((c: any) => (
+                                <option key={c.value} value={c.value}>{c.label || c.value}</option>
+                              ))}
+                              <option value="__add_new__">+ Add new value...</option>
+                            </select>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Product metafields (custom / merchant-defined) ── */}
+      {metafields.filter(m => m.definition.ownerType === 'CUSTOM').length > 0 && (
+        <div style={{ background: '#f6f6f7', border: '1px solid #e1e3e5', borderRadius: 10, padding: '20px 24px' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 16px', color: '#1a1a1a' }}>Product metafields</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {metafields.filter(m => m.definition.ownerType === 'CUSTOM').map((mf) => {
+              const def = mf.definition;
+              return (
+                <div key={def.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '12px 0', borderBottom: '1px solid #ebebeb', gap: 12 }}>
+                  <div style={{ width: 180, flexShrink: 0, paddingTop: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: '#1a1a1a' }}>{def.name}</span>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <input
+                      type="text"
+                      value={mf.value || ''}
+                      onChange={(e) => updateMetafieldValue(def.id, e.target.value)}
+                      style={mfInputStyle}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Section 2: Product Type & Pricing */}
       <div className="form-card">
@@ -1898,3 +2287,41 @@ export default function EditProductPage() {
     </div>
   );
 }
+
+// ── Metafield Shopify-style constants ─────────────────────────────────
+
+const mfInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '7px 10px',
+  fontSize: 13,
+  border: '1px solid #c9cccf',
+  borderRadius: 6,
+  background: '#fff',
+  color: '#1a1a1a',
+  outline: 'none',
+  boxSizing: 'border-box',
+};
+
+const mfChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  background: '#e4e5e7',
+  borderRadius: 4,
+  padding: '2px 8px',
+  fontSize: 12,
+  fontWeight: 500,
+  color: '#1a1a1a',
+  whiteSpace: 'nowrap',
+};
+
+const mfChipRemoveStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  fontSize: 11,
+  color: '#6d7175',
+  padding: 0,
+  marginLeft: 2,
+  lineHeight: 1,
+};

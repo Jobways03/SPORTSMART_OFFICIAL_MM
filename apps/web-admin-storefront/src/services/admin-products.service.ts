@@ -241,4 +241,63 @@ export const adminProductsService = {
       body: JSON.stringify({ imageIds }),
     });
   },
+
+  // ─── Admin Categories CRUD ──────────────────────────────────────
+
+  listAdminCategories(params?: { page?: number; limit?: number; search?: string; parentId?: string }): Promise<ApiResponse<any>> {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set('page', String(params.page));
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.search) qs.set('search', params.search);
+    if (params?.parentId) qs.set('parentId', params.parentId);
+    const q = qs.toString();
+    return apiClient(`/admin/categories${q ? '?' + q : ''}`);
+  },
+
+  createCategory(payload: { name: string; parentId?: string; description?: string; sortOrder?: number }): Promise<ApiResponse<any>> {
+    return apiClient('/admin/categories', { method: 'POST', body: JSON.stringify(payload) });
+  },
+
+  updateCategory(id: string, payload: any): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/categories/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  },
+
+  deleteCategory(id: string): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/categories/${id}`, { method: 'DELETE' });
+  },
+
+  // ─── Admin Brands CRUD ──────────────────────────────────────────
+
+  listAdminBrands(params?: { page?: number; limit?: number; search?: string }): Promise<ApiResponse<any>> {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set('page', String(params.page));
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return apiClient(`/admin/brands${q ? '?' + q : ''}`);
+  },
+
+  createBrand(payload: { name: string }): Promise<ApiResponse<any>> {
+    return apiClient('/admin/brands', { method: 'POST', body: JSON.stringify(payload) });
+  },
+
+  updateBrand(id: string, payload: any): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/brands/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  },
+
+  deleteBrand(id: string): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/brands/${id}`, { method: 'DELETE' });
+  },
+
+  getAdminBrand(id: string): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/brands/${id}`);
+  },
+
+  addProductsToBrand(brandId: string, productIds: string[]): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/brands/${brandId}/products`, { method: 'POST', body: JSON.stringify({ productIds }) });
+  },
+
+  removeProductFromBrand(brandId: string, productId: string): Promise<ApiResponse<any>> {
+    return apiClient(`/admin/brands/${brandId}/products/${productId}`, { method: 'DELETE' });
+  },
 };

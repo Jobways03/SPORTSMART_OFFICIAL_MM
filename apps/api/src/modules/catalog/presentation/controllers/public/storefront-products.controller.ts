@@ -5,12 +5,14 @@ import {
   HttpStatus,
   Param,
   Query,
+  Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { CatalogCacheService } from '../../../application/services/catalog-cache.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { Prisma } from '@prisma/client';
+import { Request } from 'express';
 
 @ApiTags('Storefront')
 @Controller('storefront/products')
@@ -33,7 +35,9 @@ export class StorefrontProductsController {
   @ApiQuery({ name: 'sortBy', required: false, enum: ['price_asc', 'price_desc', 'newest'] })
   @ApiQuery({ name: 'minPrice', required: false })
   @ApiQuery({ name: 'maxPrice', required: false })
+  @ApiQuery({ name: 'collectionId', required: false })
   async listProducts(
+    @Req() req: Request,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
@@ -42,10 +46,28 @@ export class StorefrontProductsController {
     @Query('sortBy') sortBy?: string,
     @Query('minPrice') minPrice?: string,
     @Query('maxPrice') maxPrice?: string,
+    @Query('collectionId') collectionId?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(60, Math.max(1, parseInt(limit || '20', 10) || 20));
     const offset = (pageNum - 1) * limitNum;
+
+    // Parse built-in filters from query params
+    // Express+qs parses filter[key]=val into { filter: { key: 'val' } }
+    // But @Query() params are already consumed, so read from req.query directly
+    const rawQuery = req.query as Record<string, any>;
+    const filterObj: Record<string, string> = {};
+    // Handle both nested { filter: { key: val } } and flat { 'filter[key]': val } formats
+    if (rawQuery.filter && typeof rawQuery.filter === 'object') {
+      Object.assign(filterObj, rawQuery.filter);
+    }
+    // Also check for flat format
+    for (const [k, v] of Object.entries(rawQuery)) {
+      const m = k.match(/^filter\[(\w+)\]$/);
+      if (m && v) filterObj[m[1]] = String(v);
+    }
+    const availabilityFilter = filterObj.availability || null;
+    const brandFilter = filterObj.brand || null;
 
     // Build WHERE conditions
     const conditions: Prisma.Sql[] = [
@@ -53,20 +75,50 @@ export class StorefrontProductsController {
       Prisma.sql`p.status = 'ACTIVE'`,
     ];
 
-    // Subquery: product must have at least one approved active seller mapping with available stock
-    conditions.push(Prisma.sql`EXISTS (
-      SELECT 1 FROM seller_product_mappings spm
-      WHERE spm.product_id = p.id
-        AND spm.is_active = true
-        AND spm.approval_status = 'APPROVED'
-        AND (spm.stock_qty - spm.reserved_qty) > 0
-    )`);
+    // Availability filter: in_stock, out_of_stock, or default (in_stock only)
+    if (availabilityFilter === 'out_of_stock') {
+      conditions.push(Prisma.sql`NOT EXISTS (
+        SELECT 1 FROM seller_product_mappings spm
+        WHERE spm.product_id = p.id
+          AND spm.is_active = true
+          AND spm.approval_status = 'APPROVED'
+          AND (spm.stock_qty - spm.reserved_qty) > 0
+      )`);
+    } else if (availabilityFilter === 'in_stock') {
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM seller_product_mappings spm
+        WHERE spm.product_id = p.id
+          AND spm.is_active = true
+          AND spm.approval_status = 'APPROVED'
+          AND (spm.stock_qty - spm.reserved_qty) > 0
+      )`);
+    } else {
+      // Default: only show in-stock products
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM seller_product_mappings spm
+        WHERE spm.product_id = p.id
+          AND spm.is_active = true
+          AND spm.approval_status = 'APPROVED'
+          AND (spm.stock_qty - spm.reserved_qty) > 0
+      )`);
+    }
+
+    // Brand filter from filter[brand] param
+    if (brandFilter) {
+      conditions.push(Prisma.sql`p.brand_id = ${brandFilter}`);
+    }
 
     if (categoryId) {
       conditions.push(Prisma.sql`p.category_id = ${categoryId}`);
     }
     if (brandId) {
       conditions.push(Prisma.sql`p.brand_id = ${brandId}`);
+    }
+    if (collectionId) {
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM product_collection_maps pcm
+        WHERE pcm.product_id = p.id AND pcm.collection_id = ${collectionId}
+      )`);
     }
 
     if (search) {
@@ -92,6 +144,29 @@ export class StorefrontProductsController {
       }
     }
 
+    // Metafield filters — iterate filter object (NestJS parses filter[key]=val as { filter: { key: 'val' } })
+    const BUILT_IN_FILTER_KEYS = new Set(['brand', 'availability', 'price_range']);
+    for (const [filterKey, rawValue] of Object.entries(filterObj)) {
+      if (BUILT_IN_FILTER_KEYS.has(filterKey)) continue; // handled above
+      if (rawValue) {
+        const values = String(rawValue).split(',').map((v) => v.trim()).filter(Boolean);
+        if (values.length > 0) {
+          // OR within a group (any of these values), AND between groups
+          conditions.push(Prisma.sql`EXISTS (
+            SELECT 1 FROM product_metafields pm
+            JOIN metafield_definitions md ON md.id = pm.metafield_definition_id
+            WHERE pm.product_id = p.id
+              AND md.key = ${filterKey}
+              AND (
+                pm.value_text IN (${Prisma.join(values)})
+                OR pm.value_boolean = ${values[0] === 'true'}
+                OR pm.value_json @> ${JSON.stringify(values)}::jsonb
+              )
+          )`);
+        }
+      }
+    }
+
     const whereClause = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`;
 
     // ORDER BY
@@ -110,7 +185,7 @@ export class StorefrontProductsController {
     }
 
     const result = await this.cache.getOrSetProductList(
-      { page: pageNum, limit: limitNum, search, categoryId, brandId, sortBy, minPrice, maxPrice },
+      { page: pageNum, limit: limitNum, search, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, availability: availabilityFilter, brandFilter, filters: JSON.stringify(filterObj) },
       async () => {
       // Execute count + data in parallel
       const countQuery = Prisma.sql`
