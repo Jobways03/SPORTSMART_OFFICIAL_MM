@@ -3,6 +3,8 @@ import { InventoryPublicFacade } from './application/facades/inventory-public.fa
 import { InventoryManagementService } from './application/services/inventory-management.service';
 import { SellerInventoryController } from './presentation/controllers/seller-inventory.controller';
 import { AdminInventoryController } from './presentation/controllers/admin-inventory.controller';
+import { PrismaInventoryManagementRepository } from './infrastructure/repositories/prisma-inventory-management.repository';
+import { INVENTORY_MANAGEMENT_REPOSITORY } from './domain/repositories/inventory-management.repository.interface';
 
 // Guards
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
@@ -17,7 +19,11 @@ import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
     InventoryManagementService,
     SellerAuthGuard,
     AdminAuthGuard,
+    {
+      provide: INVENTORY_MANAGEMENT_REPOSITORY,
+      useClass: PrismaInventoryManagementRepository,
+    },
   ],
-  exports: [InventoryPublicFacade, InventoryManagementService],
+  exports: [InventoryPublicFacade],
 })
 export class InventoryModule {}

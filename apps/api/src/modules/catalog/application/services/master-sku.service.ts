@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
+import { VARIANT_REPOSITORY, IVariantRepository } from '../../domain/repositories/variant.repository.interface';
 
 @Injectable()
 export class MasterSkuService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
+  ) {}
 
   /**
    * Generates a master SKU from product code + option value abbreviations.
@@ -20,17 +22,7 @@ export class MasterSkuService {
       return productCode;
     }
 
-    const optionValues = await this.prisma.optionValue.findMany({
-      where: { id: { in: optionValueIds } },
-      include: {
-        optionDefinition: {
-          select: { name: true, type: true },
-        },
-      },
-      orderBy: {
-        optionDefinition: { name: 'asc' },
-      },
-    });
+    const optionValues = await this.variantRepo.findOptionValuesByIds(optionValueIds);
 
     const parts = optionValues.map((ov) =>
       this.abbreviate(ov.value, ov.optionDefinition.type),

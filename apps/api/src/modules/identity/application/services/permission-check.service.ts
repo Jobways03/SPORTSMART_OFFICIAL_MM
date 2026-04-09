@@ -1,25 +1,21 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  UserRepository,
+  USER_REPOSITORY,
+} from '../../domain/repositories/user.repository';
 
 @Injectable()
 export class PermissionCheckService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
+  ) {}
 
   async getUserRoles(userId: string): Promise<string[]> {
-    const assignments = await this.prisma.roleAssignment.findMany({
-      where: { userId },
-      include: { role: true },
-    });
-    return assignments.map((a) => a.role.name);
+    return this.userRepo.getUserRoles(userId);
   }
 
   async hasPermission(userId: string, permissionCode: string): Promise<boolean> {
-    const count = await this.prisma.rolePermission.count({
-      where: {
-        role: { assignments: { some: { userId } } },
-        permission: { code: permissionCode },
-      },
-    });
-    return count > 0;
+    return this.userRepo.hasPermission(userId, permissionCode);
   }
 }

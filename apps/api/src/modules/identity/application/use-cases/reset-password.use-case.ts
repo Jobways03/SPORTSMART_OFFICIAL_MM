@@ -1,9 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
+import {
+  UserRepository,
+  USER_REPOSITORY,
+} from '../../domain/repositories/user.repository';
 
 interface ResetPasswordInput {
   resetToken: string;
@@ -15,7 +18,8 @@ export class ResetPasswordUseCase {
   private static readonly RESET_TOKEN_TTL_MINUTES = 15;
 
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -26,10 +30,7 @@ export class ResetPasswordUseCase {
     const { resetToken, newPassword } = input;
 
     // Find OTP record by reset token
-    const otpRecord = await this.prisma.passwordResetOtp.findUnique({
-      where: { resetToken },
-      include: { user: true },
-    });
+    const otpRecord = await this.userRepo.findOtpByResetToken(resetToken);
 
     if (!otpRecord) {
       throw new UnauthorizedAppException('Invalid or expired reset token');
@@ -54,25 +55,10 @@ export class ResetPasswordUseCase {
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
     // Update password and mark OTP as used in transaction
-    await this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
-        where: { id: otpRecord.userId },
-        data: { passwordHash },
-      });
-
-      await tx.passwordResetOtp.update({
-        where: { id: otpRecord.id },
-        data: { usedAt: new Date() },
-      });
-
-      // Revoke all active sessions for this user
-      await tx.session.updateMany({
-        where: {
-          userId: otpRecord.userId,
-          revokedAt: null,
-        },
-        data: { revokedAt: new Date() },
-      });
+    await this.userRepo.resetPasswordTransaction({
+      userId: otpRecord.userId,
+      passwordHash,
+      otpId: otpRecord.id,
     });
 
     // Emit event (fire and forget)

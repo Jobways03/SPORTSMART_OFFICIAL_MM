@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Post,
   Query,
@@ -13,10 +14,10 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { BadRequestAppException } from '../../../../../core/exceptions';
 import { SellerAuthGuard } from '../../../../../core/guards';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 
 // ─── DTOs (inline) ──────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ interface RemovePincodesDto {
 @UseGuards(SellerAuthGuard)
 export class SellerServiceAreaController {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('SellerServiceAreaController');
@@ -53,30 +54,15 @@ export class SellerServiceAreaController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    const where: any = {
-      sellerId,
-      isActive: true,
-    };
-
-    if (search) {
-      where.pincode = { contains: search };
-    }
-
-    const [serviceAreas, total] = await Promise.all([
-      this.prisma.sellerServiceArea.findMany({
-        where,
-        orderBy: { pincode: 'asc' },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      }),
-      this.prisma.sellerServiceArea.count({ where }),
-    ]);
+    const { serviceAreas, total } = await this.sellerMappingRepo.findServiceAreasPaginated(
+      sellerId, pageNum, limitNum, search,
+    );
 
     return {
       success: true,
       message: 'Service areas retrieved successfully',
       data: {
-        serviceAreas: serviceAreas.map((sa) => ({
+        serviceAreas: serviceAreas.map((sa: any) => ({
           id: sa.id,
           pincode: sa.pincode,
           isActive: sa.isActive,
@@ -125,26 +111,19 @@ export class SellerServiceAreaController {
     const uniquePincodes = [...new Set(dto.pincodes)];
 
     // Bulk upsert — skipDuplicates ensures idempotency
-    const result = await this.prisma.sellerServiceArea.createMany({
-      data: uniquePincodes.map((pincode) => ({
-        sellerId,
-        pincode,
-        isActive: true,
-      })),
-      skipDuplicates: true,
-    });
+    const addedCount = await this.sellerMappingRepo.addServiceAreas(sellerId, uniquePincodes);
 
     this.logger.log(
-      `Seller ${sellerId} added ${result.count} service area(s) (${uniquePincodes.length} requested, duplicates skipped)`,
+      `Seller ${sellerId} added ${addedCount} service area(s) (${uniquePincodes.length} requested, duplicates skipped)`,
     );
 
     return {
       success: true,
-      message: `${result.count} pincode(s) added successfully${uniquePincodes.length - result.count > 0 ? `, ${uniquePincodes.length - result.count} already existed` : ''}`,
+      message: `${addedCount} pincode(s) added successfully${uniquePincodes.length - addedCount > 0 ? `, ${uniquePincodes.length - addedCount} already existed` : ''}`,
       data: {
-        added: result.count,
+        added: addedCount,
         requested: uniquePincodes.length,
-        duplicatesSkipped: uniquePincodes.length - result.count,
+        duplicatesSkipped: uniquePincodes.length - addedCount,
       },
     };
   }
@@ -159,11 +138,7 @@ export class SellerServiceAreaController {
   ) {
     const sellerId = (req as any).sellerId;
 
-    const existing = await this.prisma.sellerServiceArea.findUnique({
-      where: {
-        sellerId_pincode: { sellerId, pincode },
-      },
-    });
+    const existing = await this.sellerMappingRepo.findServiceArea(sellerId, pincode);
 
     if (!existing) {
       throw new BadRequestAppException(
@@ -171,11 +146,7 @@ export class SellerServiceAreaController {
       );
     }
 
-    await this.prisma.sellerServiceArea.delete({
-      where: {
-        sellerId_pincode: { sellerId, pincode },
-      },
-    });
+    await this.sellerMappingRepo.removeServiceArea(sellerId, pincode);
 
     this.logger.log(
       `Seller ${sellerId} removed service area pincode ${pincode}`,
@@ -203,22 +174,17 @@ export class SellerServiceAreaController {
 
     const uniquePincodes = [...new Set(dto.pincodes)];
 
-    const result = await this.prisma.sellerServiceArea.deleteMany({
-      where: {
-        sellerId,
-        pincode: { in: uniquePincodes },
-      },
-    });
+    const removedCount = await this.sellerMappingRepo.removeServiceAreas(sellerId, uniquePincodes);
 
     this.logger.log(
-      `Seller ${sellerId} removed ${result.count} service area(s)`,
+      `Seller ${sellerId} removed ${removedCount} service area(s)`,
     );
 
     return {
       success: true,
-      message: `${result.count} pincode(s) removed from service areas`,
+      message: `${removedCount} pincode(s) removed from service areas`,
       data: {
-        removed: result.count,
+        removed: removedCount,
         requested: uniquePincodes.length,
       },
     };

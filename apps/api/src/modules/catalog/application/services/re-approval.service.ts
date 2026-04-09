@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../domain/repositories/product.repository.interface';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 
 /**
@@ -10,7 +10,7 @@ import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.servi
 @Injectable()
 export class ReApprovalService {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('ReApprovalService');
@@ -21,10 +21,7 @@ export class ReApprovalService {
    * Returns true if re-approval was triggered, false otherwise.
    */
   async triggerIfNeeded(productId: string, changedBy: string): Promise<boolean> {
-    const product = await this.prisma.product.findUnique({
-      where: { id: productId },
-      select: { status: true, moderationStatus: true },
-    });
+    const product = await this.productRepo.findByIdBasic(productId);
 
     if (!product) return false;
 
@@ -34,25 +31,16 @@ export class ReApprovalService {
 
     if (!needsReApproval) return false;
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.product.update({
-        where: { id: productId },
-        data: {
-          status: 'SUBMITTED',
-          moderationStatus: 'PENDING',
-        },
-      });
-
-      await tx.productStatusHistory.create({
-        data: {
-          productId,
-          fromStatus: product.status,
-          toStatus: 'SUBMITTED',
-          changedBy,
-          reason: 'Product modified by seller — re-approval required',
-        },
-      });
-    });
+    await this.productRepo.updateStatusInTransaction(
+      productId,
+      { status: 'SUBMITTED', moderationStatus: 'PENDING' },
+      {
+        fromStatus: product.status,
+        toStatus: 'SUBMITTED',
+        changedBy,
+        reason: 'Product modified by seller — re-approval required',
+      },
+    );
 
     this.logger.log(
       `Re-approval triggered for product ${productId} (was ${product.status})`,

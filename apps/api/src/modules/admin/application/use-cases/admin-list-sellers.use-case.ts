@@ -1,6 +1,9 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 interface ListSellersInput {
   page: number;
@@ -26,7 +29,10 @@ const ALLOWED_SORT_FIELDS: Record<string, string> = {
 
 @Injectable()
 export class AdminListSellersUseCase {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
+  ) {}
 
   async execute(input: ListSellersInput) {
     const {
@@ -81,30 +87,12 @@ export class AdminListSellersUseCase {
       [sortField]: sortOrder === 'asc' ? 'asc' : 'desc',
     };
 
-    const [sellers, total] = await Promise.all([
-      this.prisma.seller.findMany({
-        where,
-        select: {
-          id: true,
-          sellerName: true,
-          sellerShopName: true,
-          email: true,
-          phoneNumber: true,
-          status: true,
-          verificationStatus: true,
-          isEmailVerified: true,
-          profileCompletionPercentage: true,
-          isProfileCompleted: true,
-          sellerProfileImageUrl: true,
-          createdAt: true,
-          lastLoginAt: true,
-        },
-        orderBy,
-        skip,
-        take: limit,
-      }),
-      this.prisma.seller.count({ where }),
-    ]);
+    const [sellers, total] = await this.adminRepo.listSellers({
+      where,
+      orderBy,
+      skip,
+      take: limit,
+    });
 
     return {
       sellers: sellers.map((s) => ({

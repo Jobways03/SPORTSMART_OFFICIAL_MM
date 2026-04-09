@@ -1,9 +1,22 @@
 import { Module } from '@nestjs/common';
-import { AdminDiscountsController } from './controllers/admin-discounts.controller';
+import { AdminDiscountsController } from './presentation/controllers/admin-discounts.controller';
+import { DiscountsService } from './application/services/discounts.service';
+import { DiscountPublicFacade } from './application/facades/discount-public.facade';
+import { PrismaDiscountRepository } from './infrastructure/repositories/prisma-discount.repository';
+import { DISCOUNT_REPOSITORY } from './domain/repositories/discount.repository.interface';
 import { AdminAuthGuard } from '../../core/guards';
 
 @Module({
   controllers: [AdminDiscountsController],
-  providers: [AdminAuthGuard],
+  providers: [
+    AdminAuthGuard,
+    DiscountsService,
+    DiscountPublicFacade,
+    {
+      provide: DISCOUNT_REPOSITORY,
+      useClass: PrismaDiscountRepository,
+    },
+  ],
+  exports: [DiscountPublicFacade],
 })
 export class DiscountsModule {}

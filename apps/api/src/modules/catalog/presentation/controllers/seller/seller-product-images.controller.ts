@@ -4,6 +4,7 @@ import {
   Delete,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -15,7 +16,6 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
@@ -24,6 +24,7 @@ import { ProductOwnershipService } from '../../../application/services/product-o
 import { ReApprovalService } from '../../../application/services/re-approval.service';
 import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
 import { ReorderImagesDto } from '../../dtos/reorder-images.dto';
+import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -37,7 +38,7 @@ const MULTER_OPTIONS = {
 @UseGuards(SellerAuthGuard)
 export class SellerProductImagesController {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PRODUCT_IMAGE_REPOSITORY) private readonly imageRepo: IProductImageRepository,
     private readonly logger: AppLoggerService,
     private readonly ownershipService: ProductOwnershipService,
     private readonly reApprovalService: ReApprovalService,
@@ -91,21 +92,17 @@ export class SellerProductImagesController {
     }
 
     // Check if this is the first image (set as primary)
-    const existingImages = await this.prisma.productImage.count({
-      where: { productId },
-    });
+    const existingImages = await this.imageRepo.countByProduct(productId);
 
     const isPrimary = existingImages === 0;
     const sortOrder = existingImages;
 
-    const image = await this.prisma.productImage.create({
-      data: {
-        productId,
-        url: uploadResult.secureUrl,
-        publicId: uploadResult.publicId,
-        isPrimary,
-        sortOrder,
-      },
+    const image = await this.imageRepo.createProductImage({
+      productId,
+      url: uploadResult.secureUrl,
+      publicId: uploadResult.publicId,
+      isPrimary,
+      sortOrder,
     });
 
     // Trigger re-approval if product was APPROVED/ACTIVE
@@ -132,31 +129,21 @@ export class SellerProductImagesController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    const image = await this.prisma.productImage.findFirst({
-      where: { id: imageId, productId },
-    });
+    const image = await this.imageRepo.findProductImage(imageId, productId);
 
     if (!image) {
       throw new NotFoundAppException('Image not found');
     }
 
     // Delete from DB
-    await this.prisma.productImage.delete({
-      where: { id: imageId },
-    });
+    await this.imageRepo.deleteProductImage(imageId);
 
     // If was primary, set next image as primary
     if (image.isPrimary) {
-      const nextImage = await this.prisma.productImage.findFirst({
-        where: { productId },
-        orderBy: { sortOrder: 'asc' },
-      });
+      const nextImage = await this.imageRepo.findFirstByProduct(productId);
 
       if (nextImage) {
-        await this.prisma.productImage.update({
-          where: { id: nextImage.id },
-          data: { isPrimary: true },
-        });
+        await this.imageRepo.setImagePrimary(nextImage.id);
       }
     }
 
@@ -193,22 +180,10 @@ export class SellerProductImagesController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    await this.prisma.$transaction(async (tx) => {
-      for (let i = 0; i < dto.imageIds.length; i++) {
-        await tx.productImage.update({
-          where: { id: dto.imageIds[i] },
-          data: { sortOrder: i },
-        });
-      }
-    });
-
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
-    const images = await this.prisma.productImage.findMany({
-      where: { productId },
-      orderBy: { sortOrder: 'asc' },
-    });
+    const images = await this.imageRepo.reorderProductImages(productId, dto.imageIds);
 
     return {
       success: true,

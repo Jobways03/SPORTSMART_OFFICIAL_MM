@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../infrastructure/guards/admin-auth.guard';
+import { AdminAuthGuard } from '../../../../core/guards';
 import { AdminListSellersUseCase } from '../../application/use-cases/admin-list-sellers.use-case';
 import { AdminGetSellerUseCase } from '../../application/use-cases/admin-get-seller.use-case';
 import { AdminEditSellerUseCase } from '../../application/use-cases/admin-edit-seller.use-case';
@@ -28,7 +28,7 @@ import { AdminUpdateSellerStatusDto } from '../dtos/admin-update-seller-status.d
 import { AdminUpdateSellerVerificationDto } from '../dtos/admin-update-seller-verification.dto';
 import { AdminSendMessageDto } from '../dtos/admin-send-message.dto';
 import { AdminChangePasswordDto } from '../dtos/admin-change-password.dto';
-import { UpdateSellerProfileDto } from '../../../seller/presentation/dtos/update-seller-profile.dto';
+import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile.dto';
 
 @Controller('admin/sellers')
 @UseGuards(AdminAuthGuard)
@@ -81,7 +81,7 @@ export class AdminSellersController {
   @HttpCode(HttpStatus.OK)
   async editSeller(
     @Param('sellerId') sellerId: string,
-    @Body() dto: UpdateSellerProfileDto,
+    @Body() dto: AdminUpdateSellerProfileDto,
     @Req() req: Request,
   ) {
     const adminId = (req as any).adminId;

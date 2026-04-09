@@ -1,4 +1,13 @@
-import { Controller, Get, Patch, Param, Query, Body, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Patch,
+  Param,
+  Query,
+  Body,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SellerAuthGuard } from '../../../../core/guards';
 import { OrdersService } from '../../application/services/orders.service';
@@ -36,14 +45,31 @@ export class SellerOrdersController {
   }
 
   @Patch(':id/accept')
-  async acceptOrder(@Req() req: any, @Param('id') id: string) {
-    const data = await this.ordersService.sellerAcceptOrder(id, req.sellerId);
+  async acceptOrder(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { expectedDispatchDate?: string },
+  ) {
+    const data = await this.ordersService.sellerAcceptOrder(id, req.sellerId, {
+      expectedDispatchDate: body?.expectedDispatchDate,
+    });
     return { success: true, message: 'Order accepted', data };
   }
 
   @Patch(':id/reject')
-  async rejectOrder(@Req() req: any, @Param('id') id: string) {
-    const data = await this.ordersService.sellerRejectOrder(id, req.sellerId);
+  async rejectOrder(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      reason?: 'OUT_OF_STOCK' | 'CANNOT_SHIP' | 'LOCATION_ISSUE' | 'OTHER';
+      note?: string;
+    },
+  ) {
+    const data = await this.ordersService.sellerRejectOrder(id, req.sellerId, {
+      reason: body?.reason,
+      note: body?.note,
+    });
     return { success: true, message: data.message, data };
   }
 
@@ -54,13 +80,17 @@ export class SellerOrdersController {
     @Body() body: { status: string },
   ) {
     if (!body.status) {
-      throw new BadRequestAppException('status is required (PACKED, SHIPPED, FULFILLED, DELIVERED)');
+      throw new BadRequestAppException('status is required (PACKED, SHIPPED)');
     }
     const data = await this.ordersService.sellerUpdateFulfillmentStatus(
       id,
       req.sellerId,
       body.status.toUpperCase(),
     );
-    return { success: true, message: `Order status updated to ${body.status.toUpperCase()}`, data };
+    return {
+      success: true,
+      message: `Order status updated to ${body.status.toUpperCase()}`,
+      data,
+    };
   }
 }

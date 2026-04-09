@@ -3,8 +3,7 @@ import { SettlementsPublicFacade } from './application/facades/settlements-publi
 import { SettlementService } from './settlement.service';
 import { AdminSettlementController } from './admin-settlement.controller';
 import { SellerEarningsController } from './seller-earnings.controller';
-import { AdminAuthGuard } from '../admin/infrastructure/guards/admin-auth.guard';
-import { SellerAuthGuard } from '../seller/infrastructure/guards/seller-auth.guard';
+import { AdminAuthGuard, SellerAuthGuard } from '../../core/guards';
 
 @Module({
   controllers: [AdminSettlementController, SellerEarningsController],
@@ -14,6 +13,6 @@ import { SellerAuthGuard } from '../seller/infrastructure/guards/seller-auth.gua
     AdminAuthGuard,
     SellerAuthGuard,
   ],
-  exports: [SettlementsPublicFacade, SettlementService],
+  exports: [SettlementsPublicFacade],
 })
 export class SettlementsModule {}

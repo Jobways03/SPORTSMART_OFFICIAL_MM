@@ -1,9 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 interface ResetPasswordSellerInput {
   resetToken: string;
@@ -15,7 +18,8 @@ export class ResetPasswordSellerUseCase {
   private static readonly RESET_TOKEN_TTL_MINUTES = 15;
 
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -25,10 +29,7 @@ export class ResetPasswordSellerUseCase {
   async execute(input: ResetPasswordSellerInput): Promise<void> {
     const { resetToken, newPassword } = input;
 
-    const otpRecord = await this.prisma.sellerPasswordResetOtp.findUnique({
-      where: { resetToken },
-      include: { seller: true },
-    });
+    const otpRecord = await this.sellerRepo.findOtpByResetToken(resetToken);
 
     if (!otpRecord) {
       throw new UnauthorizedAppException('Invalid or expired reset token');
@@ -52,36 +53,10 @@ export class ResetPasswordSellerUseCase {
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
     // Atomic update: password + OTP used + invalidate other OTPs + revoke sessions
-    await this.prisma.$transaction(async (tx) => {
-      await tx.seller.update({
-        where: { id: otpRecord.sellerId },
-        data: { passwordHash },
-      });
-
-      await tx.sellerPasswordResetOtp.update({
-        where: { id: otpRecord.id },
-        data: { usedAt: new Date() },
-      });
-
-      // Invalidate all other unexpired OTPs for this seller
-      await tx.sellerPasswordResetOtp.updateMany({
-        where: {
-          sellerId: otpRecord.sellerId,
-          id: { not: otpRecord.id },
-          usedAt: null,
-          expiresAt: { gte: new Date() },
-        },
-        data: { expiresAt: new Date() },
-      });
-
-      // Revoke all active sessions
-      await tx.sellerSession.updateMany({
-        where: {
-          sellerId: otpRecord.sellerId,
-          revokedAt: null,
-        },
-        data: { revokedAt: new Date() },
-      });
+    await this.sellerRepo.resetPasswordTransaction({
+      sellerId: otpRecord.sellerId,
+      otpId: otpRecord.id,
+      passwordHash,
     });
 
     this.eventBus.publish({

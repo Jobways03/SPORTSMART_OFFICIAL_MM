@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -12,12 +13,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard } from '../../../../../core/guards';
+import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/repositories/category.repository.interface';
 
 function toSlug(name: string): string {
   return name
@@ -31,9 +32,9 @@ function toSlug(name: string): string {
 @Controller({ path: 'admin/categories', version: '1' })
 @UseGuards(AdminAuthGuard)
 export class AdminCategoriesController {
-  constructor(private readonly prisma: PrismaService) {}
-
-  // ─── List all categories (flat, paginated, searchable) ────────────
+  constructor(
+    @Inject(CATEGORY_REPOSITORY) private readonly categoryRepo: ICategoryRepository,
+  ) {}
 
   @Get()
   @HttpCode(HttpStatus.OK)
@@ -52,158 +53,70 @@ export class AdminCategoriesController {
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '50', 10) || 50));
-    const skip = (pageNum - 1) * limitNum;
 
-    const where: any = {};
-
-    if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { slug: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    if (parentId) {
-      where.parentId = parentId;
-    }
-
-    if (level !== undefined && level !== '') {
-      where.level = parseInt(level, 10);
-    }
-
-    const [categories, total] = await Promise.all([
-      this.prisma.category.findMany({
-        where,
-        include: {
-          parent: { select: { id: true, name: true, slug: true } },
-          _count: {
-            select: {
-              children: true,
-              products: true,
-              metafieldDefinitions: true,
-            },
-          },
-        },
-        orderBy: [{ level: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
-        skip,
-        take: limitNum,
-      }),
-      this.prisma.category.count({ where }),
-    ]);
+    const { categories, total } = await this.categoryRepo.findAllPaginated({
+      page: pageNum, limit: limitNum, search, parentId,
+      level: level !== undefined && level !== '' ? parseInt(level, 10) : undefined,
+    });
 
     return {
       success: true,
       message: 'Categories retrieved',
       data: {
         categories,
-        pagination: {
-          page: pageNum,
-          limit: limitNum,
-          total,
-          totalPages: Math.ceil(total / limitNum),
-        },
+        pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
       },
     };
   }
-
-  // ─── Get single category ──────────────────────────────────────────
 
   @Get(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get a single category' })
   async getOne(@Param('id') id: string) {
-    const category = await this.prisma.category.findUnique({
-      where: { id },
-      include: {
-        parent: { select: { id: true, name: true, slug: true } },
-        children: {
-          select: { id: true, name: true, slug: true, level: true, sortOrder: true, isActive: true },
-          orderBy: { sortOrder: 'asc' },
-        },
-        _count: {
-          select: { products: true, children: true, metafieldDefinitions: true },
-        },
-      },
-    });
-
+    const category = await this.categoryRepo.findById(id);
     if (!category) throw new NotFoundAppException('Category not found');
-
-    return {
-      success: true,
-      message: 'Category retrieved',
-      data: { category },
-    };
+    return { success: true, message: 'Category retrieved', data: { category } };
   }
-
-  // ─── Create category ──────────────────────────────────────────────
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a category' })
   async create(@Body() body: any) {
     const { name, slug: customSlug, description, imageUrl, parentId, sortOrder, isActive } = body;
-
-    if (!name || !name.trim()) {
-      throw new BadRequestAppException('name is required');
-    }
+    if (!name || !name.trim()) throw new BadRequestAppException('name is required');
 
     const slug = customSlug || toSlug(name);
+    const existing = await this.categoryRepo.findBySlug(slug);
+    if (existing) throw new BadRequestAppException(`A category with slug "${slug}" already exists`);
 
-    // Check slug uniqueness
-    const existing = await this.prisma.category.findUnique({ where: { slug } });
-    if (existing) {
-      throw new BadRequestAppException(`A category with slug "${slug}" already exists`);
-    }
-
-    // Determine level from parent
     let level = 0;
     if (parentId) {
-      const parent = await this.prisma.category.findUnique({ where: { id: parentId } });
+      const parent = await this.categoryRepo.findById(parentId);
       if (!parent) throw new NotFoundAppException('Parent category not found');
       level = parent.level + 1;
     }
 
-    const category = await this.prisma.category.create({
-      data: {
-        name: name.trim(),
-        slug,
-        description: description || null,
-        imageUrl: imageUrl || null,
-        parentId: parentId || null,
-        level,
-        sortOrder: sortOrder ?? 0,
-        isActive: isActive !== false,
-      },
-      include: {
-        parent: { select: { id: true, name: true, slug: true } },
-        _count: { select: { products: true, children: true, metafieldDefinitions: true } },
-      },
+    const category = await this.categoryRepo.create({
+      name: name.trim(), slug, description: description || null,
+      imageUrl: imageUrl || null, parentId: parentId || null,
+      level, sortOrder: sortOrder ?? 0, isActive: isActive !== false,
     });
 
-    return {
-      success: true,
-      message: 'Category created',
-      data: { category },
-    };
+    return { success: true, message: 'Category created', data: { category } };
   }
-
-  // ─── Update category ──────────────────────────────────────────────
 
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Update a category' })
   async update(@Param('id') id: string, @Body() body: any) {
-    const existing = await this.prisma.category.findUnique({ where: { id } });
+    const existing = await this.categoryRepo.findById(id);
     if (!existing) throw new NotFoundAppException('Category not found');
 
     const data: any = {};
-
     if (body.name !== undefined) data.name = body.name.trim();
     if (body.slug !== undefined) {
       if (body.slug !== existing.slug) {
-        const slugExists = await this.prisma.category.findFirst({
-          where: { slug: body.slug, id: { not: id } },
-        });
+        const slugExists = await this.categoryRepo.findBySlugExcluding(body.slug, id);
         if (slugExists) throw new BadRequestAppException(`Slug "${body.slug}" already taken`);
       }
       data.slug = body.slug;
@@ -213,11 +126,10 @@ export class AdminCategoriesController {
     if (body.sortOrder !== undefined) data.sortOrder = body.sortOrder;
     if (body.isActive !== undefined) data.isActive = body.isActive;
 
-    // Handle parent change (recalculate level)
     if (body.parentId !== undefined && body.parentId !== existing.parentId) {
       if (body.parentId === id) throw new BadRequestAppException('Category cannot be its own parent');
       if (body.parentId) {
-        const parent = await this.prisma.category.findUnique({ where: { id: body.parentId } });
+        const parent = await this.categoryRepo.findById(body.parentId);
         if (!parent) throw new NotFoundAppException('Parent category not found');
         data.parentId = body.parentId;
         data.level = parent.level + 1;
@@ -227,45 +139,23 @@ export class AdminCategoriesController {
       }
     }
 
-    const category = await this.prisma.category.update({
-      where: { id },
-      data,
-      include: {
-        parent: { select: { id: true, name: true, slug: true } },
-        _count: { select: { products: true, children: true, metafieldDefinitions: true } },
-      },
-    });
-
-    return {
-      success: true,
-      message: 'Category updated',
-      data: { category },
-    };
+    const category = await this.categoryRepo.update(id, data);
+    return { success: true, message: 'Category updated', data: { category } };
   }
-
-  // ─── Delete / deactivate category ─────────────────────────────────
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Delete or deactivate a category' })
   async delete(@Param('id') id: string) {
-    const category = await this.prisma.category.findUnique({
-      where: { id },
-      include: { _count: { select: { products: true, children: true } } },
-    });
+    const category = await this.categoryRepo.findWithCounts(id);
     if (!category) throw new NotFoundAppException('Category not found');
 
-    // If has products or children, soft-delete
     if (category._count.products > 0 || category._count.children > 0) {
-      await this.prisma.category.update({
-        where: { id },
-        data: { isActive: false },
-      });
+      await this.categoryRepo.deactivate(id);
       return { success: true, message: 'Category deactivated (has associated products or children)' };
     }
 
-    // Otherwise hard delete
-    await this.prisma.category.delete({ where: { id } });
+    await this.categoryRepo.delete(id);
     return { success: true, message: 'Category deleted' };
   }
 }

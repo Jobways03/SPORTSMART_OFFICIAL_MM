@@ -13,9 +13,9 @@ import { UploadSellerMediaUseCase } from './application/use-cases/upload-seller-
 import { DeleteSellerMediaUseCase } from './application/use-cases/delete-seller-media.use-case';
 import { SendEmailVerificationOtpUseCase } from './application/use-cases/send-email-verification-otp.use-case';
 import { VerifySellerEmailUseCase } from './application/use-cases/verify-seller-email.use-case';
-import { EmailOtpAdapter } from '../identity/infrastructure/adapters/email-otp.adapter';
+import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
-import { SellerAuthGuard } from './infrastructure/guards/seller-auth.guard';
+import { SellerAuthGuard } from '../../core/guards';
 import { SellerRegisterController } from './presentation/controllers/seller-register.controller';
 import { SellerLoginController } from './presentation/controllers/seller-login.controller';
 import { SellerForgotPasswordController } from './presentation/controllers/seller-forgot-password.controller';
@@ -23,6 +23,8 @@ import { SellerResetPasswordController } from './presentation/controllers/seller
 import { SellerProfileController } from './presentation/controllers/seller-profile.controller';
 import { SellerProfileMediaController } from './presentation/controllers/seller-profile-media.controller';
 import { SellerEmailVerificationController } from './presentation/controllers/seller-email-verification.controller';
+import { SELLER_REPOSITORY } from './domain/repositories/seller.repository.interface';
+import { PrismaSellerRepository } from './infrastructure/repositories/prisma-seller.repository';
 
 @Module({
   controllers: [
@@ -35,6 +37,10 @@ import { SellerEmailVerificationController } from './presentation/controllers/se
     SellerEmailVerificationController,
   ],
   providers: [
+    {
+      provide: SELLER_REPOSITORY,
+      useClass: PrismaSellerRepository,
+    },
     SellerPublicFacade,
     RegisterSellerUseCase,
     LoginSellerUseCase,

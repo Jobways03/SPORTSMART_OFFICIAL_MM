@@ -7,23 +7,18 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { PrismaService } from '../../../bootstrap/database/prisma.service';
 import { UserAuthGuard } from '../../../core/guards';
-import { BadRequestAppException } from '../../../core/exceptions';
+import { CustomerAddressService } from '../application/services/customer-address.service';
 
 @ApiTags('Customer Addresses')
 @Controller('customer/addresses')
 @UseGuards(UserAuthGuard)
 export class CustomerAddressController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly addressService: CustomerAddressService) {}
 
   @Get()
   async listAddresses(@Req() req: any) {
-    const addresses = await this.prisma.customerAddress.findMany({
-      where: { customerId: req.userId },
-      orderBy: { createdAt: 'desc' },
-    });
-
+    const addresses = await this.addressService.listAddresses(req.userId);
     return {
       success: true,
       message: 'Addresses retrieved',
@@ -47,37 +42,7 @@ export class CustomerAddressController {
       isDefault?: boolean;
     },
   ) {
-    const { fullName, phone, addressLine1, city, state, postalCode } = body;
-
-    if (!fullName || !phone || !addressLine1 || !city || !state || !postalCode) {
-      throw new BadRequestAppException(
-        'fullName, phone, addressLine1, city, state, and postalCode are required',
-      );
-    }
-
-    // If setting as default, unset other defaults
-    if (body.isDefault) {
-      await this.prisma.customerAddress.updateMany({
-        where: { customerId: req.userId, isDefault: true },
-        data: { isDefault: false },
-      });
-    }
-
-    const address = await this.prisma.customerAddress.create({
-      data: {
-        customerId: req.userId,
-        fullName,
-        phone,
-        addressLine1,
-        addressLine2: body.addressLine2 || null,
-        locality: body.locality || null,
-        city,
-        state,
-        postalCode,
-        isDefault: body.isDefault || false,
-      },
-    });
-
+    const address = await this.addressService.createAddress(req.userId, body);
     return {
       success: true,
       message: 'Address created',

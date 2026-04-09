@@ -1,46 +1,49 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 @Injectable()
 export class AdminGetSellerUseCase {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
+  ) {}
 
   async execute(sellerId: string) {
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: {
-        id: true,
-        sellerName: true,
-        sellerShopName: true,
-        email: true,
-        phoneNumber: true,
-        sellerContactCountryCode: true,
-        sellerContactNumber: true,
-        storeAddress: true,
-        city: true,
-        state: true,
-        country: true,
-        sellerZipCode: true,
-        shortStoreDescription: true,
-        detailedStoreDescription: true,
-        sellerPolicy: true,
-        sellerProfileImageUrl: true,
-        sellerShopLogoUrl: true,
-        status: true,
-        verificationStatus: true,
-        isEmailVerified: true,
-        profileCompletionPercentage: true,
-        isProfileCompleted: true,
-        isDeleted: true,
-        deletedAt: true,
-        lastProfileUpdatedAt: true,
-        lastLoginAt: true,
-        failedLoginAttempts: true,
-        lockUntil: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+    const seller = await this.adminRepo.findSellerByIdWithSelect(sellerId, {
+      id: true,
+      sellerName: true,
+      sellerShopName: true,
+      email: true,
+      phoneNumber: true,
+      sellerContactCountryCode: true,
+      sellerContactNumber: true,
+      storeAddress: true,
+      city: true,
+      state: true,
+      country: true,
+      sellerZipCode: true,
+      shortStoreDescription: true,
+      detailedStoreDescription: true,
+      sellerPolicy: true,
+      sellerProfileImageUrl: true,
+      sellerShopLogoUrl: true,
+      status: true,
+      verificationStatus: true,
+      isEmailVerified: true,
+      profileCompletionPercentage: true,
+      isProfileCompleted: true,
+      isDeleted: true,
+      deletedAt: true,
+      lastProfileUpdatedAt: true,
+      lastLoginAt: true,
+      failedLoginAttempts: true,
+      lockUntil: true,
+      createdAt: true,
+      updatedAt: true,
     });
 
     if (!seller || seller.isDeleted) {

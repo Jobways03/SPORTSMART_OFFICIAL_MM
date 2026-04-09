@@ -11,7 +11,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../admin/infrastructure/guards/admin-auth.guard';
+import { AdminAuthGuard } from '../../core/guards';
 import { SettlementService } from './settlement.service';
 
 @ApiTags('Admin Settlements')

@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -14,7 +15,6 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
 import {
@@ -31,13 +31,18 @@ import { ReApprovalService } from '../../../application/services/re-approval.ser
 import { DuplicateDetectionService } from '../../../application/services/duplicate-detection.service';
 import { CreateProductDto } from '../../dtos/create-product.dto';
 import { UpdateProductDto } from '../../dtos/update-product.dto';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 
 @ApiTags('Seller Products')
 @Controller('seller/products')
 @UseGuards(SellerAuthGuard)
 export class SellerProductsController {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+    @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
     private readonly slugService: ProductSlugService,
     private readonly productCodeService: ProductCodeService,
@@ -55,10 +60,7 @@ export class SellerProductsController {
     const sellerId = (req as any).sellerId;
 
     // Block product creation for non-ACTIVE or email-unverified sellers
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { status: true, isEmailVerified: true },
-    });
+    const seller = await this.productRepo.findSellerById(sellerId);
     if (!seller || seller.status !== 'ACTIVE') {
       throw new ForbiddenAppException(
         'Your account must be approved before you can create products.',
@@ -79,163 +81,76 @@ export class SellerProductsController {
     // Handle categoryName → find or create category
     let resolvedCategoryId = dto.categoryId;
     if (!resolvedCategoryId && dto.categoryName?.trim()) {
-      const catSlug = dto.categoryName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      let category = await this.prisma.category.findFirst({
-        where: { name: { equals: dto.categoryName.trim(), mode: 'insensitive' } },
-      });
-      if (!category) {
-        category = await this.prisma.category.create({
-          data: { name: dto.categoryName.trim(), slug: catSlug },
-        });
-      }
+      const category = await this.productRepo.findOrCreateCategory(dto.categoryName.trim());
       resolvedCategoryId = category.id;
     }
 
     // Handle brandName → find or create brand
     let resolvedBrandId = dto.brandId;
     if (!resolvedBrandId && dto.brandName?.trim()) {
-      const brandSlug = dto.brandName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      let brand = await this.prisma.brand.findFirst({
-        where: { name: { equals: dto.brandName.trim(), mode: 'insensitive' } },
-      });
-      if (!brand) {
-        brand = await this.prisma.brand.create({
-          data: { name: dto.brandName.trim(), slug: brandSlug },
-        });
-      }
+      const brand = await this.productRepo.findOrCreateBrand(dto.brandName.trim());
       resolvedBrandId = brand.id;
     }
 
-    const product = await this.prisma.$transaction(async (tx) => {
-      const newProduct = await tx.product.create({
-        data: {
-          sellerId,
-          productCode,
-          title: dto.title,
-          slug,
-          shortDescription: dto.shortDescription,
-          description: dto.description,
-          categoryId: resolvedCategoryId,
-          brandId: resolvedBrandId,
-          hasVariants: dto.hasVariants,
-          basePrice: dto.basePrice,
-          compareAtPrice: dto.compareAtPrice,
-          costPrice: dto.costPrice,
-          baseSku: dto.baseSku,
-          baseStock: dto.baseStock,
-          baseBarcode: dto.baseBarcode,
-          weight: dto.weight,
-          weightUnit: dto.weightUnit,
-          length: dto.length,
-          width: dto.width,
-          height: dto.height,
-          dimensionUnit: dto.dimensionUnit,
-          returnPolicy: dto.returnPolicy,
-          warrantyInfo: dto.warrantyInfo,
-        },
-      });
-
-      // Create tags
-      if (dto.tags && dto.tags.length > 0) {
-        await tx.productTag.createMany({
-          data: dto.tags.map((tag) => ({
-            productId: newProduct.id,
-            tag,
-          })),
-        });
-      }
-
-      // Create SEO
-      if (dto.seo) {
-        await tx.productSeo.create({
-          data: {
-            productId: newProduct.id,
-            metaTitle: dto.seo.metaTitle,
-            metaDescription: dto.seo.metaDescription,
-            handle: dto.seo.handle,
-          },
-        });
-      }
-
-      // Create inline variants
-      if (dto.variants && dto.variants.length > 0) {
-        for (let i = 0; i < dto.variants.length; i++) {
-          const v = dto.variants[i];
-          const variant = await tx.productVariant.create({
-            data: {
-              productId: newProduct.id,
-              price: v.price,
-              compareAtPrice: v.compareAtPrice,
-              costPrice: v.costPrice,
-              sku: v.sku,
-              stock: v.stock ?? 0,
-              weight: v.weight,
-              sortOrder: i,
-            },
-          });
-
-          if (v.optionValueIds && v.optionValueIds.length > 0) {
-            await tx.productVariantOptionValue.createMany({
-              data: v.optionValueIds.map((ovId) => ({
-                variantId: variant.id,
-                optionValueId: ovId,
-              })),
-            });
-          }
-        }
-      }
-
-      // Create status history entry
-      await tx.productStatusHistory.create({
-        data: {
-          productId: newProduct.id,
-          fromStatus: null,
-          toStatus: 'DRAFT',
-          changedBy: sellerId,
-          reason: 'Product created',
-        },
-      });
-
-      return newProduct;
-    });
+    const product = await this.productRepo.createInTransaction(
+      {
+        sellerId,
+        productCode,
+        title: dto.title,
+        slug,
+        shortDescription: dto.shortDescription,
+        description: dto.description,
+        categoryId: resolvedCategoryId,
+        brandId: resolvedBrandId,
+        hasVariants: dto.hasVariants,
+        basePrice: dto.basePrice,
+        compareAtPrice: dto.compareAtPrice,
+        costPrice: dto.costPrice,
+        baseSku: dto.baseSku,
+        baseStock: dto.baseStock,
+        baseBarcode: dto.baseBarcode,
+        weight: dto.weight,
+        weightUnit: dto.weightUnit,
+        length: dto.length,
+        width: dto.width,
+        height: dto.height,
+        dimensionUnit: dto.dimensionUnit,
+        returnPolicy: dto.returnPolicy,
+        warrantyInfo: dto.warrantyInfo,
+      },
+      dto.tags,
+      dto.seo,
+      dto.variants,
+      {
+        fromStatus: null,
+        toStatus: 'DRAFT',
+        changedBy: sellerId,
+        reason: 'Product created',
+      },
+    );
 
     this.logger.log(`Product created: ${product.id} by seller ${sellerId}`);
 
     // ── Phase 11 / T3: Auto-create SellerProductMapping for the creator ──
-    // When a seller creates their own product, they are automatically mapped
-    // as a seller for that product. This connects the old creation flow with
-    // the new platform-controlled catalog model.
     try {
-      const sellerProfile = await this.prisma.seller.findUnique({
-        where: { id: sellerId },
-        select: {
-          storeAddress: true,
-          sellerZipCode: true,
-        },
-      });
+      const sellerProfile = await this.productRepo.findSellerById(sellerId);
 
       if (product.hasVariants) {
-        // For variant products, create mappings for inline variants
-        const createdVariants = await this.prisma.productVariant.findMany({
-          where: { productId: product.id, isDeleted: false },
-          select: { id: true, price: true, stock: true },
-        });
+        const createdVariants = await this.variantRepo.findByProductId(product.id);
 
         if (createdVariants.length > 0) {
           for (const variant of createdVariants) {
-            await this.prisma.sellerProductMapping.create({
-              data: {
-                sellerId,
-                productId: product.id,
-                variantId: variant.id,
-                stockQty: variant.stock ?? 0,
-                settlementPrice: variant.price ? Number(variant.price) : (product.basePrice ? Number(product.basePrice) : undefined),
-                pickupAddress: sellerProfile?.storeAddress || null,
-                pickupPincode: sellerProfile?.sellerZipCode || null,
-                dispatchSla: 2,
-                approvalStatus: 'PENDING_APPROVAL',
-                isActive: false,
-              },
+            await this.sellerMappingRepo.create({
+              sellerId,
+              productId: product.id,
+              variantId: variant.id,
+              stockQty: variant.stock ?? 0,
+              settlementPrice: variant.price ? Number(variant.price) : (product.basePrice ? Number(product.basePrice) : undefined),
+              pickupAddress: sellerProfile?.storeAddress || null,
+              pickupPincode: sellerProfile?.sellerZipCode || null,
+              dispatchSla: 2,
+              approvalStatus: 'PENDING_APPROVAL',
+              isActive: false,
             });
           }
           this.logger.log(
@@ -243,44 +158,30 @@ export class SellerProductsController {
           );
         }
       } else {
-        // For simple products, create a single product-level mapping
-        await this.prisma.sellerProductMapping.create({
-          data: {
-            sellerId,
-            productId: product.id,
-            variantId: null,
-            stockQty: product.baseStock ?? 0,
-            settlementPrice: product.basePrice ? Number(product.basePrice) : undefined,
-            pickupAddress: sellerProfile?.storeAddress || null,
-            pickupPincode: sellerProfile?.sellerZipCode || null,
-            dispatchSla: 2,
-            approvalStatus: 'PENDING_APPROVAL',
-            isActive: false,
-          },
+        await this.sellerMappingRepo.create({
+          sellerId,
+          productId: product.id,
+          variantId: null,
+          stockQty: product.baseStock ?? 0,
+          settlementPrice: product.basePrice ? Number(product.basePrice) : undefined,
+          pickupAddress: sellerProfile?.storeAddress || null,
+          pickupPincode: sellerProfile?.sellerZipCode || null,
+          dispatchSla: 2,
+          approvalStatus: 'PENDING_APPROVAL',
+          isActive: false,
         });
         this.logger.log(
           `Auto-created seller mapping for simple product ${product.id} (pending approval)`,
         );
       }
     } catch (mappingError) {
-      // Log but don't fail product creation if mapping fails
       this.logger.warn(
         `Failed to auto-create seller mapping for product ${product.id}: ${mappingError}`,
       );
     }
 
     // Fetch full product
-    const fullProduct = await this.prisma.product.findUnique({
-      where: { id: product.id },
-      include: {
-        tags: true,
-        seo: true,
-        variants: true,
-        category: true,
-        brand: true,
-        sellerMappings: true,
-      },
-    });
+    const fullProduct = await this.productRepo.findFullProduct(product.id);
 
     return {
       success: true,
@@ -303,45 +204,14 @@ export class SellerProductsController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '10', 10) || 10));
 
-    const where: any = {
+    const { products, total } = await this.productRepo.findBySellerPaginated({
       sellerId,
-      isDeleted: false,
-    };
-
-    if (status) {
-      where.status = status;
-    }
-
-    if (search) {
-      where.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { baseSku: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    if (categoryId) {
-      where.categoryId = categoryId;
-    }
-
-    const [products, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true } },
-          brand: { select: { id: true, name: true } },
-          images: { orderBy: { sortOrder: 'asc' }, take: 1 },
-          variants: {
-            where: { isDeleted: false },
-            select: { stock: true },
-          },
-          _count: { select: { variants: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      }),
-      this.prisma.product.count({ where }),
-    ]);
+      page: pageNum,
+      limit: limitNum,
+      status,
+      search,
+      categoryId,
+    });
 
     const mapped = products.map((p: any) => {
       const totalVariantStock = p.variants?.reduce((sum: number, v: any) => sum + (v.stock || 0), 0) ?? 0;
@@ -378,54 +248,7 @@ export class SellerProductsController {
   async getProduct(@Req() req: Request, @Param('productId') productId: string) {
     const sellerId = (req as any).sellerId;
 
-    const product = await this.prisma.product.findFirst({
-      where: {
-        id: productId,
-        sellerId,
-        isDeleted: false,
-      },
-      include: {
-        variants: {
-          where: { isDeleted: false },
-          include: {
-            optionValues: {
-              include: {
-                optionValue: {
-                  include: {
-                    optionDefinition: true,
-                  },
-                },
-              },
-            },
-            images: {
-              orderBy: { sortOrder: 'asc' },
-            },
-          },
-          orderBy: { sortOrder: 'asc' },
-        },
-        options: {
-          include: {
-            optionDefinition: true,
-          },
-          orderBy: { sortOrder: 'asc' },
-        },
-        optionValues: {
-          include: {
-            optionValue: true,
-          },
-        },
-        images: {
-          orderBy: { sortOrder: 'asc' },
-        },
-        tags: true,
-        seo: true,
-        category: true,
-        brand: true,
-        statusHistory: {
-          orderBy: { createdAt: 'desc' },
-        },
-      },
-    });
+    const product = await this.productRepo.findByIdForSeller(productId, sellerId);
 
     if (!product) {
       throw new NotFoundAppException('Product not found');
@@ -459,15 +282,7 @@ export class SellerProductsController {
     }
     // Handle categoryName → find or create category
     if (dto.categoryName?.trim()) {
-      const catSlug = dto.categoryName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      let category = await this.prisma.category.findFirst({
-        where: { name: { equals: dto.categoryName.trim(), mode: 'insensitive' } },
-      });
-      if (!category) {
-        category = await this.prisma.category.create({
-          data: { name: dto.categoryName.trim(), slug: catSlug },
-        });
-      }
+      const category = await this.productRepo.findOrCreateCategory(dto.categoryName.trim());
       updateData.categoryId = category.id;
     } else if (dto.categoryId !== undefined) {
       updateData.categoryId = dto.categoryId;
@@ -475,15 +290,7 @@ export class SellerProductsController {
 
     // Handle brandName → find or create brand
     if (dto.brandName?.trim()) {
-      const brandSlug = dto.brandName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      let brand = await this.prisma.brand.findFirst({
-        where: { name: { equals: dto.brandName.trim(), mode: 'insensitive' } },
-      });
-      if (!brand) {
-        brand = await this.prisma.brand.create({
-          data: { name: dto.brandName.trim(), slug: brandSlug },
-        });
-      }
+      const brand = await this.productRepo.findOrCreateBrand(dto.brandName.trim());
       updateData.brandId = brand.id;
     } else if (dto.brandId !== undefined) {
       updateData.brandId = dto.brandId;
@@ -507,61 +314,18 @@ export class SellerProductsController {
     if (dto.returnPolicy !== undefined) updateData.returnPolicy = dto.returnPolicy;
     if (dto.warrantyInfo !== undefined) updateData.warrantyInfo = dto.warrantyInfo;
 
-    const product = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.product.update({
-        where: { id: productId },
-        data: updateData,
-      });
-
-      // Replace tags if provided
-      if (dto.tags !== undefined) {
-        await tx.productTag.deleteMany({ where: { productId } });
-        if (dto.tags.length > 0) {
-          await tx.productTag.createMany({
-            data: dto.tags.map((tag) => ({
-              productId,
-              tag,
-            })),
-          });
-        }
-      }
-
-      // Upsert SEO if provided
-      if (dto.seo !== undefined) {
-        await tx.productSeo.upsert({
-          where: { productId },
-          create: {
-            productId,
-            metaTitle: dto.seo.metaTitle,
-            metaDescription: dto.seo.metaDescription,
-            handle: dto.seo.handle,
-          },
-          update: {
-            metaTitle: dto.seo.metaTitle,
-            metaDescription: dto.seo.metaDescription,
-            handle: dto.seo.handle,
-          },
-        });
-      }
-
-      return updated;
-    });
+    const product = await this.productRepo.updateInTransaction(
+      productId,
+      updateData,
+      dto.tags,
+      dto.seo,
+    );
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     const reApproved = await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
     // Fetch full product
-    const fullProduct = await this.prisma.product.findUnique({
-      where: { id: product.id },
-      include: {
-        tags: true,
-        seo: true,
-        variants: { where: { isDeleted: false } },
-        category: true,
-        brand: true,
-        images: { orderBy: { sortOrder: 'asc' } },
-      },
-    });
+    const fullProduct = await this.productRepo.findFullProduct(product.id);
 
     return {
       success: true,
@@ -582,10 +346,7 @@ export class SellerProductsController {
 
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    const existing = await this.prisma.product.findUnique({
-      where: { id: productId },
-      select: { status: true },
-    });
+    const existing = await this.productRepo.findByIdBasic(productId);
 
     const deletableStatuses = ['DRAFT', 'REJECTED'];
     if (!deletableStatuses.includes(existing!.status)) {
@@ -595,13 +356,7 @@ export class SellerProductsController {
       );
     }
 
-    await this.prisma.product.update({
-      where: { id: productId },
-      data: {
-        isDeleted: true,
-        deletedAt: new Date(),
-      },
-    });
+    await this.productRepo.softDelete(productId);
 
     return {
       success: true,
@@ -620,16 +375,7 @@ export class SellerProductsController {
 
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    const product = await this.prisma.product.findUnique({
-      where: { id: productId },
-      include: {
-        images: true,
-        variants: {
-          where: { isDeleted: false },
-          include: { images: true },
-        },
-      },
-    });
+    const product = await this.productRepo.findByIdForSeller(productId, sellerId);
 
     if (!product) {
       throw new NotFoundAppException('Product not found');
@@ -655,7 +401,7 @@ export class SellerProductsController {
     // For variant products, accept either product-level or variant-level images
     const hasProductImages = product.images.length > 0;
     const hasVariantImages = product.hasVariants &&
-      product.variants.some((v) => v.images.length > 0);
+      product.variants.some((v: any) => v.images.length > 0);
 
     if (!hasProductImages && !hasVariantImages) {
       throw new BadRequestAppException('Product must have at least 1 image');
@@ -668,7 +414,7 @@ export class SellerProductsController {
         );
       }
       const hasVariantWithPrice = product.variants.some(
-        (v) => v.price !== null && Number(v.price) > 0,
+        (v: any) => v.price !== null && Number(v.price) > 0,
       );
       if (!hasVariantWithPrice) {
         throw new BadRequestAppException(
@@ -697,26 +443,20 @@ export class SellerProductsController {
 
     const bestMatchId = potentialDuplicates.length > 0 ? potentialDuplicates[0].productId : null;
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.product.update({
-        where: { id: productId },
-        data: {
-          status: 'SUBMITTED',
-          moderationStatus: 'PENDING',
-          ...(bestMatchId ? { potentialDuplicateOf: bestMatchId } : {}),
-        },
-      });
-
-      await tx.productStatusHistory.create({
-        data: {
-          productId,
-          fromStatus: product.status,
-          toStatus: 'SUBMITTED',
-          changedBy: sellerId,
-          reason: 'Submitted for review',
-        },
-      });
-    });
+    await this.productRepo.submitForReviewInTransaction(
+      productId,
+      {
+        status: 'SUBMITTED',
+        moderationStatus: 'PENDING',
+        ...(bestMatchId ? { potentialDuplicateOf: bestMatchId } : {}),
+      },
+      {
+        fromStatus: product.status,
+        toStatus: 'SUBMITTED',
+        changedBy: sellerId,
+        reason: 'Submitted for review',
+      },
+    );
 
     // Emit event for admin notification
     try {

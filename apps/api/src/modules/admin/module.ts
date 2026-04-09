@@ -1,10 +1,15 @@
 import { Module } from '@nestjs/common';
 
 // Guards
-import { AdminAuthGuard } from './infrastructure/guards/admin-auth.guard';
+import { AdminAuthGuard } from '../../core/guards';
+
+// Repository
+import { ADMIN_REPOSITORY } from './domain/repositories/admin.repository.interface';
+import { PrismaAdminRepository } from './infrastructure/repositories/prisma-admin.repository';
 
 // Services
 import { AdminAuditService } from './application/services/admin-audit.service';
+import { AdminCustomerService } from './application/services/admin-customer.service';
 
 // Use Cases
 import { AdminLoginUseCase } from './application/use-cases/admin-login.use-case';
@@ -33,7 +38,12 @@ import { AdminCustomersController } from './presentation/controllers/admin-custo
   ],
   providers: [
     AdminAuthGuard,
+    {
+      provide: ADMIN_REPOSITORY,
+      useClass: PrismaAdminRepository,
+    },
     AdminAuditService,
+    AdminCustomerService,
     AdminLoginUseCase,
     AdminLogoutUseCase,
     AdminGetMeUseCase,
@@ -47,6 +57,6 @@ import { AdminCustomersController } from './presentation/controllers/admin-custo
     AdminChangeSellerPasswordUseCase,
     AdminDeleteSellerUseCase,
   ],
-  exports: [AdminAuditService],
+  exports: [],
 })
 export class AdminModule {}

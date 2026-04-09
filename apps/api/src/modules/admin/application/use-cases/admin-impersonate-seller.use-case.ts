@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 interface ImpersonateInput {
   adminId: string;
@@ -17,7 +20,8 @@ interface ImpersonateInput {
 @Injectable()
 export class AdminImpersonateSellerUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly envService: EnvService,
     private readonly auditService: AdminAuditService,
     private readonly logger: AppLoggerService,
@@ -33,9 +37,14 @@ export class AdminImpersonateSellerUseCase {
       throw new ForbiddenAppException('You do not have permission to impersonate sellers');
     }
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { id: true, email: true, sellerName: true, sellerShopName: true, phoneNumber: true, status: true, isDeleted: true },
+    const seller = await this.adminRepo.findSellerByIdWithSelect(sellerId, {
+      id: true,
+      email: true,
+      sellerName: true,
+      sellerShopName: true,
+      phoneNumber: true,
+      status: true,
+      isDeleted: true,
     });
 
     if (!seller || seller.isDeleted) {
@@ -56,14 +65,12 @@ export class AdminImpersonateSellerUseCase {
     );
 
     // Log impersonation
-    const impersonationLog = await this.prisma.adminImpersonationLog.create({
-      data: {
-        adminId,
-        sellerId,
-        tokenId: `impersonation-${adminId}`,
-        ipAddress: ipAddress || null,
-        userAgent: userAgent || null,
-      },
+    const impersonationLog = await this.adminRepo.createImpersonationLog({
+      adminId,
+      sellerId,
+      tokenId: `impersonation-${adminId}`,
+      ipAddress: ipAddress || null,
+      userAgent: userAgent || null,
     });
 
     await this.auditService.log({

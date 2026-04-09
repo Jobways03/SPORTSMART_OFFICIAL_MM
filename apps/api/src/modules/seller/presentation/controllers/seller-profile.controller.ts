@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { SellerAuthGuard } from '../../infrastructure/guards/seller-auth.guard';
+import { SellerAuthGuard } from '../../../../core/guards';
 import { GetSellerProfileUseCase } from '../../application/use-cases/get-seller-profile.use-case';
 import { UpdateSellerProfileUseCase } from '../../application/use-cases/update-seller-profile.use-case';
 import { ChangeSellerPasswordUseCase } from '../../application/use-cases/change-seller-password.use-case';

@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 interface VerifyResetOtpSellerInput {
   email: string;
@@ -16,7 +19,8 @@ export interface VerifyResetOtpSellerResult {
 @Injectable()
 export class VerifyResetOtpSellerUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('VerifyResetOtpSellerUseCase');
@@ -25,22 +29,16 @@ export class VerifyResetOtpSellerUseCase {
   async execute(input: VerifyResetOtpSellerInput): Promise<VerifyResetOtpSellerResult> {
     const { email, otp } = input;
 
-    const seller = await this.prisma.seller.findUnique({ where: { email } });
+    const seller = await this.sellerRepo.findByEmail(email);
     if (!seller) {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
     // Find latest unexpired, unused, unverified OTP
-    const otpRecord = await this.prisma.sellerPasswordResetOtp.findFirst({
-      where: {
-        sellerId: seller.id,
-        purpose: 'PASSWORD_RESET',
-        usedAt: null,
-        verifiedAt: null,
-        expiresAt: { gte: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const otpRecord = await this.sellerRepo.findLatestValidOtp(
+      seller.id,
+      'PASSWORD_RESET',
+    );
 
     if (!otpRecord) {
       throw new UnauthorizedAppException('Invalid or expired OTP');
@@ -48,28 +46,19 @@ export class VerifyResetOtpSellerUseCase {
 
     // Check max attempts
     if (otpRecord.attempts >= otpRecord.maxAttempts) {
-      await this.prisma.sellerPasswordResetOtp.update({
-        where: { id: otpRecord.id },
-        data: { expiresAt: new Date() },
-      });
+      await this.sellerRepo.expireOtp(otpRecord.id);
       throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
     }
 
     // Increment attempts
-    await this.prisma.sellerPasswordResetOtp.update({
-      where: { id: otpRecord.id },
-      data: { attempts: { increment: 1 } },
-    });
+    await this.sellerRepo.incrementOtpAttempts(otpRecord.id);
 
     // Compare OTP hash
     const otpHash = createHash('sha256').update(otp).digest('hex');
     if (otpHash !== otpRecord.otpHash) {
       const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
       if (remainingAttempts <= 0) {
-        await this.prisma.sellerPasswordResetOtp.update({
-          where: { id: otpRecord.id },
-          data: { expiresAt: new Date() },
-        });
+        await this.sellerRepo.expireOtp(otpRecord.id);
         throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
       }
       throw new UnauthorizedAppException(`Invalid OTP. ${remainingAttempts} attempt(s) remaining.`);
@@ -78,12 +67,9 @@ export class VerifyResetOtpSellerUseCase {
     // OTP valid — generate reset token
     const resetToken = randomUUID();
 
-    await this.prisma.sellerPasswordResetOtp.update({
-      where: { id: otpRecord.id },
-      data: {
-        verifiedAt: new Date(),
-        resetToken,
-      },
+    await this.sellerRepo.updateOtp(otpRecord.id, {
+      verifiedAt: new Date(),
+      resetToken,
     });
 
     this.logger.log(`Seller OTP verified for: ${seller.id}`);

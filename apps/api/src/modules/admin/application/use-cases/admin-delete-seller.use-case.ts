@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 interface DeleteSellerInput {
   adminId: string;
@@ -16,7 +19,8 @@ interface DeleteSellerInput {
 @Injectable()
 export class AdminDeleteSellerUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly auditService: AdminAuditService,
     private readonly logger: AppLoggerService,
   ) {
@@ -31,16 +35,13 @@ export class AdminDeleteSellerUseCase {
       throw new BadRequestAppException('You do not have permission to delete sellers');
     }
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: {
-        id: true,
-        sellerName: true,
-        sellerShopName: true,
-        email: true,
-        status: true,
-        isDeleted: true,
-      },
+    const seller = await this.adminRepo.findSellerByIdWithSelect(sellerId, {
+      id: true,
+      sellerName: true,
+      sellerShopName: true,
+      email: true,
+      status: true,
+      isDeleted: true,
     });
 
     if (!seller) {
@@ -52,20 +53,7 @@ export class AdminDeleteSellerUseCase {
     }
 
     // Soft delete: mark as deleted, disable login, revoke sessions
-    await this.prisma.$transaction([
-      this.prisma.seller.update({
-        where: { id: sellerId },
-        data: {
-          isDeleted: true,
-          deletedAt: new Date(),
-          status: 'DEACTIVATED',
-        },
-      }),
-      this.prisma.sellerSession.updateMany({
-        where: { sellerId, revokedAt: null },
-        data: { revokedAt: new Date() },
-      }),
-    ]);
+    await this.adminRepo.softDeleteSellerAndRevokeSessions(sellerId);
 
     await this.auditService.log({
       adminId,

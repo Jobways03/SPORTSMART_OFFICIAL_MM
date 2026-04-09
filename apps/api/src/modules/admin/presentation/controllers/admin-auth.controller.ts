@@ -13,7 +13,7 @@ import { AdminLoginDto } from '../dtos/admin-login.dto';
 import { AdminLoginUseCase } from '../../application/use-cases/admin-login.use-case';
 import { AdminLogoutUseCase } from '../../application/use-cases/admin-logout.use-case';
 import { AdminGetMeUseCase } from '../../application/use-cases/admin-get-me.use-case';
-import { AdminAuthGuard } from '../../infrastructure/guards/admin-auth.guard';
+import { AdminAuthGuard } from '../../../../core/guards';
 
 @Controller('admin/auth')
 export class AdminAuthController {

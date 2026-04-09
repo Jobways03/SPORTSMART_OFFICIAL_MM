@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EmailService } from '../../../../integrations/email/email.service';
-import { OtpSenderPort } from '../../application/ports/outbound/otp-sender.port';
+import { OtpSenderPort } from '../../../../core/ports';
 
 @Injectable()
 export class EmailOtpAdapter implements OtpSenderPort {

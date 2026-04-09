@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { AppException } from '../../../../core/exceptions/app.exception';
@@ -8,8 +7,12 @@ import {
   isRichTextEmpty,
   getPlainTextLength,
 } from '../../../../core/utils/rich-text-sanitizer';
-import { computeProfileCompletion } from '../../../seller/application/helpers/profile-completion.helper';
+import { computeProfileCompletion } from '../../../../core/utils';
 import { AdminAuditService } from '../services/admin-audit.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 interface AdminEditSellerInput {
   adminId: string;
@@ -22,7 +25,8 @@ interface AdminEditSellerInput {
 @Injectable()
 export class AdminEditSellerUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly auditService: AdminAuditService,
     private readonly logger: AppLoggerService,
   ) {
@@ -32,9 +36,7 @@ export class AdminEditSellerUseCase {
   async execute(input: AdminEditSellerInput) {
     const { adminId, sellerId, payload, ipAddress, userAgent } = input;
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-    });
+    const seller = await this.adminRepo.findSellerById(sellerId);
 
     if (!seller || seller.isDeleted) {
       throw new NotFoundAppException('Seller not found');
@@ -96,19 +98,15 @@ export class AdminEditSellerUseCase {
     updateData.isProfileCompleted = isProfileCompleted;
     updateData.lastProfileUpdatedAt = new Date();
 
-    const updated = await this.prisma.seller.update({
-      where: { id: sellerId },
-      data: updateData,
-      select: {
-        id: true, sellerName: true, sellerShopName: true, email: true,
-        phoneNumber: true, sellerContactCountryCode: true, sellerContactNumber: true,
-        storeAddress: true, city: true, state: true, country: true, sellerZipCode: true,
-        shortStoreDescription: true, detailedStoreDescription: true, sellerPolicy: true,
-        sellerProfileImageUrl: true, sellerShopLogoUrl: true,
-        status: true, verificationStatus: true, isEmailVerified: true,
-        profileCompletionPercentage: true, isProfileCompleted: true,
-        lastProfileUpdatedAt: true, createdAt: true, updatedAt: true,
-      },
+    const updated = await this.adminRepo.updateSeller(sellerId, updateData, {
+      id: true, sellerName: true, sellerShopName: true, email: true,
+      phoneNumber: true, sellerContactCountryCode: true, sellerContactNumber: true,
+      storeAddress: true, city: true, state: true, country: true, sellerZipCode: true,
+      shortStoreDescription: true, detailedStoreDescription: true, sellerPolicy: true,
+      sellerProfileImageUrl: true, sellerShopLogoUrl: true,
+      status: true, verificationStatus: true, isEmailVerified: true,
+      profileCompletionPercentage: true, isProfileCompleted: true,
+      lastProfileUpdatedAt: true, createdAt: true, updatedAt: true,
     });
 
     // Audit log

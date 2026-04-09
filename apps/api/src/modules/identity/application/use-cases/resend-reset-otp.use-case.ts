@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { createHash, randomInt } from 'crypto';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { EmailOtpAdapter } from '../../infrastructure/adapters/email-otp.adapter';
+import { EmailOtpAdapter } from '../../../../integrations/email/adapters/email-otp.adapter';
+import {
+  UserRepository,
+  USER_REPOSITORY,
+} from '../../domain/repositories/user.repository';
 
 interface ResendResetOtpInput {
   email: string;
@@ -14,7 +17,8 @@ export class ResendResetOtpUseCase {
   private static readonly COOLDOWN_SECONDS = 60;
 
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
     private readonly emailOtp: EmailOtpAdapter,
     private readonly logger: AppLoggerService,
   ) {
@@ -25,9 +29,7 @@ export class ResendResetOtpUseCase {
     const { email } = input;
 
     // Always return success to prevent email enumeration
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-    });
+    const user = await this.userRepo.findByEmail(email) as any;
 
     if (!user || user.status !== 'ACTIVE') {
       await this.simulateDelay();
@@ -35,43 +37,27 @@ export class ResendResetOtpUseCase {
     }
 
     // Check cooldown
-    const recentOtp = await this.prisma.passwordResetOtp.findFirst({
-      where: {
-        userId: user.id,
-        usedAt: null,
-        createdAt: {
-          gte: new Date(Date.now() - ResendResetOtpUseCase.COOLDOWN_SECONDS * 1000),
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const recentOtp = await this.userRepo.findRecentOtp(
+      user.id,
+      ResendResetOtpUseCase.COOLDOWN_SECONDS,
+    );
 
     if (recentOtp) {
       return;
     }
 
     // Invalidate existing OTPs
-    await this.prisma.passwordResetOtp.updateMany({
-      where: {
-        userId: user.id,
-        usedAt: null,
-        verifiedAt: null,
-        expiresAt: { gte: new Date() },
-      },
-      data: { expiresAt: new Date() },
-    });
+    await this.userRepo.invalidateActiveOtps(user.id);
 
     // Generate new OTP
     const otp = String(randomInt(100000, 999999));
     const otpHash = createHash('sha256').update(otp).digest('hex');
 
-    await this.prisma.passwordResetOtp.create({
-      data: {
-        userId: user.id,
-        otpHash,
-        expiresAt: new Date(Date.now() + ResendResetOtpUseCase.OTP_EXPIRY_MINUTES * 60 * 1000),
-      },
-    });
+    await this.userRepo.createOtp(
+      user.id,
+      otpHash,
+      new Date(Date.now() + ResendResetOtpUseCase.OTP_EXPIRY_MINUTES * 60 * 1000),
+    );
 
     await this.emailOtp.sendOtp(email, otp);
 

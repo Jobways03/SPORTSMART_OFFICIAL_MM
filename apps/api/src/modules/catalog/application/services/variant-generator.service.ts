@@ -1,12 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { MasterSkuService } from './master-sku.service';
+import { VARIANT_REPOSITORY, IVariantRepository } from '../../domain/repositories/variant.repository.interface';
 
 @Injectable()
 export class VariantGeneratorService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly masterSkuService: MasterSkuService,
+    @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
   ) {}
 
   /**
@@ -58,10 +60,7 @@ export class VariantGeneratorService {
 
     // Fetch display values for auto-generated titles
     const allValueIds = optionValueGroups.flat();
-    const optionValues = await this.prisma.optionValue.findMany({
-      where: { id: { in: allValueIds } },
-      select: { id: true, displayValue: true },
-    });
+    const optionValues = await this.variantRepo.findOptionValuesByIds(allValueIds);
     const valueMap = new Map(optionValues.map((v) => [v.id, v.displayValue]));
 
     // Generate master SKUs for each combination

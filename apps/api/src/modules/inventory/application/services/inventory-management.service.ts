@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   BadRequestAppException,
   NotFoundAppException,
   ForbiddenAppException,
 } from '../../../../core/exceptions';
+import {
+  InventoryManagementRepository,
+  INVENTORY_MANAGEMENT_REPOSITORY,
+} from '../../domain/repositories/inventory-management.repository.interface';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -57,7 +60,10 @@ export interface StockImportItem {
 export class InventoryManagementService {
   private readonly logger = new Logger(InventoryManagementService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(INVENTORY_MANAGEMENT_REPOSITORY)
+    private readonly repo: InventoryManagementRepository,
+  ) {}
 
   // ── T2: Manual stock adjustment ─────────────────────────────────────
 
@@ -78,9 +84,7 @@ export class InventoryManagementService {
       throw new BadRequestAppException('Adjustment must be an integer');
     }
 
-    const mapping = await this.prisma.sellerProductMapping.findUnique({
-      where: { id: mappingId },
-    });
+    const mapping = await this.repo.findMappingById(mappingId);
 
     if (!mapping) {
       throw new NotFoundAppException(`Mapping ${mappingId} not found`);
@@ -107,10 +111,7 @@ export class InventoryManagementService {
       );
     }
 
-    const updated = await this.prisma.sellerProductMapping.update({
-      where: { id: mappingId },
-      data: { stockQty: newStockQty },
-    });
+    const updated = await this.repo.updateMappingStock(mappingId, newStockQty);
 
     this.logger.log(
       `Stock adjusted for mapping ${mappingId}: ${adjustment > 0 ? '+' : ''}${adjustment} → stockQty=${updated.stockQty}`,
@@ -131,23 +132,7 @@ export class InventoryManagementService {
     page: number,
     limit: number,
   ): Promise<{ items: LowStockItem[]; total: number }> {
-    // We need raw-ish query to compare stockQty - reservedQty <= lowStockThreshold
-    // Prisma doesn't support computed column filters, so we fetch all active mappings
-    // and filter in JS. For large datasets, this would be a raw query.
-    const where: any = {
-      sellerId,
-      isActive: true,
-    };
-
-    const allMappings = await this.prisma.sellerProductMapping.findMany({
-      where,
-      include: {
-        seller: { select: { id: true, sellerName: true, sellerShopName: true } },
-        product: { select: { id: true, title: true, productCode: true } },
-        variant: { select: { id: true, sku: true, masterSku: true } },
-      },
-      orderBy: { stockQty: 'asc' },
-    });
+    const allMappings = await this.repo.findActiveMappingsForSeller(sellerId);
 
     // Filter: available stock <= threshold
     const lowStock = allMappings.filter(
@@ -182,18 +167,7 @@ export class InventoryManagementService {
     limit: number,
     sellerId?: string,
   ): Promise<{ items: LowStockItem[]; total: number }> {
-    const where: any = { isActive: true };
-    if (sellerId) where.sellerId = sellerId;
-
-    const allMappings = await this.prisma.sellerProductMapping.findMany({
-      where,
-      include: {
-        seller: { select: { id: true, sellerName: true, sellerShopName: true } },
-        product: { select: { id: true, title: true, productCode: true } },
-        variant: { select: { id: true, sku: true, masterSku: true } },
-      },
-      orderBy: { stockQty: 'asc' },
-    });
+    const allMappings = await this.repo.findAllActiveMappings(sellerId);
 
     const lowStock = allMappings.filter(
       (m) => (m.stockQty - m.reservedQty) <= m.lowStockThreshold,
@@ -228,14 +202,7 @@ export class InventoryManagementService {
     page: number,
     limit: number,
   ): Promise<{ items: OutOfStockProduct[]; total: number }> {
-    // Group mappings by productId+variantId and find those where total available = 0
-    const mappings = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true },
-      include: {
-        product: { select: { id: true, title: true, productCode: true, hasVariants: true } },
-        variant: { select: { id: true, sku: true, masterSku: true } },
-      },
-    });
+    const mappings = await this.repo.findActiveMappingsForAggregation();
 
     // Aggregate by productId + variantId
     const aggregated = new Map<
@@ -324,16 +291,10 @@ export class InventoryManagementService {
     const skus = items.map((i) => i.masterSku);
 
     // Find variants by masterSku
-    const variants = await this.prisma.productVariant.findMany({
-      where: { masterSku: { in: skus }, isDeleted: false },
-      select: { id: true, masterSku: true, productId: true },
-    });
+    const variants = await this.repo.findVariantsByMasterSkus(skus);
 
     // Also check if masterSku matches a productCode (for simple products)
-    const products = await this.prisma.product.findMany({
-      where: { productCode: { in: skus }, isDeleted: false },
-      select: { id: true, productCode: true },
-    });
+    const products = await this.repo.findProductsByProductCodes(skus);
 
     // Build a map: masterSku -> { productId, variantId }
     const skuMap = new Map<string, { productId: string; variantId: string | null }>();
@@ -361,13 +322,11 @@ export class InventoryManagementService {
       }
 
       // Find seller's mapping for this product/variant
-      const mapping = await this.prisma.sellerProductMapping.findFirst({
-        where: {
-          sellerId,
-          productId: target.productId,
-          variantId: target.variantId,
-        },
-      });
+      const mapping = await this.repo.findSellerMappingByProductVariant(
+        sellerId,
+        target.productId,
+        target.variantId,
+      );
 
       if (!mapping) {
         skipped.push({
@@ -377,11 +336,7 @@ export class InventoryManagementService {
         continue;
       }
 
-      await this.prisma.sellerProductMapping.update({
-        where: { id: mapping.id },
-        data: { stockQty: item.stockQty },
-      });
-
+      await this.repo.setMappingStockQty(mapping.id, item.stockQty);
       updated++;
     }
 
@@ -395,37 +350,20 @@ export class InventoryManagementService {
   // ── T6: Admin inventory overview ────────────────────────────────────
 
   async getInventoryOverview(): Promise<InventoryOverview> {
-    // Total unique products with at least one mapping
-    const totalMappedProducts = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true },
-      select: { productId: true },
-      distinct: ['productId'],
-    });
+    const [
+      totalMappedProducts,
+      totalMappedVariants,
+      stockAgg,
+      allActive,
+    ] = await Promise.all([
+      this.repo.countDistinctMappedProducts(),
+      this.repo.countDistinctMappedVariants(),
+      this.repo.aggregateActiveStock(),
+      this.repo.findAllActiveMappingStockInfo(),
+    ]);
 
-    // Total unique variants with at least one mapping
-    const totalMappedVariants = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true, variantId: { not: null } },
-      select: { variantId: true },
-      distinct: ['variantId'],
-    });
-
-    // Aggregate stock numbers
-    const stockAgg = await this.prisma.sellerProductMapping.aggregate({
-      where: { isActive: true },
-      _sum: {
-        stockQty: true,
-        reservedQty: true,
-      },
-    });
-
-    const totalStock = stockAgg._sum.stockQty ?? 0;
-    const totalReserved = stockAgg._sum.reservedQty ?? 0;
-
-    // Low stock count
-    const allActive = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true },
-      select: { stockQty: true, reservedQty: true, lowStockThreshold: true },
-    });
+    const totalStock = stockAgg.totalStockQty;
+    const totalReserved = stockAgg.totalReservedQty;
 
     const lowStockCount = allActive.filter(
       (m) => (m.stockQty - m.reservedQty) <= m.lowStockThreshold && (m.stockQty - m.reservedQty) > 0,
@@ -436,8 +374,8 @@ export class InventoryManagementService {
     ).length;
 
     return {
-      totalMappedProducts: totalMappedProducts.length,
-      totalMappedVariants: totalMappedVariants.length,
+      totalMappedProducts,
+      totalMappedVariants,
       totalStock,
       totalReserved,
       totalAvailable: totalStock - totalReserved,
@@ -456,32 +394,10 @@ export class InventoryManagementService {
     reservations: any[];
     total: number;
   }> {
-    const where: any = { status: 'RESERVED' };
-
-    if (filters?.mappingId) where.mappingId = filters.mappingId;
-    if (filters?.orderId) where.orderId = filters.orderId;
-
-    const [reservations, total] = await Promise.all([
-      this.prisma.stockReservation.findMany({
-        where,
-        include: {
-          mapping: {
-            include: {
-              seller: { select: { id: true, sellerName: true, sellerShopName: true } },
-              product: { select: { id: true, title: true, productCode: true } },
-              variant: { select: { id: true, sku: true, masterSku: true } },
-            },
-          },
-        },
-        orderBy: { expiresAt: 'asc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.stockReservation.count({ where }),
-    ]);
+    const result = await this.repo.findActiveReservations(page, limit, filters);
 
     return {
-      reservations: reservations.map((r) => ({
+      reservations: result.reservations.map((r) => ({
         id: r.id,
         mappingId: r.mappingId,
         quantity: r.quantity,
@@ -506,7 +422,7 @@ export class InventoryManagementService {
             }
           : null,
       })),
-      total,
+      total: result.total,
     };
   }
 }

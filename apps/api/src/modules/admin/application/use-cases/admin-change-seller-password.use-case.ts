@@ -1,9 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 interface ChangePasswordInput {
   adminId: string;
@@ -18,7 +21,8 @@ const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d
 @Injectable()
 export class AdminChangeSellerPasswordUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly auditService: AdminAuditService,
     private readonly logger: AppLoggerService,
   ) {
@@ -38,9 +42,9 @@ export class AdminChangeSellerPasswordUseCase {
       );
     }
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { id: true, isDeleted: true },
+    const seller = await this.adminRepo.findSellerByIdWithSelect(sellerId, {
+      id: true,
+      isDeleted: true,
     });
 
     if (!seller || seller.isDeleted) {
@@ -50,20 +54,7 @@ export class AdminChangeSellerPasswordUseCase {
     const passwordHash = await bcrypt.hash(newPassword, 12);
 
     // Update password and revoke all sessions
-    await this.prisma.$transaction([
-      this.prisma.seller.update({
-        where: { id: sellerId },
-        data: {
-          passwordHash,
-          failedLoginAttempts: 0,
-          lockUntil: null,
-        },
-      }),
-      this.prisma.sellerSession.updateMany({
-        where: { sellerId, revokedAt: null },
-        data: { revokedAt: new Date() },
-      }),
-    ]);
+    await this.adminRepo.changeSellerPasswordAndRevokeSessions(sellerId, passwordHash);
 
     await this.auditService.log({
       adminId,

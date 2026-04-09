@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   BadRequestAppException,
   NotFoundAppException,
   ConflictAppException,
 } from '../../../../core/exceptions';
+import {
+  AdminControlTowerRepository,
+  ADMIN_CONTROL_TOWER_REPOSITORY,
+} from '../../domain/repositories/admin-control-tower.repository.interface';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -39,7 +42,10 @@ export interface MappingSuspensionResult {
 export class AdminOperationsService {
   private readonly logger = new Logger(AdminOperationsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(ADMIN_CONTROL_TOWER_REPOSITORY)
+    private readonly repo: AdminControlTowerRepository,
+  ) {}
 
   // ── T5: Bulk pricing management ─────────────────────────────────────────
 
@@ -58,10 +64,7 @@ export class AdminOperationsService {
     for (const update of updates) {
       try {
         // Validate product exists
-        const product = await this.prisma.product.findUnique({
-          where: { id: update.productId },
-          select: { id: true, isDeleted: true },
-        });
+        const product = await this.repo.findProductById(update.productId);
 
         if (!product) {
           errors.push({ productId: update.productId, error: 'Product not found' });
@@ -79,10 +82,7 @@ export class AdminOperationsService {
             errors.push({ productId: update.productId, error: 'Platform price must be non-negative' });
             continue;
           }
-          await this.prisma.product.update({
-            where: { id: update.productId },
-            data: { platformPrice: update.platformPrice },
-          });
+          await this.repo.updateProductPrice(update.productId, update.platformPrice);
           updatedProducts++;
         }
 
@@ -94,17 +94,12 @@ export class AdminOperationsService {
               continue;
             }
             try {
-              const variant = await this.prisma.productVariant.findFirst({
-                where: { id: vu.variantId, productId: update.productId, isDeleted: false },
-              });
+              const variant = await this.repo.findVariantForProduct(vu.variantId, update.productId);
               if (!variant) {
                 errors.push({ productId: update.productId, error: `Variant ${vu.variantId} not found` });
                 continue;
               }
-              await this.prisma.productVariant.update({
-                where: { id: vu.variantId },
-                data: { platformPrice: vu.platformPrice },
-              });
+              await this.repo.updateVariantPrice(vu.variantId, vu.platformPrice);
               updatedVariants++;
             } catch (err) {
               errors.push({
@@ -132,13 +127,7 @@ export class AdminOperationsService {
     if (!newSellerId) throw new BadRequestAppException('sellerId is required');
 
     // 1. Get the sub-order with items
-    const subOrder = await this.prisma.subOrder.findUnique({
-      where: { id: subOrderId },
-      include: {
-        items: true,
-        masterOrder: { select: { id: true, orderNumber: true } },
-      },
-    });
+    const subOrder = await this.repo.findSubOrderWithItems(subOrderId);
 
     if (!subOrder) {
       throw new NotFoundAppException(`Sub-order ${subOrderId} not found`);
@@ -158,10 +147,7 @@ export class AdminOperationsService {
     const previousSellerId = subOrder.sellerId;
 
     // 2. Validate new seller exists and is active
-    const newSeller = await this.prisma.seller.findUnique({
-      where: { id: newSellerId },
-      select: { id: true, status: true, sellerName: true },
-    });
+    const newSeller = await this.repo.findSellerById(newSellerId);
 
     if (!newSeller) {
       throw new NotFoundAppException(`Seller ${newSellerId} not found`);
@@ -173,14 +159,11 @@ export class AdminOperationsService {
 
     // 3. For each item, verify the new seller has a mapping and sufficient stock
     for (const item of subOrder.items) {
-      const mapping = await this.prisma.sellerProductMapping.findFirst({
-        where: {
-          sellerId: newSellerId,
-          productId: item.productId,
-          variantId: item.variantId,
-          isActive: true,
-        },
-      });
+      const mapping = await this.repo.findActiveSellerMapping(
+        newSellerId,
+        item.productId,
+        item.variantId,
+      );
 
       if (!mapping) {
         throw new BadRequestAppException(
@@ -197,76 +180,50 @@ export class AdminOperationsService {
     }
 
     // 4. Execute reassignment in a transaction
-    await this.prisma.$transaction(async (tx) => {
+    await this.repo.executeReassignment(async (tx) => {
       // Release current seller's reservations for this sub-order
-      const currentReservations = await tx.stockReservation.findMany({
-        where: {
-          orderId: subOrder.masterOrderId,
-          status: { in: ['RESERVED', 'CONFIRMED'] },
-          mapping: { sellerId: previousSellerId },
-        },
-      });
+      const currentReservations = await tx.findReservationsForRelease(
+        subOrder.masterOrderId,
+        previousSellerId,
+      );
 
       for (const res of currentReservations) {
         if (res.status === 'RESERVED') {
-          await tx.stockReservation.update({
-            where: { id: res.id },
-            data: { status: 'RELEASED' },
-          });
-          await tx.sellerProductMapping.update({
-            where: { id: res.mappingId },
-            data: { reservedQty: { decrement: res.quantity } },
-          });
+          await tx.releaseReservation(res.id, res.mappingId, res.quantity);
         }
       }
 
       // Create new reservations for the new seller
       for (const item of subOrder.items) {
-        const newMapping = await tx.sellerProductMapping.findFirst({
-          where: {
-            sellerId: newSellerId,
-            productId: item.productId,
-            variantId: item.variantId,
-            isActive: true,
-          },
-        });
+        const newMapping = await tx.findSellerMapping(
+          newSellerId,
+          item.productId,
+          item.variantId,
+        );
 
         if (newMapping) {
-          await tx.stockReservation.create({
-            data: {
-              mappingId: newMapping.id,
-              quantity: item.quantity,
-              status: 'CONFIRMED',
-              orderId: subOrder.masterOrderId,
-              expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-            },
-          });
-
-          await tx.sellerProductMapping.update({
-            where: { id: newMapping.id },
-            data: { reservedQty: { increment: item.quantity } },
-          });
+          await tx.createConfirmedReservation(
+            newMapping.id,
+            item.quantity,
+            subOrder.masterOrderId,
+          );
+          await tx.incrementMappingReservedQty(newMapping.id, item.quantity);
         }
       }
 
       // Update sub-order seller
-      await tx.subOrder.update({
-        where: { id: subOrderId },
-        data: { sellerId: newSellerId },
-      });
+      await tx.updateSubOrderSeller(subOrderId, newSellerId);
 
       // Log the override in allocation_logs
       for (const item of subOrder.items) {
-        await tx.allocationLog.create({
-          data: {
-            productId: item.productId,
-            variantId: item.variantId,
-            customerPincode: 'ADMIN_OVERRIDE',
-            allocatedSellerId: newSellerId,
-            allocationReason: `Admin override: reassigned from seller ${previousSellerId} to ${newSellerId}`,
-            isReallocated: true,
-            orderId: subOrder.masterOrderId,
-          },
+        await tx.createAllocationLog({
+          productId: item.productId,
+          variantId: item.variantId,
+          customerPincode: 'ADMIN_OVERRIDE',
+          allocatedSellerId: newSellerId,
+          allocationReason: `Admin override: reassigned from seller ${previousSellerId} to ${newSellerId}`,
+          isReallocated: true,
+          orderId: subOrder.masterOrderId,
         });
       }
     });
@@ -288,10 +245,7 @@ export class AdminOperationsService {
   async suspendSellerMappings(sellerId: string): Promise<MappingSuspensionResult> {
     if (!sellerId) throw new BadRequestAppException('sellerId is required');
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { id: true, sellerName: true, isDeleted: true },
-    });
+    const seller = await this.repo.findSellerBasic(sellerId);
 
     if (!seller) {
       throw new NotFoundAppException(`Seller ${sellerId} not found`);
@@ -301,18 +255,15 @@ export class AdminOperationsService {
       throw new BadRequestAppException(`Seller ${sellerId} is deleted`);
     }
 
-    const result = await this.prisma.sellerProductMapping.updateMany({
-      where: { sellerId, isActive: true },
-      data: { isActive: false },
-    });
+    const affectedMappings = await this.repo.suspendSellerMappings(sellerId);
 
     this.logger.log(
-      `Suspended ${result.count} mappings for seller ${sellerId} (${seller.sellerName})`,
+      `Suspended ${affectedMappings} mappings for seller ${sellerId} (${seller.sellerName})`,
     );
 
     return {
       sellerId,
-      affectedMappings: result.count,
+      affectedMappings,
       action: 'suspended',
     };
   }
@@ -320,10 +271,7 @@ export class AdminOperationsService {
   async activateSellerMappings(sellerId: string): Promise<MappingSuspensionResult> {
     if (!sellerId) throw new BadRequestAppException('sellerId is required');
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { id: true, sellerName: true, isDeleted: true },
-    });
+    const seller = await this.repo.findSellerBasic(sellerId);
 
     if (!seller) {
       throw new NotFoundAppException(`Seller ${sellerId} not found`);
@@ -333,18 +281,15 @@ export class AdminOperationsService {
       throw new BadRequestAppException(`Seller ${sellerId} is deleted`);
     }
 
-    const result = await this.prisma.sellerProductMapping.updateMany({
-      where: { sellerId, isActive: false },
-      data: { isActive: true },
-    });
+    const affectedMappings = await this.repo.activateSellerMappings(sellerId);
 
     this.logger.log(
-      `Activated ${result.count} mappings for seller ${sellerId} (${seller.sellerName})`,
+      `Activated ${affectedMappings} mappings for seller ${sellerId} (${seller.sellerName})`,
     );
 
     return {
       sellerId,
-      affectedMappings: result.count,
+      affectedMappings,
       action: 'activated',
     };
   }

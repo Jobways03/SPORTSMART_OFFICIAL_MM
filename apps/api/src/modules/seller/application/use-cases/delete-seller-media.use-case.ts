@@ -1,15 +1,19 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
-import { computeProfileCompletion } from '../helpers/profile-completion.helper';
+import { computeProfileCompletion } from '../../../../core/utils';
 import { MediaType } from './upload-seller-media.use-case';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 @Injectable()
 export class DeleteSellerMediaUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly cloudinary: CloudinaryAdapter,
     private readonly logger: AppLoggerService,
   ) {
@@ -17,9 +21,7 @@ export class DeleteSellerMediaUseCase {
   }
 
   async execute(sellerId: string, mediaType: MediaType) {
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-    });
+    const seller = await this.sellerRepo.findById(sellerId);
 
     if (!seller) {
       throw new NotFoundAppException('Seller profile not found');
@@ -58,10 +60,7 @@ export class DeleteSellerMediaUseCase {
     updateData.profileCompletionPercentage = profileCompletionPercentage;
     updateData.isProfileCompleted = isProfileCompleted;
 
-    await this.prisma.seller.update({
-      where: { id: sellerId },
-      data: updateData,
-    });
+    await this.sellerRepo.updateSeller(sellerId, updateData);
 
     // Delete from Cloudinary (best-effort)
     this.cloudinary.delete(currentPublicId).catch((err) => {

@@ -8,7 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { SellerAuthGuard } from '../../infrastructure/guards/seller-auth.guard';
+import { SellerAuthGuard } from '../../../../core/guards';
 import { SendEmailVerificationOtpUseCase } from '../../application/use-cases/send-email-verification-otp.use-case';
 import { VerifySellerEmailUseCase } from '../../application/use-cases/verify-seller-email.use-case';
 

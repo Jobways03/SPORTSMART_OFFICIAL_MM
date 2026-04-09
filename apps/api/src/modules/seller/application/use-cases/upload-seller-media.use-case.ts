@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import {
   NotFoundAppException,
@@ -7,7 +6,11 @@ import {
 } from '../../../../core/exceptions';
 import { AppException } from '../../../../core/exceptions/app.exception';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
-import { computeProfileCompletion } from '../helpers/profile-completion.helper';
+import { computeProfileCompletion } from '../../../../core/utils';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -24,7 +27,8 @@ export type MediaType = 'profile-image' | 'shop-logo';
 @Injectable()
 export class UploadSellerMediaUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly cloudinary: CloudinaryAdapter,
     private readonly logger: AppLoggerService,
   ) {
@@ -64,9 +68,7 @@ export class UploadSellerMediaUseCase {
     }
 
     // Load seller
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-    });
+    const seller = await this.sellerRepo.findById(sellerId);
 
     if (!seller) {
       throw new NotFoundAppException('Seller profile not found');
@@ -129,10 +131,7 @@ export class UploadSellerMediaUseCase {
     updateData.isProfileCompleted = isProfileCompleted;
 
     try {
-      await this.prisma.seller.update({
-        where: { id: sellerId },
-        data: updateData,
-      });
+      await this.sellerRepo.updateSeller(sellerId, updateData);
     } catch (error: any) {
       // DB failed — try to clean up uploaded asset
       this.logger.error(

@@ -1,40 +1,43 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 @Injectable()
 export class GetSellerProfileUseCase {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
+  ) {}
 
   async execute(sellerId: string) {
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: {
-        id: true,
-        sellerName: true,
-        sellerShopName: true,
-        email: true,
-        phoneNumber: true,
-        sellerContactCountryCode: true,
-        sellerContactNumber: true,
-        storeAddress: true,
-        locality: true,
-        city: true,
-        state: true,
-        country: true,
-        sellerZipCode: true,
-        shortStoreDescription: true,
-        detailedStoreDescription: true,
-        sellerPolicy: true,
-        sellerProfileImageUrl: true,
-        sellerShopLogoUrl: true,
-        status: true,
-        isEmailVerified: true,
-        profileCompletionPercentage: true,
-        isProfileCompleted: true,
-        lastProfileUpdatedAt: true,
-        createdAt: true,
-      },
+    const seller = await this.sellerRepo.findByIdSelect(sellerId, {
+      id: true,
+      sellerName: true,
+      sellerShopName: true,
+      email: true,
+      phoneNumber: true,
+      sellerContactCountryCode: true,
+      sellerContactNumber: true,
+      storeAddress: true,
+      locality: true,
+      city: true,
+      state: true,
+      country: true,
+      sellerZipCode: true,
+      shortStoreDescription: true,
+      detailedStoreDescription: true,
+      sellerPolicy: true,
+      sellerProfileImageUrl: true,
+      sellerShopLogoUrl: true,
+      status: true,
+      isEmailVerified: true,
+      profileCompletionPercentage: true,
+      isProfileCompleted: true,
+      lastProfileUpdatedAt: true,
+      createdAt: true,
     });
 
     if (!seller) {

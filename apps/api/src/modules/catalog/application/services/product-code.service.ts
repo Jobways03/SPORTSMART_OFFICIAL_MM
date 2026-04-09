@@ -1,24 +1,17 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../domain/repositories/product.repository.interface';
 
 @Injectable()
 export class ProductCodeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+  ) {}
 
   /**
    * Generates a unique product code like PRD-000001, PRD-000002, etc.
    * Uses an atomic database sequence to prevent race conditions.
    */
   async generateProductCode(): Promise<string> {
-    const sequence = await this.prisma.$transaction(async (tx) => {
-      const seq = await tx.productCodeSequence.upsert({
-        where: { id: 1 },
-        create: { id: 1, lastNumber: 1 },
-        update: { lastNumber: { increment: 1 } },
-      });
-      return seq;
-    });
-
-    return `PRD-${String(sequence.lastNumber).padStart(6, '0')}`;
+    return this.productRepo.generateNextProductCode();
   }
 }

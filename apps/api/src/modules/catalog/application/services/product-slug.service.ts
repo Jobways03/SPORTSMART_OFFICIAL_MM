@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../domain/repositories/product.repository.interface';
 
 @Injectable()
 export class ProductSlugService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+  ) {}
 
   async generateUniqueSlug(title: string): Promise<string> {
     const baseSlug = title
@@ -12,10 +14,7 @@ export class ProductSlugService {
       .replace(/^-|-$/g, '');
 
     // Check if base slug is available
-    const existing = await this.prisma.product.findUnique({
-      where: { slug: baseSlug },
-      select: { id: true },
-    });
+    const existing = await this.productRepo.findBySlug(baseSlug);
 
     if (!existing) {
       return baseSlug;
@@ -25,10 +24,7 @@ export class ProductSlugService {
     let suffix = 2;
     while (true) {
       const candidateSlug = `${baseSlug}-${suffix}`;
-      const collision = await this.prisma.product.findUnique({
-        where: { slug: candidateSlug },
-        select: { id: true },
-      });
+      const collision = await this.productRepo.findBySlug(candidateSlug);
 
       if (!collision) {
         return candidateSlug;

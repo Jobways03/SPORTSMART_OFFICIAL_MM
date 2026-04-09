@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
-import { SellerAuthGuard } from '../../infrastructure/guards/seller-auth.guard';
+import { SellerAuthGuard } from '../../../../core/guards';
 import { UploadSellerMediaUseCase } from '../../application/use-cases/upload-seller-media.use-case';
 import { DeleteSellerMediaUseCase } from '../../application/use-cases/delete-seller-media.use-case';
 

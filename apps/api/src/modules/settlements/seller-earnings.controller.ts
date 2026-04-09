@@ -6,7 +6,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { SellerAuthGuard } from '../seller/infrastructure/guards/seller-auth.guard';
+import { SellerAuthGuard } from '../../core/guards';
 import { SettlementService } from './settlement.service';
 
 @ApiTags('Seller Earnings')

@@ -1,9 +1,12 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
 import { EmailService } from '../../../../integrations/email/email.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 interface SendMessageInput {
   adminId: string;
@@ -18,7 +21,8 @@ interface SendMessageInput {
 @Injectable()
 export class AdminSendSellerMessageUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly auditService: AdminAuditService,
     private readonly emailService: EmailService,
     private readonly logger: AppLoggerService,
@@ -42,9 +46,11 @@ export class AdminSendSellerMessageUseCase {
       throw new BadRequestAppException('Message must not exceed 5000 characters');
     }
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { id: true, email: true, sellerName: true, isDeleted: true },
+    const seller = await this.adminRepo.findSellerByIdWithSelect(sellerId, {
+      id: true,
+      email: true,
+      sellerName: true,
+      isDeleted: true,
     });
 
     if (!seller || seller.isDeleted) {
@@ -52,15 +58,13 @@ export class AdminSendSellerMessageUseCase {
     }
 
     // Store message log
-    const messageLog = await this.prisma.adminSellerMessage.create({
-      data: {
-        sellerId,
-        sentByAdminId: adminId,
-        subject: subject.trim(),
-        message: message.trim(),
-        channel,
-        status: 'SENT',
-      },
+    const messageLog = await this.adminRepo.createSellerMessage({
+      sellerId,
+      sentByAdminId: adminId,
+      subject: subject.trim(),
+      message: message.trim(),
+      channel,
+      status: 'SENT',
     });
 
     // Send email to seller

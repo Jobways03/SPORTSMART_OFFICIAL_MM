@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { Prisma } from '@prisma/client';
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  AdminControlTowerRepository,
+  ADMIN_CONTROL_TOWER_REPOSITORY,
+} from '../../domain/repositories/admin-control-tower.repository.interface';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -59,7 +61,10 @@ export interface AllocationAnalytics {
 
 @Injectable()
 export class AdminDashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(ADMIN_CONTROL_TOWER_REPOSITORY)
+    private readonly repo: AdminControlTowerRepository,
+  ) {}
 
   // ── T1: KPIs ────────────────────────────────────────────────────────────
 
@@ -69,66 +74,26 @@ export class AdminDashboardService {
 
     const [
       totalOrders,
-      totalRevenueResult,
+      totalRevenue,
       totalProducts,
       totalActiveSellers,
       totalCustomers,
       ordersToday,
-      revenueTodayResult,
+      revenueToday,
       pendingOrders,
-      totalPlatformMarginResult,
+      totalPlatformMargin,
     ] = await Promise.all([
-      // totalOrders
-      this.prisma.masterOrder.count(),
-
-      // totalRevenue (paid orders)
-      this.prisma.masterOrder.aggregate({
-        _sum: { totalAmount: true },
-        where: { paymentStatus: 'PAID' },
-      }),
-
-      // totalProducts (active)
-      this.prisma.product.count({
-        where: { status: 'ACTIVE', isDeleted: false },
-      }),
-
-      // totalActiveSellers
-      this.prisma.seller.count({
-        where: { status: 'ACTIVE', isDeleted: false },
-      }),
-
-      // totalCustomers
-      this.prisma.user.count(),
-
-      // ordersToday
-      this.prisma.masterOrder.count({
-        where: { createdAt: { gte: todayStart } },
-      }),
-
-      // revenueToday
-      this.prisma.masterOrder.aggregate({
-        _sum: { totalAmount: true },
-        where: {
-          paymentStatus: 'PAID',
-          createdAt: { gte: todayStart },
-        },
-      }),
-
-      // pendingOrders (sub_orders with acceptStatus OPEN)
-      this.prisma.subOrder.count({
-        where: { acceptStatus: 'OPEN' },
-      }),
-
-      // totalPlatformMargin
-      this.prisma.commissionRecord.aggregate({
-        _sum: { platformMargin: true },
-        where: { status: { not: 'REFUNDED' } },
-      }),
+      this.repo.countMasterOrders(),
+      this.repo.sumPaidOrderRevenue(),
+      this.repo.countActiveProducts(),
+      this.repo.countActiveSellers(),
+      this.repo.countUsers(),
+      this.repo.countOrdersSince(todayStart),
+      this.repo.sumPaidRevenueSince(todayStart),
+      this.repo.countPendingSubOrders(),
+      this.repo.sumPlatformMargin(),
     ]);
 
-    const totalRevenue = Number(totalRevenueResult._sum.totalAmount || 0);
-    const revenueToday = Number(revenueTodayResult._sum.totalAmount || 0);
-    const totalPlatformMargin = Number(totalPlatformMarginResult._sum.platformMargin || 0);
     const avgOrderValue = totalOrders > 0 ? Math.round((totalRevenue / totalOrders) * 100) / 100 : 0;
 
     return {
@@ -150,59 +115,11 @@ export class AdminDashboardService {
   async getProductPerformance(period: string, limit: number): Promise<ProductPerformanceResult> {
     const periodStart = this.getPeriodStart(period);
 
-    // Top products by revenue
-    const topByRevenue = await this.prisma.$queryRaw<ProductPerformanceItem[]>`
-      SELECT
-        oi.product_id AS "productId",
-        p.product_code AS "productCode",
-        p.title,
-        COUNT(DISTINCT oi.sub_order_id)::int AS "totalOrders",
-        SUM(oi.quantity)::int AS "totalQuantitySold",
-        SUM(oi.total_price)::float AS "totalRevenue",
-        COALESCE(SUM(cr.platform_margin), 0)::float AS "totalMargin"
-      FROM order_items oi
-      JOIN products p ON p.id = oi.product_id
-      JOIN sub_orders so ON so.id = oi.sub_order_id
-      LEFT JOIN commission_records cr ON cr.order_item_id = oi.id AND cr.status != 'REFUNDED'
-      WHERE so.created_at >= ${periodStart}
-      GROUP BY oi.product_id, p.product_code, p.title
-      ORDER BY "totalRevenue" DESC
-      LIMIT ${limit}
-    `;
-
-    // Products with most sellers mapped
-    const mostSellersMapped = await this.prisma.$queryRaw<
-      { productId: string; productCode: string | null; title: string; sellerCount: number }[]
-    >`
-      SELECT
-        spm.product_id AS "productId",
-        p.product_code AS "productCode",
-        p.title,
-        COUNT(DISTINCT spm.seller_id)::int AS "sellerCount"
-      FROM seller_product_mappings spm
-      JOIN products p ON p.id = spm.product_id
-      WHERE spm.is_active = true AND p.is_deleted = false
-      GROUP BY spm.product_id, p.product_code, p.title
-      ORDER BY "sellerCount" DESC
-      LIMIT ${limit}
-    `;
-
-    // Products with lowest stock
-    const lowestStock = await this.prisma.$queryRaw<
-      { productId: string; productCode: string | null; title: string; totalStock: number }[]
-    >`
-      SELECT
-        spm.product_id AS "productId",
-        p.product_code AS "productCode",
-        p.title,
-        SUM(spm.stock_qty - spm.reserved_qty)::int AS "totalStock"
-      FROM seller_product_mappings spm
-      JOIN products p ON p.id = spm.product_id
-      WHERE spm.is_active = true AND p.is_deleted = false AND p.status = 'ACTIVE'
-      GROUP BY spm.product_id, p.product_code, p.title
-      ORDER BY "totalStock" ASC
-      LIMIT ${limit}
-    `;
+    const [topByRevenue, mostSellersMapped, lowestStock] = await Promise.all([
+      this.repo.getTopProductsByRevenue(periodStart, limit),
+      this.repo.getMostSellersMapped(limit),
+      this.repo.getLowestStockProducts(limit),
+    ]);
 
     return { topByRevenue, mostSellersMapped, lowestStock };
   }
@@ -210,78 +127,31 @@ export class AdminDashboardService {
   // ── T3: Seller performance ──────────────────────────────────────────────
 
   async getSellerPerformance(): Promise<SellerPerformanceItem[]> {
-    const sellers = await this.prisma.seller.findMany({
-      where: { isDeleted: false },
-      select: {
-        id: true,
-        sellerName: true,
-        sellerShopName: true,
-        status: true,
-      },
-    });
-
+    const sellers = await this.repo.findAllSellers();
     const results: SellerPerformanceItem[] = [];
 
     for (const seller of sellers) {
-      const [
-        totalSubOrders,
-        rejectedSubOrders,
-        totalRevenueResult,
-        totalMappedProducts,
-        totalStockResult,
-        avgDispatchSlaResult,
-      ] = await Promise.all([
-        // total sub-orders
-        this.prisma.subOrder.count({
-          where: { sellerId: seller.id },
-        }),
-
-        // rejected sub-orders
-        this.prisma.subOrder.count({
-          where: { sellerId: seller.id, acceptStatus: 'REJECTED' },
-        }),
-
-        // total settlement revenue
-        this.prisma.sellerSettlement.aggregate({
-          _sum: { totalSettlementAmount: true },
-          where: { sellerId: seller.id },
-        }),
-
-        // mapped products
-        this.prisma.sellerProductMapping.count({
-          where: { sellerId: seller.id, isActive: true },
-        }),
-
-        // total stock
-        this.prisma.sellerProductMapping.aggregate({
-          _sum: { stockQty: true },
-          where: { sellerId: seller.id, isActive: true },
-        }),
-
-        // avg dispatch SLA
-        this.prisma.sellerProductMapping.aggregate({
-          _avg: { dispatchSla: true },
-          where: { sellerId: seller.id, isActive: true },
-        }),
+      const [subOrderCounts, revenueResult, mappingStats] = await Promise.all([
+        this.repo.getSellerSubOrderCounts(seller.id),
+        this.repo.getSellerRevenue(seller.id),
+        this.repo.getSellerMappingStats(seller.id),
       ]);
 
-      const totalRevenue = Number(totalRevenueResult._sum.totalSettlementAmount || 0);
-      const rejectionRate = totalSubOrders > 0
-        ? Math.round((rejectedSubOrders / totalSubOrders) * 10000) / 100
+      const totalRevenue = revenueResult.totalSettlementAmount;
+      const rejectionRate = subOrderCounts.totalSubOrders > 0
+        ? Math.round((subOrderCounts.rejectedSubOrders / subOrderCounts.totalSubOrders) * 10000) / 100
         : 0;
-      const totalStock = Number(totalStockResult._sum.stockQty || 0);
-      const avgDispatchSla = Number(avgDispatchSlaResult._avg.dispatchSla || 0);
 
       results.push({
         sellerId: seller.id,
         sellerName: seller.sellerName,
         sellerShopName: seller.sellerShopName,
-        totalOrders: totalSubOrders,
+        totalOrders: subOrderCounts.totalSubOrders,
         totalRevenue,
-        avgDispatchSla: Math.round(avgDispatchSla * 100) / 100,
+        avgDispatchSla: Math.round(mappingStats.avgDispatchSla * 100) / 100,
         rejectionRate,
-        totalMappedProducts,
-        totalStock,
+        totalMappedProducts: mappingStats.totalMappedProducts,
+        totalStock: mappingStats.totalStockQty,
         isActive: seller.status === 'ACTIVE',
       });
     }
@@ -295,16 +165,10 @@ export class AdminDashboardService {
   // ── T4: Allocation analytics ────────────────────────────────────────────
 
   async getAllocationAnalytics(): Promise<AllocationAnalytics> {
-    const [
-      totalAllocations,
-      totalReallocations,
-      avgMetrics,
-    ] = await Promise.all([
-      this.prisma.allocationLog.count(),
-      this.prisma.allocationLog.count({ where: { isReallocated: true } }),
-      this.prisma.allocationLog.aggregate({
-        _avg: { distanceKm: true, score: true },
-      }),
+    const [totalAllocations, totalReallocations, avgMetrics] = await Promise.all([
+      this.repo.countAllocations(),
+      this.repo.countReallocations(),
+      this.repo.getAvgAllocationMetrics(),
     ]);
 
     const reallocationRate = totalAllocations > 0
@@ -312,27 +176,12 @@ export class AdminDashboardService {
       : 0;
 
     // Top allocated sellers
-    const topSellersRaw = await this.prisma.$queryRaw<
-      { sellerId: string; allocationCount: number }[]
-    >`
-      SELECT
-        al.allocated_seller_id AS "sellerId",
-        COUNT(*)::int AS "allocationCount"
-      FROM allocation_logs al
-      WHERE al.allocated_seller_id IS NOT NULL
-      GROUP BY al.allocated_seller_id
-      ORDER BY "allocationCount" DESC
-      LIMIT 10
-    `;
+    const topSellersRaw = await this.repo.getTopAllocatedSellers(10);
 
-    // Enrich with seller names
     const sellerIds = topSellersRaw.map(s => s.sellerId);
     const sellersMap = new Map<string, string>();
     if (sellerIds.length > 0) {
-      const sellers = await this.prisma.seller.findMany({
-        where: { id: { in: sellerIds } },
-        select: { id: true, sellerName: true, sellerShopName: true },
-      });
+      const sellers = await this.repo.findSellersByIds(sellerIds);
       for (const s of sellers) {
         sellersMap.set(s.id, s.sellerShopName || s.sellerName);
       }
@@ -349,8 +198,8 @@ export class AdminDashboardService {
       totalReallocations,
       reallocationRate,
       topAllocatedSellers,
-      avgDistanceKm: Math.round(Number(avgMetrics._avg.distanceKm || 0) * 100) / 100,
-      avgScore: Math.round(Number(avgMetrics._avg.score || 0) * 10000) / 10000,
+      avgDistanceKm: Math.round(avgMetrics.avgDistanceKm * 100) / 100,
+      avgScore: Math.round(avgMetrics.avgScore * 10000) / 10000,
     };
   }
 

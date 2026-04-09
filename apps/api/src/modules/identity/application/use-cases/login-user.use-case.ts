@@ -1,13 +1,20 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { LoginResponseData } from '../../presentation/dtos/auth-response.dto';
+import {
+  UserRepository,
+  USER_REPOSITORY,
+} from '../../domain/repositories/user.repository';
+import {
+  SessionRepository,
+  SESSION_REPOSITORY,
+} from '../../domain/repositories/session.repository';
 
 // Pre-hash a dummy password to use for timing attack prevention
 const DUMMY_HASH = '$2a$12$LJ3m4ys3Lg7VhMQdxlGC7.BQJ1HFpR9PQXHs1GKTTl1C5KVhJvtNi';
@@ -22,7 +29,10 @@ interface LoginInput {
 @Injectable()
 export class LoginUserUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
+    @Inject(SESSION_REPOSITORY)
+    private readonly sessionRepo: SessionRepository,
     private readonly envService: EnvService,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
@@ -34,14 +44,7 @@ export class LoginUserUseCase {
     const { email, password, userAgent, ipAddress } = input;
 
     // Find user by email with roles
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-      include: {
-        roleAssignments: {
-          include: { role: true },
-        },
-      },
-    });
+    const user = await this.userRepo.findByEmailWithRoles(email);
 
     if (!user) {
       // Timing attack prevention: still run bcrypt compare
@@ -68,14 +71,12 @@ export class LoginUserUseCase {
     const refreshTtl = this.parseTimeToMs(this.envService.getString('JWT_REFRESH_TTL', '30d'));
     const expiresAt = new Date(Date.now() + refreshTtl);
 
-    const session = await this.prisma.session.create({
-      data: {
-        userId: user.id,
-        refreshToken,
-        userAgent: userAgent || null,
-        ipAddress: ipAddress || null,
-        expiresAt,
-      },
+    const session = await this.sessionRepo.createSession({
+      userId: user.id,
+      refreshToken,
+      userAgent: userAgent || null,
+      ipAddress: ipAddress || null,
+      expiresAt,
     });
 
     // Generate access token

@@ -4,6 +4,7 @@ import {
   Delete,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -12,7 +13,6 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { SellerAuthGuard } from '../../../../../core/guards';
@@ -24,6 +24,9 @@ import { UpdateVariantDto } from '../../dtos/update-variant.dto';
 import { CreateVariantDto } from '../../dtos/create-variant.dto';
 import { BulkUpdateVariantsDto } from '../../dtos/bulk-update-variants.dto';
 import { GenerateManualVariantsDto } from '../../dtos/generate-manual-variants.dto';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 
 class GenerateVariantsDto {
   @IsArray()
@@ -36,7 +39,9 @@ class GenerateVariantsDto {
 @UseGuards(SellerAuthGuard)
 export class SellerProductVariantsController {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+    @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
     private readonly ownershipService: ProductOwnershipService,
     private readonly variantGenerator: VariantGeneratorService,
@@ -56,46 +61,25 @@ export class SellerProductVariantsController {
     await this.ownershipService.validateOwnership(sellerId, productId);
 
     // Get current max sortOrder
-    const lastVariant = await this.prisma.productVariant.findFirst({
-      where: { productId, isDeleted: false },
-      orderBy: { sortOrder: 'desc' },
-      select: { sortOrder: true },
-    });
-    const nextSort = (lastVariant?.sortOrder ?? -1) + 1;
+    const lastSortOrder = await this.variantRepo.findLastSortOrder(productId);
+    const nextSort = (lastSortOrder ?? -1) + 1;
 
-    const variant = await this.prisma.productVariant.create({
-      data: {
-        productId,
-        title: dto.title || null,
-        price: dto.price ?? 0,
-        compareAtPrice: dto.compareAtPrice ?? null,
-        costPrice: dto.costPrice ?? null,
-        sku: dto.sku || null,
-        barcode: dto.barcode || null,
-        stock: dto.stock ?? 0,
-        weight: dto.weight ?? null,
-        weightUnit: dto.weightUnit || 'g',
-        sortOrder: nextSort,
-      },
-      include: {
-        optionValues: {
-          include: {
-            optionValue: {
-              include: { optionDefinition: true },
-            },
-          },
-        },
-        images: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
+    const variant = await this.variantRepo.create({
+      productId,
+      title: dto.title || null,
+      price: dto.price ?? 0,
+      compareAtPrice: dto.compareAtPrice ?? null,
+      costPrice: dto.costPrice ?? null,
+      sku: dto.sku || null,
+      barcode: dto.barcode || null,
+      stock: dto.stock ?? 0,
+      weight: dto.weight ?? null,
+      weightUnit: dto.weightUnit || 'g',
+      sortOrder: nextSort,
     });
 
     // Auto-set hasVariants = true
-    await this.prisma.product.update({
-      where: { id: productId },
-      data: { hasVariants: true },
-    });
+    await this.variantRepo.setHasVariants(productId, true);
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
@@ -127,17 +111,7 @@ export class SellerProductVariantsController {
       if (!optName) continue;
 
       // Find or create OptionDefinition
-      let definition = await this.prisma.optionDefinition.findUnique({
-        where: { name: optName },
-      });
-      if (!definition) {
-        definition = await this.prisma.optionDefinition.create({
-          data: {
-            name: optName,
-            displayName: optName,
-          },
-        });
-      }
+      const definition = await this.variantRepo.findOrCreateOptionDefinition(optName);
 
       // Find or create OptionValues
       const valueIds: string[] = [];
@@ -145,24 +119,7 @@ export class SellerProductVariantsController {
         const val = opt.values[i].trim();
         if (!val) continue;
 
-        let optionValue = await this.prisma.optionValue.findUnique({
-          where: {
-            optionDefinitionId_value: {
-              optionDefinitionId: definition.id,
-              value: val,
-            },
-          },
-        });
-        if (!optionValue) {
-          optionValue = await this.prisma.optionValue.create({
-            data: {
-              optionDefinitionId: definition.id,
-              value: val,
-              displayValue: val,
-              sortOrder: i,
-            },
-          });
-        }
+        const optionValue = await this.variantRepo.findOrCreateOptionValue(definition.id, val, i);
         valueIds.push(optionValue.id);
       }
 
@@ -181,10 +138,7 @@ export class SellerProductVariantsController {
 
     // Step 2: Collect all value IDs and fetch their definitions
     const allValueIds = optionValueIdGroups.flat();
-    const optionValues = await this.prisma.optionValue.findMany({
-      where: { id: { in: allValueIds } },
-      include: { optionDefinition: true },
-    });
+    const optionValues = await this.variantRepo.findOptionValuesByIds(allValueIds);
 
     const optionDefMap = new Map<string, string[]>();
     for (const ov of optionValues) {
@@ -196,64 +150,28 @@ export class SellerProductVariantsController {
     }
 
     // Step 3: Clear existing product options and variants, then recreate
-    await this.prisma.$transaction(async (tx) => {
-      await tx.productVariantOptionValue.deleteMany({
-        where: { variant: { productId } },
-      });
-      await tx.productVariant.deleteMany({ where: { productId } });
-      await tx.productOptionValue.deleteMany({ where: { productId } });
-      await tx.productOption.deleteMany({ where: { productId } });
+    await this.variantRepo.clearProductOptionsAndVariants(productId);
 
-      let sortOrder = 0;
-      for (const defId of optionDefMap.keys()) {
-        await tx.productOption.create({
-          data: {
-            productId,
-            optionDefinitionId: defId,
-            sortOrder: sortOrder++,
-          },
-        });
-      }
+    let sortOrder = 0;
+    for (const defId of optionDefMap.keys()) {
+      await this.variantRepo.createProductOption(productId, defId, sortOrder++);
+    }
 
-      for (const valueId of allValueIds) {
-        await tx.productOptionValue.create({
-          data: {
-            productId,
-            optionValueId: valueId,
-          },
-        });
-      }
-    });
+    for (const valueId of allValueIds) {
+      await this.variantRepo.createProductOptionValue(productId, valueId);
+    }
 
     // Step 4: Generate variants
     await this.variantGenerator.generateVariants(productId, optionValueIdGroups);
 
     // Step 5: Set hasVariants = true
-    await this.prisma.product.update({
-      where: { id: productId },
-      data: { hasVariants: true },
-    });
+    await this.variantRepo.setHasVariants(productId, true);
 
     // Step 6: Trigger re-approval
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
     // Step 7: Fetch and return generated variants
-    const variants = await this.prisma.productVariant.findMany({
-      where: { productId, isDeleted: false },
-      include: {
-        optionValues: {
-          include: {
-            optionValue: {
-              include: { optionDefinition: true },
-            },
-          },
-        },
-        images: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-      orderBy: { sortOrder: 'asc' },
-    });
+    const variants = await this.variantRepo.findByProductId(productId);
 
     // ── Phase 11 / T3: Auto-create seller mappings for generated variants ──
     await this.autoCreateVariantMappings(sellerId, productId, variants);
@@ -283,10 +201,7 @@ export class SellerProductVariantsController {
     const allValueIds = dto.optionValueIds.flat();
 
     // Fetch option values with their definitions to set up ProductOptions and ProductOptionValues
-    const optionValues = await this.prisma.optionValue.findMany({
-      where: { id: { in: allValueIds } },
-      include: { optionDefinition: true },
-    });
+    const optionValues = await this.variantRepo.findOptionValuesByIds(allValueIds);
 
     // Group by optionDefinition
     const optionDefMap = new Map<string, string[]>();
@@ -298,67 +213,31 @@ export class SellerProductVariantsController {
       optionDefMap.get(defId)!.push(ov.id);
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      // Clear existing product options, option values, and variants
-      await tx.productVariantOptionValue.deleteMany({
-        where: { variant: { productId } },
-      });
-      await tx.productVariant.deleteMany({ where: { productId } });
-      await tx.productOptionValue.deleteMany({ where: { productId } });
-      await tx.productOption.deleteMany({ where: { productId } });
+    // Clear existing product options, option values, and variants
+    await this.variantRepo.clearProductOptionsAndVariants(productId);
 
-      // Create ProductOptions
-      let sortOrder = 0;
-      for (const defId of optionDefMap.keys()) {
-        await tx.productOption.create({
-          data: {
-            productId,
-            optionDefinitionId: defId,
-            sortOrder: sortOrder++,
-          },
-        });
-      }
+    // Create ProductOptions
+    let sortOrder = 0;
+    for (const defId of optionDefMap.keys()) {
+      await this.variantRepo.createProductOption(productId, defId, sortOrder++);
+    }
 
-      // Create ProductOptionValues
-      for (const valueId of allValueIds) {
-        await tx.productOptionValue.create({
-          data: {
-            productId,
-            optionValueId: valueId,
-          },
-        });
-      }
-    });
+    // Create ProductOptionValues
+    for (const valueId of allValueIds) {
+      await this.variantRepo.createProductOptionValue(productId, valueId);
+    }
 
     // Generate variants using the service
     await this.variantGenerator.generateVariants(productId, dto.optionValueIds);
 
     // Auto-set hasVariants = true
-    await this.prisma.product.update({
-      where: { id: productId },
-      data: { hasVariants: true },
-    });
+    await this.variantRepo.setHasVariants(productId, true);
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
     // Fetch and return the generated variants
-    const variants = await this.prisma.productVariant.findMany({
-      where: { productId, isDeleted: false },
-      include: {
-        optionValues: {
-          include: {
-            optionValue: {
-              include: { optionDefinition: true },
-            },
-          },
-        },
-        images: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-      orderBy: { sortOrder: 'asc' },
-    });
+    const variants = await this.variantRepo.findByProductId(productId);
 
     // ── Phase 11 / T3: Auto-create seller mappings for generated variants ──
     await this.autoCreateVariantMappings(sellerId, productId, variants);
@@ -388,9 +267,7 @@ export class SellerProductVariantsController {
     // Sellers CANNOT set platformPrice
     delete (dto as any).platformPrice;
 
-    const variant = await this.prisma.productVariant.findFirst({
-      where: { id: variantId, productId, isDeleted: false },
-    });
+    const variant = await this.variantRepo.findById(variantId, productId);
 
     if (!variant) {
       throw new NotFoundAppException('Variant not found');
@@ -412,22 +289,7 @@ export class SellerProductVariantsController {
     if (dto.barcode !== undefined) updateData.barcode = dto.barcode;
     if (dto.title !== undefined) updateData.title = dto.title;
 
-    const updated = await this.prisma.productVariant.update({
-      where: { id: variantId },
-      data: updateData,
-      include: {
-        optionValues: {
-          include: {
-            optionValue: {
-              include: { optionDefinition: true },
-            },
-          },
-        },
-        images: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
+    const updated = await this.variantRepo.update(variantId, updateData);
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
@@ -449,23 +311,16 @@ export class SellerProductVariantsController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    const results = await this.prisma.$transaction(async (tx) => {
-      const updated = [];
-      for (const item of dto.variants) {
-        const updateData: any = {};
-        if (item.price !== undefined) updateData.price = item.price;
-        if (item.stock !== undefined) updateData.stock = item.stock;
-        if (item.sku !== undefined) updateData.sku = item.sku;
-        if (item.status !== undefined) updateData.status = item.status;
-
-        const variant = await tx.productVariant.update({
-          where: { id: item.id },
-          data: updateData,
-        });
-        updated.push(variant);
-      }
-      return updated;
+    const updates = dto.variants.map((item) => {
+      const data: any = {};
+      if (item.price !== undefined) data.price = item.price;
+      if (item.stock !== undefined) data.stock = item.stock;
+      if (item.sku !== undefined) data.sku = item.sku;
+      if (item.status !== undefined) data.status = item.status;
+      return { id: item.id, data };
     });
+
+    const results = await this.variantRepo.bulkUpdate(updates);
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
@@ -478,9 +333,6 @@ export class SellerProductVariantsController {
   }
 
   // ── Phase 11 / T3: Auto-create seller mappings for generated variants ──
-  // When a seller generates variants for their own product, automatically
-  // create SellerProductMapping entries so the product appears in the
-  // storefront with seller stock/fulfillment data.
   private async autoCreateVariantMappings(
     sellerId: string,
     productId: string,
@@ -488,59 +340,43 @@ export class SellerProductVariantsController {
   ): Promise<void> {
     try {
       // Verify the product belongs to this seller (only auto-map for own products)
-      const product = await this.prisma.product.findUnique({
-        where: { id: productId },
-        select: { sellerId: true, basePrice: true },
-      });
+      const product = await this.productRepo.findByIdAndSeller(productId, sellerId);
 
-      if (!product || product.sellerId !== sellerId) {
+      if (!product) {
         return; // Only auto-map for products the seller owns
       }
 
-      const sellerProfile = await this.prisma.seller.findUnique({
-        where: { id: sellerId },
-        select: {
-          storeAddress: true,
-          sellerZipCode: true,
-        },
-      });
+      const productBasic = await this.productRepo.findByIdBasic(productId);
+      const sellerProfile = await this.productRepo.findSellerById(sellerId);
 
-      // Remove existing product-level mapping (null variantId) if it exists,
-      // since we are now creating per-variant mappings
-      await this.prisma.sellerProductMapping.deleteMany({
-        where: { sellerId, productId, variantId: null },
-      });
+      // Remove existing product-level mapping (null variantId) if it exists
+      await this.sellerMappingRepo.deleteBySellerProductVariantNull(sellerId, productId);
 
       // Get existing variant mappings for this seller + product
-      const existingMappings = await this.prisma.sellerProductMapping.findMany({
-        where: { sellerId, productId },
-        select: { variantId: true },
-      });
+      const existingMappings = await this.sellerMappingRepo.findBySellerForProduct(sellerId, productId);
       const existingVariantIds = new Set(
-        existingMappings.map((m) => m.variantId),
+        existingMappings.map((m: any) => m.variantId),
       );
 
       let created = 0;
       for (const variant of variants) {
-        if (existingVariantIds.has(variant.id)) continue; // Skip already-mapped variants
+        if (existingVariantIds.has(variant.id)) continue;
 
-        await this.prisma.sellerProductMapping.create({
-          data: {
-            sellerId,
-            productId,
-            variantId: variant.id,
-            stockQty: variant.stock ?? 0,
-            settlementPrice: variant.price
-              ? Number(variant.price)
-              : product.basePrice
-                ? Number(product.basePrice)
-                : undefined,
-            pickupAddress: sellerProfile?.storeAddress || null,
-            pickupPincode: sellerProfile?.sellerZipCode || null,
-            dispatchSla: 2,
-            approvalStatus: 'PENDING_APPROVAL',
-            isActive: false,
-          },
+        await this.sellerMappingRepo.create({
+          sellerId,
+          productId,
+          variantId: variant.id,
+          stockQty: variant.stock ?? 0,
+          settlementPrice: variant.price
+            ? Number(variant.price)
+            : productBasic?.basePrice
+              ? Number(productBasic.basePrice)
+              : undefined,
+          pickupAddress: sellerProfile?.storeAddress || null,
+          pickupPincode: sellerProfile?.sellerZipCode || null,
+          dispatchSla: 2,
+          approvalStatus: 'PENDING_APPROVAL',
+          isActive: false,
         });
         created++;
       }
@@ -551,7 +387,6 @@ export class SellerProductVariantsController {
         );
       }
     } catch (err) {
-      // Log but don't fail variant generation if mapping creation fails
       this.logger.warn(
         `Failed to auto-create seller mappings for product ${productId}: ${err}`,
       );
@@ -568,21 +403,13 @@ export class SellerProductVariantsController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    const variant = await this.prisma.productVariant.findFirst({
-      where: { id: variantId, productId, isDeleted: false },
-    });
+    const variant = await this.variantRepo.findById(variantId, productId);
 
     if (!variant) {
       throw new NotFoundAppException('Variant not found');
     }
 
-    await this.prisma.productVariant.update({
-      where: { id: variantId },
-      data: {
-        isDeleted: true,
-        deletedAt: new Date(),
-      },
-    });
+    await this.variantRepo.softDelete(variantId);
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);

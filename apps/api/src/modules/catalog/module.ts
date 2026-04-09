@@ -21,6 +21,28 @@ import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
 // Integration adapters
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
 
+// ── Repository interfaces (Symbols) ─────────────────────────────────────
+import { PRODUCT_REPOSITORY } from './domain/repositories/product.repository.interface';
+import { VARIANT_REPOSITORY } from './domain/repositories/variant.repository.interface';
+import { CATEGORY_REPOSITORY } from './domain/repositories/category.repository.interface';
+import { BRAND_REPOSITORY } from './domain/repositories/brand.repository.interface';
+import { PRODUCT_IMAGE_REPOSITORY } from './domain/repositories/product-image.repository.interface';
+import { SELLER_MAPPING_REPOSITORY } from './domain/repositories/seller-mapping.repository.interface';
+import { METAFIELD_REPOSITORY } from './domain/repositories/metafield.repository.interface';
+import { COLLECTION_REPOSITORY } from './domain/repositories/collection.repository.interface';
+import { STOREFRONT_REPOSITORY } from './domain/repositories/storefront.repository.interface';
+
+// ── Repository implementations ──────────────────────────────────────────
+import { PrismaProductRepository } from './infrastructure/repositories/prisma-product.repository';
+import { PrismaVariantRepository } from './infrastructure/repositories/prisma-variant.repository';
+import { PrismaCategoryRepository } from './infrastructure/repositories/prisma-category.repository';
+import { PrismaBrandRepository } from './infrastructure/repositories/prisma-brand.repository';
+import { PrismaProductImageRepository } from './infrastructure/repositories/prisma-product-image.repository';
+import { PrismaSellerMappingRepository } from './infrastructure/repositories/prisma-seller-mapping.repository';
+import { PrismaMetafieldRepository } from './infrastructure/repositories/prisma-metafield.repository';
+import { PrismaCollectionRepository } from './infrastructure/repositories/prisma-collection.repository';
+import { PrismaStorefrontRepository } from './infrastructure/repositories/prisma-storefront.repository';
+
 // Controllers - Public
 import { CatalogReferenceController } from './presentation/controllers/public/catalog-reference.controller';
 import { StorefrontProductsController } from './presentation/controllers/public/storefront-products.controller';
@@ -53,6 +75,9 @@ import { AdminBrandsController } from './presentation/controllers/admin/admin-br
 // Controllers - Public (Filters)
 import { StorefrontFiltersController } from './presentation/controllers/public/storefront-filters.controller';
 
+// Controllers - Seller (Service Area)
+import { SellerServiceAreaController } from './presentation/controllers/seller/seller-service-area.controller';
+
 @Module({
   controllers: [
     CatalogReferenceController,
@@ -78,8 +103,21 @@ import { StorefrontFiltersController } from './presentation/controllers/public/s
     AdminCategoriesController,
     AdminBrandsController,
     StorefrontFiltersController,
+    SellerServiceAreaController,
   ],
   providers: [
+    // ── Repository bindings ─────────────────────────────────────────────
+    { provide: PRODUCT_REPOSITORY, useClass: PrismaProductRepository },
+    { provide: VARIANT_REPOSITORY, useClass: PrismaVariantRepository },
+    { provide: CATEGORY_REPOSITORY, useClass: PrismaCategoryRepository },
+    { provide: BRAND_REPOSITORY, useClass: PrismaBrandRepository },
+    { provide: PRODUCT_IMAGE_REPOSITORY, useClass: PrismaProductImageRepository },
+    { provide: SELLER_MAPPING_REPOSITORY, useClass: PrismaSellerMappingRepository },
+    { provide: METAFIELD_REPOSITORY, useClass: PrismaMetafieldRepository },
+    { provide: COLLECTION_REPOSITORY, useClass: PrismaCollectionRepository },
+    { provide: STOREFRONT_REPOSITORY, useClass: PrismaStorefrontRepository },
+
+    // ── Application services ────────────────────────────────────────────
     CatalogPublicFacade,
     ProductSlugService,
     ProductCodeService,
@@ -91,10 +129,12 @@ import { StorefrontFiltersController } from './presentation/controllers/public/s
     SellerAllocationService,
     DuplicateDetectionService,
     CatalogCacheService,
+
+    // ── Guards & adapters ───────────────────────────────────────────────
     SellerAuthGuard,
     AdminAuthGuard,
     CloudinaryAdapter,
   ],
-  exports: [CatalogPublicFacade, SellerAllocationService, CatalogCacheService],
+  exports: [CatalogPublicFacade],
 })
 export class CatalogModule {}

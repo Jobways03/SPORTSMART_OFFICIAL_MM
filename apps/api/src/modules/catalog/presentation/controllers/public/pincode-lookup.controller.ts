@@ -1,31 +1,19 @@
 import { Controller, Get, HttpCode, HttpStatus, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
+import { Inject } from '@nestjs/common';
+import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
 
 @ApiTags('Pincode')
 @Controller('pincodes')
 export class PincodeLookupController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
+  ) {}
 
   @Get(':pincode')
   @HttpCode(HttpStatus.OK)
   async lookupPincode(@Param('pincode') pincode: string) {
-    const entries = await this.prisma.postOffice.findMany({
-      where: { pincode },
-      select: {
-        officeName: true,
-        officeType: true,
-        delivery: true,
-        district: true,
-        state: true,
-        latitude: true,
-        longitude: true,
-      },
-      orderBy: [
-        { officeType: 'asc' }, // HO first, then SO, then BO
-        { officeName: 'asc' },
-      ],
-    });
+    const entries = await this.storefrontRepo.findPostOfficeByPincode(pincode);
 
     if (entries.length === 0) {
       return {

@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { ConflictAppException } from '../../../../core/exceptions';
 import { SellerRegisterResponseData } from '../../presentation/dtos/seller-auth-response.dto';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 interface RegisterSellerInput {
   sellerName: string;
@@ -17,7 +20,8 @@ interface RegisterSellerInput {
 @Injectable()
 export class RegisterSellerUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -28,12 +32,12 @@ export class RegisterSellerUseCase {
     const { sellerName, sellerShopName, email, phoneNumber, password } = input;
 
     // Application-level duplicate checks (for specific error messages)
-    const existingByEmail = await this.prisma.seller.findUnique({ where: { email } });
+    const existingByEmail = await this.sellerRepo.findByEmail(email);
     if (existingByEmail) {
       throw new ConflictAppException('A seller account with this email already exists');
     }
 
-    const existingByPhone = await this.prisma.seller.findUnique({ where: { phoneNumber } });
+    const existingByPhone = await this.sellerRepo.findByPhone(phoneNumber);
     if (existingByPhone) {
       throw new ConflictAppException('A seller account with this phone number already exists');
     }
@@ -42,14 +46,12 @@ export class RegisterSellerUseCase {
     const passwordHash = await bcrypt.hash(password, 12);
 
     try {
-      const seller = await this.prisma.seller.create({
-        data: {
-          sellerName,
-          sellerShopName,
-          email,
-          phoneNumber,
-          passwordHash,
-        },
+      const seller = await this.sellerRepo.createSeller({
+        sellerName,
+        sellerShopName,
+        email,
+        phoneNumber,
+        passwordHash,
       });
 
       // Emit domain event (fire and forget)

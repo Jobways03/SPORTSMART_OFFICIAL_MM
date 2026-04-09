@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 @Injectable()
 export class AdminLogoutUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('AdminLogoutUseCase');
@@ -13,10 +17,7 @@ export class AdminLogoutUseCase {
 
   async execute(adminId: string): Promise<void> {
     // Revoke all active sessions for this admin
-    await this.prisma.adminSession.updateMany({
-      where: { adminId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await this.adminRepo.revokeAdminSessions(adminId);
 
     this.logger.log(`Admin logged out: ${adminId}`);
   }

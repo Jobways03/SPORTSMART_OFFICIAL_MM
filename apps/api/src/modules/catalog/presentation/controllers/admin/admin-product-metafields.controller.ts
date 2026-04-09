@@ -5,19 +5,21 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Put,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard } from '../../../../../core/guards';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
 
-// Maps MetafieldType → which value column to use
+// Maps MetafieldType -> which value column to use
 const TYPE_COLUMN_MAP: Record<string, string> = {
   SINGLE_LINE_TEXT: 'valueText',
   MULTI_LINE_TEXT: 'valueText',
@@ -41,7 +43,10 @@ const TYPE_COLUMN_MAP: Record<string, string> = {
 @Controller({ path: 'admin/products', version: '1' })
 @UseGuards(AdminAuthGuard)
 export class AdminProductMetafieldsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+    @Inject(METAFIELD_REPOSITORY) private readonly metafieldRepo: IMetafieldRepository,
+  ) {}
 
   // ─── Get all metafield values for a product ───────────────────────
 
@@ -49,60 +54,18 @@ export class AdminProductMetafieldsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get all metafield values for a product' })
   async getMetafields(@Param('productId') productId: string) {
-    const product = await this.prisma.product.findFirst({
-      where: { id: productId, isDeleted: false },
-      select: { id: true, categoryId: true },
-    });
+    const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
 
     // Fetch existing values
-    const metafields = await this.prisma.productMetafield.findMany({
-      where: { productId },
-      include: {
-        metafieldDefinition: {
-          select: {
-            id: true, namespace: true, key: true, name: true, description: true,
-            type: true, choices: true, validations: true, ownerType: true,
-            categoryId: true, pinned: true, sortOrder: true, isRequired: true,
-          },
-        },
-      },
-      orderBy: { metafieldDefinition: { sortOrder: 'asc' } },
-    });
+    const metafields = await this.metafieldRepo.findProductMetafields(productId);
 
     // Get available definitions for this product's category (with inheritance)
-    let availableDefinitions: any[] = [];
-    if (product.categoryId) {
-      const categoryIds: string[] = [];
-      let current: any = await this.prisma.category.findUnique({ where: { id: product.categoryId } });
-      while (current) {
-        categoryIds.push(current.id);
-        current = current.parentId
-          ? await this.prisma.category.findUnique({ where: { id: current.parentId } })
-          : null;
-      }
-
-      availableDefinitions = await this.prisma.metafieldDefinition.findMany({
-        where: {
-          isActive: true,
-          OR: [
-            { categoryId: { in: categoryIds }, ownerType: 'CATEGORY' },
-            { ownerType: 'CUSTOM' },
-          ],
-        },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      });
-    } else {
-      // No category — only show custom definitions
-      availableDefinitions = await this.prisma.metafieldDefinition.findMany({
-        where: { isActive: true, ownerType: 'CUSTOM' },
-        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      });
-    }
+    const availableDefinitions = await this.metafieldRepo.findAvailableDefinitions(product.categoryId ?? null);
 
     // Merge: return all available definitions with their current value (if any)
-    const existingMap = new Map(metafields.map((m) => [m.metafieldDefinitionId, m]));
-    const merged = availableDefinitions.map((def) => {
+    const existingMap = new Map(metafields.map((m: any) => [m.metafieldDefinitionId, m]));
+    const merged = availableDefinitions.map((def: any) => {
       const existing = existingMap.get(def.id);
       return {
         definition: def,
@@ -128,9 +91,7 @@ export class AdminProductMetafieldsController {
     @Param('productId') productId: string,
     @Body() body: { metafields: Array<{ definitionId: string; value: any }> },
   ) {
-    const product = await this.prisma.product.findFirst({
-      where: { id: productId, isDeleted: false },
-    });
+    const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
 
     if (!body.metafields || !Array.isArray(body.metafields)) {
@@ -142,9 +103,7 @@ export class AdminProductMetafieldsController {
 
     for (const { definitionId, value } of body.metafields) {
       try {
-        const definition = await this.prisma.metafieldDefinition.findUnique({
-          where: { id: definitionId },
-        });
+        const definition = await this.metafieldRepo.findDefinitionById(definitionId);
         if (!definition) {
           errors.push({ definitionId, error: 'Definition not found' });
           continue;
@@ -152,9 +111,7 @@ export class AdminProductMetafieldsController {
 
         // If value is null/undefined/empty, delete the metafield
         if (value === null || value === undefined || value === '') {
-          await this.prisma.productMetafield.deleteMany({
-            where: { productId, metafieldDefinitionId: definitionId },
-          });
+          await this.metafieldRepo.deleteProductMetafieldByDefinition(productId, definitionId);
           results.push({ definitionId, action: 'deleted' });
           continue;
         }
@@ -162,19 +119,7 @@ export class AdminProductMetafieldsController {
         // Build the value columns
         const valueData = buildValueData(definition.type, value);
 
-        const metafield = await this.prisma.productMetafield.upsert({
-          where: {
-            productId_metafieldDefinitionId: { productId, metafieldDefinitionId: definitionId },
-          },
-          create: {
-            productId,
-            metafieldDefinitionId: definitionId,
-            ...valueData,
-          },
-          update: {
-            ...valueData,
-          },
-        });
+        const metafield = await this.metafieldRepo.upsertProductMetafield(productId, definitionId, valueData);
 
         results.push({ definitionId, action: 'upserted', metafieldId: metafield.id });
       } catch (err: any) {
@@ -198,12 +143,10 @@ export class AdminProductMetafieldsController {
     @Param('productId') productId: string,
     @Param('metafieldId') metafieldId: string,
   ) {
-    const metafield = await this.prisma.productMetafield.findFirst({
-      where: { id: metafieldId, productId },
-    });
+    const metafield = await this.metafieldRepo.findProductMetafield(metafieldId, productId);
     if (!metafield) throw new NotFoundAppException('Product metafield not found');
 
-    await this.prisma.productMetafield.delete({ where: { id: metafieldId } });
+    await this.metafieldRepo.deleteProductMetafield(metafieldId);
 
     return { success: true, message: 'Product metafield deleted' };
   }

@@ -1,5 +1,4 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import {
@@ -12,13 +11,18 @@ import {
   isRichTextEmpty,
   getPlainTextLength,
 } from '../../../../core/utils/rich-text-sanitizer';
-import { computeProfileCompletion } from '../helpers/profile-completion.helper';
+import { computeProfileCompletion } from '../../../../core/utils';
 import { UpdateSellerProfileDto } from '../../presentation/dtos/update-seller-profile.dto';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 @Injectable()
 export class UpdateSellerProfileUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -26,9 +30,7 @@ export class UpdateSellerProfileUseCase {
   }
 
   async execute(sellerId: string, dto: UpdateSellerProfileDto) {
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-    });
+    const seller = await this.sellerRepo.findById(sellerId);
 
     if (!seller) {
       throw new NotFoundAppException('Seller profile not found');
@@ -142,10 +144,10 @@ export class UpdateSellerProfileUseCase {
     updateData.lastProfileUpdatedAt = new Date();
 
     // Persist
-    const updated = await this.prisma.seller.update({
-      where: { id: sellerId },
-      data: updateData,
-      select: {
+    const updated = await this.sellerRepo.updateSellerSelect(
+      sellerId,
+      updateData,
+      {
         id: true,
         sellerName: true,
         sellerShopName: true,
@@ -169,7 +171,7 @@ export class UpdateSellerProfileUseCase {
         lastProfileUpdatedAt: true,
         createdAt: true,
       },
-    });
+    );
 
     // Publish event
     this.eventBus

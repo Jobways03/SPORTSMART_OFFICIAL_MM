@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+// NOTE: DuplicateDetectionService uses complex Prisma queries that are tightly coupled
+// to the search algorithm. It retains PrismaService directly for pragmatic reasons.
 
 export interface PotentialDuplicate {
   productId: string;

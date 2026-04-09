@@ -1,20 +1,15 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Injectable, Inject } from '@nestjs/common';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../domain/repositories/product.repository.interface';
 import { NotFoundAppException } from '../../../../core/exceptions';
 
 @Injectable()
 export class ProductOwnershipService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+  ) {}
 
   async validateOwnership(sellerId: string, productId: string): Promise<void> {
-    const product = await this.prisma.product.findFirst({
-      where: {
-        id: productId,
-        sellerId,
-        isDeleted: false,
-      },
-      select: { id: true },
-    });
+    const product = await this.productRepo.findByIdAndSeller(productId, sellerId);
 
     if (!product) {
       throw new NotFoundAppException('Product not found');

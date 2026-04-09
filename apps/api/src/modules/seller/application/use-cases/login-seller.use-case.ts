@@ -1,13 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { SellerLoginResponseData } from '../../presentation/dtos/seller-auth-response.dto';
+import {
+  SellerRepository,
+  SELLER_REPOSITORY,
+} from '../../domain/repositories/seller.repository.interface';
 
 // Pre-hash a dummy password for timing attack prevention
 const DUMMY_HASH = '$2a$12$LJ3m4ys3Lg7VhMQdxlGC7.BQJ1HFpR9PQXHs1GKTTl1C5KVhJvtNi';
@@ -25,7 +28,8 @@ interface LoginSellerInput {
 @Injectable()
 export class LoginSellerUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_REPOSITORY)
+    private readonly sellerRepo: SellerRepository,
     private readonly envService: EnvService,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
@@ -42,8 +46,8 @@ export class LoginSellerUseCase {
 
     // Find seller
     const seller = isEmail
-      ? await this.prisma.seller.findUnique({ where: { email: lookupValue } })
-      : await this.prisma.seller.findUnique({ where: { phoneNumber: lookupValue } });
+      ? await this.sellerRepo.findByEmail(lookupValue)
+      : await this.sellerRepo.findByPhone(lookupValue);
 
     if (!seller) {
       await bcrypt.compare(password, DUMMY_HASH);
@@ -84,10 +88,7 @@ export class LoginSellerUseCase {
         }).catch(() => {});
       }
 
-      await this.prisma.seller.update({
-        where: { id: seller.id },
-        data: updateData,
-      });
+      await this.sellerRepo.updateSeller(seller.id, updateData);
 
       if (newAttempts >= MAX_FAILED_ATTEMPTS) {
         throw new UnauthorizedAppException(
@@ -107,13 +108,10 @@ export class LoginSellerUseCase {
     }
 
     // Successful login — reset counters
-    await this.prisma.seller.update({
-      where: { id: seller.id },
-      data: {
-        failedLoginAttempts: 0,
-        lockUntil: null,
-        lastLoginAt: new Date(),
-      },
+    await this.sellerRepo.updateSeller(seller.id, {
+      failedLoginAttempts: 0,
+      lockUntil: null,
+      lastLoginAt: new Date(),
     });
 
     // Create session
@@ -121,14 +119,12 @@ export class LoginSellerUseCase {
     const refreshTtl = this.parseTimeToMs(this.envService.getString('JWT_REFRESH_TTL', '30d'));
     const expiresAt = new Date(Date.now() + refreshTtl);
 
-    const session = await this.prisma.sellerSession.create({
-      data: {
-        sellerId: seller.id,
-        refreshToken,
-        userAgent: userAgent || null,
-        ipAddress: ipAddress || null,
-        expiresAt,
-      },
+    const session = await this.sellerRepo.createSession({
+      sellerId: seller.id,
+      refreshToken,
+      userAgent: userAgent || null,
+      ipAddress: ipAddress || null,
+      expiresAt,
     });
 
     // Generate access token

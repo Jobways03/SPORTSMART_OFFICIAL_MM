@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -14,7 +15,6 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import {
   NotFoundAppException,
@@ -23,6 +23,8 @@ import {
   ConflictAppException,
 } from '../../../../../core/exceptions';
 import { SellerAuthGuard } from '../../../../../core/guards';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
+import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
 
 // ─── DTOs (inline for this controller) ───────────────────────────────
 
@@ -63,7 +65,8 @@ interface BulkStockUpdateDto {
 @UseGuards(SellerAuthGuard)
 export class SellerProductMappingController {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
+    @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('SellerProductMappingController');
@@ -85,55 +88,9 @@ export class SellerProductMappingController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    // Get product IDs that this seller has already mapped to
-    const existingMappings = await this.prisma.sellerProductMapping.findMany({
-      where: { sellerId },
-      select: { productId: true },
-      distinct: ['productId'],
-    });
-    const mappedProductIds = existingMappings.map((m) => m.productId);
-
-    // Build where clause: ACTIVE + APPROVED products not yet mapped
-    const where: any = {
-      status: 'ACTIVE',
-      moderationStatus: 'APPROVED',
-      isDeleted: false,
-    };
-
-    if (mappedProductIds.length > 0) {
-      where.id = { notIn: mappedProductIds };
-    }
-
-    if (search) {
-      where.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { productCode: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    if (categoryId) {
-      where.categoryId = categoryId;
-    }
-
-    if (brandId) {
-      where.brandId = brandId;
-    }
-
-    const [products, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true } },
-          brand: { select: { id: true, name: true } },
-          images: { orderBy: { sortOrder: 'asc' }, take: 1 },
-          _count: { select: { variants: { where: { isDeleted: false } } } },
-        },
-        orderBy: { createdAt: 'desc' },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      }),
-      this.prisma.product.count({ where }),
-    ]);
+    const { products, total } = await this.storefrontRepo.findBrowsableProducts(
+      sellerId, pageNum, limitNum, search, categoryId, brandId,
+    );
 
     const mapped = products.map((p: any) => ({
       id: p.id,
@@ -183,15 +140,7 @@ export class SellerProductMappingController {
     }
 
     // Validate product exists and is ACTIVE
-    const product = await this.prisma.product.findUnique({
-      where: { id: dto.productId },
-      include: {
-        variants: {
-          where: { isDeleted: false },
-          select: { id: true },
-        },
-      },
-    });
+    const product = await this.sellerMappingRepo.findProductForMapping(dto.productId);
 
     if (!product || product.isDeleted) {
       throw new NotFoundAppException('Product not found');
@@ -205,13 +154,7 @@ export class SellerProductMappingController {
 
     // If variant specified, validate it exists and belongs to this product
     if (dto.variantId) {
-      const variant = await this.prisma.productVariant.findFirst({
-        where: {
-          id: dto.variantId,
-          productId: dto.productId,
-          isDeleted: false,
-        },
-      });
+      const variant = await this.sellerMappingRepo.findVariantForMapping(dto.variantId, dto.productId);
       if (!variant) {
         throw new NotFoundAppException(
           'Variant not found or does not belong to this product',
@@ -223,10 +166,7 @@ export class SellerProductMappingController {
     let resolvedLat = dto.latitude ?? null;
     let resolvedLon = dto.longitude ?? null;
     if (dto.pickupPincode && (resolvedLat == null || resolvedLon == null)) {
-      const postOffice = await this.prisma.postOffice.findFirst({
-        where: { pincode: dto.pickupPincode, latitude: { not: null } },
-        select: { latitude: true, longitude: true },
-      });
+      const postOffice = await this.sellerMappingRepo.findPostOfficeByPincode(dto.pickupPincode);
       if (postOffice?.latitude && postOffice?.longitude) {
         resolvedLat = Number(postOffice.latitude);
         resolvedLon = Number(postOffice.longitude);
@@ -260,16 +200,13 @@ export class SellerProductMappingController {
       }
 
       // Check for any existing mappings for this seller + product
-      const existingMappings = await this.prisma.sellerProductMapping.findMany({
-        where: { sellerId, productId: dto.productId },
-        select: { variantId: true },
-      });
+      const existingMappings = await this.sellerMappingRepo.findBySellerForProduct(sellerId, dto.productId);
       const existingVariantIds = new Set(
-        existingMappings.map((m) => m.variantId),
+        existingMappings.map((m: any) => m.variantId),
       );
 
       const variantsToMap = product.variants.filter(
-        (v) => !existingVariantIds.has(v.id),
+        (v: any) => !existingVariantIds.has(v.id),
       );
 
       if (variantsToMap.length === 0) {
@@ -278,27 +215,12 @@ export class SellerProductMappingController {
         );
       }
 
-      const createdMappings = await this.prisma.$transaction(async (tx) => {
-        const results = [];
-        for (const variant of variantsToMap) {
-          const mapping = await tx.sellerProductMapping.create({
-            data: {
-              ...baseMappingData,
-              variantId: variant.id,
-            },
-            include: {
-              product: {
-                select: { id: true, title: true, productCode: true },
-              },
-              variant: {
-                select: { id: true, sku: true, price: true },
-              },
-            },
-          });
-          results.push(mapping);
-        }
-        return results;
-      });
+      const createdMappings = await this.sellerMappingRepo.createMany(
+        variantsToMap.map((variant: any) => ({
+          ...baseMappingData,
+          variantId: variant.id,
+        })),
+      );
 
       this.logger.log(
         `Seller ${sellerId} mapped to product ${dto.productId} — ${createdMappings.length} variant mapping(s) created`,
@@ -314,13 +236,7 @@ export class SellerProductMappingController {
       const variantId = dto.variantId || null;
 
       // Check for duplicate
-      const existing = await this.prisma.sellerProductMapping.findFirst({
-        where: {
-          sellerId,
-          productId: dto.productId,
-          variantId,
-        },
-      });
+      const existing = await this.sellerMappingRepo.findBySellerAndProduct(sellerId, dto.productId, variantId);
 
       if (existing) {
         throw new ConflictAppException(
@@ -329,19 +245,9 @@ export class SellerProductMappingController {
         );
       }
 
-      const mapping = await this.prisma.sellerProductMapping.create({
-        data: {
-          ...baseMappingData,
-          variantId,
-        },
-        include: {
-          product: {
-            select: { id: true, title: true, productCode: true },
-          },
-          variant: {
-            select: { id: true, sku: true, price: true },
-          },
-        },
+      const mapping = await this.sellerMappingRepo.create({
+        ...baseMappingData,
+        variantId,
       });
 
       this.logger.log(
@@ -370,56 +276,9 @@ export class SellerProductMappingController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    // Find products that have at least one mapping for this seller
-    const productWhere: any = {
-      sellerMappings: {
-        some: { sellerId },
-      },
-      isDeleted: false,
-    };
-
-    if (search) {
-      productWhere.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { productCode: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    const [products, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where: productWhere,
-        include: {
-          category: { select: { id: true, name: true } },
-          brand: { select: { id: true, name: true } },
-          images: { orderBy: { sortOrder: 'asc' }, take: 1 },
-          sellerMappings: {
-            where: { sellerId },
-            include: {
-              variant: {
-                select: {
-                  id: true,
-                  sku: true,
-                  price: true,
-                  compareAtPrice: true,
-                  optionValues: {
-                    include: {
-                      optionValue: {
-                        include: { optionDefinition: true },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-            orderBy: { createdAt: 'asc' },
-          },
-        },
-        orderBy: { title: 'asc' },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      }),
-      this.prisma.product.count({ where: productWhere }),
-    ]);
+    const { products, total } = await this.sellerMappingRepo.findMyProductsPaginated(
+      sellerId, pageNum, limitNum, search,
+    );
 
     const mapped = products.map((p: any) => ({
       id: p.id,
@@ -473,8 +332,6 @@ export class SellerProductMappingController {
   }
 
   // ─── T8: Bulk stock update ─────────────────────────────────────────
-  // NOTE: This must be declared BEFORE the parameterized :mappingId routes
-  // to prevent NestJS from matching "bulk-stock" as a mappingId param.
 
   @Patch('mapping/bulk-stock')
   @HttpCode(HttpStatus.OK)
@@ -513,17 +370,8 @@ export class SellerProductMappingController {
     const mappingIds = dto.updates.map((u) => u.mappingId);
 
     // Validate all mappings belong to this seller
-    const existingMappings = await this.prisma.sellerProductMapping.findMany({
-      where: {
-        id: { in: mappingIds },
-      },
-      select: { id: true, sellerId: true },
-    });
-
-    const existingMap = new Map(existingMappings.map((m) => [m.id, m]));
-
     for (const mappingId of mappingIds) {
-      const mapping = existingMap.get(mappingId);
+      const mapping = await this.sellerMappingRepo.findById(mappingId);
       if (!mapping) {
         throw new NotFoundAppException(`Mapping ${mappingId} not found`);
       }
@@ -534,24 +382,8 @@ export class SellerProductMappingController {
       }
     }
 
-    // Perform bulk update in transaction
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const results = [];
-      for (const update of dto.updates) {
-        const result = await tx.sellerProductMapping.update({
-          where: { id: update.mappingId },
-          data: { stockQty: update.stockQty },
-          select: {
-            id: true,
-            stockQty: true,
-            variantId: true,
-            productId: true,
-          },
-        });
-        results.push(result);
-      }
-      return results;
-    });
+    // Perform bulk update
+    const updated = await this.sellerMappingRepo.bulkUpdateStock(dto.updates);
 
     this.logger.log(
       `Bulk stock update: ${updated.length} mappings updated by seller ${sellerId}`,
@@ -575,9 +407,7 @@ export class SellerProductMappingController {
   ) {
     const sellerId = (req as any).sellerId;
 
-    const existing = await this.prisma.sellerProductMapping.findUnique({
-      where: { id: mappingId },
-    });
+    const existing = await this.sellerMappingRepo.findById(mappingId);
 
     if (!existing) {
       throw new NotFoundAppException('Mapping not found');
@@ -618,18 +448,7 @@ export class SellerProductMappingController {
       updateData.lowStockThreshold = dto.lowStockThreshold;
     }
 
-    const updated = await this.prisma.sellerProductMapping.update({
-      where: { id: mappingId },
-      data: updateData,
-      include: {
-        product: {
-          select: { id: true, title: true, productCode: true },
-        },
-        variant: {
-          select: { id: true, sku: true, price: true },
-        },
-      },
-    });
+    const updated = await this.sellerMappingRepo.update(mappingId, updateData);
 
     this.logger.log(`Mapping ${mappingId} updated by seller ${sellerId}`);
 
@@ -650,9 +469,7 @@ export class SellerProductMappingController {
   ) {
     const sellerId = (req as any).sellerId;
 
-    const existing = await this.prisma.sellerProductMapping.findUnique({
-      where: { id: mappingId },
-    });
+    const existing = await this.sellerMappingRepo.findById(mappingId);
 
     if (!existing) {
       throw new NotFoundAppException('Mapping not found');
@@ -664,9 +481,7 @@ export class SellerProductMappingController {
       );
     }
 
-    await this.prisma.sellerProductMapping.delete({
-      where: { id: mappingId },
-    });
+    await this.sellerMappingRepo.delete(mappingId);
 
     this.logger.log(`Mapping ${mappingId} deleted by seller ${sellerId}`);
 

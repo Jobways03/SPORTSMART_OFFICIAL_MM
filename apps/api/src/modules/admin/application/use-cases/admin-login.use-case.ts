@@ -1,11 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 const DUMMY_HASH = '$2a$12$LJ3m4ys3Lg7VhMQdxlGC7.BQJ1HFpR9PQXHs1GKTTl1C5KVhJvtNi';
 const MAX_FAILED_ATTEMPTS = 5;
@@ -33,7 +36,8 @@ export interface AdminLoginResult {
 @Injectable()
 export class AdminLoginUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly envService: EnvService,
     private readonly logger: AppLoggerService,
   ) {
@@ -43,9 +47,7 @@ export class AdminLoginUseCase {
   async execute(input: AdminLoginInput): Promise<AdminLoginResult> {
     const { email, password, userAgent, ipAddress } = input;
 
-    const admin = await this.prisma.admin.findUnique({
-      where: { email: email.toLowerCase() },
-    });
+    const admin = await this.adminRepo.findAdminByEmail(email);
 
     if (!admin) {
       await bcrypt.compare(password, DUMMY_HASH);
@@ -74,10 +76,7 @@ export class AdminLoginUseCase {
         updateData.lockUntil = new Date(Date.now() + LOCK_DURATION_MINUTES * 60 * 1000);
       }
 
-      await this.prisma.admin.update({
-        where: { id: admin.id },
-        data: updateData,
-      });
+      await this.adminRepo.updateAdmin(admin.id, updateData);
 
       if (newAttempts >= MAX_FAILED_ATTEMPTS) {
         throw new UnauthorizedAppException(
@@ -89,27 +88,22 @@ export class AdminLoginUseCase {
     }
 
     // Successful login
-    await this.prisma.admin.update({
-      where: { id: admin.id },
-      data: {
-        failedLoginAttempts: 0,
-        lockUntil: null,
-        lastLoginAt: new Date(),
-      },
+    await this.adminRepo.updateAdmin(admin.id, {
+      failedLoginAttempts: 0,
+      lockUntil: null,
+      lastLoginAt: new Date(),
     });
 
     // Create session
     const refreshToken = randomUUID();
     const refreshTtl = this.parseTimeToMs(this.envService.getString('JWT_REFRESH_TTL', '30d'));
 
-    const session = await this.prisma.adminSession.create({
-      data: {
-        adminId: admin.id,
-        refreshToken,
-        userAgent: userAgent || null,
-        ipAddress: ipAddress || null,
-        expiresAt: new Date(Date.now() + refreshTtl),
-      },
+    const session = await this.adminRepo.createAdminSession({
+      adminId: admin.id,
+      refreshToken,
+      userAgent: userAgent || null,
+      ipAddress: ipAddress || null,
+      expiresAt: new Date(Date.now() + refreshTtl),
     });
 
     // Generate access token

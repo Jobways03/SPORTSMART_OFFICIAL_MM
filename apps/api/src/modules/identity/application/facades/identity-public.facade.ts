@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaUserRepository } from '../../infrastructure/repositories/prisma-user.prisma-repository';
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  UserRepository,
+  USER_REPOSITORY,
+} from '../../domain/repositories/user.repository';
 import { PermissionCheckService } from '../services/permission-check.service';
 
 @Injectable()
 export class IdentityPublicFacade {
   constructor(
-    private readonly userRepo: PrismaUserRepository,
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
     private readonly permissionService: PermissionCheckService,
   ) {}
 
@@ -18,7 +22,7 @@ export class IdentityPublicFacade {
   }
 
   async validateActorActiveStatus(userId: string): Promise<boolean> {
-    const user = await this.userRepo.findById(userId);
+    const user = await this.userRepo.findById(userId) as any;
     return user?.status === 'ACTIVE';
   }
 

@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { ConflictAppException } from '../../../../core/exceptions';
 import { RegisterResponseData } from '../../presentation/dtos/auth-response.dto';
+import {
+  UserRepository,
+  USER_REPOSITORY,
+} from '../../domain/repositories/user.repository';
 
 interface RegisterInput {
   firstName: string;
@@ -16,7 +19,8 @@ interface RegisterInput {
 @Injectable()
 export class RegisterUserUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(USER_REPOSITORY)
+    private readonly userRepo: UserRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -31,31 +35,11 @@ export class RegisterUserUseCase {
 
     try {
       // Create user + role assignment in transaction
-      const user = await this.prisma.$transaction(async (tx) => {
-        const newUser = await tx.user.create({
-          data: {
-            firstName,
-            lastName,
-            email,
-            passwordHash,
-          },
-        });
-
-        // Find or verify CUSTOMER role exists
-        const customerRole = await tx.role.findUnique({
-          where: { name: 'CUSTOMER' },
-        });
-
-        if (customerRole) {
-          await tx.roleAssignment.create({
-            data: {
-              userId: newUser.id,
-              roleId: customerRole.id,
-            },
-          });
-        }
-
-        return newUser;
+      const user = await this.userRepo.createUserWithRole({
+        firstName,
+        lastName,
+        email,
+        passwordHash,
       });
 
       // Emit domain event (fire and forget)

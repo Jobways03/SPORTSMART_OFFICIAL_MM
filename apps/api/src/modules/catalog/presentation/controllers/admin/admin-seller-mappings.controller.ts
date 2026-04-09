@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -13,20 +14,22 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard } from '../../../../../core/guards';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 
 @ApiTags('Admin Seller Mappings')
 @Controller('admin')
 @UseGuards(AdminAuthGuard)
 export class AdminSellerMappingsController {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('AdminSellerMappingsController');
@@ -41,42 +44,15 @@ export class AdminSellerMappingsController {
   async getMappingsForProduct(
     @Param('productId') productId: string,
   ) {
-    const product = await this.prisma.product.findFirst({
-      where: { id: productId, isDeleted: false },
-      select: { id: true, title: true },
-    });
+    const product = await this.productRepo.findByIdBasic(productId);
 
     if (!product) {
       throw new NotFoundAppException('Product not found');
     }
 
-    const mappings = await this.prisma.sellerProductMapping.findMany({
-      where: { productId },
-      include: {
-        seller: {
-          select: {
-            id: true,
-            sellerName: true,
-            sellerShopName: true,
-            email: true,
-            status: true,
-            storeAddress: true,
-            sellerZipCode: true,
-          },
-        },
-        variant: {
-          select: {
-            id: true,
-            masterSku: true,
-            title: true,
-            sku: true,
-          },
-        },
-      },
-      orderBy: { operationalPriority: 'desc' },
-    });
+    const mappings = await this.sellerMappingRepo.findByProduct(productId);
 
-    const data = mappings.map((m) => {
+    const data = mappings.map((m: any) => {
       const availableQty = m.stockQty - m.reservedQty;
       let mappingDisplayStatus: string;
       if (m.approvalStatus === 'PENDING_APPROVAL') {
@@ -146,88 +122,17 @@ export class AdminSellerMappingsController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '10', 10) || 10));
 
-    const where: any = {};
+    const { mappings, total } = await this.sellerMappingRepo.findAllPaginated({
+      page: pageNum,
+      limit: limitNum,
+      sellerId,
+      productId,
+      isActive: isActive !== undefined && isActive !== '' ? isActive === 'true' : undefined,
+      approvalStatus,
+      search,
+    });
 
-    if (sellerId) {
-      where.sellerId = sellerId;
-    }
-
-    if (productId) {
-      where.productId = productId;
-    }
-
-    if (isActive !== undefined && isActive !== '') {
-      where.isActive = isActive === 'true';
-    }
-
-    if (approvalStatus) {
-      where.approvalStatus = approvalStatus;
-    }
-
-    if (search) {
-      where.OR = [
-        {
-          product: {
-            title: { contains: search, mode: 'insensitive' },
-          },
-        },
-        {
-          seller: {
-            sellerName: { contains: search, mode: 'insensitive' },
-          },
-        },
-        {
-          seller: {
-            sellerShopName: { contains: search, mode: 'insensitive' },
-          },
-        },
-      ];
-    }
-
-    const [mappings, total] = await Promise.all([
-      this.prisma.sellerProductMapping.findMany({
-        where,
-        include: {
-          seller: {
-            select: {
-              id: true,
-              sellerName: true,
-              sellerShopName: true,
-              email: true,
-              status: true,
-              storeAddress: true,
-              sellerZipCode: true,
-            },
-          },
-          product: {
-            select: {
-              id: true,
-              title: true,
-              slug: true,
-              productCode: true,
-              status: true,
-            },
-          },
-          variant: {
-            select: {
-              id: true,
-              masterSku: true,
-              title: true,
-              sku: true,
-            },
-          },
-        },
-        orderBy: [
-          { operationalPriority: 'desc' },
-          { createdAt: 'desc' },
-        ],
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      }),
-      this.prisma.sellerProductMapping.count({ where }),
-    ]);
-
-    const enrichedMappings = mappings.map((m) => {
+    const enrichedMappings = mappings.map((m: any) => {
       const availableQty = m.stockQty - m.reservedQty;
       let mappingDisplayStatus: string;
       if (m.approvalStatus === 'PENDING_APPROVAL') {
@@ -278,45 +183,7 @@ export class AdminSellerMappingsController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    const where = { approvalStatus: 'PENDING_APPROVAL' as const };
-
-    const [mappings, total] = await Promise.all([
-      this.prisma.sellerProductMapping.findMany({
-        where,
-        include: {
-          seller: {
-            select: {
-              id: true,
-              sellerName: true,
-              sellerShopName: true,
-              email: true,
-              status: true,
-            },
-          },
-          product: {
-            select: {
-              id: true,
-              title: true,
-              slug: true,
-              productCode: true,
-              status: true,
-            },
-          },
-          variant: {
-            select: {
-              id: true,
-              masterSku: true,
-              title: true,
-              sku: true,
-            },
-          },
-        },
-        orderBy: { createdAt: 'asc' },
-        skip: (pageNum - 1) * limitNum,
-        take: limitNum,
-      }),
-      this.prisma.sellerProductMapping.count({ where }),
-    ]);
+    const { mappings, total } = await this.sellerMappingRepo.findPendingPaginated(pageNum, limitNum);
 
     return {
       success: true,
@@ -346,9 +213,7 @@ export class AdminSellerMappingsController {
   ) {
     const adminId = (req as any).adminId;
 
-    const existing = await this.prisma.sellerProductMapping.findUnique({
-      where: { id: mappingId },
-    });
+    const existing = await this.sellerMappingRepo.findById(mappingId);
 
     if (!existing) {
       throw new NotFoundAppException('Seller mapping not found');
@@ -441,36 +306,7 @@ export class AdminSellerMappingsController {
       throw new BadRequestAppException('No valid fields provided for update');
     }
 
-    const updated = await this.prisma.sellerProductMapping.update({
-      where: { id: mappingId },
-      data: updateData,
-      include: {
-        seller: {
-          select: {
-            id: true,
-            sellerName: true,
-            sellerShopName: true,
-            email: true,
-          },
-        },
-        product: {
-          select: {
-            id: true,
-            title: true,
-            slug: true,
-            productCode: true,
-          },
-        },
-        variant: {
-          select: {
-            id: true,
-            masterSku: true,
-            title: true,
-            sku: true,
-          },
-        },
-      },
-    });
+    const updated = await this.sellerMappingRepo.update(mappingId, updateData);
 
     this.logger.log(
       `Seller mapping ${mappingId} updated by admin ${adminId}: ${JSON.stringify(updateData)}`,
@@ -497,47 +333,13 @@ export class AdminSellerMappingsController {
   ) {
     const adminId = (req as any).adminId;
 
-    const existing = await this.prisma.sellerProductMapping.findUnique({
-      where: { id: mappingId },
-    });
+    const existing = await this.sellerMappingRepo.findById(mappingId);
 
     if (!existing) {
       throw new NotFoundAppException('Seller mapping not found');
     }
 
-    const updated = await this.prisma.sellerProductMapping.update({
-      where: { id: mappingId },
-      data: {
-        approvalStatus: 'APPROVED',
-        isActive: true,
-      },
-      include: {
-        seller: {
-          select: {
-            id: true,
-            sellerName: true,
-            sellerShopName: true,
-            email: true,
-          },
-        },
-        product: {
-          select: {
-            id: true,
-            title: true,
-            slug: true,
-            productCode: true,
-          },
-        },
-        variant: {
-          select: {
-            id: true,
-            masterSku: true,
-            title: true,
-            sku: true,
-          },
-        },
-      },
-    });
+    const updated = await this.sellerMappingRepo.approve(mappingId);
 
     this.logger.log(
       `Seller mapping ${mappingId} APPROVED by admin ${adminId}`,
@@ -562,47 +364,13 @@ export class AdminSellerMappingsController {
   ) {
     const adminId = (req as any).adminId;
 
-    const existing = await this.prisma.sellerProductMapping.findUnique({
-      where: { id: mappingId },
-    });
+    const existing = await this.sellerMappingRepo.findById(mappingId);
 
     if (!existing) {
       throw new NotFoundAppException('Seller mapping not found');
     }
 
-    const updated = await this.prisma.sellerProductMapping.update({
-      where: { id: mappingId },
-      data: {
-        approvalStatus: 'STOPPED',
-        isActive: false,
-      },
-      include: {
-        seller: {
-          select: {
-            id: true,
-            sellerName: true,
-            sellerShopName: true,
-            email: true,
-          },
-        },
-        product: {
-          select: {
-            id: true,
-            title: true,
-            slug: true,
-            productCode: true,
-          },
-        },
-        variant: {
-          select: {
-            id: true,
-            masterSku: true,
-            title: true,
-            sku: true,
-          },
-        },
-      },
-    });
+    const updated = await this.sellerMappingRepo.stop(mappingId);
 
     this.logger.log(
       `Seller mapping ${mappingId} STOPPED by admin ${adminId}`,

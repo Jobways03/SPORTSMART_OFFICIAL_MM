@@ -1,14 +1,18 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { OrdersService } from './orders.service';
+import {
+  OrderRepository,
+  ORDER_REPOSITORY,
+} from '../../domain/repositories/order.repository.interface';
 
 const CHECK_INTERVAL_MS = 300_000; // 5 minutes
 
 @Injectable()
 export class OrderTimeoutService implements OnModuleInit {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ORDER_REPOSITORY)
+    private readonly orderRepo: OrderRepository,
     private readonly ordersService: OrdersService,
     private readonly logger: AppLoggerService,
   ) {
@@ -27,16 +31,7 @@ export class OrderTimeoutService implements OnModuleInit {
   async checkExpiredOrders() {
     const now = new Date();
 
-    const expiredSubOrders = await this.prisma.subOrder.findMany({
-      where: {
-        acceptStatus: 'OPEN',
-        acceptDeadlineAt: {
-          not: null,
-          lt: now,
-        },
-      },
-      select: { id: true, sellerId: true },
-    });
+    const expiredSubOrders = await this.orderRepo.findExpiredSubOrders(now);
 
     if (expiredSubOrders.length === 0) return;
 

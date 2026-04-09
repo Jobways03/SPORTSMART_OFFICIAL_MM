@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
+import {
+  AdminRepository,
+  ADMIN_REPOSITORY,
+} from '../../domain/repositories/admin.repository.interface';
 
 // Allowed status transitions
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -25,7 +28,8 @@ interface UpdateStatusInput {
 @Injectable()
 export class AdminUpdateSellerStatusUseCase {
   constructor(
-    private readonly prisma: PrismaService,
+    @Inject(ADMIN_REPOSITORY)
+    private readonly adminRepo: AdminRepository,
     private readonly auditService: AdminAuditService,
     private readonly logger: AppLoggerService,
   ) {
@@ -40,9 +44,10 @@ export class AdminUpdateSellerStatusUseCase {
       throw new BadRequestAppException(`Invalid status: ${status}`);
     }
 
-    const seller = await this.prisma.seller.findUnique({
-      where: { id: sellerId },
-      select: { id: true, status: true, isDeleted: true },
+    const seller = await this.adminRepo.findSellerByIdWithSelect(sellerId, {
+      id: true,
+      status: true,
+      isDeleted: true,
     });
 
     if (!seller || seller.isDeleted) {
@@ -60,11 +65,11 @@ export class AdminUpdateSellerStatusUseCase {
       );
     }
 
-    const updated = await this.prisma.seller.update({
-      where: { id: sellerId },
-      data: { status: status as any },
-      select: { id: true, status: true },
-    });
+    const updated = await this.adminRepo.updateSeller(
+      sellerId,
+      { status: status as any },
+      { id: true, status: true },
+    );
 
     await this.auditService.log({
       adminId,

@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -12,12 +13,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard } from '../../../../../core/guards';
+import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
+import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
 
 const VALID_FILTER_TYPES = ['checkbox', 'price_range', 'boolean_toggle', 'color_swatch', 'text_input'] as const;
 const VALID_BUILT_IN_TYPES = ['price_range', 'brand', 'availability', 'variant_option'] as const;
@@ -27,7 +29,10 @@ const VALID_SCOPE_TYPES = ['GLOBAL', 'CATEGORY', 'COLLECTION'] as const;
 @Controller({ path: 'admin/storefront-filters', version: '1' })
 @UseGuards(AdminAuthGuard)
 export class AdminStorefrontFiltersController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
+    @Inject(METAFIELD_REPOSITORY) private readonly metafieldRepo: IMetafieldRepository,
+  ) {}
 
   // ─── List all filter configs ──────────────────────────────────────
 
@@ -44,18 +49,7 @@ export class AdminStorefrontFiltersController {
     if (scopeId) where.scopeId = scopeId;
     if (isActive !== undefined) where.isActive = isActive !== 'false';
 
-    const filters = await this.prisma.storefrontFilter.findMany({
-      where,
-      include: {
-        metafieldDefinition: {
-          select: {
-            id: true, namespace: true, key: true, name: true, type: true,
-            choices: true, ownerType: true, categoryId: true,
-          },
-        },
-      },
-      orderBy: { sortOrder: 'asc' },
-    });
+    const filters = await this.storefrontRepo.findFilterConfigs(where);
 
     return {
       success: true,
@@ -91,27 +85,20 @@ export class AdminStorefrontFiltersController {
     }
 
     if (metafieldDefinitionId) {
-      const def = await this.prisma.metafieldDefinition.findUnique({ where: { id: metafieldDefinitionId } });
+      const def = await this.metafieldRepo.findDefinitionById(metafieldDefinitionId);
       if (!def) throw new NotFoundAppException('Metafield definition not found');
     }
 
-    const filter = await this.prisma.storefrontFilter.create({
-      data: {
-        metafieldDefinitionId: metafieldDefinitionId || null,
-        builtInType: builtInType || null,
-        label,
-        filterType,
-        sortOrder: sortOrder ?? 0,
-        scopeType: scopeType || 'GLOBAL',
-        scopeId: scopeId || null,
-        collapsed: collapsed ?? false,
-        showCounts: showCounts ?? true,
-      },
-      include: {
-        metafieldDefinition: {
-          select: { id: true, namespace: true, key: true, name: true, type: true },
-        },
-      },
+    const filter = await this.storefrontRepo.createFilterConfig({
+      metafieldDefinitionId: metafieldDefinitionId || null,
+      builtInType: builtInType || null,
+      label,
+      filterType,
+      sortOrder: sortOrder ?? 0,
+      scopeType: scopeType || 'GLOBAL',
+      scopeId: scopeId || null,
+      collapsed: collapsed ?? false,
+      showCounts: showCounts ?? true,
     });
 
     return { success: true, message: 'Storefront filter created', data: { filter } };
@@ -122,7 +109,7 @@ export class AdminStorefrontFiltersController {
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   async update(@Param('id') id: string, @Body() body: any) {
-    const existing = await this.prisma.storefrontFilter.findUnique({ where: { id } });
+    const existing = await this.storefrontRepo.findFilterConfigById(id);
     if (!existing) throw new NotFoundAppException('Storefront filter not found');
 
     const updateData: any = {};
@@ -140,15 +127,7 @@ export class AdminStorefrontFiltersController {
     if (body.scopeType !== undefined) updateData.scopeType = body.scopeType;
     if (body.scopeId !== undefined) updateData.scopeId = body.scopeId;
 
-    const filter = await this.prisma.storefrontFilter.update({
-      where: { id },
-      data: updateData,
-      include: {
-        metafieldDefinition: {
-          select: { id: true, namespace: true, key: true, name: true, type: true },
-        },
-      },
-    });
+    const filter = await this.storefrontRepo.updateFilterConfig(id, updateData);
 
     return { success: true, message: 'Storefront filter updated', data: { filter } };
   }
@@ -158,10 +137,10 @@ export class AdminStorefrontFiltersController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async remove(@Param('id') id: string) {
-    const existing = await this.prisma.storefrontFilter.findUnique({ where: { id } });
+    const existing = await this.storefrontRepo.findFilterConfigById(id);
     if (!existing) throw new NotFoundAppException('Storefront filter not found');
 
-    await this.prisma.storefrontFilter.delete({ where: { id } });
+    await this.storefrontRepo.deleteFilterConfig(id);
 
     return { success: true, message: 'Storefront filter deleted' };
   }
@@ -176,12 +155,7 @@ export class AdminStorefrontFiltersController {
       throw new BadRequestAppException('ids array is required');
     }
 
-    for (let i = 0; i < body.ids.length; i++) {
-      await this.prisma.storefrontFilter.update({
-        where: { id: body.ids[i] },
-        data: { sortOrder: i },
-      });
-    }
+    await this.storefrontRepo.reorderFilterConfigs(body.ids);
 
     return { success: true, message: 'Filters reordered' };
   }
