@@ -1,17 +1,25 @@
 'use client';
 
 import { Suspense, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 
 function ImpersonateHandler() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [error, setError] = useState('');
 
   useEffect(() => {
     try {
-      const token = searchParams.get('token');
-      const data = searchParams.get('data');
+      // Token + payload arrive in the URL fragment (see admin impersonate
+      // modal). Fragments aren't sent to the server or in cross-origin
+      // Referer, so reading from window.location.hash — not searchParams —
+      // is the whole point of the scheme. Parse, store, then strip the hash
+      // from history so the next page load can't re-read stale credentials.
+      const rawHash = window.location.hash.startsWith('#')
+        ? window.location.hash.slice(1)
+        : window.location.hash;
+      const params = new URLSearchParams(rawHash);
+      const token = params.get('token');
+      const data = params.get('data');
 
       if (!token || !data) {
         setError('Invalid impersonation link');
@@ -30,11 +38,15 @@ function ImpersonateHandler() {
       }));
       sessionStorage.setItem('impersonated', 'true');
 
+      // Clear the hash so the token no longer sits in window.location or
+      // browser history after the handoff completes.
+      window.history.replaceState(null, '', window.location.pathname);
+
       router.replace('/dashboard');
     } catch {
       setError('Failed to process impersonation');
     }
-  }, [searchParams, router]);
+  }, [router]);
 
   if (error) {
     return (

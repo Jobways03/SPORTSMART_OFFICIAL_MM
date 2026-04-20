@@ -30,6 +30,20 @@ export interface AdminSessionRecord {
   expiresAt: Date;
 }
 
+export interface AdminPasswordResetOtpRecord {
+  id: string;
+  adminId: string;
+  otpHash: string;
+  attempts: number;
+  maxAttempts: number;
+  verifiedAt: Date | null;
+  resetToken: string | null;
+  usedAt: Date | null;
+  expiresAt: Date;
+  createdAt: Date;
+  admin?: { id: string; email: string; status: string };
+}
+
 export interface SellerBasicRecord {
   id: string;
   sellerName: string;
@@ -115,6 +129,32 @@ export interface AdminRepository {
     expiresAt: Date;
   }): Promise<AdminSessionRecord>;
   revokeAdminSessions(adminId: string): Promise<void>;
+
+  // ── Admin password reset OTP ────────────────────────────────
+  findRecentAdminOtp(params: {
+    adminId: string;
+    unusedOnly: boolean;
+    createdAfter: Date;
+  }): Promise<AdminPasswordResetOtpRecord | null>;
+  findActiveAdminOtp(adminId: string): Promise<AdminPasswordResetOtpRecord | null>;
+  invalidateActiveAdminOtps(adminId: string): Promise<void>;
+  createAdminOtp(data: {
+    adminId: string;
+    otpHash: string;
+    purpose: string;
+    expiresAt: Date;
+  }): Promise<void>;
+  incrementAdminOtpAttempts(otpId: string): Promise<void>;
+  expireAdminOtp(otpId: string): Promise<void>;
+  markAdminOtpVerified(otpId: string, resetToken: string): Promise<void>;
+  findAdminOtpByResetToken(
+    resetToken: string,
+  ): Promise<AdminPasswordResetOtpRecord | null>;
+  resetAdminPasswordTransaction(params: {
+    adminId: string;
+    passwordHash: string;
+    otpId: string;
+  }): Promise<void>;
 
   // ── Seller management ──────────────────────────────────────
   findSellerById(sellerId: string): Promise<any | null>;

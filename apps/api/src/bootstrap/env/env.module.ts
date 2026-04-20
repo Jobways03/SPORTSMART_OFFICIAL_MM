@@ -8,6 +8,7 @@ import { EnvService } from './env.service';
     ConfigModule.forRoot({
       isGlobal: true,
       expandVariables: true,
+      envFilePath: ['.env', 'apps/api/.env'],
     }),
   ],
   providers: [EnvService],

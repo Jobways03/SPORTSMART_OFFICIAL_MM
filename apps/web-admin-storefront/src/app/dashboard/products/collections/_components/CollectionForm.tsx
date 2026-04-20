@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
-import RichTextEditor from '@/components/RichTextEditor';
+import { RichTextEditor } from '@sportsmart/ui';
 
 /* ── types ── */
 interface CollectionProduct {

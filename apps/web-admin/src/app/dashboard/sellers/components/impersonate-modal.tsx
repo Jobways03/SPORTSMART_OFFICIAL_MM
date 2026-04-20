@@ -28,8 +28,13 @@ export default function ImpersonateModal({ seller, onClose }: Props) {
           email: seller.email,
           phoneNumber: seller.phoneNumber,
         }));
+        // Token + payload go in the URL fragment, not the query string.
+        // Fragments are never sent to the server (not in request line, not
+        // in Referer) so the impersonation token does not land in server
+        // access logs or cross-origin referrer headers. The receiving page
+        // reads from location.hash and immediately clears it.
         window.open(
-          `${sellerPortalUrl}/impersonate?token=${encodeURIComponent(res.data.accessToken)}&data=${encodeURIComponent(sellerData)}`,
+          `${sellerPortalUrl}/impersonate#token=${encodeURIComponent(res.data.accessToken)}&data=${encodeURIComponent(sellerData)}`,
           '_blank',
         );
         onClose();

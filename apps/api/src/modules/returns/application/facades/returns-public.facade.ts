@@ -1,32 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import {
+  RETURN_REPOSITORY,
+  ReturnRepository,
+} from '../../domain/repositories/return.repository.interface';
 
 @Injectable()
 export class ReturnsPublicFacade {
-  async createReturnRequest(returnData: unknown): Promise<unknown> {
-    throw new Error('Not implemented');
+  constructor(
+    @Inject(RETURN_REPOSITORY)
+    private readonly returnRepo: ReturnRepository,
+  ) {}
+
+  async getReturnById(id: string): Promise<any | null> {
+    return this.returnRepo.findByIdWithItems(id);
   }
 
-  async evaluateReturnEligibility(orderLineId: string): Promise<{ eligible: boolean; reasons: string[] }> {
-    throw new Error('Not implemented');
-  }
-
-  async updateQcResult(returnId: string, qcData: unknown): Promise<void> {
-    throw new Error('Not implemented');
-  }
-
-  async approveReturn(returnId: string): Promise<void> {
-    throw new Error('Not implemented');
-  }
-
-  async rejectReturn(returnId: string, reason: string): Promise<void> {
-    throw new Error('Not implemented');
-  }
-
-  async getReturnState(returnId: string): Promise<unknown> {
-    throw new Error('Not implemented');
-  }
-
-  async requestRefundOrAdjustment(returnId: string): Promise<void> {
-    throw new Error('Not implemented');
+  async getReturnsForSubOrder(subOrderId: string): Promise<any[]> {
+    return this.returnRepo.findBySubOrderId(subOrderId);
   }
 }

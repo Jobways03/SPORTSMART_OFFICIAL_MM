@@ -6,17 +6,20 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../core/guards';
+import { AdminAuthGuard, RolesGuard } from '../../core/guards';
+import { Roles } from '../../core/decorators/roles.decorator';
 import { SettlementService } from './settlement.service';
 
 @ApiTags('Admin Settlements')
 @Controller('admin/settlements')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 export class AdminSettlementController {
   constructor(private readonly settlementService: SettlementService) {}
 
@@ -88,6 +91,7 @@ export class AdminSettlementController {
 
   /* ── PATCH /admin/settlements/cycles/:cycleId/approve ── */
   @Patch('cycles/:cycleId/approve')
+  @Roles('SUPER_ADMIN')
   async approveCycle(@Param('cycleId') cycleId: string) {
     const result = await this.settlementService.approveCycle(cycleId);
 
@@ -103,7 +107,9 @@ export class AdminSettlementController {
 
   /* ── PATCH /admin/settlements/:settlementId/mark-paid ── */
   @Patch(':settlementId/mark-paid')
+  @Roles('SUPER_ADMIN')
   async markPaid(
+    @Req() req: Request,
     @Param('settlementId') settlementId: string,
     @Body() body: { utrReference: string },
   ) {
@@ -114,6 +120,11 @@ export class AdminSettlementController {
     const result = await this.settlementService.markSettlementPaid(
       settlementId,
       body.utrReference.trim(),
+      {
+        adminId: (req as any).adminId,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      },
     );
 
     if (!result.success) {

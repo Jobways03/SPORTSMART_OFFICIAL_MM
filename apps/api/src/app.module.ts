@@ -35,6 +35,7 @@ import { FilesModule } from './modules/files/module';
 import { CommissionModule } from './modules/commission/module';
 import { DiscountsModule } from './modules/discounts/discounts.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AccountsModule } from './modules/accounts/module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { AiModule } from './modules/ai/ai.module';
     CommissionModule,
     DiscountsModule,
     AiModule,
+    AccountsModule,
   ],
   controllers: [HealthController],
 })

@@ -35,6 +35,18 @@ export interface CreateAddressInput {
   isDefault?: boolean;
 }
 
+export interface UpdateAddressInput {
+  fullName?: string;
+  phone?: string;
+  addressLine1?: string;
+  addressLine2?: string | null;
+  locality?: string | null;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  isDefault?: boolean;
+}
+
 // ── Cart types ─────────────────────────────────────────────────────────────
 
 export interface CartWithItems {
@@ -90,7 +102,9 @@ export interface MasterOrderEntity {
 export interface SubOrderEntity {
   id: string;
   masterOrderId: string;
-  sellerId: string;
+  sellerId: string | null;
+  franchiseId: string | null;
+  fulfillmentNodeType: string;
   subTotal: number;
   fulfillmentStatus: string;
   acceptStatus: string;
@@ -122,10 +136,20 @@ export interface CreateOrderItemInput {
 
 export interface CreatedSubOrderInfo {
   subOrderId: string;
-  sellerId: string;
-  sellerName: string | null;
+  sellerId: string | null;
+  franchiseId: string | null;
+  fulfillmentNodeType: 'SELLER' | 'FRANCHISE';
+  nodeName: string | null;
   subTotal: number;
   itemCount: number;
+}
+
+export interface FulfillmentGroupInput {
+  items: CreateOrderItemInput[];
+  nodeName: string | null;
+  nodeType: 'SELLER' | 'FRANCHISE';
+  nodeId: string;
+  commissionRateSnapshot?: number | null;
 }
 
 export interface PlaceOrderTransactionInput {
@@ -133,7 +157,8 @@ export interface PlaceOrderTransactionInput {
   addressSnapshot: Record<string, any>;
   totalAmount: number;
   itemCount: number;
-  sellerGroups: Record<string, { items: CreateOrderItemInput[]; sellerName: string | null }>;
+  paymentMethod?: 'COD' | 'ONLINE';
+  fulfillmentGroups: Record<string, FulfillmentGroupInput>;
 }
 
 export interface PlaceOrderTransactionResult {
@@ -161,6 +186,9 @@ export interface ICheckoutRepository {
   findAddressesByCustomer(customerId: string): Promise<CustomerAddressEntity[]>;
   clearDefaultAddresses(customerId: string): Promise<void>;
   createAddress(input: CreateAddressInput): Promise<CustomerAddressEntity>;
+  updateAddress(addressId: string, data: UpdateAddressInput): Promise<CustomerAddressEntity>;
+  deleteAddress(addressId: string): Promise<void>;
+  setDefaultAddress(addressId: string, customerId: string): Promise<CustomerAddressEntity>;
 
   // ── Cart operations ────────────────────────────────────────────────────
   findCartWithCheckoutItems(customerId: string): Promise<CartWithItems | null>;

@@ -21,6 +21,7 @@ model User {
   addresses         CustomerAddress[]
   carts             Cart[]
   orders            MasterOrder[]
+  returns           Return[]
 
   @@map("users")
 }

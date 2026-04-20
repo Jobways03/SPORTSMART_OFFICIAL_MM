@@ -14,10 +14,14 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
-import { NotFoundAppException } from '../../../../../core/exceptions';
+import {
+  BadRequestAppException,
+  NotFoundAppException,
+} from '../../../../../core/exceptions';
 import { AdminAuthGuard } from '../../../../../core/guards';
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
+import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
 import { IsArray, ArrayNotEmpty } from 'class-validator';
 import { UpdateVariantDto } from '../../dtos/update-variant.dto';
 import { CreateVariantDto } from '../../dtos/create-variant.dto';
@@ -38,6 +42,7 @@ export class AdminProductVariantsController {
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
     private readonly logger: AppLoggerService,
     private readonly variantGenerator: VariantGeneratorService,
+    private readonly cartFacade: CartPublicFacade,
   ) {
     this.logger.setContext('AdminProductVariantsController');
   }
@@ -191,6 +196,19 @@ export class AdminProductVariantsController {
     const adminId = (req as any).adminId;
     const variant = await this.variantRepo.findById(variantId, productId);
     if (!variant) throw new NotFoundAppException('Variant not found');
+
+    // Block deletion if any active cart still references this variant.
+    // Otherwise the next checkout would fetch the variant with isDeleted
+    // filter, get null, and crash with a NULL reference error. Customers
+    // would need manual intervention to clear their cart.
+    const activeCartCount =
+      await this.cartFacade.countActiveItemsForVariant(variantId);
+    if (activeCartCount > 0) {
+      throw new BadRequestAppException(
+        `Cannot delete variant — ${activeCartCount} cart item(s) currently reference it. Customers must remove it from their carts first.`,
+      );
+    }
+
     await this.variantRepo.softDelete(variantId);
     this.logger.log(`Variant ${variantId} deleted from product ${productId} by admin ${adminId}`);
     return { success: true, message: 'Variant deleted successfully', data: null };

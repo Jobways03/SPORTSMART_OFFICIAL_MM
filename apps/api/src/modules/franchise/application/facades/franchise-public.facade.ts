@@ -1,19 +1,240 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import {
+  FranchisePartnerRepository,
+  FRANCHISE_PARTNER_REPOSITORY,
+} from '../../domain/repositories/franchise.repository.interface';
+import {
+  FranchiseCatalogRepository,
+  FRANCHISE_CATALOG_REPOSITORY,
+} from '../../domain/repositories/franchise-catalog.repository.interface';
+import { FranchiseInventoryService } from '../services/franchise-inventory.service';
+import { FranchiseOrdersService } from '../services/franchise-orders.service';
+import { FranchiseCommissionService } from '../services/franchise-commission.service';
 
 @Injectable()
 export class FranchisePublicFacade {
-  async getMappedFranchiseForPincode(pincode: string): Promise<unknown> {
-    throw new Error('Not implemented');
+  constructor(
+    @Inject(FRANCHISE_PARTNER_REPOSITORY)
+    private readonly franchiseRepo: FranchisePartnerRepository,
+    @Inject(FRANCHISE_CATALOG_REPOSITORY)
+    private readonly catalogRepo: FranchiseCatalogRepository,
+    private readonly inventoryService: FranchiseInventoryService,
+    private readonly ordersService: FranchiseOrdersService,
+    private readonly commissionService: FranchiseCommissionService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  async getFranchisePartnerState(franchiseId: string) {
+    const franchise = await this.franchiseRepo.findById(franchiseId);
+    if (!franchise) return null;
+    return {
+      id: franchise.id,
+      status: franchise.status,
+      verificationStatus: franchise.verificationStatus,
+    };
   }
 
-  async computeFranchiseFeeApplicability(params: {
+  async isFranchiseActive(franchiseId: string): Promise<boolean> {
+    const franchise = await this.franchiseRepo.findById(franchiseId);
+    return franchise?.status === 'ACTIVE';
+  }
+
+  /**
+   * Check if a franchise has a specific product mapped in its catalog.
+   */
+  async getFranchiseCatalogMappings(franchiseId: string, productId: string) {
+    const result = await this.catalogRepo.findByFranchiseAndProduct(
+      franchiseId,
+      productId,
+      null,
+    );
+    return result;
+  }
+
+  async computeFranchiseFeeApplicability(_params: {
     pincode: string;
     orderValue: number;
-  }): Promise<unknown> {
-    throw new Error('Not implemented');
+  }) {
+    return null;
   }
 
-  async getFranchisePartnerState(franchiseId: string): Promise<unknown> {
-    throw new Error('Not implemented');
+  /**
+   * Get available stock for a product at a franchise (used by routing engine).
+   */
+  async getAvailableStock(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+  ): Promise<number> {
+    return this.inventoryService.getAvailableStock(
+      franchiseId,
+      productId,
+      variantId,
+    );
+  }
+
+  /**
+   * Reserve stock at a franchise for checkout.
+   */
+  async reserveStock(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    orderId?: string,
+  ) {
+    return this.inventoryService.reserveStock(
+      franchiseId,
+      productId,
+      variantId,
+      quantity,
+      orderId,
+    );
+  }
+
+  /**
+   * Unreserve stock at a franchise (cancellation).
+   */
+  async unreserveStock(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    orderId?: string,
+  ) {
+    return this.inventoryService.unreserveStock(
+      franchiseId,
+      productId,
+      variantId,
+      quantity,
+      orderId,
+    );
+  }
+
+  /**
+   * List orders assigned to a franchise (for cross-module access).
+   */
+  async listFranchiseOrders(
+    franchiseId: string,
+    page: number,
+    limit: number,
+  ) {
+    return this.ordersService.listOrders(franchiseId, page, limit);
+  }
+
+  /**
+   * Record online order commission for a franchise-fulfilled order.
+   * Called by the commission processor after delivery + return window passes.
+   */
+  async recordOnlineOrderCommission(params: {
+    franchiseId: string;
+    subOrderId: string;
+    orderNumber: string;
+    items: Array<{ unitPrice: number; quantity: number }>;
+    commissionRate: number;
+  }) {
+    return this.commissionService.recordOnlineOrderCommission(params);
+  }
+
+  /**
+   * Get earnings summary for franchise dashboard KPIs.
+   */
+  async getEarningsSummary(franchiseId: string) {
+    return this.commissionService.getEarningsSummary(franchiseId);
+  }
+
+  /**
+   * Get the current online fulfillment commission rate for a franchise.
+   * Used by checkout to snapshot the rate at order placement time.
+   */
+  async getCommissionRate(franchiseId: string): Promise<number | null> {
+    const franchise = await this.franchiseRepo.findById(franchiseId);
+    if (!franchise) return null;
+    return Number(franchise.onlineFulfillmentRate);
+  }
+
+  /**
+   * Return QC-approved stock to the franchise's on-hand quantity via
+   * ORDER_RETURN ledger movement.
+   */
+  async recordReturn(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    orderId: string,
+  ): Promise<void> {
+    await this.inventoryService.recordReturn(
+      franchiseId,
+      productId,
+      variantId,
+      quantity,
+      orderId,
+    );
+  }
+
+  /**
+   * Mark returned stock as damaged at the franchise — moves to damagedQty via
+   * a DAMAGE adjustment (deducts from onHand and adds to damagedQty).
+   */
+  async recordDamagedReturn(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+    orderId: string,
+    actorId: string,
+  ): Promise<void> {
+    await this.inventoryService.adjustStock(franchiseId, {
+      productId,
+      variantId: variantId ?? undefined,
+      adjustmentType: 'DAMAGE',
+      quantity,
+      reason: `Damaged return for order ${orderId}`,
+      actorType: 'SYSTEM',
+      actorId,
+    });
+  }
+
+  /**
+   * Reverse franchise commission for a returned sub-order. Finds the original
+   * ONLINE_ORDER ledger entry and creates a RETURN_REVERSAL entry against it.
+   */
+  async recordReturnReversal(params: {
+    franchiseId: string;
+    subOrderId: string;
+    reversalAmount: number;
+  }): Promise<void> {
+    // Locate the original online-order ledger entry for this sub-order.
+    // If none exists yet (e.g. return happened before the 7-day commission
+    // lock processor fired), we still record a standalone reversal entry so
+    // the ledger never misses a refund — the caller is shielded from having
+    // to know about this edge case.
+    const originalEntry = await this.prisma.franchiseFinanceLedger.findFirst({
+      where: {
+        franchiseId: params.franchiseId,
+        sourceId: params.subOrderId,
+        sourceType: 'ONLINE_ORDER',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!originalEntry) {
+      // Not an error — can happen when return lands before commission lock.
+      // The reversal is still recorded so settlement math stays correct.
+      // Logged at warn so operators can spot unusual patterns.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[FranchisePublicFacade] No ONLINE_ORDER ledger entry for subOrder ${params.subOrderId} — creating standalone reversal for ₹${params.reversalAmount}`,
+      );
+    }
+
+    await this.commissionService.recordReturnReversal({
+      franchiseId: params.franchiseId,
+      originalLedgerEntryId: originalEntry?.id ?? '',
+      subOrderId: params.subOrderId,
+      reversalAmount: params.reversalAmount,
+    });
   }
 }

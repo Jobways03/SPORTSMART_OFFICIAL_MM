@@ -59,9 +59,66 @@ export class CheckoutController {
       req.userId,
       body.paymentMethod,
     );
+    const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {
       success: true,
-      message: 'Order placed successfully',
+      message: isOnline
+        ? 'Order created — complete payment to confirm'
+        : 'Order placed successfully',
+      data,
+    };
+  }
+
+  // ── POST /customer/checkout/payment/retry ───────────────────────────
+  @Post('payment/retry')
+  async retryPayment(
+    @Req() req: any,
+    @Body() body: { orderNumber: string },
+  ) {
+    if (!body.orderNumber) {
+      return { success: false, message: 'orderNumber is required' };
+    }
+    const data = await this.checkoutService.retryPayment(
+      req.userId,
+      body.orderNumber,
+    );
+    return {
+      success: true,
+      message: 'New payment session created — complete payment to confirm',
+      data,
+    };
+  }
+
+  // ── POST /customer/checkout/payment/verify ──────────────────────────
+  @Post('payment/verify')
+  async verifyPayment(
+    @Req() req: any,
+    @Body()
+    body: {
+      razorpayOrderId: string;
+      razorpayPaymentId: string;
+      razorpaySignature: string;
+    },
+  ) {
+    if (
+      !body.razorpayOrderId ||
+      !body.razorpayPaymentId ||
+      !body.razorpaySignature
+    ) {
+      return {
+        success: false,
+        message:
+          'razorpayOrderId, razorpayPaymentId, and razorpaySignature are required',
+      };
+    }
+    const data = await this.checkoutService.verifyPayment(req.userId, {
+      razorpayOrderId: body.razorpayOrderId,
+      razorpayPaymentId: body.razorpayPaymentId,
+      razorpaySignature: body.razorpaySignature,
+    });
+    return {
+      success: true,
+      message: 'Payment verified — order confirmed',
       data,
     };
   }

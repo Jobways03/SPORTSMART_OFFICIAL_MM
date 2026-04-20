@@ -11,24 +11,37 @@ export class PrismaSellerRepository implements SellerRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   // ── Auth / Seller CRUD ──────────────────────────────────────
+  //
+  // All seller lookups exclude soft-deleted rows. A reused email or phone
+  // after a soft-delete must NOT return the deleted seller — that would
+  // both leak the old account's data and cause unique-constraint headaches.
 
   async findByEmail(email: string): Promise<Seller | null> {
-    return this.prisma.seller.findUnique({ where: { email } });
+    return this.prisma.seller.findFirst({
+      where: { email, isDeleted: false },
+    });
   }
 
   async findByPhone(phoneNumber: string): Promise<Seller | null> {
-    return this.prisma.seller.findUnique({ where: { phoneNumber } });
+    return this.prisma.seller.findFirst({
+      where: { phoneNumber, isDeleted: false },
+    });
   }
 
   async findById(id: string): Promise<Seller | null> {
-    return this.prisma.seller.findUnique({ where: { id } });
+    return this.prisma.seller.findFirst({
+      where: { id, isDeleted: false },
+    });
   }
 
   async findByIdSelect<T extends Record<string, boolean>>(
     id: string,
     select: T,
   ): Promise<Pick<Seller, Extract<keyof T, keyof Seller>> | null> {
-    return this.prisma.seller.findUnique({ where: { id }, select }) as any;
+    return this.prisma.seller.findFirst({
+      where: { id, isDeleted: false },
+      select,
+    }) as any;
   }
 
   async createSeller(data: {

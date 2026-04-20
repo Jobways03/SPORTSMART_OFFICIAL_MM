@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { apiClient } from '@/lib/api-client';
+import { sanitizeProductHtml } from '@/lib/sanitize';
 
 interface ProductImage {
   id: string;
@@ -548,7 +549,9 @@ export default function ProductDetailPage() {
                 {product.description ? (
                   <div
                     className="description-content"
-                    dangerouslySetInnerHTML={{ __html: product.description }}
+                    dangerouslySetInnerHTML={{
+                      __html: sanitizeProductHtml(product.description),
+                    }}
                   />
                 ) : (
                   <p>{product.shortDescription}</p>

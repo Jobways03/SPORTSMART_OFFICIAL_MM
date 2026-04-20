@@ -1,4 +1,172 @@
 // ============================================
 // Returns Module - owned tables
-// Models defined when returns module is implemented
 // ============================================
+
+model Return {
+  id            String       @id @default(uuid())
+  returnNumber  String       @unique @map("return_number") // RET-2026-000001
+  subOrderId    String       @map("sub_order_id")
+  masterOrderId String       @map("master_order_id")
+  customerId    String       @map("customer_id")
+
+  status        ReturnStatus @default(REQUESTED)
+
+  // Initiator
+  initiatedBy   String       @default("CUSTOMER") @map("initiated_by") // CUSTOMER, ADMIN, SELLER, FRANCHISE
+  initiatorId   String?      @map("initiator_id")
+
+  // Approval
+  approvedAt      DateTime? @map("approved_at")
+  approvedBy      String?   @map("approved_by")
+  rejectedAt      DateTime? @map("rejected_at")
+  rejectedBy      String?   @map("rejected_by")
+  rejectionReason String?   @map("rejection_reason")
+
+  // Pickup
+  pickupScheduledAt    DateTime? @map("pickup_scheduled_at")
+  pickupAddress        Json?     @map("pickup_address")
+  pickupTrackingNumber String?   @map("pickup_tracking_number")
+  pickupCourier        String?   @map("pickup_courier")
+
+  // Receipt at warehouse
+  receivedAt DateTime? @map("received_at")
+  receivedBy String?   @map("received_by")
+
+  // QC
+  qcCompletedAt DateTime?  @map("qc_completed_at")
+  qcDecision    QcOutcome? @map("qc_decision")
+  qcNotes       String?    @map("qc_notes")
+
+  // Refund
+  refundMethod      ReturnRefundMethod? @map("refund_method")
+  refundAmount      Decimal?            @map("refund_amount") @db.Decimal(10, 2)
+  refundProcessedAt DateTime?           @map("refund_processed_at")
+  refundReference   String?             @map("refund_reference")
+
+  // Refund processing tracking (Phase R4)
+  refundAttempts      Int       @default(0) @map("refund_attempts")
+  refundLastAttemptAt DateTime? @map("refund_last_attempt_at")
+  refundFailureReason String?   @map("refund_failure_reason")
+  refundInitiatedBy   String?   @map("refund_initiated_by") // ADMIN, SYSTEM
+  refundInitiatedAt   DateTime? @map("refund_initiated_at")
+
+  // Misc
+  customerNotes String?   @map("customer_notes")
+  closedAt      DateTime? @map("closed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subOrder      SubOrder              @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  masterOrder   MasterOrder           @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  customer      User                  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items               ReturnItem[]
+  evidence            ReturnEvidence[]
+  statusHistory       ReturnStatusHistory[]
+  refundTransactions  RefundTransaction[]
+
+  @@index([customerId])
+  @@index([subOrderId])
+  @@index([masterOrderId])
+  @@index([status])
+  @@index([returnNumber])
+  @@map("returns")
+}
+
+model ReturnItem {
+  id             String               @id @default(uuid())
+  returnId       String               @map("return_id")
+  orderItemId    String               @map("order_item_id")
+  quantity       Int
+  reasonCategory ReturnReasonCategory @map("reason_category")
+  reasonDetail   String?              @map("reason_detail")
+
+  // QC outcome per item
+  qcOutcome          QcOutcome? @map("qc_outcome")
+  qcQuantityApproved Int?       @map("qc_quantity_approved")
+  qcNotes            String?    @map("qc_notes")
+
+  refundAmount Decimal? @map("refund_amount") @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  return    Return    @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@index([orderItemId])
+  @@map("return_items")
+}
+
+model ReturnEvidence {
+  id          String   @id @default(uuid())
+  returnId    String   @map("return_id")
+  uploadedBy  String   @map("uploaded_by") // CUSTOMER, FRANCHISE, SELLER, ADMIN
+  uploaderId  String?  @map("uploader_id")
+  fileType    String   @map("file_type")
+  fileUrl     String   @map("file_url")
+  publicId    String?  @map("public_id")
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  return Return @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@map("return_evidence")
+}
+
+model ReturnStatusHistory {
+  id          String        @id @default(uuid())
+  returnId    String        @map("return_id")
+  fromStatus  ReturnStatus? @map("from_status")
+  toStatus    ReturnStatus  @map("to_status")
+  changedBy   String        @map("changed_by") // CUSTOMER, ADMIN, SELLER, FRANCHISE, SYSTEM
+  changedById String?       @map("changed_by_id")
+  notes       String?
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  return Return @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@map("return_status_history")
+}
+
+// ── Refund Transaction audit trail ──────────────────────────────
+//
+// One row per refund gateway attempt. The Return model's embedded
+// `refundAttempts`, `refundReference`, and `refundFailureReason`
+// are running-state fields; this table preserves the full history
+// so operators can trace every gateway call made for a refund.
+
+enum RefundTransactionStatus {
+  INITIATED
+  PROCESSED
+  FAILED
+}
+
+model RefundTransaction {
+  id               String                   @id @default(uuid())
+  returnId         String                   @map("return_id")
+  attemptNumber    Int                      @map("attempt_number")
+  amount           Decimal                  @map("amount") @db.Decimal(10, 2)
+  gatewayRefundId  String?                  @map("gateway_refund_id")
+  status           RefundTransactionStatus  @default(INITIATED)
+  failureReason    String?                  @map("failure_reason")
+  actorType        String                   @map("actor_type") // ADMIN, SYSTEM
+  actorId          String?                  @map("actor_id")
+  createdAt        DateTime                 @default(now()) @map("created_at")
+
+  return Return @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("refund_transactions")
+}
+
+model ReturnSequence {
+  id         Int @id @default(1)
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("return_sequences")
+}

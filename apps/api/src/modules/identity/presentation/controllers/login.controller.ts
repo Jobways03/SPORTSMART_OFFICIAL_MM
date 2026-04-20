@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { LoginDto } from '../dtos/login.dto';
 import { LoginUserUseCase } from '../../application/use-cases/login-user.use-case';
@@ -9,6 +10,7 @@ export class LoginController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(@Body() dto: LoginDto, @Req() req: Request) {
     const data = await this.loginUseCase.execute({
       email: dto.email,

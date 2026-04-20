@@ -39,7 +39,7 @@ export class OrderTimeoutService implements OnModuleInit {
 
     for (const subOrder of expiredSubOrders) {
       try {
-        await this.ordersService.sellerRejectOrder(subOrder.id, subOrder.sellerId, {
+        await this.ordersService.sellerRejectOrder(subOrder.id, subOrder.sellerId || '', {
           reason: 'OTHER',
           note: 'Auto-rejected due to SLA timeout — seller did not respond within deadline',
         });

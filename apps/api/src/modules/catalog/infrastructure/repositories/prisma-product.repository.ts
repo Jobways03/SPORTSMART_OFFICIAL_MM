@@ -267,11 +267,27 @@ export class PrismaProductRepository implements IProductRepository {
     });
   }
 
-  async approveInTransaction(productId: string, historyEntries: any[]): Promise<void> {
+  async approveInTransaction(
+    productId: string,
+    historyEntries: any[],
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void> {
+    const reviewedAt = moderator?.reviewedAt ?? new Date();
     await this.prisma.$transaction(async (tx) => {
       await tx.product.update({
         where: { id: productId },
-        data: { status: 'ACTIVE', moderationStatus: 'APPROVED', moderationNote: null },
+        data: {
+          status: 'ACTIVE',
+          moderationStatus: 'APPROVED',
+          moderationNote: null,
+          // Clear any prior rejection/change-request reason so the audit
+          // panel shows a clean slate after approval. Previous decisions
+          // remain visible through ProductStatusHistory.
+          rejectionReason: null,
+          changeRequestNote: null,
+          moderatorId: moderator?.moderatorId ?? null,
+          reviewedAt,
+        },
       });
       for (const entry of historyEntries) {
         await tx.productStatusHistory.create({ data: { productId, ...entry } });
@@ -279,21 +295,49 @@ export class PrismaProductRepository implements IProductRepository {
     });
   }
 
-  async rejectInTransaction(productId: string, reason: string, historyEntry: any): Promise<void> {
+  async rejectInTransaction(
+    productId: string,
+    reason: string,
+    historyEntry: any,
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void> {
+    const reviewedAt = moderator?.reviewedAt ?? new Date();
     await this.prisma.$transaction(async (tx) => {
       await tx.product.update({
         where: { id: productId },
-        data: { status: 'REJECTED', moderationStatus: 'REJECTED', moderationNote: reason },
+        data: {
+          status: 'REJECTED',
+          moderationStatus: 'REJECTED',
+          moderationNote: reason,
+          rejectionReason: reason,
+          changeRequestNote: null,
+          moderatorId: moderator?.moderatorId ?? null,
+          reviewedAt,
+        },
       });
       await tx.productStatusHistory.create({ data: { productId, ...historyEntry } });
     });
   }
 
-  async requestChangesInTransaction(productId: string, note: string, historyEntry: any): Promise<void> {
+  async requestChangesInTransaction(
+    productId: string,
+    note: string,
+    historyEntry: any,
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void> {
+    const reviewedAt = moderator?.reviewedAt ?? new Date();
     await this.prisma.$transaction(async (tx) => {
       await tx.product.update({
         where: { id: productId },
-        data: { status: 'CHANGES_REQUESTED', moderationStatus: 'CHANGES_REQUESTED', moderationNote: note },
+        data: {
+          status: 'CHANGES_REQUESTED',
+          moderationStatus: 'CHANGES_REQUESTED',
+          moderationNote: note,
+          changeRequestNote: note,
+          rejectionReason: null,
+          moderatorId: moderator?.moderatorId ?? null,
+          reviewedAt,
+        },
       });
       await tx.productStatusHistory.create({ data: { productId, ...historyEntry } });
     });

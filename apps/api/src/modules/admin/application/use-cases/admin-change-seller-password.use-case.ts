@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
+import * as bcrypt from 'bcrypt';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';

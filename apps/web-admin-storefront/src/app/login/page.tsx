@@ -37,8 +37,8 @@ export default function LoginPage() {
     <div className="login-wrapper">
       <div className="login-card">
         <div className="login-logo">
-          <h1>SportSmart</h1>
-          <p>Log in to your store admin</p>
+          <h1>SPORTSMART</h1>
+          <p>SPORTSMART Admin</p>
         </div>
 
         {error && <div className="login-error">{error}</div>}

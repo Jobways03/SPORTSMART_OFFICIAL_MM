@@ -8,7 +8,7 @@ import { ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
 import '../../product-form.css';
-import RichTextEditor from '@/components/RichTextEditor';
+import { RichTextEditor } from '@sportsmart/ui';
 
 // ----- Types -----
 
@@ -920,12 +920,12 @@ export default function EditProductPage() {
         </div>
       )}
 
-      {/* Moderation Actions (only for SUBMITTED / IN_REVIEW products) */}
+      {/* Approval Actions (only for SUBMITTED / IN_REVIEW products) */}
       {isSubmitted && (
         <div className="form-card" style={{ marginBottom: 16 }}>
-          <div className="form-card-title">MODERATION</div>
+          <div className="form-card-title">APPROVAL</div>
           <p style={{ fontSize: 14, marginBottom: 12, color: '#374151' }}>
-            This product is awaiting review. Take an action:
+            This product is awaiting approval. Take an action:
           </p>
           <div style={{ display: 'flex', gap: 10 }}>
             <button

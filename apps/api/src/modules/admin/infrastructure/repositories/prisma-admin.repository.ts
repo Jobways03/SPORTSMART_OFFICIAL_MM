@@ -5,6 +5,7 @@ import {
   AdminRepository,
   AdminRecord,
   AdminSessionRecord,
+  AdminPasswordResetOtpRecord,
   SellerListItem,
   CustomerListItem,
   CustomerDetail,
@@ -279,5 +280,125 @@ export class PrismaAdminRepository implements AdminRepository {
       },
       orderBy: { createdAt: 'desc' as const },
     }) as unknown as MasterOrderRecord[];
+  }
+
+  // ── Admin password reset OTP ────────────────────────────────────────────
+
+  async findRecentAdminOtp(params: {
+    adminId: string;
+    unusedOnly: boolean;
+    createdAfter: Date;
+  }): Promise<AdminPasswordResetOtpRecord | null> {
+    return this.prisma.adminPasswordResetOtp.findFirst({
+      where: {
+        adminId: params.adminId,
+        ...(params.unusedOnly ? { usedAt: null } : {}),
+        createdAt: { gte: params.createdAfter },
+      },
+      orderBy: { createdAt: 'desc' },
+    }) as Promise<AdminPasswordResetOtpRecord | null>;
+  }
+
+  async findActiveAdminOtp(
+    adminId: string,
+  ): Promise<AdminPasswordResetOtpRecord | null> {
+    return this.prisma.adminPasswordResetOtp.findFirst({
+      where: {
+        adminId,
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    }) as Promise<AdminPasswordResetOtpRecord | null>;
+  }
+
+  async invalidateActiveAdminOtps(adminId: string): Promise<void> {
+    await this.prisma.adminPasswordResetOtp.updateMany({
+      where: {
+        adminId,
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { expiresAt: new Date() },
+    });
+  }
+
+  async createAdminOtp(data: {
+    adminId: string;
+    otpHash: string;
+    purpose: string;
+    expiresAt: Date;
+  }): Promise<void> {
+    await this.prisma.adminPasswordResetOtp.create({
+      data: {
+        adminId: data.adminId,
+        otpHash: data.otpHash,
+        purpose: data.purpose,
+        expiresAt: data.expiresAt,
+      },
+    });
+  }
+
+  async incrementAdminOtpAttempts(otpId: string): Promise<void> {
+    await this.prisma.adminPasswordResetOtp.update({
+      where: { id: otpId },
+      data: { attempts: { increment: 1 } },
+    });
+  }
+
+  async expireAdminOtp(otpId: string): Promise<void> {
+    await this.prisma.adminPasswordResetOtp.update({
+      where: { id: otpId },
+      data: { expiresAt: new Date() },
+    });
+  }
+
+  async markAdminOtpVerified(
+    otpId: string,
+    resetToken: string,
+  ): Promise<void> {
+    await this.prisma.adminPasswordResetOtp.update({
+      where: { id: otpId },
+      data: { verifiedAt: new Date(), resetToken },
+    });
+  }
+
+  async findAdminOtpByResetToken(
+    resetToken: string,
+  ): Promise<AdminPasswordResetOtpRecord | null> {
+    return this.prisma.adminPasswordResetOtp.findUnique({
+      where: { resetToken },
+      include: {
+        admin: { select: { id: true, email: true, status: true } },
+      },
+    }) as unknown as AdminPasswordResetOtpRecord | null;
+  }
+
+  async resetAdminPasswordTransaction(params: {
+    adminId: string;
+    passwordHash: string;
+    otpId: string;
+  }): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.admin.update({
+        where: { id: params.adminId },
+        data: {
+          passwordHash: params.passwordHash,
+          failedLoginAttempts: 0,
+          lockUntil: null,
+        },
+      });
+      await tx.adminPasswordResetOtp.update({
+        where: { id: params.otpId },
+        data: { usedAt: new Date() },
+      });
+      // Revoke all existing sessions — forces re-login with the new password.
+      await tx.adminSession.updateMany({
+        where: { adminId: params.adminId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
   }
 }

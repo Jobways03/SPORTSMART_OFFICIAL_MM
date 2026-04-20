@@ -46,6 +46,12 @@ export interface CartRepository {
   getAggregatedStock(productId: string, variantId?: string | null): Promise<number>;
   validateProduct(productId: string): Promise<boolean>;
   validateVariant(variantId: string, productId: string): Promise<boolean>;
+  /** Count cart items currently referencing a given variant. Used to block
+   *  catalog admins from soft-deleting variants that customers have in their
+   *  carts (would otherwise crash checkout with a NULL variant reference). */
+  countActiveItemsForVariant(variantId: string): Promise<number>;
+  /** Same, but for a base-product (no variant) line item. */
+  countActiveItemsForProduct(productId: string): Promise<number>;
 }
 
 export const CART_REPOSITORY = Symbol('CartRepository');

@@ -135,4 +135,18 @@ export class PrismaCartRepository implements CartRepository {
     });
     return !!variant;
   }
+
+  async countActiveItemsForVariant(variantId: string): Promise<number> {
+    return this.prisma.cartItem.count({
+      where: { variantId },
+    });
+  }
+
+  async countActiveItemsForProduct(productId: string): Promise<number> {
+    // Only count base-product line items (where variantId is null) — variant
+    // line items are tracked separately by countActiveItemsForVariant.
+    return this.prisma.cartItem.count({
+      where: { productId, variantId: null },
+    });
+  }
 }

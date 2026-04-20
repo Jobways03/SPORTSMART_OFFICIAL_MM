@@ -38,6 +38,10 @@ export interface OrderRepository {
 
   findSubOrderByIdWithMasterOrder(id: string): Promise<any | null>;
 
+  /** Look up a sub-order by its courier tracking number. Used by the
+   *  Shiprocket webhook to find the right sub-order to mark delivered. */
+  findSubOrderByTrackingNumber(trackingNumber: string): Promise<any | null>;
+
   findSubOrderForSeller(id: string, sellerId: string): Promise<any | null>;
 
   findSubOrderForSellerBasic(
@@ -123,7 +127,7 @@ export interface OrderRepository {
 
   // ── Expired sub-orders (for timeout service) ───────────────────────────
 
-  findExpiredSubOrders(now: Date): Promise<{ id: string; sellerId: string }[]>;
+  findExpiredSubOrders(now: Date): Promise<{ id: string; sellerId: string | null }[]>;
 
   // ── Transaction support ────────────────────────────────────────────────
 

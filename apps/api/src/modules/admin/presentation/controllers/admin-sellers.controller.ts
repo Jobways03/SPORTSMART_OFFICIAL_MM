@@ -13,7 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { Roles } from '../../../../core/decorators/roles.decorator';
 import { AdminListSellersUseCase } from '../../application/use-cases/admin-list-sellers.use-case';
 import { AdminGetSellerUseCase } from '../../application/use-cases/admin-get-seller.use-case';
 import { AdminEditSellerUseCase } from '../../application/use-cases/admin-edit-seller.use-case';
@@ -31,7 +32,7 @@ import { AdminChangePasswordDto } from '../dtos/admin-change-password.dto';
 import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile.dto';
 
 @Controller('admin/sellers')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 export class AdminSellersController {
   constructor(
     private readonly listSellersUseCase: AdminListSellersUseCase,
@@ -150,6 +151,7 @@ export class AdminSellersController {
 
   @Post(':sellerId/impersonate')
   @HttpCode(HttpStatus.OK)
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async impersonate(
     @Param('sellerId') sellerId: string,
     @Req() req: Request,
@@ -221,6 +223,7 @@ export class AdminSellersController {
 
   @Delete(':sellerId')
   @HttpCode(HttpStatus.OK)
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async deleteSeller(
     @Param('sellerId') sellerId: string,
     @Body() body: { reason?: string },

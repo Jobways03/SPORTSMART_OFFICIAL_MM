@@ -20,6 +20,7 @@ interface MappingRow {
   pickupPincode: string | null;
   isActive: boolean;
   approvalStatus?: string;
+  sellerInternalSku?: string | null;
 }
 
 interface MappedProduct {

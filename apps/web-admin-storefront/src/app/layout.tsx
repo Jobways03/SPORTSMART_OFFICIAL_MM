@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'SportSmart Admin',
-  description: 'SportSmart Store Administration',
+  title: 'SPORTSMART Admin',
+  description: 'Main administration for SPORTSMART marketplace',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -4,6 +4,7 @@ import {
   ICheckoutRepository,
   CustomerAddressEntity,
   CreateAddressInput,
+  UpdateAddressInput,
   CartWithItems,
   MasterOrderEntity,
   PlaceOrderTransactionInput,
@@ -55,6 +56,38 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         postalCode: input.postalCode,
         isDefault: input.isDefault || false,
       },
+    });
+  }
+
+  async updateAddress(
+    addressId: string,
+    data: UpdateAddressInput,
+  ): Promise<CustomerAddressEntity> {
+    return this.prisma.customerAddress.update({
+      where: { id: addressId },
+      data,
+    });
+  }
+
+  async deleteAddress(addressId: string): Promise<void> {
+    await this.prisma.customerAddress.delete({
+      where: { id: addressId },
+    });
+  }
+
+  async setDefaultAddress(
+    addressId: string,
+    customerId: string,
+  ): Promise<CustomerAddressEntity> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.customerAddress.updateMany({
+        where: { customerId, isDefault: true },
+        data: { isDefault: false },
+      });
+      return tx.customerAddress.update({
+        where: { id: addressId },
+        data: { isDefault: true },
+      });
     });
   }
 
@@ -152,6 +185,95 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
     input: PlaceOrderTransactionInput,
   ): Promise<PlaceOrderTransactionResult> {
     return this.prisma.$transaction(async (tx) => {
+      // ── Server-side price validation ─────────────────────────────────
+      // The client (cart / checkout session) supplies unitPrice for each
+      // line item. We MUST re-fetch the current platform price from the
+      // canonical product/variant rows here and reject if anything has
+      // drifted by more than ₹0.01 (rounding tolerance). This closes a
+      // price-spoofing vector and also protects customers from stale
+      // higher prices when an admin lowers a price between cart-add and
+      // checkout — both directions are rejected.
+      const PRICE_TOLERANCE = 0.01;
+      const allLineItems = Object.values(input.fulfillmentGroups).flatMap(
+        (g) => g.items,
+      );
+      const productIds = Array.from(
+        new Set(allLineItems.map((i) => i.productId)),
+      );
+      const variantIds = Array.from(
+        new Set(
+          allLineItems
+            .map((i) => i.variantId)
+            .filter((id): id is string => !!id),
+        ),
+      );
+
+      const [productRows, variantRows] = await Promise.all([
+        tx.product.findMany({
+          where: { id: { in: productIds } },
+          select: {
+            id: true,
+            platformPrice: true,
+            basePrice: true,
+            status: true,
+          },
+        }),
+        variantIds.length > 0
+          ? tx.productVariant.findMany({
+              where: { id: { in: variantIds } },
+              select: {
+                id: true,
+                platformPrice: true,
+                price: true,
+              },
+            })
+          : Promise.resolve([] as Array<{
+              id: string;
+              platformPrice: any;
+              price: any;
+            }>),
+      ]);
+
+      const productById = new Map(productRows.map((p) => [p.id, p]));
+      const variantById = new Map(variantRows.map((v) => [v.id, v]));
+
+      for (const item of allLineItems) {
+        const product = productById.get(item.productId);
+        if (!product) {
+          throw new BadRequestAppException(
+            `Product ${item.productId} no longer exists`,
+          );
+        }
+        if (product.status !== 'ACTIVE') {
+          throw new BadRequestAppException(
+            `Product is no longer available — please refresh your cart`,
+          );
+        }
+
+        let canonicalUnitPrice: number;
+        if (item.variantId) {
+          const variant = variantById.get(item.variantId);
+          if (!variant) {
+            throw new BadRequestAppException(
+              `Variant ${item.variantId} no longer exists`,
+            );
+          }
+          canonicalUnitPrice = Number(
+            variant.platformPrice ?? variant.price ?? 0,
+          );
+        } else {
+          canonicalUnitPrice = Number(
+            product.platformPrice ?? product.basePrice ?? 0,
+          );
+        }
+
+        if (Math.abs(item.unitPrice - canonicalUnitPrice) > PRICE_TOLERANCE) {
+          throw new BadRequestAppException(
+            `Price for "${item.productTitle}" has changed (was ₹${item.unitPrice.toFixed(2)}, now ₹${canonicalUnitPrice.toFixed(2)}). Please refresh your cart and try again.`,
+          );
+        }
+      }
+
       // Generate order number (upsert ensures row always exists)
       const seq = await tx.orderSequence.upsert({
         where: { id: 1 },
@@ -161,23 +283,28 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
       const year = new Date().getFullYear();
       const orderNumber = `SM${year}${String(seq.lastNumber).padStart(4, '0')}`;
 
-      // Create master order with status PLACED (awaits admin verification)
+      const paymentMethod = input.paymentMethod ?? 'COD';
+      const isOnline = paymentMethod === 'ONLINE';
+
+      // Create master order. ONLINE orders start in PENDING_PAYMENT until
+      // the frontend confirms the Razorpay payment; COD orders go straight
+      // to PLACED.
       const masterOrder = await tx.masterOrder.create({
         data: {
           orderNumber,
           customerId: input.customerId,
           shippingAddressSnapshot: input.addressSnapshot,
           totalAmount: input.totalAmount,
-          paymentMethod: 'COD',
-          paymentStatus: 'PENDING',
-          orderStatus: 'PLACED',
+          paymentMethod,
+          paymentStatus: isOnline ? 'PENDING' : 'PENDING',
+          orderStatus: isOnline ? 'PENDING_PAYMENT' : 'PLACED',
           itemCount: input.itemCount,
         },
       });
 
-      // Create sub-orders per seller
+      // Create sub-orders per fulfillment node (seller or franchise)
       const createdSubOrders: PlaceOrderTransactionResult['createdSubOrders'] = [];
-      for (const [sellerId, group] of Object.entries(input.sellerGroups)) {
+      for (const [_groupKey, group] of Object.entries(input.fulfillmentGroups)) {
         let subTotal = 0;
         const orderItemsData = group.items.map((item) => {
           subTotal += item.totalPrice;
@@ -198,19 +325,24 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         const subOrder = await tx.subOrder.create({
           data: {
             masterOrderId: masterOrder.id,
-            sellerId,
+            sellerId: group.nodeType === 'SELLER' ? group.nodeId : null,
+            franchiseId: group.nodeType === 'FRANCHISE' ? group.nodeId : null,
+            fulfillmentNodeType: group.nodeType,
             subTotal,
             paymentStatus: 'PENDING',
             fulfillmentStatus: 'UNFULFILLED',
             acceptStatus: 'OPEN',
+            commissionRateSnapshot: group.commissionRateSnapshot ?? null,
             items: { create: orderItemsData },
           },
         });
 
         createdSubOrders.push({
           subOrderId: subOrder.id,
-          sellerId,
-          sellerName: group.sellerName,
+          sellerId: group.nodeType === 'SELLER' ? group.nodeId : null,
+          franchiseId: group.nodeType === 'FRANCHISE' ? group.nodeId : null,
+          fulfillmentNodeType: group.nodeType,
+          nodeName: group.nodeName,
           subTotal,
           itemCount: group.items.reduce((s, i) => s + i.quantity, 0),
         });
@@ -435,7 +567,10 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             });
           }
 
-          // Refund commission if already processed
+          // Refund commission if already processed. Full cancel reverses the
+          // entire margin and drops an audit row so settlement reconciliation
+          // sees the reversal event, not just a silently-mutated running total
+          // — mirrors return-commission-reversal.service.ts (seller path).
           const commissionRecord = await tx.commissionRecord.findUnique({
             where: { orderItemId: item.id },
           });
@@ -444,6 +579,21 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
               where: { id: commissionRecord.id },
               data: {
                 refundedAdminEarning: commissionRecord.adminEarning,
+                status: 'REFUNDED',
+              },
+            });
+            await tx.commissionReversalRecord.create({
+              data: {
+                commissionRecordId: commissionRecord.id,
+                source: 'MANUAL',
+                returnId: null,
+                returnNumber: null,
+                reversedQty: item.quantity,
+                totalRefundAmount: commissionRecord.totalPrice,
+                refundedAdminEarning: commissionRecord.adminEarning,
+                actorType: 'SYSTEM',
+                actorId: null,
+                note: `Customer cancellation of order ${order.orderNumber}`,
               },
             });
           }

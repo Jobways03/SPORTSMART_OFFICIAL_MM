@@ -79,7 +79,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <aside className="admin-sidebar">
         <Link href="/dashboard" className="sidebar-brand">
           <div className="sidebar-brand-icon">S</div>
-          <span className="sidebar-brand-name">SportSmart</span>
+          <span className="sidebar-brand-name">SPORTSMART</span>
         </Link>
 
         <nav className="sidebar-nav">

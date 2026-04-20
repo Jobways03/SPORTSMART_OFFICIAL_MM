@@ -204,7 +204,7 @@ export default function ProductsPage() {
             marginTop: 4,
             fontWeight: 400,
           }}>
-            Products you have created go through admin moderation before going live.
+            Products you have created go through admin approval before going live.
             You are automatically mapped as a seller for approved products.
           </p>
         </div>
@@ -276,7 +276,7 @@ export default function ProductsPage() {
                   <th>Price</th>
                   <th>Stock</th>
                   <th>Status</th>
-                  <th>Moderation</th>
+                  <th>Approval</th>
                   <th style={{ width: 60 }}>Actions</th>
                 </tr>
               </thead>
@@ -329,9 +329,35 @@ export default function ProductsPage() {
                       </span>
                     </td>
                     <td>
-                      <span className={getModerationBadgeClass(product.moderationStatus)}>
+                      <span
+                        className={getModerationBadgeClass(product.moderationStatus)}
+                        title={product.moderationNote || undefined}
+                      >
                         {formatStatus(product.moderationStatus)}
                       </span>
+                      {/* Inline preview of moderation note so the seller can
+                          see rejection / change-request reasons without
+                          opening the detail page. */}
+                      {product.moderationNote &&
+                        (product.moderationStatus === 'REJECTED' ||
+                          product.moderationStatus === 'CHANGES_REQUESTED') && (
+                          <div
+                            style={{
+                              marginTop: 4,
+                              fontSize: 11,
+                              color:
+                                product.moderationStatus === 'REJECTED'
+                                  ? '#991b1b'
+                                  : '#92400e',
+                              maxWidth: 220,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {product.moderationNote}
+                          </div>
+                        )}
                     </td>
                     <td>
                       <ProductActionMenu

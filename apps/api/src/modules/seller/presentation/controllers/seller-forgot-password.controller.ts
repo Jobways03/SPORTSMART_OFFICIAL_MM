@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { SellerForgotPasswordDto } from '../dtos/seller-forgot-password.dto';
 import { SellerVerifyResetOtpDto } from '../dtos/seller-verify-reset-otp.dto';
 import { SellerResendResetOtpDto } from '../dtos/seller-resend-reset-otp.dto';
@@ -16,6 +17,7 @@ export class SellerForgotPasswordController {
 
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async forgotPassword(@Body() dto: SellerForgotPasswordDto) {
     await this.forgotPasswordUseCase.execute({ email: dto.email });
 
@@ -27,6 +29,7 @@ export class SellerForgotPasswordController {
 
   @Post('verify-reset-otp')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async verifyResetOtp(@Body() dto: SellerVerifyResetOtpDto) {
     const result = await this.verifyResetOtpUseCase.execute({
       email: dto.email,
@@ -42,6 +45,7 @@ export class SellerForgotPasswordController {
 
   @Post('resend-reset-otp')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async resendResetOtp(@Body() dto: SellerResendResetOtpDto) {
     await this.resendResetOtpUseCase.execute({ email: dto.email });
 

@@ -14,11 +14,15 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
-import { NotFoundAppException } from '../../../../../core/exceptions';
+import {
+  BadRequestAppException,
+  NotFoundAppException,
+} from '../../../../../core/exceptions';
 import { SellerAuthGuard } from '../../../../../core/guards';
 import { ProductOwnershipService } from '../../../application/services/product-ownership.service';
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
 import { ReApprovalService } from '../../../application/services/re-approval.service';
+import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
 import { IsArray, ArrayNotEmpty } from 'class-validator';
 import { UpdateVariantDto } from '../../dtos/update-variant.dto';
 import { CreateVariantDto } from '../../dtos/create-variant.dto';
@@ -46,6 +50,7 @@ export class SellerProductVariantsController {
     private readonly ownershipService: ProductOwnershipService,
     private readonly variantGenerator: VariantGeneratorService,
     private readonly reApprovalService: ReApprovalService,
+    private readonly cartFacade: CartPublicFacade,
   ) {
     this.logger.setContext('SellerProductVariantsController');
   }
@@ -291,8 +296,11 @@ export class SellerProductVariantsController {
 
     const updated = await this.variantRepo.update(variantId, updateData);
 
-    // Trigger re-approval if product was APPROVED/ACTIVE
-    await this.reApprovalService.triggerIfNeeded(productId, sellerId);
+    // Price / stock / sku / status edits on an existing variant are
+    // self-serve — only title / option changes force re-approval.
+    await this.reApprovalService.triggerIfNeeded(productId, sellerId, {
+      changedFields: Object.keys(updateData),
+    });
 
     return {
       success: true,
@@ -322,8 +330,17 @@ export class SellerProductVariantsController {
 
     const results = await this.variantRepo.bulkUpdate(updates);
 
-    // Trigger re-approval if product was APPROVED/ACTIVE
-    await this.reApprovalService.triggerIfNeeded(productId, sellerId);
+    // Bulk update only touches price / stock / sku / status (see the DTO
+    // extraction above). All of these are on the self-serve whitelist so
+    // re-approval is skipped on LIVE products.
+    const bulkChangedFields = Array.from(
+      new Set(
+        updates.flatMap((u: any) => Object.keys(u.data || {})) as string[],
+      ),
+    );
+    await this.reApprovalService.triggerIfNeeded(productId, sellerId, {
+      changedFields: bulkChangedFields,
+    });
 
     return {
       success: true,
@@ -407,6 +424,15 @@ export class SellerProductVariantsController {
 
     if (!variant) {
       throw new NotFoundAppException('Variant not found');
+    }
+
+    // Block deletion if any active cart still references this variant.
+    const activeCartCount =
+      await this.cartFacade.countActiveItemsForVariant(variantId);
+    if (activeCartCount > 0) {
+      throw new BadRequestAppException(
+        `Cannot delete variant — ${activeCartCount} cart item(s) currently reference it. Customers must remove it from their carts first.`,
+      );
     }
 
     await this.variantRepo.softDelete(variantId);

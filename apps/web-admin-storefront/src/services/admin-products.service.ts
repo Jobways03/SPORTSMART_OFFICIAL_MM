@@ -108,6 +108,35 @@ export const adminProductsService = {
     });
   },
 
+  bulkApprove(
+    productIds: string[],
+  ): Promise<ApiResponse<{ ok: string[]; failed: Array<{ id: string; reason: string }> }>> {
+    return apiClient('/admin/products/bulk/approve', {
+      method: 'POST',
+      body: JSON.stringify({ productIds }),
+    });
+  },
+
+  bulkReject(
+    productIds: string[],
+    reason: string,
+  ): Promise<ApiResponse<{ ok: string[]; failed: Array<{ id: string; reason: string }> }>> {
+    return apiClient('/admin/products/bulk/reject', {
+      method: 'POST',
+      body: JSON.stringify({ productIds, reason }),
+    });
+  },
+
+  bulkRequestChanges(
+    productIds: string[],
+    note: string,
+  ): Promise<ApiResponse<{ ok: string[]; failed: Array<{ id: string; reason: string }> }>> {
+    return apiClient('/admin/products/bulk/request-changes', {
+      method: 'POST',
+      body: JSON.stringify({ productIds, note }),
+    });
+  },
+
   updateStatus(productId: string, status: string, reason?: string): Promise<ApiResponse> {
     return apiClient(`/admin/products/${productId}/status`, {
       method: 'PATCH',

@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
+import { AuditPublicFacade } from '../audit/application/facades/audit-public.facade';
 
 @Injectable()
 export class SettlementService {
   private readonly logger = new Logger(SettlementService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditPublicFacade,
+  ) {}
 
   /* ── T3: Create settlement cycle ── */
   async createCycle(periodStart: Date, periodEnd: Date) {
@@ -196,7 +200,11 @@ export class SettlementService {
   }
 
   /* ── T3: Mark a seller settlement as paid ── */
-  async markSettlementPaid(settlementId: string, utrReference: string) {
+  async markSettlementPaid(
+    settlementId: string,
+    utrReference: string,
+    actorContext?: { adminId?: string; ipAddress?: string; userAgent?: string },
+  ) {
     const settlement = await this.prisma.sellerSettlement.findUnique({
       where: { id: settlementId },
       include: { cycle: true },
@@ -249,6 +257,30 @@ export class SettlementService {
         });
       }
     });
+
+    // Audit the payout — settlement payouts are real money movements and
+    // need to be traceable to a specific admin action with the UTR.
+    this.audit
+      .writeAuditLog({
+        actorId: actorContext?.adminId,
+        actorRole: 'ADMIN',
+        action: 'MARK_SETTLEMENT_PAID',
+        module: 'settlements',
+        resource: 'seller_settlement',
+        resourceId: settlementId,
+        oldValue: { status: settlement.status },
+        newValue: { status: 'PAID', utrReference },
+        metadata: {
+          sellerId: settlement.sellerId,
+          cycleId: settlement.cycleId,
+          amount: Number(settlement.totalSettlementAmount ?? 0),
+        },
+        ipAddress: actorContext?.ipAddress,
+        userAgent: actorContext?.userAgent,
+      })
+      .catch((err) => {
+        this.logger.error(`Audit write failed: ${(err as Error).message}`);
+      });
 
     return { success: true, message: 'Settlement marked as paid' };
   }

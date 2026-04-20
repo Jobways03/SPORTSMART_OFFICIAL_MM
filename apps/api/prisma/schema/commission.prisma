@@ -67,13 +67,23 @@ model CommissionRecord {
   status               CommissionRecordStatus @default(PENDING) @map("status")
   settlementId         String?                @map("settlement_id")
 
+  // Manual admin adjustment — populated by PATCH /admin/commission/:id/adjust.
+  // `adminEarning` on the row is always the *current* value (adjusted if set);
+  // `originalAdminEarning` holds the processor's computed value pre-adjustment
+  // so we never lose what the formula produced.
+  adjustedBy           String?                @map("adjusted_by")
+  adjustedAt           DateTime?              @map("adjusted_at")
+  adjustmentReason     String?                @map("adjustment_reason")
+  originalAdminEarning Decimal?               @map("original_admin_earning") @db.Decimal(10, 2)
+
   createdAt            DateTime               @default(now()) @map("created_at")
 
-  orderItem        OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-  subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
-  masterOrder      MasterOrder       @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
-  seller           Seller            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  sellerSettlement SellerSettlement?  @relation(fields: [settlementId], references: [id])
+  orderItem        OrderItem                  @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  subOrder         SubOrder                   @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  masterOrder      MasterOrder                @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  seller           Seller                     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  sellerSettlement SellerSettlement?          @relation(fields: [settlementId], references: [id], onDelete: SetNull)
+  reversals        CommissionReversalRecord[]
 
   @@index([sellerId])
   @@index([masterOrderId])
@@ -83,4 +93,37 @@ model CommissionRecord {
   @@index([settlementId])
   @@index([createdAt])
   @@map("commission_records")
+}
+
+// ── Reversal audit trail ───────────────────────────────────
+//
+// One row per reversal event against a CommissionRecord. The parent row's
+// `refundedAdminEarning` is a running sum of these; this table preserves
+// the per-event detail (which return, how much, who / what triggered it)
+// so operators can reconstruct the history of a disputed order.
+enum CommissionReversalSource {
+  RETURN_QC
+  MANUAL
+}
+
+model CommissionReversalRecord {
+  id                   String                   @id @default(uuid())
+  commissionRecordId   String                   @map("commission_record_id")
+  source               CommissionReversalSource @default(RETURN_QC)
+  returnId             String?                  @map("return_id")
+  returnNumber         String?                  @map("return_number")
+  reversedQty          Int                      @map("reversed_qty")
+  totalRefundAmount    Decimal                  @map("total_refund_amount") @db.Decimal(10, 2)
+  refundedAdminEarning Decimal                  @map("refunded_admin_earning") @db.Decimal(10, 2)
+  actorType            String                   @map("actor_type") // SYSTEM | ADMIN
+  actorId              String?                  @map("actor_id")
+  note                 String?
+  createdAt            DateTime                 @default(now()) @map("created_at")
+
+  commissionRecord CommissionRecord @relation(fields: [commissionRecordId], references: [id], onDelete: Cascade)
+
+  @@index([commissionRecordId])
+  @@index([returnId])
+  @@index([createdAt])
+  @@map("commission_reversal_records")
 }

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import {
   CommissionRepository,
   CommissionRecordFilter,
@@ -12,25 +13,21 @@ import {
 
 @Injectable()
 export class PrismaCommissionRepository implements CommissionRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ordersFacade: OrdersPublicFacade,
+  ) {}
 
   /* ── Processing ───────────────────────────────────────────────────── */
 
   async findDeliveredSubOrders(): Promise<DeliveredSubOrder[]> {
-    return this.prisma.subOrder.findMany({
-      where: {
-        fulfillmentStatus: 'DELIVERED',
-        commissionProcessed: false,
-        returnWindowEndsAt: { lte: new Date() },
-        paymentStatus: { not: 'CANCELLED' },
-        masterOrder: { paymentStatus: 'PAID' },
-      },
-      include: {
-        items: true,
-        masterOrder: { select: { orderNumber: true, paymentStatus: true } },
-        seller: { select: { id: true, sellerShopName: true } },
-      },
-    }) as unknown as DeliveredSubOrder[];
+    // Uses OrdersPublicFacade instead of direct subOrder query (module boundary)
+    const subOrders = await this.ordersFacade.findDeliveredSubOrdersPastReturnWindow();
+
+    // Filter to seller-only orders (franchise orders processed separately)
+    return subOrders.filter(
+      (so: any) => so.fulfillmentNodeType === 'SELLER' && so.sellerId,
+    ) as unknown as DeliveredSubOrder[];
   }
 
   async getSellerProductMapping(
@@ -59,20 +56,30 @@ export class PrismaCommissionRepository implements CommissionRepository {
     records: CreateCommissionRecordData[],
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      for (const record of records) {
-        // Skip if commission already exists for this item
-        const existing = await tx.commissionRecord.findUnique({
-          where: { orderItemId: record.orderItemId },
-        });
-        if (existing) continue;
-
-        await tx.commissionRecord.create({ data: record as any });
-      }
-
-      await tx.subOrder.update({
-        where: { id: subOrderId },
+      // Atomic-claim: only mark this sub-order processed if it isn't already.
+      // If another job instance beat us to it, the updateMany returns 0 and
+      // we abort the transaction without writing duplicate commission rows.
+      // This is the key idempotency guard for the lock-expired-mid-batch
+      // race: lock TTL is 30s, this batch may take longer, a second instance
+      // can pick up the same sub-order — but only one will win the claim.
+      const claim = await tx.subOrder.updateMany({
+        where: { id: subOrderId, commissionProcessed: false },
         data: { commissionProcessed: true },
       });
+      if (claim.count === 0) {
+        // Already processed by another instance — silent no-op.
+        return;
+      }
+
+      // Use createMany with skipDuplicates so a partially-written batch
+      // (e.g. recovered from a crash) doesn't crash the whole transaction.
+      // The orderItemId column is @unique so duplicates are ignored cleanly.
+      if (records.length > 0) {
+        await tx.commissionRecord.createMany({
+          data: records as any,
+          skipDuplicates: true,
+        });
+      }
     });
   }
 

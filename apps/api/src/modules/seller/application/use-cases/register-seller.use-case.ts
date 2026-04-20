@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
+import * as bcrypt from 'bcrypt';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { ConflictAppException } from '../../../../core/exceptions';

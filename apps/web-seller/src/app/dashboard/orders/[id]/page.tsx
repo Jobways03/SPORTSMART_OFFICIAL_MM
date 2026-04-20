@@ -48,6 +48,8 @@ interface SubOrderDetail {
   deliveredAt: string | null;
   returnWindowEndsAt: string | null;
   commissionProcessed: boolean;
+  trackingNumber: string | null;
+  courierName: string | null;
   items: OrderItem[];
   commissionRecords: CommissionRecord[];
   masterOrder: {
@@ -223,6 +225,17 @@ export default function SellerOrderDetailPage() {
   const [showAcceptModal, setShowAcceptModal] = useState(false);
   const [expectedDispatchDate, setExpectedDispatchDate] = useState('');
 
+  // Pack modal state
+  const [showPackModal, setShowPackModal] = useState(false);
+  const [packNote, setPackNote] = useState('');
+
+  // Ship modal state
+  const [showShipModal, setShowShipModal] = useState(false);
+  const [shipTrackingNumber, setShipTrackingNumber] = useState('');
+  const [shipCourierSelection, setShipCourierSelection] = useState('');
+  const [shipCourierOther, setShipCourierOther] = useState('');
+  const [shipError, setShipError] = useState('');
+
   const fetchOrder = useCallback(() => {
     fetch(`${API_BASE}/api/v1/seller/orders/${id}`, {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -238,22 +251,6 @@ export default function SellerOrderDetailPage() {
   useEffect(() => {
     fetchOrder();
   }, [fetchOrder]);
-
-  const handleAction = async (action: string, key: string, body?: object) => {
-    setActionLoading(key);
-    try {
-      await fetch(`${API_BASE}/api/v1/seller/orders/${id}/${action}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      fetchOrder();
-    } catch {
-      //
-    } finally {
-      setActionLoading(null);
-    }
-  };
 
   const handleRejectConfirm = async () => {
     setActionLoading('reject');
@@ -297,6 +294,80 @@ export default function SellerOrderDetailPage() {
     }
   };
 
+  const handlePackConfirm = async () => {
+    setActionLoading('pack');
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/seller/orders/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ status: 'PACKED' }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        alert(body?.message || 'Failed to mark order as packed');
+      } else {
+        fetchOrder();
+        setShowPackModal(false);
+        setPackNote('');
+      }
+    } catch {
+      alert('Network error. Please try again.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleShipConfirm = async () => {
+    setShipError('');
+    const trackingNumber = shipTrackingNumber.trim();
+    const courierName =
+      shipCourierSelection === 'Other'
+        ? shipCourierOther.trim()
+        : shipCourierSelection;
+    if (!trackingNumber) {
+      setShipError('Tracking number is required');
+      return;
+    }
+    if (!courierName) {
+      setShipError('Courier name is required');
+      return;
+    }
+    setActionLoading('ship');
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/seller/orders/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          status: 'SHIPPED',
+          trackingNumber,
+          courierName,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        setShipError(body?.message || 'Failed to mark order as shipped');
+      } else {
+        fetchOrder();
+        setShowShipModal(false);
+        setShipTrackingNumber('');
+        setShipCourierSelection('');
+        setShipCourierOther('');
+      }
+    } catch {
+      setShipError('Network error. Please try again.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const resetShipModal = () => {
+    setShowShipModal(false);
+    setShipTrackingNumber('');
+    setShipCourierSelection('');
+    setShipCourierOther('');
+    setShipError('');
+  };
+
   if (loading) {
     return <div style={{ textAlign: 'center', padding: 60, color: '#6b7280' }}>Loading order...</div>;
   }
@@ -323,17 +394,12 @@ export default function SellerOrderDetailPage() {
     ? totalProductEarning
     : Number(order.subTotal) * 0.8;
 
-  // Determine next fulfillment action — seller can only do UNFULFILLED → PACKED → SHIPPED
-  const getNextFulfillmentAction = (): { label: string; status: string; color: string } | null => {
-    if (order.acceptStatus !== 'ACCEPTED') return null;
-    switch (order.fulfillmentStatus) {
-      case 'UNFULFILLED': return { label: 'MARK AS PACKED', status: 'PACKED', color: '#d97706' };
-      case 'PACKED': return { label: 'MARK AS SHIPPED', status: 'SHIPPED', color: '#2563eb' };
-      default: return null; // After SHIPPED, delivery confirmed by admin
-    }
-  };
-
-  const nextAction = getNextFulfillmentAction();
+  const canMarkPacked =
+    order.acceptStatus === 'ACCEPTED' &&
+    order.fulfillmentStatus === 'UNFULFILLED';
+  const canMarkShipped =
+    order.acceptStatus === 'ACCEPTED' &&
+    order.fulfillmentStatus === 'PACKED';
 
   return (
     <div>
@@ -353,6 +419,12 @@ export default function SellerOrderDetailPage() {
       {order.acceptStatus === 'OPEN' && order.acceptDeadlineAt && (
         <AcceptDeadlineCountdown deadline={order.acceptDeadlineAt} />
       )}
+
+      {/* -- Status timeline -- */}
+      <StatusTimeline
+        acceptStatus={order.acceptStatus}
+        fulfillmentStatus={order.fulfillmentStatus}
+      />
 
       {/* -- two-column layout -- */}
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -458,14 +530,25 @@ export default function SellerOrderDetailPage() {
                 </>
               )}
 
-              {/* Fulfillment status progression */}
-              {nextAction && (
+              {/* Fulfillment status progression - PACK */}
+              {canMarkPacked && (
                 <button
-                  onClick={() => handleAction('status', 'status', { status: nextAction.status })}
+                  onClick={() => setShowPackModal(true)}
                   disabled={!!actionLoading}
-                  style={{ ...btnBlue, background: nextAction.color }}
+                  style={{ ...btnBlue, background: '#d97706' }}
                 >
-                  {actionLoading === 'status' ? 'Updating...' : nextAction.label}
+                  {actionLoading === 'pack' ? 'Updating...' : 'MARK AS PACKED'}
+                </button>
+              )}
+
+              {/* Fulfillment status progression - SHIP */}
+              {canMarkShipped && (
+                <button
+                  onClick={() => setShowShipModal(true)}
+                  disabled={!!actionLoading}
+                  style={{ ...btnBlue, background: '#2563eb' }}
+                >
+                  {actionLoading === 'ship' ? 'Updating...' : 'MARK AS SHIPPED'}
                 </button>
               )}
 
@@ -616,6 +699,32 @@ export default function SellerOrderDetailPage() {
               <div>Email: {mo.customer.email}</div>
             </div>
           </div>
+
+          {/* -- SHIPMENT TRACKING -- */}
+          {(order.trackingNumber || order.courierName) && (
+            <div style={sideCard}>
+              <h3 style={sideCardTitle}>SHIPMENT TRACKING</h3>
+              <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 14px 0' }}>
+                Courier details shared with the customer.
+              </p>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <tbody>
+                  <SideRow
+                    label="COURIER"
+                    value={order.courierName || '-'}
+                  />
+                  <SideRow
+                    label="TRACKING #"
+                    value={
+                      <span style={{ fontFamily: 'monospace', color: '#2563eb' }}>
+                        {order.trackingNumber || '-'}
+                      </span>
+                    }
+                  />
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* -- SHIPPING ADDRESS -- */}
           <div style={sideCard}>
@@ -775,6 +884,185 @@ export default function SellerOrderDetailPage() {
           </div>
         </div>
       )}
+
+      {/* -- PACK MODAL -- */}
+      {showPackModal && (
+        <div
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 1000,
+          }}
+          onClick={() => { setShowPackModal(false); setPackNote(''); }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, padding: 28, width: 440,
+              maxWidth: '90vw', boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 4px 0', fontSize: 18, fontWeight: 700, color: '#d97706' }}>
+              Mark Order as Packed
+            </h3>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 20px 0' }}>
+              Confirm that the items for this order have been packed and are ready to be
+              handed over to the courier.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Note (optional)
+            </label>
+            <textarea
+              value={packNote}
+              onChange={(e) => setPackNote(e.target.value)}
+              placeholder="Internal note about the packing (optional)"
+              rows={3}
+              style={{
+                width: '100%', padding: '10px 12px', border: '1px solid #d1d5db',
+                borderRadius: 6, fontSize: 13, marginBottom: 24, resize: 'vertical',
+                fontFamily: 'inherit',
+              }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                onClick={() => { setShowPackModal(false); setPackNote(''); }}
+                disabled={actionLoading === 'pack'}
+                style={{
+                  padding: '10px 20px', fontSize: 13, fontWeight: 600,
+                  border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePackConfirm}
+                disabled={!!actionLoading}
+                style={{
+                  padding: '10px 20px', fontSize: 13, fontWeight: 700, border: 'none',
+                  background: '#d97706', color: '#fff', borderRadius: 6, cursor: 'pointer',
+                }}
+              >
+                {actionLoading === 'pack' ? 'Updating...' : 'Confirm Packed'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -- SHIP MODAL -- */}
+      {showShipModal && (
+        <div
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 1000,
+          }}
+          onClick={resetShipModal}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, padding: 28, width: 460,
+              maxWidth: '90vw', boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 4px 0', fontSize: 18, fontWeight: 700, color: '#2563eb' }}>
+              Mark Order as Shipped
+            </h3>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 20px 0' }}>
+              Provide the courier and tracking details. These will be shared with the
+              customer.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Tracking Number *
+            </label>
+            <input
+              type="text"
+              value={shipTrackingNumber}
+              onChange={(e) => setShipTrackingNumber(e.target.value)}
+              placeholder="e.g. 1Z999AA10123456784"
+              style={{
+                width: '100%', padding: '10px 12px', border: '1px solid #d1d5db',
+                borderRadius: 6, fontSize: 13, marginBottom: 16, background: '#fff',
+              }}
+            />
+
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+              Courier *
+            </label>
+            <select
+              value={shipCourierSelection}
+              onChange={(e) => setShipCourierSelection(e.target.value)}
+              style={{
+                width: '100%', padding: '10px 12px', border: '1px solid #d1d5db',
+                borderRadius: 6, fontSize: 13, marginBottom: 16, background: '#fff',
+              }}
+            >
+              <option value="">Select a courier...</option>
+              <option value="BlueDart">BlueDart</option>
+              <option value="Delhivery">Delhivery</option>
+              <option value="FedEx">FedEx</option>
+              <option value="DTDC">DTDC</option>
+              <option value="India Post">India Post</option>
+              <option value="Other">Other</option>
+            </select>
+
+            {shipCourierSelection === 'Other' && (
+              <>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+                  Courier Name *
+                </label>
+                <input
+                  type="text"
+                  value={shipCourierOther}
+                  onChange={(e) => setShipCourierOther(e.target.value)}
+                  placeholder="Enter courier name"
+                  style={{
+                    width: '100%', padding: '10px 12px', border: '1px solid #d1d5db',
+                    borderRadius: 6, fontSize: 13, marginBottom: 16, background: '#fff',
+                  }}
+                />
+              </>
+            )}
+
+            {shipError && (
+              <div style={{
+                fontSize: 12, color: '#dc2626', background: '#fef2f2',
+                border: '1px solid #fecaca', borderRadius: 6, padding: '8px 12px',
+                marginBottom: 16,
+              }}>
+                {shipError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <button
+                onClick={resetShipModal}
+                disabled={actionLoading === 'ship'}
+                style={{
+                  padding: '10px 20px', fontSize: 13, fontWeight: 600,
+                  border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleShipConfirm}
+                disabled={!!actionLoading}
+                style={{
+                  padding: '10px 20px', fontSize: 13, fontWeight: 700, border: 'none',
+                  background: '#2563eb', color: '#fff', borderRadius: 6, cursor: 'pointer',
+                }}
+              >
+                {actionLoading === 'ship' ? 'Shipping...' : 'Confirm Shipped'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -855,6 +1143,180 @@ function SellerDeliveryCard({ order, onRefresh }: { order: SubOrderDetail; onRef
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* -- status timeline -- */
+function StatusTimeline({
+  acceptStatus,
+  fulfillmentStatus,
+}: {
+  acceptStatus: string;
+  fulfillmentStatus: string;
+}) {
+  // Determine each step's state: 'done' | 'current' | 'pending' | 'cancelled'
+  const isCancelled =
+    acceptStatus === 'REJECTED' ||
+    acceptStatus === 'CANCELLED' ||
+    fulfillmentStatus === 'CANCELLED';
+
+  const accepted = acceptStatus === 'ACCEPTED';
+  const packed =
+    accepted &&
+    ['PACKED', 'SHIPPED', 'FULFILLED', 'DELIVERED'].includes(fulfillmentStatus);
+  const shipped =
+    accepted &&
+    ['SHIPPED', 'FULFILLED', 'DELIVERED'].includes(fulfillmentStatus);
+  const delivered =
+    accepted && ['FULFILLED', 'DELIVERED'].includes(fulfillmentStatus);
+
+  const steps: Array<{ label: string; done: boolean; current: boolean }> = [
+    { label: 'Order Placed', done: true, current: false },
+    {
+      label: 'Accepted',
+      done: accepted,
+      current: acceptStatus === 'OPEN',
+    },
+    {
+      label: 'Packed',
+      done: packed,
+      current: accepted && fulfillmentStatus === 'UNFULFILLED',
+    },
+    {
+      label: 'Shipped',
+      done: shipped,
+      current: accepted && fulfillmentStatus === 'PACKED',
+    },
+    {
+      label: 'Delivered',
+      done: delivered,
+      current: accepted && fulfillmentStatus === 'SHIPPED',
+    },
+  ];
+
+  if (isCancelled) {
+    return (
+      <div
+        style={{
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          borderRadius: 10,
+          padding: '14px 18px',
+          marginBottom: 16,
+          fontSize: 13,
+          fontWeight: 600,
+          color: '#dc2626',
+        }}
+      >
+        Order {acceptStatus === 'REJECTED' ? 'Rejected' : 'Cancelled'}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 10,
+        padding: '20px 24px',
+        marginBottom: 16,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          position: 'relative',
+        }}
+      >
+        {steps.map((step, idx) => {
+          const isLast = idx === steps.length - 1;
+          const active = step.done;
+          const isCurrent = step.current && !step.done;
+          const circleBg = active
+            ? '#16a34a'
+            : isCurrent
+              ? '#2563eb'
+              : '#e5e7eb';
+          const circleColor = active || isCurrent ? '#fff' : '#9ca3af';
+          const labelColor = active
+            ? '#16a34a'
+            : isCurrent
+              ? '#2563eb'
+              : '#9ca3af';
+
+          // Next step highlight: connector is green if the next step is done
+          const nextDone = !isLast && steps[idx + 1].done;
+          const connectorColor = nextDone ? '#16a34a' : '#e5e7eb';
+
+          return (
+            <div
+              key={step.label}
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                position: 'relative',
+                minWidth: 0,
+              }}
+            >
+              {/* Connector line to next step */}
+              {!isLast && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 14,
+                    left: '50%',
+                    width: '100%',
+                    height: 3,
+                    background: connectorColor,
+                    zIndex: 0,
+                  }}
+                />
+              )}
+              {/* Circle */}
+              <div
+                style={{
+                  position: 'relative',
+                  zIndex: 1,
+                  width: 30,
+                  height: 30,
+                  borderRadius: '50%',
+                  background: circleBg,
+                  color: circleColor,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: isCurrent ? '3px solid #bfdbfe' : 'none',
+                  boxShadow: isCurrent
+                    ? '0 0 0 3px rgba(37,99,235,0.15)'
+                    : 'none',
+                }}
+              >
+                {active ? '\u2713' : idx + 1}
+              </div>
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: labelColor,
+                  textAlign: 'center',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {step.label}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -12,12 +12,20 @@ import { setupSwagger } from './bootstrap/docs/swagger.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
+    rawBody: true,
   });
 
   const envService = app.get(EnvService);
   const logger = app.get(AppLoggerService);
 
   app.useLogger(logger);
+
+  // Trust N reverse-proxy hops so req.ip reflects the real client (used by
+  // the rate-limiter to key per client IP, not the LB's IP). 0 disables.
+  const trustProxyHops = envService.getNumber('TRUST_PROXY_HOPS', 0);
+  if (trustProxyHops > 0) {
+    app.getHttpAdapter().getInstance().set('trust proxy', trustProxyHops);
+  }
 
   app.setGlobalPrefix('api');
 

@@ -346,7 +346,7 @@ export default function ProductsPage() {
           value={moderationFilter}
           onChange={(e) => setModerationFilter(e.target.value)}
         >
-          <option value="">All Moderation</option>
+          <option value="">All Approval</option>
           <option value="PENDING">Pending</option>
           <option value="IN_REVIEW">In Review</option>
           <option value="APPROVED">Approved</option>
@@ -499,7 +499,7 @@ export default function ProductsPage() {
                   <th>Price</th>
                   <th>Stock</th>
                   <th>Status</th>
-                  <th>Moderation</th>
+                  <th>Approval</th>
                   <th style={{ width: 60 }}>Actions</th>
                 </tr>
               </thead>

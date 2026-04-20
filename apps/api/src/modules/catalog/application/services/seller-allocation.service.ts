@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -9,9 +10,11 @@ import {
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
 export interface AllocatedSeller {
-  sellerId: string;
-  sellerName: string;
-  mappingId: string;
+  nodeType: 'SELLER' | 'FRANCHISE';
+  sellerId: string;        // seller ID or franchise ID
+  sellerName: string;      // seller name or franchise name
+  franchiseId?: string;    // only set when nodeType is FRANCHISE
+  mappingId: string;       // SellerProductMapping ID or FranchiseCatalogMapping ID
   distanceKm: number;
   dispatchSla: number;
   availableStock: number;
@@ -43,7 +46,19 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SellerAllocationService.name);
   private expiryInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  // Scoring weights — configurable via env, cached at startup.
+  private readonly wDistance: number;
+  private readonly wStock: number;
+  private readonly wSla: number;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly envService: EnvService,
+  ) {
+    this.wDistance = this.envService.getNumber('ROUTING_DISTANCE_WEIGHT', 0.7);
+    this.wStock = this.envService.getNumber('ROUTING_STOCK_WEIGHT', 0.2);
+    this.wSla = this.envService.getNumber('ROUTING_SLA_WEIGHT', 0.1);
+  }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -74,12 +89,14 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
   // ── T1-T2  Core allocation ─────────────────────────────────────────────
 
   /**
-   * Allocates the best seller(s) for a product/variant at a customer pincode.
-   * Returns primary, secondary, and tertiary sellers.
+   * Allocates the best fulfillment node(s) — sellers and/or franchises —
+   * for a product/variant at a customer pincode.
+   * Returns primary, secondary, and tertiary candidates.
    *
-   * Ranking criteria:
-   *  1. Stock availability (must have stock - reserved >= quantity)
-   *  2. Shortest distance from seller pickup pincode to customer pincode (100% weight)
+   * Ranking criteria (weighted scoring — sellers & franchises compete equally):
+   *  - Distance: ROUTING_DISTANCE_WEIGHT (default 0.7, lower = better, Haversine from pincode)
+   *  - Stock confidence: ROUTING_STOCK_WEIGHT (default 0.2, more stock = better)
+   *  - Dispatch SLA: ROUTING_SLA_WEIGHT (default 0.1, faster = better)
    */
   async allocate(input: {
     productId: string;
@@ -114,6 +131,10 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       mappingWhere.id = { notIn: excludeMappingIds };
     }
 
+    // Deterministic tiebreak: when two sellers end up with the same allocation
+    // score, the stable sort at L#274 preserves this input order — so an
+    // explicit orderBy prevents different API instances from routing the
+    // same order to different sellers.
     const sellerMappings = await this.prisma.sellerProductMapping.findMany({
       where: mappingWhere,
       include: {
@@ -126,18 +147,49 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           },
         },
       },
+      orderBy: { id: 'asc' },
     });
 
     // Keep only ACTIVE sellers with enough available stock
-    const eligible = sellerMappings.filter((m) => {
+    const stockEligible = sellerMappings.filter((m) => {
       if (m.seller.status !== 'ACTIVE') return false;
       const available = m.stockQty - m.reservedQty;
       return available >= quantity;
     });
 
-    if (eligible.length === 0) {
-      return { serviceable: false, primary: null, secondary: null, tertiary: null, allEligible: [] };
+    // Enforce SellerServiceArea for sellers that opted in. A seller with ANY
+    // active service-area row is treated as "explicitly restricted" — the
+    // customer pincode must be in their set. Sellers with no rows keep
+    // distance-only behavior (backwards compatible).
+    const candidateSellerIds = stockEligible.map((m) => m.sellerId);
+    let optedInSellers = new Set<string>();
+    let servingThisPincode = new Set<string>();
+    if (candidateSellerIds.length > 0) {
+      const [optedIn, serving] = await Promise.all([
+        this.prisma.sellerServiceArea.findMany({
+          where: {
+            sellerId: { in: candidateSellerIds },
+            isActive: true,
+          },
+          select: { sellerId: true },
+          distinct: ['sellerId'],
+        }),
+        this.prisma.sellerServiceArea.findMany({
+          where: {
+            sellerId: { in: candidateSellerIds },
+            pincode: customerPincode,
+            isActive: true,
+          },
+          select: { sellerId: true },
+        }),
+      ]);
+      optedInSellers = new Set(optedIn.map((r) => r.sellerId));
+      servingThisPincode = new Set(serving.map((r) => r.sellerId));
     }
+    const eligible = stockEligible.filter(
+      (m) =>
+        !optedInSellers.has(m.sellerId) || servingThisPincode.has(m.sellerId),
+    );
 
     // 3. Filter by distance — seller must be within serviceable range
     const serviceable: {
@@ -175,30 +227,56 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    if (serviceable.length === 0) {
+    // 4. Build seller candidates with nodeType
+    const sellerCandidates: AllocatedSeller[] = serviceable.map((s) => ({
+      nodeType: 'SELLER' as const,
+      sellerId: s.mapping.seller.id,
+      sellerName: s.mapping.seller.sellerShopName || s.mapping.seller.sellerName,
+      mappingId: s.mapping.id,
+      distanceKm: Math.round(s.distance * 100) / 100,
+      dispatchSla: s.mapping.dispatchSla,
+      availableStock: s.mapping.stockQty - s.mapping.reservedQty,
+      estimatedDeliveryDays: this.estimateDeliveryDays(s.distance, s.mapping.dispatchSla),
+      score: 0, // will be scored below
+    }));
+
+    // 5. Find franchise candidates — same distance-based logic as sellers
+    const franchiseCandidates = await this.findEligibleFranchises({
+      productId,
+      variantId,
+      customerPincode,
+      quantity,
+      customerLat,
+      customerLon,
+    });
+
+    // 6. Merge all candidates (sellers + franchises compete equally)
+    const allCandidates = [
+      ...sellerCandidates,
+      ...franchiseCandidates,
+    ];
+
+    if (allCandidates.length === 0) {
       return { serviceable: false, primary: null, secondary: null, tertiary: null, allEligible: [] };
     }
 
-    // 4. Score each seller — 100% shortest distance priority
-    const maxDistance = Math.max(...serviceable.map((s) => s.distance), 1);
+    const maxDistance = Math.max(...allCandidates.map((c) => c.distanceKm), 1);
+    const maxSla = Math.max(...allCandidates.map((c) => c.dispatchSla), 1);
 
-    const scored: AllocatedSeller[] = serviceable.map((s) => {
-      const score = maxDistance > 0 ? 1 - s.distance / maxDistance : 1;
-
-      return {
-        sellerId: s.mapping.seller.id,
-        sellerName: s.mapping.seller.sellerShopName || s.mapping.seller.sellerName,
-        mappingId: s.mapping.id,
-        distanceKm: Math.round(s.distance * 100) / 100,
-        dispatchSla: s.mapping.dispatchSla,
-        availableStock: s.mapping.stockQty - s.mapping.reservedQty,
-        estimatedDeliveryDays: this.estimateDeliveryDays(s.distance, s.mapping.dispatchSla),
-        score: Math.round(score * 10000) / 10000,
-      };
+    const scored: AllocatedSeller[] = allCandidates.map((candidate) => {
+      let score = 0;
+      // Distance score (lower distance = higher score)
+      score += this.wDistance * (1 - candidate.distanceKm / maxDistance);
+      // Stock confidence
+      score += this.wStock * Math.min(candidate.availableStock / quantity, 1);
+      // SLA score (faster dispatch = higher score)
+      score += this.wSla * (1 - candidate.dispatchSla / maxSla);
+      // No priority boost — sellers and franchises compete equally
+      return { ...candidate, score: Math.round(score * 10000) / 10000 };
     });
 
-    // 5. Sort by shortest distance (ascending) — closest seller wins
-    scored.sort((a, b) => a.distanceKm - b.distanceKm);
+    // 7. Sort by score descending — highest score wins
+    scored.sort((a, b) => b.score - a.score);
 
     const result: AllocationResult = {
       serviceable: true,
@@ -208,7 +286,7 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       allEligible: scored,
     };
 
-    // 6. Log allocation decision (T7)
+    // 8. Log allocation decision (T7)
     await this.logAllocation(input, result);
 
     return result;
@@ -226,19 +304,46 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
 
     if (quantity < 1) throw new BadRequestAppException('quantity must be >= 1');
 
-    // Use a transaction to prevent race conditions
+    // Reserve inside a transaction with a row-level lock so concurrent
+    // reservations against the same mapping serialize correctly.
+    //
+    // The race we're closing: two transactions both `findUnique`, both see
+    // `available >= quantity`, both increment `reservedQty`. Without the
+    // FOR UPDATE the database happily lets both commit and oversells.
+    // With FOR UPDATE the second SELECT blocks until the first commits,
+    // then sees the updated `reservedQty` and correctly rejects.
     return this.prisma.$transaction(async (tx) => {
-      const mapping = await tx.sellerProductMapping.findUnique({
-        where: { id: mappingId },
-      });
+      // Acquire the row lock. Postgres-only — uses raw SQL because Prisma
+      // does not expose FOR UPDATE on its query builder.
+      const lockedRows = await tx.$queryRaw<
+        Array<{ id: string; stock_qty: number; reserved_qty: number }>
+      >`
+        SELECT id, stock_qty, reserved_qty
+        FROM seller_product_mappings
+        WHERE id = ${mappingId}
+        FOR UPDATE
+      `;
+      const locked = lockedRows[0];
+      if (!locked) {
+        throw new NotFoundAppException(`Mapping ${mappingId} not found`);
+      }
 
-      if (!mapping) throw new NotFoundAppException(`Mapping ${mappingId} not found`);
-
-      const available = mapping.stockQty - mapping.reservedQty;
+      const available = locked.stock_qty - locked.reserved_qty;
       if (available < quantity) {
         throw new ConflictAppException(
           `Insufficient stock: available=${available}, requested=${quantity}`,
         );
+      }
+
+      // Re-fetch via the type-safe client so downstream code that expected
+      // a Prisma model object still works (the locked row above only has
+      // the snake_case columns we asked for).
+      const mapping = await tx.sellerProductMapping.findUnique({
+        where: { id: mappingId },
+      });
+      if (!mapping) {
+        // Should not happen — we just locked it.
+        throw new NotFoundAppException(`Mapping ${mappingId} not found`);
       }
 
       // Create reservation
@@ -406,9 +511,11 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           productId,
           variantId: variantId ?? null,
           customerPincode,
-          allocatedSellerId: result.primary.sellerId,
+          allocatedNodeType: result.primary.nodeType,
+          allocatedSellerId: result.primary.nodeType === 'SELLER' ? result.primary.sellerId : null,
+          allocatedFranchiseId: result.primary.nodeType === 'FRANCHISE' ? result.primary.franchiseId : null,
           allocatedMappingId: result.primary.mappingId,
-          allocationReason: `Re-allocated from failed mapping ${failedMappingId}`,
+          allocationReason: `Re-allocated from failed mapping ${failedMappingId} (${result.primary.nodeType})`,
           distanceKm: result.primary.distanceKm,
           score: result.primary.score,
           isReallocated: true,
@@ -433,9 +540,11 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
             productId: input.productId,
             variantId: input.variantId ?? null,
             customerPincode: input.customerPincode,
-            allocatedSellerId: result.primary.sellerId,
+            allocatedNodeType: result.primary.nodeType,
+            allocatedSellerId: result.primary.nodeType === 'SELLER' ? result.primary.sellerId : null,
+            allocatedFranchiseId: result.primary.nodeType === 'FRANCHISE' ? result.primary.franchiseId : null,
             allocatedMappingId: result.primary.mappingId,
-            allocationReason: 'Primary allocation — highest score',
+            allocationReason: `Primary allocation — highest score (${result.primary.nodeType})`,
             distanceKm: result.primary.distanceKm,
             score: result.primary.score,
             isReallocated: false,
@@ -447,7 +556,7 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
             productId: input.productId,
             variantId: input.variantId ?? null,
             customerPincode: input.customerPincode,
-            allocationReason: 'No serviceable sellers found',
+            allocationReason: 'No serviceable sellers or franchises found',
             isReallocated: false,
           },
         });
@@ -456,6 +565,113 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       // Logging should never break the main flow
       this.logger.error(`Failed to log allocation: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  // ── Franchise candidate discovery ──────────────────────────────────────
+
+  /**
+   * Find eligible franchise partners for a product, using the same
+   * distance-based logic as sellers. Franchises compete equally with
+   * sellers — no coverage area checks, no exclusivity, no priority boost.
+   *
+   * A franchise is eligible when:
+   *  1. FranchisePartner status is ACTIVE
+   *  2. FranchiseCatalogMapping exists (approved + active + listed for online)
+   *  3. FranchiseStock has enough available quantity
+   *  4. Distance is calculated from franchise warehousePincode to customer pincode
+   */
+  private async findEligibleFranchises(input: {
+    productId: string;
+    variantId?: string;
+    customerPincode: string;
+    quantity: number;
+    customerLat: number | null;
+    customerLon: number | null;
+  }): Promise<AllocatedSeller[]> {
+    const { productId, variantId, quantity, customerLat, customerLon } = input;
+
+    // 1. Find all approved + active catalog mappings for this product
+    const catalogWhere: any = {
+      productId,
+      isActive: true,
+      approvalStatus: 'APPROVED',
+      isListedForOnlineFulfillment: true,
+    };
+    if (variantId) catalogWhere.variantId = variantId;
+
+    const catalogMappings = await this.prisma.franchiseCatalogMapping.findMany({
+      where: catalogWhere,
+      include: {
+        franchise: {
+          select: {
+            id: true,
+            businessName: true,
+            status: true,
+            warehousePincode: true,
+            isDeleted: true,
+          },
+        },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    const candidates: AllocatedSeller[] = [];
+
+    // Deduplicate by franchiseId (keep first mapping found)
+    const seen = new Set<string>();
+
+    for (const mapping of catalogMappings) {
+      const franchise = mapping.franchise;
+
+      // Skip non-active or deleted franchises
+      if (franchise.status !== 'ACTIVE' || franchise.isDeleted) continue;
+      if (seen.has(franchise.id)) continue;
+      seen.add(franchise.id);
+
+      // 2. Check FranchiseStock: available qty >= requested quantity
+      const stockWhere: any = { franchiseId: franchise.id, productId };
+      if (variantId) stockWhere.variantId = variantId;
+
+      const stock = await this.prisma.franchiseStock.findFirst({
+        where: stockWhere,
+      });
+
+      if (!stock || stock.availableQty < quantity) continue;
+
+      // 3. Calculate distance from franchise warehouse pincode to customer pincode
+      let distance = 999;
+      if (customerLat && customerLon && franchise.warehousePincode) {
+        const warehousePO = await this.prisma.postOffice.findFirst({
+          where: { pincode: franchise.warehousePincode, latitude: { not: null } },
+          select: { latitude: true, longitude: true },
+        });
+        if (warehousePO?.latitude && warehousePO?.longitude) {
+          distance = this.calculateDistance(
+            customerLat,
+            customerLon,
+            Number(warehousePO.latitude),
+            Number(warehousePO.longitude),
+          );
+        }
+      }
+
+      const dispatchSla = 1; // franchise default dispatch SLA
+
+      candidates.push({
+        nodeType: 'FRANCHISE',
+        sellerId: franchise.id,
+        sellerName: franchise.businessName,
+        franchiseId: franchise.id,
+        mappingId: mapping.id,
+        distanceKm: Math.round(distance * 100) / 100,
+        dispatchSla,
+        availableStock: stock.availableQty,
+        estimatedDeliveryDays: this.estimateDeliveryDays(distance, dispatchSla),
+        score: 0,
+      });
+    }
+
+    return candidates;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────

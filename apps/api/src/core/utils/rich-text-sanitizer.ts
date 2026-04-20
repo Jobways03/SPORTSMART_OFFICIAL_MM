@@ -1,4 +1,4 @@
-import * as sanitizeHtml from 'sanitize-html';
+import sanitizeHtml = require('sanitize-html');
 
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [

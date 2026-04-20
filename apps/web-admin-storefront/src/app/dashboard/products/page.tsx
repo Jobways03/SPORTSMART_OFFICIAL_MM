@@ -25,6 +25,31 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [moderationFilter, setModerationFilter] = useState('');
+
+  // Bulk moderation — only the current-page set of PENDING rows is selectable
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkSaving, setBulkSaving] = useState<null | 'approve' | 'reject' | 'request-changes'>(null);
+  const [bulkModal, setBulkModal] = useState<null | 'reject' | 'request-changes'>(null);
+  const [bulkNote, setBulkNote] = useState('');
+  const [bulkMessage, setBulkMessage] = useState('');
+
+  const selectableIds = products
+    .filter((p) => p.status === 'SUBMITTED')
+    .map((p) => p.id);
+
+  const toggleOne = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected((prev) => {
+      if (selectableIds.every((id) => prev.has(id))) return new Set();
+      return new Set(selectableIds);
+    });
+  const clearSelection = () => setSelected(new Set());
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchProducts = useCallback(async (params: ListProductsParams = {}) => {
@@ -75,6 +100,70 @@ export default function ProductsPage() {
     setStatusFilter('');
     setModerationFilter('');
     fetchProducts({ page: 1, search: '', status: '', moderationStatus: '' });
+  };
+
+  // Bulk moderation handlers
+  const runBulkApprove = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`Approve ${selected.size} selected product(s)?`)) return;
+    setBulkSaving('approve');
+    setBulkMessage('');
+    try {
+      const res = await adminProductsService.bulkApprove([...selected]);
+      const d = res.data;
+      setBulkMessage(
+        d
+          ? `Approved ${d.ok.length}${d.failed.length ? ` — ${d.failed.length} failed` : ''}`
+          : 'Done',
+      );
+      clearSelection();
+      await fetchProducts({ page: pagination.page });
+    } catch (err) {
+      setBulkMessage(
+        err instanceof ApiError
+          ? err.body.message || 'Bulk approve failed'
+          : 'Bulk approve failed',
+      );
+    } finally {
+      setBulkSaving(null);
+    }
+  };
+
+  const runBulkRejectOrChanges = async () => {
+    if (selected.size === 0 || !bulkModal) return;
+    const text = bulkNote.trim();
+    if (!text) {
+      setBulkMessage(
+        bulkModal === 'reject' ? 'Reason is required' : 'Note is required',
+      );
+      return;
+    }
+    setBulkSaving(bulkModal);
+    setBulkMessage('');
+    try {
+      const res =
+        bulkModal === 'reject'
+          ? await adminProductsService.bulkReject([...selected], text)
+          : await adminProductsService.bulkRequestChanges([...selected], text);
+      const d = res.data;
+      setBulkMessage(
+        d
+          ? `${bulkModal === 'reject' ? 'Rejected' : 'Changes requested on'} ${d.ok.length}${d.failed.length ? ` — ${d.failed.length} failed` : ''}`
+          : 'Done',
+      );
+      setBulkModal(null);
+      setBulkNote('');
+      clearSelection();
+      await fetchProducts({ page: pagination.page });
+    } catch (err) {
+      setBulkMessage(
+        err instanceof ApiError
+          ? err.body.message || 'Bulk action failed'
+          : 'Bulk action failed',
+      );
+    } finally {
+      setBulkSaving(null);
+    }
   };
 
   const getStatusBadgeClass = (status: string) => {
@@ -229,9 +318,123 @@ export default function ProductsPage() {
           </div>
         ) : (
           <>
+            {/* Bulk action bar — only surfaces when rows are selected */}
+            {selected.size > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '10px 14px',
+                  marginBottom: 12,
+                  background: '#eff6ff',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: 8,
+                  fontSize: 13,
+                }}
+              >
+                <span style={{ fontWeight: 600, color: '#1e40af' }}>
+                  {selected.size} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={runBulkApprove}
+                  disabled={bulkSaving !== null}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    background: '#16a34a',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 6,
+                    cursor: bulkSaving ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {bulkSaving === 'approve' ? 'Approving\u2026' : 'Approve all'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setBulkModal('request-changes'); setBulkNote(''); setBulkMessage(''); }}
+                  disabled={bulkSaving !== null}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    background: '#fff',
+                    color: '#b45309',
+                    border: '1px solid #fbbf24',
+                    borderRadius: 6,
+                    cursor: bulkSaving ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Request changes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setBulkModal('reject'); setBulkNote(''); setBulkMessage(''); }}
+                  disabled={bulkSaving !== null}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: 13,
+                    fontWeight: 500,
+                    background: '#fff',
+                    color: '#b91c1c',
+                    border: '1px solid #fca5a5',
+                    borderRadius: 6,
+                    cursor: bulkSaving ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Reject all
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  style={{
+                    marginLeft: 'auto',
+                    padding: '6px 10px',
+                    fontSize: 13,
+                    background: 'transparent',
+                    color: '#6b7280',
+                    border: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+            {bulkMessage && !bulkModal && (
+              <div
+                style={{
+                  padding: '8px 12px',
+                  marginBottom: 12,
+                  background: '#f0fdf4',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  color: '#15803d',
+                }}
+              >
+                {bulkMessage}
+              </div>
+            )}
+
             <table className="products-table">
               <thead>
                 <tr>
+                  <th style={{ width: 36 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all pending products on this page"
+                      checked={
+                        selectableIds.length > 0 &&
+                        selectableIds.every((id) => selected.has(id))
+                      }
+                      onChange={toggleAll}
+                      disabled={selectableIds.length === 0}
+                    />
+                  </th>
                   <th>Product</th>
                   <th>Type</th>
                   <th>Price</th>
@@ -242,6 +445,16 @@ export default function ProductsPage() {
               <tbody>
                 {products.map(product => (
                   <tr key={product.id}>
+                    <td style={{ width: 36 }} onClick={(e) => e.stopPropagation()}>
+                      {product.status === 'SUBMITTED' ? (
+                        <input
+                          type="checkbox"
+                          checked={selected.has(product.id)}
+                          onChange={() => toggleOne(product.id)}
+                          aria-label={`Select ${product.title}`}
+                        />
+                      ) : null}
+                    </td>
                     <td>
                       <Link
                         href={`/dashboard/products/${product.id}/edit`}
@@ -343,6 +556,127 @@ export default function ProductsPage() {
           </>
         )}
       </div>
+
+      {/* Bulk reject / request-changes modal */}
+      {bulkModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !bulkSaving) setBulkModal(null);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(17, 24, 39, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              padding: 24,
+              width: '100%',
+              maxWidth: 480,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
+              {bulkModal === 'reject'
+                ? `Reject ${selected.size} product(s)`
+                : `Request changes on ${selected.size} product(s)`}
+            </h2>
+            <p style={{ marginTop: 4, marginBottom: 12, color: '#6b7280', fontSize: 13 }}>
+              This {bulkModal === 'reject' ? 'reason' : 'note'} will be sent to
+              every seller whose product is in this batch. Each seller receives
+              an email with the text below.
+            </p>
+            {bulkMessage && (
+              <div
+                style={{
+                  padding: 10,
+                  background: '#fef2f2',
+                  color: '#b91c1c',
+                  border: '1px solid #fecaca',
+                  borderRadius: 6,
+                  marginBottom: 12,
+                  fontSize: 13,
+                }}
+              >
+                {bulkMessage}
+              </div>
+            )}
+            <textarea
+              rows={4}
+              placeholder={
+                bulkModal === 'reject'
+                  ? 'Rejection reason (required)'
+                  : 'What needs to change (required)'
+              }
+              value={bulkNote}
+              onChange={(e) => setBulkNote(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                fontSize: 14,
+                border: '1px solid #d1d5db',
+                borderRadius: 8,
+                marginBottom: 16,
+                resize: 'vertical',
+                fontFamily: 'inherit',
+              }}
+              disabled={bulkSaving !== null}
+            />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setBulkModal(null)}
+                disabled={bulkSaving !== null}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  background: '#fff',
+                  color: '#374151',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 6,
+                  cursor: bulkSaving ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={runBulkRejectOrChanges}
+                disabled={bulkSaving !== null}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: bulkModal === 'reject' ? '#dc2626' : '#d97706',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: bulkSaving ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {bulkSaving
+                  ? bulkModal === 'reject'
+                    ? 'Rejecting\u2026'
+                    : 'Saving\u2026'
+                  : bulkModal === 'reject'
+                    ? 'Confirm Rejection'
+                    : 'Send Changes Note'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

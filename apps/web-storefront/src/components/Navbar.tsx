@@ -268,6 +268,13 @@ export default function Navbar() {
                   >
                     My Orders
                   </Link>
+                  <Link
+                    href="/returns"
+                    onClick={() => setDropdownOpen(false)}
+                    style={{ display: 'block', padding: '10px 14px', fontSize: 14, color: '#111', textDecoration: 'none', borderTop: '1px solid #f3f4f6' }}
+                  >
+                    My Returns
+                  </Link>
                   <button
                     onClick={handleLogout}
                     style={{

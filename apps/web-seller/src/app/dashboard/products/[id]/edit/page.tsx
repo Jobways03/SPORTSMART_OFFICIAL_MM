@@ -11,7 +11,7 @@ import {
 } from '@/services/product.service';
 import { ApiError } from '@/lib/api-client';
 import '../../product-form.css';
-import RichTextEditor from '@/components/RichTextEditor';
+import { RichTextEditor } from '@sportsmart/ui';
 
 // ----- Types -----
 
@@ -122,6 +122,7 @@ export default function EditProductPage() {
 
   // AI generation
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [selfStatusSaving, setSelfStatusSaving] = useState(false);
 
   const generateWithAI = useCallback(async () => {
     if (!form.title.trim()) return;
@@ -643,6 +644,43 @@ export default function EditProductPage() {
     }
   }
 
+  // ----- Seller self-service pause/resume -----
+
+  async function handleToggleSelfStatus() {
+    if (!product) return;
+    const token = sessionStorage.getItem('accessToken');
+    if (!token) {
+      showToast('error', 'Session expired. Please log in again.');
+      return;
+    }
+    const current = product.status;
+    const target: 'ACTIVE' | 'SUSPENDED' =
+      current === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED';
+    const prompt =
+      target === 'SUSPENDED'
+        ? 'Pause sales for this product? Customers will no longer see it on the storefront.'
+        : 'Resume sales for this product? It will go live again immediately.';
+    if (!confirm(prompt)) return;
+
+    setSelfStatusSaving(true);
+    try {
+      await productService.setSelfStatus(token, product.id, target);
+      showToast(
+        'success',
+        target === 'SUSPENDED' ? 'Product paused.' : 'Product is live again.',
+      );
+      // Refetch to pick up the new status + updated statusHistory entry
+      const refreshed = await productService.getProduct(token, product.id);
+      if (refreshed.data) setProduct(refreshed.data);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Failed to update status';
+      showToast('error', msg);
+    } finally {
+      setSelfStatusSaving(false);
+    }
+  }
+
   // ----- Status banner -----
 
   function renderStatusBanner() {
@@ -680,8 +718,66 @@ export default function EditProductPage() {
     }
     if (status === 'APPROVED' || status === 'ACTIVE') {
       return (
-        <div className="status-banner active">
-          This product is live.
+        <div
+          className="status-banner active"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}
+        >
+          <span>This product is live.</span>
+          <button
+            type="button"
+            onClick={handleToggleSelfStatus}
+            disabled={selfStatusSaving}
+            style={{
+              padding: '6px 14px',
+              fontSize: 13,
+              fontWeight: 500,
+              background: '#fff',
+              border: '1px solid #9ca3af',
+              borderRadius: 6,
+              color: '#374151',
+              cursor: selfStatusSaving ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {selfStatusSaving ? 'Pausing\u2026' : 'Pause sales'}
+          </button>
+        </div>
+      );
+    }
+    if (status === 'SUSPENDED') {
+      return (
+        <div
+          className="status-banner"
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+            background: '#f3f4f6',
+            border: '1px solid #d1d5db',
+            color: '#374151',
+          }}
+        >
+          <span>
+            <strong>Paused</strong> &mdash; this product is not visible to customers.
+          </span>
+          <button
+            type="button"
+            onClick={handleToggleSelfStatus}
+            disabled={selfStatusSaving}
+            style={{
+              padding: '6px 14px',
+              fontSize: 13,
+              fontWeight: 500,
+              background: '#2563eb',
+              border: '1px solid #2563eb',
+              borderRadius: 6,
+              color: '#fff',
+              cursor: selfStatusSaving ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {selfStatusSaving ? 'Resuming\u2026' : 'Resume sales'}
+          </button>
         </div>
       );
     }
@@ -738,6 +834,11 @@ export default function EditProductPage() {
 
       {/* Status Banner */}
       {renderStatusBanner()}
+
+      {/* Status history timeline — full audit trail of moderation decisions */}
+      {Array.isArray(product.statusHistory) && product.statusHistory.length > 0 && (
+        <StatusHistoryPanel entries={product.statusHistory} />
+      )}
 
       {/* Status notice removed — editing allowed at all times */}
 
@@ -1528,6 +1629,134 @@ export default function EditProductPage() {
         </div>
       )}
 
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// StatusHistoryPanel — renders a compact vertical timeline of every
+// status transition on this product. Data comes from the backend's
+// `statusHistory` relation which is already populated on every
+// transition via ProductRepository.*InTransaction helpers.
+// ─────────────────────────────────────────────────────────────────
+
+type StatusHistoryEntry = {
+  id: string;
+  fromStatus: string | null;
+  toStatus: string;
+  changedBy: string | null;
+  reason: string | null;
+  createdAt: string | Date;
+};
+
+function StatusHistoryPanel({ entries }: { entries: StatusHistoryEntry[] }) {
+  const ordered = [...entries].sort(
+    (a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+
+  const palette = (status: string): string => {
+    if (['APPROVED', 'ACTIVE'].includes(status)) return '#16a34a';
+    if (['REJECTED', 'SUSPENDED', 'ARCHIVED'].includes(status)) return '#dc2626';
+    if (['CHANGES_REQUESTED'].includes(status)) return '#d97706';
+    if (['SUBMITTED'].includes(status)) return '#2563eb';
+    return '#6b7280';
+  };
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 12,
+        padding: '16px 20px',
+        marginBottom: 16,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: '#6b7280',
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+          marginBottom: 12,
+        }}
+      >
+        Review Timeline
+      </div>
+      <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        {ordered.map((e, i) => {
+          const color = palette(e.toStatus);
+          const isLast = i === ordered.length - 1;
+          return (
+            <li
+              key={e.id}
+              style={{ display: 'flex', gap: 12, position: 'relative' }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  flexShrink: 0,
+                  paddingTop: 2,
+                }}
+              >
+                <div
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    background: color,
+                    border: '2px solid #fff',
+                    boxShadow: `0 0 0 1px ${color}`,
+                  }}
+                />
+                {!isLast && (
+                  <div
+                    style={{
+                      width: 2,
+                      flex: 1,
+                      background: '#e5e7eb',
+                      marginTop: 4,
+                      minHeight: 24,
+                    }}
+                  />
+                )}
+              </div>
+              <div style={{ paddingBottom: isLast ? 0 : 14, flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: '#111827' }}>
+                  <span style={{ fontWeight: 600, color }}>
+                    {e.toStatus.replace(/_/g, ' ')}
+                  </span>
+                  {e.fromStatus && (
+                    <span style={{ color: '#9ca3af' }}>
+                      {' '}
+                      &larr; {e.fromStatus.replace(/_/g, ' ')}
+                    </span>
+                  )}
+                </div>
+                {e.reason && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: '#374151',
+                      marginTop: 2,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {e.reason}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                  {new Date(e.createdAt).toLocaleString()}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

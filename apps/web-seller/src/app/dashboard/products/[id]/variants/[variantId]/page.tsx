@@ -283,7 +283,7 @@ export default function VariantDetailPage() {
                 const name = ov.optionValue?.optionDefinition?.name || ov.optionName || '';
                 return name.toLowerCase() === 'color' || name.toLowerCase() === 'colour';
               });
-              const colorValue = colorOv?.optionValue?.displayValue || colorOv?.displayValue;
+              const colorValue = (colorOv as any)?.optionValue?.displayValue || colorOv?.displayValue;
               if (colorValue) {
                 return (
                   <div style={{

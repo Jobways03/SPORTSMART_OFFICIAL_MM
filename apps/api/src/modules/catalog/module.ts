@@ -78,7 +78,11 @@ import { StorefrontFiltersController } from './presentation/controllers/public/s
 // Controllers - Seller (Service Area)
 import { SellerServiceAreaController } from './presentation/controllers/seller/seller-service-area.controller';
 
+// Cross-module imports
+import { CartModule } from '../cart/module';
+
 @Module({
+  imports: [CartModule],
   controllers: [
     CatalogReferenceController,
     StorefrontProductsController,

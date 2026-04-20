@@ -9,7 +9,7 @@ import { apiClient, ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
 import '../../product-form.css';
-import RichTextEditor from '@/components/RichTextEditor';
+import { RichTextEditor } from '@sportsmart/ui';
 
 // ----- Types -----
 
@@ -1044,6 +1044,12 @@ export default function EditProductPage() {
       {/* Status Banner */}
       {renderStatusBanner()}
 
+      {/* Status history timeline — every transition, who triggered it, why */}
+      {Array.isArray((product as any).statusHistory) &&
+        (product as any).statusHistory.length > 0 && (
+          <StatusHistoryPanel entries={(product as any).statusHistory} />
+        )}
+
       {/* Seller-submitted product info */}
       {product.seller && (
         <div className="form-card" style={{ marginBottom: 16, background: '#eff6ff', border: '1px solid #bfdbfe' }}>
@@ -1061,12 +1067,12 @@ export default function EditProductPage() {
         </div>
       )}
 
-      {/* Moderation Actions (only for SUBMITTED / IN_REVIEW products) */}
+      {/* Approval Actions (only for SUBMITTED / IN_REVIEW products) */}
       {isSubmitted && (
         <div className="form-card" style={{ marginBottom: 16 }}>
-          <div className="form-card-title">MODERATION</div>
+          <div className="form-card-title">APPROVAL</div>
           <p style={{ fontSize: 14, marginBottom: 12, color: '#374151' }}>
-            This product is awaiting review. Take an action:
+            This product is awaiting approval. Take an action:
           </p>
           <div style={{ display: 'flex', gap: 10 }}>
             <button
@@ -2325,3 +2331,131 @@ const mfChipRemoveStyle: React.CSSProperties = {
   marginLeft: 2,
   lineHeight: 1,
 };
+
+// ─────────────────────────────────────────────────────────────────
+// StatusHistoryPanel — admin-side timeline of every moderation /
+// status transition on this product. Matches the seller-side panel
+// but lives on the admin detail page so moderators can see the full
+// audit trail at a glance.
+// ─────────────────────────────────────────────────────────────────
+
+type StatusHistoryEntry = {
+  id: string;
+  fromStatus: string | null;
+  toStatus: string;
+  changedBy: string | null;
+  reason: string | null;
+  createdAt: string | Date;
+};
+
+function StatusHistoryPanel({ entries }: { entries: StatusHistoryEntry[] }) {
+  const ordered = [...entries].sort(
+    (a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+
+  const palette = (status: string): string => {
+    if (['APPROVED', 'ACTIVE'].includes(status)) return '#16a34a';
+    if (['REJECTED', 'SUSPENDED', 'ARCHIVED'].includes(status)) return '#dc2626';
+    if (status === 'CHANGES_REQUESTED') return '#d97706';
+    if (status === 'SUBMITTED') return '#2563eb';
+    return '#6b7280';
+  };
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 12,
+        padding: '16px 20px',
+        marginBottom: 16,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: '#6b7280',
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+          marginBottom: 12,
+        }}
+      >
+        Review Timeline
+      </div>
+      <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        {ordered.map((e, i) => {
+          const color = palette(e.toStatus);
+          const isLast = i === ordered.length - 1;
+          return (
+            <li
+              key={e.id}
+              style={{ display: 'flex', gap: 12, position: 'relative' }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  flexShrink: 0,
+                  paddingTop: 2,
+                }}
+              >
+                <div
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    background: color,
+                    border: '2px solid #fff',
+                    boxShadow: `0 0 0 1px ${color}`,
+                  }}
+                />
+                {!isLast && (
+                  <div
+                    style={{
+                      width: 2,
+                      flex: 1,
+                      background: '#e5e7eb',
+                      marginTop: 4,
+                      minHeight: 24,
+                    }}
+                  />
+                )}
+              </div>
+              <div style={{ paddingBottom: isLast ? 0 : 14, flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: '#111827' }}>
+                  <span style={{ fontWeight: 600, color }}>
+                    {e.toStatus.replace(/_/g, ' ')}
+                  </span>
+                  {e.fromStatus && (
+                    <span style={{ color: '#9ca3af' }}>
+                      {' '}
+                      &larr; {e.fromStatus.replace(/_/g, ' ')}
+                    </span>
+                  )}
+                </div>
+                {e.reason && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: '#374151',
+                      marginTop: 2,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {e.reason}
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
+                  {new Date(e.createdAt).toLocaleString()}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}

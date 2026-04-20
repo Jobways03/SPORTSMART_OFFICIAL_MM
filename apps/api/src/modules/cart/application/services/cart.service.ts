@@ -166,4 +166,12 @@ export class CartService {
       await this.cartRepo.clearCart(cart.id);
     }
   }
+
+  async countActiveItemsForVariant(variantId: string): Promise<number> {
+    return this.cartRepo.countActiveItemsForVariant(variantId);
+  }
+
+  async countActiveItemsForProduct(productId: string): Promise<number> {
+    return this.cartRepo.countActiveItemsForProduct(productId);
+  }
 }

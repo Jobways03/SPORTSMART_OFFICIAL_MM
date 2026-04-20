@@ -19,6 +19,26 @@ export class PrismaSessionRepository implements SessionRepository {
     }) as Promise<SessionRecord[]>;
   }
 
+  async findByRefreshToken(refreshToken: string): Promise<SessionRecord | null> {
+    return this.prisma.session.findFirst({
+      where: { refreshToken },
+    }) as Promise<SessionRecord | null>;
+  }
+
+  async rotateRefreshToken(
+    sessionId: string,
+    newRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<SessionRecord> {
+    return this.prisma.session.update({
+      where: { id: sessionId },
+      data: {
+        refreshToken: newRefreshToken,
+        expiresAt: newExpiresAt,
+      },
+    }) as Promise<SessionRecord>;
+  }
+
   async save(_session: unknown): Promise<void> {
     // Generic save - not used in current use-cases but kept for interface compliance
   }

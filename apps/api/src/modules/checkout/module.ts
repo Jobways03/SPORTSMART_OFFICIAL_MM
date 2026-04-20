@@ -23,9 +23,11 @@ import { PrismaCheckoutRepository } from './infrastructure/repositories/prisma-c
 // Shared
 import { UserAuthGuard } from '../../core/guards';
 import { CatalogModule } from '../catalog/module';
+import { FranchiseModule } from '../franchise/module';
+import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 
 @Module({
-  imports: [CatalogModule],
+  imports: [CatalogModule, FranchiseModule, RazorpayModule],
   controllers: [
     CustomerAddressController,
     CustomerOrdersController,

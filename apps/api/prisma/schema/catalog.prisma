@@ -105,6 +105,16 @@ model Product {
   status           ProductStatus    @default(DRAFT)
   moderationStatus ModerationStatus @default(PENDING)
   moderationNote   String?          @map("moderation_note")
+
+  // Moderation audit — populated on every admin review action. `moderationNote`
+  // is kept for legacy readers but the canonical source is now the three
+  // columns below. Each review overwrites these to reflect the latest
+  // decision; full history is in ProductStatusHistory.
+  moderatorId       String?   @map("moderator_id")
+  reviewedAt        DateTime? @map("reviewed_at")
+  rejectionReason   String?   @map("rejection_reason")
+  changeRequestNote String?   @map("change_request_note")
+
   hasVariants      Boolean          @default(false) @map("has_variants")
 
   // Platform pricing (customer-facing price, admin-controlled)
@@ -152,8 +162,9 @@ model Product {
   collectionMaps ProductCollectionMap[]
   discounts      DiscountProduct[]
   cartItems      CartItem[]
-  sellerMappings SellerProductMapping[]
-  metafields     ProductMetafield[]
+  sellerMappings          SellerProductMapping[]
+  metafields              ProductMetafield[]
+  franchiseCatalogMappings FranchiseCatalogMapping[]
 
   @@index([sellerId])
   @@index([categoryId])
@@ -222,8 +233,9 @@ model ProductVariant {
   product        Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
   optionValues   ProductVariantOptionValue[]
   images         ProductVariantImage[]
-  cartItems      CartItem[]
-  sellerMappings SellerProductMapping[]
+  cartItems               CartItem[]
+  sellerMappings          SellerProductMapping[]
+  franchiseCatalogMappings FranchiseCatalogMapping[]
 
   @@index([productId])
   @@index([sku])

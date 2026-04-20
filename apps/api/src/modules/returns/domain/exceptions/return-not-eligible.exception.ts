@@ -1,1 +1,0 @@
-import { DomainException } from '@core/exceptions/domain.exception'; export class ReturnNotEligibleException extends DomainException { constructor() { super('Return not eligible', 'RETURN_NOT_ELIGIBLE'); } }

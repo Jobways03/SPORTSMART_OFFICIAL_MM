@@ -324,11 +324,26 @@ export default function SellerOrdersPage() {
                         {(() => {
                           const next = nextFulfillmentAction(so);
                           if (!next) return null;
+                          // SHIPPED requires tracking info — take seller to the detail page
+                          if (next.status === 'SHIPPED') {
+                            return (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  router.push(`/dashboard/orders/${so.id}`);
+                                }}
+                                disabled={actionLoading === so.id}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#2563eb', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
+                              >
+                                {next.label}
+                              </button>
+                            );
+                          }
                           return (
                             <button
                               onClick={(e) => handleAction(e, so.id, 'status', { status: next.status })}
                               disabled={actionLoading === so.id}
-                              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#2563eb', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
+                              style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#d97706', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
                             >
                               {next.label}
                             </button>

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { ApiError } from '@/lib/api-client';
+import { sanitizeRichHtml } from '@/lib/sanitize';
 import {
   sellerProfileService,
   SellerProfileData,
@@ -1399,7 +1400,7 @@ export default function SellerProfilePage() {
               <div className="editor-wrapper editor-disabled">
                 <div
                   className="ql-editor"
-                  dangerouslySetInnerHTML={{ __html: formData.shortStoreDescription || '<p style="color: var(--color-text-secondary)">No description yet</p>' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(formData.shortStoreDescription || '<p style="color: var(--color-text-secondary)">No description yet</p>') }}
                 />
               </div>
             ) : (
@@ -1439,7 +1440,7 @@ export default function SellerProfilePage() {
               <div className="editor-wrapper editor-disabled">
                 <div
                   className="ql-editor"
-                  dangerouslySetInnerHTML={{ __html: formData.detailedStoreDescription || '<p style="color: var(--color-text-secondary)">No description yet</p>' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(formData.detailedStoreDescription || '<p style="color: var(--color-text-secondary)">No description yet</p>') }}
                 />
               </div>
             ) : (
@@ -1491,7 +1492,7 @@ export default function SellerProfilePage() {
               <div className="editor-wrapper editor-disabled">
                 <div
                   className="ql-editor"
-                  dangerouslySetInnerHTML={{ __html: formData.sellerPolicy || '<p style="color: var(--color-text-secondary)">No policy defined yet</p>' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(formData.sellerPolicy || '<p style="color: var(--color-text-secondary)">No policy defined yet</p>') }}
                 />
               </div>
             ) : (

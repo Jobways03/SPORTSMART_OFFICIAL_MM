@@ -18,6 +18,7 @@ export interface CheckoutItemAllocation {
   unserviceableReason?: string;
   allocatedSellerId: string | null;
   allocatedSellerName: string | null;
+  allocatedNodeType: 'SELLER' | 'FRANCHISE';
   allocatedMappingId: string | null;
   estimatedDeliveryDays: number | null;
   reservationId: string | null;

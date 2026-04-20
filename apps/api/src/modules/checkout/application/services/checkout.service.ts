@@ -3,6 +3,7 @@ import {
   CHECKOUT_REPOSITORY,
   ICheckoutRepository,
   CreateOrderItemInput,
+  FulfillmentGroupInput,
 } from '../../domain/repositories/checkout.repository.interface';
 import {
   BadRequestAppException,
@@ -11,14 +12,21 @@ import {
 import {
   CatalogPublicFacade,
   AllocationResult,
-  StockReservationResult,
 } from '../../../catalog/application/facades/catalog-public.facade';
+import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
+import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import {
   CheckoutSessionService,
   CheckoutSession,
   CheckoutItemAllocation,
 } from './checkout-session.service';
+import * as crypto from 'crypto';
+
+const PAYMENT_WINDOW_MINUTES = 30;
+const PLACE_ORDER_LOCK_TTL_SECONDS = 30;
 
 @Injectable()
 export class CheckoutService {
@@ -27,7 +35,11 @@ export class CheckoutService {
     private readonly repo: ICheckoutRepository,
     private readonly sessionService: CheckoutSessionService,
     private readonly catalogFacade: CatalogPublicFacade,
+    private readonly franchiseFacade: FranchisePublicFacade,
+    private readonly razorpayAdapter: RazorpayAdapter,
+    private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
+    private readonly redis: RedisService,
   ) {}
 
   // ── Initiate Checkout ──────────────────────────────────────────────────
@@ -56,12 +68,20 @@ export class CheckoutService {
     const existingSession = await this.sessionService.get(userId);
     if (existingSession) {
       for (const item of existingSession.items) {
-        if (item.reservationId) {
-          try {
+        try {
+          if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
+            // Franchise reservations are released via the franchise facade
+            await this.franchiseFacade.unreserveStock(
+              item.allocatedSellerId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+            );
+          } else if (item.reservationId) {
             await this.catalogFacade.releaseReservation(item.reservationId);
-          } catch {
-            // Best-effort release — reservation may have expired already
           }
+        } catch {
+          // Best-effort release — reservation may have expired already
         }
       }
       await this.sessionService.delete(userId);
@@ -113,6 +133,7 @@ export class CheckoutService {
           unserviceableReason: 'This item cannot be delivered to your address',
           allocatedSellerId: null,
           allocatedSellerName: null,
+          allocatedNodeType: 'SELLER',
           allocatedMappingId: null,
           estimatedDeliveryDays: null,
           reservationId: null,
@@ -137,6 +158,7 @@ export class CheckoutService {
           unserviceableReason: 'This item cannot be delivered to your address',
           allocatedSellerId: null,
           allocatedSellerName: null,
+          allocatedNodeType: 'SELLER',
           allocatedMappingId: null,
           estimatedDeliveryDays: null,
           reservationId: null,
@@ -145,14 +167,31 @@ export class CheckoutService {
         continue;
       }
 
-      // Reserve stock for allocated seller
-      let reservation: StockReservationResult | null = null;
+      // Reserve stock — use the appropriate facade based on node type
+      const primaryNodeType = allocation.primary.nodeType ?? 'SELLER';
+      let reservationId: string | null = null;
+
       try {
-        reservation = await this.catalogFacade.reserveStock({
-          mappingId: allocation.primary.mappingId,
-          quantity: cartItem.quantity,
-          expiresInMinutes: 15,
-        });
+        if (primaryNodeType === 'FRANCHISE') {
+          // Franchise stock reservation via franchise facade
+          const franchiseId = allocation.primary.franchiseId || allocation.primary.sellerId;
+          await this.franchiseFacade.reserveStock(
+            franchiseId,
+            cartItem.productId,
+            cartItem.variantId ?? null,
+            cartItem.quantity,
+          );
+          // Franchise reservations are tracked via ledger — no reservationId
+          reservationId = null;
+        } else {
+          // Seller stock reservation via catalog facade
+          const reservation = await this.catalogFacade.reserveStock({
+            mappingId: allocation.primary.mappingId,
+            quantity: cartItem.quantity,
+            expiresInMinutes: 15,
+          });
+          reservationId = reservation.id;
+        }
       } catch {
         // Stock race condition — treat as unserviceable
         allocatedItems.push({
@@ -170,6 +209,7 @@ export class CheckoutService {
           unserviceableReason: 'Stock just became unavailable — please try again',
           allocatedSellerId: null,
           allocatedSellerName: null,
+          allocatedNodeType: 'SELLER',
           allocatedMappingId: null,
           estimatedDeliveryDays: null,
           reservationId: null,
@@ -179,6 +219,11 @@ export class CheckoutService {
       }
 
       serviceableAmount += lineTotal;
+
+      // Use franchiseId as the allocatedSellerId for franchise nodes
+      const allocatedNodeId = primaryNodeType === 'FRANCHISE'
+        ? (allocation.primary.franchiseId || allocation.primary.sellerId)
+        : allocation.primary.sellerId;
 
       allocatedItems.push({
         cartItemId: cartItem.id,
@@ -192,11 +237,12 @@ export class CheckoutService {
         unitPrice,
         lineTotal,
         serviceable: true,
-        allocatedSellerId: allocation.primary.sellerId,
+        allocatedSellerId: allocatedNodeId,
         allocatedSellerName: allocation.primary.sellerName,
+        allocatedNodeType: primaryNodeType,
         allocatedMappingId: allocation.primary.mappingId,
         estimatedDeliveryDays: allocation.primary.estimatedDeliveryDays,
-        reservationId: reservation.id,
+        reservationId,
       });
     }
 
@@ -329,7 +375,33 @@ export class CheckoutService {
 
   // ── Place Order ────────────────────────────────────────────────────────
 
-  async placeOrder(userId: string, _paymentMethod?: string) {
+  async placeOrder(userId: string, paymentMethod?: string) {
+    // Per-user lock: prevents double-submit (UI double-click or client
+    // retry) from committing two MasterOrders against the same checkout
+    // session. Without it, two concurrent calls both pass session.get()
+    // and both run placeOrderTransaction, leaving an orphan order whose
+    // reservationId is already CONFIRMED by the winning call.
+    const lockKey = `lock:checkout:place-order:${userId}`;
+    const acquired = await this.redis.acquireLock(
+      lockKey,
+      PLACE_ORDER_LOCK_TTL_SECONDS,
+    );
+    if (!acquired) {
+      throw new BadRequestAppException(
+        'Another order placement is in progress — please wait a moment and retry.',
+      );
+    }
+
+    try {
+      return await this.placeOrderLocked(userId, paymentMethod);
+    } finally {
+      await this.redis.releaseLock(lockKey);
+    }
+  }
+
+  private async placeOrderLocked(userId: string, paymentMethod?: string) {
+    const method: 'COD' | 'ONLINE' =
+      paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
     const session = await this.sessionService.get(userId);
 
     if (!session) {
@@ -356,14 +428,21 @@ export class CheckoutService {
       throw new BadRequestAppException('No items to order');
     }
 
-    // Group items by allocated seller
-    const sellerGroups: Record<string, { items: CreateOrderItemInput[]; sellerName: string | null }> = {};
+    // Group items by fulfillment node (nodeType + nodeId)
+    const fulfillmentGroups: Record<string, FulfillmentGroupInput> = {};
     for (const item of session.items) {
-      const sellerId = item.allocatedSellerId || 'unknown';
-      if (!sellerGroups[sellerId]) {
-        sellerGroups[sellerId] = { items: [], sellerName: item.allocatedSellerName };
+      const nodeType = item.allocatedNodeType || 'SELLER';
+      const nodeId = item.allocatedSellerId || 'unknown';
+      const groupKey = `${nodeType}:${nodeId}`;
+      if (!fulfillmentGroups[groupKey]) {
+        fulfillmentGroups[groupKey] = {
+          items: [],
+          nodeName: item.allocatedSellerName,
+          nodeType,
+          nodeId,
+        };
       }
-      sellerGroups[sellerId].items.push({
+      fulfillmentGroups[groupKey].items.push({
         productId: item.productId,
         variantId: item.variantId,
         productTitle: item.productTitle,
@@ -377,17 +456,48 @@ export class CheckoutService {
       });
     }
 
-    const result = await this.repo.placeOrderTransaction({
-      customerId: userId,
-      addressSnapshot: session.addressSnapshot,
-      totalAmount: session.totalAmount,
-      itemCount: session.itemCount,
-      sellerGroups,
-    });
+    // Snapshot franchise commission rates at order time
+    for (const [_key, group] of Object.entries(fulfillmentGroups)) {
+      if (group.nodeType === 'FRANCHISE') {
+        const rate = await this.franchiseFacade.getCommissionRate(group.nodeId);
+        group.commissionRateSnapshot = rate;
+      }
+    }
 
-    // Confirm all reservations (deducts from actual stockQty)
+    let result;
+    try {
+      result = await this.repo.placeOrderTransaction({
+        customerId: userId,
+        addressSnapshot: session.addressSnapshot,
+        totalAmount: session.totalAmount,
+        itemCount: session.itemCount,
+        paymentMethod: method,
+        fulfillmentGroups,
+      });
+    } catch (err) {
+      // Compensating action: release franchise reservations on failure
+      // (Seller reservations have a TTL via StockReservation table and will auto-expire)
+      for (const item of session.items) {
+        if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
+          try {
+            await this.franchiseFacade.unreserveStock(
+              item.allocatedSellerId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+            );
+          } catch {
+            // Best-effort release; FranchiseReservationCleanupService will catch stragglers
+          }
+        }
+      }
+      throw err;
+    }
+
+    // Confirm all seller reservations (deducts from actual stockQty)
+    // Franchise reservations are already deducted via the ledger at reserve time
     for (const item of session.items) {
-      if (item.reservationId) {
+      if (item.reservationId && item.allocatedNodeType !== 'FRANCHISE') {
         await this.catalogFacade.confirmReservation(
           item.reservationId,
           result.masterOrderId,
@@ -425,7 +535,9 @@ export class CheckoutService {
             masterOrderId: result.masterOrderId,
             orderNumber: result.orderNumber,
             sellerId: so.sellerId,
-            sellerName: so.sellerName,
+            franchiseId: so.franchiseId,
+            fulfillmentNodeType: so.fulfillmentNodeType,
+            nodeName: so.nodeName,
             subTotal: so.subTotal,
             itemCount: so.itemCount,
           },
@@ -435,10 +547,200 @@ export class CheckoutService {
       // Events are best-effort — do not fail the order if event publishing fails
     }
 
+    // For ONLINE payments: create Razorpay order and return details for frontend
+    if (method === 'ONLINE') {
+      try {
+        const razorpayOrder = await this.razorpayAdapter.createOrder({
+          amountInr: result.totalAmount,
+          receipt: result.orderNumber,
+          notes: {
+            masterOrderId: result.masterOrderId,
+            orderNumber: result.orderNumber,
+          },
+        });
+
+        const paymentExpiresAt = new Date(
+          Date.now() + PAYMENT_WINDOW_MINUTES * 60 * 1000,
+        );
+
+        await this.prisma.masterOrder.update({
+          where: { id: result.masterOrderId },
+          data: {
+            razorpayOrderId: razorpayOrder.providerOrderId,
+            paymentExpiresAt,
+          },
+        });
+
+        return {
+          orderNumber: result.orderNumber,
+          totalAmount: result.totalAmount,
+          itemCount: result.itemCount,
+          paymentMethod: 'ONLINE' as const,
+          payment: {
+            razorpayOrderId: razorpayOrder.providerOrderId,
+            razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
+            amount: razorpayOrder.amount,
+            currency: razorpayOrder.currency,
+            expiresAt: paymentExpiresAt.toISOString(),
+          },
+        };
+      } catch (err) {
+        await this.prisma.masterOrder.update({
+          where: { id: result.masterOrderId },
+          data: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
+        });
+        throw new BadRequestAppException(
+          `Payment initialization failed: ${(err as Error).message}. Order has been cancelled.`,
+        );
+      }
+    }
+
     return {
       orderNumber: result.orderNumber,
       totalAmount: result.totalAmount,
       itemCount: result.itemCount,
+      paymentMethod: 'COD' as const,
+    };
+  }
+
+  // ── Verify Online Payment ─────────────────────────────────────────────
+
+  async verifyPayment(
+    userId: string,
+    input: {
+      razorpayOrderId: string;
+      razorpayPaymentId: string;
+      razorpaySignature: string;
+    },
+  ) {
+    const order = await this.prisma.masterOrder.findFirst({
+      where: {
+        customerId: userId,
+        razorpayOrderId: input.razorpayOrderId,
+        orderStatus: 'PENDING_PAYMENT',
+      },
+    });
+    if (!order) {
+      throw new NotFoundAppException(
+        'No pending-payment order found for this Razorpay order',
+      );
+    }
+
+    if (order.paymentExpiresAt && new Date() > order.paymentExpiresAt) {
+      throw new BadRequestAppException(
+        'Payment window has expired. Please place a new order.',
+      );
+    }
+
+    const webhookSecret = process.env.RAZORPAY_KEY_SECRET || '';
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(`${input.razorpayOrderId}|${input.razorpayPaymentId}`)
+      .digest('hex');
+
+    if (expectedSignature !== input.razorpaySignature) {
+      throw new BadRequestAppException('Payment verification failed — invalid signature');
+    }
+
+    await this.prisma.masterOrder.update({
+      where: { id: order.id },
+      data: {
+        orderStatus: 'PLACED',
+        paymentStatus: 'PAID',
+        razorpayPaymentId: input.razorpayPaymentId,
+      },
+    });
+
+    await this.prisma.subOrder.updateMany({
+      where: { masterOrderId: order.id },
+      data: { paymentStatus: 'PAID' },
+    });
+
+    this.eventBus
+      .publish({
+        eventName: 'payments.payment.captured',
+        aggregate: 'MasterOrder',
+        aggregateId: order.id,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: order.id,
+          orderNumber: order.orderNumber,
+          customerId: userId,
+          paymentId: input.razorpayPaymentId,
+          amount: Number(order.totalAmount),
+        },
+      })
+      .catch(() => {});
+
+    return {
+      verified: true,
+      orderNumber: order.orderNumber,
+      totalAmount: Number(order.totalAmount),
+      paymentId: input.razorpayPaymentId,
+    };
+  }
+
+  // ── Retry Payment ──────────────────────────────────────────────────────
+
+  /**
+   * Customer retries payment on a PENDING_PAYMENT order that hasn't expired.
+   * Creates a fresh Razorpay order (idempotent — Razorpay allows multiple
+   * orders for the same receipt) and returns new payment details.
+   */
+  async retryPayment(userId: string, orderNumber: string) {
+    const order = await this.prisma.masterOrder.findFirst({
+      where: {
+        customerId: userId,
+        orderNumber,
+        orderStatus: 'PENDING_PAYMENT',
+      },
+    });
+    if (!order) {
+      throw new NotFoundAppException(
+        'No pending-payment order found with this order number',
+      );
+    }
+
+    if (order.paymentExpiresAt && new Date() > order.paymentExpiresAt) {
+      throw new BadRequestAppException(
+        'Payment window has expired. Please place a new order.',
+      );
+    }
+
+    // Create a new Razorpay order (previous one may have expired on Razorpay side)
+    const razorpayOrder = await this.razorpayAdapter.createOrder({
+      amountInr: Number(order.totalAmount),
+      receipt: order.orderNumber,
+      notes: {
+        masterOrderId: order.id,
+        orderNumber: order.orderNumber,
+        retry: 'true',
+      },
+    });
+
+    // Extend the payment window
+    const newExpiry = new Date(
+      Date.now() + PAYMENT_WINDOW_MINUTES * 60 * 1000,
+    );
+
+    await this.prisma.masterOrder.update({
+      where: { id: order.id },
+      data: {
+        razorpayOrderId: razorpayOrder.providerOrderId,
+        paymentExpiresAt: newExpiry,
+      },
+    });
+
+    return {
+      orderNumber: order.orderNumber,
+      totalAmount: Number(order.totalAmount),
+      payment: {
+        razorpayOrderId: razorpayOrder.providerOrderId,
+        razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        expiresAt: newExpiry.toISOString(),
+      },
     };
   }
 

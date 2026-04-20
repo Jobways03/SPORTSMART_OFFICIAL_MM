@@ -13,6 +13,7 @@ export interface SessionRecord {
 export interface SessionRepository {
   findById(id: string): Promise<SessionRecord | null>;
   findByUserId(userId: string): Promise<SessionRecord[]>;
+  findByRefreshToken(refreshToken: string): Promise<SessionRecord | null>;
   save(session: unknown): Promise<void>;
   revoke(sessionId: string): Promise<void>;
 
@@ -23,6 +24,17 @@ export interface SessionRepository {
     ipAddress: string | null;
     expiresAt: Date;
   }): Promise<SessionRecord>;
+
+  /**
+   * Atomically rotate the refresh token for a session and extend its expiry.
+   * Used by the refresh-session flow to issue a fresh refresh token while
+   * keeping the same session row (so revocation still works).
+   */
+  rotateRefreshToken(
+    sessionId: string,
+    newRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<SessionRecord>;
 
   revokeAllUserSessions(userId: string): Promise<void>;
 }

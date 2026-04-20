@@ -51,7 +51,10 @@ export class AdminImpersonateSellerUseCase {
       throw new NotFoundAppException('Seller not found');
     }
 
-    // Generate a short-lived seller token (30 minutes)
+    // Generate a short-lived seller token (30 minutes).
+    // Signed with the seller secret because the seller guard verifies it.
+    // The `impersonatedBy` claim signals to the guard to skip the session
+    // revocation check (impersonation tokens have no real SellerSession row).
     const accessToken = jwt.sign(
       {
         sub: seller.id,
@@ -60,7 +63,7 @@ export class AdminImpersonateSellerUseCase {
         sessionId: `impersonation-${adminId}`,
         impersonatedBy: adminId,
       },
-      this.envService.getString('JWT_ACCESS_SECRET'),
+      this.envService.getString('JWT_SELLER_SECRET'),
       { expiresIn: 1800 }, // 30 minutes
     );
 

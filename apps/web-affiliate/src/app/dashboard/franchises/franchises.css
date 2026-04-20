@@ -1,0 +1,1089 @@
+/* ===== Franchises Page ===== */
+.franchises-page {
+  padding: 32px;
+  max-width: 1400px;
+}
+
+.franchises-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.franchises-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.franchises-header-count {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+/* ===== Filters Bar ===== */
+.franchises-filters {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.franchises-search {
+  flex: 1;
+  min-width: 240px;
+  max-width: 400px;
+  position: relative;
+}
+
+.franchises-search input {
+  width: 100%;
+  padding: 9px 12px 9px 36px;
+  font-size: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  outline: none;
+  background: #fff;
+  min-height: 40px;
+}
+
+.franchises-search input:focus {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.franchises-search-icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-secondary);
+  font-size: 15px;
+  pointer-events: none;
+}
+
+/* ===== Table ===== */
+.franchises-table-wrap {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: visible;
+}
+
+.franchises-table-wrap > table thead tr:first-child th:first-child {
+  border-top-left-radius: 12px;
+}
+
+.franchises-table-wrap > table thead tr:first-child th:last-child {
+  border-top-right-radius: 12px;
+}
+
+.franchises-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.franchises-table thead {
+  background: var(--color-bg-page);
+}
+
+.franchises-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.franchises-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.franchises-table th.sortable:hover {
+  color: var(--color-text);
+}
+
+.franchises-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #f3f4f6;
+  vertical-align: middle;
+}
+
+.franchises-table tbody tr {
+  cursor: pointer;
+}
+
+.franchises-table tbody tr:hover {
+  background: #fafafa;
+}
+
+.franchises-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Franchise name cell */
+.franchise-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.franchise-name-code {
+  font-weight: 600;
+  color: var(--color-text);
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.franchise-name-business {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.franchise-owner-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.franchise-owner-name {
+  font-weight: 500;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.franchise-contact-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.franchise-contact-email {
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.franchise-contact-phone {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.franchise-location-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.franchise-location-state {
+  font-weight: 500;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.franchise-location-city {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* ===== Badges ===== */
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 100px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.status-badge.pending {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.status-badge.approved {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status-badge.active {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.status-badge.suspended {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.status-badge.deactivated {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.verification-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 100px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.verification-badge.not-verified {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.verification-badge.under-review {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.verification-badge.verified {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.verification-badge.rejected {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+/* ===== Profile completion ===== */
+.completion-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.completion-track {
+  flex: 1;
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.completion-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.completion-fill.low { background: #dc2626; }
+.completion-fill.medium { background: #d97706; }
+.completion-fill.high { background: #16a34a; }
+
+.completion-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  min-width: 32px;
+}
+
+/* ===== Action Menu ===== */
+.action-menu-wrap {
+  position: relative;
+}
+
+.action-menu-btn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.action-menu-btn:hover {
+  background: var(--color-bg-page);
+  color: var(--color-text);
+}
+
+.action-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  min-width: 200px;
+  padding: 6px;
+  z-index: 50;
+}
+
+.action-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--color-text);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+  text-align: left;
+}
+
+.action-menu-item:hover {
+  background: var(--color-bg-page);
+  text-decoration: none;
+}
+
+.action-menu-item.danger {
+  color: var(--color-error);
+}
+
+.action-menu-item.danger:hover {
+  background: var(--color-error-bg);
+}
+
+.action-menu-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 4px 0;
+}
+
+.action-menu-item .action-icon {
+  font-size: 15px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* ===== Pagination ===== */
+.franchises-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.pagination-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.pagination-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--color-text);
+  transition: all 0.15s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: var(--color-bg-page);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pagination-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* ===== Empty & Loading ===== */
+.franchises-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--color-text-secondary);
+}
+
+.franchises-empty h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.franchises-empty p {
+  font-size: 14px;
+}
+
+.franchises-loading {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.franchises-error {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--color-error);
+  font-size: 14px;
+}
+
+.franchises-error button {
+  margin-top: 12px;
+  padding: 8px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+}
+
+.filter-select {
+  padding: 9px 12px;
+  font-size: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  outline: none;
+  background: #fff;
+  color: var(--color-text);
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.filter-select:focus {
+  border-color: var(--color-border-focus);
+}
+
+.filter-clear-btn {
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.filter-clear-btn:hover {
+  background: var(--color-bg-page);
+  color: var(--color-text);
+}
+
+/* ===== Franchise Detail Page ===== */
+.franchise-detail-page {
+  padding: 32px;
+  max-width: 1400px;
+}
+
+.franchise-detail-header {
+  margin-bottom: 20px;
+}
+
+.franchise-detail-header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.franchise-detail-header .subtitle {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.franchise-detail-header .code {
+  font-family: monospace;
+  background: var(--color-bg-page);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-right: 8px;
+}
+
+.franchise-detail-layout {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 24px;
+}
+
+@media (max-width: 1024px) {
+  .franchise-detail-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.franchise-detail-main {
+  min-width: 0;
+}
+
+.franchise-detail-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.franchise-sidebar-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.franchise-sidebar-card h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.sidebar-action-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sidebar-action-btn:hover {
+  background: var(--color-bg-page);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.sidebar-action-btn:last-child {
+  margin-bottom: 0;
+}
+
+/* Tabs */
+.franchise-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+
+.franchise-tab {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.franchise-tab:hover {
+  color: var(--color-text);
+}
+
+.franchise-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+/* Cards */
+.franchise-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.franchise-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.franchise-card-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.franchise-card-header p {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px 20px;
+}
+
+@media (max-width: 640px) {
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.info-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.info-value {
+  font-size: 14px;
+  color: var(--color-text);
+  word-break: break-word;
+}
+
+.info-value.muted {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+/* Coverage list */
+.coverage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.coverage-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--color-bg-page);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  gap: 12px;
+}
+
+.coverage-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.coverage-item-type {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+.coverage-item-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.coverage-item-meta {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.coverage-item-remove {
+  background: #fff;
+  color: var(--color-error);
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.coverage-item-remove:hover {
+  background: var(--color-error-bg);
+}
+
+/* Catalog mapping list */
+.catalog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.catalog-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  border-bottom: 1px solid #e5e7eb;
+  background: var(--color-bg-page);
+}
+
+.catalog-table td {
+  padding: 12px;
+  border-bottom: 1px solid #f3f4f6;
+  vertical-align: middle;
+}
+
+.catalog-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.mapping-status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 100px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.mapping-status-badge.pending {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.mapping-status-badge.approved,
+.mapping-status-badge.active {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.mapping-status-badge.stopped,
+.mapping-status-badge.rejected {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.mapping-action-btn {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--color-text);
+  margin-right: 6px;
+}
+
+.mapping-action-btn:hover {
+  background: var(--color-bg-page);
+}
+
+.mapping-action-btn.approve {
+  color: var(--color-success, #15803d);
+  border-color: #bbf7d0;
+}
+
+.mapping-action-btn.stop {
+  color: var(--color-error);
+  border-color: #fecaca;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 1024px) {
+  .franchises-page,
+  .franchise-detail-page {
+    padding: 20px 16px;
+  }
+
+  .franchises-table th:nth-child(4),
+  .franchises-table td:nth-child(4),
+  .franchises-table th:nth-child(7),
+  .franchises-table td:nth-child(7) {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .franchises-table th:nth-child(3),
+  .franchises-table td:nth-child(3) {
+    display: none;
+  }
+
+  .franchises-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .franchises-search {
+    max-width: 100%;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   Edit-mode form fields (profile, location, warehouse, etc.)
+   Matches .info-grid's 2-column layout so view and edit modes align.
+   ─────────────────────────────────────────────────────────────────── */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  font-family: inherit;
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 56px;
+}
+
+.form-group select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'><path d='M1 1L6 6L11 1' stroke='%236b7280' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  border-color: var(--color-primary, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.form-group input:disabled,
+.form-group textarea:disabled,
+.form-group select:disabled {
+  background: #f3f4f6;
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.form-group input[readonly] {
+  background: #f9fafb;
+  cursor: default;
+}
+
+.form-group small {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   Detail header — franchise code pill, Back button, title row
+   ─────────────────────────────────────────────────────────────────── */
+.franchise-detail-header {
+  margin-bottom: 16px;
+}
+
+.franchise-detail-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text, #111827);
+  letter-spacing: -0.01em;
+}
+
+.code {
+  display: inline-block;
+  padding: 4px 10px;
+  font-family: 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary, #6b7280);
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  font-family: inherit;
+}
+
+.back-btn:hover {
+  background: #f9fafb;
+  border-color: #d1d5db;
+  color: var(--color-text, #111827);
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   Profile completion progress card — used inside the Owner card
+   ─────────────────────────────────────────────────────────────────── */
+.profile-completion-inline {
+  margin-top: 4px;
+}
+
+.profile-completion-inline .completion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.profile-completion-inline .completion-percent {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text, #111827);
+}
+
+/* ───────────────────────────────────────────────────────────────────
+   Buttons — .btn / .btn-primary / .btn-secondary / .btn-danger
+   Used across edit-mode Cancel/Save and the card-header action buttons.
+   ─────────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+              box-shadow 0.15s ease, color 0.15s ease, transform 0.05s ease;
+  user-select: none;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--color-primary, #2563eb);
+  color: #fff;
+  border-color: var(--color-primary, #2563eb);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.btn-secondary {
+  background: #fff;
+  color: var(--color-text, #111827);
+  border-color: #d1d5db;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.btn-danger {
+  background: #fff;
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+/* Compact variant for inline card-header actions */
+.btn.btn-sm,
+.franchise-card-header .btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  line-height: 18px;
+  border-radius: 6px;
+}

@@ -123,9 +123,10 @@ export default function DashboardLayout({
     { href: '/dashboard/sellers', label: 'Sellers', icon: '&#128101;' },
     { href: '/dashboard/products', label: 'Products', icon: '&#128230;' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
+    { href: '/dashboard/returns', label: 'Returns', icon: '&#8634;' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },
+    { href: '/dashboard/accounts', label: 'Accounts', icon: '&#128202;' },
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
-    { href: '/dashboard/storefront', label: 'Storefront', icon: '&#127998;' },
   ];
 
   return (
@@ -142,7 +143,7 @@ export default function DashboardLayout({
           </button>
           <Link href="/dashboard" className="navbar-brand">
             <span className="navbar-brand-name">SPORTSMART</span>
-            <span className="navbar-brand-tag">Seller Admin</span>
+            <span className="navbar-brand-tag">SELLER ADMIN</span>
           </Link>
         </div>
 

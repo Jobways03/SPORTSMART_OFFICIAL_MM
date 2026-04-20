@@ -295,7 +295,7 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
 
     return {
       id: result.id,
-      sellerId: result.sellerId,
+      sellerId: result.sellerId || '',
       masterOrderId: result.masterOrderId,
       acceptStatus: result.acceptStatus,
       items: result.items.map((item) => ({

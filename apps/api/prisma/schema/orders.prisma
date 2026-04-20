@@ -27,6 +27,7 @@ enum OrderAcceptStatus {
 
 enum OrderPaymentMethod {
   COD
+  ONLINE
 }
 
 model CustomerAddress {
@@ -93,12 +94,19 @@ model MasterOrder {
   verifiedBy              String?            @map("verified_by")
   verificationRemarks     String?            @map("verification_remarks")
   itemCount               Int                @map("item_count")
+
+  // Online payment tracking (Razorpay)
+  razorpayOrderId         String?            @map("razorpay_order_id")
+  razorpayPaymentId       String?            @map("razorpay_payment_id")
+  paymentExpiresAt        DateTime?          @map("payment_expires_at")
+
   createdAt               DateTime           @default(now()) @map("created_at")
   updatedAt               DateTime           @updatedAt @map("updated_at")
 
   customer          User               @relation(fields: [customerId], references: [id], onDelete: Cascade)
   subOrders         SubOrder[]
   commissionRecords CommissionRecord[]
+  returns           Return[]
 
   @@index([customerId])
   @@index([orderNumber])
@@ -107,30 +115,40 @@ model MasterOrder {
 }
 
 model SubOrder {
-  id                  String                 @id @default(uuid())
-  masterOrderId       String                 @map("master_order_id")
-  sellerId            String                 @map("seller_id")
-  subTotal            Decimal                @map("sub_total") @db.Decimal(10, 2)
-  paymentStatus       OrderPaymentStatus     @default(PENDING) @map("payment_status")
-  fulfillmentStatus   OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
-  acceptStatus        OrderAcceptStatus      @default(OPEN) @map("accept_status")
-  acceptDeadlineAt    DateTime?              @map("accept_deadline_at")
-  rejectionReason     String?                @map("rejection_reason")
-  rejectionNote       String?                @map("rejection_note")
-  expectedDispatchDate DateTime?             @map("expected_dispatch_date")
-  deliveredAt         DateTime?              @map("delivered_at")
-  returnWindowEndsAt  DateTime?              @map("return_window_ends_at")
-  commissionProcessed Boolean                @default(false) @map("commission_processed")
-  createdAt           DateTime               @default(now()) @map("created_at")
-  updatedAt           DateTime               @updatedAt @map("updated_at")
+  id                   String                 @id @default(uuid())
+  masterOrderId        String                 @map("master_order_id")
+  sellerId             String?                @map("seller_id")
+  fulfillmentNodeType  String                 @default("SELLER") @map("fulfillment_node_type")
+  franchiseId          String?                @map("franchise_id")
+  subTotal             Decimal                @map("sub_total") @db.Decimal(10, 2)
+  paymentStatus        OrderPaymentStatus     @default(PENDING) @map("payment_status")
+  fulfillmentStatus    OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
+  acceptStatus         OrderAcceptStatus      @default(OPEN) @map("accept_status")
+  acceptDeadlineAt     DateTime?              @map("accept_deadline_at")
+  rejectionReason      String?                @map("rejection_reason")
+  rejectionNote        String?                @map("rejection_note")
+  expectedDispatchDate DateTime?              @map("expected_dispatch_date")
+  deliveredAt          DateTime?              @map("delivered_at")
+  returnWindowEndsAt   DateTime?              @map("return_window_ends_at")
+  trackingNumber       String?                @map("tracking_number")
+  courierName          String?                @map("courier_name")
+  shippingLabelUrl     String?                @map("shipping_label_url")
+  commissionProcessed     Boolean                @default(false) @map("commission_processed")
+  commissionRateSnapshot  Decimal?               @map("commission_rate_snapshot") @db.Decimal(5, 2)
+  createdAt               DateTime               @default(now()) @map("created_at")
+  updatedAt               DateTime               @updatedAt @map("updated_at")
 
   masterOrder       MasterOrder        @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
-  seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  franchise         FranchisePartner?  @relation(fields: [franchiseId], references: [id], onDelete: SetNull)
   items             OrderItem[]
   commissionRecords CommissionRecord[]
+  returns           Return[]
 
   @@index([masterOrderId])
   @@index([sellerId])
+  @@index([franchiseId])
+  @@index([fulfillmentNodeType])
   @@map("sub_orders")
 }
 
@@ -151,6 +169,7 @@ model OrderItem {
 
   subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
   commissionRecord CommissionRecord?
+  returnItems      ReturnItem[]
 
   @@index([subOrderId])
   @@map("order_items")

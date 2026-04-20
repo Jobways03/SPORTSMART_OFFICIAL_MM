@@ -97,8 +97,8 @@ export default function AdminLoginPage() {
       <div className="auth-card">
         <div className="auth-header">
           <h1 className="auth-logo">SPORTSMART</h1>
-          <p className="auth-badge">Seller Admin</p>
-          <h2 className="auth-title">Sign in to your account</h2>
+          <p className="auth-badge">SELLER ADMIN</p>
+          <h2 className="auth-title">Sign in to seller admin</h2>
         </div>
 
         {serverError && (
@@ -171,7 +171,7 @@ export default function AdminLoginPage() {
         </form>
 
         <p className="auth-footer">
-          Seller Admin access only. Contact your administrator for credentials.
+          Admin access only. Contact your administrator for credentials.
         </p>
       </div>
     </div>

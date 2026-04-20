@@ -6,8 +6,10 @@ import { CommissionPublicFacade } from './application/facades/commission-public.
 import { PrismaCommissionRepository } from './infrastructure/repositories/prisma-commission.repository';
 import { COMMISSION_REPOSITORY } from './domain/repositories/commission.repository.interface';
 import { AdminAuthGuard, SellerAuthGuard } from '../../core/guards';
+import { OrdersModule } from '../orders/module';
 
 @Module({
+  imports: [OrdersModule],
   controllers: [AdminCommissionController, SellerCommissionController],
   providers: [
     AdminAuthGuard,

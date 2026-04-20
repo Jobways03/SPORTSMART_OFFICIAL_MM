@@ -321,8 +321,18 @@ export class SellerProductsController {
       dto.seo,
     );
 
-    // Trigger re-approval if product was APPROVED/ACTIVE
-    const reApproved = await this.reApprovalService.triggerIfNeeded(productId, sellerId);
+    // Trigger re-approval only if content fields actually changed. The
+    // classifier treats price / inventory / physical / policy fields as
+    // self-serve (stay LIVE); anything else forces a fresh admin review.
+    // Tags + SEO always count as content when present.
+    const changedFields = Object.keys(updateData);
+    if (dto.tags !== undefined) changedFields.push('tags');
+    if (dto.seo !== undefined) changedFields.push('seo');
+    const reApproved = await this.reApprovalService.triggerIfNeeded(
+      productId,
+      sellerId,
+      { changedFields },
+    );
 
     // Fetch full product
     const fullProduct = await this.productRepo.findFullProduct(product.id);
@@ -362,6 +372,74 @@ export class SellerProductsController {
       success: true,
       message: 'Product deleted successfully',
       data: null,
+    };
+  }
+
+  /**
+   * Seller self-service pause/resume. Tightly scoped: only ACTIVE <-> SUSPENDED.
+   * Any other transition (archive / reject / etc.) still requires admin action.
+   * This lets the seller quickly stop sales on a live product without a
+   * support ticket — e.g. if stock runs out or they spot a listing issue.
+   */
+  @Patch(':productId/self-status')
+  @HttpCode(HttpStatus.OK)
+  async updateSelfStatus(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Body() body: { status: 'ACTIVE' | 'SUSPENDED'; reason?: string },
+  ) {
+    const sellerId = (req as any).sellerId;
+
+    await this.ownershipService.validateOwnership(sellerId, productId);
+
+    const target = body?.status;
+    if (target !== 'ACTIVE' && target !== 'SUSPENDED') {
+      throw new AppException(
+        "status must be 'ACTIVE' or 'SUSPENDED'",
+        'BAD_REQUEST',
+      );
+    }
+
+    const existing = await this.productRepo.findByIdBasic(productId);
+    if (!existing) {
+      throw new NotFoundAppException('Product not found');
+    }
+
+    const allowed: Record<string, string[]> = {
+      ACTIVE: ['SUSPENDED'],
+      SUSPENDED: ['ACTIVE'],
+    };
+    const legal = allowed[existing.status]?.includes(target);
+    if (!legal) {
+      throw new AppException(
+        `Cannot transition from ${existing.status} to ${target}. Self-service only supports ACTIVE <-> SUSPENDED.`,
+        'BAD_REQUEST',
+      );
+    }
+
+    await this.productRepo.updateStatusInTransaction(
+      productId,
+      { status: target },
+      {
+        fromStatus: existing.status,
+        toStatus: target,
+        changedBy: sellerId,
+        reason:
+          body?.reason ||
+          (target === 'SUSPENDED'
+            ? 'Seller paused the listing'
+            : 'Seller resumed the listing'),
+      },
+    );
+
+    this.logger.log(
+      `Seller ${sellerId} self-transitioned product ${productId}: ${existing.status} -> ${target}`,
+    );
+
+    return {
+      success: true,
+      message: target === 'SUSPENDED' ? 'Product paused' : 'Product resumed',
+      data: { productId, status: target },
     };
   }
 

@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import * as bcrypt from 'bcryptjs';
+import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -138,7 +138,7 @@ export class LoginSellerUseCase {
         roles: ['SELLER'],
         sessionId: session.id,
       },
-      this.envService.getString('JWT_ACCESS_SECRET'),
+      this.envService.getString('JWT_SELLER_SECRET'),
       { expiresIn: accessTtlSeconds },
     );
 

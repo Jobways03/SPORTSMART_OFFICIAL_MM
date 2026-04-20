@@ -24,6 +24,13 @@ import { AdminImpersonateSellerUseCase } from './application/use-cases/admin-imp
 import { AdminSendSellerMessageUseCase } from './application/use-cases/admin-send-seller-message.use-case';
 import { AdminChangeSellerPasswordUseCase } from './application/use-cases/admin-change-seller-password.use-case';
 import { AdminDeleteSellerUseCase } from './application/use-cases/admin-delete-seller.use-case';
+import { ForgotAdminPasswordUseCase } from './application/use-cases/forgot-admin-password.use-case';
+import { VerifyAdminResetOtpUseCase } from './application/use-cases/verify-admin-reset-otp.use-case';
+import { ResendAdminResetOtpUseCase } from './application/use-cases/resend-admin-reset-otp.use-case';
+import { ResetAdminPasswordUseCase } from './application/use-cases/reset-admin-password.use-case';
+
+// Email OTP adapter (used by password reset flow)
+import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 
 // Controllers
 import { AdminAuthController } from './presentation/controllers/admin-auth.controller';
@@ -44,6 +51,7 @@ import { AdminCustomersController } from './presentation/controllers/admin-custo
     },
     AdminAuditService,
     AdminCustomerService,
+    EmailOtpAdapter,
     AdminLoginUseCase,
     AdminLogoutUseCase,
     AdminGetMeUseCase,
@@ -56,6 +64,10 @@ import { AdminCustomersController } from './presentation/controllers/admin-custo
     AdminSendSellerMessageUseCase,
     AdminChangeSellerPasswordUseCase,
     AdminDeleteSellerUseCase,
+    ForgotAdminPasswordUseCase,
+    VerifyAdminResetOtpUseCase,
+    ResendAdminResetOtpUseCase,
+    ResetAdminPasswordUseCase,
   ],
   exports: [],
 })

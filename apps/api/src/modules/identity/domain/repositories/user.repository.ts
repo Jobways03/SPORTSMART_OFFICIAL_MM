@@ -26,11 +26,43 @@ export interface PasswordResetOtpRecord {
   user?: { id: string; email: string; status: string };
 }
 
+export interface CustomerProfile {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string | null;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  status: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CustomerProfileWithPassword extends CustomerProfile {
+  passwordHash: string;
+}
+
+export interface UpdateCustomerProfileInput {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string | null;
+}
+
 export interface UserRepository {
   findById(id: string): Promise<unknown | null>;
   findByEmail(email: string): Promise<unknown | null>;
   findByEmailWithRoles(email: string): Promise<UserWithRoles | null>;
   save(user: unknown): Promise<void>;
+
+  // Customer profile self-service
+  findCustomerProfile(id: string): Promise<CustomerProfile | null>;
+  findCustomerProfileWithPassword(id: string): Promise<CustomerProfileWithPassword | null>;
+  updateCustomerProfile(id: string, data: UpdateCustomerProfileInput): Promise<CustomerProfile>;
+  existsByEmailExcept(email: string, excludeUserId: string): Promise<boolean>;
+  existsByPhoneExcept(phone: string, excludeUserId: string): Promise<boolean>;
+  changePasswordAndRevokeSessions(userId: string, passwordHash: string): Promise<void>;
 
   // Registration (transactional)
   createUserWithRole(data: {

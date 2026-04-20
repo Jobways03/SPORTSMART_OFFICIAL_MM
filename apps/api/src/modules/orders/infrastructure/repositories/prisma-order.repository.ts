@@ -153,6 +153,19 @@ export class PrismaOrderRepository implements OrderRepository {
     });
   }
 
+  async findSubOrderByTrackingNumber(
+    trackingNumber: string,
+  ): Promise<any | null> {
+    // Tracking numbers should be unique across active sub-orders, but we
+    // use findFirst defensively in case of historical reuse.
+    return this.prisma.subOrder.findFirst({
+      where: { trackingNumber },
+      include: {
+        masterOrder: { include: { subOrders: true } },
+      },
+    });
+  }
+
   async findSubOrderForSeller(
     id: string,
     sellerId: string,
@@ -436,7 +449,7 @@ export class PrismaOrderRepository implements OrderRepository {
 
   async findExpiredSubOrders(
     now: Date,
-  ): Promise<{ id: string; sellerId: string }[]> {
+  ): Promise<{ id: string; sellerId: string | null }[]> {
     return this.prisma.subOrder.findMany({
       where: {
         acceptStatus: 'OPEN',

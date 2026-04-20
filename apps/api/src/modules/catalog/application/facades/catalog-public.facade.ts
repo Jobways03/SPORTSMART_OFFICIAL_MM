@@ -48,6 +48,22 @@ export class CatalogPublicFacade {
     return this.productRepo.findByIdWithFullDetails(productId);
   }
 
+  /**
+   * Get product with variants, images, and category info.
+   * Used by franchise/POS/procurement modules that need product details.
+   */
+  async getProductWithDetails(productId: string): Promise<unknown> {
+    return this.productRepo.findByIdWithFullDetails(productId);
+  }
+
+  /**
+   * Validate a product exists and is active.
+   */
+  async isProductActive(productId: string): Promise<boolean> {
+    const product = await this.productRepo.findByIdBasic(productId);
+    return !!product && product.status === 'ACTIVE';
+  }
+
   // ── Seller Allocation (public API for Checkout/Orders modules) ──────
 
   async allocate(input: {

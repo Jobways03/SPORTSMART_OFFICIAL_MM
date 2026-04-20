@@ -107,12 +107,55 @@ export class AdminOrdersController {
     return { success: true, message: 'Eligible sellers retrieved', data };
   }
 
+  /**
+   * Node-agnostic candidate list. Returns both sellers AND franchises that
+   * can fulfill this sub-order, each with a `nodeType` discriminator.
+   * Prefer this over the legacy `eligible-sellers` endpoint.
+   */
+  @Get('sub-orders/:subOrderId/eligible-nodes')
+  async getEligibleNodes(@Param('subOrderId') subOrderId: string) {
+    const data = await this.ordersService.getEligibleNodes(subOrderId);
+    return { success: true, message: 'Eligible nodes retrieved', data };
+  }
+
+  /**
+   * Reassign a sub-order to a new fulfillment node.
+   *
+   * Preferred body shape: `{ nodeType: 'SELLER'|'FRANCHISE', nodeId, reason? }`.
+   * Legacy shape `{ sellerId, reason? }` is still accepted and maps to a
+   * SELLER target.
+   */
   @Post('sub-orders/:subOrderId/reassign')
   async reassignSubOrder(
     @Param('subOrderId') subOrderId: string,
-    @Body() body: { sellerId: string; reason?: string },
+    @Body()
+    body: {
+      nodeType?: 'SELLER' | 'FRANCHISE';
+      nodeId?: string;
+      sellerId?: string;
+      reason?: string;
+    },
   ) {
-    const data = await this.ordersService.reassignSubOrder(subOrderId, body.sellerId, body.reason);
+    const target =
+      body.nodeType && body.nodeId
+        ? ({ nodeType: body.nodeType, nodeId: body.nodeId } as const)
+        : body.sellerId
+          ? ({ nodeType: 'SELLER', nodeId: body.sellerId } as const)
+          : null;
+
+    if (!target) {
+      return {
+        success: false,
+        message:
+          'Reassignment target required — provide { nodeType, nodeId } or legacy { sellerId }',
+      };
+    }
+
+    const data = await this.ordersService.reassignSubOrder(
+      subOrderId,
+      target,
+      body.reason,
+    );
     return { success: true, message: 'Sub-order reassigned successfully', data };
   }
 
@@ -120,5 +163,28 @@ export class AdminOrdersController {
   async getReassignmentHistory(@Param('id') id: string) {
     const data = await this.ordersService.getReassignmentHistory(id);
     return { success: true, message: 'Reassignment history retrieved', data };
+  }
+
+  /**
+   * Mid-flow cancel for a single sub-order. Safe to call at any stage
+   * except DELIVERED (use the returns flow for that). Releases stock holds
+   * on whichever node currently owns the sub-order (seller or franchise).
+   */
+  @Patch('sub-orders/:subOrderId/cancel')
+  async cancelSubOrder(
+    @Req() req: any,
+    @Param('subOrderId') subOrderId: string,
+    @Body() body: { reason?: string },
+  ) {
+    const data = await this.ordersService.adminCancelSubOrder(
+      subOrderId,
+      req.adminId,
+      body?.reason,
+    );
+    return {
+      success: true,
+      message: 'Sub-order cancelled',
+      data,
+    };
   }
 }

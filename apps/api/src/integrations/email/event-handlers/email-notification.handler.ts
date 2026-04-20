@@ -148,41 +148,13 @@ export class EmailNotificationHandler {
     totalAmount: number;
     itemCount: number;
   }>) {
-    const { orderNumber, customerId, totalAmount, itemCount } = event.payload;
+    const { orderNumber, totalAmount, itemCount } = event.payload;
     this.logger.log(`Master order created: ${orderNumber}`);
 
-    // 1. Customer order confirmation email
-    try {
-      const customer = await this.prisma.user.findUnique({
-        where: { id: customerId },
-        select: { email: true, firstName: true },
-      });
+    // Note: Customer-facing order confirmation is handled by OrderNotificationHandler
+    // (in modules/notifications). This handler only sends the admin notification.
 
-      if (customer) {
-        const formattedAmount = `\u20B9${Number(totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-        await this.emailService.send({
-          to: customer.email,
-          subject: `Order Confirmed — #${orderNumber}`,
-          html: this.wrap(`
-            <h2 style="color: #15803d;">Thank you for your order!</h2>
-            <p>Hi ${customer.firstName || 'there'},</p>
-            <p>Your order has been placed successfully. Here are the details:</p>
-            <div style="background: #f9fafb; border-radius: 8px; padding: 16px; margin: 16px 0;">
-              <p style="margin: 0 0 8px 0;"><strong>Order #${orderNumber}</strong></p>
-              <p style="margin: 0 0 4px 0;">${itemCount} item${itemCount !== 1 ? 's' : ''}</p>
-              <p style="margin: 0; font-size: 18px; font-weight: 700; color: #2563eb;">${formattedAmount}</p>
-            </div>
-            <p>We'll send you updates as your order is processed and shipped.</p>
-            <p style="font-size: 13px; color: #6b7280;">If you have any questions about your order, please contact our support team.</p>
-          `),
-          text: `Thank you for your order! Order #${orderNumber}, ${itemCount} items, total ${formattedAmount}. We'll send you updates as your order is processed.`,
-        });
-      }
-    } catch (err) {
-      this.logger.error(`Failed to send customer order confirmation email: ${err}`);
-    }
-
-    // 2. Admin notification — new order pending verification
+    // Admin notification — new order pending verification
     try {
       const formattedAmount = `\u20B9${Number(totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       await this.emailService.send({
@@ -392,6 +364,120 @@ export class EmailNotificationHandler {
       });
     } catch (err) {
       this.logger.error(`Failed to send seller product rejection email: ${err}`);
+    }
+  }
+
+  @OnEvent('catalog.listing.request_changes')
+  async onProductChangesRequested(event: DomainEvent<{
+    productId: string;
+    productTitle: string;
+    sellerId: string | null;
+    note: string;
+    adminId: string;
+  }>) {
+    const { productTitle, sellerId, note } = event.payload;
+    this.logger.log(`Changes requested for product "${productTitle}" from seller ${sellerId}`);
+
+    if (!sellerId) {
+      this.logger.warn('No sellerId on changes-requested event — skipping email');
+      return;
+    }
+
+    try {
+      const seller = await this.findSeller(sellerId);
+      if (!seller) {
+        this.logger.warn(`Seller ${sellerId} not found — cannot send changes-requested email`);
+        return;
+      }
+
+      await this.emailService.send({
+        to: seller.email,
+        subject: `Changes requested — ${productTitle}`,
+        html: this.wrap(`
+          <h2 style="color: #d97706;">Changes Requested</h2>
+          <p>Hi ${seller.sellerName},</p>
+          <p>Our review team needs a few changes before your product can go live.</p>
+          <div style="background: #fffbeb; border-radius: 8px; padding: 16px; margin: 16px 0; border: 1px solid #fde68a;">
+            <p style="margin: 0 0 8px 0; font-weight: 600; color: #92400e;">${productTitle}</p>
+            <p style="margin: 0; font-size: 13px; color: #78350f;"><strong>What to update:</strong> ${note || 'No note provided'}</p>
+          </div>
+          <p>Please apply the changes in your seller dashboard and resubmit for review.</p>
+        `),
+        text: `Hi ${seller.sellerName}, changes have been requested for your product "${productTitle}". What to update: ${note || 'No note provided'}. Please resubmit from your dashboard.`,
+      });
+    } catch (err) {
+      this.logger.error(`Failed to send seller changes-requested email: ${err}`);
+    }
+  }
+
+  // ──── Commission Events ────
+
+  @OnEvent('commission.locked')
+  async onCommissionLocked(event: DomainEvent<{
+    subOrderId: string;
+    masterOrderId: string;
+    orderNumber: string;
+    sellerId?: string;
+    franchiseId?: string | null;
+    nodeType?: 'SELLER' | 'FRANCHISE';
+    itemCount: number;
+    adminEarning: number;
+    sellerEarning: number;
+    commissionRate?: number;
+  }>) {
+    const { orderNumber, itemCount, adminEarning, sellerEarning, nodeType, sellerId, franchiseId } = event.payload;
+    const isFranchise = nodeType === 'FRANCHISE' || !!franchiseId;
+
+    try {
+      let recipientEmail: string | null = null;
+      let recipientName: string | null = null;
+      let partnerLabel = 'Seller';
+
+      if (isFranchise && franchiseId) {
+        const franchise = await this.prisma.franchisePartner.findUnique({
+          where: { id: franchiseId },
+          select: { email: true, ownerName: true, businessName: true },
+        });
+        if (franchise) {
+          recipientEmail = franchise.email;
+          recipientName = franchise.ownerName || franchise.businessName;
+          partnerLabel = 'Franchise';
+        }
+      } else if (sellerId) {
+        const seller = await this.findSeller(sellerId);
+        if (seller) {
+          recipientEmail = seller.email;
+          recipientName = seller.sellerName;
+        }
+      }
+
+      if (!recipientEmail) {
+        this.logger.warn(`commission.locked: recipient not found for sub-order ${event.payload.subOrderId}`);
+        return;
+      }
+
+      const fmt = (n: number) =>
+        `\u20B9${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+      await this.emailService.send({
+        to: recipientEmail,
+        subject: `Commission locked — Order #${orderNumber}`,
+        html: this.wrap(`
+          <h2 style="color: #15803d;">Commission Locked</h2>
+          <p>Hi ${recipientName || partnerLabel},</p>
+          <p>The return window has passed for your order and the commission for this sub-order is now locked.</p>
+          <div style="background: #f0fdf4; border-radius: 8px; padding: 16px; margin: 16px 0; border: 1px solid #bbf7d0;">
+            <p style="margin: 0 0 8px 0;"><strong>Order #${orderNumber}</strong></p>
+            <p style="margin: 0 0 4px 0; font-size: 13px; color: #374151;">${itemCount} item${itemCount !== 1 ? 's' : ''}</p>
+            <p style="margin: 8px 0 4px 0; font-size: 13px; color: #374151;">Platform earning: <strong>${fmt(adminEarning)}</strong></p>
+            <p style="margin: 0; font-size: 16px; font-weight: 700; color: #15803d;">Your earning: ${fmt(sellerEarning)}</p>
+          </div>
+          <p style="font-size: 13px; color: #6b7280;">This amount will be included in your next settlement cycle.</p>
+        `),
+        text: `Commission locked for Order #${orderNumber}. Platform earning: ${fmt(adminEarning)}. Your earning: ${fmt(sellerEarning)}. This will be included in your next settlement.`,
+      });
+    } catch (err) {
+      this.logger.error(`Failed to send commission.locked email for sub-order ${event.payload.subOrderId}: ${err}`);
     }
   }
 

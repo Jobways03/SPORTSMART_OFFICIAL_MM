@@ -9,6 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@sportsmart/shared-utils": "workspace:*",
+    "@sportsmart/ui": "workspace:*",
+    "isomorphic-dompurify": "^3.9.0",
     "react-quill-new": "^3.8.3"
   }
 }

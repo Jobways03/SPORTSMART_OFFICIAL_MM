@@ -8,12 +8,19 @@ import { Prisma } from '@prisma/client';
 import {
   CatalogPublicFacade,
 } from '../../../catalog/application/facades/catalog-public.facade';
+import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   OrderRepository,
   ORDER_REPOSITORY,
 } from '../../domain/repositories/order.repository.interface';
+import { assertTransition } from '../../../../core/fsm/status-transitions';
 
-const RETURN_WINDOW_MS = 60 * 1000; // 1 minute for testing
+export type ReassignTarget =
+  | { nodeType: 'SELLER'; nodeId: string }
+  | { nodeType: 'FRANCHISE'; nodeId: string };
+
+const RETURN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // Customer-friendly status label mapping
@@ -38,6 +45,8 @@ export class OrdersService {
     private readonly orderRepo: OrderRepository,
     private readonly eventBus: EventBusService,
     private readonly catalogFacade: CatalogPublicFacade,
+    private readonly franchiseFacade: FranchisePublicFacade,
+    private readonly prisma: PrismaService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────────
@@ -338,10 +347,222 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Seller-initiated return — parallel to franchiseOrdersService.initiateReturn.
+   * Returns stock to the seller's SellerProductMapping.stockQty and marks
+   * the sub-order CANCELLED. Does NOT create a Return row; customer-initiated
+   * returns keep their own lifecycle in the returns module.
+   */
+  async sellerInitiateReturn(
+    subOrderId: string,
+    sellerId: string,
+    items: Array<{ orderItemId: string; quantity: number; reason: string }>,
+  ) {
+    const subOrder = await this.prisma.subOrder.findUnique({
+      where: { id: subOrderId },
+      include: { items: true, masterOrder: true },
+    });
+
+    if (!subOrder || subOrder.fulfillmentNodeType !== 'SELLER') {
+      throw new NotFoundAppException('Seller order not found');
+    }
+    if (subOrder.sellerId !== sellerId) {
+      throw new NotFoundAppException('Seller order not found');
+    }
+    if (subOrder.fulfillmentStatus !== 'DELIVERED') {
+      throw new BadRequestAppException('Can only return delivered orders');
+    }
+    if (
+      subOrder.returnWindowEndsAt &&
+      new Date() > subOrder.returnWindowEndsAt
+    ) {
+      throw new BadRequestAppException('Return window has expired');
+    }
+    if (!items || items.length === 0) {
+      throw new BadRequestAppException('At least one item is required');
+    }
+
+    // Validate + return stock in a single transaction so we don't leave
+    // half-updated state if any item lookup fails.
+    await this.prisma.$transaction(async (tx) => {
+      for (const returnItem of items) {
+        const orderItem = subOrder.items.find(
+          (i) => i.id === returnItem.orderItemId,
+        );
+        if (!orderItem) {
+          throw new NotFoundAppException(
+            `Order item ${returnItem.orderItemId} not found`,
+          );
+        }
+        if (returnItem.quantity <= 0) {
+          throw new BadRequestAppException('Return quantity must be positive');
+        }
+        if (returnItem.quantity > orderItem.quantity) {
+          throw new BadRequestAppException(
+            'Cannot return more than ordered quantity',
+          );
+        }
+
+        const mapping = await tx.sellerProductMapping.findFirst({
+          where: {
+            sellerId,
+            productId: orderItem.productId,
+            variantId: orderItem.variantId,
+          },
+        });
+        if (mapping) {
+          await tx.sellerProductMapping.update({
+            where: { id: mapping.id },
+            data: { stockQty: { increment: returnItem.quantity } },
+          });
+        }
+      }
+
+      await tx.subOrder.update({
+        where: { id: subOrderId },
+        data: { fulfillmentStatus: 'CANCELLED' },
+      });
+    });
+
+    await this.eventBus
+      .publish({
+        eventName: 'orders.sub_order.returned_by_seller',
+        aggregate: 'SubOrder',
+        aggregateId: subOrderId,
+        occurredAt: new Date(),
+        payload: {
+          subOrderId,
+          masterOrderId: subOrder.masterOrderId,
+          orderNumber: subOrder.masterOrder.orderNumber,
+          sellerId,
+          items: items.map((i) => ({ orderItemId: i.orderItemId, quantity: i.quantity })),
+        },
+      })
+      .catch(() => {});
+
+    return {
+      subOrderId,
+      fulfillmentStatus: 'CANCELLED',
+      itemsReturned: items.length,
+    };
+  }
+
+  /**
+   * Admin-initiated mid-flow sub-order cancel. Reverses any outstanding
+   * seller/franchise stock hold, releases reservations (if still in
+   * pre-delivery states), marks the sub-order CANCELLED, and publishes an
+   * event. Callers that need to cancel an entire master order can call this
+   * per-sub-order.
+   */
+  async adminCancelSubOrder(subOrderId: string, adminId: string, reason?: string) {
+    const subOrder =
+      await this.orderRepo.findSubOrderByIdWithItems(subOrderId);
+    if (!subOrder) throw new NotFoundAppException('Sub-order not found');
+
+    if (subOrder.fulfillmentStatus === 'DELIVERED') {
+      throw new BadRequestAppException(
+        'Cannot cancel a DELIVERED sub-order — use the return flow instead',
+      );
+    }
+    if (subOrder.fulfillmentStatus === 'CANCELLED') {
+      throw new BadRequestAppException('Sub-order is already cancelled');
+    }
+
+    const nodeType = (subOrder as any).fulfillmentNodeType || 'SELLER';
+    const sellerId: string | null = subOrder.sellerId ?? null;
+    const franchiseId: string | null = (subOrder as any).franchiseId ?? null;
+
+    // Release stock holds. For seller: use stock reservations. For
+    // franchise: route through the franchise facade which handles ledger
+    // writes + reservedQty bookkeeping.
+    if (nodeType === 'SELLER' && sellerId) {
+      await this.orderRepo.executeTransaction(async (tx) => {
+        const currentReservations = await tx.stockReservation.findMany({
+          where: {
+            orderId: subOrder.masterOrder.id,
+            status: { in: ['RESERVED', 'CONFIRMED'] },
+            mapping: { sellerId },
+          },
+        });
+        for (const res of currentReservations) {
+          if (res.status === 'CONFIRMED') {
+            await tx.stockReservation.update({
+              where: { id: res.id },
+              data: { status: 'RELEASED' },
+            });
+            await tx.sellerProductMapping.update({
+              where: { id: res.mappingId },
+              data: { stockQty: { increment: res.quantity } },
+            });
+          } else {
+            await tx.stockReservation.update({
+              where: { id: res.id },
+              data: { status: 'RELEASED' },
+            });
+            await tx.sellerProductMapping.update({
+              where: { id: res.mappingId },
+              data: { reservedQty: { decrement: res.quantity } },
+            });
+          }
+        }
+      });
+    } else if (nodeType === 'FRANCHISE' && franchiseId) {
+      for (const item of subOrder.items) {
+        await this.franchiseFacade
+          .unreserveStock(
+            franchiseId,
+            item.productId,
+            item.variantId ?? null,
+            item.quantity,
+            subOrder.masterOrder.id,
+          )
+          .catch(() => {});
+      }
+    }
+
+    const now = new Date();
+    const updated = await this.orderRepo.updateSubOrder(subOrderId, {
+      fulfillmentStatus: 'CANCELLED',
+      acceptStatus: 'CANCELLED',
+    });
+
+    await this.eventBus
+      .publish({
+        eventName: 'orders.sub_order.cancelled_by_admin',
+        aggregate: 'SubOrder',
+        aggregateId: subOrderId,
+        occurredAt: now,
+        payload: {
+          subOrderId,
+          masterOrderId: subOrder.masterOrder.id,
+          orderNumber: subOrder.masterOrder.orderNumber,
+          adminId,
+          previousFulfillmentStatus: subOrder.fulfillmentStatus,
+          nodeType,
+          sellerId,
+          franchiseId,
+          reason: reason ?? 'Admin cancellation',
+        },
+      })
+      .catch(() => {});
+
+    return updated;
+  }
+
   async deliverSubOrder(id: string) {
     const subOrder =
       await this.orderRepo.findSubOrderByIdWithMasterOrder(id);
     if (!subOrder) throw new NotFoundAppException('Sub-order not found');
+
+    // FSM enforcement — also catches anyone calling this from a stale
+    // background job with an outdated cached status. The ad-hoc check
+    // below is kept as defense-in-depth and produces a clearer error
+    // message for the common case.
+    assertTransition(
+      'OrderFulfillmentStatus',
+      subOrder.fulfillmentStatus,
+      'DELIVERED',
+    );
 
     if (subOrder.fulfillmentStatus !== 'SHIPPED') {
       throw new BadRequestAppException(
@@ -369,6 +590,26 @@ export class OrdersService {
         orderStatus: 'DELIVERED',
       });
     }
+
+    // Publish delivery event (best-effort)
+    await this.eventBus
+      .publish({
+        eventName: 'orders.sub_order.delivered',
+        aggregate: 'SubOrder',
+        aggregateId: id,
+        occurredAt: now,
+        payload: {
+          subOrderId: id,
+          masterOrderId: subOrder.masterOrderId,
+          sellerId: subOrder.sellerId,
+          deliveredAt: now.toISOString(),
+          returnWindowEndsAt: new Date(
+            now.getTime() + RETURN_WINDOW_MS,
+          ).toISOString(),
+          allDelivered,
+        },
+      })
+      .catch(() => {});
 
     return updated;
   }
@@ -402,6 +643,10 @@ export class OrdersService {
         'Cannot mark a cancelled order as paid',
       );
     }
+
+    // FSM enforcement — pinning the rule that VOIDED → PAID and other
+    // illegal transitions are also rejected.
+    assertTransition('OrderPaymentStatus', order.paymentStatus, 'PAID');
 
     await this.orderRepo.executeTransaction(async (tx) => {
       await tx.masterOrder.update({
@@ -515,7 +760,9 @@ export class OrdersService {
       }
     }
 
-    // Sort by score descending
+    // Sort by score descending — NOTE: this still ONLY contains sellers.
+    // The node-agnostic equivalent is `getEligibleNodes`. We keep this method
+    // for backward-compat with existing callers that only want sellers.
     const sellers = Array.from(sellerScoresMap.values()).sort(
       (a, b) => b.score - a.score,
     );
@@ -523,29 +770,159 @@ export class OrdersService {
   }
 
   /**
-   * Manually reassign a sub-order to a different seller.
+   * Node-agnostic version of getEligibleSellers — returns both sellers AND
+   * franchises that can fulfill this sub-order, ranked by allocation score.
+   * Each entry carries a `nodeType` discriminator plus the corresponding ID.
+   */
+  async getEligibleNodes(subOrderId: string) {
+    const subOrder =
+      await this.orderRepo.findSubOrderByIdWithItems(subOrderId);
+    if (!subOrder) throw new NotFoundAppException('Sub-order not found');
+
+    const addressSnapshot =
+      subOrder.masterOrder.shippingAddressSnapshot as any;
+    const customerPincode = addressSnapshot?.postalCode;
+    if (!customerPincode) {
+      throw new BadRequestAppException(
+        'Cannot determine customer pincode from shipping address',
+      );
+    }
+
+    // Exclude the currently-assigned node and anyone who already rejected
+    // this master order — so the admin doesn't see the same rejector again.
+    const allSubOrders = await this.orderRepo.findSubOrdersByMasterOrder(
+      subOrder.masterOrder.id,
+    );
+    const excludeSellerIds = new Set<string>();
+    const excludeFranchiseIds = new Set<string>();
+    if (subOrder.sellerId) excludeSellerIds.add(subOrder.sellerId);
+    if ((subOrder as any).franchiseId)
+      excludeFranchiseIds.add((subOrder as any).franchiseId);
+    for (const so of allSubOrders) {
+      if (so.acceptStatus === 'REJECTED') {
+        if (so.sellerId) excludeSellerIds.add(so.sellerId);
+        if ((so as any).franchiseId)
+          excludeFranchiseIds.add((so as any).franchiseId);
+      }
+    }
+
+    // Intersect eligibility across items — a candidate only qualifies if
+    // they can fulfill every line.
+    type NodeCandidate = {
+      nodeType: 'SELLER' | 'FRANCHISE';
+      nodeId: string;
+      name: string;
+      distanceKm: number;
+      dispatchSla: number;
+      availableStock: number;
+      score: number;
+    };
+    const scoreMap = new Map<string, NodeCandidate>();
+
+    for (const item of subOrder.items) {
+      try {
+        const allocation = await this.catalogFacade.allocate({
+          productId: item.productId,
+          variantId: item.variantId ?? undefined,
+          customerPincode,
+          quantity: item.quantity,
+        });
+
+        if (allocation.allEligible) {
+          for (const node of allocation.allEligible) {
+            const isFranchise = node.nodeType === 'FRANCHISE';
+            const nodeId = isFranchise
+              ? node.franchiseId ?? node.sellerId
+              : node.sellerId;
+
+            if (!isFranchise && excludeSellerIds.has(nodeId)) continue;
+            if (isFranchise && excludeFranchiseIds.has(nodeId)) continue;
+
+            const key = `${node.nodeType}:${nodeId}`;
+            const existing = scoreMap.get(key);
+            if (!existing || node.score > existing.score) {
+              scoreMap.set(key, {
+                nodeType: node.nodeType,
+                nodeId,
+                name: node.sellerName,
+                distanceKm: node.distanceKm,
+                dispatchSla: node.dispatchSla,
+                availableStock: node.availableStock,
+                score: node.score,
+              });
+            }
+          }
+        }
+      } catch {
+        // per-item allocation failure shouldn't kill the whole listing
+      }
+    }
+
+    return Array.from(scoreMap.values()).sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Manually reassign a sub-order to a different node (seller OR franchise).
+   *
+   * Signature accepts either:
+   *   - a legacy string sellerId (backward-compat with existing callers)
+   *   - a typed target `{ nodeType: 'SELLER'|'FRANCHISE', nodeId }`
+   *
+   * The previous node may itself be a seller or a franchise — stock release
+   * branches on the CURRENT assignment, reservation creation branches on the
+   * NEW assignment. Cross-actor reassignment (SELLER↔FRANCHISE) is supported.
    */
   async reassignSubOrder(
     subOrderId: string,
-    newSellerId: string,
+    target: ReassignTarget | string,
     reason?: string,
   ) {
     if (!subOrderId)
       throw new BadRequestAppException('subOrderId is required');
-    if (!newSellerId)
-      throw new BadRequestAppException('sellerId is required');
+
+    // Normalize legacy string form
+    const newTarget: ReassignTarget =
+      typeof target === 'string'
+        ? { nodeType: 'SELLER', nodeId: target }
+        : target;
+
+    if (!newTarget?.nodeId)
+      throw new BadRequestAppException('target nodeId is required');
+    const rawNodeType = (newTarget as { nodeType: string }).nodeType;
+    if (rawNodeType !== 'SELLER' && rawNodeType !== 'FRANCHISE') {
+      throw new BadRequestAppException(
+        `Invalid nodeType: ${rawNodeType}. Must be 'SELLER' or 'FRANCHISE'.`,
+      );
+    }
 
     // 1. Get the sub-order with items
     const subOrder =
       await this.orderRepo.findSubOrderByIdWithItems(subOrderId);
     if (!subOrder)
-      throw new NotFoundAppException(
-        `Sub-order ${subOrderId} not found`,
-      );
+      throw new NotFoundAppException(`Sub-order ${subOrderId} not found`);
 
-    if (subOrder.sellerId === newSellerId) {
+    const previousSellerId: string | null = subOrder.sellerId ?? null;
+    const previousFranchiseId: string | null =
+      (subOrder as any).franchiseId ?? null;
+    const previousNodeType =
+      (subOrder as any).fulfillmentNodeType ||
+      (previousFranchiseId ? 'FRANCHISE' : 'SELLER');
+
+    // Reject no-op reassignment (same node)
+    if (
+      newTarget.nodeType === 'SELLER' &&
+      previousSellerId === newTarget.nodeId
+    ) {
       throw new BadRequestAppException(
         'Sub-order is already assigned to this seller',
+      );
+    }
+    if (
+      newTarget.nodeType === 'FRANCHISE' &&
+      previousFranchiseId === newTarget.nodeId
+    ) {
+      throw new BadRequestAppException(
+        'Sub-order is already assigned to this franchise',
       );
     }
 
@@ -558,125 +935,195 @@ export class OrdersService {
       );
     }
 
-    const previousSellerId = subOrder.sellerId;
-
-    // 2. Validate new seller exists and is active
-    const newSeller = await this.orderRepo.findSeller(newSellerId);
-    if (!newSeller)
-      throw new NotFoundAppException(
-        `Seller ${newSellerId} not found`,
-      );
-    if (newSeller.status !== 'ACTIVE') {
-      throw new BadRequestAppException(
-        `Seller ${newSellerId} is not active (status: ${newSeller.status})`,
-      );
-    }
-
-    // 3. For each item, verify the new seller has a mapping and sufficient stock
-    for (const item of subOrder.items) {
-      const mapping = await this.orderRepo.findSellerProductMapping(
-        newSellerId,
-        item.productId,
-        item.variantId,
-      );
-
-      if (!mapping) {
+    // 2. Validate new node exists, is ACTIVE, has mapping + stock for every item
+    if (newTarget.nodeType === 'SELLER') {
+      const newSeller = await this.orderRepo.findSeller(newTarget.nodeId);
+      if (!newSeller)
+        throw new NotFoundAppException(`Seller ${newTarget.nodeId} not found`);
+      if (newSeller.status !== 'ACTIVE') {
         throw new BadRequestAppException(
-          `Seller ${newSellerId} does not have an active mapping for product ${item.productId}${item.variantId ? ` / variant ${item.variantId}` : ''}`,
+          `Seller ${newTarget.nodeId} is not active (status: ${newSeller.status})`,
         );
       }
-
-      const available = mapping.stockQty - mapping.reservedQty;
-      if (available < item.quantity) {
-        throw new BadRequestAppException(
-          `Seller ${newSellerId} has insufficient stock for product ${item.productId}: available=${available}, required=${item.quantity}`,
+      for (const item of subOrder.items) {
+        const mapping = await this.orderRepo.findSellerProductMapping(
+          newTarget.nodeId,
+          item.productId,
+          item.variantId,
         );
+        if (!mapping) {
+          throw new BadRequestAppException(
+            `Seller ${newTarget.nodeId} does not have an active mapping for product ${item.productId}${item.variantId ? ` / variant ${item.variantId}` : ''}`,
+          );
+        }
+        const available = mapping.stockQty - mapping.reservedQty;
+        if (available < item.quantity) {
+          throw new BadRequestAppException(
+            `Seller ${newTarget.nodeId} has insufficient stock for product ${item.productId}: available=${available}, required=${item.quantity}`,
+          );
+        }
+      }
+    } else {
+      // FRANCHISE target
+      const franchise = await this.prisma.franchisePartner.findUnique({
+        where: { id: newTarget.nodeId },
+        select: { id: true, status: true, businessName: true, isDeleted: true },
+      });
+      if (!franchise || franchise.isDeleted) {
+        throw new NotFoundAppException(
+          `Franchise ${newTarget.nodeId} not found`,
+        );
+      }
+      if (franchise.status !== 'ACTIVE') {
+        throw new BadRequestAppException(
+          `Franchise ${newTarget.nodeId} is not active (status: ${franchise.status})`,
+        );
+      }
+      for (const item of subOrder.items) {
+        const mapping = await this.prisma.franchiseCatalogMapping.findFirst({
+          where: {
+            franchiseId: newTarget.nodeId,
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+            isActive: true,
+            approvalStatus: 'APPROVED',
+          },
+          select: { id: true },
+        });
+        if (!mapping) {
+          throw new BadRequestAppException(
+            `Franchise ${newTarget.nodeId} does not have an approved mapping for product ${item.productId}${item.variantId ? ` / variant ${item.variantId}` : ''}`,
+          );
+        }
+        const stock = await this.prisma.franchiseStock.findFirst({
+          where: {
+            franchiseId: newTarget.nodeId,
+            productId: item.productId,
+            variantId: item.variantId ?? null,
+          },
+          select: { availableQty: true },
+        });
+        if (!stock || stock.availableQty < item.quantity) {
+          throw new BadRequestAppException(
+            `Franchise ${newTarget.nodeId} has insufficient stock for product ${item.productId}: available=${stock?.availableQty ?? 0}, required=${item.quantity}`,
+          );
+        }
       }
     }
 
     const now = new Date();
-    const acceptDeadlineAt = new Date(
-      now.getTime() + ACCEPT_DEADLINE_MS,
-    );
+    const acceptDeadlineAt = new Date(now.getTime() + ACCEPT_DEADLINE_MS);
 
-    // 4. Execute reassignment in a transaction
-    await this.orderRepo.executeTransaction(async (tx) => {
-      // Release current seller's reservations for this sub-order
-      const currentReservations =
-        await tx.stockReservation.findMany({
+    // 3. Release previous node's hold (branches on previous node type).
+    //    We do this OUTSIDE the transaction for the FRANCHISE case because
+    //    the franchise facade manages its own persistence path (ledger +
+    //    stock update) that isn't expressible as a single tx with our repo.
+    //    Rollback on subsequent failure is mitigated by validation above.
+    if (previousNodeType === 'SELLER' && previousSellerId) {
+      await this.orderRepo.executeTransaction(async (tx) => {
+        const currentReservations = await tx.stockReservation.findMany({
           where: {
             orderId: subOrder.masterOrder.id,
             status: { in: ['RESERVED', 'CONFIRMED'] },
             mapping: { sellerId: previousSellerId },
           },
         });
-
-      for (const res of currentReservations) {
-        if (res.status === 'CONFIRMED') {
-          await tx.stockReservation.update({
-            where: { id: res.id },
-            data: { status: 'RELEASED' },
-          });
-          await tx.sellerProductMapping.update({
-            where: { id: res.mappingId },
-            data: { stockQty: { increment: res.quantity } },
-          });
-        } else if (res.status === 'RESERVED') {
-          await tx.stockReservation.update({
-            where: { id: res.id },
-            data: { status: 'RELEASED' },
-          });
-          await tx.sellerProductMapping.update({
-            where: { id: res.mappingId },
-            data: { reservedQty: { decrement: res.quantity } },
-          });
+        for (const res of currentReservations) {
+          if (res.status === 'CONFIRMED') {
+            await tx.stockReservation.update({
+              where: { id: res.id },
+              data: { status: 'RELEASED' },
+            });
+            await tx.sellerProductMapping.update({
+              where: { id: res.mappingId },
+              data: { stockQty: { increment: res.quantity } },
+            });
+          } else {
+            await tx.stockReservation.update({
+              where: { id: res.id },
+              data: { status: 'RELEASED' },
+            });
+            await tx.sellerProductMapping.update({
+              where: { id: res.mappingId },
+              data: { reservedQty: { decrement: res.quantity } },
+            });
+          }
         }
-      }
-
-      // Create new reservations for the new seller
+      });
+    } else if (previousNodeType === 'FRANCHISE' && previousFranchiseId) {
       for (const item of subOrder.items) {
-        const newMapping =
-          await tx.sellerProductMapping.findFirst({
+        await this.franchiseFacade
+          .unreserveStock(
+            previousFranchiseId,
+            item.productId,
+            item.variantId ?? null,
+            item.quantity,
+            subOrder.masterOrder.id,
+          )
+          .catch(() => {
+            // Best effort — old hold may already have been released if the
+            // sub-order was REJECTED and auto-rebooked earlier.
+          });
+      }
+    }
+
+    // 4. Reserve stock on the new node.
+    if (newTarget.nodeType === 'SELLER') {
+      await this.orderRepo.executeTransaction(async (tx) => {
+        for (const item of subOrder.items) {
+          const newMapping = await tx.sellerProductMapping.findFirst({
             where: {
-              sellerId: newSellerId,
+              sellerId: newTarget.nodeId,
               productId: item.productId,
               variantId: item.variantId,
               isActive: true,
             },
           });
-
-        if (newMapping) {
-          await tx.stockReservation.create({
-            data: {
-              mappingId: newMapping.id,
-              quantity: item.quantity,
-              status: 'CONFIRMED',
-              orderId: subOrder.masterOrder.id,
-              expiresAt: new Date(
-                Date.now() + 7 * 24 * 60 * 60 * 1000,
-              ),
-            },
-          });
-
-          await tx.sellerProductMapping.update({
-            where: { id: newMapping.id },
-            data: { reservedQty: { increment: item.quantity } },
-          });
+          if (newMapping) {
+            await tx.stockReservation.create({
+              data: {
+                mappingId: newMapping.id,
+                quantity: item.quantity,
+                status: 'CONFIRMED',
+                orderId: subOrder.masterOrder.id,
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+              },
+            });
+            await tx.sellerProductMapping.update({
+              where: { id: newMapping.id },
+              data: { reservedQty: { increment: item.quantity } },
+            });
+          }
         }
+      });
+    } else {
+      for (const item of subOrder.items) {
+        await this.franchiseFacade.reserveStock(
+          newTarget.nodeId,
+          item.productId,
+          item.variantId ?? null,
+          item.quantity,
+          subOrder.masterOrder.id,
+        );
       }
+    }
 
-      // Update sub-order: new seller, reset accept status to OPEN, set deadline
+    // 5. Update the sub-order row + promote master out of EXCEPTION_QUEUE
+    await this.orderRepo.executeTransaction(async (tx) => {
       await tx.subOrder.update({
         where: { id: subOrderId },
         data: {
-          sellerId: newSellerId,
+          // Swap node fields: set new, clear the other side
+          sellerId: newTarget.nodeType === 'SELLER' ? newTarget.nodeId : null,
+          franchiseId:
+            newTarget.nodeType === 'FRANCHISE' ? newTarget.nodeId : null,
+          fulfillmentNodeType: newTarget.nodeType,
           acceptStatus: 'OPEN',
           fulfillmentStatus: 'UNFULFILLED',
           acceptDeadlineAt,
-        },
+        } as any,
       });
 
-      // If master order was in EXCEPTION_QUEUE, move it back to ROUTED_TO_SELLER
       if (subOrder.masterOrder.orderStatus === 'EXCEPTION_QUEUE') {
         await tx.masterOrder.update({
           where: { id: subOrder.masterOrder.id },
@@ -684,36 +1131,44 @@ export class OrdersService {
         });
       }
 
-      // Log in AllocationLog
       for (const item of subOrder.items) {
         await tx.allocationLog.create({
           data: {
             productId: item.productId,
             variantId: item.variantId,
             customerPincode: 'ADMIN_REASSIGN',
-            allocatedSellerId: newSellerId,
-            allocationReason: `Admin manual reassignment: from seller ${previousSellerId} to ${newSellerId}${reason ? ` — ${reason}` : ''}`,
+            allocatedNodeType: newTarget.nodeType,
+            allocatedSellerId:
+              newTarget.nodeType === 'SELLER' ? newTarget.nodeId : null,
+            allocatedFranchiseId:
+              newTarget.nodeType === 'FRANCHISE' ? newTarget.nodeId : null,
+            allocationReason: `Admin manual reassignment: from ${previousNodeType.toLowerCase()} ${previousSellerId ?? previousFranchiseId} to ${newTarget.nodeType.toLowerCase()} ${newTarget.nodeId}${reason ? ` — ${reason}` : ''}`,
             isReallocated: true,
             orderId: subOrder.masterOrder.id,
-          },
+          } as any,
         });
       }
     });
 
-    // 5. Log in OrderReassignmentLog (outside transaction — best effort)
+    // 6. Log in OrderReassignmentLog (outside transaction — best effort).
+    //    `fromSellerId`/`toSellerId` are retained for backward-compat; when
+    //    either side is a franchise we use the franchise id in the same slot
+    //    so the log remains readable.
     await this.orderRepo
       .createReassignmentLog({
         subOrderId,
         masterOrderId: subOrder.masterOrder.id,
-        fromSellerId: previousSellerId,
-        toSellerId: newSellerId,
-        reason: reason || 'Admin manual reassignment',
+        fromSellerId: previousSellerId ?? previousFranchiseId ?? '',
+        toSellerId: newTarget.nodeId,
+        reason:
+          reason ||
+          `Admin manual reassignment (${previousNodeType} → ${newTarget.nodeType})`,
         successful: true,
         newSubOrderId: null,
       })
       .catch(() => {});
 
-    // 6. Publish event
+    // 7. Publish event
     await this.eventBus
       .publish({
         eventName: 'orders.sub_order.reassigned',
@@ -724,14 +1179,19 @@ export class OrdersService {
           subOrderId,
           masterOrderId: subOrder.masterOrder.id,
           orderNumber: subOrder.masterOrder.orderNumber,
+          fromNodeType: previousNodeType,
+          fromNodeId: previousSellerId ?? previousFranchiseId,
+          toNodeType: newTarget.nodeType,
+          toNodeId: newTarget.nodeId,
+          // Legacy fields kept for existing consumers
           fromSellerId: previousSellerId,
-          toSellerId: newSellerId,
+          toSellerId:
+            newTarget.nodeType === 'SELLER' ? newTarget.nodeId : null,
           reason: reason || 'Admin manual reassignment',
         },
       })
       .catch(() => {});
 
-    // Return updated sub-order
     const updated =
       await this.orderRepo.findSubOrderByIdWithItems(subOrderId);
     return updated;
@@ -1076,6 +1536,7 @@ export class OrdersService {
     id: string,
     sellerId: string,
     status: string,
+    extra?: { trackingNumber?: string; courierName?: string },
   ) {
     const subOrder = await this.orderRepo.findSubOrderForSellerBasic(
       id,
@@ -1089,14 +1550,14 @@ export class OrdersService {
     }
 
     // Seller can only move: UNFULFILLED -> PACKED -> SHIPPED
-    // DELIVERED must be confirmed by admin
-    const validTransitions: Record<string, string[]> = {
+    // DELIVERED must be confirmed by admin (or by Shiprocket webhook)
+    const sellerAllowedTransitions: Record<string, string[]> = {
       UNFULFILLED: ['PACKED'],
       PACKED: ['SHIPPED'],
     };
 
     const allowed =
-      validTransitions[subOrder.fulfillmentStatus] || [];
+      sellerAllowedTransitions[subOrder.fulfillmentStatus] || [];
     if (!allowed.includes(status)) {
       if (status === 'DELIVERED') {
         throw new BadRequestAppException(
@@ -1113,7 +1574,26 @@ export class OrdersService {
       );
     }
 
+    // Defense-in-depth: also validate against the global FSM in case the
+    // ad-hoc check above ever drifts.
+    assertTransition('OrderFulfillmentStatus', subOrder.fulfillmentStatus, status);
+
+    // When moving to SHIPPED, tracking number and courier name are required
+    if (status === 'SHIPPED') {
+      const trackingNumber = extra?.trackingNumber?.trim();
+      const courierName = extra?.courierName?.trim();
+      if (!trackingNumber || !courierName) {
+        throw new BadRequestAppException(
+          'trackingNumber and courierName are required when marking an order as SHIPPED',
+        );
+      }
+    }
+
     const updateData: any = { fulfillmentStatus: status };
+    if (status === 'SHIPPED') {
+      updateData.trackingNumber = extra?.trackingNumber?.trim();
+      updateData.courierName = extra?.courierName?.trim();
+    }
     const updated = await this.orderRepo.updateSubOrder(
       id,
       updateData,

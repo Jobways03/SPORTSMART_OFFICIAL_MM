@@ -4,6 +4,9 @@ import {
   UserRepository,
   UserWithRoles,
   PasswordResetOtpRecord,
+  CustomerProfile,
+  CustomerProfileWithPassword,
+  UpdateCustomerProfileInput,
 } from '../../domain/repositories/user.repository';
 
 @Injectable()
@@ -37,6 +40,112 @@ export class PrismaUserRepository implements UserRepository {
 
   async save(_user: unknown): Promise<void> {
     // Generic save - not used in current use-cases but kept for interface compliance
+  }
+
+  // ── Customer profile self-service ──────────────────────────
+
+  async findCustomerProfile(id: string): Promise<CustomerProfile | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        emailVerified: true,
+        phoneVerified: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return user as CustomerProfile | null;
+  }
+
+  async findCustomerProfileWithPassword(
+    id: string,
+  ): Promise<CustomerProfileWithPassword | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        emailVerified: true,
+        phoneVerified: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        passwordHash: true,
+      },
+    });
+    return user as CustomerProfileWithPassword | null;
+  }
+
+  async updateCustomerProfile(
+    id: string,
+    data: UpdateCustomerProfileInput,
+  ): Promise<CustomerProfile> {
+    // If email is changing, mark as unverified again
+    const updates: any = { ...data };
+    if (data.email !== undefined) {
+      updates.emailVerified = false;
+    }
+    if (data.phone !== undefined) {
+      updates.phoneVerified = false;
+    }
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: updates,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        emailVerified: true,
+        phoneVerified: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return user as CustomerProfile;
+  }
+
+  async existsByEmailExcept(email: string, excludeUserId: string): Promise<boolean> {
+    const found = await this.prisma.user.findFirst({
+      where: { email, id: { not: excludeUserId } },
+      select: { id: true },
+    });
+    return !!found;
+  }
+
+  async existsByPhoneExcept(phone: string, excludeUserId: string): Promise<boolean> {
+    const found = await this.prisma.user.findFirst({
+      where: { phone, id: { not: excludeUserId } },
+      select: { id: true },
+    });
+    return !!found;
+  }
+
+  async changePasswordAndRevokeSessions(
+    userId: string,
+    passwordHash: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { passwordHash },
+      });
+      await tx.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
   }
 
   // ── Registration ───────────────────────────────────────────

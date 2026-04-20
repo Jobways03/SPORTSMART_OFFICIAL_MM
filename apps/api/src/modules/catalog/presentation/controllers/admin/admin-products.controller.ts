@@ -31,6 +31,7 @@ import { AdminRejectProductDto } from '../../dtos/admin-reject-product.dto';
 import { AdminRequestChangesDto } from '../../dtos/admin-request-changes.dto';
 import { AdminUpdateProductStatusDto } from '../../dtos/admin-update-status.dto';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
 
 @ApiTags('Admin Products')
 @Controller('admin/products')
@@ -42,6 +43,7 @@ export class AdminProductsController {
     private readonly slugService: ProductSlugService,
     private readonly productCodeService: ProductCodeService,
     private readonly eventBus: EventBusService,
+    private readonly cartFacade: CartPublicFacade,
   ) {
     this.logger.setContext('AdminProductsController');
   }
@@ -225,6 +227,17 @@ export class AdminProductsController {
     const existing = await this.productRepo.findByIdBasic(productId);
     if (!existing) throw new NotFoundAppException('Product not found');
 
+    // Block deletion if any active cart references this product (either as
+    // a base-product line or via any of its variants — softDeleteWithVariants
+    // would orphan all of them).
+    const activeCount =
+      await this.cartFacade.countActiveItemsForProduct(productId);
+    if (activeCount > 0) {
+      throw new BadRequestAppException(
+        `Cannot delete product — ${activeCount} cart item(s) currently reference it. Customers must remove it from their carts first.`,
+      );
+    }
+
     await this.productRepo.softDeleteWithVariants(productId);
     this.logger.log(`Product ${productId} deleted by admin ${adminId}`);
     return { success: true, message: 'Product deleted successfully', data: null };
@@ -238,10 +251,14 @@ export class AdminProductsController {
     if (!product) throw new NotFoundAppException('Product not found');
     if (product.status !== 'SUBMITTED') throw new AppException('Only SUBMITTED products can be approved', 'BAD_REQUEST');
 
-    await this.productRepo.approveInTransaction(productId, [
-      { fromStatus: 'SUBMITTED', toStatus: 'APPROVED', changedBy: adminId, reason: 'Product approved' },
-      { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after approval' },
-    ]);
+    await this.productRepo.approveInTransaction(
+      productId,
+      [
+        { fromStatus: 'SUBMITTED', toStatus: 'APPROVED', changedBy: adminId, reason: 'Product approved' },
+        { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after approval' },
+      ],
+      { moderatorId: adminId },
+    );
 
     this.logger.log(`Product ${productId} approved by admin ${adminId}`);
 
@@ -266,9 +283,12 @@ export class AdminProductsController {
     if (!product) throw new NotFoundAppException('Product not found');
     if (product.status !== 'SUBMITTED') throw new AppException('Only SUBMITTED products can be rejected', 'BAD_REQUEST');
 
-    await this.productRepo.rejectInTransaction(productId, dto.reason, {
-      fromStatus: 'SUBMITTED', toStatus: 'REJECTED', changedBy: adminId, reason: dto.reason,
-    });
+    await this.productRepo.rejectInTransaction(
+      productId,
+      dto.reason,
+      { fromStatus: 'SUBMITTED', toStatus: 'REJECTED', changedBy: adminId, reason: dto.reason },
+      { moderatorId: adminId },
+    );
 
     this.logger.log(`Product ${productId} rejected by admin ${adminId}`);
 
@@ -293,11 +313,35 @@ export class AdminProductsController {
     if (!product) throw new NotFoundAppException('Product not found');
     if (product.status !== 'SUBMITTED') throw new AppException('Only SUBMITTED products can have changes requested', 'BAD_REQUEST');
 
-    await this.productRepo.requestChangesInTransaction(productId, dto.note, {
-      fromStatus: 'SUBMITTED', toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: dto.note,
-    });
+    await this.productRepo.requestChangesInTransaction(
+      productId,
+      dto.note,
+      { fromStatus: 'SUBMITTED', toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: dto.note },
+      { moderatorId: adminId },
+    );
 
     this.logger.log(`Changes requested for product ${productId} by admin ${adminId}`);
+
+    // Emit so the seller gets an email with the change request note. The
+    // event schema matches the approved/rejected events for consistency.
+    try {
+      await this.eventBus.publish({
+        eventName: 'catalog.listing.request_changes',
+        aggregate: 'Product',
+        aggregateId: productId,
+        occurredAt: new Date(),
+        payload: {
+          productId,
+          productTitle: product.title,
+          sellerId: product.sellerId,
+          note: dto.note,
+          adminId,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to emit catalog.listing.request_changes event: ${err}`);
+    }
+
     return { success: true, message: 'Changes requested', data: null };
   }
 
@@ -379,6 +423,211 @@ export class AdminProductsController {
         brandName: d.brand?.name ?? null, categoryName: d.category?.name ?? null,
         images: d.images, seller: d.seller,
       },
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Bulk moderation — approve / reject / request-changes for many
+  // products in one request. Each item is processed independently:
+  // if one product is in the wrong state we record a failure for
+  // it and keep going, so a bad apple doesn't block the batch.
+  // Response shape: { ok: [...productIds], failed: [{id, reason}] }
+  // ─────────────────────────────────────────────────────────────
+
+  @Post('bulk/approve')
+  @HttpCode(HttpStatus.OK)
+  async bulkApprove(
+    @Req() req: Request,
+    @Body() dto: { productIds: string[] },
+  ) {
+    const adminId = (req as any).adminId;
+    if (!Array.isArray(dto.productIds) || dto.productIds.length === 0) {
+      throw new BadRequestAppException('productIds must be a non-empty array');
+    }
+
+    const ok: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+
+    for (const productId of dto.productIds) {
+      try {
+        const product = await this.productRepo.findByIdBasic(productId);
+        if (!product) {
+          failed.push({ id: productId, reason: 'Product not found' });
+          continue;
+        }
+        if (product.status !== 'SUBMITTED') {
+          failed.push({
+            id: productId,
+            reason: `Expected SUBMITTED, got ${product.status}`,
+          });
+          continue;
+        }
+        await this.productRepo.approveInTransaction(
+          productId,
+          [
+            { fromStatus: 'SUBMITTED', toStatus: 'APPROVED', changedBy: adminId, reason: 'Bulk approve' },
+            { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after bulk approval' },
+          ],
+          { moderatorId: adminId },
+        );
+        await this.eventBus
+          .publish({
+            eventName: 'catalog.listing.approved',
+            aggregate: 'Product',
+            aggregateId: productId,
+            occurredAt: new Date(),
+            payload: { productId, productTitle: product.title, sellerId: product.sellerId, adminId },
+          })
+          .catch(() => {});
+        ok.push(productId);
+      } catch (err) {
+        failed.push({
+          id: productId,
+          reason: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+
+    this.logger.log(
+      `Bulk approve by admin ${adminId}: ok=${ok.length}, failed=${failed.length}`,
+    );
+
+    return {
+      success: true,
+      message: `Approved ${ok.length} of ${dto.productIds.length}`,
+      data: { ok, failed },
+    };
+  }
+
+  @Post('bulk/reject')
+  @HttpCode(HttpStatus.OK)
+  async bulkReject(
+    @Req() req: Request,
+    @Body() dto: { productIds: string[]; reason: string },
+  ) {
+    const adminId = (req as any).adminId;
+    if (!Array.isArray(dto.productIds) || dto.productIds.length === 0) {
+      throw new BadRequestAppException('productIds must be a non-empty array');
+    }
+    if (!dto.reason || !dto.reason.trim()) {
+      throw new BadRequestAppException('reason is required');
+    }
+
+    const ok: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+
+    for (const productId of dto.productIds) {
+      try {
+        const product = await this.productRepo.findByIdBasic(productId);
+        if (!product) {
+          failed.push({ id: productId, reason: 'Product not found' });
+          continue;
+        }
+        if (product.status !== 'SUBMITTED') {
+          failed.push({
+            id: productId,
+            reason: `Expected SUBMITTED, got ${product.status}`,
+          });
+          continue;
+        }
+        await this.productRepo.rejectInTransaction(
+          productId,
+          dto.reason,
+          { fromStatus: 'SUBMITTED', toStatus: 'REJECTED', changedBy: adminId, reason: dto.reason },
+          { moderatorId: adminId },
+        );
+        await this.eventBus
+          .publish({
+            eventName: 'catalog.listing.rejected',
+            aggregate: 'Product',
+            aggregateId: productId,
+            occurredAt: new Date(),
+            payload: { productId, productTitle: product.title, sellerId: product.sellerId, reason: dto.reason, adminId },
+          })
+          .catch(() => {});
+        ok.push(productId);
+      } catch (err) {
+        failed.push({
+          id: productId,
+          reason: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+
+    this.logger.log(
+      `Bulk reject by admin ${adminId}: ok=${ok.length}, failed=${failed.length}`,
+    );
+
+    return {
+      success: true,
+      message: `Rejected ${ok.length} of ${dto.productIds.length}`,
+      data: { ok, failed },
+    };
+  }
+
+  @Post('bulk/request-changes')
+  @HttpCode(HttpStatus.OK)
+  async bulkRequestChanges(
+    @Req() req: Request,
+    @Body() dto: { productIds: string[]; note: string },
+  ) {
+    const adminId = (req as any).adminId;
+    if (!Array.isArray(dto.productIds) || dto.productIds.length === 0) {
+      throw new BadRequestAppException('productIds must be a non-empty array');
+    }
+    if (!dto.note || !dto.note.trim()) {
+      throw new BadRequestAppException('note is required');
+    }
+
+    const ok: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+
+    for (const productId of dto.productIds) {
+      try {
+        const product = await this.productRepo.findByIdBasic(productId);
+        if (!product) {
+          failed.push({ id: productId, reason: 'Product not found' });
+          continue;
+        }
+        if (product.status !== 'SUBMITTED') {
+          failed.push({
+            id: productId,
+            reason: `Expected SUBMITTED, got ${product.status}`,
+          });
+          continue;
+        }
+        await this.productRepo.requestChangesInTransaction(
+          productId,
+          dto.note,
+          { fromStatus: 'SUBMITTED', toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: dto.note },
+          { moderatorId: adminId },
+        );
+        await this.eventBus
+          .publish({
+            eventName: 'catalog.listing.request_changes',
+            aggregate: 'Product',
+            aggregateId: productId,
+            occurredAt: new Date(),
+            payload: { productId, productTitle: product.title, sellerId: product.sellerId, note: dto.note, adminId },
+          })
+          .catch(() => {});
+        ok.push(productId);
+      } catch (err) {
+        failed.push({
+          id: productId,
+          reason: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+
+    this.logger.log(
+      `Bulk request-changes by admin ${adminId}: ok=${ok.length}, failed=${failed.length}`,
+    );
+
+    return {
+      success: true,
+      message: `Changes requested on ${ok.length} of ${dto.productIds.length}`,
+      data: { ok, failed },
     };
   }
 }

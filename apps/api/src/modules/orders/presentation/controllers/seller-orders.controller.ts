@@ -5,6 +5,7 @@ import {
   Param,
   Query,
   Body,
+  Post,
   UseGuards,
   Req,
 } from '@nestjs/common';
@@ -77,7 +78,12 @@ export class SellerOrdersController {
   async updateFulfillmentStatus(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { status: string },
+    @Body()
+    body: {
+      status: string;
+      trackingNumber?: string;
+      courierName?: string;
+    },
   ) {
     if (!body.status) {
       throw new BadRequestAppException('status is required (PACKED, SHIPPED)');
@@ -86,11 +92,40 @@ export class SellerOrdersController {
       id,
       req.sellerId,
       body.status.toUpperCase(),
+      {
+        trackingNumber: body?.trackingNumber,
+        courierName: body?.courierName,
+      },
     );
     return {
       success: true,
       message: `Order status updated to ${body.status.toUpperCase()}`,
       data,
     };
+  }
+
+  /**
+   * Seller-initiated return — mirrors the franchise `/return` endpoint.
+   * Used when the seller needs to reverse a delivered sub-order (e.g. the
+   * customer returned via a B2B channel or the goods came back damaged).
+   * Stock is returned to the seller's `stockQty` and the sub-order is
+   * marked CANCELLED. Does not create a Return row — that lifecycle stays
+   * customer-initiated.
+   */
+  @Post(':subOrderId/return')
+  async initiateReturn(
+    @Req() req: any,
+    @Param('subOrderId') subOrderId: string,
+    @Body()
+    body: {
+      items: Array<{ orderItemId: string; quantity: number; reason: string }>;
+    },
+  ) {
+    const data = await this.ordersService.sellerInitiateReturn(
+      subOrderId,
+      req.sellerId,
+      body.items,
+    );
+    return { success: true, message: 'Return initiated', data };
   }
 }

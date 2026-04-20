@@ -2,7 +2,10 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Delete,
   Body,
+  Param,
   UseGuards,
   Req,
 } from '@nestjs/common';
@@ -46,6 +49,64 @@ export class CustomerAddressController {
     return {
       success: true,
       message: 'Address created',
+      data: address,
+    };
+  }
+
+  @Patch(':addressId')
+  async updateAddress(
+    @Req() req: any,
+    @Param('addressId') addressId: string,
+    @Body()
+    body: {
+      fullName?: string;
+      phone?: string;
+      addressLine1?: string;
+      addressLine2?: string | null;
+      locality?: string | null;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+      isDefault?: boolean;
+    },
+  ) {
+    const address = await this.addressService.updateAddress(
+      req.userId,
+      addressId,
+      body,
+    );
+    return {
+      success: true,
+      message: 'Address updated',
+      data: address,
+    };
+  }
+
+  @Delete(':addressId')
+  async deleteAddress(
+    @Req() req: any,
+    @Param('addressId') addressId: string,
+  ) {
+    await this.addressService.deleteAddress(req.userId, addressId);
+    return {
+      success: true,
+      message: 'Address deleted',
+      data: null,
+    };
+  }
+
+  @Patch(':addressId/set-default')
+  async setDefaultAddress(
+    @Req() req: any,
+    @Param('addressId') addressId: string,
+  ) {
+    const address = await this.addressService.setDefaultAddress(
+      req.userId,
+      addressId,
+    );
+    return {
+      success: true,
+      message: 'Default address updated',
       data: address,
     };
   }

@@ -189,6 +189,26 @@ export const sellerProductService = {
     });
   },
 
+  /**
+   * Toggle a live product between ACTIVE and SUSPENDED. Useful when the
+   * seller needs to pause sales briefly without involving an admin.
+   */
+  setSelfStatus(
+    token: string,
+    productId: string,
+    status: 'ACTIVE' | 'SUSPENDED',
+    reason?: string,
+  ): Promise<ApiResponse<{ productId: string; status: string }>> {
+    return apiClient<{ productId: string; status: string }>(
+      `/seller/products/${productId}/self-status`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status, reason }),
+      },
+    );
+  },
+
   generateVariants(token: string, productId: string, optionValueIds: string[][]): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants/generate`, {
       method: 'POST',

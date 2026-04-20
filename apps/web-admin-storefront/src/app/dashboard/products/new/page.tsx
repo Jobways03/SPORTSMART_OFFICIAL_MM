@@ -7,7 +7,7 @@ import { adminProductsService } from '@/services/admin-products.service';
 import { adminSellersService, SellerListItem } from '@/services/admin-sellers.service';
 import { ApiError } from '@/lib/api-client';
 import '../product-form.css';
-import RichTextEditor from '@/components/RichTextEditor';
+import { RichTextEditor } from '@sportsmart/ui';
 
 // ----- Types -----
 

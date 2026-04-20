@@ -47,9 +47,23 @@ export interface IProductRepository {
   updateStatusInTransaction(productId: string, statusData: any, historyEntry: any): Promise<void>;
 
   // ── Moderation ──
-  approveInTransaction(productId: string, historyEntries: any[]): Promise<void>;
-  rejectInTransaction(productId: string, reason: string, historyEntry: any): Promise<void>;
-  requestChangesInTransaction(productId: string, note: string, historyEntry: any): Promise<void>;
+  approveInTransaction(
+    productId: string,
+    historyEntries: any[],
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void>;
+  rejectInTransaction(
+    productId: string,
+    reason: string,
+    historyEntry: any,
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void>;
+  requestChangesInTransaction(
+    productId: string,
+    note: string,
+    historyEntry: any,
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void>;
   submitForReviewInTransaction(productId: string, data: any, historyEntry: any): Promise<void>;
 
   // ── Merge ──
