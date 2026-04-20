@@ -14,13 +14,14 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { Roles } from '../../../../core/decorators/roles.decorator';
 import { AccountsSettlementService } from '../../application/services/accounts-settlement.service';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
 @ApiTags('Admin Accounts - Settlements')
 @Controller('admin/accounts/settlements')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 export class AccountsSettlementsController {
   constructor(
     private readonly settlementService: AccountsSettlementService,
@@ -324,8 +325,14 @@ export class AccountsSettlementsController {
     };
   }
 
+  // Mutations on settlement state move real money (payout batch) or
+  // pin the ledger's grouping (new cycle / cycle preview). Restrict to
+  // SUPER_ADMIN, matching /admin/settlements/mark-paid and the other
+  // money-movement endpoints locked down in earlier areas.
+
   /* ── POST /admin/accounts/settlements/mark-paid ── */
   @Post('mark-paid')
+  @Roles('SUPER_ADMIN')
   async batchMarkPaid(
     @Req() req: Request,
     @Body()
@@ -354,6 +361,7 @@ export class AccountsSettlementsController {
 
   /* ── PATCH /admin/accounts/settlements/cycles/:cycleId/preview ── */
   @Patch('cycles/:cycleId/preview')
+  @Roles('SUPER_ADMIN')
   async markCyclePreviewed(@Param('cycleId') cycleId: string) {
     const cycle = await this.settlementService.markCyclePreviewed(cycleId);
     return {
@@ -365,6 +373,7 @@ export class AccountsSettlementsController {
 
   /* ── POST /admin/accounts/settlements/cycles ── */
   @Post('cycles')
+  @Roles('SUPER_ADMIN')
   async createCycle(
     @Body() body: { periodStart: string; periodEnd: string },
   ) {

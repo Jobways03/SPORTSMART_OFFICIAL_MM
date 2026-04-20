@@ -1,8 +1,10 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { ResetPasswordDto } from '../dtos/reset-password.dto';
 import { ResetPasswordUseCase } from '../../application/use-cases/reset-password.use-case';
 
+@ApiTags('Auth')
 @Controller('auth')
 export class ResetPasswordController {
   constructor(

@@ -3,8 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { apiClient, ApiError } from '@/lib/api-client';
 
 /* -- types -- */
 interface OrderItem {
@@ -68,20 +67,6 @@ interface SubOrderDetail {
     };
     customer: { firstName: string; lastName: string; email: string };
   };
-}
-
-/* -- helpers -- */
-function getToken() {
-  try {
-    return sessionStorage.getItem('accessToken');
-  } catch {
-    return null;
-  }
-}
-
-function authHeaders(): Record<string, string> {
-  const t = getToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
 const fmt = (n: number) =>
@@ -237,10 +222,7 @@ export default function SellerOrderDetailPage() {
   const [shipError, setShipError] = useState('');
 
   const fetchOrder = useCallback(() => {
-    fetch(`${API_BASE}/api/v1/seller/orders/${id}`, {
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    })
-      .then((r) => r.json())
+    apiClient<any>(`/seller/orders/${id}`)
       .then((res) => {
         if (res.data) setOrder(res.data);
       })
@@ -255,9 +237,8 @@ export default function SellerOrderDetailPage() {
   const handleRejectConfirm = async () => {
     setActionLoading('reject');
     try {
-      await fetch(`${API_BASE}/api/v1/seller/orders/${id}/reject`, {
+      await apiClient(`/seller/orders/${id}/reject`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           reason: rejectReason || undefined,
           note: rejectNote || undefined,
@@ -277,9 +258,8 @@ export default function SellerOrderDetailPage() {
   const handleAcceptConfirm = async () => {
     setActionLoading('accept');
     try {
-      await fetch(`${API_BASE}/api/v1/seller/orders/${id}/accept`, {
+      await apiClient(`/seller/orders/${id}/accept`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           expectedDispatchDate: expectedDispatchDate || undefined,
         }),
@@ -297,21 +277,15 @@ export default function SellerOrderDetailPage() {
   const handlePackConfirm = async () => {
     setActionLoading('pack');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/seller/orders/${id}/status`, {
+      await apiClient(`/seller/orders/${id}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ status: 'PACKED' }),
       });
-      const body = await res.json().catch(() => null);
-      if (!res.ok) {
-        alert(body?.message || 'Failed to mark order as packed');
-      } else {
-        fetchOrder();
-        setShowPackModal(false);
-        setPackNote('');
-      }
-    } catch {
-      alert('Network error. Please try again.');
+      fetchOrder();
+      setShowPackModal(false);
+      setPackNote('');
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : 'Network error. Please try again.');
     } finally {
       setActionLoading(null);
     }
@@ -334,27 +308,21 @@ export default function SellerOrderDetailPage() {
     }
     setActionLoading('ship');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/seller/orders/${id}/status`, {
+      await apiClient(`/seller/orders/${id}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           status: 'SHIPPED',
           trackingNumber,
           courierName,
         }),
       });
-      const body = await res.json().catch(() => null);
-      if (!res.ok) {
-        setShipError(body?.message || 'Failed to mark order as shipped');
-      } else {
-        fetchOrder();
-        setShowShipModal(false);
-        setShipTrackingNumber('');
-        setShipCourierSelection('');
-        setShipCourierOther('');
-      }
-    } catch {
-      setShipError('Network error. Please try again.');
+      fetchOrder();
+      setShowShipModal(false);
+      setShipTrackingNumber('');
+      setShipCourierSelection('');
+      setShipCourierOther('');
+    } catch (err) {
+      setShipError(err instanceof ApiError ? err.message : 'Network error. Please try again.');
     } finally {
       setActionLoading(null);
     }

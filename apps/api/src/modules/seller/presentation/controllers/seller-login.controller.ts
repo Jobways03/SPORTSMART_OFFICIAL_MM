@@ -1,9 +1,11 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { SellerLoginDto } from '../dtos/seller-login.dto';
 import { LoginSellerUseCase } from '../../application/use-cases/login-seller.use-case';
 
+@ApiTags('Seller Auth')
 @Controller('seller/auth')
 export class SellerLoginController {
   constructor(private readonly loginSellerUseCase: LoginSellerUseCase) {}

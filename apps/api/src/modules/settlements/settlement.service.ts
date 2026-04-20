@@ -13,10 +13,18 @@ export class SettlementService {
 
   /* ── T3: Create settlement cycle ── */
   async createCycle(periodStart: Date, periodEnd: Date) {
-    // Find all PENDING commission records within the date range
+    // Find all PENDING commission records within the date range that
+    // aren't already attached to a settlement. The `settlementId: null`
+    // guard keeps this idempotent across concurrent / overlapping
+    // createCycle calls — a record can only be grouped into one cycle.
+    // Without it, two cycles with overlapping date ranges both pick
+    // up the same PENDING record and the second updateMany (see below)
+    // overwrites the first cycle's settlementId, silently detaching
+    // records from the earlier cycle's aggregate totals.
     const pendingRecords = await this.prisma.commissionRecord.findMany({
       where: {
         status: 'PENDING',
+        settlementId: null,
         createdAt: {
           gte: periodStart,
           lte: periodEnd,
@@ -106,10 +114,12 @@ export class SettlementService {
           },
         });
 
-        // Link commission records to the settlement
+        // Link commission records to the settlement. Filter on
+        // `settlementId: null` so a concurrent createCycle racing the
+        // same record loses the claim — only one cycle wins.
         const recordIds = data.records.map((r) => r.id);
         await tx.commissionRecord.updateMany({
-          where: { id: { in: recordIds } },
+          where: { id: { in: recordIds }, settlementId: null },
           data: { settlementId: sellerSettlement.id },
         });
       }

@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException, BadRequestAppException } from '../../../../core/exceptions';
@@ -59,9 +59,14 @@ export class VerifySellerEmailUseCase {
     // Increment attempts
     await this.sellerRepo.incrementOtpAttempts(otpRecord.id);
 
-    // Compare OTP hash
+    // Compare OTP hash in constant time — see
+    // identity/verify-reset-otp.use-case.ts for rationale.
     const otpHash = createHash('sha256').update(otp).digest('hex');
-    if (otpHash !== otpRecord.otpHash) {
+    const actual = Buffer.from(otpHash, 'utf8');
+    const expected = Buffer.from(otpRecord.otpHash, 'utf8');
+    const isMatch =
+      actual.length === expected.length && timingSafeEqual(actual, expected);
+    if (!isMatch) {
       const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
       if (remainingAttempts <= 0) {
         await this.sellerRepo.expireOtp(otpRecord.id);

@@ -159,12 +159,10 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
     try {
       const formData = new FormData();
       formData.append('image', file);
-      const token = typeof window !== 'undefined' ? sessionStorage.getItem('adminAccessToken') : null;
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/v1/admin/collections/${collectionId}/image`,
-        { method: 'POST', body: formData, headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      const json = await apiClient<{ imageUrl?: string }>(
+        `/admin/collections/${collectionId}/image`,
+        { method: 'POST', body: formData },
       );
-      const json = await res.json();
       if (json.data?.imageUrl) setImageUrl(json.data.imageUrl);
     } catch { /* */ }
     finally { setUploading(false); }

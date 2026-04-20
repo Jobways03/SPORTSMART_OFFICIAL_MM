@@ -632,13 +632,31 @@ export class CheckoutService {
       );
     }
 
-    const webhookSecret = process.env.RAZORPAY_KEY_SECRET || '';
+    // Razorpay verify-payment signature is HMAC-SHA256(orderId|paymentId)
+    // keyed by the API key_secret. Fail closed if the secret is missing —
+    // a blank key would let an attacker compute a valid HMAC themselves,
+    // since hmac('', x) is deterministic and publicly reproducible. Prior
+    // behaviour silently fell back to '' and accepted any "matching"
+    // signature. Parallels the webhook signature verifier.
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keySecret) {
+      throw new BadRequestAppException(
+        'Payment verification unavailable — gateway not configured',
+      );
+    }
     const expectedSignature = crypto
-      .createHmac('sha256', webhookSecret)
+      .createHmac('sha256', keySecret)
       .update(`${input.razorpayOrderId}|${input.razorpayPaymentId}`)
       .digest('hex');
 
-    if (expectedSignature !== input.razorpaySignature) {
+    // Constant-time compare — same rationale as the webhook verifier
+    // (prevents byte-position timing leakage on the HMAC).
+    const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+    const actualBuf = Buffer.from(input.razorpaySignature, 'utf8');
+    const isValidSignature =
+      expectedBuf.length === actualBuf.length &&
+      crypto.timingSafeEqual(expectedBuf, actualBuf);
+    if (!isValidSignature) {
       throw new BadRequestAppException('Payment verification failed — invalid signature');
     }
 

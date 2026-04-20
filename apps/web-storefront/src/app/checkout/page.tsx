@@ -105,9 +105,7 @@ export default function CheckoutPage() {
     setPincodeLoading(true);
     setPincodeError('');
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-      const res = await fetch(`${API_BASE}/api/v1/pincodes/${pincode}`);
-      const data = await res.json();
+      const data = await apiClient<any>(`/pincodes/${pincode}`);
 
       if (data.success && data.data) {
         setPincodeData(data.data);

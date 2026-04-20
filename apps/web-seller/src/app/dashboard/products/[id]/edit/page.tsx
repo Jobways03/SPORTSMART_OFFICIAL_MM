@@ -9,7 +9,7 @@ import {
   ProductVariant,
   ProductImage,
 } from '@/services/product.service';
-import { ApiError } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 import '../../product-form.css';
 import { RichTextEditor } from '@sportsmart/ui';
 
@@ -128,11 +128,8 @@ export default function EditProductPage() {
     if (!form.title.trim()) return;
     setAiGenerating(true);
     try {
-      const token = sessionStorage.getItem('accessToken') || '';
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-      const res = await fetch(`${API_BASE}/api/v1/ai/generate-product-content`, {
+      const json = await apiClient<any>('/ai/generate-product-content', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           title: form.title,
           category: form.categoryName || '',
@@ -140,7 +137,6 @@ export default function EditProductPage() {
           shortDescription: form.shortDescription,
         }),
       });
-      const json = await res.json();
       if (json.data) {
         setForm(prev => ({
           ...prev,

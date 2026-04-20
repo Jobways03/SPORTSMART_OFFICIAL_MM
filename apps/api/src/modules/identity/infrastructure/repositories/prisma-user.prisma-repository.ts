@@ -139,12 +139,36 @@ export class PrismaUserRepository implements UserRepository {
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: userId },
-        data: { passwordHash },
+        // Clear the lockout counter too so the user is never stuck
+        // locked-out after a self-service password change.
+        data: {
+          passwordHash,
+          failedLoginAttempts: 0,
+          lockUntil: null,
+        },
       });
       await tx.session.updateMany({
         where: { userId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+    });
+  }
+
+  async recordFailedLogin(
+    userId: string,
+    attempts: number,
+    lockUntil: Date | null,
+  ): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { failedLoginAttempts: attempts, lockUntil },
+    });
+  }
+
+  async clearLoginLockout(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { failedLoginAttempts: 0, lockUntil: null },
     });
   }
 
@@ -287,7 +311,13 @@ export class PrismaUserRepository implements UserRepository {
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: params.userId },
-        data: { passwordHash: params.passwordHash },
+        data: {
+          passwordHash: params.passwordHash,
+          // Clear lockout so a previously locked-out user can log in
+          // immediately with the new password.
+          failedLoginAttempts: 0,
+          lockUntil: null,
+        },
       });
 
       await tx.passwordResetOtp.update({

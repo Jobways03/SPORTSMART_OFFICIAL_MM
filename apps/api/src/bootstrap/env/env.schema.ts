@@ -110,6 +110,34 @@ export const envSchema = z.object({
   // to rate-limit per client IP). 0 = don't trust X-Forwarded-For (dev).
   // 1 = trust one hop (typical: ALB / nginx in front). Higher if chained.
   TRUST_PROXY_HOPS: z.coerce.number().default(0),
+}).superRefine((env, ctx) => {
+  // Prod-only hardening. In dev / test / staging these integrations are
+  // optional so you can boot the API without accounts; in production a
+  // missing secret caused silent failures deep inside the checkout flow
+  // (e.g. RAZORPAY_KEY_SECRET missing → HMAC verify comparing against
+  // an empty-key digest) rather than a loud boot-time error. Fail fast
+  // on start instead.
+  if (env.NODE_ENV !== 'production') return;
+
+  const requiredInProd: Array<keyof typeof env> = [
+    'RAZORPAY_KEY_ID',
+    'RAZORPAY_KEY_SECRET',
+    'RAZORPAY_WEBHOOK_SECRET',
+    'S3_BUCKET',
+    'S3_REGION',
+    'S3_ACCESS_KEY',
+    'S3_SECRET_KEY',
+  ];
+  for (const key of requiredInProd) {
+    const value = env[key];
+    if (value === undefined || value === null || String(value).trim() === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} is required when NODE_ENV=production`,
+      });
+    }
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

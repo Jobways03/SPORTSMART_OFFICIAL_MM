@@ -105,6 +105,7 @@ export class RefundProcessorService
       if (!ret.refundReference) continue;
       try {
         const gatewayStatus = await this.refundGateway.checkRefundStatus(
+          ret.id,
           ret.refundReference,
         );
         if (gatewayStatus.status === 'PROCESSED') {

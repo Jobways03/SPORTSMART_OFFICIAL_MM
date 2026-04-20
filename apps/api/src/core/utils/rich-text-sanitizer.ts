@@ -1,3 +1,8 @@
+// sanitize-html is a CJS module with a namespace export (IOptions
+// type). The `import x = require()` form is the TS-idiomatic way to
+// consume it while retaining namespace access, and is the pattern the
+// library's own docs recommend.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import sanitizeHtml = require('sanitize-html');
 
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {

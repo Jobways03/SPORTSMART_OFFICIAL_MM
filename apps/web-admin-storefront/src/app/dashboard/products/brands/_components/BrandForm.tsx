@@ -156,12 +156,10 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
     try {
       const formData = new FormData();
       formData.append('logo', file);
-      const token = typeof window !== 'undefined' ? sessionStorage.getItem('adminAccessToken') : null;
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/v1/admin/brands/${brandId}/logo`,
-        { method: 'POST', body: formData, headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      const json = await apiClient<{ logoUrl?: string }>(
+        `/admin/brands/${brandId}/logo`,
+        { method: 'POST', body: formData },
       );
-      const json = await res.json();
       if (json.data?.logoUrl) setLogoUrl(json.data.logoUrl);
     } catch { /* */ }
     finally { setUploading(false); }

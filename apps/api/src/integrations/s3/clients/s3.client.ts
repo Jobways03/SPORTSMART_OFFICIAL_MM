@@ -1,6 +1,28 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as crypto from 'crypto';
 
+/**
+ * STUB — NOT PRODUCTION-READY.
+ *
+ * Nothing in the codebase imports S3Adapter / S3Client today. Image
+ * uploads run through CloudinaryAdapter. This module is a placeholder
+ * so S3 can be wired in later, but the "presigned URL" it used to
+ * return was just the plain public bucket URL (no signature, no auth)
+ * and deleteObject was a no-op log. A future caller wiring this up
+ * would silently upload to a world-writable bucket — or get 403s if
+ * the bucket is correctly private, with no obvious failure mode.
+ *
+ * Every method now throws an explicit NOT_IMPLEMENTED error so the
+ * trap surfaces immediately at first call, not later in production
+ * logs. Replace with @aws-sdk/client-s3 + @aws-sdk/s3-request-presigner
+ * before using.
+ */
+function notImplemented(): never {
+  throw new Error(
+    'S3Client is a stub — uses @aws-sdk/client-s3 + @aws-sdk/s3-request-presigner to be implemented. Use CloudinaryAdapter for image uploads.',
+  );
+}
+
 @Injectable()
 export class S3Client implements OnModuleInit {
   private readonly logger = new Logger(S3Client.name);
@@ -15,72 +37,43 @@ export class S3Client implements OnModuleInit {
     this.accessKey = process.env.S3_ACCESS_KEY || '';
     this.secretKey = process.env.S3_SECRET_KEY || '';
 
-    if (!this.bucket || !this.accessKey || !this.secretKey) {
-      this.logger.warn('S3 credentials not configured — file operations will fail');
+    if (this.bucket || this.accessKey || this.secretKey) {
+      // If anyone sets the env vars we warn loudly — env-present
+      // strongly implies intent to use the client, which doesn't work.
+      this.logger.warn(
+        'S3 env vars are set but S3Client is an unimplemented stub — calls will throw. See class docstring.',
+      );
     }
   }
 
   get isConfigured(): boolean {
-    return !!(this.bucket && this.accessKey && this.secretKey);
+    // Intentionally false so `if (isConfigured) { call() }` guards skip
+    // the stub. Any caller that bypasses isConfigured hits the throw.
+    return false;
   }
 
-  /**
-   * Generate a pre-signed URL for uploading a file to S3.
-   */
-  generatePresignedUploadUrl(params: {
+  generatePresignedUploadUrl(_params: {
     key: string;
     contentType: string;
     expiresInSeconds?: number;
-  }): {
-    uploadUrl: string;
-    publicUrl: string;
-    key: string;
-  } {
-    const expiry = params.expiresInSeconds || 3600;
-    const date = new Date();
-    const dateStr = date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const dateShort = dateStr.substring(0, 8);
-
-    // Simplified pre-signed URL generation
-    // In production, use @aws-sdk/s3-request-presigner
-    const publicUrl = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${params.key}`;
-
-    this.logger.log(`Pre-signed upload URL generated for key: ${params.key}`);
-
-    return {
-      uploadUrl: publicUrl, // Simplified — real impl uses AWS SDK
-      publicUrl,
-      key: params.key,
-    };
+  }): never {
+    notImplemented();
   }
 
-  /**
-   * Generate a pre-signed URL for reading a private file from S3.
-   */
-  generatePresignedAccessUrl(params: {
+  generatePresignedAccessUrl(_params: {
     key: string;
     expiresInSeconds?: number;
-  }): string {
-    const publicUrl = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${params.key}`;
-    return publicUrl; // Simplified — real impl uses AWS SDK
+  }): never {
+    notImplemented();
   }
 
-  /**
-   * Delete an object from S3.
-   */
-  async deleteObject(key: string): Promise<void> {
-    if (!this.isConfigured) return;
-
-    // In production, use @aws-sdk/client-s3
-    const url = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
-
-    this.logger.log(`S3 object deleted: ${key}`);
+  async deleteObject(_key: string): Promise<never> {
+    notImplemented();
   }
 
-  /**
-   * Generate a unique key for a file upload.
-   */
   generateKey(folder: string, originalFilename: string): string {
+    // Key generation itself is pure and safe to leave working — a
+    // future impl wants the same UUID-scoped folder path.
     const ext = originalFilename.split('.').pop() || 'bin';
     const uniqueId = crypto.randomUUID();
     return `${folder}/${uniqueId}.${ext}`;

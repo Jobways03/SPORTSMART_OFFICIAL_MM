@@ -3,17 +3,23 @@
 // ============================================
 
 model User {
-  id            String     @id @default(uuid())
-  firstName     String     @map("first_name")
-  lastName      String     @map("last_name")
-  email         String     @unique
-  phone         String?    @unique
-  passwordHash  String     @map("password_hash")
-  status        UserStatus @default(ACTIVE)
-  emailVerified Boolean    @default(false) @map("email_verified")
-  phoneVerified Boolean    @default(false) @map("phone_verified")
-  createdAt     DateTime   @default(now()) @map("created_at")
-  updatedAt     DateTime   @updatedAt @map("updated_at")
+  id                  String     @id @default(uuid())
+  firstName           String     @map("first_name")
+  lastName            String     @map("last_name")
+  email               String     @unique
+  phone               String?    @unique
+  passwordHash        String     @map("password_hash")
+  status              UserStatus @default(ACTIVE)
+  emailVerified       Boolean    @default(false) @map("email_verified")
+  phoneVerified       Boolean    @default(false) @map("phone_verified")
+  // Brute-force guard — parity with Seller / Franchise / Admin login:
+  // after MAX_FAILED_ATTEMPTS consecutive wrong passwords the account
+  // locks for LOCK_DURATION_MINUTES. Reset on successful login,
+  // password reset, or change-password.
+  failedLoginAttempts Int        @default(0) @map("failed_login_attempts")
+  lockUntil           DateTime?  @map("lock_until")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
 
   roleAssignments   RoleAssignment[]
   sessions          Session[]

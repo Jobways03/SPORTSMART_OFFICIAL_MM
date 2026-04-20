@@ -1,5 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 @Injectable()
 export class WhatsAppClient implements OnModuleInit {
   private readonly logger = new Logger(WhatsAppClient.name);
@@ -22,14 +24,13 @@ export class WhatsAppClient implements OnModuleInit {
   }
 
   /**
-   * Send a text message to a phone number.
+   * POST to the Meta Graph messages endpoint with a 30s timeout. The
+   * notification handlers wrap their calls in try/catch already, but
+   * without the timeout a hung connection to Meta could slow the
+   * event-bus worker that dispatched the notification. Aligned with
+   * the request-helper pattern we use for Razorpay and Shiprocket.
    */
-  async sendTextMessage(to: string, body: string): Promise<{ messageId: string }> {
-    if (!this.isConfigured) {
-      this.logger.warn('WhatsApp not configured — message not sent');
-      return { messageId: '' };
-    }
-
+  private async postMessage<T>(op: string, body: unknown): Promise<T> {
     const res = await fetch(
       `${this.apiUrl}/${this.phoneNumberId}/messages`,
       {
@@ -38,21 +39,36 @@ export class WhatsAppClient implements OnModuleInit {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${this.apiToken}`,
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to,
-          type: 'text',
-          text: { body },
-        }),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       },
     );
 
     if (!res.ok) {
       const respBody = await res.text();
-      throw new Error(`WhatsApp sendTextMessage failed (${res.status}): ${respBody}`);
+      throw new Error(`WhatsApp ${op} failed (${res.status}): ${respBody}`);
     }
 
-    const data = await res.json();
+    return res.json() as Promise<T>;
+  }
+
+  /**
+   * Send a text message to a phone number.
+   */
+  async sendTextMessage(to: string, body: string): Promise<{ messageId: string }> {
+    if (!this.isConfigured) {
+      this.logger.warn('WhatsApp not configured — message not sent');
+      return { messageId: '' };
+    }
+
+    const data = await this.postMessage<{
+      messages?: Array<{ id: string }>;
+    }>('sendTextMessage', {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body },
+    });
     return { messageId: data.messages?.[0]?.id || '' };
   }
 
@@ -70,41 +86,26 @@ export class WhatsAppClient implements OnModuleInit {
       return { messageId: '' };
     }
 
-    const res = await fetch(
-      `${this.apiUrl}/${this.phoneNumberId}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiToken}`,
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to,
-          type: 'template',
-          template: {
-            name: templateName,
-            language: { code: languageCode },
-            components: [
-              {
-                type: 'body',
-                parameters: parameters.map((p) => ({
-                  type: p.type,
-                  text: p.text,
-                })),
-              },
-            ],
+    const data = await this.postMessage<{
+      messages?: Array<{ id: string }>;
+    }>('sendTemplateMessage', {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        components: [
+          {
+            type: 'body',
+            parameters: parameters.map((p) => ({
+              type: p.type,
+              text: p.text,
+            })),
           },
-        }),
+        ],
       },
-    );
-
-    if (!res.ok) {
-      const respBody = await res.text();
-      throw new Error(`WhatsApp sendTemplateMessage failed (${res.status}): ${respBody}`);
-    }
-
-    const data = await res.json();
+    });
     return { messageId: data.messages?.[0]?.id || '' };
   }
 }

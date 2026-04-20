@@ -1,0 +1,87 @@
+name: API CI
+
+# Scope: runs on PRs and pushes that actually touch the API code,
+# lockfile, or shared packages it depends on. The six frontend apps
+# have (or will have) their own workflow files — no point rebuilding
+# all of them when only api/ changes, and vice versa.
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api-ci.yml"
+
+# Cancel superseded runs on the same ref. Developers push frequently
+# while iterating and queuing ten in-flight runs wastes CI minutes.
+concurrency:
+  group: api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint / Typecheck / Test / Build
+    runs-on: ubuntu-latest
+    # Matches the Node major pinned in infra/docker/Dockerfile.api.
+    # If the Dockerfile moves, bump this to match — the whole point
+    # is CI exercising the same runtime the image will run under.
+    env:
+      NODE_VERSION: "22"
+      PNPM_VERSION: "10.0.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@sportsmart/api..."
+
+      # Prisma generate must run before typecheck / build because the
+      # generated client is imported throughout the codebase.
+      - name: Prisma generate
+        working-directory: apps/api
+        run: pnpm exec prisma generate
+
+      - name: Prisma schema validate
+        working-directory: apps/api
+        run: pnpm exec prisma validate
+
+      - name: Lint
+        run: pnpm --filter @sportsmart/api run lint
+
+      # tsc --noEmit is the canonical "does this compile" check. Faster
+      # than `build` and catches the same class of errors.
+      - name: Typecheck
+        working-directory: apps/api
+        run: pnpm exec tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm --filter @sportsmart/api test
+
+      # e2e stays as a separate job / workflow once DB-backed tests
+      # land. Today's e2e suite uses in-memory fakes so it is cheap to
+      # include, but deliberately kept as its own step so a regression
+      # there does not mask a unit-test failure in the log.
+      - name: E2E tests
+        run: pnpm --filter @sportsmart/api test:e2e
+
+      - name: Build
+        run: pnpm --filter @sportsmart/api run build

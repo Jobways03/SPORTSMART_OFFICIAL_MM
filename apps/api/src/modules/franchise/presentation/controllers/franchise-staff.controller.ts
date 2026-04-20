@@ -11,12 +11,14 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { FranchiseStaffService } from '../../application/services/franchise-staff.service';
 import { FranchiseAddStaffDto } from '../dtos/franchise-add-staff.dto';
 import { FranchiseUpdateStaffDto } from '../dtos/franchise-update-staff.dto';
 
+@ApiTags('Franchise Staff')
 @Controller('franchise/staff')
 @UseGuards(FranchiseAuthGuard)
 export class FranchiseStaffController {

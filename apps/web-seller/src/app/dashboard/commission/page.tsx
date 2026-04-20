@@ -1,8 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { apiClient } from '@/lib/api-client';
 
 interface EarningsSummary {
   totalEarned: number;
@@ -61,15 +60,6 @@ interface SettlementResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
-function getToken() {
-  try { return sessionStorage.getItem('accessToken'); } catch { return null; }
-}
-
-function authHeaders(): Record<string, string> {
-  const t = getToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
-
 function Th({ label }: { label: string }) {
   return <th style={thStyle}>{label}</th>;
 }
@@ -96,10 +86,7 @@ export default function SellerCommissionPage() {
 
   // Fetch earnings summary
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/seller/earnings/summary`, {
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    })
-      .then((r) => r.json())
+    apiClient<EarningsSummary>('/seller/earnings/summary')
       .then((res) => { if (res.data) setSummary(res.data); })
       .catch(() => {});
   }, []);
@@ -113,10 +100,7 @@ export default function SellerCommissionPage() {
     if (dateFrom) params.set('dateFrom', dateFrom);
     if (dateTo) params.set('dateTo', dateTo);
 
-    fetch(`${API_BASE}/api/v1/seller/earnings/records?${params}`, {
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    })
-      .then((r) => r.json())
+    apiClient<any>(`/seller/earnings/records?${params}`)
       .then((res) => { if (res.data) setData(res.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -126,10 +110,7 @@ export default function SellerCommissionPage() {
   const fetchSettlements = useCallback((p: number) => {
     setSettlementLoading(true);
     const params = new URLSearchParams({ page: String(p), limit: '20' });
-    fetch(`${API_BASE}/api/v1/seller/earnings/settlements?${params}`, {
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    })
-      .then((r) => r.json())
+    apiClient<SettlementResponse>(`/seller/earnings/settlements?${params}`)
       .then((res) => { if (res.data) setSettlements(res.data); })
       .catch(() => {})
       .finally(() => setSettlementLoading(false));

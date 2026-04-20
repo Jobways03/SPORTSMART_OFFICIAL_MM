@@ -1,6 +1,5 @@
 import { apiClient, ApiError, ApiResponse } from '@/lib/api-client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 export interface SellerProfileData {
   sellerId: string;
@@ -68,25 +67,17 @@ export const sellerProfileService = {
     });
   },
 
-  async uploadProfileImage(
+  uploadProfileImage(
     token: string,
     file: File,
   ): Promise<ApiResponse<MediaUploadResponse>> {
     const formData = new FormData();
     formData.append('profileImage', file);
-
-    const url = `${API_BASE_URL}/api/v1/seller/profile/media/profile-image`;
-    const response = await fetch(url, {
+    return apiClient<MediaUploadResponse>('/seller/profile/media/profile-image', {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
-
-    const body: ApiResponse<MediaUploadResponse> = await response.json();
-    if (!response.ok) {
-      throw new ApiError(response.status, body);
-    }
-    return body;
   },
 
   async deleteProfileImage(
@@ -98,25 +89,17 @@ export const sellerProfileService = {
     });
   },
 
-  async uploadShopLogo(
+  uploadShopLogo(
     token: string,
     file: File,
   ): Promise<ApiResponse<MediaUploadResponse>> {
     const formData = new FormData();
     formData.append('shopLogo', file);
-
-    const url = `${API_BASE_URL}/api/v1/seller/profile/media/shop-logo`;
-    const response = await fetch(url, {
+    return apiClient<MediaUploadResponse>('/seller/profile/media/shop-logo', {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
-
-    const body: ApiResponse<MediaUploadResponse> = await response.json();
-    if (!response.ok) {
-      throw new ApiError(response.status, body);
-    }
-    return body;
   },
 
   async deleteShopLogo(

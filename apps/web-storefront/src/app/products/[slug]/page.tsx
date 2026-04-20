@@ -293,7 +293,6 @@ export default function ProductDetailPage() {
     }
 
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
       const params = new URLSearchParams({
         productId: product.id,
         pincode,
@@ -301,11 +300,9 @@ export default function ProductDetailPage() {
       if (selectedVariant) {
         params.set('variantId', selectedVariant.id);
       }
-      const response = await fetch(`${API_BASE}/api/v1/storefront/serviceability/check?${params}`);
-      const body = await response.json();
-      if (!response.ok) {
-        throw new Error(body.message || 'Failed to check serviceability');
-      }
+      const body = await apiClient<any>(
+        `/storefront/serviceability/check?${params}`,
+      );
       if (body.data) {
         setPincodeResult({
           serviceable: body.data.serviceable,

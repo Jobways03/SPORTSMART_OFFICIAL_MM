@@ -61,16 +61,21 @@ export class RefundGatewayService {
       };
     }
 
-    // For online payments — call Razorpay refund API
+    // For online payments — call Razorpay refund API. The adapter wants
+    // the Razorpay payment_id (pay_xxx), not our internal MasterOrder id.
+    // A previous revision passed input.orderId, which is always rejected
+    // by Razorpay as an unknown payment, silently falling every online
+    // refund into the "requires manual processing" branch. The payment
+    // id is stored at verify time (see checkout.service.verifyPayment)
+    // so we just look it up here.
     try {
-      // MasterOrder doesn't store paymentId directly.
-      // Use the order number as the Razorpay receipt to look up the payment.
-      // In production, the payment ID should be stored after checkout capture.
-      // TODO: Replace with ordersFacade.getMasterOrderBasic(input.orderId)
-      // once Returns module imports OrdersModule via forwardRef
       const order = await this.prisma.masterOrder.findFirst({
         where: { id: input.orderId },
-        select: { orderNumber: true, paymentStatus: true },
+        select: {
+          orderNumber: true,
+          paymentStatus: true,
+          razorpayPaymentId: true,
+        },
       });
 
       if (!order || order.paymentStatus !== 'PAID') {
@@ -84,11 +89,23 @@ export class RefundGatewayService {
         };
       }
 
-      // Use order number as a reference for the refund.
-      // In a complete integration, the Razorpay payment_id would be stored
-      // after initial capture and used here.
+      if (!order.razorpayPaymentId) {
+        // Paid but the gateway payment id never landed — can happen for
+        // orders placed before the verify-payment flow started storing it,
+        // or for COD orders mis-flagged as PAID. Fail closed to manual.
+        this.logger.warn(
+          `Order ${input.orderId} has no razorpayPaymentId — refund requires manual processing`,
+        );
+        return {
+          success: false,
+          requiresManualProcessing: true,
+          failureReason:
+            'Gateway payment reference missing — manual processing required',
+        };
+      }
+
       const refundResult = await this.razorpayAdapter.initiateRefund(
-        input.orderId, // Would be razorpay payment_id in production
+        order.razorpayPaymentId,
         input.amount,
         {
           return_id: input.returnId,
@@ -128,16 +145,37 @@ export class RefundGatewayService {
   }
 
   /**
-   * Check the status of a refund by gateway refund ID.
+   * Check the status of a refund by gateway refund ID. The adapter's
+   * `getRefundStatus` hits Razorpay's payment-scoped refund endpoint,
+   * so we need the original razorpayPaymentId alongside the refund id.
+   * We look that up through the Return → MasterOrder relation.
+   *
+   * Previously this method passed an empty string as paymentId, so
+   * every status check failed and the auto-confirm loop in the
+   * refund-processor never advanced any refund past REFUND_PROCESSING.
    */
   async checkRefundStatus(
+    returnId: string,
     gatewayRefundId: string,
   ): Promise<RefundGatewayStatus> {
     try {
-      // We need the payment ID to check refund status — for now we parse from the refund
-      // In production, store the mapping (gatewayRefundId -> paymentId) in DB
+      const ret = await this.prisma.return.findFirst({
+        where: { id: returnId },
+        select: {
+          masterOrder: { select: { razorpayPaymentId: true } },
+        },
+      });
+
+      const paymentId = ret?.masterOrder?.razorpayPaymentId;
+      if (!paymentId) {
+        this.logger.warn(
+          `No razorpayPaymentId linked to return ${returnId} — cannot poll refund status`,
+        );
+        return { status: 'PENDING' };
+      }
+
       const refundStatus = await this.razorpayAdapter.getRefundStatus(
-        '', // Payment ID would be stored from processRefund
+        paymentId,
         gatewayRefundId,
       );
 

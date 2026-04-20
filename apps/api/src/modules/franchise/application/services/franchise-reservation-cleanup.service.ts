@@ -1,7 +1,11 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { FranchiseInventoryService } from './franchise-inventory.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+
+const LOCK_KEY = 'lock:franchise-reservation-cleanup';
+const LOCK_TTL_SECONDS = 60;
 
 @Injectable()
 export class FranchiseReservationCleanupService implements OnModuleInit, OnModuleDestroy {
@@ -16,6 +20,7 @@ export class FranchiseReservationCleanupService implements OnModuleInit, OnModul
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
     private readonly inventoryService: FranchiseInventoryService,
     private readonly logger: AppLoggerService,
   ) {
@@ -23,16 +28,32 @@ export class FranchiseReservationCleanupService implements OnModuleInit, OnModul
   }
 
   onModuleInit() {
-    this.cleanupInterval = setInterval(async () => {
-      await this.cleanup();
+    this.cleanupInterval = setInterval(() => this.tick(), 60_000);
+    this.logger.log('Franchise reservation cleanup started (every 60s)');
+  }
 
-      // Check for expired contracts once per hour
+  /**
+   * Gate the sweep behind a Redis lock so only one API instance runs
+   * the cleanup per tick. Without this, every running instance picks up
+   * the same expired ORDER_RESERVE rows and each calls `unreserveStock`
+   * — double-releasing held franchise inventory.
+   */
+  private async tick(): Promise<void> {
+    const acquired = await this.redis.acquireLock(LOCK_KEY, LOCK_TTL_SECONDS);
+    if (!acquired) return;
+    try {
+      await this.cleanup();
       if (Date.now() - this.lastContractCheck > this.CONTRACT_CHECK_INTERVAL) {
         await this.checkExpiredContracts();
         this.lastContractCheck = Date.now();
       }
-    }, 60_000);
-    this.logger.log('Franchise reservation cleanup started (every 60s)');
+    } catch (err) {
+      this.logger.error(
+        `Franchise cleanup tick failed: ${(err as Error)?.message ?? 'unknown error'}`,
+      );
+    } finally {
+      await this.redis.releaseLock(LOCK_KEY);
+    }
   }
 
   onModuleDestroy() {

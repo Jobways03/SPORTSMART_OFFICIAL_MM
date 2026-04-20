@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { ApiError } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 import { sanitizeRichHtml } from '@/lib/sanitize';
 import {
   sellerProfileService,
@@ -216,9 +216,7 @@ export default function SellerProfilePage() {
     setPincodeLoading(true);
     setPincodeError('');
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-      const res = await fetch(`${API_BASE}/api/v1/pincodes/${pincode}`);
-      const data = await res.json();
+      const data = await apiClient<any>(`/pincodes/${pincode}`);
 
       if (data.success && data.data) {
         setPincodeData(data.data);

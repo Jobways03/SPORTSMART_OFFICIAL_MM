@@ -7,6 +7,8 @@ export interface UserWithRoles {
   email: string;
   passwordHash: string;
   status: string;
+  failedLoginAttempts: number;
+  lockUntil: Date | null;
   roleAssignments: Array<{
     role: { name: string };
   }>;
@@ -79,6 +81,10 @@ export interface UserRepository {
 
   // Password update
   updatePassword(userId: string, passwordHash: string): Promise<void>;
+
+  // Brute-force lockout counters (parity with Seller / Franchise / Admin).
+  recordFailedLogin(userId: string, attempts: number, lockUntil: Date | null): Promise<void>;
+  clearLoginLockout(userId: string): Promise<void>;
 
   // OTP operations
   findRecentOtp(userId: string, cooldownSeconds: number): Promise<PasswordResetOtpRecord | null>;

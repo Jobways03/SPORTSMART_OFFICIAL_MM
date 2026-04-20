@@ -1,6 +1,5 @@
 import { apiClient, ApiError, ApiResponse } from '@/lib/api-client';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 // ===== Interfaces =====
 
@@ -256,22 +255,14 @@ export const sellerProductService = {
     });
   },
 
-  async uploadImage(token: string, productId: string, file: File): Promise<ApiResponse<any>> {
+  uploadImage(token: string, productId: string, file: File): Promise<ApiResponse<any>> {
     const formData = new FormData();
     formData.append('image', file);
-
-    const url = `${API_BASE_URL}/api/v1/seller/products/${productId}/images`;
-    const response = await fetch(url, {
+    return apiClient<any>(`/seller/products/${productId}/images`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
-
-    const body: ApiResponse<any> = await response.json();
-    if (!response.ok) {
-      throw new ApiError(response.status, body);
-    }
-    return body;
   },
 
   deleteImage(token: string, productId: string, imageId: string): Promise<ApiResponse<void>> {
@@ -308,22 +299,17 @@ export const sellerProductService = {
     });
   },
 
-  async uploadVariantImage(token: string, productId: string, variantId: string, file: File): Promise<ApiResponse<any>> {
+  uploadVariantImage(token: string, productId: string, variantId: string, file: File): Promise<ApiResponse<any>> {
     const formData = new FormData();
     formData.append('image', file);
-
-    const url = `${API_BASE_URL}/api/v1/seller/products/${productId}/variants/${variantId}/images`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData,
-    });
-
-    const body: ApiResponse<any> = await response.json();
-    if (!response.ok) {
-      throw new ApiError(response.status, body);
-    }
-    return body;
+    return apiClient<any>(
+      `/seller/products/${productId}/variants/${variantId}/images`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      },
+    );
   },
 
   deleteVariantImage(token: string, productId: string, variantId: string, imageId: string): Promise<ApiResponse<void>> {

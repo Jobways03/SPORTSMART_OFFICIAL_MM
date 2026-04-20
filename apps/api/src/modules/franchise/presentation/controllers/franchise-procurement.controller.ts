@@ -51,17 +51,31 @@ export class FranchiseProcurementController {
     @Query('status') status?: string,
   ) {
     const franchiseId = (req as any).franchiseId;
-    const data = await this.procurementService.getMyRequests(
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+
+    const { requests, total } = await this.procurementService.getMyRequests(
       franchiseId,
-      page ? parseInt(page, 10) : 1,
-      limit ? parseInt(limit, 10) : 20,
+      pageNum,
+      limitNum,
       status,
     );
 
+    // Match the pagination envelope used by every other list endpoint
+    // in the codebase. The admin-procurement controller was the sibling
+    // outlier — both fixed together.
     return {
       success: true,
       message: 'Procurement requests fetched successfully',
-      data,
+      data: {
+        requests,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      },
     };
   }
 

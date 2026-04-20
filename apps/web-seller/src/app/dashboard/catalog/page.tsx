@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { sellerProductService } from '@/services/product.service';
-import { ApiError } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 import '../products/product-form.css';
 import '../products/products.css';
 
@@ -89,19 +89,13 @@ export default function BrowseCatalogPage() {
     } catch {}
 
     // Fetch seller profile to get default pickup pincode
-    const token = sessionStorage.getItem('accessToken');
-    if (token) {
-      fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/v1/seller/profile`, {
-        headers: { Authorization: `Bearer ${token}` },
+    apiClient<{ sellerZipCode?: string }>('/seller/profile')
+      .then((d) => {
+        if (d.data?.sellerZipCode) {
+          setDefaultPincode(d.data.sellerZipCode);
+        }
       })
-        .then(r => r.json())
-        .then(d => {
-          if (d.data?.sellerZipCode) {
-            setDefaultPincode(d.data.sellerZipCode);
-          }
-        })
-        .catch(() => {});
-    }
+      .catch(() => {});
   }, []);
 
   const canAccess = sellerStatus === 'ACTIVE' && isEmailVerified;
@@ -166,9 +160,9 @@ export default function BrowseCatalogPage() {
     if (product.hasVariants && product.variantCount > 0 && product.slug) {
       setLoadingVariants(true);
       try {
-        const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-        const res = await fetch(`${API_BASE}/api/v1/storefront/products/${product.slug}`);
-        const data = await res.json();
+        const data = await apiClient<{ variants?: any[] }>(
+          `/storefront/products/${product.slug}`,
+        );
         if (data.success && data.data?.variants) {
           setVariantStocks(
             data.data.variants.map((v: any) => ({

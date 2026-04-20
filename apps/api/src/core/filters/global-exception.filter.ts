@@ -5,6 +5,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Response } from 'express';
 import { AppException } from '../exceptions/app.exception';
 import { AppLoggerService } from '../../bootstrap/logging/app-logger.service';
@@ -36,6 +37,16 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       status = this.mapAppExceptionToStatus(exception.code);
       message = exception.message;
       code = exception.code;
+    } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      // Prisma errors that escape a use-case's local try/catch used to
+      // fall into the else-branch and be returned as generic 500s —
+      // which is both misleading to clients (a duplicate email should
+      // be 409, not 500) and noisy in ops dashboards. Translate the
+      // common ones here so the filter stays a proper safety net.
+      const translated = this.translatePrismaError(exception);
+      status = translated.status;
+      message = translated.message;
+      code = translated.code;
     } else {
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       message = 'Internal server error';
@@ -65,5 +76,61 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       EXTERNAL_SERVICE_ERROR: HttpStatus.BAD_GATEWAY,
     };
     return map[code] || HttpStatus.INTERNAL_SERVER_ERROR;
+  }
+
+  private translatePrismaError(
+    err: Prisma.PrismaClientKnownRequestError,
+  ): { status: number; message: string; code: string } {
+    // The message is intentionally generic — Prisma's own err.message
+    // leaks table and column names, which is fine in server logs (we
+    // log below) but noisy for customer-facing error UI. Meta fields
+    // like `target` are the useful-for-logging bits.
+    this.logger.warn(
+      `Prisma error ${err.code}: ${err.message.split('\n')[0]} | meta=${JSON.stringify(err.meta ?? {})}`,
+    );
+
+    switch (err.code) {
+      case 'P2002':
+        // Unique constraint violation — caller probably meant CONFLICT.
+        return {
+          status: HttpStatus.CONFLICT,
+          message: 'A record with these details already exists',
+          code: 'CONFLICT',
+        };
+      case 'P2025':
+        // "An operation failed because it depends on one or more records
+        // that were required but not found."
+        return {
+          status: HttpStatus.NOT_FOUND,
+          message: 'The requested record was not found',
+          code: 'NOT_FOUND',
+        };
+      case 'P2003':
+        // Foreign-key constraint violation.
+        return {
+          status: HttpStatus.BAD_REQUEST,
+          message: 'A referenced record does not exist',
+          code: 'BAD_REQUEST',
+        };
+      case 'P2014':
+        // Change would violate a required relation.
+        return {
+          status: HttpStatus.BAD_REQUEST,
+          message: 'The operation would break a required relation',
+          code: 'BAD_REQUEST',
+        };
+      default:
+        // Unmapped Prisma error — log in detail and surface a generic
+        // 500 rather than the raw Prisma message.
+        this.logger.error(
+          `Unmapped Prisma error ${err.code}: ${err.message}`,
+          err.stack,
+        );
+        return {
+          status: HttpStatus.INTERNAL_SERVER_ERROR,
+          message: 'Internal server error',
+          code: 'INTERNAL_ERROR',
+        };
+    }
   }
 }

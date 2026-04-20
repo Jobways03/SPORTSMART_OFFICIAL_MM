@@ -10,6 +10,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { SellerAuthGuard } from '../../../../core/guards';
 import { UploadSellerMediaUseCase } from '../../application/use-cases/upload-seller-media.use-case';
@@ -19,6 +20,7 @@ const MULTER_OPTIONS = {
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
 };
 
+@ApiTags('Seller Profile')
 @Controller('seller/profile/media')
 @UseGuards(SellerAuthGuard)
 export class SellerProfileMediaController {

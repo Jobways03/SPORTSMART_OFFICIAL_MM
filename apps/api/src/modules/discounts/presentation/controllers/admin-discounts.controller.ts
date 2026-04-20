@@ -1,11 +1,12 @@
 import { Controller, Get, Post, Put, Delete, Param, Query, Body, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { Roles } from '../../../../core/decorators/roles.decorator';
 import { DiscountsService } from '../../application/services/discounts.service';
 
 @ApiTags('Admin Discounts')
 @Controller('admin/discounts')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 export class AdminDiscountsController {
   constructor(private readonly discountsService: DiscountsService) {}
 
@@ -27,8 +28,12 @@ export class AdminDiscountsController {
     return { success: true, message: 'Discount retrieved', data };
   }
 
+  // Discount mutations move revenue — a bad percentage value or a mass
+  // "100% OFF" code hands out free products at scale. Gate at the same
+  // tier as commission-record adjustment and return-refund movement.
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async create(@Body() body: any) {
     const data = await this.discountsService.create(body);
     return { success: true, message: 'Discount created', data };
@@ -36,6 +41,7 @@ export class AdminDiscountsController {
 
   @Put(':id')
   @HttpCode(HttpStatus.OK)
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async update(@Param('id') id: string, @Body() body: any) {
     const data = await this.discountsService.update(id, body);
     return { success: true, message: 'Discount updated', data };
@@ -43,6 +49,7 @@ export class AdminDiscountsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async delete(@Param('id') id: string) {
     await this.discountsService.delete(id);
     return { success: true, message: 'Discount deleted' };

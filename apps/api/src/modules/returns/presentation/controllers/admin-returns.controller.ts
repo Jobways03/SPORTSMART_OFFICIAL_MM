@@ -15,7 +15,8 @@ import {
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { Roles } from '../../../../core/decorators/roles.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { ReturnService } from '../../application/services/return.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
@@ -36,7 +37,7 @@ const QC_EVIDENCE_UPLOAD_OPTIONS = {
 
 @ApiTags('Admin Returns')
 @Controller('admin/returns')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 export class AdminReturnsController {
   constructor(
     private readonly returnService: ReturnService,
@@ -261,8 +262,14 @@ export class AdminReturnsController {
 
   // ── Phase R4: Refund processing ─────────────────────────────────────────
 
-  // PATCH /admin/returns/:returnId/initiate-refund — initiate refund
+  // PATCH /admin/returns/:returnId/initiate-refund — initiate refund.
+  // All four refund-movement endpoints (initiate / confirm / fail /
+  // retry) move real money, so we gate them to the same tier that can
+  // adjust a commission record. Lower-tier admins can still approve,
+  // reject, schedule pickup, and run QC — they just can't touch the
+  // money at the gateway.
   @Patch(':returnId/initiate-refund')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async initiateRefund(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -279,6 +286,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/confirm-refund — confirm refund completed
   @Patch(':returnId/confirm-refund')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async confirmRefund(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -295,6 +303,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/mark-refund-failed — mark refund failed
   @Patch(':returnId/mark-refund-failed')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async markRefundFailed(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -311,6 +320,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/retry-refund — retry refund via gateway
   @Patch(':returnId/retry-refund')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   async retryRefund(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -339,7 +349,11 @@ export class AdminReturnsController {
 
   // ── Bulk operations ────────────────────────────────────────────
 
+  // Bulk operations run across up to 100 records in one call — the same
+  // per-record guards apply, but a bad call can fan out widely. Keep them
+  // SUPER_ADMIN-only to limit blast radius on mass-mutations.
   @Post('bulk-approve')
+  @Roles('SUPER_ADMIN')
   async bulkApprove(
     @Req() req: any,
     @Body() body: { returnIds: string[] },
@@ -370,6 +384,7 @@ export class AdminReturnsController {
   }
 
   @Post('bulk-close')
+  @Roles('SUPER_ADMIN')
   async bulkClose(
     @Req() req: any,
     @Body() body: { returnIds: string[] },

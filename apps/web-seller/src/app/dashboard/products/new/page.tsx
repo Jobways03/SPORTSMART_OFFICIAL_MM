@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { sellerProductService } from '@/services/product.service';
-import { ApiError } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 import '../product-form.css';
 import { RichTextEditor } from '@sportsmart/ui';
 
@@ -126,11 +126,8 @@ export default function CreateProductPage() {
     }
     setAiGenerating(true);
     try {
-      const token = sessionStorage.getItem('accessToken') || '';
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-      const res = await fetch(`${API_BASE}/api/v1/ai/generate-product-content`, {
+      const json = await apiClient<any>('/ai/generate-product-content', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           title: form.title,
           category: form.categoryName || categories.find(c => c.id === form.categoryId)?.name || '',
@@ -138,7 +135,6 @@ export default function CreateProductPage() {
           shortDescription: form.shortDescription,
         }),
       });
-      const json = await res.json();
       if (json.data) {
         setForm(prev => ({
           ...prev,

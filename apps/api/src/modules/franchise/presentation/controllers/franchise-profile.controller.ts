@@ -8,12 +8,14 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { GetFranchiseProfileUseCase } from '../../application/use-cases/get-franchise-profile.use-case';
 import { UpdateFranchiseProfileUseCase } from '../../application/use-cases/update-franchise-profile.use-case';
 import { FranchiseUpdateProfileDto } from '../dtos/franchise-update-profile.dto';
 
+@ApiTags('Franchise Profile')
 @Controller('franchise/profile')
 @UseGuards(FranchiseAuthGuard)
 export class FranchiseProfileController {

@@ -32,18 +32,34 @@ export class AdminProcurementController {
     @Query('franchiseId') franchiseId?: string,
     @Query('search') search?: string,
   ) {
-    const data = await this.procurementService.listAllRequests(
-      page ? parseInt(page, 10) : 1,
-      limit ? parseInt(limit, 10) : 20,
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+
+    const { requests, total } = await this.procurementService.listAllRequests(
+      pageNum,
+      limitNum,
       status,
       franchiseId,
       search,
     );
 
+    // Wrap in the pagination envelope used by every other list
+    // endpoint in this codebase (admin-products, admin-categories,
+    // storefront-products, …). The affiliate/franchise dashboards
+    // read `data.pagination.total` — without this wrapper they crashed
+    // on first render.
     return {
       success: true,
       message: 'Procurement requests fetched successfully',
-      data,
+      data: {
+        requests,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      },
     };
   }
 

@@ -197,26 +197,13 @@ export const adminProductsService = {
   },
 
   // Image methods
-  async uploadImage(productId: string, file: File): Promise<ApiResponse<any>> {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+  uploadImage(productId: string, file: File): Promise<ApiResponse<any>> {
     const formData = new FormData();
     formData.append('image', file);
-
-    const token = typeof window !== 'undefined' ? sessionStorage.getItem('adminAccessToken') : null;
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const response = await fetch(`${API_BASE}/api/v1/admin/products/${productId}/images`, {
+    return apiClient(`/admin/products/${productId}/images`, {
       method: 'POST',
-      headers,
       body: formData,
     });
-
-    const body = await response.json();
-    if (!response.ok) {
-      throw new ApiError(response.status, body);
-    }
-    return body;
   },
 
   deleteImage(productId: string, imageId: string): Promise<ApiResponse> {
@@ -231,26 +218,13 @@ export const adminProductsService = {
   },
 
   // Variant image methods
-  async uploadVariantImage(productId: string, variantId: string, file: File): Promise<ApiResponse<any>> {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+  uploadVariantImage(productId: string, variantId: string, file: File): Promise<ApiResponse<any>> {
     const formData = new FormData();
     formData.append('image', file);
-
-    const token = typeof window !== 'undefined' ? sessionStorage.getItem('adminAccessToken') : null;
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const response = await fetch(`${API_BASE}/api/v1/admin/products/${productId}/variants/${variantId}/images`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-
-    const body = await response.json();
-    if (!response.ok) {
-      throw new ApiError(response.status, body);
-    }
-    return body;
+    return apiClient(
+      `/admin/products/${productId}/variants/${variantId}/images`,
+      { method: 'POST', body: formData },
+    );
   },
 
   deleteVariantImage(productId: string, variantId: string, imageId: string): Promise<ApiResponse> {

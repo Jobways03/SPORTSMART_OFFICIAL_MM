@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { redactEmail } from '../../../../bootstrap/logging/log-redact';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
 import { EmailService } from '../../../../integrations/email/email.service';
@@ -99,7 +100,9 @@ export class AdminSendSellerMessageUseCase {
     });
 
     if (!emailSent) {
-      this.logger.warn(`Email delivery failed for seller ${seller.email}, message logged to DB only`);
+      this.logger.warn(
+        `Email delivery failed for seller ${sellerId} (${redactEmail(seller.email)}), message logged to DB only`,
+      );
     }
 
     await this.auditService.log({

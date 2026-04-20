@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EmailService } from '../../../../integrations/email/email.service';
+import { redactEmail } from '../../../../bootstrap/logging/log-redact';
 
 @Injectable()
 export class NotificationsPublicFacade {
@@ -41,7 +42,9 @@ export class NotificationsPublicFacade {
           html: body,
         });
 
-        this.logger.log(`Email notification sent to ${email} [${templateKey}]`);
+        this.logger.log(
+          `Email notification sent to ${redactEmail(email)} [${templateKey}] recipient=${recipientId}`,
+        );
       } else {
         this.logger.warn(`Channel "${channel}" is not yet implemented`);
       }
@@ -77,7 +80,9 @@ export class NotificationsPublicFacade {
         subject: (variables.subject as string) || templateId,
         html,
       });
-      this.logger.log(`Templated communication "${templateId}" sent to ${email}`);
+      this.logger.log(
+        `Templated communication "${templateId}" sent to ${redactEmail(email)} recipient=${recipientId}`,
+      );
     } catch (error) {
       this.logger.error(`Failed to send templated communication: ${(error as Error).message}`);
     }
@@ -102,7 +107,9 @@ export class NotificationsPublicFacade {
         subject: (params as any).subject || 'Operational Reminder',
         html: `<p>${(params as any).message}</p>`,
       });
-      this.logger.log(`Operational reminder sent to ${email}`);
+      this.logger.log(
+        `Operational reminder sent to ${redactEmail(email)} recipient=${params.recipientId}`,
+      );
     } catch (error) {
       this.logger.error(`Failed to send operational reminder: ${(error as Error).message}`);
     }

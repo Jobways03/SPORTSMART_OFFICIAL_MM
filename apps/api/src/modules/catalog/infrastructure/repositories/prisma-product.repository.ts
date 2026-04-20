@@ -245,8 +245,12 @@ export class PrismaProductRepository implements IProductRepository {
   }
 
   async findFullProduct(productId: string): Promise<any | null> {
-    return this.prisma.product.findUnique({
-      where: { id: productId },
+    // Soft-deleted products must not surface in fetched-by-id reads — all
+    // other product reads in this repo already filter `isDeleted: false`
+    // and this was the only one that didn't, so callers could receive a
+    // tombstoned record if an id leaked through a URL or stale cache.
+    return this.prisma.product.findFirst({
+      where: { id: productId, isDeleted: false },
       include: {
         tags: true,
         seo: true,

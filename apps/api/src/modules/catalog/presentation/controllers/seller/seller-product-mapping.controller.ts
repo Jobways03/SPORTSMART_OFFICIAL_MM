@@ -434,6 +434,30 @@ export class SellerProductMappingController {
     if (dto.pickupPincode !== undefined) updateData.pickupPincode = dto.pickupPincode;
     if (dto.latitude !== undefined) updateData.latitude = dto.latitude;
     if (dto.longitude !== undefined) updateData.longitude = dto.longitude;
+    // If the pincode changed and the caller didn't explicitly supply new
+    // coordinates, re-resolve lat/lng from PostOffice. Without this, old
+    // coordinates persist and skew the routing-distance scoring — e.g. a
+    // seller who moves warehouses would keep being picked for their former
+    // pickup city. Mirrors the auto-resolve done at map-product time.
+    if (
+      dto.pickupPincode !== undefined &&
+      dto.pickupPincode !== existing.pickupPincode &&
+      dto.latitude === undefined &&
+      dto.longitude === undefined
+    ) {
+      const postOffice = await this.sellerMappingRepo.findPostOfficeByPincode(
+        dto.pickupPincode,
+      );
+      if (postOffice?.latitude && postOffice?.longitude) {
+        updateData.latitude = Number(postOffice.latitude);
+        updateData.longitude = Number(postOffice.longitude);
+      } else {
+        // No match — null out the stale coords so routing falls back to
+        // the "no coords → high distance" branch rather than lying.
+        updateData.latitude = null;
+        updateData.longitude = null;
+      }
+    }
     if (dto.dispatchSla !== undefined) {
       if (dto.dispatchSla < 0) {
         throw new BadRequestAppException('dispatchSla must be >= 0');

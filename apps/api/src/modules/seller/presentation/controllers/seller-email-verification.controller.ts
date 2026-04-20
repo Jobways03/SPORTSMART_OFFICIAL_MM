@@ -7,11 +7,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { SellerAuthGuard } from '../../../../core/guards';
 import { SendEmailVerificationOtpUseCase } from '../../application/use-cases/send-email-verification-otp.use-case';
 import { VerifySellerEmailUseCase } from '../../application/use-cases/verify-seller-email.use-case';
 
+@ApiTags('Seller Auth')
 @Controller('seller/profile/verify-email')
 @UseGuards(SellerAuthGuard)
 export class SellerEmailVerificationController {

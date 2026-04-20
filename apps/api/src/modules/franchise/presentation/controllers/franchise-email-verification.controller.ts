@@ -7,11 +7,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { SendFranchiseEmailVerificationUseCase } from '../../application/use-cases/send-franchise-email-verification.use-case';
 import { VerifyFranchiseEmailUseCase } from '../../application/use-cases/verify-franchise-email.use-case';
 
+@ApiTags('Franchise Auth')
 @Controller('franchise/profile/verify-email')
 @UseGuards(FranchiseAuthGuard)
 export class FranchiseEmailVerificationController {

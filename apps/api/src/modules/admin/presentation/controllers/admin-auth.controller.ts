@@ -8,6 +8,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { AdminLoginDto } from '../dtos/admin-login.dto';
@@ -20,6 +21,7 @@ import { ResendAdminResetOtpUseCase } from '../../application/use-cases/resend-a
 import { ResetAdminPasswordUseCase } from '../../application/use-cases/reset-admin-password.use-case';
 import { AdminAuthGuard } from '../../../../core/guards';
 
+@ApiTags('Admin Auth')
 @Controller('admin/auth')
 export class AdminAuthController {
   constructor(

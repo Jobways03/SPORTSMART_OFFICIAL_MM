@@ -9,6 +9,10 @@ import { AdminFranchiseSettlementsController } from '../../src/modules/franchise
 import { AdminCommissionController } from '../../src/modules/commission/presentation/controllers/admin-commission.controller';
 import { AdminSellersController } from '../../src/modules/admin/presentation/controllers/admin-sellers.controller';
 import { AdminFranchiseController } from '../../src/modules/franchise/presentation/controllers/admin-franchise.controller';
+import { AdminReturnsController } from '../../src/modules/returns/presentation/controllers/admin-returns.controller';
+import { AccountsSettlementsController } from '../../src/modules/accounts/presentation/controllers/accounts-settlements.controller';
+import { AdminDiscountsController } from '../../src/modules/discounts/presentation/controllers/admin-discounts.controller';
+import { AdminDashboardController } from '../../src/modules/admin-control-tower/presentation/controllers/admin-dashboard.controller';
 
 /**
  * Regression tests for admin role granularity — narrow slice.
@@ -66,6 +70,76 @@ describe('Admin commission adjustment — SUPER_ADMIN + SELLER_ADMIN', () => {
       'SUPER_ADMIN',
       'SELLER_ADMIN',
     ]));
+});
+
+describe('Admin returns — refund money-movement gated to SUPER_ADMIN + SELLER_ADMIN', () => {
+  it.each([
+    'initiateRefund',
+    'confirmRefund',
+    'markRefundFailed',
+    'retryRefund',
+  ])('AdminReturnsController.%s', (method) =>
+    expectRoles(AdminReturnsController, method, ['SUPER_ADMIN', 'SELLER_ADMIN']),
+  );
+});
+
+describe('Admin returns — bulk operations gated to SUPER_ADMIN', () => {
+  it.each(['bulkApprove', 'bulkClose'])(
+    'AdminReturnsController.%s',
+    (method) => expectRoles(AdminReturnsController, method, ['SUPER_ADMIN']),
+  );
+});
+
+describe('Admin accounts settlement mutations — SUPER_ADMIN only', () => {
+  // batchMarkPaid is the payout trigger; createCycle + markCyclePreviewed
+  // pin the ledger's settlement-group structure. All three are money-
+  // movement or money-structuring operations.
+  it.each(['batchMarkPaid', 'markCyclePreviewed', 'createCycle'])(
+    'AccountsSettlementsController.%s',
+    (method) => expectRoles(AccountsSettlementsController, method, ['SUPER_ADMIN']),
+  );
+});
+
+describe('Admin discounts mutations — SUPER_ADMIN + SELLER_ADMIN', () => {
+  // create/update/delete all move customer-facing pricing; a bad
+  // percentage value or a free-forever code moves real revenue.
+  it.each(['create', 'update', 'delete'])(
+    'AdminDiscountsController.%s',
+    (method) =>
+      expectRoles(AdminDiscountsController, method, [
+        'SUPER_ADMIN',
+        'SELLER_ADMIN',
+      ]),
+  );
+});
+
+describe('Admin control-tower bulk + override mutations — SUPER_ADMIN only', () => {
+  // Platform-wide pricing rewrite and manual routing override are the
+  // highest-blast-radius admin ops in the control tower.
+  it.each(['bulkUpdatePricing', 'reassignSubOrder'])(
+    'AdminDashboardController.%s',
+    (method) =>
+      expectRoles(AdminDashboardController, method, ['SUPER_ADMIN']),
+  );
+});
+
+describe('Admin control-tower seller catalog suspension — SUPER_ADMIN + SELLER_ADMIN', () => {
+  it.each(['suspendMappings', 'activateMappings'])(
+    'AdminDashboardController.%s',
+    (method) =>
+      expectRoles(AdminDashboardController, method, [
+        'SUPER_ADMIN',
+        'SELLER_ADMIN',
+      ]),
+  );
+});
+
+describe('Admin commission global settings — SUPER_ADMIN only', () => {
+  // updateSettings rewrites the platform-wide commission formula, which
+  // flows through to every commission record the processor writes next.
+  // Keep the blast radius contained to SUPER_ADMIN.
+  it('AdminCommissionController.updateSettings', () =>
+    expectRoles(AdminCommissionController, 'updateSettings', ['SUPER_ADMIN']));
 });
 
 describe('Admin account mutations — SUPER_ADMIN + SELLER_ADMIN', () => {

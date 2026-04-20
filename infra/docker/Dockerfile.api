@@ -1,0 +1,85 @@
+# syntax=docker/dockerfile:1.7
+
+# ─────────────────────────────────────────────────────────────────────
+# SPORTSMART API — production image
+# ─────────────────────────────────────────────────────────────────────
+# Build context MUST be the repo root (not apps/api/), because pnpm needs
+# the workspace root to resolve internal `packages/*` deps and read the
+# shared lockfile:
+#
+#   docker build -f infra/docker/Dockerfile.api -t sportsmart-api:latest .
+#
+# Base is node:22-slim (Debian/glibc): Prisma's default "native" target
+# resolves to debian-openssl-3.0.x without adding binaryTargets to the
+# schema, so local dev on macOS and the container share one schema.
+# ─────────────────────────────────────────────────────────────────────
+
+FROM node:22-slim AS base
+ENV PNPM_HOME="/pnpm" \
+    PATH="/pnpm:$PATH" \
+    CI=true
+# openssl is required at runtime by the Prisma query engine. Install it
+# once here so every downstream stage inherits it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+
+
+# ─── build: install dev deps, generate Prisma client, compile TS ────
+FROM base AS build
+WORKDIR /workspace
+
+# Copy only the manifests first so `pnpm install` is cached between
+# rebuilds whenever source changes but deps don't.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/api/package.json apps/api/package.json
+COPY packages/shared-utils/package.json packages/shared-utils/package.json
+COPY packages/ui/package.json packages/ui/package.json
+
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter @sportsmart/api...
+
+# Now copy the API source and shared packages and build.
+COPY apps/api apps/api
+COPY packages packages
+
+# Prisma client generation must run inside the image so the produced
+# binaries match the container's libc / openssl, not the developer's
+# host.
+RUN pnpm --filter @sportsmart/api exec prisma generate
+RUN pnpm --filter @sportsmart/api run build
+
+# Produce a deploy-ready, flat, prod-only tree under /out. `pnpm deploy`
+# resolves workspace links and prunes devDependencies — much safer than
+# hand-copying node_modules across stages (pnpm's symlink layout does
+# not survive a naive COPY).
+RUN pnpm deploy --filter=@sportsmart/api --prod --legacy /out
+
+
+# ─── runtime: lean image, non-root, healthcheck ─────────────────────
+FROM base AS runtime
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=4000
+
+# Non-root for defence in depth. The node:*-slim image ships a `node`
+# user (uid 1000) specifically for this pattern.
+COPY --from=build --chown=node:node /out/package.json ./package.json
+COPY --from=build --chown=node:node /out/node_modules ./node_modules
+COPY --from=build --chown=node:node /workspace/apps/api/dist ./dist
+# Schema + migrations — prisma migrate deploy reads them at startup if
+# the operator runs migrations via the container (recommended pattern).
+COPY --from=build --chown=node:node /workspace/apps/api/prisma ./prisma
+
+USER node
+
+EXPOSE 4000
+
+# Healthcheck hits /health/live — the readiness route hits the DB/Redis
+# and would fail the container during a dep blip, which is wrong at the
+# liveness layer (a DB outage should not crash-loop every pod).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/api/v1/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["node", "dist/main.js"]

@@ -1,0 +1,45 @@
+# Applies to any Docker build using the repo root as context
+# (infra/docker/Dockerfile.api uses this).
+#
+# Keep the excludes tight: anything that changes frequently but isn't
+# needed in the image bloats the build-cache invalidation surface.
+
+# Dependency artefacts — let the image install fresh
+**/node_modules
+**/.pnpm-store
+
+# Build outputs — generated inside the image
+**/dist
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+
+# Local env & secrets — MUST NOT leak into an image layer
+**/.env
+**/.env.*
+!**/.env.example
+
+# VCS / IDE / OS cruft
+.git
+.gitignore
+.github
+.vscode
+.idea
+.claude
+**/.DS_Store
+
+# Test artefacts and coverage reports
+**/coverage
+**/test-results
+**/__snapshots__
+
+# Docs + infra — not part of any runtime
+docs
+infra
+README.md
+**/*.md
+
+# Logs
+**/*.log
+**/npm-debug.log*
+**/pnpm-debug.log*

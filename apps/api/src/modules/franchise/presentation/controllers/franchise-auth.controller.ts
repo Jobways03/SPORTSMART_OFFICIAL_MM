@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { FranchiseRegisterDto } from '../dtos/franchise-register.dto';
@@ -18,6 +19,7 @@ import { ChangePasswordFranchiseUseCase } from '../../application/use-cases/chan
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
 
+@ApiTags('Franchise Auth')
 @Controller('franchise/auth')
 export class FranchiseAuthController {
   constructor(

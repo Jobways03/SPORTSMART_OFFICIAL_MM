@@ -1,0 +1,42 @@
+{
+  "preset": "ts-jest",
+  "testEnvironment": "node",
+  "rootDir": "..",
+  "roots": ["<rootDir>/test/e2e", "<rootDir>/test/integration"],
+  "testRegex": "\\.e2e-spec\\.ts$|\\.integration-spec\\.ts$",
+  "transform": {
+    "^.+\\.ts$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "target": "ES2022",
+          "module": "commonjs",
+          "esModuleInterop": true,
+          "experimentalDecorators": true,
+          "emitDecoratorMetadata": true,
+          "strict": true,
+          "strictPropertyInitialization": false,
+          "skipLibCheck": true,
+          "paths": {
+            "@src/*": ["src/*"],
+            "@core/*": ["src/core/*"],
+            "@bootstrap/*": ["src/bootstrap/*"],
+            "@modules/*": ["src/modules/*"],
+            "@integrations/*": ["src/integrations/*"]
+          },
+          "baseUrl": "."
+        }
+      }
+    ]
+  },
+  "moduleNameMapper": {
+    "^@src/(.*)$": "<rootDir>/src/$1",
+    "^@core/(.*)$": "<rootDir>/src/core/$1",
+    "^@bootstrap/(.*)$": "<rootDir>/src/bootstrap/$1",
+    "^@modules/(.*)$": "<rootDir>/src/modules/$1",
+    "^@integrations/(.*)$": "<rootDir>/src/integrations/$1"
+  },
+  "transformIgnorePatterns": ["/node_modules/"],
+  "passWithNoTests": true,
+  "verbose": false
+}

@@ -10,12 +10,13 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { Roles } from '../../../../core/decorators/roles.decorator';
 import { OrdersService } from '../../application/services/orders.service';
 
 @ApiTags('Admin Orders')
 @Controller('admin/orders')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 export class AdminOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
@@ -58,30 +59,43 @@ export class AdminOrdersController {
   }
 
   @Patch(':id/reject-order')
+  @Roles('SUPER_ADMIN')
   async rejectOrder(@Param('id') id: string) {
     await this.ordersService.rejectOrder(id);
     return { success: true, message: 'Order rejected and cancelled — stock restored' };
   }
 
+  // The sub-order state-machine overrides below all bypass the normal
+  // lifecycle (seller accept → pack → ship → deliver) and can force
+  // arbitrary transitions without corresponding commission / stock
+  // side-effects. Reserved for SUPER_ADMIN because a wrong transition
+  // from a lower-tier admin can detach the ledger from physical reality
+  // (e.g. reversing DELIVERED → UNFULFILLED while goods are with the
+  // customer). Same principle as the money / account operations locked
+  // down in admin-settlement / admin-commission / admin-sellers.
   @Patch('sub-orders/:id/accept')
+  @Roles('SUPER_ADMIN')
   async acceptSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.acceptSubOrder(id);
     return { success: true, message: 'Sub-order accepted', data };
   }
 
   @Patch('sub-orders/:id/reject')
+  @Roles('SUPER_ADMIN')
   async rejectSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.rejectSubOrder(id);
     return { success: true, message: 'Sub-order rejected', data };
   }
 
   @Patch('sub-orders/:id/fulfill')
+  @Roles('SUPER_ADMIN')
   async fulfillSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.fulfillSubOrder(id);
     return { success: true, message: 'Sub-order fulfilled', data };
   }
 
   @Patch('sub-orders/:id/deliver')
+  @Roles('SUPER_ADMIN')
   async deliverSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.deliverSubOrder(id);
     return { success: true, message: 'Sub-order marked as delivered — return window started', data };

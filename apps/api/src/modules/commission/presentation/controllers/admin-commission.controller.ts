@@ -31,7 +31,14 @@ export class AdminCommissionController {
     return { success: true, message: 'Commission settings retrieved', data: settings };
   }
 
+  // Global commission formula — changes flow through to every new
+  // commission record written by the background processor. A lower-tier
+  // admin flipping this setting would change platform earnings across the
+  // entire marketplace with no localised blast radius. Treat as a
+  // platform-economics operation and restrict to SUPER_ADMIN, same as
+  // settlement mark-paid and commission-record adjustment.
   @Put('settings')
+  @Roles('SUPER_ADMIN')
   async updateSettings(
     @Body()
     body: {

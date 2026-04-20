@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
 import {
@@ -51,8 +51,13 @@ export class VerifyAdminResetOtpUseCase {
 
     await this.adminRepo.incrementAdminOtpAttempts(otpRecord.id);
 
+    // Constant-time comparison — see verify-reset-otp.use-case.ts for rationale.
     const otpHash = createHash('sha256').update(otp).digest('hex');
-    if (otpHash !== otpRecord.otpHash) {
+    const actual = Buffer.from(otpHash, 'utf8');
+    const expected = Buffer.from(otpRecord.otpHash, 'utf8');
+    const isMatch =
+      actual.length === expected.length && timingSafeEqual(actual, expected);
+    if (!isMatch) {
       const remaining = otpRecord.maxAttempts - (otpRecord.attempts + 1);
       if (remaining <= 0) {
         await this.adminRepo.expireAdminOtp(otpRecord.id);

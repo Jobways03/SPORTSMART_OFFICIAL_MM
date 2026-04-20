@@ -1,5 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 @Injectable()
 export class ShiprocketClient implements OnModuleInit {
   private readonly logger = new Logger(ShiprocketClient.name);
@@ -17,9 +19,18 @@ export class ShiprocketClient implements OnModuleInit {
     return !!(process.env.SHIPROCKET_EMAIL && process.env.SHIPROCKET_PASSWORD);
   }
 
-  private async authenticate(): Promise<string> {
-    // Reuse token if still valid (tokens last 10 days)
-    if (this.token && this.tokenExpiresAt && this.tokenExpiresAt > new Date()) {
+  private async authenticate(forceRefresh = false): Promise<string> {
+    // Reuse token if still valid (tokens last 10 days). forceRefresh is
+    // set by the 401-retry path in `request()` — Shiprocket can
+    // invalidate a token before our 9-day grace window (user rotates
+    // credentials, admin revokes, etc.), so we need to be able to drop
+    // the cached token and re-login on demand.
+    if (
+      !forceRefresh &&
+      this.token &&
+      this.tokenExpiresAt &&
+      this.tokenExpiresAt > new Date()
+    ) {
       return this.token;
     }
 
@@ -30,6 +41,7 @@ export class ShiprocketClient implements OnModuleInit {
         email: process.env.SHIPROCKET_EMAIL,
         password: process.env.SHIPROCKET_PASSWORD,
       }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -43,6 +55,50 @@ export class ShiprocketClient implements OnModuleInit {
     this.tokenExpiresAt = new Date(Date.now() + 9 * 24 * 60 * 60 * 1000);
 
     return this.token!;
+  }
+
+  /**
+   * Authenticated fetch wrapper. Adds the Bearer token, enforces a
+   * 30s timeout (so a hung Shiprocket call can't pin an order-shipping
+   * request indefinitely), and retries once on 401 after forcing a
+   * token refresh. Without the 401 retry, any admin-side credential
+   * rotation or Shiprocket-initiated revoke would break every in-flight
+   * request until the next process restart.
+   */
+  private async request<T>(
+    op: string,
+    path: string,
+    init: Omit<RequestInit, 'signal'> = {},
+  ): Promise<T> {
+    const doFetch = async (token: string): Promise<Response> => {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        ...((init.headers as Record<string, string>) || {}),
+      };
+      return fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    };
+
+    let token = await this.authenticate();
+    let res = await doFetch(token);
+
+    if (res.status === 401) {
+      // Stale token — force refresh and retry once.
+      this.token = null;
+      this.tokenExpiresAt = null;
+      token = await this.authenticate(true);
+      res = await doFetch(token);
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Shiprocket ${op} failed (${res.status}): ${body}`);
+    }
+
+    return res.json() as Promise<T>;
   }
 
   async createOrder(params: {
@@ -74,22 +130,11 @@ export class ShiprocketClient implements OnModuleInit {
     shipment_id: string;
     status: string;
   }> {
-    const token = await this.authenticate();
-    const res = await fetch(`${this.baseUrl}/orders/create/adhoc`, {
+    return this.request('createOrder', '/orders/create/adhoc', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
     });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Shiprocket createOrder failed (${res.status}): ${body}`);
-    }
-
-    return res.json();
   }
 
   async generateAWB(shipmentId: string, courierId?: number): Promise<{
@@ -101,25 +146,14 @@ export class ShiprocketClient implements OnModuleInit {
       };
     };
   }> {
-    const token = await this.authenticate();
     const body: any = { shipment_id: shipmentId };
     if (courierId) body.courier_id = courierId;
 
-    const res = await fetch(`${this.baseUrl}/courier/assign/awb`, {
+    return this.request('generateAWB', '/courier/assign/awb', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-
-    if (!res.ok) {
-      const respBody = await res.text();
-      throw new Error(`Shiprocket generateAWB failed (${res.status}): ${respBody}`);
-    }
-
-    return res.json();
   }
 
   async trackShipment(awb: string): Promise<{
@@ -140,56 +174,25 @@ export class ShiprocketClient implements OnModuleInit {
       }>;
     };
   }> {
-    const token = await this.authenticate();
-    const res = await fetch(
-      `${this.baseUrl}/courier/track/awb/${awb}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Shiprocket tracking failed (${res.status}): ${body}`);
-    }
-
-    return res.json();
+    return this.request('tracking', `/courier/track/awb/${awb}`);
   }
 
   async cancelOrder(orderId: string): Promise<void> {
-    const token = await this.authenticate();
-    const res = await fetch(`${this.baseUrl}/orders/cancel`, {
+    await this.request<void>('cancelOrder', '/orders/cancel', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: [orderId] }),
     });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Shiprocket cancelOrder failed (${res.status}): ${body}`);
-    }
   }
 
   async schedulePickup(shipmentId: string): Promise<{
     pickup_status: number;
     response: { pickup_scheduled_date: string };
   }> {
-    const token = await this.authenticate();
-    const res = await fetch(`${this.baseUrl}/courier/generate/pickup`, {
+    return this.request('schedulePickup', '/courier/generate/pickup', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ shipment_id: [shipmentId] }),
     });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Shiprocket schedulePickup failed (${res.status}): ${body}`);
-    }
-
-    return res.json();
   }
 }

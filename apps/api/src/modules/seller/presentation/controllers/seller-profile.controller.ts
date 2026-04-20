@@ -9,6 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { SellerAuthGuard } from '../../../../core/guards';
 import { GetSellerProfileUseCase } from '../../application/use-cases/get-seller-profile.use-case';
@@ -17,6 +18,7 @@ import { ChangeSellerPasswordUseCase } from '../../application/use-cases/change-
 import { UpdateSellerProfileDto } from '../dtos/update-seller-profile.dto';
 import { SellerChangePasswordDto } from '../dtos/seller-change-password.dto';
 
+@ApiTags('Seller Profile')
 @Controller('seller/profile')
 @UseGuards(SellerAuthGuard)
 export class SellerProfileController {

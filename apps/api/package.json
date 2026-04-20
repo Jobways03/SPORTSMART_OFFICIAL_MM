@@ -13,14 +13,15 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
+    "db:status": "prisma migrate status",
     "seed": "npx ts-node prisma/seed/seed.ts",
     "seed:quick": "npx ts-node prisma/seed/seed.ts --skip-pincodes",
     "seed:pincodes": "npx ts-node prisma/seed/seed-pincodes.ts",
     "seed:metafields": "npx ts-node prisma/seed/seed-metafields.ts",
     "seed:admin": "npx ts-node prisma/seed/seed-admin.ts",
     "seed:catalog": "npx ts-node prisma/seed/seed-catalog.ts",
-    "db:reset": "prisma migrate reset --force && npm run seed",
-    "db:fresh": "prisma migrate reset --force && prisma migrate deploy && npm run seed"
+    "db:reset": "npx ts-node prisma/scripts/guard-not-prod.ts && prisma migrate reset --force && npm run seed",
+    "db:fresh": "npx ts-node prisma/scripts/guard-not-prod.ts && prisma migrate reset --force --skip-seed"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
@@ -67,6 +68,7 @@
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.58.2"
   }
 }

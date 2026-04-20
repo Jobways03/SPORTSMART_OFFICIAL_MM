@@ -78,6 +78,12 @@ model FranchisePartner {
   @@index([state])
   @@index([email])
   @@index([phoneNumber])
+  @@index([isDeleted])
+  @@index([verificationStatus])
+  // Scanned every hour by FranchiseReservationCleanupService.checkExpiredContracts
+  // (status=ACTIVE, contractEndDate<now). Without this index the sweep
+  // does a seq scan on the whole franchise table.
+  @@index([contractEndDate])
   @@map("franchise_partners")
 }
 

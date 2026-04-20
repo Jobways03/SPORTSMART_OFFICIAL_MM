@@ -80,6 +80,16 @@ export class DiscountsService {
     if (method === 'AUTOMATIC' && !title?.trim())
       throw new BadRequestAppException('Discount title is required');
 
+    // Guard against out-of-bounds values that would silently hand out
+    // more than the product cost. The controller accepts a loose `any`
+    // body (no DTO) so this validation lives here. A PERCENTAGE > 100
+    // would refund the customer more than they paid; any negative would
+    // add to the total instead of subtracting.
+    this.validateDiscountValue(rest.valueType, rest.value);
+    if (rest.getDiscountValue !== undefined && rest.getDiscountValue !== null) {
+      this.validateDiscountValue(rest.getDiscountType, rest.getDiscountValue);
+    }
+
     if (code?.trim()) {
       const existing = await this.discountRepo.findByCode(
         code.trim().toUpperCase(),
@@ -91,6 +101,11 @@ export class DiscountsService {
     const now = new Date();
     const start = startsAt ? new Date(startsAt) : now;
     const end = endsAt ? new Date(endsAt) : null;
+    if (end && end <= start) {
+      throw new BadRequestAppException(
+        'endsAt must be after startsAt — an always-expired discount cannot be created',
+      );
+    }
     let status: 'ACTIVE' | 'SCHEDULED' | 'EXPIRED' = 'ACTIVE';
     if (start > now) status = 'SCHEDULED';
     if (end && end < now) status = 'EXPIRED';
@@ -162,6 +177,21 @@ export class DiscountsService {
     const { productIds, collectionIds, startsAt, endsAt, ...fields } = body;
     const data: any = {};
 
+    // Same bounds guard as create — if the caller is changing the value
+    // or the value type, re-validate. Unchanged fields are left alone.
+    if (fields.value !== undefined || fields.valueType !== undefined) {
+      const nextValueType =
+        fields.valueType ?? (discount as any).valueType;
+      const nextValue =
+        fields.value !== undefined ? fields.value : (discount as any).value;
+      this.validateDiscountValue(nextValueType, Number(nextValue));
+    }
+    if (fields.getDiscountValue !== undefined) {
+      const nextType =
+        fields.getDiscountType ?? (discount as any).getDiscountType;
+      this.validateDiscountValue(nextType, fields.getDiscountValue);
+    }
+
     for (const key of [
       'code',
       'title',
@@ -220,5 +250,29 @@ export class DiscountsService {
     const discount = await this.discountRepo.findById(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
     await this.discountRepo.delete(id);
+  }
+
+  /**
+   * Enforce numeric bounds on discount values. PERCENTAGE must be in
+   * [0, 100] — anything above would refund more than the customer paid.
+   * FIXED must be non-negative — negative would add to the order total.
+   */
+  private validateDiscountValue(
+    valueType: string | null | undefined,
+    value: number | null | undefined,
+  ): void {
+    if (value === null || value === undefined) return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      throw new BadRequestAppException('Discount value must be a number');
+    }
+    if (n < 0) {
+      throw new BadRequestAppException('Discount value cannot be negative');
+    }
+    if ((valueType ?? 'PERCENTAGE') === 'PERCENTAGE' && n > 100) {
+      throw new BadRequestAppException(
+        'PERCENTAGE discount value must be between 0 and 100',
+      );
+    }
   }
 }

@@ -391,26 +391,36 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
 
     if (expired.length === 0) return 0;
 
-    // Process each expired reservation in a transaction
+    // Process each expired reservation in a transaction. The atomic-claim
+    // via updateMany({status: RESERVED}) is the critical guard: this sweep
+    // runs on every API instance on a 60s interval, so two instances see
+    // the same expired row in their findMany and race here. Without the
+    // claim, both would flip the row to EXPIRED and both decrement
+    // reservedQty — driving reservedQty below actual held stock. With the
+    // claim, only one claim.count === 1 wins; the loser short-circuits.
+    let releasedCount = 0;
     for (const reservation of expired) {
       await this.prisma.$transaction(async (tx) => {
-        // Update reservation status
-        await tx.stockReservation.update({
-          where: { id: reservation.id },
+        const claim = await tx.stockReservation.updateMany({
+          where: { id: reservation.id, status: 'RESERVED' },
           data: { status: 'EXPIRED' },
         });
+        if (claim.count === 0) {
+          // Another instance won the race — skip the decrement.
+          return;
+        }
 
-        // Decrement reservedQty
         await tx.sellerProductMapping.update({
           where: { id: reservation.mappingId },
           data: {
             reservedQty: { decrement: reservation.quantity },
           },
         });
+        releasedCount++;
       });
     }
 
-    return expired.length;
+    return releasedCount;
   }
 
   /**

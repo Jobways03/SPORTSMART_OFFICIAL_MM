@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { WhatsAppClient } from '../clients/whatsapp.client';
+import { redactPhone } from '../../../bootstrap/logging/log-redact';
 
 @Injectable()
 export class WhatsAppAdapter {
@@ -22,7 +23,9 @@ export class WhatsAppAdapter {
         phoneNumber,
         `Your order ${orderNumber} has been placed successfully! Total: ₹${totalAmount}. Track your order at our website.`,
       );
-      this.logger.log(`Order confirmation sent to ${phoneNumber} for ${orderNumber}`);
+      this.logger.log(
+        `Order confirmation sent to ${redactPhone(phoneNumber)} for ${orderNumber}`,
+      );
     } catch (error) {
       this.logger.error(`Failed to send WhatsApp order confirmation: ${(error as Error).message}`);
     }
@@ -44,7 +47,9 @@ export class WhatsAppAdapter {
       if (trackingUrl) message += `\nTrack: ${trackingUrl}`;
 
       await this.client.sendTextMessage(phoneNumber, message);
-      this.logger.log(`Delivery update sent to ${phoneNumber}: ${status}`);
+      this.logger.log(
+        `Delivery update sent to ${redactPhone(phoneNumber)}: ${status}`,
+      );
     } catch (error) {
       this.logger.error(`Failed to send WhatsApp delivery update: ${(error as Error).message}`);
     }
@@ -61,7 +66,7 @@ export class WhatsAppAdapter {
         phoneNumber,
         `Your SPORTSMART verification code is: ${otp}. Valid for 10 minutes. Do not share this code.`,
       );
-      this.logger.log(`OTP sent to ${phoneNumber}`);
+      this.logger.log(`OTP sent to ${redactPhone(phoneNumber)}`);
     } catch (error) {
       this.logger.error(`Failed to send WhatsApp OTP: ${(error as Error).message}`);
     }

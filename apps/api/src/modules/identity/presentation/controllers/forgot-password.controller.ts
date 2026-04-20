@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { ForgotPasswordDto } from '../dtos/forgot-password.dto';
 import { VerifyResetOtpDto } from '../dtos/verify-reset-otp.dto';
@@ -7,6 +8,7 @@ import { ForgotPasswordUseCase } from '../../application/use-cases/forgot-passwo
 import { VerifyResetOtpUseCase } from '../../application/use-cases/verify-reset-otp.use-case';
 import { ResendResetOtpUseCase } from '../../application/use-cases/resend-reset-otp.use-case';
 
+@ApiTags('Auth')
 @Controller('auth')
 export class ForgotPasswordController {
   constructor(

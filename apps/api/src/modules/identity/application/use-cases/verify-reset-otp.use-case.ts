@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
 import {
@@ -52,9 +52,15 @@ export class VerifyResetOtpUseCase {
     // Increment attempts
     await this.userRepo.incrementOtpAttempts(otpRecord.id);
 
-    // Compare OTP hash
+    // Compare OTP hash in constant time. Both values are 64-char hex
+    // strings from sha256 so lengths always match, but the explicit
+    // length guard keeps us safe if the storage format ever changes.
     const otpHash = createHash('sha256').update(otp).digest('hex');
-    if (otpHash !== otpRecord.otpHash) {
+    const actual = Buffer.from(otpHash, 'utf8');
+    const expected = Buffer.from(otpRecord.otpHash, 'utf8');
+    const isMatch =
+      actual.length === expected.length && timingSafeEqual(actual, expected);
+    if (!isMatch) {
       const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
       if (remainingAttempts <= 0) {
         // Expire after last failed attempt

@@ -8,6 +8,17 @@ module.exports = {
   // directory is reserved for integration / e2e tests that span modules.
   roots: ['<rootDir>/src', '<rootDir>/test'],
   testRegex: '\\.(spec|test)\\.ts$',
+  // Keep the unit runner scoped to unit-only files. e2e/integration
+  // tests have their own config (test/jest-e2e.json) and a dedicated
+  // suffix (*.e2e-spec.ts / *.integration-spec.ts) so running
+  // `pnpm test` doesn't pull them in without their setup.
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '<rootDir>/test/e2e/',
+    '<rootDir>/test/integration/',
+    '\\.e2e-spec\\.ts$',
+    '\\.integration-spec\\.ts$',
+  ],
   transform: {
     '^.+\\.ts$': [
       'ts-jest',

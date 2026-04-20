@@ -6,15 +6,13 @@ import {
   FranchiseProfile,
   UpdateFranchiseProfilePayload,
 } from '@/services/profile.service';
-import { ApiError } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 
 type PincodeData = {
   district: string;
   state: string;
   places: { name: string; type: string; delivery: string }[];
 };
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 const AUTO_FILLED_STYLE: React.CSSProperties = {
   background: '#f0fdf4',
@@ -264,8 +262,7 @@ export default function ProfilePage() {
     setPincodeLoading(true);
     setPincodeError('');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/pincodes/${pincode}`);
-      const data = await res.json();
+      const data = await apiClient<any>(`/pincodes/${pincode}`);
 
       if (data.success && data.data) {
         setPincodeData(data.data);
@@ -299,8 +296,7 @@ export default function ProfilePage() {
     setWarehousePincodeLoading(true);
     setWarehousePincodeError('');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/pincodes/${pincode}`);
-      const data = await res.json();
+      const data = await apiClient<any>(`/pincodes/${pincode}`);
 
       if (data.success && data.data) {
         setWarehousePincodeData(data.data);

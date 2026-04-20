@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   FranchisePartnerRepository,
@@ -14,6 +14,8 @@ import { FranchiseCommissionService } from '../services/franchise-commission.ser
 
 @Injectable()
 export class FranchisePublicFacade {
+  private readonly logger = new Logger(FranchisePublicFacade.name);
+
   constructor(
     @Inject(FRANCHISE_PARTNER_REPOSITORY)
     private readonly franchiseRepo: FranchisePartnerRepository,
@@ -224,9 +226,8 @@ export class FranchisePublicFacade {
       // Not an error — can happen when return lands before commission lock.
       // The reversal is still recorded so settlement math stays correct.
       // Logged at warn so operators can spot unusual patterns.
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[FranchisePublicFacade] No ONLINE_ORDER ledger entry for subOrder ${params.subOrderId} — creating standalone reversal for ₹${params.reversalAmount}`,
+      this.logger.warn(
+        `No ONLINE_ORDER ledger entry for subOrder ${params.subOrderId} — creating standalone reversal for ₹${params.reversalAmount}`,
       );
     }
 

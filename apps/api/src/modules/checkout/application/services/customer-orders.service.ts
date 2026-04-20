@@ -68,17 +68,21 @@ export class CustomerOrdersService {
       throw new BadRequestAppException('Order is already cancelled');
     }
 
-    // Cannot cancel if any sub-order is delivered and past return window
-    const now = new Date();
-    const hasExpiredReturnWindow = order.subOrders.some(
-      (so) =>
-        so.fulfillmentStatus === 'DELIVERED' &&
-        so.returnWindowEndsAt &&
-        new Date(so.returnWindowEndsAt) < now,
+    // Once a sub-order has been shipped or delivered, this endpoint is the
+    // wrong tool. cancelOrderTransaction unconditionally restores stock and
+    // fully refunds commission — safe for pre-ship orders, wrong for goods
+    // that are in transit or already with the customer. Post-ship cases must
+    // route through the returns flow (QC + conditional stock restore +
+    // audited commission reversal). A previous revision allowed cancel for
+    // DELIVERED sub-orders while the return window was still open, which
+    // effectively let customers self-return with zero QC.
+    const blockingStatuses = new Set(['SHIPPED', 'DELIVERED', 'FULFILLED']);
+    const hasBlockingSubOrder = order.subOrders.some((so) =>
+      blockingStatuses.has(so.fulfillmentStatus as string),
     );
-    if (hasExpiredReturnWindow) {
+    if (hasBlockingSubOrder) {
       throw new BadRequestAppException(
-        'Cannot cancel order — return/exchange window has expired',
+        'This order has already shipped or been delivered. Please use the returns flow instead of cancelling.',
       );
     }
 

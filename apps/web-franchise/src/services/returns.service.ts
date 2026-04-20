@@ -81,20 +81,12 @@ export const franchiseReturnsService = {
   },
 
   uploadEvidence(returnId: string, file: File, description?: string) {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-    const token =
-      typeof window !== 'undefined' ? sessionStorage.getItem('accessToken') : null;
     const formData = new FormData();
     formData.append('file', file);
     if (description) formData.append('description', description);
-    return fetch(`${API_BASE}/api/v1/franchise/returns/${returnId}/qc-evidence`, {
+    return apiClient(`/franchise/returns/${returnId}/qc-evidence`, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       body: formData,
-    }).then(async (res) => {
-      const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(body?.message || 'Failed to upload evidence');
-      return body;
     });
   },
 };

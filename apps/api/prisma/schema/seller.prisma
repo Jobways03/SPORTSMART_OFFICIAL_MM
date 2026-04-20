@@ -53,6 +53,8 @@ model Seller {
 
   @@index([status])
   @@index([isProfileCompleted])
+  @@index([isDeleted])
+  @@index([verificationStatus])
   @@map("sellers")
 }
 

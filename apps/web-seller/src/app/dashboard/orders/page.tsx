@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { apiClient } from '@/lib/api-client';
 
 interface SubOrder {
   id: string;
@@ -85,19 +84,12 @@ export default function SellerOrdersPage() {
 
   const fetchOrders = (p: number) => {
     setLoading(true);
-    const token = sessionStorage.getItem('accessToken');
     const params = new URLSearchParams({ page: String(p), limit: '20' });
     if (fulfillmentFilter) params.append('fulfillmentStatus', fulfillmentFilter);
     if (acceptFilter) params.append('acceptStatus', acceptFilter);
     if (searchQuery) params.append('search', searchQuery);
 
-    fetch(`${API_BASE}/api/v1/seller/orders?${params.toString()}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-      .then((r) => r.json())
+    apiClient<any>(`/seller/orders?${params.toString()}`)
       .then((res) => { if (res.data) setData(res.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -113,14 +105,9 @@ export default function SellerOrdersPage() {
   const handleAction = async (e: React.MouseEvent, subOrderId: string, action: string, body?: object) => {
     e.stopPropagation();
     setActionLoading(subOrderId);
-    const token = sessionStorage.getItem('accessToken');
     try {
-      await fetch(`${API_BASE}/api/v1/seller/orders/${subOrderId}/${action}`, {
+      await apiClient(`/seller/orders/${subOrderId}/${action}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
         body: body ? JSON.stringify(body) : undefined,
       });
       fetchOrders(page);
@@ -135,14 +122,9 @@ export default function SellerOrdersPage() {
     if (!rejectModal) return;
     e.stopPropagation();
     setActionLoading(rejectModal.subOrderId);
-    const token = sessionStorage.getItem('accessToken');
     try {
-      await fetch(`${API_BASE}/api/v1/seller/orders/${rejectModal.subOrderId}/reject`, {
+      await apiClient(`/seller/orders/${rejectModal.subOrderId}/reject`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
         body: JSON.stringify({
           reason: rejectReason || undefined,
           note: rejectNote || undefined,

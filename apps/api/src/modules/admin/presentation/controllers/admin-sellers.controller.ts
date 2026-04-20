@@ -12,6 +12,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
@@ -31,6 +32,7 @@ import { AdminSendMessageDto } from '../dtos/admin-send-message.dto';
 import { AdminChangePasswordDto } from '../dtos/admin-change-password.dto';
 import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile.dto';
 
+@ApiTags('Admin Sellers')
 @Controller('admin/sellers')
 @UseGuards(AdminAuthGuard, RolesGuard)
 export class AdminSellersController {

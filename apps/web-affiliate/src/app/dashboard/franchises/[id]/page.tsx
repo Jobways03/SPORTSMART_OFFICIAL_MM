@@ -10,7 +10,7 @@ import {
   FranchiseInventoryItem,
   FranchiseOrderItem,
 } from '@/services/admin-franchises.service';
-import { ApiError } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 import FranchiseStatusModal from '../components/franchise-status-modal';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
 import FranchiseCommissionModal from '../components/franchise-commission-modal';
@@ -117,7 +117,6 @@ export default function AdminFranchiseDetailPage() {
     state: string;
     places: { name: string; type: string; delivery: string }[];
   };
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
   const AUTO_FILLED_STYLE: React.CSSProperties = { background: '#f0fdf4', borderColor: '#86efac' };
 
   const [pincodeData, setPincodeData] = useState<PincodeData | null>(null);
@@ -149,8 +148,7 @@ export default function AdminFranchiseDetailPage() {
     setLoading(true);
     setErr('');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/pincodes/${pincode}`);
-      const data = await res.json();
+      const data = await apiClient<any>(`/pincodes/${pincode}`);
 
       if (data.success && data.data) {
         setData(data.data);

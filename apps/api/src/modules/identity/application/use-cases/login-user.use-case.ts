@@ -18,6 +18,8 @@ import {
 
 // Pre-hash a dummy password to use for timing attack prevention
 const DUMMY_HASH = '$2a$12$LJ3m4ys3Lg7VhMQdxlGC7.BQJ1HFpR9PQXHs1GKTTl1C5KVhJvtNi';
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCK_DURATION_MINUTES = 15;
 
 interface LoginInput {
   email: string;
@@ -57,10 +59,40 @@ export class LoginUserUseCase {
       throw new ForbiddenAppException('Account is not active. Please contact support.');
     }
 
+    // Lockout check — brought to parity with seller / franchise / admin.
+    // After MAX_FAILED_ATTEMPTS wrong passwords the account is locked for
+    // LOCK_DURATION_MINUTES. Per-IP rate limiting (see auth throttle
+    // decorator) catches the common case; this catches distributed spray.
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      const remainingMinutes = Math.ceil(
+        (user.lockUntil.getTime() - Date.now()) / 60_000,
+      );
+      throw new UnauthorizedAppException(
+        `Account locked. Try again after ${remainingMinutes} minute(s).`,
+      );
+    }
+
     // Compare password
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
+      const newAttempts = user.failedLoginAttempts + 1;
+      const lockUntil =
+        newAttempts >= MAX_FAILED_ATTEMPTS
+          ? new Date(Date.now() + LOCK_DURATION_MINUTES * 60 * 1000)
+          : null;
+      await this.userRepo.recordFailedLogin(user.id, newAttempts, lockUntil);
+      if (lockUntil) {
+        throw new UnauthorizedAppException(
+          `Account locked due to too many failed attempts. Try again after ${LOCK_DURATION_MINUTES} minute(s).`,
+        );
+      }
       throw new UnauthorizedAppException('Invalid email or password');
+    }
+
+    // Successful password check — clear any lockout counters so a user who
+    // nearly triggered a lockout doesn't carry the counter forward.
+    if (user.failedLoginAttempts > 0 || user.lockUntil) {
+      await this.userRepo.clearLoginLockout(user.id);
     }
 
     // Extract roles

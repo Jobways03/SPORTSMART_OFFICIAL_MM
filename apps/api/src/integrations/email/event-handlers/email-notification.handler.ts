@@ -173,7 +173,7 @@ export class EmailNotificationHandler {
         text: `New order #${orderNumber} placed (${itemCount} items, ${formattedAmount}). Please verify in the admin dashboard.`,
       });
     } catch (err) {
-      this.logger.error(`Failed to send admin order notification email: ${err}`);
+      this.logger.error(`Failed to send admin order notification email: ${(err as Error)?.message ?? "unknown error"}`);
     }
   }
 
@@ -279,7 +279,7 @@ export class EmailNotificationHandler {
         text: `New product "${productTitle}" submitted for review by ${sellerName}. Please review in the admin dashboard.`,
       });
     } catch (err) {
-      this.logger.error(`Failed to send admin product review notification email: ${err}`);
+      this.logger.error(`Failed to send admin product review notification email: ${(err as Error)?.message ?? "unknown error"}`);
     }
   }
 
@@ -320,7 +320,7 @@ export class EmailNotificationHandler {
         text: `Hi ${seller.sellerName}, your product "${productTitle}" has been approved and is now active on the marketplace!`,
       });
     } catch (err) {
-      this.logger.error(`Failed to send seller product approval email: ${err}`);
+      this.logger.error(`Failed to send seller product approval email: ${(err as Error)?.message ?? "unknown error"}`);
     }
   }
 
@@ -363,7 +363,7 @@ export class EmailNotificationHandler {
         text: `Hi ${seller.sellerName}, your product "${productTitle}" has been rejected. Reason: ${reason || 'No reason provided'}. You can update and resubmit from your dashboard.`,
       });
     } catch (err) {
-      this.logger.error(`Failed to send seller product rejection email: ${err}`);
+      this.logger.error(`Failed to send seller product rejection email: ${(err as Error)?.message ?? "unknown error"}`);
     }
   }
 
@@ -406,7 +406,7 @@ export class EmailNotificationHandler {
         text: `Hi ${seller.sellerName}, changes have been requested for your product "${productTitle}". What to update: ${note || 'No note provided'}. Please resubmit from your dashboard.`,
       });
     } catch (err) {
-      this.logger.error(`Failed to send seller changes-requested email: ${err}`);
+      this.logger.error(`Failed to send seller changes-requested email: ${(err as Error)?.message ?? "unknown error"}`);
     }
   }
 
@@ -477,7 +477,7 @@ export class EmailNotificationHandler {
         text: `Commission locked for Order #${orderNumber}. Platform earning: ${fmt(adminEarning)}. Your earning: ${fmt(sellerEarning)}. This will be included in your next settlement.`,
       });
     } catch (err) {
-      this.logger.error(`Failed to send commission.locked email for sub-order ${event.payload.subOrderId}: ${err}`);
+      this.logger.error(`Failed to send commission.locked email for sub-order ${event.payload.subOrderId}: ${(err as Error)?.message ?? "unknown error"}`);
     }
   }
 

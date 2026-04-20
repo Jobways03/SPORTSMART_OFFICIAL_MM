@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { SellerForgotPasswordDto } from '../dtos/seller-forgot-password.dto';
 import { SellerVerifyResetOtpDto } from '../dtos/seller-verify-reset-otp.dto';
@@ -7,6 +8,7 @@ import { ForgotPasswordSellerUseCase } from '../../application/use-cases/forgot-
 import { VerifyResetOtpSellerUseCase } from '../../application/use-cases/verify-reset-otp-seller.use-case';
 import { ResendResetOtpSellerUseCase } from '../../application/use-cases/resend-reset-otp-seller.use-case';
 
+@ApiTags('Seller Auth')
 @Controller('seller/auth')
 export class SellerForgotPasswordController {
   constructor(

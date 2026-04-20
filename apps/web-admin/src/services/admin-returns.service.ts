@@ -281,36 +281,18 @@ export const adminReturnsService = {
     });
   },
 
-  async uploadQcEvidence(
+  uploadQcEvidence(
     returnId: string,
     file: File,
     description?: string,
   ): Promise<ApiResponse> {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
     const formData = new FormData();
     formData.append('image', file);
     if (description) formData.append('description', description);
-
-    let token = '';
-    try {
-      token = sessionStorage.getItem('adminAccessToken') || '';
-    } catch {
-      // SSR or storage unavailable
-    }
-
-    const res = await fetch(
-      `${API_BASE}/api/v1/admin/returns/${returnId}/qc-evidence`,
-      {
-        method: 'POST',
-        body: formData,
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      },
-    );
-    const body = await res.json();
-    if (!res.ok) {
-      throw new Error(body?.message || 'Failed to upload evidence');
-    }
-    return body;
+    return apiClient(`/admin/returns/${returnId}/qc-evidence`, {
+      method: 'POST',
+      body: formData,
+    });
   },
 
   submitQcDecision(
