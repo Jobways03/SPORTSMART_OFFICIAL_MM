@@ -257,10 +257,12 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
     });
   }
 
-  async updateProductPrice(productId: string, platformPrice: number): Promise<void> {
+  async updateProductPrice(productId: string, price: number): Promise<void> {
+    // Bulk pricing now writes to basePrice (the canonical customer-
+    // facing price after the platformPrice column was removed).
     await this.prisma.product.update({
       where: { id: productId },
-      data: { platformPrice },
+      data: { basePrice: price },
     });
   }
 
@@ -271,10 +273,12 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
     });
   }
 
-  async updateVariantPrice(variantId: string, platformPrice: number): Promise<void> {
+  async updateVariantPrice(variantId: string, price: number): Promise<void> {
+    // Bulk pricing now writes to `price` (variant's canonical
+    // customer-facing price).
     await this.prisma.productVariant.update({
       where: { id: variantId },
-      data: { platformPrice },
+      data: { price },
     });
   }
 

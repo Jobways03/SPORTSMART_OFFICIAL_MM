@@ -89,9 +89,9 @@ export default function EditProductPage() {
     description: '',
     hasVariants: false,
     basePrice: '',
-    platformPrice: '',
     compareAtPrice: '',
     costPrice: '',
+    procurementPrice: '',
     baseSku: '',
     baseStock: '',
     baseBarcode: '',
@@ -319,9 +319,9 @@ export default function EditProductPage() {
       description: p.description || '',
       hasVariants: p.hasVariants,
       basePrice: p.basePrice ?? '',
-      platformPrice: p.platformPrice ?? '',
       compareAtPrice: p.compareAtPrice && Number(p.compareAtPrice) > 0 ? p.compareAtPrice : '',
       costPrice: p.costPrice ?? '',
+      procurementPrice: (p as any).procurementPrice ?? '',
       baseSku: p.baseSku || '',
       baseStock: p.baseStock != null ? String(p.baseStock) : '',
       baseBarcode: p.baseBarcode || '',
@@ -620,9 +620,10 @@ export default function EditProductPage() {
     payload.shortDescription = form.shortDescription.trim();
     payload.description = form.description.trim();
 
-    // Platform price applies to both simple and variant products
-    if (form.platformPrice) payload.platformPrice = Number(form.platformPrice);
-    else payload.platformPrice = null;
+    // Procurement price applies to both simple and variant products
+    // (fallback for product-level mappings with no variant).
+    if (form.procurementPrice) payload.procurementPrice = Number(form.procurementPrice);
+    else payload.procurementPrice = null;
 
     if (!form.hasVariants) {
       if (form.basePrice) payload.basePrice = Number(form.basePrice);
@@ -1567,8 +1568,8 @@ export default function EditProductPage() {
                 <input
                   type="number"
                   className="form-input"
-                  value={form.platformPrice || form.basePrice}
-                  onChange={e => { updateField('platformPrice', e.target.value); updateField('basePrice', e.target.value); }}
+                  value={form.basePrice}
+                  onChange={e => updateField('basePrice', e.target.value)}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -1903,7 +1904,7 @@ export default function EditProductPage() {
                   <th>Image</th>
                   <th>Option Values</th>
                   <th>Master SKU</th>
-                  <th>Platform Price</th>
+                  <th>Price</th>
                   <th>Compare At</th>
                   <th>Weight</th>
                   <th>Actions</th>
@@ -1918,7 +1919,7 @@ export default function EditProductPage() {
                   const variantLabel = ovs.map((ov: any) => ov.displayValue || ov.value).join(' / ') || variant.title || 'Unnamed';
                   const variantImg = (variant.images && variant.images.length > 0) ? variant.images[0].url : (product.images.length > 0 ? product.images[0].url : null);
                   const weightDisplay = variant.weight ? `${variant.weight}${variant.weightUnit || 'g'}` : '\u2014';
-                  const platformPriceDisplay = variant.platformPrice != null ? `\u20B9 ${Number(variant.platformPrice).toLocaleString('en-IN')}` : '\u2014';
+                  const priceDisplay = variant.price != null ? `\u20B9 ${Number(variant.price).toLocaleString('en-IN')}` : '\u2014';
                   const compareAtDisplay = variant.compareAtPrice != null ? `\u20B9 ${Number(variant.compareAtPrice).toLocaleString('en-IN')}` : '\u2014';
 
                   return (
@@ -1932,7 +1933,7 @@ export default function EditProductPage() {
                       </td>
                       <td style={{ fontWeight: 500, fontSize: 13 }}>{variantLabel}</td>
                       <td style={{ fontSize: 13, fontFamily: 'monospace', color: variant.masterSku ? 'var(--color-text)' : '#9ca3af' }}>{variant.masterSku || '\u2014'}</td>
-                      <td style={{ fontSize: 13, fontWeight: 600, color: variant.platformPrice != null ? '#166534' : '#9ca3af' }}>{platformPriceDisplay}</td>
+                      <td style={{ fontSize: 13, fontWeight: 600, color: variant.price != null ? '#166534' : '#9ca3af' }}>{priceDisplay}</td>
                       <td style={{ fontSize: 13, color: variant.compareAtPrice != null ? '#9ca3af' : '#d1d5db', textDecoration: variant.compareAtPrice != null ? 'line-through' : 'none' }}>{compareAtDisplay}</td>
                       <td style={{ fontSize: 13, color: variant.weight ? 'var(--color-text)' : '#9ca3af' }}>{weightDisplay}</td>
                       <td>

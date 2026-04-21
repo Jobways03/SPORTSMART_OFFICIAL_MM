@@ -66,7 +66,6 @@ export interface CartItemWithRelations {
     title: string;
     slug: string;
     basePrice: any;
-    platformPrice: any;
     baseSku: string | null;
     baseStock?: number | null;
     hasVariants: boolean;
@@ -78,7 +77,6 @@ export interface CartItemWithRelations {
     id: string;
     title: string | null;
     price: any;
-    platformPrice: any;
     stock?: number;
     sku: string | null;
     status: string;

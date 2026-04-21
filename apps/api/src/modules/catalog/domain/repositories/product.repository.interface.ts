@@ -40,7 +40,8 @@ export interface IProductRepository {
   createInTransaction(data: any, tags?: string[], seo?: any, variants?: any[], statusHistoryEntry?: any): Promise<any>;
   updateInTransaction(productId: string, updateData: any, tags?: string[], seo?: any): Promise<any>;
   softDelete(productId: string): Promise<void>;
-  softDeleteWithVariants(productId: string): Promise<void>;
+  /** Cascades soft-delete to all variants; returns the affected variant ids so the caller can emit domain events. */
+  softDeleteWithVariants(productId: string): Promise<string[]>;
   findFullProduct(productId: string): Promise<any | null>;
 
   // ── Status management ──

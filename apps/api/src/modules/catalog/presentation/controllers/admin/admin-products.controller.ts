@@ -129,7 +129,8 @@ export class AdminProductsController {
         sellerId: seller?.id || null, productCode, title: dto.title, slug,
         shortDescription: dto.shortDescription, description: dto.description,
         categoryId, brandId, hasVariants: dto.hasVariants,
-        moderationStatus: 'APPROVED', platformPrice: dto.platformPrice,
+        moderationStatus: 'APPROVED',
+        procurementPrice: dto.procurementPrice,
         basePrice: dto.basePrice, baseSku: dto.baseSku, baseStock: dto.baseStock,
         weight: dto.weight, weightUnit: dto.weightUnit,
         length: dto.length, width: dto.width, height: dto.height, dimensionUnit: dto.dimensionUnit,
@@ -198,7 +199,7 @@ export class AdminProductsController {
     if (dto.description !== undefined) updateData.description = dto.description;
     if (dto.hasVariants !== undefined) updateData.hasVariants = dto.hasVariants;
     if (dto.basePrice !== undefined) updateData.basePrice = dto.basePrice;
-    if (dto.platformPrice !== undefined) updateData.platformPrice = dto.platformPrice;
+    if (dto.procurementPrice !== undefined) updateData.procurementPrice = dto.procurementPrice;
     if (dto.compareAtPrice !== undefined) updateData.compareAtPrice = dto.compareAtPrice;
     if (dto.costPrice !== undefined) updateData.costPrice = dto.costPrice;
     if (dto.baseSku !== undefined) updateData.baseSku = dto.baseSku;
@@ -238,8 +239,31 @@ export class AdminProductsController {
       );
     }
 
-    await this.productRepo.softDeleteWithVariants(productId);
-    this.logger.log(`Product ${productId} deleted by admin ${adminId}`);
+    const deletedVariantIds = await this.productRepo.softDeleteWithVariants(productId);
+    this.logger.log(
+      `Product ${productId} deleted by admin ${adminId} (cascaded ${deletedVariantIds.length} variant(s))`,
+    );
+
+    // Emit one event per cascaded variant so the franchise module can
+    // stop its mappings. Done sequentially-awaited so a mass-delete
+    // doesn't create a burst of in-flight promises — but each publish
+    // is wrapped so one listener failure doesn't derail the loop.
+    for (const variantId of deletedVariantIds) {
+      try {
+        await this.eventBus.publish({
+          eventName: 'catalog.variant.soft_deleted',
+          aggregate: 'ProductVariant',
+          aggregateId: variantId,
+          occurredAt: new Date(),
+          payload: { variantId, productId, deletedBy: adminId },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to publish catalog.variant.soft_deleted for ${variantId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     return { success: true, message: 'Product deleted successfully', data: null };
   }
 

@@ -49,18 +49,35 @@ export class AdminFranchiseSettlementsController {
     @Query('franchiseId') franchiseId?: string,
     @Query('status') status?: string,
   ) {
-    const data = await this.settlementService.listSettlements({
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+
+    const { settlements, total } = await this.settlementService.listSettlements({
+      page: pageNum,
+      limit: limitNum,
       cycleId,
       franchiseId,
       status,
     });
 
+    // Wrap in the pagination envelope used by every other list
+    // endpoint in this codebase — admin-products, admin-categories,
+    // storefront-products, admin-procurement (fixed in this pass),
+    // franchise-procurement (fixed in this pass). The franchise-admin
+    // dashboard reads `data.pagination.total` for its "Pending
+    // Settlements" KPI; without this wrapper the tile stays at "--".
     return {
       success: true,
       message: 'Franchise settlements fetched successfully',
-      data,
+      data: {
+        settlements,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      },
     };
   }
 

@@ -33,7 +33,6 @@ interface Variant {
   id: string;
   masterSku: string;
   title: string;
-  platformPrice: number | null;
   price: number;
   compareAtPrice: number | null;
   costPrice: number | null;
@@ -54,7 +53,7 @@ interface ProductDetail {
   productCode: string | null;
   shortDescription: string | null;
   description: string | null;
-  platformPrice: number | null;
+  price: number | null;
   basePrice: number | null;
   compareAtPrice: number | null;
   hasVariants: boolean;
@@ -169,17 +168,17 @@ export default function ProductDetailPage() {
     );
   }
 
-  // Use platformPrice where available, fallback to basePrice
-  const getVariantPrice = (v: Variant): number => {
-    return v.platformPrice ?? v.price;
-  };
+  // Customer-facing price is the variant's price (or the product's
+  // `price` field for variant-less products). The old platformPrice
+  // fallback is gone.
+  const getVariantPrice = (v: Variant): number => v.price;
   const getVariantStock = (v: Variant): number => {
     return v.totalAvailableStock ?? v.totalStock ?? v.stock ?? 0;
   };
 
   const currentPrice = selectedVariant
     ? getVariantPrice(selectedVariant)
-    : (product.platformPrice ?? product.basePrice);
+    : (product.price ?? product.basePrice);
   const currentCompare = selectedVariant ? selectedVariant.compareAtPrice : product.compareAtPrice;
   const discount = getDiscount(currentPrice, currentCompare);
   const currentStock = selectedVariant

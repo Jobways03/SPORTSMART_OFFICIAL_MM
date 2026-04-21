@@ -275,6 +275,17 @@ export default function CheckoutPage() {
 
   const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
 
+  // Redirect empty-cart visitors to /cart. Runs in useEffect because
+  // calling router.push() during render updates Router state mid-render
+  // and React refuses (`Cannot update a component while rendering a
+  // different component`). Gate on !loading so we don't bounce the
+  // user while the initial cart fetch is still in flight.
+  useEffect(() => {
+    if (!loading && (!cart || cart.items.length === 0)) {
+      router.push('/cart');
+    }
+  }, [loading, cart, router]);
+
   if (loading) {
     return (
       <>
@@ -285,7 +296,9 @@ export default function CheckoutPage() {
   }
 
   if (!cart || cart.items.length === 0) {
-    router.push('/cart');
+    // Render a blank shell while the useEffect above queues the
+    // redirect. No router.push() here — doing so would re-trigger the
+    // setState-during-render error.
     return null;
   }
 

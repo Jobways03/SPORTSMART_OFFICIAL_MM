@@ -72,8 +72,10 @@ export class SellerProductsController {
       );
     }
 
-    // Sellers CANNOT set platformPrice
-    delete (dto as any).platformPrice;
+    // Sellers cannot set admin-internal pricing fields (procurementPrice
+    // is the platform's negotiated landed cost, not the seller's price).
+    delete (dto as any).platformPrice; // obsolete — safe to drop if present
+    delete (dto as any).procurementPrice;
 
     const slug = await this.slugService.generateUniqueSlug(dto.title);
     const productCode = await this.productCodeService.generateProductCode();
@@ -273,8 +275,10 @@ export class SellerProductsController {
     // Validate ownership
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    // Build update data — sellers CANNOT set platformPrice
+    // Build update data — sellers cannot set admin-internal pricing
+    // (procurementPrice is platform-side; platformPrice is obsolete).
     delete (dto as any).platformPrice;
+    delete (dto as any).procurementPrice;
     const updateData: any = {};
     if (dto.title !== undefined) {
       updateData.title = dto.title;

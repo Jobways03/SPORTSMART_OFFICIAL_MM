@@ -447,6 +447,31 @@ function NewSaleTab() {
                     >
                       {m.product?.title ?? 'Unknown'}
                     </div>
+                    {/* Variant subtitle + SKU. Without these, a franchise
+                         that has mapped 3 size-variants of the same product
+                         sees 3 identical tiles and can't tell them apart
+                         until after clicking. */}
+                    {m.variant?.title && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: '#6b7280',
+                          fontWeight: 500,
+                          marginTop: -4,
+                        }}
+                      >
+                        {m.variant.title}
+                      </div>
+                    )}
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: '#9ca3af',
+                        fontFamily: 'monospace',
+                      }}
+                    >
+                      {m.globalSku || m.variant?.sku || '\u2014'}
+                    </div>
                     <div
                       style={{
                         fontSize: 13,

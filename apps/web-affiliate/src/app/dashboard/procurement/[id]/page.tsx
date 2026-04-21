@@ -11,8 +11,13 @@ import {
 import { ApiError } from '@/lib/api-client';
 
 function formatINR(n: number | string | null | undefined): string {
-  const v = Number(n ?? 0);
-  return '\u20B9' + v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  // Procurement amounts (landed cost, approved total, procurement
+  // fee, final payable, per-item final) are admin-entered at the
+  // approve step. On a SUBMITTED request they come back as 0/null
+  // — rendering "₹0" reads like a real zero and confuses the
+  // reviewer. Em-dash signals "not set yet".
+  if (n == null || Number(n) === 0) return '\u2014';
+  return '\u20B9' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 
 function formatDateTime(iso: string | null): string {
@@ -84,9 +89,34 @@ export default function AdminProcurementDetailPage() {
     if (!request) return;
     const draft: ApproveDraft = {};
     for (const item of request.items) {
+      // Pre-fill landed cost with the best-available default:
+      //   1. Already-entered landedUnitCost (re-opening the modal)
+      //   2. Per-franchise negotiated override (Option C — admin has
+      //      set an explicit price for this franchise + SKU)
+      //   3. The variant's saved procurementPrice (platform-wide
+      //      default written back by approveRequest when no override
+      //      exists)
+      //   4. The product's saved procurementPrice (fallback for
+      //      product-level mappings with no variant)
+      //   5. 0 if nothing is known yet
+      //
+      // Note: costPrice is intentionally NOT part of this chain —
+      // it's a display-only informational field per product policy.
+      const prior = Number(item.landedUnitCost ?? 0);
+      const franchisePrice = Number(
+        (item as any).franchisePrice?.landedUnitCost ?? 0,
+      );
+      const variantProcurement = Number(
+        (item as any).variant?.procurementPrice ?? 0,
+      );
+      const productProcurement = Number(
+        (item as any).product?.procurementPrice ?? 0,
+      );
+      const landedUnitCost =
+        prior || franchisePrice || variantProcurement || productProcurement || 0;
       draft[item.id] = {
         approvedQty: item.approvedQty || item.requestedQty,
-        landedUnitCost: Number(item.landedUnitCost ?? 0),
+        landedUnitCost,
       };
     }
     setApproveDraft(draft);
@@ -103,13 +133,32 @@ export default function AdminProcurementDetailPage() {
         landedUnitCost: Number(v.landedUnitCost),
       }),
     );
+    // Validate each item; also require at least one item be approved
+    // (approvedQty > 0). An "approve everything as zero" submission
+    // is equivalent to rejection and should go through the Reject
+    // flow instead — otherwise the procurement status moves to
+    // APPROVED with nothing to dispatch.
+    let anyApproved = false;
     for (const it of items) {
-      if (it.landedUnitCost <= 0 && it.approvedQty > 0) {
-        setActionError(
-          'Landed unit cost must be greater than 0 for approved items',
-        );
+      if (it.approvedQty < 0) {
+        setActionError('Approved quantity cannot be negative');
         return;
       }
+      if (it.approvedQty > 0) {
+        anyApproved = true;
+        if (it.landedUnitCost <= 0) {
+          setActionError(
+            'Landed unit cost must be greater than 0 for approved items',
+          );
+          return;
+        }
+      }
+    }
+    if (!anyApproved) {
+      setActionError(
+        'Approve at least one item with quantity > 0, or use Reject to decline the request',
+      );
+      return;
     }
     setActionError('');
     setWorking('approve');

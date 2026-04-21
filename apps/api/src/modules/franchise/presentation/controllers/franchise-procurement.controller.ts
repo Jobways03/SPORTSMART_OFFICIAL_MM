@@ -18,6 +18,61 @@ import { ProcurementCreateDto } from '../dtos/procurement-create.dto';
 import { ProcurementReceiptDto } from '../dtos/procurement-receipt.dto';
 import { ProcurementCancelDto } from '../dtos/procurement-cancel.dto';
 
+/**
+ * Strip the platform's cost breakdown from a procurement request before
+ * it goes out to a franchise caller.
+ *
+ * The request + its items carry both the franchise-facing price
+ * (finalUnitCostToFranchise, finalPayableAmount) AND the platform's
+ * internal breakdown (landedUnitCost, procurementFeePerUnit,
+ * totalApprovedAmount, procurementFeeAmount). The UI already hides the
+ * breakdown, but the raw JSON still exposes it — a curious franchise
+ * could `curl` the endpoint and read the platform's margin. Scrub the
+ * breakdown here so the API contract matches the UI contract.
+ *
+ * Admin callers go through a different controller (admin-procurement)
+ * which deliberately keeps the full breakdown.
+ */
+function scrubPlatformBreakdown<T extends Record<string, any>>(request: T): T {
+  if (!request || typeof request !== 'object') return request;
+  const {
+    totalApprovedAmount: _totalApproved,
+    procurementFeeAmount: _procurementFee,
+    procurementFeeRate: _feeRate,
+    ...safeRequest
+  } = request as any;
+  const items = Array.isArray((request as any).items)
+    ? (request as any).items.map((it: any) => {
+        const {
+          landedUnitCost: _landed,
+          procurementFeePerUnit: _feePerUnit,
+          franchisePrice: _franchisePrice, // Option C override — landed cost, must never leak
+          variant: rawVariant,
+          product: rawProduct,
+          ...rest
+        } = it ?? {};
+        // The repo include pulls costPrice off variant + product so
+        // the admin approval modal can pre-fill landed cost from a
+        // previous write-back. That's an internal platform number;
+        // drop it before anything goes to a franchise caller.
+        const variant = rawVariant
+          ? (() => {
+              const { costPrice: _vCost, ...safeVariant } = rawVariant;
+              return safeVariant;
+            })()
+          : rawVariant;
+        const product = rawProduct
+          ? (() => {
+              const { costPrice: _pCost, ...safeProduct } = rawProduct;
+              return safeProduct;
+            })()
+          : rawProduct;
+        return { ...rest, variant, product };
+      })
+    : (request as any).items;
+  return { ...safeRequest, items } as T;
+}
+
 @ApiTags('Franchise Procurement')
 @Controller('franchise/procurement')
 @UseGuards(FranchiseAuthGuard)
@@ -39,7 +94,7 @@ export class FranchiseProcurementController {
     return {
       success: true,
       message: 'Procurement request created successfully',
-      data,
+      data: scrubPlatformBreakdown(data),
     };
   }
 
@@ -68,7 +123,7 @@ export class FranchiseProcurementController {
       success: true,
       message: 'Procurement requests fetched successfully',
       data: {
-        requests,
+        requests: requests.map(scrubPlatformBreakdown),
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -93,7 +148,7 @@ export class FranchiseProcurementController {
     return {
       success: true,
       message: 'Procurement request detail fetched successfully',
-      data,
+      data: scrubPlatformBreakdown(data),
     };
   }
 
@@ -109,7 +164,7 @@ export class FranchiseProcurementController {
     return {
       success: true,
       message: 'Procurement request submitted successfully',
-      data,
+      data: scrubPlatformBreakdown(data),
     };
   }
 
@@ -130,7 +185,7 @@ export class FranchiseProcurementController {
     return {
       success: true,
       message: 'Procurement request cancelled successfully',
-      data,
+      data: scrubPlatformBreakdown(data),
     };
   }
 
@@ -151,7 +206,7 @@ export class FranchiseProcurementController {
     return {
       success: true,
       message: 'Procurement receipt confirmed successfully',
-      data,
+      data: scrubPlatformBreakdown(data),
     };
   }
 }

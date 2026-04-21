@@ -24,10 +24,10 @@ export default function AdminVariantDetailPage() {
 
   const [form, setForm] = useState({
     title: '',
-    platformPrice: '',
     price: '',
     compareAtPrice: '',
     costPrice: '',
+    procurementPrice: '',
     sku: '',
     barcode: '',
     stock: '',
@@ -51,10 +51,10 @@ export default function AdminVariantDetailPage() {
   const populateForm = useCallback((v: any) => {
     setForm({
       title: v.title || '',
-      platformPrice: v.platformPrice ?? '',
       price: v.price ?? '',
       compareAtPrice: v.compareAtPrice ?? '',
       costPrice: v.costPrice ?? '',
+      procurementPrice: v.procurementPrice ?? '',
       sku: v.sku || '',
       barcode: v.barcode || '',
       stock: String(v.stock ?? 0),
@@ -119,13 +119,13 @@ export default function AdminVariantDetailPage() {
     try {
       const payload: any = {};
       if (form.title.trim()) payload.title = form.title.trim();
-      if (form.platformPrice) payload.platformPrice = Number(form.platformPrice);
-      else payload.platformPrice = null;
       if (form.price) payload.price = Number(form.price);
       if (form.compareAtPrice) payload.compareAtPrice = Number(form.compareAtPrice);
       else payload.compareAtPrice = null;
       if (form.costPrice) payload.costPrice = Number(form.costPrice);
       else payload.costPrice = null;
+      if (form.procurementPrice) payload.procurementPrice = Number(form.procurementPrice);
+      else payload.procurementPrice = null;
       payload.sku = form.sku.trim() || null;
       payload.barcode = form.barcode.trim() || null;
       if (form.stock !== '') payload.stock = Number(form.stock);
@@ -410,23 +410,17 @@ export default function AdminVariantDetailPage() {
           <div className="form-card">
             <div className="form-card-title">PRICING DETAILS</div>
             <p className="variant-detail-hint">Edit pricing details here</p>
-            <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontWeight: 600, color: '#1e40af' }}>Platform Price (Customer-Facing)</label>
-                <div className="input-with-prefix">
-                  <span className="input-prefix">&#8377;</span>
-                  <input type="number" className="form-input" value={form.platformPrice} onChange={e => setForm(prev => ({ ...prev, platformPrice: e.target.value }))} placeholder="0.00" min="0" step="0.01" />
-                </div>
-                <span className="form-hint">This is the price customers see on the storefront. Leave empty to use the seller&apos;s price.</span>
-              </div>
-            </div>
+            {/*
+              Customer-facing price is Price (seller's price) and
+              Compare at Price. The old Platform Price field is gone.
+            */}
             <div className="form-group">
               <label className="form-label">Price (Seller&apos;s Price) <span className="required">*</span></label>
               <div className="input-with-prefix">
                 <span className="input-prefix">&#8377;</span>
                 <input type="number" className="form-input" value={form.price} onChange={e => setForm(prev => ({ ...prev, price: e.target.value }))} placeholder="0.00" min="0" step="0.01" />
               </div>
-              <span className="form-hint">The seller&apos;s listed price. For reference only.</span>
+              <span className="form-hint">The price customers see on the storefront.</span>
             </div>
             <div className="form-group">
               <label className="form-label">Compare at Price</label>
@@ -441,6 +435,15 @@ export default function AdminVariantDetailPage() {
                 <span className="input-prefix">&#8377;</span>
                 <input type="number" className="form-input" value={form.costPrice} onChange={e => setForm(prev => ({ ...prev, costPrice: e.target.value }))} placeholder="0.00" min="0" step="0.01" />
               </div>
+              <span className="form-hint">Display-only informational cost. Not used in any pricing logic.</span>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Procurement Price</label>
+              <div className="input-with-prefix">
+                <span className="input-prefix">&#8377;</span>
+                <input type="number" className="form-input" value={form.procurementPrice} onChange={e => setForm(prev => ({ ...prev, procurementPrice: e.target.value }))} placeholder="0.00" min="0" step="0.01" />
+              </div>
+              <span className="form-hint">Platform-wide default landed cost for franchise procurements of this variant. Overwritten when an approval saves a different value. Per-franchise overrides take precedence.</span>
             </div>
           </div>
 

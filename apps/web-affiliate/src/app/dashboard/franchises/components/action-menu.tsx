@@ -7,6 +7,7 @@ interface ActionMenuProps {
   onEditStatus: () => void;
   onEditVerification: () => void;
   onEditCommission: () => void;
+  onEditPricing?: () => void;
   onSendMessage?: () => void;
   onChangePassword?: () => void;
   onImpersonate?: () => void;
@@ -18,6 +19,7 @@ export default function ActionMenu({
   onEditStatus,
   onEditVerification,
   onEditCommission,
+  onEditPricing,
   onSendMessage,
   onChangePassword,
   onImpersonate,
@@ -73,6 +75,12 @@ export default function ActionMenu({
             <span className="action-icon">&#128176;</span>
             Update Commission
           </button>
+          {onEditPricing && (
+            <button className="action-menu-item" onClick={() => handleAction(onEditPricing)}>
+              <span className="action-icon">&#128200;</span>
+              Procurement Pricing
+            </button>
+          )}
 
           {onSendMessage && (
             <button className="action-menu-item" onClick={() => handleAction(onSendMessage)}>

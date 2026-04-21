@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { apiClient } from '@/lib/api-client';
 
 interface SellerInfo {
   sellerName: string;
@@ -10,8 +11,28 @@ interface SellerInfo {
   phoneNumber: string;
 }
 
+interface KpiState {
+  products: number | null;
+  orders: number | null;
+  revenue: number | null;
+  pending: number | null;
+}
+
+// `null` means "still loading / errored"; a real zero renders as "0".
+const INITIAL_KPIS: KpiState = {
+  products: null,
+  orders: null,
+  revenue: null,
+  pending: null,
+};
+
+const fmtCount = (v: number | null) => (v === null ? '--' : v.toLocaleString('en-IN'));
+const fmtInr = (v: number | null) =>
+  v === null ? '₹--' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+
 export default function DashboardPage() {
   const [seller, setSeller] = useState<SellerInfo | null>(null);
+  const [kpis, setKpis] = useState<KpiState>(INITIAL_KPIS);
 
   useEffect(() => {
     try {
@@ -20,6 +41,41 @@ export default function DashboardPage() {
     } catch {
       // handled by layout
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      // Three parallel fetches, each wrapped so one failure doesn't
+      // blank every tile. limit=1 on list endpoints because we only
+      // need `pagination.total` — the rows are thrown away.
+      const [productsRes, ordersRes, earningsRes] = await Promise.all([
+        apiClient<{ pagination: { total: number } }>('/seller/products?limit=1').catch(
+          () => null,
+        ),
+        apiClient<{ pagination: { total: number } }>('/seller/orders?limit=1').catch(
+          () => null,
+        ),
+        apiClient<{
+          totalEarned: number;
+          pendingSettlement: number;
+        }>('/seller/earnings/summary').catch(() => null),
+      ]);
+
+      if (cancelled) return;
+
+      setKpis({
+        products: productsRes?.data?.pagination?.total ?? null,
+        orders: ordersRes?.data?.pagination?.total ?? null,
+        revenue: earningsRes?.data?.totalEarned ?? null,
+        pending: earningsRes?.data?.pendingSettlement ?? null,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const greeting = () => {
@@ -45,32 +101,36 @@ export default function DashboardPage() {
           <div className="stat-icon blue">&#128230;</div>
           <div className="stat-content">
             <h3>Products</h3>
-            <div className="stat-value">0</div>
-            <div className="stat-sub">No products listed yet</div>
+            <div className="stat-value">{fmtCount(kpis.products)}</div>
+            <div className="stat-sub">
+              {kpis.products === 0 ? 'No products listed yet' : 'Products in catalog'}
+            </div>
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-icon green">&#128195;</div>
           <div className="stat-content">
             <h3>Orders</h3>
-            <div className="stat-value">0</div>
-            <div className="stat-sub">No orders received yet</div>
+            <div className="stat-value">{fmtCount(kpis.orders)}</div>
+            <div className="stat-sub">
+              {kpis.orders === 0 ? 'No orders received yet' : 'Lifetime orders'}
+            </div>
           </div>
         </div>
         <div className="stat-card">
-          <div className="stat-icon amber">&#11088;</div>
+          <div className="stat-icon amber">&#9203;</div>
           <div className="stat-content">
-            <h3>Reviews</h3>
-            <div className="stat-value">--</div>
-            <div className="stat-sub">No reviews yet</div>
+            <h3>Pending Settlement</h3>
+            <div className="stat-value">{fmtInr(kpis.pending)}</div>
+            <div className="stat-sub">Awaiting payout</div>
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-icon purple">&#128200;</div>
           <div className="stat-content">
-            <h3>Revenue</h3>
-            <div className="stat-value">&#8377;0</div>
-            <div className="stat-sub">This month</div>
+            <h3>Total Earned</h3>
+            <div className="stat-value">{fmtInr(kpis.revenue)}</div>
+            <div className="stat-sub">Settled to date</div>
           </div>
         </div>
       </div>
@@ -86,20 +146,32 @@ export default function DashboardPage() {
               <p>Add store details, images & policies</p>
             </div>
           </Link>
-          <div className="quick-action-card" style={{ opacity: 0.5, cursor: 'not-allowed' }}>
+          {/*
+            Add Product is live — was previously shown as "coming soon"
+            with a disabled tile, hiding working functionality at
+            /dashboard/products/new.
+          */}
+          <Link href="/dashboard/products/new" className="quick-action-card">
             <div className="quick-action-icon">&#128722;</div>
             <div className="quick-action-text">
               <h3>Add Product</h3>
-              <p>List your first product — coming soon</p>
+              <p>List a new product and its variants</p>
             </div>
-          </div>
-          <div className="quick-action-card" style={{ opacity: 0.5, cursor: 'not-allowed' }}>
+          </Link>
+          <Link href="/dashboard/orders" className="quick-action-card">
+            <div className="quick-action-icon">&#128195;</div>
+            <div className="quick-action-text">
+              <h3>Manage Orders</h3>
+              <p>Accept, dispatch and track orders</p>
+            </div>
+          </Link>
+          <Link href="/dashboard/commission" className="quick-action-card">
             <div className="quick-action-icon">&#128176;</div>
             <div className="quick-action-text">
-              <h3>Setup Payments</h3>
-              <p>Configure payout details — coming soon</p>
+              <h3>Commission &amp; Earnings</h3>
+              <p>Review per-order commission and settlements</p>
             </div>
-          </div>
+          </Link>
         </div>
       </div>
 

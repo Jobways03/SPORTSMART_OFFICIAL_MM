@@ -16,9 +16,20 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
       approvalStatus?: string;
     },
   ): Promise<{ mappings: any[]; total: number }> {
+    // Exclude mappings whose underlying variant has been soft-deleted
+    // by the seller. A mapping pointing to a dead variant is an orphan
+    // — keeping it in the list would let the franchise UI surface a
+    // product they can no longer stock or sell. Product-level
+    // mappings (variantId=null) stay visible.
+    //
+    // We compose with AND rather than the top-level OR so the search
+    // branch below can add its own OR without clobbering this one.
     const where: any = {
       franchiseId,
       product: { isDeleted: false },
+      AND: [
+        { OR: [{ variantId: null }, { variant: { isDeleted: false } }] },
+      ] as any[],
     };
 
     if (params.isActive !== undefined) {
@@ -30,12 +41,14 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     }
 
     if (params.search) {
-      where.OR = [
-        { globalSku: { contains: params.search, mode: 'insensitive' } },
-        { franchiseSku: { contains: params.search, mode: 'insensitive' } },
-        { barcode: { contains: params.search, mode: 'insensitive' } },
-        { product: { title: { contains: params.search, mode: 'insensitive' }, isDeleted: false } },
-      ];
+      where.AND.push({
+        OR: [
+          { globalSku: { contains: params.search, mode: 'insensitive' } },
+          { franchiseSku: { contains: params.search, mode: 'insensitive' } },
+          { barcode: { contains: params.search, mode: 'insensitive' } },
+          { product: { title: { contains: params.search, mode: 'insensitive' }, isDeleted: false } },
+        ],
+      });
     }
 
     const skip = (params.page - 1) * params.limit;
@@ -84,8 +97,21 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     productId: string,
     variantId: string | null,
   ): Promise<any | null> {
+    // Critical: this lookup is how POS + allocation decide whether a
+    // franchise is permitted to sell / fulfil a given SKU. If the
+    // product has been soft-deleted, or the variant has been
+    // soft-deleted, the mapping must NOT be considered live even if
+    // the FranchiseCatalogMapping row still exists. Without this
+    // guard, a POS operator could scan a tombstoned barcode and the
+    // sale would pass validation.
     return this.prisma.franchiseCatalogMapping.findFirst({
-      where: { franchiseId, productId, variantId: variantId ?? null },
+      where: {
+        franchiseId,
+        productId,
+        variantId: variantId ?? null,
+        product: { isDeleted: false },
+        ...(variantId ? { variant: { isDeleted: false } } : {}),
+      },
     });
   }
 
@@ -198,7 +224,6 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
               masterSku: true,
               barcode: true,
               price: true,
-              platformPrice: true,
               stock: true,
               status: true,
             },
@@ -255,8 +280,14 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     approvalStatus?: string;
     search?: string;
   }): Promise<{ mappings: any[]; total: number }> {
+    // Same soft-deleted-variant filter as the per-franchise list
+    // (see findByFranchiseId). Orphan mappings must not surface in the
+    // admin-wide catalog view either.
     const where: any = {
       product: { isDeleted: false },
+      AND: [
+        { OR: [{ variantId: null }, { variant: { isDeleted: false } }] },
+      ] as any[],
     };
 
     if (params.franchiseId) {
@@ -268,12 +299,14 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     }
 
     if (params.search) {
-      where.OR = [
-        { globalSku: { contains: params.search, mode: 'insensitive' } },
-        { franchiseSku: { contains: params.search, mode: 'insensitive' } },
-        { barcode: { contains: params.search, mode: 'insensitive' } },
-        { product: { title: { contains: params.search, mode: 'insensitive' }, isDeleted: false } },
-      ];
+      where.AND.push({
+        OR: [
+          { globalSku: { contains: params.search, mode: 'insensitive' } },
+          { franchiseSku: { contains: params.search, mode: 'insensitive' } },
+          { barcode: { contains: params.search, mode: 'insensitive' } },
+          { product: { title: { contains: params.search, mode: 'insensitive' }, isDeleted: false } },
+        ],
+      });
     }
 
     const skip = (params.page - 1) * params.limit;

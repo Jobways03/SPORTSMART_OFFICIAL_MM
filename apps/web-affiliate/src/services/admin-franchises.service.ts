@@ -367,6 +367,13 @@ export const adminFranchisesService = {
     return apiClient(`/admin/franchise-settlements${qs ? `?${qs}` : ''}`);
   },
 
+  createSettlementCycle(periodStart: string, periodEnd: string): Promise<ApiResponse> {
+    return apiClient(`/admin/franchise-settlements`, {
+      method: 'POST',
+      body: JSON.stringify({ periodStart, periodEnd }),
+    });
+  },
+
   approveSettlement(id: string): Promise<ApiResponse> {
     return apiClient(`/admin/franchise-settlements/${id}/approve`, { method: 'PATCH' });
   },
@@ -384,5 +391,55 @@ export const adminFranchisesService = {
     return apiClient(`/admin/franchise-orders/${subOrderId}/mark-delivered`, {
       method: 'PATCH',
     });
+  },
+
+  // ── Per-franchise procurement pricing (Option C) ───────
+  //
+  // Each row is a negotiated landed cost for a specific
+  // (franchise, product, variant) combo. When present, it wins over
+  // ProductVariant.costPrice in the procurement approval prefill
+  // chain and is the target of the approval write-back.
+
+  listProcurementPrices(franchiseId: string): Promise<ApiResponse<{
+    prices: Array<{
+      id: string;
+      franchiseId: string;
+      productId: string;
+      variantId: string | null;
+      landedUnitCost: string | number;
+      notes: string | null;
+      createdBy: string | null;
+      createdAt: string;
+      updatedAt: string;
+      product?: { id: string; title: string } | null;
+      variant?: { id: string; title: string | null; sku: string | null } | null;
+    }>;
+  }>> {
+    return apiClient(`/admin/franchises/${franchiseId}/procurement-prices`);
+  },
+
+  upsertProcurementPrice(
+    franchiseId: string,
+    payload: {
+      productId: string;
+      variantId?: string;
+      landedUnitCost: number;
+      notes?: string;
+    },
+  ): Promise<ApiResponse> {
+    return apiClient(`/admin/franchises/${franchiseId}/procurement-prices`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteProcurementPrice(
+    franchiseId: string,
+    priceId: string,
+  ): Promise<ApiResponse> {
+    return apiClient(
+      `/admin/franchises/${franchiseId}/procurement-prices/${priceId}`,
+      { method: 'DELETE' },
+    );
   },
 };

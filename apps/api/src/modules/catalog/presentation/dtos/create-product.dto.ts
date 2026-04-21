@@ -94,12 +94,14 @@ export class CreateProductDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  platformPrice?: number;
+  basePrice?: number;
 
+  // Platform-wide default landed cost used by the franchise
+  // procurement flow. Distinct from costPrice (display-only).
   @IsOptional()
   @IsNumber()
   @Min(0)
-  basePrice?: number;
+  procurementPrice?: number;
 
   @IsOptional()
   @IsNumber()

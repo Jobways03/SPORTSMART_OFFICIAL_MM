@@ -146,7 +146,23 @@ export default function SellerCommissionPage() {
       APPROVED: { bg: '#dbeafe', color: '#1e40af' },
       REFUNDED: { bg: '#fee2e2', color: '#991b1b' },
     };
+    // Human labels so the UI doesn't render raw enum values. Unknown
+    // statuses fall back to title-case (e.g. FUTURE_STATE → "Future
+    // state") instead of the screaming-snake original.
+    const labels: Record<string, string> = {
+      PENDING: 'Pending',
+      SETTLED: 'Settled',
+      PAID: 'Paid',
+      APPROVED: 'Approved',
+      REFUNDED: 'Refunded',
+    };
     const c = colors[s] || { bg: '#f3f4f6', color: '#374151' };
+    const label =
+      labels[s] ??
+      s
+        .toLowerCase()
+        .replace(/_/g, ' ')
+        .replace(/\b\w/, (ch) => ch.toUpperCase());
     return (
       <span style={{
         padding: '2px 8px',
@@ -156,7 +172,7 @@ export default function SellerCommissionPage() {
         background: c.bg,
         color: c.color,
       }}>
-        {s}
+        {label}
       </span>
     );
   };

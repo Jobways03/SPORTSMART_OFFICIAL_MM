@@ -1,21 +1,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { NotFoundAppException, BadRequestAppException, ForbiddenAppException } from '../../../../core/exceptions';
+import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { SellerStatusTransitionPolicy } from '../../../seller/application/policies/seller-status-transition.policy';
 import {
   AdminRepository,
   ADMIN_REPOSITORY,
 } from '../../domain/repositories/admin.repository.interface';
-
-// Allowed status transitions
-const ALLOWED_TRANSITIONS: Record<string, string[]> = {
-  PENDING_APPROVAL: ['ACTIVE', 'DEACTIVATED'],
-  ACTIVE: ['INACTIVE', 'SUSPENDED', 'DEACTIVATED'],
-  INACTIVE: ['ACTIVE', 'DEACTIVATED'],
-  SUSPENDED: ['ACTIVE', 'DEACTIVATED'],
-  DEACTIVATED: ['ACTIVE'],
-};
 
 interface UpdateStatusInput {
   adminId: string;
@@ -34,6 +26,7 @@ export class AdminUpdateSellerStatusUseCase {
     private readonly auditService: AdminAuditService,
     private readonly logger: AppLoggerService,
     private readonly audit: AuditPublicFacade,
+    private readonly transitionPolicy: SellerStatusTransitionPolicy,
   ) {
     this.logger.setContext('AdminUpdateSellerStatusUseCase');
   }
@@ -56,16 +49,10 @@ export class AdminUpdateSellerStatusUseCase {
       throw new NotFoundAppException('Seller not found');
     }
 
-    if (seller.status === status) {
-      throw new BadRequestAppException(`Seller is already ${status}`);
-    }
-
-    const allowed = ALLOWED_TRANSITIONS[seller.status] || [];
-    if (!allowed.includes(status)) {
-      throw new ForbiddenAppException(
-        `Cannot transition from ${seller.status} to ${status}`,
-      );
-    }
+    // Delegates identity-checks + transition rules to the policy so
+    // the state machine is testable in isolation and any future
+    // mutator of seller.status hits the same gate.
+    this.transitionPolicy.assertTransition(seller.status, status);
 
     const updated = await this.adminRepo.updateSeller(
       sellerId,

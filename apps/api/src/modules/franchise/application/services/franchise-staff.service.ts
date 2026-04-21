@@ -52,7 +52,12 @@ export class FranchiseStaffService {
   }
 
   async addStaff(franchiseId: string, data: AddStaffInput) {
-    // Check for duplicate email
+    // Pre-check for duplicate email — gives a clean error on the common
+    // case. NOT the source of truth for uniqueness: two requests for
+    // the same email can both pass this check before either insert
+    // runs. The DB unique index is authoritative; we map its
+    // constraint-violation error back to the same ConflictAppException
+    // shape below so callers see one consistent response.
     const existing = await this.prisma.franchiseStaff.findUnique({
       where: { email: data.email },
     });
@@ -64,29 +69,43 @@ export class FranchiseStaffService {
     // Hash password
     const passwordHash = await bcrypt.hash(data.password, 12);
 
-    const staff = await this.prisma.franchiseStaff.create({
-      data: {
-        franchiseId,
-        name: data.name,
-        email: data.email,
-        phone: data.phone || null,
-        passwordHash,
-        role: data.role as any,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        role: true,
-        isActive: true,
-        createdAt: true,
-      },
-    });
+    try {
+      const staff = await this.prisma.franchiseStaff.create({
+        data: {
+          franchiseId,
+          name: data.name,
+          email: data.email,
+          phone: data.phone || null,
+          passwordHash,
+          role: data.role as any,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+        },
+      });
 
-    this.logger.log(`Staff member added to franchise ${franchiseId}: ${staff.id}`);
+      this.logger.log(`Staff member added to franchise ${franchiseId}: ${staff.id}`);
 
-    return staff;
+      return staff;
+    } catch (err: any) {
+      // P2002 = Prisma unique-constraint violation. The only unique
+      // column on FranchiseStaff that an external caller can collide
+      // with is `email`; map to the same ConflictAppException the
+      // pre-check uses so the API response is identical whether the
+      // duplicate was caught by our check or by the DB.
+      if (err?.code === 'P2002') {
+        throw new ConflictAppException(
+          'A staff member with this email already exists',
+        );
+      }
+      throw err;
+    }
   }
 
   async updateStaff(franchiseId: string, staffId: string, data: UpdateStaffInput) {

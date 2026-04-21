@@ -521,10 +521,17 @@ export default function ProcurementDetailPage() {
                       borderBottom: '1px solid #e5e7eb',
                     }}
                   >
+                    {/*
+                      Cost columns consolidated to ONE ("Unit Cost") plus
+                      a "Line Total". The prior Base Cost + Platform Fee
+                      + Your Cost breakdown leaked the platform's margin
+                      to the franchise. They should see only the rolled-
+                      up per-unit price they're paying.
+                    */}
                     {['Product', 'Requested']
                       .concat(
                         showApprovedColumns
-                          ? ['Approved', 'Base Cost', 'Platform Fee', 'Your Cost']
+                          ? ['Approved', 'Unit Cost', 'Line Total']
                           : [],
                       )
                       .concat(showReceivedColumns ? ['Received', 'Damaged'] : [])
@@ -585,35 +592,15 @@ export default function ProcurementDetailPage() {
                             <td style={{ padding: '12px 14px', color: '#111827' }}>
                               {it.approvedQty}
                             </td>
-                            {/* Base cost (what admin paid to source) */}
-                            <td
-                              style={{
-                                padding: '12px 14px',
-                                color: '#111827',
-                                fontFamily:
-                                  'ui-monospace, SFMono-Regular, Menlo, monospace',
-                                fontSize: 13,
-                              }}
-                            >
-                              {it.landedUnitCost != null
-                                ? formatProcurementCurrency(it.landedUnitCost)
-                                : '—'}
-                            </td>
-                            {/* Platform procurement fee on top */}
-                            <td
-                              style={{
-                                padding: '12px 14px',
-                                color: '#6b7280',
-                                fontFamily:
-                                  'ui-monospace, SFMono-Regular, Menlo, monospace',
-                                fontSize: 13,
-                              }}
-                            >
-                              {it.procurementFeePerUnit != null
-                                ? `+ ${formatProcurementCurrency(it.procurementFeePerUnit)}`
-                                : '—'}
-                            </td>
-                            {/* Final cost to franchise — what they actually pay per unit */}
+                            {/*
+                              Unit Cost = the single rolled-up price the
+                              franchise pays per unit (backend field
+                              finalUnitCostToFranchise already includes
+                              the platform procurement fee). We do NOT
+                              render landedUnitCost or
+                              procurementFeePerUnit here — that
+                              breakdown is admin-only.
+                            */}
                             <td
                               style={{
                                 padding: '12px 14px',
@@ -627,6 +614,27 @@ export default function ProcurementDetailPage() {
                               {it.finalUnitCostToFranchise != null
                                 ? formatProcurementCurrency(
                                     it.finalUnitCostToFranchise,
+                                  )
+                                : '—'}
+                            </td>
+                            {/* Line Total = unit × approved qty. Rendered
+                               here (not derived on the backend) so the
+                               franchise sees the running total per item
+                               without a separate calculation step. */}
+                            <td
+                              style={{
+                                padding: '12px 14px',
+                                color: '#111827',
+                                fontWeight: 600,
+                                fontFamily:
+                                  'ui-monospace, SFMono-Regular, Menlo, monospace',
+                                fontSize: 13,
+                              }}
+                            >
+                              {it.finalUnitCostToFranchise != null &&
+                              it.approvedQty != null
+                                ? formatProcurementCurrency(
+                                    it.finalUnitCostToFranchise * it.approvedQty,
                                   )
                                 : '—'}
                             </td>

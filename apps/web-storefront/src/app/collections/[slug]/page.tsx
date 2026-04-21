@@ -13,7 +13,7 @@ interface Product {
   title: string;
   slug: string;
   shortDescription: string | null;
-  platformPrice: number | null;
+  price: number | null;
   basePrice: number | null;
   compareAtPrice: number | null;
   primaryImageUrl: string | null;
@@ -88,7 +88,7 @@ function CollectionContent() {
 
   // Helpers
   const getDisplayPrice = (product: Product): number | null => {
-    return product.platformPrice ?? product.basePrice ?? null;
+    return product.price ?? product.basePrice ?? null;
   };
 
   const formatPrice = (price: number | null) => {

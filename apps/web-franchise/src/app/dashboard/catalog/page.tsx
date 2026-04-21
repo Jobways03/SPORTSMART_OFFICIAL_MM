@@ -94,7 +94,8 @@ export default function CatalogPage() {
     franchiseSku: string;
     barcode: string;
     isListedForOnlineFulfillment: boolean;
-  }>({ franchiseSku: '', barcode: '', isListedForOnlineFulfillment: true });
+    variantId: string | null;
+  }>({ franchiseSku: '', barcode: '', isListedForOnlineFulfillment: true, variantId: null });
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState('');
 
@@ -247,7 +248,17 @@ export default function CatalogPage() {
 
   const openAddModal = (product: AvailableProduct) => {
     setAddProduct(product);
-    setAddForm({ franchiseSku: '', barcode: '', isListedForOnlineFulfillment: true });
+    // If the product has exactly one variant, preselect it so the
+    // operator doesn't have to click. Multi-variant products force an
+    // explicit choice before the submit button enables.
+    const variants = product.variants ?? [];
+    const preselect = variants.length === 1 ? variants[0].id : null;
+    setAddForm({
+      franchiseSku: '',
+      barcode: '',
+      isListedForOnlineFulfillment: true,
+      variantId: preselect,
+    });
     setAddError('');
   };
 
@@ -260,11 +271,22 @@ export default function CatalogPage() {
   const handleAddSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!addProduct) return;
+
+    // Multi-variant products must pick a variant. Fail fast with a
+    // friendly message rather than sending an ambiguous payload the
+    // backend's assertVariantBelongsToProduct will reject at runtime.
+    const variants = addProduct.variants ?? [];
+    if (variants.length > 0 && !addForm.variantId) {
+      setAddError('Please pick a variant to map.');
+      return;
+    }
+
     setAddError('');
     setAddSaving(true);
     try {
       const payload: AddMappingPayload = {
         productId: addProduct.id,
+        variantId: addForm.variantId || undefined,
         franchiseSku: addForm.franchiseSku.trim() || undefined,
         barcode: addForm.barcode.trim() || undefined,
         isListedForOnlineFulfillment: addForm.isListedForOnlineFulfillment,
@@ -555,6 +577,62 @@ export default function CatalogPage() {
             </div>
 
             <form onSubmit={handleAddSubmit} noValidate>
+              {(addProduct.variants ?? []).length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={modalLabelStyle}>
+                    Variant{(addProduct.variants ?? []).length > 1 ? ' *' : ''}
+                  </label>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                      gap: 8,
+                      maxHeight: 220,
+                      overflowY: 'auto',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 6,
+                      padding: 8,
+                      background: '#fafafa',
+                    }}
+                  >
+                    {(addProduct.variants ?? []).map((v) => {
+                      const selected = addForm.variantId === v.id;
+                      return (
+                        <button
+                          key={v.id}
+                          type="button"
+                          disabled={addSaving}
+                          onClick={() =>
+                            setAddForm((p) => ({ ...p, variantId: v.id }))
+                          }
+                          style={{
+                            textAlign: 'left',
+                            padding: '10px 12px',
+                            background: selected ? '#eff6ff' : '#fff',
+                            border: `1px solid ${selected ? '#3b82f6' : '#e5e7eb'}`,
+                            borderRadius: 6,
+                            cursor: addSaving ? 'not-allowed' : 'pointer',
+                            fontSize: 12,
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, color: '#111827', marginBottom: 2 }}>
+                            {v.title || v.sku || v.masterSku || v.id.slice(0, 8)}
+                          </div>
+                          <div style={{ color: '#6b7280', fontFamily: 'monospace', fontSize: 11 }}>
+                            {v.sku || v.masterSku || '\u2014'}
+                          </div>
+                          <div style={{ color: '#6b7280', fontSize: 11 }}>
+                            {formatPrice(v.price)}
+                            {typeof v.stock === 'number' ? ` \u00B7 stock ${v.stock}` : ''}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div style={{ marginBottom: 14 }}>
                 <label style={modalLabelStyle}>Franchise SKU (optional)</label>
                 <input

@@ -88,9 +88,9 @@ export default function EditProductPage() {
     description: '',
     hasVariants: false,
     basePrice: '',
-    platformPrice: '',
     compareAtPrice: '',
     costPrice: '',
+    procurementPrice: '',
     baseSku: '',
     baseStock: '',
     baseBarcode: '',
@@ -168,9 +168,9 @@ export default function EditProductPage() {
       description: p.description || '',
       hasVariants: p.hasVariants,
       basePrice: p.basePrice ?? '',
-      platformPrice: (p as any).platformPrice ?? '',
       compareAtPrice: p.compareAtPrice && Number(p.compareAtPrice) > 0 ? p.compareAtPrice : '',
       costPrice: p.costPrice ?? '',
+      procurementPrice: (p as any).procurementPrice ?? '',
       baseSku: p.baseSku || '',
       baseStock: p.baseStock != null ? String(p.baseStock) : '',
       baseBarcode: p.baseBarcode || '',
@@ -472,9 +472,10 @@ export default function EditProductPage() {
     payload.shortDescription = form.shortDescription.trim();
     payload.description = form.description.trim();
 
-    // Platform price applies to both simple and variant products
-    if (form.platformPrice) payload.platformPrice = Number(form.platformPrice);
-    else payload.platformPrice = null;
+    // Procurement price applies to both simple and variant products
+    // (fallback for product-level mappings with no variant).
+    if (form.procurementPrice) payload.procurementPrice = Number(form.procurementPrice);
+    else payload.procurementPrice = null;
 
     if (!form.hasVariants) {
       if (form.basePrice) payload.basePrice = Number(form.basePrice);
@@ -1188,8 +1189,8 @@ export default function EditProductPage() {
                 <input
                   type="number"
                   className="form-input"
-                  value={form.platformPrice || form.basePrice}
-                  onChange={e => { updateField('platformPrice', e.target.value); updateField('basePrice', e.target.value); }}
+                  value={form.basePrice}
+                  onChange={e => updateField('basePrice', e.target.value)}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -1215,6 +1216,57 @@ export default function EditProductPage() {
                 />
               </div>
               <span className="form-hint">Original price (shown as strikethrough). Leave empty if not applicable.</span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Cost Price</label>
+              <div className="input-with-prefix">
+                <span className="input-prefix">&#8377;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={form.costPrice}
+                  onChange={e => updateField('costPrice', e.target.value)}
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                  disabled={!isEditable}
+                />
+              </div>
+              <span className="form-hint">
+                Display-only informational cost. Not used by any pricing logic.
+              </span>
+            </div>
+
+            {/*
+              Product-level procurement cost. Used by the franchise
+              procurement flow when a mapping has no variant
+              (rare — most mappings are variant-level). Variant-level
+              procurementPrice wins when set; per-franchise overrides
+              set on the franchise's Procurement Pricing page take
+              precedence over both.
+            */}
+            <div className="form-group">
+              <label className="form-label">Procurement Price</label>
+              <div className="input-with-prefix">
+                <span className="input-prefix">&#8377;</span>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={form.procurementPrice}
+                  onChange={e => updateField('procurementPrice', e.target.value)}
+                  placeholder="0.00"
+                  min="0"
+                  step="0.01"
+                  disabled={!isEditable}
+                />
+              </div>
+              <span className="form-hint">
+                Platform-wide default landed cost applied when franchises procure this
+                product. Variant-level procurement price wins when set; franchise-
+                specific overrides on each franchise&apos;s Procurement Pricing page
+                take precedence over both.
+              </span>
             </div>
 
             <div className="form-group">

@@ -20,6 +20,12 @@ export class CreateVariantDto {
   @Min(0)
   costPrice?: number;
 
+  // Platform-wide default landed cost used by franchise procurement.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  procurementPrice?: number;
+
   @IsOptional()
   @IsString()
   sku?: string;

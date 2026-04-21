@@ -13,8 +13,8 @@ import {
 
 export interface BulkPricingUpdate {
   productId: string;
-  platformPrice?: number;
-  variantUpdates?: { variantId: string; platformPrice: number }[];
+  price?: number;
+  variantUpdates?: { variantId: string; price: number }[];
 }
 
 export interface BulkPricingResult {
@@ -77,19 +77,19 @@ export class AdminOperationsService {
         }
 
         // Update product platform price
-        if (update.platformPrice !== undefined) {
-          if (update.platformPrice < 0) {
+        if (update.price !== undefined) {
+          if (update.price < 0) {
             errors.push({ productId: update.productId, error: 'Platform price must be non-negative' });
             continue;
           }
-          await this.repo.updateProductPrice(update.productId, update.platformPrice);
+          await this.repo.updateProductPrice(update.productId, update.price);
           updatedProducts++;
         }
 
         // Update variant platform prices
         if (update.variantUpdates && update.variantUpdates.length > 0) {
           for (const vu of update.variantUpdates) {
-            if (vu.platformPrice < 0) {
+            if (vu.price < 0) {
               errors.push({ productId: update.productId, error: `Variant ${vu.variantId}: price must be non-negative` });
               continue;
             }
@@ -99,7 +99,7 @@ export class AdminOperationsService {
                 errors.push({ productId: update.productId, error: `Variant ${vu.variantId} not found` });
                 continue;
               }
-              await this.repo.updateVariantPrice(vu.variantId, vu.platformPrice);
+              await this.repo.updateVariantPrice(vu.variantId, vu.price);
               updatedVariants++;
             } catch (err) {
               errors.push({

@@ -1,16 +1,18 @@
 /**
  * Tests for the server-side price validation rule used inside
- * `placeOrderTransaction`. The actual rule is inlined into the repository
- * but it's the same one-liner everywhere — pinning the spec here documents
- * the contract:
+ * `placeOrderTransaction`. The actual rule is inlined into the
+ * repository but it's the same one-liner everywhere — pinning the
+ * spec here documents the contract:
  *
  *   reject if abs(suppliedPrice - canonicalPrice) > PRICE_TOLERANCE
  *
- * The tolerance is ₹0.01, which is the smallest unit of `Decimal(10,2)`.
+ * The tolerance is ₹0.01, which is the smallest unit of Decimal(10,2).
  *
- * The fallback chain for canonical price is also documented here:
- *   variant: variant.platformPrice ?? variant.price ?? 0
- *   product: product.platformPrice ?? product.basePrice ?? 0
+ * After the platformPrice removal, the canonical price chain is:
+ *   variant: variant.price ?? 0
+ *   product: product.basePrice ?? 0
+ * (The old `variant.platformPrice ?? variant.price` fallback is gone;
+ * customer sees the seller's price directly.)
  */
 
 const PRICE_TOLERANCE = 0.01;
@@ -23,15 +25,13 @@ function shouldRejectPrice(
 }
 
 function resolveCanonicalPrice(args: {
-  product: { platformPrice: number | null; basePrice: number | null };
-  variant?: { platformPrice: number | null; price: number | null } | null;
+  product: { basePrice: number | null };
+  variant?: { price: number | null } | null;
 }): number {
   if (args.variant) {
-    return Number(
-      args.variant.platformPrice ?? args.variant.price ?? 0,
-    );
+    return Number(args.variant.price ?? 0);
   }
-  return Number(args.product.platformPrice ?? args.product.basePrice ?? 0);
+  return Number(args.product.basePrice ?? 0);
 }
 
 describe('Price validation rule', () => {
@@ -62,43 +62,24 @@ describe('Price validation rule', () => {
     });
 
     it('handles two-decimal Decimal-shaped values cleanly', () => {
-      // Realistic scenario: cart shows ₹1499.99, server has ₹1499.99
       expect(shouldRejectPrice(1499.99, 1499.99)).toBe(false);
-      // Cart shows ₹1499.99, server has ₹1500.00 (₹0.01 drift — accepted)
       expect(shouldRejectPrice(1499.99, 1500.0)).toBe(false);
-      // Cart shows ₹1499.99, server has ₹1501.00 (₹1.01 drift — rejected)
       expect(shouldRejectPrice(1499.99, 1501.0)).toBe(true);
     });
   });
 
   describe('resolveCanonicalPrice', () => {
-    it('returns variant.platformPrice when set', () => {
+    it('returns variant.price when a variant exists', () => {
       const result = resolveCanonicalPrice({
-        product: { platformPrice: 999, basePrice: 800 },
-        variant: { platformPrice: 1099, price: 1000 },
-      });
-      expect(result).toBe(1099);
-    });
-
-    it('falls back to variant.price when variant.platformPrice is null', () => {
-      const result = resolveCanonicalPrice({
-        product: { platformPrice: 999, basePrice: 800 },
-        variant: { platformPrice: null, price: 1050 },
+        product: { basePrice: 800 },
+        variant: { price: 1050 },
       });
       expect(result).toBe(1050);
     });
 
-    it('uses product.platformPrice when no variant', () => {
+    it('uses product.basePrice when no variant', () => {
       const result = resolveCanonicalPrice({
-        product: { platformPrice: 999, basePrice: 800 },
-        variant: null,
-      });
-      expect(result).toBe(999);
-    });
-
-    it('falls back to product.basePrice when product.platformPrice is null', () => {
-      const result = resolveCanonicalPrice({
-        product: { platformPrice: null, basePrice: 800 },
+        product: { basePrice: 800 },
         variant: null,
       });
       expect(result).toBe(800);
@@ -106,7 +87,7 @@ describe('Price validation rule', () => {
 
     it('returns 0 when nothing is set (edge case)', () => {
       const result = resolveCanonicalPrice({
-        product: { platformPrice: null, basePrice: null },
+        product: { basePrice: null },
         variant: null,
       });
       expect(result).toBe(0);
@@ -114,11 +95,12 @@ describe('Price validation rule', () => {
 
     it('ignores product price when a variant is present (variant is authoritative)', () => {
       const result = resolveCanonicalPrice({
-        product: { platformPrice: 999, basePrice: 800 },
-        variant: { platformPrice: null, price: 0 },
+        product: { basePrice: 800 },
+        variant: { price: 0 },
       });
-      // When the variant exists, its price wins even if zero — bug or feature?
-      // The current code does this; pinning it here so changes are intentional.
+      // When the variant exists, its price wins even if zero — bug or
+      // feature? The current code does this; pinning here so changes
+      // are intentional.
       expect(result).toBe(0);
     });
   });

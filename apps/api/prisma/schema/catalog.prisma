@@ -118,7 +118,11 @@ model Product {
   hasVariants      Boolean          @default(false) @map("has_variants")
 
   // Platform pricing (customer-facing price, admin-controlled)
-  platformPrice Decimal? @map("platform_price") @db.Decimal(10, 2)
+  // procurementPrice: platform-wide default landed cost used by the
+  // franchise procurement flow (Option A/B). Distinct from costPrice,
+  // which is now display-only. Per-franchise overrides live in
+  // FranchiseProcurementPrice (Option C) and take precedence.
+  procurementPrice Decimal? @map("procurement_price") @db.Decimal(10, 2)
 
   // Simple product fields (used when hasVariants = false)
   basePrice      Decimal? @map("base_price") @db.Decimal(10, 2)
@@ -213,7 +217,7 @@ model ProductVariant {
   sku            String?
   barcode        String?
   price          Decimal       @db.Decimal(10, 2)
-  platformPrice  Decimal?      @map("platform_price") @db.Decimal(10, 2)
+  procurementPrice Decimal?    @map("procurement_price") @db.Decimal(10, 2)
   compareAtPrice Decimal?      @map("compare_at_price") @db.Decimal(10, 2)
   costPrice      Decimal?      @map("cost_price") @db.Decimal(10, 2)
   stock          Int           @default(0)

@@ -13,7 +13,7 @@ export class PrismaProcurementRepository implements ProcurementRepository {
   }
 
   async findByIdWithItems(id: string): Promise<any | null> {
-    return this.prisma.procurementRequest.findUnique({
+    const request = await this.prisma.procurementRequest.findUnique({
       where: { id },
       include: {
         items: {
@@ -29,6 +29,80 @@ export class PrismaProcurementRepository implements ProcurementRepository {
         },
       },
     });
+
+    if (!request) return null;
+
+    // Hydrate each item with cost-prefill data so the admin approval
+    // modal can fill landedUnitCost from the correct precedence chain:
+    //
+    //   per-franchise override  >  variant default  >  product default
+    //
+    // Cross-module FKs are intentionally scalar-only in this codebase,
+    // so we do batched lookups instead of ORM includes. Runs N+1-safe:
+    // three queries regardless of item count.
+    const items = request.items as any[];
+    const productIds = Array.from(
+      new Set(items.map((i) => i.productId).filter(Boolean)),
+    );
+    const variantIds = Array.from(
+      new Set(items.map((i) => i.variantId).filter((v): v is string => !!v)),
+    );
+
+    const [products, variants, franchisePrices] = await Promise.all([
+      productIds.length
+        ? this.prisma.product.findMany({
+            where: { id: { in: productIds } },
+            // procurementPrice drives the approval prefill fallback.
+            // costPrice is display-only per product policy and is
+            // intentionally NOT fetched here — it isn't used by
+            // procurement logic.
+            select: { id: true, title: true, procurementPrice: true },
+          })
+        : Promise.resolve([] as any[]),
+      variantIds.length
+        ? this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, title: true, sku: true, procurementPrice: true },
+          })
+        : Promise.resolve([] as any[]),
+      productIds.length
+        ? this.prisma.franchiseProcurementPrice.findMany({
+            where: {
+              franchiseId: request.franchiseId,
+              productId: { in: productIds },
+            },
+            select: {
+              id: true,
+              productId: true,
+              variantId: true,
+              landedUnitCost: true,
+            },
+          })
+        : Promise.resolve([] as any[]),
+    ]);
+
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const variantById = new Map(variants.map((v) => [v.id, v]));
+    // Key on "productId::variantId|''" so product-level overrides
+    // (variantId=null) are disambiguated from variant-level ones.
+    const franchisePriceByKey = new Map(
+      franchisePrices.map((fp: any) => [
+        `${fp.productId}::${fp.variantId ?? ''}`,
+        fp,
+      ]),
+    );
+
+    return {
+      ...request,
+      items: items.map((it) => ({
+        ...it,
+        product: productById.get(it.productId) ?? null,
+        variant: it.variantId ? variantById.get(it.variantId) ?? null : null,
+        franchisePrice:
+          franchisePriceByKey.get(`${it.productId}::${it.variantId ?? ''}`) ??
+          null,
+      })),
+    };
   }
 
   async findByFranchiseId(

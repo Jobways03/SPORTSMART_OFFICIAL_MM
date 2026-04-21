@@ -359,7 +359,52 @@ export default function ProcurementListPage() {
                           ? formatProcurementCurrency(req.finalPayableAmount)
                           : '—'}
                       </td>
-                      <td style={{ padding: '14px 16px' }}>{renderStatusBadge(req.status)}</td>
+                      <td style={{ padding: '14px 16px' }}>
+                        {renderStatusBadge(req.status)}
+                        {/*
+                         * Status subtitle — timestamp + tracking for the
+                         * most-relevant milestone. Prior list view showed
+                         * only the status chip for a DISPATCHED request,
+                         * so the franchise had no dispatch date or carrier
+                         * without drilling into the detail page.
+                         */}
+                        {(() => {
+                          if (req.status === 'DISPATCHED' && req.dispatchedAt) {
+                            const carrier = req.carrierName || req.trackingNumber;
+                            return (
+                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                {formatProcurementDate(req.dispatchedAt)}
+                                {carrier ? ` \u00B7 ${carrier}` : ''}
+                              </div>
+                            );
+                          }
+                          if (
+                            (req.status === 'RECEIVED' || req.status === 'PARTIALLY_RECEIVED') &&
+                            req.receivedAt
+                          ) {
+                            return (
+                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                Received {formatProcurementDate(req.receivedAt)}
+                              </div>
+                            );
+                          }
+                          if (req.status === 'APPROVED' && req.approvedAt) {
+                            return (
+                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                Approved {formatProcurementDate(req.approvedAt)}
+                              </div>
+                            );
+                          }
+                          if (req.status === 'SETTLED' && req.settledAt) {
+                            return (
+                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                                Settled {formatProcurementDate(req.settledAt)}
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </td>
                       <td
                         style={{
                           padding: '14px 16px',

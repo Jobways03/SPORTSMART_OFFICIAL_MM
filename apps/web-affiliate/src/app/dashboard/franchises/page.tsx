@@ -340,6 +340,7 @@ export default function FranchisesPage() {
                         onEditStatus={() => openModal('status', franchise)}
                         onEditVerification={() => openModal('verification', franchise)}
                         onEditCommission={() => openModal('commission', franchise)}
+                        onEditPricing={() => router.push(`/dashboard/franchises/${franchise.id}/pricing`)}
                         onSendMessage={() => openModal('message', franchise)}
                         onChangePassword={() => openModal('password', franchise)}
                         onImpersonate={() => openModal('impersonate', franchise)}

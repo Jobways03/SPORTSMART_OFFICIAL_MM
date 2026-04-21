@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 import { AdminProcurementController } from '../../src/modules/franchise/presentation/controllers/admin-procurement.controller';
 import { FranchiseProcurementController } from '../../src/modules/franchise/presentation/controllers/franchise-procurement.controller';
+import { AdminFranchiseSettlementsController } from '../../src/modules/franchise/presentation/controllers/admin-franchise-settlements.controller';
+import { AdminFranchiseCatalogController } from '../../src/modules/franchise/presentation/controllers/admin-franchise-catalog.controller';
 
 /**
  * Regression test for procurement list response shape.
@@ -87,6 +89,82 @@ describe('FranchiseProcurementController.listMyRequests — response envelope', 
           limit: 10,
           total: 1,
           totalPages: 1,
+        },
+      },
+    });
+  });
+});
+
+describe('AdminFranchiseSettlementsController.listSettlements — response envelope', () => {
+  it('wraps settlements in the pagination envelope so dashboard KPIs resolve', async () => {
+    // The affiliate/franchise-admin dashboard reads
+    // data.pagination.total for its "Pending Settlements" tile.
+    // Without this envelope the tile stayed at "--".
+    const service: any = {
+      listSettlements: jest.fn().mockResolvedValue({
+        settlements: [{ id: 's1' }, { id: 's2' }],
+        total: 12,
+      }),
+    };
+    const ctrl = new AdminFranchiseSettlementsController(service);
+
+    const res = await ctrl.listSettlements('1', '1', undefined, undefined, 'PENDING');
+
+    expect(service.listSettlements).toHaveBeenCalledWith({
+      page: 1,
+      limit: 1,
+      cycleId: undefined,
+      franchiseId: undefined,
+      status: 'PENDING',
+    });
+    expect(res).toMatchObject({
+      success: true,
+      data: {
+        settlements: [{ id: 's1' }, { id: 's2' }],
+        pagination: {
+          page: 1,
+          limit: 1,
+          total: 12,
+          totalPages: 12,
+        },
+      },
+    });
+  });
+});
+
+describe('AdminFranchiseCatalogController.listAllMappings — response envelope', () => {
+  it('wraps mappings in the pagination envelope so the admin pager can render', async () => {
+    // The franchise-admin catalog page uses pagination.totalPages to
+    // decide whether to render the Prev / Next controls. The bare
+    // { mappings, total } shape the repo returned made that check
+    // always false, so the pager was invisible even when rows
+    // spanned multiple pages.
+    const repo: any = {
+      findAllPaginated: jest.fn().mockResolvedValue({
+        mappings: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }],
+        total: 45,
+      }),
+    };
+    const ctrl = new AdminFranchiseCatalogController(repo);
+
+    const res = await ctrl.listAllMappings('2', '20');
+
+    expect(repo.findAllPaginated).toHaveBeenCalledWith({
+      page: 2,
+      limit: 20,
+      franchiseId: undefined,
+      approvalStatus: undefined,
+      search: undefined,
+    });
+    expect(res).toMatchObject({
+      success: true,
+      data: {
+        mappings: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }],
+        pagination: {
+          page: 2,
+          limit: 20,
+          total: 45,
+          totalPages: 3, // ceil(45 / 20)
         },
       },
     });

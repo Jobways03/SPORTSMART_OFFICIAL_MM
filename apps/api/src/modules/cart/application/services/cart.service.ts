@@ -25,8 +25,8 @@ export class CartService {
     const items = await Promise.all(
       cart.items.map(async (item) => {
         const price = item.variant
-          ? Number(item.variant.platformPrice ?? item.variant.price)
-          : Number(item.product.platformPrice ?? item.product.basePrice ?? 0);
+          ? Number(item.variant.price)
+          : Number(item.product.basePrice ?? 0);
         const lineTotal = price * item.quantity;
         totalAmount += lineTotal;
 

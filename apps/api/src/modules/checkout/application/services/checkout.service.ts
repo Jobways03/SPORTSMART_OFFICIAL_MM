@@ -97,8 +97,10 @@ export class CheckoutService {
 
     for (const cartItem of cart.items) {
       const unitPrice = cartItem.variant
-        ? Number(cartItem.variant.platformPrice ?? cartItem.variant.price)
-        : Number(cartItem.product.platformPrice ?? cartItem.product.basePrice ?? 0);
+        // Customer-facing price consolidates on `price` (variant) and
+        // `basePrice` (product). platformPrice column is dropped.
+        ? Number(cartItem.variant.price)
+        : Number(cartItem.product.basePrice ?? 0);
       const lineTotal = unitPrice * cartItem.quantity;
       totalAmount += lineTotal;
       itemCount += cartItem.quantity;

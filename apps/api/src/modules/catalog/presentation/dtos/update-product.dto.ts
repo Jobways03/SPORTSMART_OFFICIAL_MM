@@ -52,12 +52,14 @@ export class UpdateProductDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  platformPrice?: number;
+  compareAtPrice?: number;
 
+  // Platform-wide default landed cost used by the franchise
+  // procurement flow. Not shown to customers.
   @IsOptional()
   @IsNumber()
   @Min(0)
-  compareAtPrice?: number;
+  procurementPrice?: number;
 
   @IsOptional()
   @IsNumber()

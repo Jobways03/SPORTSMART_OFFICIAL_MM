@@ -231,8 +231,19 @@ export class PrismaProductRepository implements IProductRepository {
     });
   }
 
-  async softDeleteWithVariants(productId: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
+  async softDeleteWithVariants(productId: string): Promise<string[]> {
+    // Returns the ids of the variants that were soft-deleted as part
+    // of the cascade, so the caller can emit downstream events
+    // (catalog.variant.soft_deleted) per variant. Querying inside the
+    // same transaction before the updateMany keeps the list honest
+    // under concurrent writes.
+    return this.prisma.$transaction(async (tx) => {
+      const variants = await tx.productVariant.findMany({
+        where: { productId, isDeleted: false },
+        select: { id: true },
+      });
+      const variantIds = variants.map((v) => v.id);
+
       await tx.productVariant.updateMany({
         where: { productId },
         data: { isDeleted: true, deletedAt: new Date() },
@@ -241,6 +252,8 @@ export class PrismaProductRepository implements IProductRepository {
         where: { id: productId },
         data: { isDeleted: true, deletedAt: new Date() },
       });
+
+      return variantIds;
     });
   }
 

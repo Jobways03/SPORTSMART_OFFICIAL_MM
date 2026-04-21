@@ -37,6 +37,9 @@ import { AdminAuthController } from './presentation/controllers/admin-auth.contr
 import { AdminSellersController } from './presentation/controllers/admin-sellers.controller';
 import { AdminCustomersController } from './presentation/controllers/admin-customers.controller';
 
+// Policies
+import { SellerStatusTransitionPolicy } from '../seller/application/policies/seller-status-transition.policy';
+
 @Module({
   controllers: [
     AdminAuthController,
@@ -60,6 +63,7 @@ import { AdminCustomersController } from './presentation/controllers/admin-custo
     AdminEditSellerUseCase,
     AdminUpdateSellerStatusUseCase,
     AdminUpdateSellerVerificationUseCase,
+    SellerStatusTransitionPolicy,
     AdminImpersonateSellerUseCase,
     AdminSendSellerMessageUseCase,
     AdminChangeSellerPasswordUseCase,

@@ -31,9 +31,9 @@ export interface ProductDetail extends ProductListItem {
   description: string | null;
   categoryId: string | null;
   brandId: string | null;
-  platformPrice: string | null;
   compareAtPrice: string | null;
   costPrice: string | null;
+  procurementPrice: string | null;
   baseSku: string | null;
   baseBarcode: string | null;
   weight: string | null;

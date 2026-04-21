@@ -14,6 +14,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
+import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -43,6 +44,7 @@ export class AdminProductVariantsController {
     private readonly logger: AppLoggerService,
     private readonly variantGenerator: VariantGeneratorService,
     private readonly cartFacade: CartPublicFacade,
+    private readonly eventBus: EventBusService,
   ) {
     this.logger.setContext('AdminProductVariantsController');
   }
@@ -57,6 +59,7 @@ export class AdminProductVariantsController {
     const variant = await this.variantRepo.create({
       productId, title: dto.title || null, price: dto.price ?? 0,
       compareAtPrice: dto.compareAtPrice ?? null, costPrice: dto.costPrice ?? null,
+      procurementPrice: (dto as any).procurementPrice ?? null,
       sku: dto.sku || null, barcode: dto.barcode || null, stock: dto.stock ?? 0,
       weight: dto.weight ?? null, weightUnit: dto.weightUnit || 'g', sortOrder: nextSort,
     });
@@ -153,9 +156,9 @@ export class AdminProductVariantsController {
 
     const updateData: any = {};
     if (dto.price !== undefined) updateData.price = dto.price;
-    if (dto.platformPrice !== undefined) updateData.platformPrice = dto.platformPrice;
     if (dto.compareAtPrice !== undefined) updateData.compareAtPrice = dto.compareAtPrice;
     if (dto.costPrice !== undefined) updateData.costPrice = dto.costPrice;
+    if (dto.procurementPrice !== undefined) updateData.procurementPrice = dto.procurementPrice;
     if (dto.sku !== undefined) updateData.sku = dto.sku;
     if (dto.stock !== undefined) updateData.stock = dto.stock;
     if (dto.weight !== undefined) updateData.weight = dto.weight;
@@ -211,6 +214,26 @@ export class AdminProductVariantsController {
 
     await this.variantRepo.softDelete(variantId);
     this.logger.log(`Variant ${variantId} deleted from product ${productId} by admin ${adminId}`);
+
+    // Notify downstream (franchise module auto-stops mappings that
+    // pointed at this variant). Fire-and-forget — the repo's soft-
+    // delete filter already hides dead-variant mappings, so a missed
+    // event only leaves stale STOPPED-worthy rows; not a correctness
+    // bug, just cleanup.
+    try {
+      await this.eventBus.publish({
+        eventName: 'catalog.variant.soft_deleted',
+        aggregate: 'ProductVariant',
+        aggregateId: variantId,
+        occurredAt: new Date(),
+        payload: { variantId, productId, deletedBy: adminId },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to publish catalog.variant.soft_deleted for ${variantId}: ${(err as Error).message}`,
+      );
+    }
+
     return { success: true, message: 'Variant deleted successfully', data: null };
   }
 }

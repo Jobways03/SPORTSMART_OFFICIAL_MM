@@ -1,5 +1,16 @@
 import { apiClient, ApiResponse } from '@/lib/api-client';
 
+export interface AvailableProductVariant {
+  id: string;
+  title: string | null;
+  sku: string | null;
+  masterSku: string | null;
+  barcode: string | null;
+  price: number | null;
+  stock: number | null;
+  status: string;
+}
+
 export interface AvailableProduct {
   id: string;
   title: string;
@@ -10,6 +21,12 @@ export interface AvailableProduct {
   category?: { id: string; name: string };
   brand?: { id: string; name: string };
   images?: Array<{ url: string; isPrimary: boolean }>;
+  /**
+   * Live (non-soft-deleted) variants the franchise can map. May be
+   * empty for products that are sold as a single SKU. The backend
+   * already scopes this with `isDeleted: false` in the catalog repo.
+   */
+  variants?: AvailableProductVariant[];
 }
 
 export interface CatalogMapping {

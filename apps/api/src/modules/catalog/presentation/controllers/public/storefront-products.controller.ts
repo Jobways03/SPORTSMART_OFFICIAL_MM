@@ -72,7 +72,10 @@ export class StorefrontProductsController {
           id: p.id, productCode: p.productCode, title: p.title, slug: p.slug,
           shortDescription: p.shortDescription, categoryName: p.categoryName,
           brandName: p.brandName,
-          platformPrice: p.platformPrice ? Number(p.platformPrice) : null,
+          // Customer-facing price is the seller's price (basePrice at
+          // the product level, variant.price at variant level). The
+          // old separate platformPrice column is gone.
+          price: p.basePrice ? Number(p.basePrice) : null,
           compareAtPrice: p.compareAtPrice ? Number(p.compareAtPrice) : null,
           primaryImageUrl: p.primaryImageUrl,
           totalAvailableStock: p.totalAvailableStock, sellerCount: p.sellerCount,
@@ -159,7 +162,9 @@ export class StorefrontProductsController {
       const agg = variantAggMap.get(v.id) || { totalStock: 0, sellerCount: 0 };
       return {
         id: v.id, masterSku: v.masterSku, title: v.title,
-        platformPrice: v.platformPrice ? Number(v.platformPrice) : Number(v.price),
+        // Customer sees the seller's `price` directly — no separate
+        // platform markup any more.
+        price: Number(v.price),
         compareAtPrice: v.compareAtPrice ? Number(v.compareAtPrice) : null,
         totalAvailableStock: agg.totalStock, inStock: agg.totalStock > 0,
         optionValues: v.optionValues.map((ov: any) => ({
@@ -182,7 +187,7 @@ export class StorefrontProductsController {
       id: product.id, productCode: product.productCode, title: product.title,
       slug: product.slug, shortDescription: product.shortDescription,
       description: product.description, hasVariants: product.hasVariants,
-      platformPrice: product.platformPrice ? Number(product.platformPrice) : product.basePrice ? Number(product.basePrice) : null,
+      price: product.basePrice ? Number(product.basePrice) : null,
       compareAtPrice: product.compareAtPrice ? Number(product.compareAtPrice) : null,
       totalAvailableStock: overallStock, sellerCount: overallSellerCount, inStock: overallStock > 0,
       category: product.category ? { id: product.category.id, name: product.category.name, slug: product.category.slug } : null,

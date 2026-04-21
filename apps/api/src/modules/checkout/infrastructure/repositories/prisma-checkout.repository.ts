@@ -105,7 +105,6 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
                 title: true,
                 slug: true,
                 basePrice: true,
-                platformPrice: true,
                 baseStock: true,
                 baseSku: true,
                 hasVariants: true,
@@ -122,7 +121,6 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
                 id: true,
                 title: true,
                 price: true,
-                platformPrice: true,
                 stock: true,
                 sku: true,
                 status: true,
@@ -168,8 +166,9 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         },
       },
     });
-    // Cast at the Prisma boundary — the domain interface uses loose types (any)
-    // for price fields, and the legacy query omits platformPrice/status on variant.
+    // Cast at the Prisma boundary — the domain interface uses loose
+    // types (any) for price fields, and the legacy query omits status
+    // on variant.
     return cart as CartWithItems | null;
   }
 
@@ -213,7 +212,6 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           where: { id: { in: productIds } },
           select: {
             id: true,
-            platformPrice: true,
             basePrice: true,
             status: true,
           },
@@ -223,13 +221,11 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
               where: { id: { in: variantIds } },
               select: {
                 id: true,
-                platformPrice: true,
                 price: true,
               },
             })
           : Promise.resolve([] as Array<{
               id: string;
-              platformPrice: any;
               price: any;
             }>),
       ]);
@@ -258,13 +254,11 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
               `Variant ${item.variantId} no longer exists`,
             );
           }
-          canonicalUnitPrice = Number(
-            variant.platformPrice ?? variant.price ?? 0,
-          );
+          // Customer-facing price consolidates on variant.price
+          // (platformPrice column is gone).
+          canonicalUnitPrice = Number(variant.price ?? 0);
         } else {
-          canonicalUnitPrice = Number(
-            product.platformPrice ?? product.basePrice ?? 0,
-          );
+          canonicalUnitPrice = Number(product.basePrice ?? 0);
         }
 
         if (Math.abs(item.unitPrice - canonicalUnitPrice) > PRICE_TOLERANCE) {

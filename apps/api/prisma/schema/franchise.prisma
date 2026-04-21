@@ -71,6 +71,7 @@ model FranchisePartner {
   financeLedger       FranchiseFinanceLedger[]
   settlements         FranchiseSettlement[]
   staff               FranchiseStaff[]
+  procurementPrices   FranchiseProcurementPrice[]
 
   @@index([status])
   @@index([isProfileCompleted])
@@ -85,6 +86,33 @@ model FranchisePartner {
   // does a seq scan on the whole franchise table.
   @@index([contractEndDate])
   @@map("franchise_partners")
+}
+
+// Per-franchise negotiated procurement price. When a row exists for
+// (franchise, product, variant), the procurement approval modal
+// pre-fills landedUnitCost from this table instead of the
+// variant-level default (ProductVariant.costPrice). Write-back on
+// approval targets this row so subsequent approvals for the same
+// franchise + SKU keep its negotiated price, while other franchises
+// continue to default to the platform-wide cost.
+//
+// variantId is nullable for product-level mappings (rare).
+model FranchiseProcurementPrice {
+  id              String   @id @default(uuid())
+  franchiseId     String   @map("franchise_id")
+  productId       String   @map("product_id")
+  variantId       String?  @map("variant_id")
+  landedUnitCost  Decimal  @map("landed_unit_cost") @db.Decimal(10, 2)
+  notes           String?
+  createdBy       String?  @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@unique([franchiseId, productId, variantId])
+  @@index([franchiseId])
+  @@map("franchise_procurement_prices")
 }
 
 model FranchiseSession {

@@ -64,6 +64,9 @@ import { FranchiseSettlementService } from './application/services/franchise-set
 import { FranchiseReservationCleanupService } from './application/services/franchise-reservation-cleanup.service';
 import { FranchiseCommissionProcessorService } from './application/services/franchise-commission-processor.service';
 
+// Event handlers
+import { VariantSoftDeleteCleanupHandler } from './application/event-handlers/variant-soft-delete-cleanup.handler';
+
 // Controllers
 import { FranchiseAuthController } from './presentation/controllers/franchise-auth.controller';
 import { FranchiseProfileController } from './presentation/controllers/franchise-profile.controller';
@@ -74,6 +77,7 @@ import { FranchiseInventoryController } from './presentation/controllers/franchi
 import { AdminFranchiseInventoryController } from './presentation/controllers/admin-franchise-inventory.controller';
 import { FranchiseProcurementController } from './presentation/controllers/franchise-procurement.controller';
 import { AdminProcurementController } from './presentation/controllers/admin-procurement.controller';
+import { AdminFranchiseProcurementPricingController } from './presentation/controllers/admin-franchise-procurement-pricing.controller';
 import { FranchisePosController } from './presentation/controllers/franchise-pos.controller';
 import { AdminFranchisePosController } from './presentation/controllers/admin-franchise-pos.controller';
 import { FranchiseEarningsController } from './presentation/controllers/franchise-earnings.controller';
@@ -133,6 +137,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     AdminFranchiseOrdersController,
     FranchiseProcurementController,
     AdminProcurementController,
+    AdminFranchiseProcurementPricingController,
     FranchisePosController,
     AdminFranchisePosController,
     FranchiseEarningsController,
@@ -177,6 +182,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     FranchiseSettlementService,
     FranchiseReservationCleanupService,
     FranchiseCommissionProcessorService,
+    VariantSoftDeleteCleanupHandler,
     RegisterFranchiseUseCase,
     LoginFranchiseUseCase,
     ForgotPasswordFranchiseUseCase,

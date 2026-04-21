@@ -14,6 +14,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
+import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -51,6 +52,7 @@ export class SellerProductVariantsController {
     private readonly variantGenerator: VariantGeneratorService,
     private readonly reApprovalService: ReApprovalService,
     private readonly cartFacade: CartPublicFacade,
+    private readonly eventBus: EventBusService,
   ) {
     this.logger.setContext('SellerProductVariantsController');
   }
@@ -269,8 +271,10 @@ export class SellerProductVariantsController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    // Sellers CANNOT set platformPrice
+    // Sellers cannot set admin-internal pricing (procurementPrice
+    // is platform-side; platformPrice is obsolete).
     delete (dto as any).platformPrice;
+    delete (dto as any).procurementPrice;
 
     const variant = await this.variantRepo.findById(variantId, productId);
 
@@ -439,6 +443,24 @@ export class SellerProductVariantsController {
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
+
+    // Same event the admin-side variant delete emits. Franchise
+    // module's VariantSoftDeleteCleanupHandler stops mappings that
+    // pointed at this variant so the franchise catalog doesn't keep
+    // the stale SKU in APPROVED state forever.
+    try {
+      await this.eventBus.publish({
+        eventName: 'catalog.variant.soft_deleted',
+        aggregate: 'ProductVariant',
+        aggregateId: variantId,
+        occurredAt: new Date(),
+        payload: { variantId, productId, deletedBy: sellerId },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to publish catalog.variant.soft_deleted for ${variantId}: ${(err as Error).message}`,
+      );
+    }
 
     return {
       success: true,

@@ -43,11 +43,11 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     }
     if (minPrice) {
       const min = parseFloat(minPrice);
-      if (!isNaN(min)) conditions.push(Prisma.sql`COALESCE(p.platform_price, p.base_price, 0) >= ${min}`);
+      if (!isNaN(min)) conditions.push(Prisma.sql`COALESCE(p.base_price, 0) >= ${min}`);
     }
     if (maxPrice) {
       const max = parseFloat(maxPrice);
-      if (!isNaN(max)) conditions.push(Prisma.sql`COALESCE(p.platform_price, p.base_price, 0) <= ${max}`);
+      if (!isNaN(max)) conditions.push(Prisma.sql`COALESCE(p.base_price, 0) <= ${max}`);
     }
 
     // Metafield filters
@@ -72,8 +72,8 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
 
     let orderByClause: Prisma.Sql;
     switch (sortBy) {
-      case 'price_asc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.platform_price, p.base_price, 0) ASC`; break;
-      case 'price_desc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.platform_price, p.base_price, 0) DESC`; break;
+      case 'price_asc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) ASC`; break;
+      case 'price_desc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) DESC`; break;
       default: orderByClause = Prisma.sql`ORDER BY p.created_at DESC`; break;
     }
 
@@ -81,7 +81,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     const dataQuery = Prisma.sql`
       SELECT p.id, p.product_code AS "productCode", p.title, p.slug, p.short_description AS "shortDescription",
         c.name AS "categoryName", b.name AS "brandName",
-        COALESCE(p.platform_price, p.base_price)::numeric AS "platformPrice",
+        p.base_price::numeric AS "basePrice",
         p.compare_at_price::numeric AS "compareAtPrice", p.has_variants AS "hasVariants",
         COALESCE(
           (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1),
@@ -129,7 +129,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       where: { slug, isDeleted: false, status: 'ACTIVE' },
       select: {
         id: true, productCode: true, title: true, slug: true, shortDescription: true,
-        description: true, hasVariants: true, platformPrice: true, basePrice: true, compareAtPrice: true,
+        description: true, hasVariants: true, basePrice: true, compareAtPrice: true,
         category: { select: { id: true, name: true, slug: true } },
         brand: { select: { id: true, name: true, slug: true } },
         images: { orderBy: { sortOrder: 'asc' }, select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
@@ -147,7 +147,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
         variants: {
           where: { isDeleted: false },
           select: {
-            id: true, masterSku: true, title: true, price: true, platformPrice: true,
+            id: true, masterSku: true, title: true, price: true,
             compareAtPrice: true, sortOrder: true, status: true,
             optionValues: {
               select: { optionValue: { select: { id: true, value: true, displayValue: true, optionDefinition: { select: { id: true, name: true, displayName: true, type: true } } } } },
@@ -252,8 +252,8 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       : Prisma.sql``;
     const results = await this.prisma.$queryRaw<{ min: number; max: number }[]>(Prisma.sql`
       SELECT
-        MIN(COALESCE(p.platform_price, p.base_price, 0))::numeric AS min,
-        MAX(COALESCE(p.platform_price, p.base_price, 0))::numeric AS max
+        MIN(COALESCE(p.base_price, 0))::numeric AS min,
+        MAX(COALESCE(p.base_price, 0))::numeric AS max
       FROM products p
       ${whereClause}
     `);

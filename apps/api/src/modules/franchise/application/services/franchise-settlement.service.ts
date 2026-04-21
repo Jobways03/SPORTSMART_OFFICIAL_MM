@@ -52,15 +52,42 @@ export class FranchiseSettlementService {
         });
       }
 
-      // 2. Find all PENDING franchise ledger entries within date range
-      const pendingEntries = await tx.franchiseFinanceLedger.findMany({
+      // 2. Atomically CLAIM the PENDING ledger entries in the period.
+      //
+      // This used to be a find-then-update: findMany(PENDING in range),
+      // then later updateMany by id. Under concurrent admins calling
+      // this endpoint with overlapping date ranges, both calls read the
+      // same PENDING rows, both compute totals from them, and the
+      // second updateMany only overwrites the settlementBatchId — the
+      // two FranchiseSettlement rows end up with totals that both
+      // include the overlapping entries → franchise double-counted.
+      //
+      // The fix is to flip status from PENDING to ACCRUED atomically
+      // up-front. PostgreSQL takes row-level write locks on the UPDATE,
+      // so a racing transaction blocks, re-evaluates `status = PENDING`
+      // after we commit, and finds zero rows left to claim in the
+      // overlap. We tag them with the cycle id as a temporary marker
+      // and re-point them to the per-franchise settlement id in step 5.
+      const claimed = await tx.franchiseFinanceLedger.updateMany({
         where: {
           status: 'PENDING',
-          createdAt: {
-            gte: periodStart,
-            lte: periodEnd,
-          },
+          createdAt: { gte: periodStart, lte: periodEnd },
+          settlementBatchId: null,
         },
+        data: {
+          status: 'ACCRUED',
+          settlementBatchId: cycle.id,
+        },
+      });
+
+      if (claimed.count === 0) {
+        return { cycle, settlements: [] as any[], empty: true };
+      }
+
+      // Re-fetch only the rows WE claimed in this transaction — a
+      // concurrent cycle cannot have tagged its rows with our cycle.id.
+      const pendingEntries = await tx.franchiseFinanceLedger.findMany({
+        where: { settlementBatchId: cycle.id },
         include: {
           franchise: {
             select: {
@@ -72,10 +99,6 @@ export class FranchiseSettlementService {
         },
         orderBy: { createdAt: 'asc' },
       });
-
-      if (pendingEntries.length === 0) {
-        return { cycle, settlements: [] as any[], empty: true };
-      }
 
       // 3. Group by franchiseId
       const grouped = new Map<string, any[]>();

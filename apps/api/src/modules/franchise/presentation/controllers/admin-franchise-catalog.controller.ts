@@ -34,18 +34,34 @@ export class AdminFranchiseCatalogController {
     @Query('approvalStatus') approvalStatus?: string,
     @Query('search') search?: string,
   ) {
-    const data = await this.catalogRepo.findAllPaginated({
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+
+    const { mappings, total } = await this.catalogRepo.findAllPaginated({
+      page: pageNum,
+      limit: limitNum,
       franchiseId,
       approvalStatus,
       search,
     });
 
+    // Pagination envelope — same shape used by admin-products,
+    // admin-procurement, admin-franchise-settlements. The
+    // franchise-admin catalog page reads `data.pagination.totalPages`
+    // to decide whether to render the pager; without this wrapper the
+    // pager stayed hidden even when more rows existed.
     return {
       success: true,
       message: 'Franchise catalog mappings fetched successfully',
-      data,
+      data: {
+        mappings,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+        },
+      },
     };
   }
 

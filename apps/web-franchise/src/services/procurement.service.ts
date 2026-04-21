@@ -135,8 +135,16 @@ export function getProcurementStatusLabel(status: string): string {
 }
 
 export function formatProcurementCurrency(amount: number | null | undefined): string {
-  const value = typeof amount === 'number' ? amount : 0;
-  return `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // All procurement amounts (landed cost, approved total, payable,
+  // etc.) are admin-entered at approval time. On a freshly SUBMITTED
+  // request those fields come back as 0 / null — rendering them as
+  // "₹0.00" reads like a real zero, so the franchise sees "Requested
+  // ₹0.00" and wonders why the system thinks they asked for free
+  // goods. Em-dash on nullish / 0 honestly signals "not set yet".
+  // Real 0-priced procurement is essentially never a legitimate state
+  // in prod, so the loss of that edge case is negligible.
+  if (amount == null || Number(amount) === 0) return '—';
+  return `₹${Number(amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatProcurementDate(value: string | null | undefined): string {

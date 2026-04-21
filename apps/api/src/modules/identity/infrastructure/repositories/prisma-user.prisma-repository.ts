@@ -186,6 +186,23 @@ export class PrismaUserRepository implements UserRepository {
     lastName: string;
   }> {
     return this.prisma.$transaction(async (tx) => {
+      // Resolve CUSTOMER role first — if it's missing, fail the whole
+      // transaction so we never create an orphan user without a role.
+      // The prior silent `if (customerRole)` swallow is how 6 customers
+      // ended up un-login-able: registration ran before seed-admin had
+      // inserted the system roles, so the role lookup returned null and
+      // the create was skipped. UserAuthGuard requires
+      // roles.includes('CUSTOMER'); an un-roled user = instant 401 on
+      // every subsequent request.
+      const customerRole = await tx.role.findUnique({
+        where: { name: 'CUSTOMER' },
+      });
+      if (!customerRole) {
+        throw new Error(
+          'CUSTOMER role missing from database — run `pnpm run seed:admin` to provision system roles before registering users.',
+        );
+      }
+
       const newUser = await tx.user.create({
         data: {
           firstName: data.firstName,
@@ -195,18 +212,12 @@ export class PrismaUserRepository implements UserRepository {
         },
       });
 
-      const customerRole = await tx.role.findUnique({
-        where: { name: 'CUSTOMER' },
+      await tx.roleAssignment.create({
+        data: {
+          userId: newUser.id,
+          roleId: customerRole.id,
+        },
       });
-
-      if (customerRole) {
-        await tx.roleAssignment.create({
-          data: {
-            userId: newUser.id,
-            roleId: customerRole.id,
-          },
-        });
-      }
 
       return newUser;
     });

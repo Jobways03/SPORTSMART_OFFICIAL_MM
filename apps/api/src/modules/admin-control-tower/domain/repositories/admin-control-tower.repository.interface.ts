@@ -211,9 +211,9 @@ export interface AdminControlTowerRepository {
 
   /* ── Operations (bulk pricing) ── */
   findProductById(productId: string): Promise<ProductBasic | null>;
-  updateProductPrice(productId: string, platformPrice: number): Promise<void>;
+  updateProductPrice(productId: string, price: number): Promise<void>;
   findVariantForProduct(variantId: string, productId: string): Promise<VariantBasic | null>;
-  updateVariantPrice(variantId: string, platformPrice: number): Promise<void>;
+  updateVariantPrice(variantId: string, price: number): Promise<void>;
 
   /* ── Operations (reassignment) ── */
   findSubOrderWithItems(subOrderId: string): Promise<SubOrderWithItems | null>;

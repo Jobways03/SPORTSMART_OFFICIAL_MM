@@ -14,7 +14,6 @@ export interface CartItemWithDetails {
     title: string;
     slug: string;
     basePrice: any;
-    platformPrice: any;
     baseStock: number | null;
     baseSku: string | null;
     hasVariants: boolean;
@@ -25,7 +24,6 @@ export interface CartItemWithDetails {
     id: string;
     title: string | null;
     price: any;
-    platformPrice: any;
     stock: number | null;
     sku: string | null;
     status: string;

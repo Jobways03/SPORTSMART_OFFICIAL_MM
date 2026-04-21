@@ -13,17 +13,22 @@ export class UpdateVariantDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  platformPrice?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
   compareAtPrice?: number;
 
+  // costPrice is display-only per product policy — it is NOT used
+  // by procurement prefill or any pricing logic. Kept editable so
+  // admins can record an informational cost per variant.
   @IsOptional()
   @IsNumber()
   @Min(0)
   costPrice?: number;
+
+  // procurementPrice is the platform-wide default landed cost used
+  // by the franchise procurement flow. Never exposed to customers.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  procurementPrice?: number;
 
   @IsOptional()
   @IsString()

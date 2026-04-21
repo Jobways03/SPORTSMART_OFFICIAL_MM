@@ -527,6 +527,75 @@ export class ProcurementService {
       finalPayableAmount: totals.finalPayableAmount,
     });
 
+    // Persist the admin-entered landed cost for next-time auto-fill.
+    //
+    // Precedence:
+    //   1. If a per-franchise negotiated-price row exists for
+    //      (franchiseId, productId, variantId), update IT. That
+    //      protects this franchise's deal from platform-wide rate
+    //      changes.
+    //   2. Otherwise update the variant default (or product default
+    //      for product-level mappings) — the platform-wide value that
+    //      other franchises fall back to.
+    //
+    // We intentionally do NOT auto-create the per-franchise override
+    // row. Admins create those deliberately in the franchise's
+    // procurement-pricing page — approval only maintains whichever
+    // record already exists.
+    //
+    // Best-effort — a write failure here must not roll back the
+    // approval. Each item's write is independent.
+    for (const approveItem of items) {
+      if (approveItem.approvedQty <= 0 || approveItem.landedUnitCost <= 0) {
+        continue; // skip rejected items and sentinel zeros
+      }
+      const original = (request.items as Array<any>).find(
+        (i) => i.id === approveItem.itemId,
+      );
+      if (!original) continue;
+
+      try {
+        const existingOverride =
+          await this.prisma.franchiseProcurementPrice.findUnique({
+            where: {
+              // Prisma's composite-unique input type doesn't model
+              // the nullable variantId as nullable; the `as any` is
+              // the codebase-wide workaround. See admin-franchise-
+              // procurement-pricing.controller.ts for the same cast.
+              franchiseId_productId_variantId: {
+                franchiseId: request.franchiseId,
+                productId: original.productId,
+                variantId: original.variantId ?? null,
+              } as any,
+            },
+          });
+
+        if (existingOverride) {
+          await this.prisma.franchiseProcurementPrice.update({
+            where: { id: existingOverride.id },
+            data: { landedUnitCost: approveItem.landedUnitCost },
+          });
+        } else if (original.variantId) {
+          // Target procurementPrice (NOT costPrice). costPrice is a
+          // display-only field per product policy and is deliberately
+          // decoupled from procurement logic.
+          await this.prisma.productVariant.update({
+            where: { id: original.variantId },
+            data: { procurementPrice: approveItem.landedUnitCost },
+          });
+        } else if (original.productId) {
+          await this.prisma.product.update({
+            where: { id: original.productId },
+            data: { procurementPrice: approveItem.landedUnitCost },
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Failed to persist landed cost for item ${approveItem.itemId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     await this.eventBus.publish({
       eventName: 'procurement.approved',
       aggregate: 'ProcurementRequest',

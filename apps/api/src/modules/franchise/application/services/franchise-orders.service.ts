@@ -788,9 +788,22 @@ export class FranchiseOrdersService {
       })
       .catch(() => {});
 
-    // 5. Attempt commission reversal
+    // 5. Attempt commission reversal — proportional to the returned value.
+    //
+    // The prior implementation reversed the FULL franchise earning for the
+    // sub-order regardless of whether the customer returned 1 of 3 items
+    // or all 3. That over-credited the platform (under-paid the franchise)
+    // on every partial counter-return. The fix below computes the gross
+    // value of the returned items and scales the reversal by that share
+    // of the sub-order's gross. Quantity and unitPrice come from the
+    // OrderItem rows we already loaded at line 734.
+    //
+    // Note: this path is the counter-return shortcut — franchise has
+    // physically inspected the items at the store and is recording the
+    // return immediately. It deliberately skips the Return/QC pipeline
+    // used by customer-initiated online returns (which has its own
+    // reversal path gated on qcQuantityApproved > 0).
     try {
-      // Find the original commission ledger entry for this sub-order
       const originalEntry = await this.prisma.franchiseFinanceLedger.findFirst({
         where: {
           franchiseId: subOrder.franchiseId!,
@@ -799,13 +812,37 @@ export class FranchiseOrdersService {
           status: { in: ['ACCRUED', 'PENDING'] },
         },
       });
+
       if (originalEntry) {
-        await this.commissionService.recordReturnReversal({
-          franchiseId: subOrder.franchiseId!,
-          originalLedgerEntryId: originalEntry.id,
-          subOrderId,
-          reversalAmount: Number(originalEntry.franchiseEarning),
-        });
+        // Returned-item gross
+        let returnedGross = 0;
+        for (const ri of input.items) {
+          const oi = subOrder.items.find((i) => i.id === ri.orderItemId);
+          if (!oi) continue;
+          returnedGross += ri.quantity * Number(oi.unitPrice);
+        }
+
+        // Sub-order gross (for proportion denominator)
+        const subOrderGross = subOrder.items.reduce(
+          (acc, i) => acc + i.quantity * Number(i.unitPrice),
+          0,
+        );
+
+        if (subOrderGross > 0 && returnedGross > 0) {
+          const fullFranchiseEarning = Number(originalEntry.franchiseEarning);
+          const proportion = returnedGross / subOrderGross;
+          const reversalAmount =
+            Math.round(fullFranchiseEarning * proportion * 100) / 100;
+
+          if (reversalAmount > 0) {
+            await this.commissionService.recordReturnReversal({
+              franchiseId: subOrder.franchiseId!,
+              originalLedgerEntryId: originalEntry.id,
+              subOrderId,
+              reversalAmount,
+            });
+          }
+        }
       }
     } catch (err) {
       this.logger.warn(

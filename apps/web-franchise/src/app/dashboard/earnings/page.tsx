@@ -35,6 +35,18 @@ function formatInr(value: number | string | null | undefined): string {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Keep the server-side enum values lowercase-friendly for the UI.
+// FranchiseSettlementStatus in _base.prisma is PENDING | APPROVED | PAID | FAILED.
+const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
+  PENDING: 'Pending',
+  APPROVED: 'Approved',
+  PAID: 'Paid',
+  FAILED: 'Failed',
+};
+function formatSettlementStatus(status: string): string {
+  return SETTLEMENT_STATUS_LABELS[status] ?? status;
+}
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return '—';
   try {
@@ -260,7 +272,7 @@ function OverviewTab() {
                     </td>
                     <td style={tdStyle}>
                       <span style={statusBadgeStyle(s.status as string)}>
-                        {s.status as string}
+                        {formatSettlementStatus(s.status as string)}
                       </span>
                     </td>
                     <td style={tdStyle}>{formatDate(s.paidAt)}</td>
@@ -373,6 +385,7 @@ function LedgerHistoryTab() {
           <input
             type="date"
             value={filters.fromDate}
+            max={filters.toDate || undefined}
             onChange={(e) =>
               setFilters({ ...filters, fromDate: e.target.value })
             }
@@ -381,6 +394,7 @@ function LedgerHistoryTab() {
           <input
             type="date"
             value={filters.toDate}
+            min={filters.fromDate || undefined}
             onChange={(e) =>
               setFilters({ ...filters, toDate: e.target.value })
             }
@@ -635,7 +649,7 @@ function SettlementsTab() {
                     </td>
                     <td style={tdStyle}>
                       <span style={statusBadgeStyle(s.status as string)}>
-                        {s.status as string}
+                        {formatSettlementStatus(s.status as string)}
                       </span>
                     </td>
                     <td style={tdStyle}>{formatDate(s.paidAt)}</td>

@@ -63,9 +63,9 @@ export class AdminDashboardController {
 
   // ── T5: Bulk pricing ───────────────────────────────────────────────────
 
-  // Bulk pricing writes directly to product platformPrice across
-  // potentially hundreds of rows. Money-affecting + cross-seller impact
-  // → SUPER_ADMIN only.
+  // Bulk pricing writes directly to product basePrice (and variant
+  // price) across potentially hundreds of rows. Money-affecting +
+  // cross-seller impact → SUPER_ADMIN only.
   @Patch('products/bulk-pricing')
   @Roles('SUPER_ADMIN')
   async bulkUpdatePricing(
