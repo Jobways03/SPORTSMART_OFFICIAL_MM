@@ -7,6 +7,7 @@ import {
   franchiseReturnsService,
   FranchiseReturn,
 } from '@/services/returns.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 /* -- helpers -- */
@@ -88,7 +89,8 @@ const reasonLabel = (r: string) => {
 
 /* -- page -- */
 export default function FranchiseReturnDetailPage() {
-  const { returnId } = useParams<{ returnId: string }>();
+  const { notify, confirmDialog } = useModal();
+const { returnId } = useParams<{ returnId: string }>();
   const [ret, setRet] = useState<FranchiseReturn | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -130,8 +132,8 @@ export default function FranchiseReturnDetailPage() {
         setQcDecisions(defaults);
       }
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to load return');
-      else alert('Failed to load return');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to load return');
+      else void notify('Failed to load return');
     } finally {
       setLoading(false);
     }
@@ -141,8 +143,7 @@ export default function FranchiseReturnDetailPage() {
     fetchReturn();
   }, [fetchReturn]);
 
-  const handleMarkReceived = async () => {
-    if (!returnId) return;
+  const handleMarkReceived = async () => {if (!returnId) return;
     setActionLoading('received');
     try {
       await franchiseReturnsService.markReceived(returnId, receivedNotes || undefined);
@@ -151,24 +152,23 @@ export default function FranchiseReturnDetailPage() {
       fetchReturn();
     } catch (err) {
       if (err instanceof ApiError)
-        alert(err.body.message || 'Failed to mark as received');
-      else alert('Failed to mark as received');
+        void notify(err.body.message || 'Failed to mark as received');
+      else void notify('Failed to mark as received');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleQcSubmit = async () => {
-    if (!returnId || !ret) return;
+  const handleQcSubmit = async () => {if (!returnId || !ret) return;
     // Validate all items have outcomes
     for (const item of ret.items) {
       const dec = qcDecisions[item.id];
       if (!dec || !dec.qcOutcome) {
-        alert('Please select an outcome for all items');
+        void notify('Please select an outcome for all items');
         return;
       }
       if (dec.qcQuantityApproved < 0 || dec.qcQuantityApproved > item.quantity) {
-        alert(
+        void notify(
           `Approved quantity for an item must be between 0 and ${item.quantity}`,
         );
         return;
@@ -191,22 +191,21 @@ export default function FranchiseReturnDetailPage() {
       setOverallNotes('');
       fetchReturn();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to submit QC');
-      else alert('Failed to submit QC');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to submit QC');
+      else void notify('Failed to submit QC');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!returnId || !e.target.files || e.target.files.length === 0) return;
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {if (!returnId || !e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     setUploadingEvidence(true);
     try {
       await franchiseReturnsService.uploadEvidence(returnId, file);
       fetchReturn();
     } catch (err) {
-      alert((err as Error).message || 'Failed to upload evidence');
+      void notify((err as Error).message || 'Failed to upload evidence');
     } finally {
       setUploadingEvidence(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

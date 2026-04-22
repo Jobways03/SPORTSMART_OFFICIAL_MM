@@ -12,6 +12,9 @@
     "@sportsmart/shared-utils": "workspace:*",
     "@sportsmart/ui": "workspace:*",
     "isomorphic-dompurify": "^3.9.0",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "react-quill-new": "^3.8.3"
   }
 }

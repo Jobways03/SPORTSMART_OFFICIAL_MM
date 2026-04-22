@@ -156,6 +156,7 @@ export class OrdersPublicFacade {
       include: {
         items: true,
         masterOrder: { select: { id: true, orderNumber: true } },
+        seller: { select: { id: true, sellerName: true, sellerShopName: true } },
       },
     });
   }

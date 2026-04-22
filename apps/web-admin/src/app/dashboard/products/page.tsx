@@ -10,6 +10,7 @@ import RejectModal from './components/reject-modal';
 import RequestChangesModal from './components/request-changes-modal';
 import DeleteModal from './components/delete-modal';
 import './products.css';
+import { useModal } from '@sportsmart/ui';
 
 type ModalType = 'reject' | 'requestChanges' | 'delete' | null;
 
@@ -21,7 +22,8 @@ interface Pagination {
 }
 
 export default function ProductsPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const [products, setProducts] = useState<ProductListItem[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -118,27 +120,25 @@ export default function ProductsPage() {
       .catch(() => {});
   }, []);
 
-  const handleApproveMappingInline = async (mappingId: string) => {
-    setMappingActionLoading(mappingId);
+  const handleApproveMappingInline = async (mappingId: string) => {setMappingActionLoading(mappingId);
     try {
       await adminProductsService.approveMappings(mappingId);
       setPendingMappings(prev => prev.filter(m => m.id !== mappingId));
       setPendingMappingsCount(prev => Math.max(0, prev - 1));
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : 'Failed to approve mapping');
+      void notify(err instanceof ApiError ? err.message : 'Failed to approve mapping');
     } finally {
       setMappingActionLoading(null);
     }
   };
 
-  const handleStopMappingInline = async (mappingId: string) => {
-    setMappingActionLoading(mappingId);
+  const handleStopMappingInline = async (mappingId: string) => {setMappingActionLoading(mappingId);
     try {
       await adminProductsService.stopMapping(mappingId);
       setPendingMappings(prev => prev.filter(m => m.id !== mappingId));
       setPendingMappingsCount(prev => Math.max(0, prev - 1));
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : 'Failed to stop mapping');
+      void notify(err instanceof ApiError ? err.message : 'Failed to stop mapping');
     } finally {
       setMappingActionLoading(null);
     }
@@ -167,8 +167,7 @@ export default function ProductsPage() {
     fetchProducts({ page: pagination.page });
   };
 
-  const handleApprove = async (product: ProductListItem) => {
-    try {
+  const handleApprove = async (product: ProductListItem) => {try {
       await adminProductsService.approveProduct(product.id);
       fetchProducts({ page: pagination.page });
     } catch (err) {
@@ -176,12 +175,11 @@ export default function ProductsPage() {
         router.replace('/login');
         return;
       }
-      alert(err instanceof ApiError ? err.message : 'Failed to approve product');
+      void notify(err instanceof ApiError ? err.message : 'Failed to approve product');
     }
   };
 
-  const handleStatusChange = async (product: ProductListItem, status: string) => {
-    try {
+  const handleStatusChange = async (product: ProductListItem, status: string) => {try {
       await adminProductsService.updateStatus(product.id, status);
       fetchProducts({ page: pagination.page });
     } catch (err) {
@@ -189,7 +187,7 @@ export default function ProductsPage() {
         router.replace('/login');
         return;
       }
-      alert(err instanceof ApiError ? err.message : 'Failed to update status');
+      void notify(err instanceof ApiError ? err.message : 'Failed to update status');
     }
   };
 
@@ -327,31 +325,34 @@ export default function ProductsPage() {
 
         <select
           className="products-filter-select"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
+          value={
+            statusFilter ? `s:${statusFilter}` : moderationFilter ? `m:${moderationFilter}` : ''
+          }
+          onChange={(e) => {
+            const v = e.target.value;
+            if (!v) {
+              setStatusFilter('');
+              setModerationFilter('');
+            } else if (v.startsWith('s:')) {
+              setStatusFilter(v.slice(2));
+              setModerationFilter('');
+            } else if (v.startsWith('m:')) {
+              setModerationFilter(v.slice(2));
+              setStatusFilter('');
+            }
+          }}
         >
           <option value="">All Status</option>
-          <option value="DRAFT">Draft</option>
-          <option value="SUBMITTED">Submitted</option>
-          <option value="APPROVED">Approved</option>
-          <option value="ACTIVE">Active</option>
-          <option value="REJECTED">Rejected</option>
-          <option value="CHANGES_REQUESTED">Changes Requested</option>
-          <option value="SUSPENDED">Suspended</option>
-          <option value="ARCHIVED">Archived</option>
-        </select>
-
-        <select
-          className="products-filter-select"
-          value={moderationFilter}
-          onChange={(e) => setModerationFilter(e.target.value)}
-        >
-          <option value="">All Approval</option>
-          <option value="PENDING">Pending</option>
-          <option value="IN_REVIEW">In Review</option>
-          <option value="APPROVED">Approved</option>
-          <option value="REJECTED">Rejected</option>
-          <option value="CHANGES_REQUESTED">Changes Requested</option>
+          <option value="s:DRAFT">Draft</option>
+          <option value="s:SUBMITTED">Submitted</option>
+          <option value="s:APPROVED">Approved</option>
+          <option value="s:ACTIVE">Active</option>
+          <option value="s:REJECTED">Rejected</option>
+          <option value="s:CHANGES_REQUESTED">Changes Requested</option>
+          <option value="s:SUSPENDED">Suspended</option>
+          <option value="s:ARCHIVED">Archived</option>
+          <option value="m:PENDING">Pending</option>
+          <option value="m:IN_REVIEW">In Review</option>
         </select>
 
         {hasFilters && (

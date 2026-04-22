@@ -47,6 +47,13 @@ export class CommissionProcessorService implements OnModuleInit {
 
       if (subOrders.length === 0) return;
 
+      // Fetch the global commission setting once per tick. Used as a
+      // fallback when a mapping's margin is <= 0 (e.g., seller-admin set
+      // settlementPrice equal to platformPrice) so the platform still
+      // earns commission on every order.
+      const settings = await this.commissionRepo.getCommissionSettings();
+      const fallbackRatePercent = Number(settings?.commissionValue ?? 20);
+
       for (const so of subOrders) {
         const sellerName = so.seller?.sellerShopName || 'Unknown';
         const orderNumber = so.masterOrder.orderNumber;
@@ -64,16 +71,28 @@ export class CommissionProcessorService implements OnModuleInit {
           // platformPrice = what the customer paid (stored as unitPrice in the OrderItem)
           const platformPrice = Number(item.unitPrice);
 
-          // settlementPrice = what the seller gets per unit (from the mapping)
-          // Fallback: if no mapping or no settlementPrice, use 80% of platformPrice as a safe default
-          const settlementPrice = mapping?.settlementPrice
+          // settlementPrice = what the seller gets per unit (from the mapping).
+          // Starts with whatever the mapping says (null → 80% fallback); if that
+          // leaves the platform with zero or negative margin, we re-derive it
+          // from the global commission percentage below so every order still
+          // earns a commission.
+          let settlementPrice = mapping?.settlementPrice
             ? Number(mapping.settlementPrice)
             : Math.round(platformPrice * 0.8 * 100) / 100;
 
           const quantity = item.quantity;
 
           // Per-unit margin
-          const unitMargin = Math.round((platformPrice - settlementPrice) * 100) / 100;
+          let unitMargin = Math.round((platformPrice - settlementPrice) * 100) / 100;
+          let usedFallbackRate = false;
+          if (unitMargin <= 0) {
+            // Platform keeps `fallbackRatePercent` of the platform price,
+            // seller keeps the remainder — applies when seller-admin forgot
+            // to set a margin on the mapping.
+            unitMargin = Math.round(platformPrice * (fallbackRatePercent / 100) * 100) / 100;
+            settlementPrice = Math.round((platformPrice - unitMargin) * 100) / 100;
+            usedFallbackRate = true;
+          }
 
           // Totals
           const totalPlatformAmount = Math.round(platformPrice * quantity * 100) / 100;
@@ -82,7 +101,10 @@ export class CommissionProcessorService implements OnModuleInit {
 
           // Populate legacy fields for backward compatibility
           const totalItemPrice = Number(item.totalPrice);
-          const rateLabel = `Margin: ${((unitMargin / platformPrice) * 100).toFixed(1)}%`;
+          const ratePct = platformPrice > 0 ? (unitMargin / platformPrice) * 100 : 0;
+          const rateLabel = usedFallbackRate
+            ? `Platform fee: ${ratePct.toFixed(1)}% (fallback)`
+            : `Margin: ${ratePct.toFixed(1)}%`;
 
           records.push({
             orderItemId: item.id,

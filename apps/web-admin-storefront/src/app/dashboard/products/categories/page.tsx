@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { adminProductsService } from '../../../../services/admin-products.service';
+import { useModal } from '@sportsmart/ui';
 
 interface Category {
   id: string;
@@ -15,7 +16,8 @@ interface Category {
 }
 
 export default function CategoriesPage() {
-  const [categories, setCategories] = useState<Category[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -118,11 +120,10 @@ export default function CategoriesPage() {
     }
   };
 
-  const handleDelete = async (cat: Category) => {
-    const msg = cat._count && (cat._count.products > 0 || cat._count.children > 0)
+  const handleDelete = async (cat: Category) => {const msg = cat._count && (cat._count.products > 0 || cat._count.children > 0)
       ? `This category has ${cat._count.products} product(s) and ${cat._count.children} subcategorie(s). It will be deactivated instead of deleted. Continue?`
       : `Delete category "${cat.name}"?`;
-    if (!confirm(msg)) return;
+    if (!(await confirmDialog(msg))) return;
     try {
       await adminProductsService.deleteCategory(cat.id);
       setSuccessMsg('Category removed');

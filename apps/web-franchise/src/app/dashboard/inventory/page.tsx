@@ -7,6 +7,7 @@ import {
   LedgerEntry,
   AdjustStockPayload,
 } from '@/services/inventory.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 type TabKey = 'stock' | 'low-stock' | 'ledger';
@@ -97,7 +98,8 @@ function handleError(err: unknown, fallback: string): string {
 }
 
 export default function InventoryPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>('stock');
+  const { notify, confirmDialog } = useModal();
+const [activeTab, setActiveTab] = useState<TabKey>('stock');
 
   // Stock tab state
   const [stocks, setStocks] = useState<StockItem[]>([]);
@@ -159,7 +161,7 @@ export default function InventoryPage() {
         setStockTotalPages(res.data.totalPages || 1);
       }
     } catch (err) {
-      alert(handleError(err, 'Failed to load inventory'));
+      void notify(handleError(err, 'Failed to load inventory'));
     } finally {
       setStockLoading(false);
     }
@@ -174,7 +176,7 @@ export default function InventoryPage() {
         setLowStockItems(res.data || []);
       }
     } catch (err) {
-      alert(handleError(err, 'Failed to load low stock alerts'));
+      void notify(handleError(err, 'Failed to load low stock alerts'));
     } finally {
       setLowStockLoading(false);
     }
@@ -198,7 +200,7 @@ export default function InventoryPage() {
         setLedgerTotalPages(res.data.totalPages || 1);
       }
     } catch (err) {
-      alert(handleError(err, 'Failed to load ledger'));
+      void notify(handleError(err, 'Failed to load ledger'));
     } finally {
       setLedgerLoading(false);
     }
@@ -267,22 +269,21 @@ export default function InventoryPage() {
     setAdjustTarget(null);
   };
 
-  const handleAdjustSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleAdjustSubmit = async (e: FormEvent) => {e.preventDefault();
     const productId = adjustForm.productId.trim();
     const reason = adjustForm.reason.trim();
     const quantity = Number(adjustForm.quantity);
 
     if (!productId) {
-      alert('Product ID is required');
+      void notify('Product ID is required');
       return;
     }
     if (!quantity || quantity <= 0 || !Number.isFinite(quantity)) {
-      alert('Quantity must be a positive number');
+      void notify('Quantity must be a positive number');
       return;
     }
     if (reason.length < 3 || reason.length > 500) {
-      alert('Reason must be between 3 and 500 characters');
+      void notify('Reason must be between 3 and 500 characters');
       return;
     }
 
@@ -305,7 +306,7 @@ export default function InventoryPage() {
       if (activeTab === 'low-stock') await loadLowStock();
       if (activeTab === 'ledger') await loadLedger();
     } catch (err) {
-      alert(handleError(err, 'Failed to adjust stock'));
+      void notify(handleError(err, 'Failed to adjust stock'));
     } finally {
       setAdjustSubmitting(false);
     }

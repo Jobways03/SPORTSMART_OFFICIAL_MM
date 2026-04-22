@@ -462,6 +462,12 @@ export class PrismaProductRepository implements IProductRepository {
     });
     if (!product || !product.potentialDuplicateOf) return product;
 
+    // Stale data guard: if the stored duplicate points at the product itself,
+    // treat it as no duplicate so we don't render a self-match warning.
+    if (product.potentialDuplicateOf === productId) {
+      return { potentialDuplicateOf: null };
+    }
+
     const duplicate = await this.prisma.product.findFirst({
       where: { id: product.potentialDuplicateOf, isDeleted: false },
       include: {

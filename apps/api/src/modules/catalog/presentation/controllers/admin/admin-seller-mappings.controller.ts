@@ -22,6 +22,7 @@ import {
 import { AdminAuthGuard } from '../../../../../core/guards';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
+import { StockSyncService } from '../../../application/services/stock-sync.service';
 
 @ApiTags('Admin Seller Mappings')
 @Controller('admin')
@@ -31,6 +32,7 @@ export class AdminSellerMappingsController {
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
     @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
+    private readonly stockSyncService: StockSyncService,
   ) {
     this.logger.setContext('AdminSellerMappingsController');
   }
@@ -48,6 +50,12 @@ export class AdminSellerMappingsController {
 
     if (!product) {
       throw new NotFoundAppException('Product not found');
+    }
+
+    // Auto-repair: if product has variants but only has product-level mappings
+    // (variantId=null), replace them with per-variant mappings
+    if (product.hasVariants) {
+      await this.autoRepairStaleMappings(productId);
     }
 
     const mappings = await this.sellerMappingRepo.findByProduct(productId);
@@ -308,6 +316,13 @@ export class AdminSellerMappingsController {
 
     const updated = await this.sellerMappingRepo.update(mappingId, updateData);
 
+    // Sync variant stock from all mappings when mapping stockQty changes
+    if (body.stockQty !== undefined) {
+      await this.stockSyncService.syncVariantStockFromMappings(
+        existing.productId, existing.variantId,
+      );
+    }
+
     this.logger.log(
       `Seller mapping ${mappingId} updated by admin ${adminId}: ${JSON.stringify(updateData)}`,
     );
@@ -381,5 +396,65 @@ export class AdminSellerMappingsController {
       message: 'Seller mapping stopped successfully',
       data: updated,
     };
+  }
+
+  /**
+   * Auto-repair: if a product has variants but only product-level mappings
+   * (variantId=null), replace them with per-variant mappings.
+   */
+  private async autoRepairStaleMappings(productId: string): Promise<void> {
+    try {
+      const mappings = await this.sellerMappingRepo.findByProduct(productId);
+      // Find stale product-level mappings (variantId is null)
+      const staleMappings = mappings.filter((m: any) => m.variantId === null);
+      if (staleMappings.length === 0) return;
+
+      // Get the product with its variants
+      const fullProduct = await this.productRepo.findFullProduct(productId);
+      const variants = fullProduct?.variants || [];
+      if (variants.length === 0) return; // No variants to map to
+
+      for (const staleMapping of staleMappings) {
+        const sellerId = staleMapping.sellerId;
+
+        // Check if per-variant mappings already exist for this seller
+        const existingForSeller = await this.sellerMappingRepo.findBySellerForProduct(sellerId, productId);
+        const existingVariantIds = new Set(existingForSeller.map((m: any) => m.variantId).filter(Boolean));
+
+        // Only repair if this seller has no per-variant mappings yet
+        if (existingVariantIds.size > 0) continue;
+
+        const sellerProfile = await this.productRepo.findSellerById(sellerId);
+
+        // Create per-variant mappings
+        for (const variant of variants) {
+          await this.sellerMappingRepo.create({
+            sellerId,
+            productId,
+            variantId: variant.id,
+            stockQty: variant.stock ?? 0,
+            settlementPrice: variant.price
+              ? Number(variant.price)
+              : fullProduct?.basePrice
+                ? Number(fullProduct.basePrice)
+                : undefined,
+            pickupAddress: staleMapping.pickupAddress || sellerProfile?.storeAddress || null,
+            pickupPincode: staleMapping.pickupPincode || sellerProfile?.sellerZipCode || null,
+            dispatchSla: staleMapping.dispatchSla || 2,
+            approvalStatus: staleMapping.approvalStatus || 'APPROVED',
+            isActive: staleMapping.isActive ?? true,
+          });
+        }
+
+        // Remove the stale product-level mapping
+        await this.sellerMappingRepo.delete(staleMapping.id);
+
+        this.logger.log(
+          `Auto-repaired stale product-level mapping for product ${productId}, seller ${sellerId}: replaced with ${variants.length} variant mapping(s)`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to auto-repair stale mappings for product ${productId}: ${err}`);
+    }
   }
 }

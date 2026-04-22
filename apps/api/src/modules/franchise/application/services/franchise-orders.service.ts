@@ -12,7 +12,7 @@ import { FranchiseInventoryService } from './franchise-inventory.service';
 import { FranchiseCommissionService } from './franchise-commission.service';
 import { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
 
-const RETURN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (matches orders module)
+const RETURN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes (matches orders module)
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DISPATCH_DEADLINE_HOURS = 48;
 

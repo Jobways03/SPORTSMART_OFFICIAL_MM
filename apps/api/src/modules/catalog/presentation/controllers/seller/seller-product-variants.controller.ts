@@ -32,6 +32,7 @@ import { GenerateManualVariantsDto } from '../../dtos/generate-manual-variants.d
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
+import { StockSyncService } from '../../../application/services/stock-sync.service';
 
 class GenerateVariantsDto {
   @IsArray()
@@ -53,6 +54,7 @@ export class SellerProductVariantsController {
     private readonly reApprovalService: ReApprovalService,
     private readonly cartFacade: CartPublicFacade,
     private readonly eventBus: EventBusService,
+    private readonly stockSyncService: StockSyncService,
   ) {
     this.logger.setContext('SellerProductVariantsController');
   }
@@ -300,6 +302,13 @@ export class SellerProductVariantsController {
 
     const updated = await this.variantRepo.update(variantId, updateData);
 
+    // Sync stock to seller mapping when variant stock is updated
+    if (dto.stock !== undefined) {
+      await this.stockSyncService.syncMappingStockFromVariant(
+        sellerId, productId, variantId, dto.stock,
+      );
+    }
+
     // Price / stock / sku / status edits on an existing variant are
     // self-serve — only title / option changes force re-approval.
     await this.reApprovalService.triggerIfNeeded(productId, sellerId, {
@@ -333,6 +342,15 @@ export class SellerProductVariantsController {
     });
 
     const results = await this.variantRepo.bulkUpdate(updates);
+
+    // Sync stock to seller mappings for each variant that had stock changes
+    for (const item of dto.variants) {
+      if (item.stock !== undefined) {
+        await this.stockSyncService.syncMappingStockFromVariant(
+          sellerId, productId, item.id, item.stock,
+        );
+      }
+    }
 
     // Bulk update only touches price / stock / sku / status (see the DTO
     // extraction above). All of these are on the self-serve whitelist so
@@ -440,6 +458,16 @@ export class SellerProductVariantsController {
     }
 
     await this.variantRepo.softDelete(variantId);
+
+    // Delete seller mappings that pointed at this deleted variant
+    const orphanedMappings = await this.sellerMappingRepo.findBySellerForProduct(sellerId, productId);
+    for (const m of orphanedMappings) {
+      if (m.variantId === variantId) {
+        try {
+          await this.sellerMappingRepo.delete(m.id);
+        } catch { /* best-effort */ }
+      }
+    }
 
     // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);

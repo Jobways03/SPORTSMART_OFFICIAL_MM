@@ -9,11 +9,13 @@ import {
   ProductVariant,
   ProductVariantImage,
 } from '@/services/product.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 import '../../../product-form.css';
 
 export default function VariantDetailPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const params = useParams();
   const productId = params.id as string;
   const variantId = params.variantId as string;
@@ -216,8 +218,7 @@ export default function VariantDetailPage() {
     }
   }
 
-  async function handleDeleteImage(imageId: string) {
-    if (!confirm('Delete this variant image?')) return;
+  async function handleDeleteImage(imageId: string) {if (!(await confirmDialog('Delete this variant image?'))) return;
     try {
       const token = sessionStorage.getItem('accessToken') || '';
       await sellerProductService.deleteVariantImage(token, productId, variantId, imageId);

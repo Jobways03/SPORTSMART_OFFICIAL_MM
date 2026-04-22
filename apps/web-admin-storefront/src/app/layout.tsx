@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { ModalProvider } from '@sportsmart/ui';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -9,7 +10,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ModalProvider>{children}</ModalProvider>
+      </body>
     </html>
   );
 }

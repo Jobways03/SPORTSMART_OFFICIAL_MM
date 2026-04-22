@@ -34,7 +34,7 @@ export class FranchiseStaffService {
 
   async listStaff(franchiseId: string) {
     const staff = await this.prisma.franchiseStaff.findMany({
-      where: { franchiseId, isActive: true },
+      where: { franchiseId },
       select: {
         id: true,
         name: true,
@@ -45,7 +45,7 @@ export class FranchiseStaffService {
         createdAt: true,
         updatedAt: true,
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
     });
 
     return staff;

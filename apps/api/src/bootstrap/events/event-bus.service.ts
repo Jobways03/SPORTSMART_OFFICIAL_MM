@@ -15,13 +15,15 @@ export class EventBusService {
   /**
    * Publish a domain event to all registered listeners.
    *
-   * Uses `emitAsync` so any async listener error is captured and logged
-   * here — `emit()` would fire-and-forget and turn a failing listener
-   * into an unhandled promise rejection (invisible in the publisher's
-   * logs, potentially crashing Node under --unhandled-rejections=strict).
+   * Listener fan-out is scheduled on the next tick and NOT awaited here,
+   * so slow side-effects (email via SMTP, outbound webhooks) cannot
+   * stretch the publisher's HTTP response time. The publisher's business
+   * flow has already committed by the time we reach this method; a
+   * failing listener does not propagate back to the caller either way.
    *
-   * The publisher's business flow has already committed by the time
-   * this runs; a failing listener does not propagate back to the caller.
+   * We still attach a single `.catch` so async listener rejections are
+   * surfaced in our logs instead of becoming silent unhandled rejections.
+   *
    * Durable delivery would require a transactional outbox + background
    * worker — out of scope for this in-process bus.
    */
@@ -29,16 +31,17 @@ export class EventBusService {
     this.logger.log(
       `Publishing ${event.eventName} for ${event.aggregate}:${event.aggregateId}`,
     );
-    try {
-      await this.eventEmitter.emitAsync(event.eventName, event);
-    } catch (err) {
-      this.logger.error(
-        `Listener failed for ${event.eventName} (${event.aggregate}:${event.aggregateId}): ${
-          (err as Error)?.message ?? 'unknown error'
-        }`,
-      );
-      // Deliberately do NOT rethrow — best-effort delivery.
-    }
+    queueMicrotask(() => {
+      this.eventEmitter
+        .emitAsync(event.eventName, event)
+        .catch((err) => {
+          this.logger.error(
+            `Listener failed for ${event.eventName} (${event.aggregate}:${event.aggregateId}): ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          );
+        });
+    });
   }
 
   async publishAll(events: DomainEvent[]): Promise<void> {

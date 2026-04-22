@@ -9,6 +9,7 @@ import './dashboard.css';
 const navItems = [
   { label: 'Home', href: '/dashboard', icon: '🏠' },
   { label: 'Orders', href: '/dashboard/orders', icon: '📋', hasPendingBadge: true },
+  { label: 'Returns', href: '/dashboard/returns', icon: '↩️' },
   { label: 'Products', href: '/dashboard/products', icon: '📦' },
   { label: 'Inventory', href: '/dashboard/inventory', icon: '📊' },
   { label: 'Commission', href: '/dashboard/commission', icon: '💰' },

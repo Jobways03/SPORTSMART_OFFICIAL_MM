@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { apiClient } from '@/lib/api-client';
+import { useModal } from '@sportsmart/ui';
 
 interface OrderItem {
   id: string;
@@ -245,7 +246,8 @@ function OrderProgressTracker({ orderStatus, fulfillmentStatus, paymentStatus }:
 }
 
 export default function OrderDetailPage() {
-  const { orderNumber } = useParams<{ orderNumber: string }>();
+  const { notify, confirmDialog } = useModal();
+const { orderNumber } = useParams<{ orderNumber: string }>();
   const router = useRouter();
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -265,18 +267,17 @@ export default function OrderDetailPage() {
     fetchOrder();
   }, [fetchOrder]);
 
-  const handleCancel = async () => {
-    if (!confirm('Are you sure you want to cancel this order?')) return;
+  const handleCancel = async () => {if (!(await confirmDialog('Are you sure you want to cancel this order?'))) return;
     setCancelling(true);
     try {
       const res = await apiClient(`/customer/orders/${orderNumber}/cancel`, { method: 'PATCH' });
       if (res.success) {
         fetchOrder();
       } else {
-        alert(res.message || 'Failed to cancel order');
+        void notify(res.message || 'Failed to cancel order');
       }
     } catch {
-      alert('Failed to cancel order');
+      void notify('Failed to cancel order');
     } finally {
       setCancelling(false);
     }

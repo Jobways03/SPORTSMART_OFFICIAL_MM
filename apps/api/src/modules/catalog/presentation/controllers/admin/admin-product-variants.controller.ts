@@ -22,6 +22,8 @@ import {
 import { AdminAuthGuard } from '../../../../../core/guards';
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
+import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
 import { IsArray, ArrayNotEmpty } from 'class-validator';
 import { UpdateVariantDto } from '../../dtos/update-variant.dto';
@@ -41,6 +43,8 @@ class GenerateVariantsDto {
 export class AdminProductVariantsController {
   constructor(
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
+    @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
     private readonly variantGenerator: VariantGeneratorService,
     private readonly cartFacade: CartPublicFacade,
@@ -114,6 +118,10 @@ export class AdminProductVariantsController {
     await this.variantRepo.setHasVariants(productId, true);
 
     const variants = await this.variantRepo.findByProductId(productId);
+
+    // Auto-create seller mappings for generated variants
+    await this.autoCreateVariantMappingsForAdmin(productId, variants);
+
     this.logger.log(`Generated ${variants.length} variants (manual options) for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };
   }
@@ -143,6 +151,10 @@ export class AdminProductVariantsController {
     await this.variantRepo.setHasVariants(productId, true);
 
     const variants = await this.variantRepo.findByProductId(productId);
+
+    // Auto-create seller mappings for generated variants
+    await this.autoCreateVariantMappingsForAdmin(productId, variants);
+
     this.logger.log(`Generated ${variants.length} variants for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };
   }
@@ -191,6 +203,64 @@ export class AdminProductVariantsController {
     const results = await this.variantRepo.bulkUpdate(updates);
     this.logger.log(`${results.length} variants bulk-updated for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${results.length} variants updated successfully`, data: results };
+  }
+
+  /**
+   * Auto-create per-variant seller mappings when admin generates variants.
+   * Looks up the product's sellerId, removes stale product-level mapping,
+   * and creates per-variant mappings with APPROVED status.
+   */
+  private async autoCreateVariantMappingsForAdmin(
+    productId: string,
+    variants: any[],
+  ): Promise<void> {
+    try {
+      const product = await this.productRepo.findByIdBasic(productId);
+      if (!product?.sellerId) return; // No seller associated — nothing to map
+
+      const sellerId = product.sellerId;
+      const sellerProfile = await this.productRepo.findSellerById(sellerId);
+
+      // Remove existing product-level mapping (null variantId)
+      await this.sellerMappingRepo.deleteBySellerProductVariantNull(sellerId, productId);
+
+      // Get existing variant mappings to avoid duplicates
+      const existingMappings = await this.sellerMappingRepo.findBySellerForProduct(sellerId, productId);
+      const existingVariantIds = new Set(existingMappings.map((m: any) => m.variantId));
+
+      let created = 0;
+      for (const variant of variants) {
+        if (existingVariantIds.has(variant.id)) continue;
+
+        await this.sellerMappingRepo.create({
+          sellerId,
+          productId,
+          variantId: variant.id,
+          stockQty: variant.stock ?? 0,
+          settlementPrice: variant.price
+            ? Number(variant.price)
+            : product.basePrice
+              ? Number(product.basePrice)
+              : undefined,
+          pickupAddress: sellerProfile?.storeAddress || null,
+          pickupPincode: sellerProfile?.sellerZipCode || null,
+          dispatchSla: 2,
+          approvalStatus: 'APPROVED',
+          isActive: true,
+        });
+        created++;
+      }
+
+      if (created > 0) {
+        this.logger.log(
+          `Auto-created ${created} seller mapping(s) for variants of product ${productId} (admin flow)`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to auto-create seller mappings for product ${productId}: ${err}`,
+      );
+    }
   }
 
   @Delete(':variantId')

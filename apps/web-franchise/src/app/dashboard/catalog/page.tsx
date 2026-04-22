@@ -8,6 +8,7 @@ import {
   AddMappingPayload,
   UpdateMappingPayload,
 } from '@/services/catalog.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 type TabKey = 'mine' | 'browse';
@@ -55,6 +56,7 @@ function formatApprovalStatus(status: string): string {
 }
 
 export default function CatalogPage() {
+  const { notify, confirmDialog } = useModal();
   const [activeTab, setActiveTab] = useState<TabKey>('mine');
 
   // ---- My Catalog state ----
@@ -221,9 +223,8 @@ export default function CatalogPage() {
     }
   };
 
-  const handleRemoveMapping = async (mapping: CatalogMapping) => {
-    const title = mapping.product?.title || 'this product';
-    if (!window.confirm(`Remove "${title}" from your catalog?`)) return;
+  const handleRemoveMapping = async (mapping: CatalogMapping) => {const title = mapping.product?.title || 'this product';
+    if (!(await confirmDialog(`Remove "${title}" from your catalog?`))) return;
     setRemovingId(mapping.id);
     try {
       await franchiseCatalogService.removeMapping(mapping.id);
@@ -231,9 +232,9 @@ export default function CatalogPage() {
       await loadMappings();
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to remove mapping');
+        void notify(err.body.message || 'Failed to remove mapping');
       } else {
-        alert('Failed to remove mapping');
+        void notify('Failed to remove mapping');
       }
     } finally {
       setRemovingId(null);

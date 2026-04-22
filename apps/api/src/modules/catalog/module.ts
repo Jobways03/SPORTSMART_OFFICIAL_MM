@@ -14,6 +14,7 @@ import { ServiceabilityService } from './application/services/serviceability.ser
 import { SellerAllocationService } from './application/services/seller-allocation.service';
 import { DuplicateDetectionService } from './application/services/duplicate-detection.service';
 import { CatalogCacheService } from './application/services/catalog-cache.service';
+import { StockSyncService } from './application/services/stock-sync.service';
 
 // Guards
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
@@ -133,6 +134,7 @@ import { CartModule } from '../cart/module';
     SellerAllocationService,
     DuplicateDetectionService,
     CatalogCacheService,
+    StockSyncService,
 
     // ── Guards & adapters ───────────────────────────────────────────────
     SellerAuthGuard,

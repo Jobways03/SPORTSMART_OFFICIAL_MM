@@ -7,6 +7,7 @@ import {
   franchiseOrdersService,
   FranchiseOrder,
 } from '@/services/orders.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 /* -- helpers -- */
@@ -107,7 +108,8 @@ const rejectionReasonLabel = (reason: string) => {
 
 /* -- page -- */
 export default function FranchiseOrderDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { notify, confirmDialog } = useModal();
+const { id } = useParams<{ id: string }>();
   const [order, setOrder] = useState<FranchiseOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -139,8 +141,8 @@ export default function FranchiseOrderDetailPage() {
       const res = await franchiseOrdersService.get(id);
       if (res.data) setOrder(res.data);
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to load order');
-      else alert('Failed to load order');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to load order');
+      else void notify('Failed to load order');
     } finally {
       setLoading(false);
     }
@@ -150,8 +152,7 @@ export default function FranchiseOrderDetailPage() {
     fetchOrder();
   }, [fetchOrder]);
 
-  const handleAcceptConfirm = async () => {
-    if (!id) return;
+  const handleAcceptConfirm = async () => {if (!id) return;
     setActionLoading('accept');
     try {
       await franchiseOrdersService.accept(id, expectedDispatchDate || undefined);
@@ -159,15 +160,14 @@ export default function FranchiseOrderDetailPage() {
       setExpectedDispatchDate('');
       fetchOrder();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to accept order');
-      else alert('Failed to accept order');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to accept order');
+      else void notify('Failed to accept order');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleRejectConfirm = async () => {
-    if (!id) return;
+  const handleRejectConfirm = async () => {if (!id) return;
     setActionLoading('reject');
     try {
       await franchiseOrdersService.reject(
@@ -180,15 +180,14 @@ export default function FranchiseOrderDetailPage() {
       setRejectNote('');
       fetchOrder();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to reject order');
-      else alert('Failed to reject order');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to reject order');
+      else void notify('Failed to reject order');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handlePackConfirm = async () => {
-    if (!id) return;
+  const handlePackConfirm = async () => {if (!id) return;
     setActionLoading('pack');
     try {
       await franchiseOrdersService.updateStatus(id, 'PACKED');
@@ -196,8 +195,8 @@ export default function FranchiseOrderDetailPage() {
       setPackNote('');
       fetchOrder();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to mark as packed');
-      else alert('Failed to mark as packed');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to mark as packed');
+      else void notify('Failed to mark as packed');
     } finally {
       setActionLoading(null);
     }

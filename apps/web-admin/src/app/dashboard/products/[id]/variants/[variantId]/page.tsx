@@ -6,9 +6,11 @@ import Link from 'next/link';
 import { adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
 import '../../../product-form.css';
+import { useModal } from '@sportsmart/ui';
 
 export default function AdminVariantDetailPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const params = useParams();
   const productId = params.id as string;
   const variantId = params.variantId as string;
@@ -209,8 +211,7 @@ export default function AdminVariantDetailPage() {
     }
   }
 
-  async function handleDeleteImage(imageId: string) {
-    if (!confirm('Delete this variant image?')) return;
+  async function handleDeleteImage(imageId: string) {if (!(await confirmDialog('Delete this variant image?'))) return;
     try {
       await adminProductsService.deleteVariantImage(productId, variantId, imageId);
       showToast('success', 'Image deleted.');

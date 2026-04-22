@@ -9,6 +9,7 @@ import {
   PosSale,
   PosSaleType,
 } from '@/services/pos.service';
+import { useModal } from '@sportsmart/ui';
 import {
   franchiseCatalogService,
   CatalogMapping,
@@ -107,7 +108,7 @@ function statusBadgeStyle(status: string): React.CSSProperties {
 }
 
 export default function PosPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>('new-sale');
+const [activeTab, setActiveTab] = useState<TabKey>('new-sale');
 
   return (
     <div>
@@ -170,6 +171,7 @@ export default function PosPage() {
 // ══════════════════════════════════════════════════════════════
 
 function NewSaleTab() {
+  const { notify, confirmDialog } = useModal();
   const [products, setProducts] = useState<CatalogMapping[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -184,7 +186,7 @@ function NewSaleTab() {
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   const loadProducts = async (searchTerm: string) => {
-    setProductsLoading(true);
+setProductsLoading(true);
     try {
       const res = await franchiseCatalogService.listMappings({
         page: 1,
@@ -196,9 +198,9 @@ function NewSaleTab() {
       setProducts(res.data?.mappings ?? []);
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load products');
+        void notify(err.body.message || 'Failed to load products');
       } else {
-        alert('Failed to load products');
+        void notify('Failed to load products');
       }
     } finally {
       setProductsLoading(false);
@@ -277,17 +279,17 @@ function NewSaleTab() {
   };
 
   const handleSubmit = async () => {
-    if (cart.length === 0) {
-      alert('Cart is empty. Add at least one product.');
+if (cart.length === 0) {
+      void notify('Cart is empty. Add at least one product.');
       return;
     }
     for (const line of cart) {
       if (line.quantity <= 0) {
-        alert(`Quantity must be greater than 0 for ${line.title}`);
+        void notify(`Quantity must be greater than 0 for ${line.title}`);
         return;
       }
       if (line.unitPrice <= 0) {
-        alert(`Unit price must be greater than 0 for ${line.title}`);
+        void notify(`Unit price must be greater than 0 for ${line.title}`);
         return;
       }
     }
@@ -315,9 +317,9 @@ function NewSaleTab() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to record sale');
+        void notify(err.body.message || 'Failed to record sale');
       } else {
-        alert('Failed to record sale');
+        void notify('Failed to record sale');
       }
     } finally {
       setIsSubmitting(false);
@@ -923,7 +925,8 @@ function NewSaleTab() {
 // ══════════════════════════════════════════════════════════════
 
 function SaleHistoryTab() {
-  const [sales, setSales] = useState<PosSale[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [sales, setSales] = useState<PosSale[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
@@ -940,7 +943,7 @@ function SaleHistoryTab() {
   const [returnSale, setReturnSale] = useState<PosSale | null>(null);
 
   const load = async () => {
-    setIsLoading(true);
+setIsLoading(true);
     try {
       const res = await franchisePosService.listSales({
         page,
@@ -957,9 +960,9 @@ function SaleHistoryTab() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load sales');
+        void notify(err.body.message || 'Failed to load sales');
       } else {
-        alert('Failed to load sales');
+        void notify('Failed to load sales');
       }
     } finally {
       setIsLoading(false);
@@ -977,22 +980,22 @@ function SaleHistoryTab() {
   };
 
   const openView = async (sale: PosSale) => {
-    try {
+try {
       const res = await franchisePosService.getSale(sale.id);
       if (res.data) setViewSale(res.data);
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to load sale detail');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to load sale detail');
     }
   };
 
   const openReturn = async (sale: PosSale) => {
-    try {
+try {
       const res = await franchisePosService.getSale(sale.id);
       if (res.data) setReturnSale(res.data);
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to load sale detail');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to load sale detail');
     }
   };
 
@@ -1237,20 +1240,21 @@ function SaleHistoryTab() {
 // ══════════════════════════════════════════════════════════════
 
 function DailyReportTab() {
-  const [date, setDate] = useState(todayIso());
+  const { notify, confirmDialog } = useModal();
+const [date, setDate] = useState(todayIso());
   const [report, setReport] = useState<PosDailyReconciliation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const load = async () => {
-    setIsLoading(true);
+setIsLoading(true);
     try {
       const res = await franchisePosService.getReconciliation(date);
       if (res.data) setReport(res.data);
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load report');
+        void notify(err.body.message || 'Failed to load report');
       } else {
-        alert('Failed to load report');
+        void notify('Failed to load report');
       }
     } finally {
       setIsLoading(false);
@@ -1722,12 +1726,13 @@ function VoidSaleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { notify, confirmDialog } = useModal();
   const [reason, setReason] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   const submit = async () => {
-    if (reason.trim().length < 5 || reason.trim().length > 500) {
-      alert('Reason must be between 5 and 500 characters');
+if (reason.trim().length < 5 || reason.trim().length > 500) {
+      void notify('Reason must be between 5 and 500 characters');
       return;
     }
     setIsSaving(true);
@@ -1735,8 +1740,8 @@ function VoidSaleModal({
       await franchisePosService.voidSale(sale.id, { reason: reason.trim() });
       onDone();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to void sale');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to void sale');
     } finally {
       setIsSaving(false);
     }
@@ -1833,7 +1838,8 @@ function ReturnSaleModal({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [selected, setSelected] = useState<
+  const { notify, confirmDialog } = useModal();
+const [selected, setSelected] = useState<
     Record<string, { checked: boolean; qty: number }>
   >(() => {
     const init: Record<string, { checked: boolean; qty: number }> = {};
@@ -1860,12 +1866,12 @@ function ReturnSaleModal({
   };
 
   const submit = async () => {
-    const items = Object.entries(selected)
+const items = Object.entries(selected)
       .filter(([, v]) => v.checked)
       .map(([id, v]) => ({ itemId: id, returnQty: v.qty }));
 
     if (items.length === 0) {
-      alert('Select at least one item to return');
+      void notify('Select at least one item to return');
       return;
     }
 
@@ -1874,8 +1880,8 @@ function ReturnSaleModal({
       await franchisePosService.returnSale(sale.id, { items });
       onDone();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to process return');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to process return');
     } finally {
       setIsSaving(false);
     }

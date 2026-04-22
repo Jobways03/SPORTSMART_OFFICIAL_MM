@@ -6,6 +6,7 @@ import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { profileService, CustomerProfile } from '@/services/profile.service';
 import { ApiError } from '@/lib/api-client';
+import { useModal } from '@sportsmart/ui';
 
 const formatPhoneWithCountryCode = (phone: string | null | undefined): string => {
   if (!phone) return '';
@@ -18,7 +19,8 @@ const formatPhoneWithCountryCode = (phone: string | null | undefined): string =>
 };
 
 export default function ProfilePage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -64,8 +66,7 @@ export default function ProfilePage() {
       .finally(() => setLoading(false));
   }, [router]);
 
-  const handleProfileSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleProfileSubmit = async (e: FormEvent) => {e.preventDefault();
     setProfileError(null);
     setProfileSuccess(null);
 
@@ -109,14 +110,13 @@ export default function ProfilePage() {
     } catch (err) {
       const msg = err instanceof ApiError ? err.body.message : 'Failed to update profile.';
       setProfileError(msg || 'Failed to update profile.');
-      alert(msg || 'Failed to update profile.');
+      void notify(msg || 'Failed to update profile.');
     } finally {
       setSavingProfile(false);
     }
   };
 
-  const handlePasswordSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handlePasswordSubmit = async (e: FormEvent) => {e.preventDefault();
     setPasswordError(null);
 
     if (!currentPassword || !newPassword || !confirmPassword) {
@@ -142,12 +142,12 @@ export default function ProfilePage() {
       } catch {
         // ignore storage errors
       }
-      alert('Password changed \u2014 please log in again');
+      void notify('Password changed \u2014 please log in again');
       router.push('/login');
     } catch (err) {
       const msg = err instanceof ApiError ? err.body.message : 'Failed to change password.';
       setPasswordError(msg || 'Failed to change password.');
-      alert(msg || 'Failed to change password.');
+      void notify(msg || 'Failed to change password.');
     } finally {
       setChangingPassword(false);
     }

@@ -6,6 +6,7 @@ import {
   franchiseOrdersService,
   FranchiseOrder,
 } from '@/services/orders.service';
+import { useModal } from '@sportsmart/ui';
 import {
   franchiseReturnsService,
   FranchiseReturn,
@@ -123,7 +124,8 @@ const pageBtnStyle: React.CSSProperties = {
 };
 
 export default function FranchiseOrdersPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const [tab, setTab] = useState<Tab>('orders');
 
   // ---------------- Orders state ----------------
@@ -167,8 +169,8 @@ export default function FranchiseOrdersPage() {
       });
       if (res.data) setOrdersData(res.data);
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to load orders');
-      else alert('Failed to load orders');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to load orders');
+      else void notify('Failed to load orders');
     } finally {
       setOrdersLoading(false);
     }
@@ -184,8 +186,8 @@ export default function FranchiseOrdersPage() {
       });
       if (res.data) setReturnsData(res.data);
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message || 'Failed to load returns');
-      else alert('Failed to load returns');
+      if (err instanceof ApiError) void notify(err.body.message || 'Failed to load returns');
+      else void notify('Failed to load returns');
     } finally {
       setReturnsLoading(false);
     }

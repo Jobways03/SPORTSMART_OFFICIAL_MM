@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { apiClient } from '@/lib/api-client';
 
@@ -70,6 +71,9 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(true);
   const [initiating, setInitiating] = useState(false);
   const [placing, setPlacing] = useState(false);
+  const [placedOrderNumber, setPlacedOrderNumber] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [removingUnserviceable, setRemovingUnserviceable] = useState(false);
   const [error, setError] = useState('');
   const [checkoutData, setCheckoutData] = useState<CheckoutData | null>(null);
@@ -157,30 +161,127 @@ export default function CheckoutPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const validateAddressField = (name: string, value: string): string => {
+    const v = (value || '').trim();
+    switch (name) {
+      case 'fullName':
+        if (!v) return 'Full name is required';
+        if (v.length < 2) return 'Name is too short';
+        if (!/^[A-Za-z][A-Za-z .'-]*$/.test(v)) return 'Use letters, spaces, . ’ - only';
+        return '';
+      case 'phone': {
+        if (!v) return 'Phone is required';
+        const digits = v.replace(/\D/g, '');
+        const local =
+          digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+        if (local.length !== 10) return 'Enter a valid 10-digit phone number';
+        if (!/^[6-9]/.test(local)) return 'Indian mobiles start with 6-9';
+        return '';
+      }
+      case 'addressLine1':
+        if (!v) return 'Address is required';
+        if (v.length < 4) return 'Address is too short';
+        return '';
+      case 'postalCode':
+        if (!v) return 'Pincode is required';
+        if (!/^\d{6}$/.test(v)) return 'Pincode must be 6 digits';
+        return '';
+      case 'city':
+        if (!v) return 'City is required';
+        return '';
+      case 'state':
+        if (!v) return 'State is required';
+        return '';
+      default:
+        return '';
+    }
+  };
+
+  const validateAddressForm = (f: typeof form): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    (['fullName', 'phone', 'addressLine1', 'postalCode', 'city', 'state'] as const).forEach((k) => {
+      const e = validateAddressField(k, (f as Record<string, string>)[k] ?? '');
+      if (e) errs[k] = e;
+    });
+    return errs;
+  };
+
+  const clearFieldError = (name: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[name]) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  };
+
+  const resetAddressForm = () => {
+    setForm({ fullName: '', phone: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', locality: '' });
+    setFieldErrors({});
+    setPincodeData(null);
+    setPincodeError('');
+    setPincodeAutoFilled(false);
+    setSelectedPlace('');
+    setEditingAddressId(null);
+  };
+
+  const startEditAddress = (addr: Address) => {
+    setEditingAddressId(addr.id);
+    setForm({
+      fullName: addr.fullName || '',
+      phone: addr.phone || '',
+      addressLine1: addr.addressLine1 || '',
+      addressLine2: addr.addressLine2 || '',
+      city: addr.city || '',
+      state: addr.state || '',
+      postalCode: addr.postalCode || '',
+      locality: '',
+    });
+    setFieldErrors({});
+    setPincodeData(null);
+    setPincodeError('');
+    setPincodeAutoFilled(false);
+    setSelectedPlace('');
+    setShowNewAddress(true);
+    setError('');
+  };
+
   const handleCreateAddress = async () => {
-    const { fullName, phone, addressLine1, city, state, postalCode } = form;
-    if (!fullName || !phone || !addressLine1 || !city || !state || !postalCode) {
-      setError('Please fill all required address fields');
+    const errs = validateAddressForm(form);
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setError('Please fix the highlighted fields');
       return;
     }
     setError('');
+    const isEditing = !!editingAddressId;
     try {
-      const res = await apiClient<Address>('/customer/addresses', {
-        method: 'POST',
-        body: JSON.stringify(form),
-      });
+      const res = isEditing
+        ? await apiClient<Address>(`/customer/addresses/${editingAddressId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(form),
+          })
+        : await apiClient<Address>('/customer/addresses', {
+            method: 'POST',
+            body: JSON.stringify(form),
+          });
       if (res.data) {
-        setAddresses((prev) => [res.data!, ...prev]);
-        setSelectedAddressId(res.data.id);
+        if (isEditing) {
+          setAddresses((prev) => prev.map((a) => (a.id === res.data!.id ? res.data! : a)));
+          // If the edited address was selected, keep it selected & reset any
+          // cached serviceability/allocation tied to the old values.
+          if (selectedAddressId === res.data.id) {
+            setCheckoutData(null);
+          }
+        } else {
+          setAddresses((prev) => [res.data!, ...prev]);
+          setSelectedAddressId(res.data.id);
+        }
         setShowNewAddress(false);
-        setForm({ fullName: '', phone: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', locality: '' });
-        setPincodeData(null);
-        setPincodeError('');
-        setPincodeAutoFilled(false);
-        setSelectedPlace('');
+        resetAddressForm();
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to save address');
+      setError(err?.body?.message || err?.message || 'Failed to save address');
     }
   };
 
@@ -257,19 +358,37 @@ export default function CheckoutPage() {
     }
     setPlacing(true);
     setError('');
+    // 60-second client-side timeout so the button can never hang forever.
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 60_000);
     try {
       const res = await apiClient<{ orderNumber: string }>('/customer/checkout/place-order', {
         method: 'POST',
         body: JSON.stringify({ paymentMethod: 'COD' }),
+        signal: abort.signal,
       });
       window.dispatchEvent(new Event('cart-updated'));
-      if (res.data) {
-        router.push(`/orders/${res.data.orderNumber}`);
+      const orderNumber = res?.data?.orderNumber;
+      if (!orderNumber) {
+        setError('Order placed but confirmation was missing. Check My Orders.');
+        setPlacing(false);
+        return;
       }
+      // Flip to a success screen immediately so the user isn't staring at
+      // "Placing Order..." while Next.js compiles/loads /orders/[id] in dev
+      // mode. Kick off the navigation in the background.
+      setPlacedOrderNumber(orderNumber);
+      router.prefetch(`/orders/${orderNumber}`);
+      router.replace(`/orders/${orderNumber}`);
     } catch (err: any) {
-      setError(err?.message || 'Failed to place order');
-    } finally {
+      if (err?.name === 'AbortError') {
+        setError('The server took too long to respond. Please check My Orders — your order may still have been placed.');
+      } else {
+        setError(err?.message || 'Failed to place order');
+      }
       setPlacing(false);
+    } finally {
+      clearTimeout(timer);
     }
   };
 
@@ -302,6 +421,95 @@ export default function CheckoutPage() {
     return null;
   }
 
+  // Success overlay shown from the moment the server confirms the order.
+  // Takes over the viewport so the user isn't watching a "Placing Order…"
+  // button while Next.js compiles/loads /orders/[orderNumber] in dev mode.
+  if (placedOrderNumber) {
+    return (
+      <>
+        <Navbar />
+        <div
+          style={{
+            minHeight: '70vh',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              padding: '32px 28px',
+              textAlign: 'center',
+              maxWidth: 420,
+              width: '100%',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
+            }}
+          >
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                background: '#d1fae5',
+                color: '#16a34a',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 30,
+                fontWeight: 700,
+                margin: '0 auto 16px',
+              }}
+            >
+              ✓
+            </div>
+            <h2 style={{ margin: '0 0 8px', fontSize: 20, color: '#111' }}>
+              Order placed
+            </h2>
+            <p style={{ margin: 0, fontSize: 14, color: '#4b5563' }}>
+              Order #{placedOrderNumber}
+            </p>
+            <p
+              style={{
+                margin: '18px 0 0',
+                fontSize: 13,
+                color: '#6b7280',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 14,
+                  height: 14,
+                  border: '2px solid #d1d5db',
+                  borderTopColor: '#2563eb',
+                  borderRadius: '50%',
+                  display: 'inline-block',
+                  animation: 'sm-spin 0.8s linear infinite',
+                }}
+              />
+              Opening your order…
+            </p>
+            <div style={{ marginTop: 18 }}>
+              <Link
+                href={`/orders/${placedOrderNumber}`}
+                style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+              >
+                Tap here if the page doesn&apos;t load
+              </Link>
+            </div>
+          </div>
+        </div>
+        <style>{`@keyframes sm-spin { to { transform: rotate(360deg); } }`}</style>
+      </>
+    );
+  }
+
   return (
     <>
       <Navbar />
@@ -323,32 +531,51 @@ export default function CheckoutPage() {
             {addresses.length > 0 && !showNewAddress && (
               <div style={{ marginBottom: 16 }}>
                 {addresses.map((addr) => (
-                  <label
+                  <div
                     key={addr.id}
                     style={{
-                      display: 'block',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 10,
                       padding: 14,
                       border: `2px solid ${selectedAddressId === addr.id ? '#111' : '#e5e7eb'}`,
                       borderRadius: 8,
                       marginBottom: 8,
-                      cursor: 'pointer',
                     }}
                   >
-                    <input
-                      type="radio"
-                      name="address"
-                      checked={selectedAddressId === addr.id}
-                      onChange={() => {
-                        setSelectedAddressId(addr.id);
-                        setCheckoutData(null); // Reset checkout when address changes
+                    <label style={{ flex: 1, cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="address"
+                        checked={selectedAddressId === addr.id}
+                        onChange={() => {
+                          setSelectedAddressId(addr.id);
+                          setCheckoutData(null); // Reset checkout when address changes
+                        }}
+                        style={{ marginRight: 10 }}
+                      />
+                      <strong>{addr.fullName}</strong> - {addr.phone}
+                      <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4, marginLeft: 24 }}>
+                        {addr.addressLine1}{addr.addressLine2 && `, ${addr.addressLine2}`}, {addr.city}, {addr.state} - {addr.postalCode}
+                      </div>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => startEditAddress(addr)}
+                      style={{
+                        flex: '0 0 auto',
+                        background: 'none',
+                        border: 'none',
+                        color: '#2563eb',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        padding: '4px 8px',
                       }}
-                      style={{ marginRight: 10 }}
-                    />
-                    <strong>{addr.fullName}</strong> - {addr.phone}
-                    <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4, marginLeft: 24 }}>
-                      {addr.addressLine1}{addr.addressLine2 && `, ${addr.addressLine2}`}, {addr.city}, {addr.state} - {addr.postalCode}
-                    </div>
-                  </label>
+                    >
+                      Edit
+                    </button>
+                  </div>
                 ))}
                 <button
                   onClick={() => setShowNewAddress(true)}
@@ -361,62 +588,161 @@ export default function CheckoutPage() {
 
             {showNewAddress && (
               <div style={{ background: '#f9fafb', borderRadius: 12, padding: 20, marginBottom: 16 }}>
-                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>New Address</h3>
+                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
+                  {editingAddressId ? 'Edit Address' : 'New Address'}
+                </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <input placeholder="Full Name *" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} style={inputStyle} />
-                  <input placeholder="Phone *" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
-                  <input placeholder="Address Line 1 *" value={form.addressLine1} onChange={(e) => setForm({ ...form, addressLine1: e.target.value })} style={{ ...inputStyle, gridColumn: '1 / -1' }} />
+                  <div>
+                    <input
+                      placeholder="Full Name *"
+                      value={form.fullName}
+                      maxLength={60}
+                      onChange={(e) => {
+                        // Strip anything that isn't a letter, space, . ' -
+                        const cleaned = e.target.value.replace(/[^A-Za-z .'\-]/g, '');
+                        setForm({ ...form, fullName: cleaned });
+                        clearFieldError('fullName');
+                      }}
+                      onBlur={(e) => {
+                        const msg = validateAddressField('fullName', e.target.value);
+                        setFieldErrors((p) => ({ ...p, fullName: msg })) ;
+                      }}
+                      style={{ ...inputStyle, borderColor: fieldErrors.fullName ? '#dc2626' : inputStyle.borderColor }}
+                      aria-invalid={!!fieldErrors.fullName}
+                    />
+                    {fieldErrors.fullName && (
+                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.fullName}</span>
+                    )}
+                  </div>
+                  <div>
+                    <input
+                      placeholder="Phone *"
+                      value={form.phone}
+                      inputMode="numeric"
+                      maxLength={10}
+                      onChange={(e) => {
+                        // Keep digits only, drop leading 0-5 so first digit must be 6-9,
+                        // cap at 10 digits.
+                        let digits = e.target.value.replace(/\D/g, '');
+                        while (digits.length > 0 && !/^[6-9]/.test(digits)) {
+                          digits = digits.slice(1);
+                        }
+                        digits = digits.slice(0, 10);
+                        setForm({ ...form, phone: digits });
+                        clearFieldError('phone');
+                      }}
+                      onBlur={(e) => {
+                        const msg = validateAddressField('phone', e.target.value);
+                        setFieldErrors((p) => ({ ...p, phone: msg }));
+                      }}
+                      style={{ ...inputStyle, borderColor: fieldErrors.phone ? '#dc2626' : inputStyle.borderColor }}
+                      aria-invalid={!!fieldErrors.phone}
+                    />
+                    {fieldErrors.phone && (
+                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.phone}</span>
+                    )}
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <input
+                      placeholder="Address Line 1 *"
+                      value={form.addressLine1}
+                      onChange={(e) => { setForm({ ...form, addressLine1: e.target.value }); clearFieldError('addressLine1'); }}
+                      onBlur={(e) => {
+                        const msg = validateAddressField('addressLine1', e.target.value);
+                        setFieldErrors((p) => ({ ...p, addressLine1: msg }));
+                      }}
+                      style={{ ...inputStyle, borderColor: fieldErrors.addressLine1 ? '#dc2626' : inputStyle.borderColor, width: '100%' }}
+                      aria-invalid={!!fieldErrors.addressLine1}
+                    />
+                    {fieldErrors.addressLine1 && (
+                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.addressLine1}</span>
+                    )}
+                  </div>
                   <input placeholder="Address Line 2" value={form.addressLine2} onChange={(e) => setForm({ ...form, addressLine2: e.target.value })} style={{ ...inputStyle, gridColumn: '1 / -1' }} />
                   <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     <div>
                       <input
                         placeholder="Postal Code (PIN) *"
                         value={form.postalCode}
+                        inputMode="numeric"
                         onChange={(e) => {
                           const val = e.target.value.replace(/\D/g, '').slice(0, 6);
                           setForm({ ...form, postalCode: val });
+                          clearFieldError('postalCode');
                           lookupPincode(val);
                         }}
-                        style={inputStyle}
+                        onBlur={(e) => {
+                          const msg = validateAddressField('postalCode', e.target.value);
+                          setFieldErrors((p) => ({ ...p, postalCode: msg }));
+                        }}
+                        style={{ ...inputStyle, borderColor: fieldErrors.postalCode ? '#dc2626' : inputStyle.borderColor }}
                         maxLength={6}
+                        aria-invalid={!!fieldErrors.postalCode}
                       />
-                      {pincodeLoading && (
+                      {fieldErrors.postalCode && (
+                        <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.postalCode}</span>
+                      )}
+                      {!fieldErrors.postalCode && pincodeLoading && (
                         <span style={{ fontSize: 12, color: '#6b7280', marginTop: 4, display: 'block' }}>Looking up pincode...</span>
                       )}
-                      {pincodeError && (
+                      {!fieldErrors.postalCode && pincodeError && (
                         <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{pincodeError}</span>
                       )}
-                      {pincodeData && !pincodeError && (
+                      {!fieldErrors.postalCode && pincodeData && !pincodeError && (
                         <span style={{ fontSize: 12, color: '#16a34a', marginTop: 4, display: 'block' }}>{pincodeData.district}, {pincodeData.state}</span>
                       )}
                     </div>
                     <div />
                   </div>
-                  <input
-                    placeholder="City / District *"
-                    value={form.city}
-                    onChange={(e) => {
-                      setForm({ ...form, city: e.target.value });
-                      if (pincodeAutoFilled) setPincodeAutoFilled(false);
-                    }}
-                    style={{
-                      ...inputStyle,
-                      ...(pincodeAutoFilled ? { background: '#f0fdf4', borderColor: '#86efac' } : {}),
-                    }}
-                    readOnly={pincodeAutoFilled}
-                  />
-                  <input
-                    placeholder="State *"
-                    value={form.state}
-                    onChange={(e) => {
-                      setForm({ ...form, state: e.target.value });
-                      if (pincodeAutoFilled) setPincodeAutoFilled(false);
-                    }}
-                    style={{
-                      ...inputStyle,
-                      ...(pincodeAutoFilled ? { background: '#f0fdf4', borderColor: '#86efac' } : {}),
-                    }}
-                  />
+                  <div>
+                    <input
+                      placeholder="City / District *"
+                      value={form.city}
+                      onChange={(e) => {
+                        setForm({ ...form, city: e.target.value });
+                        clearFieldError('city');
+                        if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                      }}
+                      onBlur={(e) => {
+                        const msg = validateAddressField('city', e.target.value);
+                        setFieldErrors((p) => ({ ...p, city: msg }));
+                      }}
+                      style={{
+                        ...inputStyle,
+                        borderColor: fieldErrors.city ? '#dc2626' : (pincodeAutoFilled ? '#86efac' : inputStyle.borderColor),
+                        ...(pincodeAutoFilled ? { background: '#f0fdf4' } : {}),
+                      }}
+                      readOnly={pincodeAutoFilled}
+                      aria-invalid={!!fieldErrors.city}
+                    />
+                    {fieldErrors.city && (
+                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.city}</span>
+                    )}
+                  </div>
+                  <div>
+                    <input
+                      placeholder="State *"
+                      value={form.state}
+                      onChange={(e) => {
+                        setForm({ ...form, state: e.target.value });
+                        clearFieldError('state');
+                        if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                      }}
+                      onBlur={(e) => {
+                        const msg = validateAddressField('state', e.target.value);
+                        setFieldErrors((p) => ({ ...p, state: msg }));
+                      }}
+                      style={{
+                        ...inputStyle,
+                        borderColor: fieldErrors.state ? '#dc2626' : (pincodeAutoFilled ? '#86efac' : inputStyle.borderColor),
+                        ...(pincodeAutoFilled ? { background: '#f0fdf4' } : {}),
+                      }}
+                      aria-invalid={!!fieldErrors.state}
+                    />
+                    {fieldErrors.state && (
+                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.state}</span>
+                    )}
+                  </div>
                   {pincodeData && pincodeData.places && pincodeData.places.length > 0 && (
                     <select
                       value={selectedPlace}
@@ -432,10 +758,16 @@ export default function CheckoutPage() {
                 </div>
                 <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
                   <button onClick={handleCreateAddress} style={{ padding: '10px 20px', background: '#111', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
-                    Save Address
+                    {editingAddressId ? 'Update Address' : 'Save Address'}
                   </button>
-                  {addresses.length > 0 && (
-                    <button onClick={() => setShowNewAddress(false)} style={{ padding: '10px 20px', background: 'none', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}>
+                  {(addresses.length > 0 || editingAddressId) && (
+                    <button
+                      onClick={() => {
+                        setShowNewAddress(false);
+                        resetAddressForm();
+                      }}
+                      style={{ padding: '10px 20px', background: 'none', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}
+                    >
                       Cancel
                     </button>
                   )}
@@ -626,6 +958,7 @@ export default function CheckoutPage() {
                 <button
                   onClick={handlePlaceOrder}
                   disabled={placing || !checkoutData.allServiceable || checkoutData.items.length === 0}
+                  aria-busy={placing}
                   style={{
                     width: '100%',
                     marginTop: 16,
@@ -633,18 +966,39 @@ export default function CheckoutPage() {
                     fontSize: 15,
                     fontWeight: 700,
                     border: 'none',
-                    background: (placing || !checkoutData.allServiceable) ? '#9ca3af' : '#111',
+                    background: !checkoutData.allServiceable ? '#9ca3af' : '#111',
                     color: '#fff',
                     borderRadius: 8,
                     cursor: (placing || !checkoutData.allServiceable) ? 'not-allowed' : 'pointer',
+                    opacity: placing ? 0.85 : 1,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    transition: 'opacity 120ms ease',
                   }}
                 >
+                  {placing && (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 16,
+                        height: 16,
+                        border: '2px solid rgba(255,255,255,0.35)',
+                        borderTopColor: '#fff',
+                        borderRadius: '50%',
+                        display: 'inline-block',
+                        animation: 'sm-spin 0.8s linear infinite',
+                      }}
+                    />
+                  )}
                   {placing
                     ? 'Placing Order...'
                     : !checkoutData.allServiceable
                       ? 'Remove Unserviceable Items First'
                       : 'Place Order (COD)'}
                 </button>
+                <style>{`@keyframes sm-spin { to { transform: rotate(360deg); } }`}</style>
               </>
             ) : (
               <>
@@ -690,7 +1044,9 @@ export default function CheckoutPage() {
 
 const inputStyle: React.CSSProperties = {
   padding: '10px 12px',
-  border: '1px solid #d1d5db',
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: '#d1d5db',
   borderRadius: 8,
   fontSize: 14,
   outline: 'none',

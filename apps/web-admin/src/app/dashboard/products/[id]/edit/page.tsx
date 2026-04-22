@@ -8,7 +8,7 @@ import { ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
 import '../../product-form.css';
-import { RichTextEditor } from '@sportsmart/ui';
+import { RichTextEditor, useModal } from '@sportsmart/ui';
 
 // ----- Types -----
 
@@ -73,6 +73,7 @@ function slugify(text: string): string {
 // ----- Component -----
 
 export default function EditProductPage() {
+  const { notify, confirmDialog } = useModal();
   const router = useRouter();
   const params = useParams();
   const productId = params.id as string;
@@ -241,8 +242,7 @@ export default function EditProductPage() {
     }
   }, [productId]);
 
-  const handleMerge = async (targetId: string) => {
-    if (!confirm('Are you sure you want to merge this product into the existing one? This will archive the current product and create seller mappings on the target product.')) return;
+  const handleMerge = async (targetId: string) => {if (!(await confirmDialog('Are you sure you want to merge this product into the existing one? This will archive the current product and create seller mappings on the target product.'))) return;
     setMerging(true);
     try {
       await adminProductsService.mergeProduct(productId, targetId);
@@ -629,8 +629,7 @@ export default function EditProductPage() {
     ));
   }
 
-  async function handleGenerateVariants() {
-    const validOptions = productOptions
+  async function handleGenerateVariants() {const validOptions = productOptions
       .filter(opt => opt.name.trim() && opt.values.some(v => v.trim()))
       .map(opt => ({
         name: opt.name.trim(),
@@ -643,7 +642,7 @@ export default function EditProductPage() {
     }
 
     if (product && product.variants.length > 0) {
-      if (!confirm('This will replace all existing variants. Continue?')) return;
+      if (!(await confirmDialog('This will replace all existing variants. Continue?'))) return;
     }
 
     setGeneratingVariants(true);
@@ -663,8 +662,7 @@ export default function EditProductPage() {
     }
   }
 
-  async function deleteVariant(variantId: string) {
-    if (!confirm('Are you sure you want to delete this variant?')) return;
+  async function deleteVariant(variantId: string) {if (!(await confirmDialog('Are you sure you want to delete this variant?'))) return;
 
     try {
       await adminProductsService.deleteVariant(productId, variantId);
@@ -720,8 +718,7 @@ export default function EditProductPage() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
-  async function handleDeleteImage(imageId: string) {
-    if (!confirm('Delete this image?')) return;
+  async function handleDeleteImage(imageId: string) {if (!(await confirmDialog('Delete this image?'))) return;
 
     try {
       await adminProductsService.deleteImage(productId, imageId);

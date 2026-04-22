@@ -20,7 +20,7 @@ export type ReassignTarget =
   | { nodeType: 'SELLER'; nodeId: string }
   | { nodeType: 'FRANCHISE'; nodeId: string };
 
-const RETURN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const RETURN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes (dev/demo — commission fires shortly after delivery)
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // Customer-friendly status label mapping

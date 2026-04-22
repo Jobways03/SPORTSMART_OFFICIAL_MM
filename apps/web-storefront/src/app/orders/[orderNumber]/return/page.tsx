@@ -11,6 +11,7 @@ import {
   REASON_CATEGORIES,
   CreateReturnPayload,
 } from '@/services/returns.service';
+import { useModal } from '@sportsmart/ui';
 
 interface OrderLookup {
   id: string;
@@ -28,7 +29,8 @@ interface SelectedItemState {
 type Step = 'subOrder' | 'items' | 'reasons' | 'review';
 
 export default function InitiateReturnPage() {
-  const { orderNumber } = useParams<{ orderNumber: string }>();
+  const { notify, confirmDialog } = useModal();
+const { orderNumber } = useParams<{ orderNumber: string }>();
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
@@ -46,7 +48,7 @@ export default function InitiateReturnPage() {
       // First look up masterOrderId from orderNumber
       const orderRes = await apiClient<OrderLookup>(`/customer/orders/${orderNumber}`);
       if (!orderRes.data) {
-        alert('Order not found');
+        void notify('Order not found');
         router.push('/orders');
         return;
       }
@@ -63,7 +65,7 @@ export default function InitiateReturnPage() {
         }
       }
     } catch {
-      alert('Failed to load return eligibility');
+      void notify('Failed to load return eligibility');
     } finally {
       setLoading(false);
     }
@@ -137,26 +139,27 @@ export default function InitiateReturnPage() {
 
   const selectedItems = Object.values(itemStates).filter((s) => s.selected);
 
-  const handleItemsNext = () => {
-    if (selectedItems.length === 0) {
-      alert('Select at least one item to return');
+  const handleItemsNext = () => {if (selectedItems.length === 0) {
+      void notify('Select at least one item to return');
       return;
     }
     setStep('reasons');
   };
 
-  const handleReasonsNext = () => {
-    for (const item of selectedItems) {
+  const handleReasonsNext = () => {for (const item of selectedItems) {
       if (!item.reasonCategory) {
-        alert('Please select a reason for all items');
+        void notify('Please select a reason for all items');
+        return;
+      }
+      if (item.reasonCategory === 'OTHER' && !item.reasonDetail.trim()) {
+        void notify('Please write your reason when selecting "Other"');
         return;
       }
     }
     setStep('review');
   };
 
-  const handleSubmit = async () => {
-    if (!selectedSubOrderId) return;
+  const handleSubmit = async () => {if (!selectedSubOrderId) return;
     setSubmitting(true);
     try {
       const payload: CreateReturnPayload = {
@@ -173,10 +176,10 @@ export default function InitiateReturnPage() {
       if (res.success && res.data) {
         router.push(`/returns/${res.data.id}`);
       } else {
-        alert(res.message || 'Failed to create return');
+        void notify(res.message || 'Failed to create return');
       }
     } catch (e: any) {
-      alert(e?.body?.message || e?.message || 'Failed to create return');
+      void notify(e?.body?.message || e?.message || 'Failed to create return');
     } finally {
       setSubmitting(false);
     }
@@ -728,7 +731,9 @@ export default function InitiateReturnPage() {
                         display: 'block',
                       }}
                     >
-                      Additional Details (optional)
+                      {state.reasonCategory === 'OTHER'
+                        ? 'Please specify your reason *'
+                        : 'Additional Details (optional)'}
                     </label>
                     <textarea
                       value={state.reasonDetail}
@@ -736,12 +741,20 @@ export default function InitiateReturnPage() {
                         updateItemDetail(state.orderItemId, e.target.value)
                       }
                       rows={2}
-                      placeholder="Tell us more about the issue..."
+                      placeholder={
+                        state.reasonCategory === 'OTHER'
+                          ? 'Type your reason here...'
+                          : 'Tell us more about the issue...'
+                      }
                       style={{
                         width: '100%',
                         padding: '8px 10px',
                         fontSize: 13,
-                        border: '1px solid #e5e7eb',
+                        border:
+                          state.reasonCategory === 'OTHER' &&
+                          !state.reasonDetail.trim()
+                            ? '1px solid #f59e0b'
+                            : '1px solid #e5e7eb',
                         borderRadius: 6,
                         fontFamily: 'inherit',
                         resize: 'vertical',

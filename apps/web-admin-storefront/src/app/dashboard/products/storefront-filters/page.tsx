@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { adminMetafieldsService } from '../../../../services/admin-metafields.service';
 import { adminProductsService } from '../../../../services/admin-products.service';
 import { apiClient } from '../../../../lib/api-client';
+import { useModal } from '@sportsmart/ui';
 
 const FILTER_TYPES = [
   { value: 'checkbox', label: 'Checkbox list' },
@@ -60,7 +61,8 @@ interface AutoFilter {
 interface ScopeOption { id: string; name: string; level?: number }
 
 export default function StorefrontFiltersPage() {
-  const [filters, setFilters] = useState<FilterConfig[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [filters, setFilters] = useState<FilterConfig[]>([]);
   const [definitions, setDefinitions] = useState<MetafieldDef[]>([]);
   const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
   const [loading, setLoading] = useState(true);
@@ -228,8 +230,7 @@ export default function StorefrontFiltersPage() {
     } catch {}
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this filter configuration?')) return;
+  const handleDelete = async (id: string) => {if (!(await confirmDialog('Delete this filter configuration?'))) return;
     try {
       await adminMetafieldsService.deleteFilter(id);
       setSuccessMsg('Filter deleted');

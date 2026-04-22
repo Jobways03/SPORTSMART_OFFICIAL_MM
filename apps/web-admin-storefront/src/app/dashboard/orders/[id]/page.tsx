@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 
 /* ────────── types ────────── */
@@ -300,6 +301,7 @@ function AdminOrderTimeline({ orderStatus, paymentStatus, fulfillmentStatuses }:
 
 /* ────────── page ────────── */
 export default function OrderDetailPage() {
+  const { notify } = useModal();
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [order, setOrder] = useState<OrderDetail | null>(null);
@@ -327,12 +329,19 @@ export default function OrderDetailPage() {
 
   const handleAction = async (endpoint: string, label: string) => {
     setActionLoading(label);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 60_000);
     try {
-      await apiClient(endpoint, { method: 'PATCH' });
+      await apiClient(endpoint, { method: 'PATCH', signal: abort.signal });
       fetchOrder();
-    } catch {
-      // ignore
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        void notify('The server took too long to respond. Please refresh and try again.');
+      } else {
+        void notify(err?.body?.message || err?.message || 'Action failed');
+      }
     } finally {
+      clearTimeout(timer);
       setActionLoading(null);
     }
   };
@@ -340,17 +349,25 @@ export default function OrderDetailPage() {
   const handleVerifyOrder = async () => {
     setActionLoading('verify');
     setVerifySuccess(false);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 60_000);
     try {
       await apiClient(`/admin/orders/${id}/verify`, {
         method: 'POST',
         body: JSON.stringify({ remarks: verifyRemarks || undefined }),
+        signal: abort.signal,
       });
       setVerifySuccess(true);
       setVerifyRemarks('');
       fetchOrder();
-    } catch {
-      // ignore
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        void notify('The server took too long to respond. Please refresh and try again.');
+      } else {
+        void notify(err?.body?.message || err?.message || 'Failed to verify order');
+      }
     } finally {
+      clearTimeout(timer);
       setActionLoading(null);
     }
   };

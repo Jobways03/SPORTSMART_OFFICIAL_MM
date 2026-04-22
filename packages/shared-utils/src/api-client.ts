@@ -102,11 +102,16 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       }
       if (!refreshToken) return false;
 
+      // Hard cap on the refresh call so a hung /auth/refresh never wedges
+      // every downstream request in the app.
+      const refreshAbort = new AbortController();
+      const refreshTimer = setTimeout(() => refreshAbort.abort(), 20_000);
       try {
         const res = await fetch(`${API_BASE}/api/v1/${config.refreshPath}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken }),
+          signal: refreshAbort.signal,
         });
         if (!res.ok) return false;
         const body = await res.json();
@@ -117,6 +122,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         return true;
       } catch {
         return false;
+      } finally {
+        clearTimeout(refreshTimer);
       }
     })();
 
@@ -129,11 +136,34 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     }
   };
 
+  const DEFAULT_TIMEOUT_MS = 60_000;
+
+  // Combine the caller's AbortSignal (if any) with a timeout-driven one so
+  // a hung request can't block the UI indefinitely. Falls back to a plain
+  // timeout signal when no caller signal was provided.
+  const buildSignal = (userSignal: AbortSignal | null | undefined): {
+    signal: AbortSignal;
+    cleanup: () => void;
+  } => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (userSignal) userSignal.removeEventListener('abort', onUserAbort);
+    };
+    const onUserAbort = () => controller.abort();
+    if (userSignal) {
+      if (userSignal.aborted) controller.abort();
+      else userSignal.addEventListener('abort', onUserAbort, { once: true });
+    }
+    return { signal: controller.signal, cleanup };
+  };
+
   const makeRequest = async <T>(
     url: string,
     options: RequestInit,
   ): Promise<{ ok: boolean; status: number; body: ApiResponse<T> }> => {
-    const { headers: optionHeaders, body: requestBody, ...restOptions } =
+    const { headers: optionHeaders, body: requestBody, signal: userSignal, ...restOptions } =
       options;
     const token = getAccessToken();
 
@@ -148,13 +178,29 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       ...(optionHeaders as Record<string, string>),
     };
 
-    const response = await fetch(url, {
-      ...restOptions,
-      body: requestBody,
-      headers,
-    });
-    const body: ApiResponse<T> = await response.json();
-    return { ok: response.ok, status: response.status, body };
+    const { signal, cleanup } = buildSignal(userSignal);
+    try {
+      const response = await fetch(url, {
+        ...restOptions,
+        body: requestBody,
+        headers,
+        signal,
+      });
+      let body: ApiResponse<T>;
+      try {
+        body = await response.json();
+      } catch {
+        // Non-JSON error response (gateway HTML, timeout text, etc.) —
+        // synthesize a typed envelope so callers always get a uniform shape.
+        body = {
+          success: false,
+          message: `Request failed with status ${response.status}`,
+        } as ApiResponse<T>;
+      }
+      return { ok: response.ok, status: response.status, body };
+    } finally {
+      cleanup();
+    }
   };
 
   const apiClient = async <T = unknown>(

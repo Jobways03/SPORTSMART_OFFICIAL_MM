@@ -69,6 +69,24 @@ type TabType = 'records' | 'settlements';
 export default function SellerCommissionPage() {
   const [activeTab, setActiveTab] = useState<TabType>('records');
   const [summary, setSummary] = useState<EarningsSummary | null>(null);
+  const [currentSeller, setCurrentSeller] = useState<{ sellerName: string; sellerShopName: string } | null>(null);
+
+  // Pull the active seller identity from sessionStorage so the header
+  // always shows whose data this page is rendering — catches the case
+  // where a stale login in another tab/window causes confusion.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('seller');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s?.sellerShopName) {
+          setCurrentSeller({ sellerName: s.sellerName, sellerShopName: s.sellerShopName });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Commission records state
   const [data, setData] = useState<CommissionResponse | null>(null);
@@ -185,6 +203,23 @@ export default function SellerCommissionPage() {
         <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>
           Track your earnings, settlement prices, and payout history.
         </p>
+        {currentSeller && (
+          <div style={{
+            marginTop: 10,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 12px',
+            background: '#eef2ff',
+            border: '1px solid #c7d2fe',
+            borderRadius: 999,
+            fontSize: 12,
+            color: '#3730a3',
+            fontWeight: 600,
+          }}>
+            Viewing as: {currentSeller.sellerShopName}
+          </div>
+        )}
       </div>
 
       {/* Summary cards */}

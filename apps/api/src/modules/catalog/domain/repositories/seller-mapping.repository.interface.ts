@@ -41,6 +41,9 @@ export interface ISellerMappingRepository {
   removeServiceAreas(sellerId: string, pincodes: string[]): Promise<number>;
   findServiceArea(sellerId: string, pincode: string): Promise<any | null>;
 
+  // ── Auto-repair ──
+  autoRepairMissingMappingsForSeller(sellerId: string): Promise<number>;
+
   // ── Product validation for mapping ──
   findProductForMapping(productId: string): Promise<any | null>;
   findVariantForMapping(variantId: string, productId: string): Promise<any | null>;

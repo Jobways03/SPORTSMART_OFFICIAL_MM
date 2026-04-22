@@ -11,7 +11,7 @@ import {
 } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import '../../product-form.css';
-import { RichTextEditor } from '@sportsmart/ui';
+import { RichTextEditor, useModal } from '@sportsmart/ui';
 
 // ----- Types -----
 
@@ -74,7 +74,8 @@ function slugify(text: string): string {
 // ----- Component -----
 
 export default function EditProductPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const params = useParams();
   const productId = params.id as string;
 
@@ -157,6 +158,10 @@ export default function EditProductPage() {
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  // Track initial form snapshot to detect changes
+  const initialFormRef = useRef<string>('');
+  const hasChanges = JSON.stringify(form) !== initialFormRef.current;
+
   // Variant options state
   const [productOptions, setProductOptions] = useState<OptionEntry[]>([]);
   const [predefinedOptions, setPredefinedOptions] = useState<PredefinedOption[]>([]);
@@ -177,7 +182,7 @@ export default function EditProductPage() {
   // ----- Populate form from product -----
 
   const populateForm = useCallback((p: ProductDetail) => {
-    setForm({
+    const formData = {
       title: p.title || '',
       categoryId: p.categoryId || '',
       categoryName: p.category?.name || '',
@@ -204,7 +209,9 @@ export default function EditProductPage() {
       seoMetaTitle: p.seo?.metaTitle || '',
       seoMetaDescription: p.seo?.metaDescription || '',
       seoHandle: p.seo?.handle || '',
-    });
+    };
+    setForm(formData);
+    initialFormRef.current = JSON.stringify(formData);
   }, []);
 
   // ----- Load product and reference data -----
@@ -476,8 +483,7 @@ export default function EditProductPage() {
     ));
   }
 
-  async function handleGenerateVariants() {
-    // Validate options
+  async function handleGenerateVariants() {// Validate options
     const validOptions = productOptions
       .filter(opt => opt.name.trim() && opt.values.some(v => v.trim()))
       .map(opt => ({
@@ -492,7 +498,7 @@ export default function EditProductPage() {
 
     // Warn if variants already exist
     if (product && product.variants.length > 0) {
-      if (!confirm('This will replace all existing variants. Continue?')) return;
+      if (!(await confirmDialog('This will replace all existing variants. Continue?'))) return;
     }
 
     setGeneratingVariants(true);
@@ -514,8 +520,7 @@ export default function EditProductPage() {
     }
   }
 
-  async function deleteVariant(variantId: string) {
-    if (!confirm('Are you sure you want to delete this variant?')) return;
+  async function deleteVariant(variantId: string) {if (!(await confirmDialog('Are you sure you want to delete this variant?'))) return;
 
     try {
       const token = sessionStorage.getItem('accessToken') || '';
@@ -573,8 +578,7 @@ export default function EditProductPage() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
-  async function handleDeleteImage(imageId: string) {
-    if (!confirm('Delete this image?')) return;
+  async function handleDeleteImage(imageId: string) {if (!(await confirmDialog('Delete this image?'))) return;
 
     try {
       const token = sessionStorage.getItem('accessToken') || '';
@@ -642,8 +646,7 @@ export default function EditProductPage() {
 
   // ----- Seller self-service pause/resume -----
 
-  async function handleToggleSelfStatus() {
-    if (!product) return;
+  async function handleToggleSelfStatus() {if (!product) return;
     const token = sessionStorage.getItem('accessToken');
     if (!token) {
       showToast('error', 'Session expired. Please log in again.');
@@ -656,7 +659,7 @@ export default function EditProductPage() {
       target === 'SUSPENDED'
         ? 'Pause sales for this product? Customers will no longer see it on the storefront.'
         : 'Resume sales for this product? It will go live again immediately.';
-    if (!confirm(prompt)) return;
+    if (!(await confirmDialog(prompt))) return;
 
     setSelfStatusSaving(true);
     try {
@@ -1608,7 +1611,7 @@ export default function EditProductPage() {
             type="button"
             className="form-btn"
             onClick={() => handleSave(false)}
-            disabled={saving}
+            disabled={saving || !hasChanges}
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>

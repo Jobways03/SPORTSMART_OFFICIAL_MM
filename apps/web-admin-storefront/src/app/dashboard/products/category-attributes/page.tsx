@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { adminMetafieldsService } from '../../../../services/admin-metafields.service';
 import { adminProductsService } from '../../../../services/admin-products.service';
+import { useModal } from '@sportsmart/ui';
 
 const METAFIELD_TYPES = [
   { value: 'SINGLE_LINE_TEXT', label: 'Single line text' },
@@ -33,7 +34,8 @@ interface MetafieldDef {
 }
 
 export default function CategoryAttributesPage() {
-  const [categories, setCategories] = useState<Category[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [definitions, setDefinitions] = useState<MetafieldDef[]>([]);
   const [loading, setLoading] = useState(false);
@@ -167,8 +169,7 @@ export default function CategoryAttributesPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Deactivate this attribute definition?')) return;
+  const handleDelete = async (id: string) => {if (!(await confirmDialog('Deactivate this attribute definition?'))) return;
     try {
       await adminMetafieldsService.deleteDefinition(id);
       setSuccessMsg('Definition deactivated');

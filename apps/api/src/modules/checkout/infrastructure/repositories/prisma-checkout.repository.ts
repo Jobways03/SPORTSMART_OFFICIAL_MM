@@ -561,6 +561,23 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             });
           }
 
+          // Also restore SellerProductMapping.stockQty
+          if (so.sellerId) {
+            const mapping = await tx.sellerProductMapping.findFirst({
+              where: {
+                sellerId: so.sellerId,
+                productId: item.productId,
+                variantId: item.variantId ?? null,
+              },
+            });
+            if (mapping) {
+              await tx.sellerProductMapping.update({
+                where: { id: mapping.id },
+                data: { stockQty: { increment: item.quantity } },
+              });
+            }
+          }
+
           // Refund commission if already processed. Full cancel reverses the
           // entire margin and drops an audit row so settlement reconciliation
           // sees the reversal event, not just a silently-mutated running total

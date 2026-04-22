@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { ModalProvider } from '@sportsmart/ui';
 import '../styles/globals.css';
 import '../styles/storefront.css';
 
@@ -15,10 +16,12 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        {children}
-        <footer className="footer">
-          &copy; {new Date().getFullYear()} SPORTSMART. All rights reserved.
-        </footer>
+        <ModalProvider>
+          {children}
+          <footer className="footer">
+            &copy; {new Date().getFullYear()} SPORTSMART. All rights reserved.
+          </footer>
+        </ModalProvider>
       </body>
     </html>
   );

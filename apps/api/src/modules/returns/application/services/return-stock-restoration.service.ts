@@ -120,8 +120,22 @@ export class ReturnStockRestorationService {
               where: { id: mapping.id },
               data: { stockQty: { increment: saleableQty } },
             });
+
+            // Also restore ProductVariant.stock or Product.baseStock
+            if (orderItem.variantId) {
+              await db.productVariant.update({
+                where: { id: orderItem.variantId },
+                data: { stock: { increment: saleableQty } },
+              });
+            } else {
+              await db.product.update({
+                where: { id: orderItem.productId },
+                data: { baseStock: { increment: saleableQty } },
+              });
+            }
+
             this.logger.log(
-              `Restored ${saleableQty} units to seller mapping ${mapping.id}`,
+              `Restored ${saleableQty} units to seller mapping ${mapping.id} and variant/product stock`,
             );
           } else {
             this.logger.warn(

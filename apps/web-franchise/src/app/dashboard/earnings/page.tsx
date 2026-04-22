@@ -7,6 +7,7 @@ import {
   FranchiseSettlement,
   LedgerEntry,
 } from '@/services/earnings.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 type TabKey = 'overview' | 'history' | 'settlements';
@@ -101,7 +102,7 @@ function statusBadgeStyle(status: string): React.CSSProperties {
 }
 
 export default function EarningsPage() {
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+const [activeTab, setActiveTab] = useState<TabKey>('overview');
 
   return (
     <div>
@@ -164,12 +165,12 @@ export default function EarningsPage() {
 // ══════════════════════════════════════════════════════════════
 
 function OverviewTab() {
-  const [summary, setSummary] = useState<EarningsSummary | null>(null);
+  const { notify, confirmDialog } = useModal();
+const [summary, setSummary] = useState<EarningsSummary | null>(null);
   const [recent, setRecent] = useState<FranchiseSettlement[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const load = async () => {
-    setIsLoading(true);
+  const load = async () => {setIsLoading(true);
     try {
       const [summaryRes, settlementsRes] = await Promise.all([
         franchiseEarningsService.getSummary(),
@@ -179,9 +180,9 @@ function OverviewTab() {
       if (settlementsRes.data) setRecent(settlementsRes.data.settlements);
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load earnings summary');
+        void notify(err.body.message || 'Failed to load earnings summary');
       } else {
-        alert('Failed to load earnings summary');
+        void notify('Failed to load earnings summary');
       }
     } finally {
       setIsLoading(false);
@@ -292,7 +293,8 @@ function OverviewTab() {
 // ══════════════════════════════════════════════════════════════
 
 function LedgerHistoryTab() {
-  const [entries, setEntries] = useState<LedgerEntry[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
@@ -304,8 +306,7 @@ function LedgerHistoryTab() {
     toDate: '',
   });
 
-  const load = async () => {
-    setIsLoading(true);
+  const load = async () => {setIsLoading(true);
     try {
       const res = await franchiseEarningsService.getLedgerHistory({
         page,
@@ -321,9 +322,9 @@ function LedgerHistoryTab() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load ledger');
+        void notify(err.body.message || 'Failed to load ledger');
       } else {
-        alert('Failed to load ledger');
+        void notify('Failed to load ledger');
       }
     } finally {
       setIsLoading(false);
@@ -514,7 +515,8 @@ function LedgerHistoryTab() {
 // ══════════════════════════════════════════════════════════════
 
 function SettlementsTab() {
-  const [settlements, setSettlements] = useState<FranchiseSettlement[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [settlements, setSettlements] = useState<FranchiseSettlement[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [limit] = useState(20);
@@ -522,8 +524,7 @@ function SettlementsTab() {
   const [statusFilter, setStatusFilter] = useState('');
   const [detail, setDetail] = useState<FranchiseSettlement | null>(null);
 
-  const load = async () => {
-    setIsLoading(true);
+  const load = async () => {setIsLoading(true);
     try {
       const res = await franchiseEarningsService.listSettlements({
         page,
@@ -536,9 +537,9 @@ function SettlementsTab() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load settlements');
+        void notify(err.body.message || 'Failed to load settlements');
       } else {
-        alert('Failed to load settlements');
+        void notify('Failed to load settlements');
       }
     } finally {
       setIsLoading(false);
@@ -550,13 +551,12 @@ function SettlementsTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
-  const openDetail = async (id: string) => {
-    try {
+  const openDetail = async (id: string) => {try {
       const res = await franchiseEarningsService.getSettlement(id);
       if (res.data) setDetail(res.data);
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to load settlement');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to load settlement');
     }
   };
 

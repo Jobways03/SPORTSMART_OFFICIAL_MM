@@ -279,59 +279,110 @@ export class SellerProductsController {
     // (procurementPrice is platform-side; platformPrice is obsolete).
     delete (dto as any).platformPrice;
     delete (dto as any).procurementPrice;
+
+    // Fetch current product to compare values — only include fields that actually changed
+    const current = await this.productRepo.findByIdBasic(productId);
+
     const updateData: any = {};
-    if (dto.title !== undefined) {
+    if (dto.title !== undefined && dto.title !== current?.title) {
       updateData.title = dto.title;
       updateData.slug = await this.slugService.generateUniqueSlug(dto.title);
     }
     // Handle categoryName → find or create category
     if (dto.categoryName?.trim()) {
       const category = await this.productRepo.findOrCreateCategory(dto.categoryName.trim());
-      updateData.categoryId = category.id;
-    } else if (dto.categoryId !== undefined) {
+      if (category.id !== current?.categoryId) updateData.categoryId = category.id;
+    } else if (dto.categoryId !== undefined && dto.categoryId !== current?.categoryId) {
       updateData.categoryId = dto.categoryId;
     }
 
     // Handle brandName → find or create brand
     if (dto.brandName?.trim()) {
       const brand = await this.productRepo.findOrCreateBrand(dto.brandName.trim());
-      updateData.brandId = brand.id;
-    } else if (dto.brandId !== undefined) {
+      if (brand.id !== current?.brandId) updateData.brandId = brand.id;
+    } else if (dto.brandId !== undefined && dto.brandId !== current?.brandId) {
       updateData.brandId = dto.brandId;
     }
 
-    if (dto.shortDescription !== undefined) updateData.shortDescription = dto.shortDescription;
-    if (dto.description !== undefined) updateData.description = dto.description;
-    if (dto.hasVariants !== undefined) updateData.hasVariants = dto.hasVariants;
-    if (dto.basePrice !== undefined) updateData.basePrice = dto.basePrice;
-    if (dto.compareAtPrice !== undefined) updateData.compareAtPrice = dto.compareAtPrice;
-    if (dto.costPrice !== undefined) updateData.costPrice = dto.costPrice;
-    if (dto.baseSku !== undefined) updateData.baseSku = dto.baseSku;
-    if (dto.baseStock !== undefined) updateData.baseStock = dto.baseStock;
-    if (dto.baseBarcode !== undefined) updateData.baseBarcode = dto.baseBarcode;
-    if (dto.weight !== undefined) updateData.weight = dto.weight;
-    if (dto.weightUnit !== undefined) updateData.weightUnit = dto.weightUnit;
-    if (dto.length !== undefined) updateData.length = dto.length;
-    if (dto.width !== undefined) updateData.width = dto.width;
-    if (dto.height !== undefined) updateData.height = dto.height;
-    if (dto.dimensionUnit !== undefined) updateData.dimensionUnit = dto.dimensionUnit;
-    if (dto.returnPolicy !== undefined) updateData.returnPolicy = dto.returnPolicy;
-    if (dto.warrantyInfo !== undefined) updateData.warrantyInfo = dto.warrantyInfo;
+    const simpleFields: Array<{ key: string; dtoKey: keyof typeof dto }> = [
+      { key: 'shortDescription', dtoKey: 'shortDescription' },
+      { key: 'description', dtoKey: 'description' },
+      { key: 'hasVariants', dtoKey: 'hasVariants' },
+      { key: 'basePrice', dtoKey: 'basePrice' },
+      { key: 'compareAtPrice', dtoKey: 'compareAtPrice' },
+      { key: 'costPrice', dtoKey: 'costPrice' },
+      { key: 'baseSku', dtoKey: 'baseSku' },
+      { key: 'baseStock', dtoKey: 'baseStock' },
+      { key: 'baseBarcode', dtoKey: 'baseBarcode' },
+      { key: 'weight', dtoKey: 'weight' },
+      { key: 'weightUnit', dtoKey: 'weightUnit' },
+      { key: 'length', dtoKey: 'length' },
+      { key: 'width', dtoKey: 'width' },
+      { key: 'height', dtoKey: 'height' },
+      { key: 'dimensionUnit', dtoKey: 'dimensionUnit' },
+      { key: 'returnPolicy', dtoKey: 'returnPolicy' },
+      { key: 'warrantyInfo', dtoKey: 'warrantyInfo' },
+    ];
+    for (const { key, dtoKey } of simpleFields) {
+      const dtoVal = dto[dtoKey];
+      if (dtoVal !== undefined) {
+        // Compare with type coercion for Decimal fields
+        const curVal = current?.[key];
+        const dtoStr = String(dtoVal ?? '');
+        const curStr = String(curVal ?? '');
+        if (dtoStr !== curStr) {
+          updateData[key] = dtoVal;
+        }
+      }
+    }
+
+    // Compare tags — only include if actually different
+    let tagsChanged = false;
+    if (dto.tags !== undefined && current) {
+      const currentProduct = await this.productRepo.findFullProduct(productId);
+      const currentTags = (currentProduct?.tags || []).map((t: any) => t.tag || t).sort();
+      const newTags = [...dto.tags].sort();
+      tagsChanged = JSON.stringify(currentTags) !== JSON.stringify(newTags);
+    }
+
+    // Compare SEO — only include if actually different
+    let seoChanged = false;
+    if (dto.seo !== undefined && current) {
+      const currentProduct = await this.productRepo.findFullProduct(productId);
+      const curSeo = currentProduct?.seo;
+      if (curSeo) {
+        seoChanged = (dto.seo.metaTitle !== curSeo.metaTitle) ||
+          (dto.seo.metaDescription !== curSeo.metaDescription) ||
+          (dto.seo.metaKeywords !== curSeo.metaKeywords);
+      } else {
+        seoChanged = !!(dto.seo.metaTitle || dto.seo.metaDescription || dto.seo.metaKeywords);
+      }
+    }
+
+    // If nothing actually changed, return early without triggering re-approval
+    if (Object.keys(updateData).length === 0 && !tagsChanged && !seoChanged) {
+      const fullProduct = await this.productRepo.findFullProduct(productId);
+      return {
+        success: true,
+        message: 'No changes detected',
+        data: fullProduct,
+      };
+    }
 
     const product = await this.productRepo.updateInTransaction(
       productId,
       updateData,
-      dto.tags,
-      dto.seo,
+      tagsChanged ? dto.tags : undefined,
+      seoChanged ? dto.seo : undefined,
     );
 
     // Trigger re-approval only if content fields actually changed. The
     // classifier treats price / inventory / physical / policy fields as
     // self-serve (stay LIVE); anything else forces a fresh admin review.
     // Tags + SEO always count as content when present.
-    const changedFields = Object.keys(updateData);
-    if (dto.tags !== undefined) changedFields.push('tags');
-    if (dto.seo !== undefined) changedFields.push('seo');
+    const changedFields = Object.keys(updateData).filter((k) => k !== 'slug');
+    if (tagsChanged) changedFields.push('tags');
+    if (seoChanged) changedFields.push('seo');
     const reApproved = await this.reApprovalService.triggerIfNeeded(
       productId,
       sellerId,
@@ -518,6 +569,7 @@ export class SellerProductsController {
         title: product.title,
         brandId: product.brandId ?? undefined,
         categoryId: product.categoryId ?? undefined,
+        excludeProductId: productId,
       });
     } catch (err) {
       this.logger.warn(`Duplicate detection failed for product ${productId}: ${err}`);

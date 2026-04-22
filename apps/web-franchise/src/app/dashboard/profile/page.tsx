@@ -6,6 +6,7 @@ import {
   FranchiseProfile,
   UpdateFranchiseProfilePayload,
 } from '@/services/profile.service';
+import { useModal } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
 
 type PincodeData = {
@@ -112,7 +113,8 @@ function formatRate(value: number | null | undefined): string {
 }
 
 export default function ProfilePage() {
-  const [profile, setProfile] = useState<FranchiseProfile | null>(null);
+  const { notify, confirmDialog } = useModal();
+const [profile, setProfile] = useState<FranchiseProfile | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -226,8 +228,7 @@ export default function ProfilePage() {
     }
   };
 
-  const handleMediaRemove = async (kind: 'profile' | 'logo') => {
-    if (!confirm(`Remove your ${kind === 'profile' ? 'profile image' : 'logo'}?`)) return;
+  const handleMediaRemove = async (kind: 'profile' | 'logo') => {if (!(await confirmDialog(`Remove your ${kind === 'profile' ? 'profile image' : 'logo'}?`))) return;
     setMediaError('');
     setMediaSaving(kind);
     try {

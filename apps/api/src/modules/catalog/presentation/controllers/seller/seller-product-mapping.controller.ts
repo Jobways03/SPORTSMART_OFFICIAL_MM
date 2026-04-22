@@ -25,6 +25,7 @@ import {
 import { SellerAuthGuard } from '../../../../../core/guards';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
+import { StockSyncService } from '../../../application/services/stock-sync.service';
 
 // ─── DTOs (inline for this controller) ───────────────────────────────
 
@@ -68,6 +69,7 @@ export class SellerProductMappingController {
     @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly logger: AppLoggerService,
+    private readonly stockSyncService: StockSyncService,
   ) {
     this.logger.setContext('SellerProductMappingController');
   }
@@ -276,6 +278,16 @@ export class SellerProductMappingController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
 
+    // Auto-repair: create mappings for seller-owned products that are missing them
+    try {
+      const repaired = await this.sellerMappingRepo.autoRepairMissingMappingsForSeller(sellerId);
+      if (repaired > 0) {
+        this.logger.log(`Auto-repaired ${repaired} missing mapping(s) for seller ${sellerId}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to auto-repair mappings for seller ${sellerId}: ${err}`);
+    }
+
     const { products, total } = await this.sellerMappingRepo.findMyProductsPaginated(
       sellerId, pageNum, limitNum, search,
     );
@@ -385,6 +397,21 @@ export class SellerProductMappingController {
     // Perform bulk update
     const updated = await this.sellerMappingRepo.bulkUpdateStock(dto.updates);
 
+    // Sync variant stock for each affected mapping (deduplicated by productId+variantId)
+    const synced = new Set<string>();
+    for (const mappingId of mappingIds) {
+      const mapping = await this.sellerMappingRepo.findById(mappingId);
+      if (mapping) {
+        const key = `${mapping.productId}:${mapping.variantId ?? 'null'}`;
+        if (!synced.has(key)) {
+          synced.add(key);
+          await this.stockSyncService.syncVariantStockFromMappings(
+            mapping.productId, mapping.variantId,
+          );
+        }
+      }
+    }
+
     this.logger.log(
       `Bulk stock update: ${updated.length} mappings updated by seller ${sellerId}`,
     );
@@ -473,6 +500,13 @@ export class SellerProductMappingController {
     }
 
     const updated = await this.sellerMappingRepo.update(mappingId, updateData);
+
+    // Sync variant stock from all mappings when mapping stockQty changes
+    if (dto.stockQty !== undefined) {
+      await this.stockSyncService.syncVariantStockFromMappings(
+        existing.productId, existing.variantId,
+      );
+    }
 
     this.logger.log(`Mapping ${mappingId} updated by seller ${sellerId}`);
 

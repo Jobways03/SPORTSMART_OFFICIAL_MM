@@ -7,6 +7,7 @@ import {
   franchiseCatalogService,
   CatalogMapping,
 } from '@/services/catalog.service';
+import { useModal } from '@sportsmart/ui';
 import {
   franchiseProcurementService,
   CreateProcurementPayload,
@@ -29,7 +30,8 @@ interface SelectedItem {
 }
 
 export default function NewProcurementPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const [step, setStep] = useState<Step>(1);
 
   const [mappings, setMappings] = useState<CatalogMapping[]>([]);
@@ -138,9 +140,8 @@ export default function NewProcurementPage() {
     notes: notes.trim() || undefined,
   });
 
-  const handleSaveDraft = async () => {
-    if (selectedCount === 0) {
-      alert('Please select at least one item.');
+  const handleSaveDraft = async () => {if (selectedCount === 0) {
+      void notify('Please select at least one item.');
       return;
     }
     setSaving(true);
@@ -152,9 +153,9 @@ export default function NewProcurementPage() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to save draft.');
+        void notify(err.body.message || 'Failed to save draft.');
       } else {
-        alert('Failed to save draft.');
+        void notify('Failed to save draft.');
       }
     } finally {
       setSaving(false);
@@ -162,9 +163,8 @@ export default function NewProcurementPage() {
     }
   };
 
-  const handleSubmitForApproval = async () => {
-    if (selectedCount === 0) {
-      alert('Please select at least one item.');
+  const handleSubmitForApproval = async () => {if (selectedCount === 0) {
+      void notify('Please select at least one item.');
       return;
     }
     setSaving(true);
@@ -177,11 +177,11 @@ export default function NewProcurementPage() {
           await franchiseProcurementService.submit(created.id);
         } catch (err) {
           if (err instanceof ApiError) {
-            alert(
+            void notify(
               `Request created but failed to submit: ${err.body.message || 'Unknown error'}`,
             );
           } else {
-            alert('Request created but failed to submit.');
+            void notify('Request created but failed to submit.');
           }
           router.replace(`/dashboard/procurement/${created.id}`);
           return;
@@ -190,9 +190,9 @@ export default function NewProcurementPage() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to create request.');
+        void notify(err.body.message || 'Failed to create request.');
       } else {
-        alert('Failed to create request.');
+        void notify('Failed to create request.');
       }
     } finally {
       setSaving(false);

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
+import { useModal } from '@sportsmart/ui';
 
 /* -- types -- */
 interface OrderItem {
@@ -196,7 +197,8 @@ function AcceptDeadlineCountdown({ deadline }: { deadline: string }) {
 
 /* -- page -- */
 export default function SellerOrderDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const { notify, confirmDialog } = useModal();
+const { id } = useParams<{ id: string }>();
   const [order, setOrder] = useState<SubOrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -274,8 +276,7 @@ export default function SellerOrderDetailPage() {
     }
   };
 
-  const handlePackConfirm = async () => {
-    setActionLoading('pack');
+  const handlePackConfirm = async () => {setActionLoading('pack');
     try {
       await apiClient(`/seller/orders/${id}/status`, {
         method: 'PATCH',
@@ -285,7 +286,7 @@ export default function SellerOrderDetailPage() {
       setShowPackModal(false);
       setPackNote('');
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : 'Network error. Please try again.');
+      void notify(err instanceof ApiError ? err.message : 'Network error. Please try again.');
     } finally {
       setActionLoading(null);
     }

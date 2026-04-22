@@ -8,6 +8,7 @@ import {
   FranchiseStaffRole,
   UpdateStaffPayload,
 } from '@/services/staff.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 const ASSIGNABLE_ROLES: FranchiseStaffRole[] = [
@@ -69,6 +70,7 @@ function roleBadgeStyle(role: string): React.CSSProperties {
 }
 
 export default function StaffPage() {
+  const { notify, confirmDialog } = useModal();
   const [staff, setStaff] = useState<FranchiseStaff[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -79,16 +81,15 @@ export default function StaffPage() {
     null,
   );
 
-  const load = async () => {
-    setIsLoading(true);
+  const load = async () => {setIsLoading(true);
     try {
       const res = await franchiseStaffService.listStaff();
       if (res.data) setStaff(res.data);
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to load staff');
+        void notify(err.body.message || 'Failed to load staff');
       } else {
-        alert('Failed to load staff');
+        void notify('Failed to load staff');
       }
     } finally {
       setIsLoading(false);
@@ -245,8 +246,8 @@ export default function StaffPage() {
                                 load();
                               } catch (err) {
                                 if (err instanceof ApiError)
-                                  alert(err.body.message);
-                                else alert('Failed to activate');
+                                  void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+                                else void notify('Failed to activate');
                               }
                             }}
                             style={{
@@ -388,6 +389,7 @@ function AddStaffModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { notify, confirmDialog } = useModal();
   const [form, setForm] = useState<AddStaffPayload>({
     name: '',
     email: '',
@@ -398,11 +400,11 @@ function AddStaffModal({
   const [isSaving, setIsSaving] = useState(false);
 
   const submit = async () => {
-    if (!form.name.trim()) return alert('Name is required');
+if (!form.name.trim()) return void notify('Name is required');
     if (!form.email.trim() || !form.email.includes('@'))
-      return alert('Valid email is required');
+      return void notify('Valid email is required');
     if (!form.password || form.password.length < 8)
-      return alert('Password must be at least 8 characters');
+      return void notify('Password must be at least 8 characters');
 
     setIsSaving(true);
     try {
@@ -415,8 +417,8 @@ function AddStaffModal({
       });
       onDone();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to add staff');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to add staff');
     } finally {
       setIsSaving(false);
     }
@@ -522,6 +524,7 @@ function EditStaffModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { notify, confirmDialog } = useModal();
   const [form, setForm] = useState<UpdateStaffPayload>({
     name: staff.name,
     phone: staff.phone || '',
@@ -531,7 +534,7 @@ function EditStaffModal({
   const [isSaving, setIsSaving] = useState(false);
 
   const submit = async () => {
-    if (!form.name?.trim()) return alert('Name is required');
+if (!form.name?.trim()) return void notify('Name is required');
 
     setIsSaving(true);
     try {
@@ -543,8 +546,8 @@ function EditStaffModal({
       });
       onDone();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to update staff');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to update staff');
     } finally {
       setIsSaving(false);
     }
@@ -668,16 +671,17 @@ function ConfirmDeactivateModal({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const { notify, confirmDialog } = useModal();
   const [isSaving, setIsSaving] = useState(false);
 
   const submit = async () => {
     setIsSaving(true);
     try {
-      await franchiseStaffService.removeStaff(staff.id);
+      await franchiseStaffService.updateStaff(staff.id, { isActive: false });
       onDone();
     } catch (err) {
-      if (err instanceof ApiError) alert(err.body.message);
-      else alert('Failed to deactivate');
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to deactivate');
     } finally {
       setIsSaving(false);
     }
@@ -739,19 +743,52 @@ function FieldInput({
   required?: boolean;
   disabled?: boolean;
 }) {
+  const [revealed, setRevealed] = useState(false);
+  const isPassword = type === 'password';
+  const effectiveType = isPassword && revealed ? 'text' : type;
   return (
     <div>
       <div style={labelStyle}>
         {label}
         {required && <span style={{ color: '#dc2626' }}> *</span>}
       </div>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        style={{ ...fieldInputStyle, marginTop: 6 }}
-      />
+      <div style={{ position: 'relative', marginTop: 6 }}>
+        <input
+          type={effectiveType}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          style={{
+            ...fieldInputStyle,
+            marginTop: 0,
+            paddingRight: isPassword ? 64 : undefined,
+          }}
+        />
+        {isPassword && (
+          <button
+            type="button"
+            onClick={() => setRevealed((v) => !v)}
+            disabled={disabled}
+            aria-label={revealed ? 'Hide password' : 'Show password'}
+            tabIndex={-1}
+            style={{
+              position: 'absolute',
+              right: 8,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: 'transparent',
+              border: 'none',
+              color: '#2563eb',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              padding: '4px 8px',
+            }}
+          >
+            {revealed ? 'Hide' : 'Show'}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

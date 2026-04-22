@@ -470,13 +470,26 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       });
 
       // Deduct from actual stockQty and release reservedQty
-      await tx.sellerProductMapping.update({
+      const mapping = await tx.sellerProductMapping.update({
         where: { id: reservation.mappingId },
         data: {
           stockQty: { decrement: reservation.quantity },
           reservedQty: { decrement: reservation.quantity },
         },
       });
+
+      // Also decrement variant/product stock to keep in sync
+      if (mapping.variantId) {
+        await tx.productVariant.update({
+          where: { id: mapping.variantId },
+          data: { stock: { decrement: reservation.quantity } },
+        });
+      } else {
+        await tx.product.update({
+          where: { id: mapping.productId },
+          data: { baseStock: { decrement: reservation.quantity } },
+        });
+      }
     });
   }
 

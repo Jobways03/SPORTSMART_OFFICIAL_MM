@@ -13,6 +13,7 @@ import {
   formatProcurementCurrency,
   formatProcurementDate,
 } from '@/services/procurement.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 const TIMELINE_STEPS: Array<{ key: string; label: string; matches: string[] }> = [
@@ -62,7 +63,8 @@ function isStepReached(stepKey: string, status: string): boolean {
 }
 
 export default function ProcurementDetailPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params?.id as string;
 
@@ -134,18 +136,17 @@ export default function ProcurementDetailPage() {
     ].includes(request.status);
   }, [request]);
 
-  const handleSubmit = async () => {
-    if (!request) return;
-    if (!confirm('Submit this request for admin approval?')) return;
+  const handleSubmit = async () => {if (!request) return;
+    if (!(await confirmDialog('Submit this request for admin approval?'))) return;
     setActionLoading(true);
     try {
       await franchiseProcurementService.submit(request.id);
       await loadRequest();
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to submit request.');
+        void notify(err.body.message || 'Failed to submit request.');
       } else {
-        alert('Failed to submit request.');
+        void notify('Failed to submit request.');
       }
     } finally {
       setActionLoading(false);
@@ -157,8 +158,7 @@ export default function ProcurementDetailPage() {
     setShowCancelModal(true);
   };
 
-  const handleCancelConfirm = async () => {
-    if (!request) return;
+  const handleCancelConfirm = async () => {if (!request) return;
     setActionLoading(true);
     try {
       await franchiseProcurementService.cancel(
@@ -169,9 +169,9 @@ export default function ProcurementDetailPage() {
       await loadRequest();
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to cancel request.');
+        void notify(err.body.message || 'Failed to cancel request.');
       } else {
-        alert('Failed to cancel request.');
+        void notify('Failed to cancel request.');
       }
     } finally {
       setActionLoading(false);
@@ -219,8 +219,7 @@ export default function ProcurementDetailPage() {
     });
   };
 
-  const handleReceiptSubmit = async () => {
-    if (!request) return;
+  const handleReceiptSubmit = async () => {if (!request) return;
     const payload: ConfirmReceiptPayload = {
       items: Object.entries(receiptItems)
         .filter(([, v]) => v.receivedQty > 0 || v.damagedQty > 0)
@@ -231,7 +230,7 @@ export default function ProcurementDetailPage() {
         })),
     };
     if (payload.items.length === 0) {
-      alert('Please enter received quantities for at least one item.');
+      void notify('Please enter received quantities for at least one item.');
       return;
     }
     setActionLoading(true);
@@ -239,12 +238,12 @@ export default function ProcurementDetailPage() {
       await franchiseProcurementService.confirmReceipt(request.id, payload);
       setShowReceiptModal(false);
       await loadRequest();
-      alert('Receipt confirmed. Saleable items have been added to your inventory.');
+      void notify('Receipt confirmed. Saleable items have been added to your inventory.');
     } catch (err) {
       if (err instanceof ApiError) {
-        alert(err.body.message || 'Failed to confirm receipt.');
+        void notify(err.body.message || 'Failed to confirm receipt.');
       } else {
-        alert('Failed to confirm receipt.');
+        void notify('Failed to confirm receipt.');
       }
     } finally {
       setActionLoading(false);

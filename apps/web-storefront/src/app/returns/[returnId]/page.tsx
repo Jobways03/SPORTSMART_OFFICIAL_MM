@@ -10,6 +10,7 @@ import {
   getReturnStatusLabel,
   getReturnStatusColor,
 } from '@/services/returns.service';
+import { useModal } from '@sportsmart/ui';
 import { REASON_CATEGORIES } from '@/services/returns.service';
 
 const getReasonLabel = (value: string) => {
@@ -18,7 +19,8 @@ const getReasonLabel = (value: string) => {
 };
 
 export default function ReturnDetailPage() {
-  const { returnId } = useParams<{ returnId: string }>();
+  const { notify, confirmDialog } = useModal();
+const { returnId } = useParams<{ returnId: string }>();
   const router = useRouter();
   const [ret, setRet] = useState<ReturnDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,35 +50,33 @@ export default function ReturnDetailPage() {
     fetchReturn();
   }, [fetchReturn]);
 
-  const handleCancel = async () => {
-    if (!confirm('Are you sure you want to cancel this return request?')) return;
+  const handleCancel = async () => {if (!(await confirmDialog('Are you sure you want to cancel this return request?'))) return;
     setActionLoading(true);
     try {
       const res = await returnsService.cancel(returnId);
       if (res.success) {
         fetchReturn();
       } else {
-        alert(res.message || 'Failed to cancel return');
+        void notify(res.message || 'Failed to cancel return');
       }
     } catch {
-      alert('Failed to cancel return');
+      void notify('Failed to cancel return');
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleHandedOver = async () => {
-    if (!confirm('Confirm that you have handed over the package to the courier?')) return;
+  const handleHandedOver = async () => {if (!(await confirmDialog('Confirm that you have handed over the package to the courier?'))) return;
     setActionLoading(true);
     try {
       const res = await returnsService.markHandedOver(returnId);
       if (res.success) {
         fetchReturn();
       } else {
-        alert(res.message || 'Failed to update return');
+        void notify(res.message || 'Failed to update return');
       }
     } catch {
-      alert('Failed to update return');
+      void notify('Failed to update return');
     } finally {
       setActionLoading(false);
     }

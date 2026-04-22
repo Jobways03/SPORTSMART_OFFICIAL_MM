@@ -33,6 +33,15 @@ export class PrismaReturnRepository implements ReturnRepository {
         },
         subOrder: true,
         masterOrder: true,
+        customer: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+          },
+        },
         evidence: true,
         statusHistory: {
           orderBy: { createdAt: 'desc' },

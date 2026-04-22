@@ -380,12 +380,21 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
 
     const where: any = {
       status: 'ACTIVE', moderationStatus: 'APPROVED', isDeleted: false,
+      // Exclude products the seller already owns (but include platform products with null sellerId)
+      OR: [
+        { sellerId: null },
+        { sellerId: { not: sellerId } },
+      ],
     };
     if (mappedProductIds.length > 0) where.id = { notIn: mappedProductIds };
     if (search) {
-      where.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { productCode: { contains: search, mode: 'insensitive' } },
+      where.AND = [
+        {
+          OR: [
+            { title: { contains: search, mode: 'insensitive' } },
+            { productCode: { contains: search, mode: 'insensitive' } },
+          ],
+        },
       ];
     }
     if (categoryId) where.categoryId = categoryId;

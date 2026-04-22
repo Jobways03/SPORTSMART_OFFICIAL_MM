@@ -58,6 +58,7 @@ export class DuplicateDetectionService {
     title: string;
     brandId?: string;
     categoryId?: string;
+    excludeProductId?: string;
   }): Promise<PotentialDuplicate[]> {
     const significantWords = this.getSignificantWords(input.title);
     if (significantWords.length === 0) {
@@ -72,11 +73,13 @@ export class DuplicateDetectionService {
       title: { contains: word, mode: 'insensitive' as const },
     }));
 
-    // Query existing ACTIVE/APPROVED products with similar title
+    // Query existing ACTIVE/APPROVED products with similar title.
+    // excludeProductId skips the product being submitted/edited so it doesn't match itself.
     const candidates = await this.prisma.product.findMany({
       where: {
         AND: searchConditions,
         isDeleted: false,
+        ...(input.excludeProductId ? { id: { not: input.excludeProductId } } : {}),
         OR: [
           { status: 'ACTIVE' },
           { moderationStatus: 'APPROVED' },

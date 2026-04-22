@@ -8,6 +8,7 @@ import {
   ApproveItemInput,
   statusPalette,
 } from '@/services/admin-procurement.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 function formatINR(n: number | string | null | undefined): string {
@@ -41,7 +42,7 @@ type ApproveDraft = Record<
 >;
 
 export default function AdminProcurementDetailPage() {
-  const params = useParams();
+const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
@@ -235,12 +236,11 @@ export default function AdminProcurementDetailPage() {
     }
   };
 
-  const handleSettle = async () => {
-    if (!request) return;
+  const handleSettle = async () => {if (!request) return;
     if (
-      !confirm(
+      !(await confirmDialog(
         `Settle this request? Procurement fee ${formatINR(request.procurementFeeAmount)} will be recorded in the franchise finance ledger.`,
-      )
+      ))
     )
       return;
     setActionError('');

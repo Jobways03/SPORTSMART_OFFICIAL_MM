@@ -9,6 +9,7 @@ import {
   CustomerAddress,
   AddressPayload,
 } from '@/services/addresses.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 
 interface FormState {
@@ -45,7 +46,8 @@ const normalizePhone = (phone: string): string => {
 };
 
 export default function AddressesPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -131,8 +133,7 @@ export default function AddressesPage() {
     return null;
   };
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e: FormEvent) => {e.preventDefault();
     setFormError(null);
 
     const validationError = validateForm();
@@ -167,15 +168,14 @@ export default function AddressesPage() {
     } catch (err) {
       const msg = err instanceof ApiError ? err.body.message : 'Failed to save address.';
       setFormError(msg || 'Failed to save address.');
-      alert(msg || 'Failed to save address.');
+      void notify(msg || 'Failed to save address.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (addr: CustomerAddress) => {
-    const confirmed = typeof window !== 'undefined'
-      ? window.confirm(`Delete address for ${addr.fullName}? This cannot be undone.`)
+  const handleDelete = async (addr: CustomerAddress) => {const confirmed = typeof window !== 'undefined'
+      ? await confirmDialog(`Delete address for ${addr.fullName}? This cannot be undone.`)
       : false;
     if (!confirmed) return;
     try {
@@ -183,17 +183,16 @@ export default function AddressesPage() {
       fetchAddresses();
     } catch (err) {
       const msg = err instanceof ApiError ? err.body.message : 'Failed to delete address.';
-      alert(msg || 'Failed to delete address.');
+      void notify(msg || 'Failed to delete address.');
     }
   };
 
-  const handleSetDefault = async (addr: CustomerAddress) => {
-    try {
+  const handleSetDefault = async (addr: CustomerAddress) => {try {
       await addressesService.setDefault(addr.id);
       fetchAddresses();
     } catch (err) {
       const msg = err instanceof ApiError ? err.body.message : 'Failed to set default.';
-      alert(msg || 'Failed to set default.');
+      void notify(msg || 'Failed to set default.');
     }
   };
 

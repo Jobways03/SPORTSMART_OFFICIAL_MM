@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { adminProductsService, ProductListItem, ListProductsParams } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
 import './products.css';
+import { useModal } from '@sportsmart/ui';
 
 interface Pagination {
   page: number;
@@ -15,7 +16,8 @@ interface Pagination {
 }
 
 export default function ProductsPage() {
-  const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+const router = useRouter();
   const [products, setProducts] = useState<ProductListItem[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -103,9 +105,8 @@ export default function ProductsPage() {
   };
 
   // Bulk moderation handlers
-  const runBulkApprove = async () => {
-    if (selected.size === 0) return;
-    if (!confirm(`Approve ${selected.size} selected product(s)?`)) return;
+  const runBulkApprove = async () => {if (selected.size === 0) return;
+    if (!(await confirmDialog(`Approve ${selected.size} selected product(s)?`))) return;
     setBulkSaving('approve');
     setBulkMessage('');
     try {

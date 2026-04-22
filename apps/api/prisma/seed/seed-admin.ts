@@ -5,12 +5,12 @@ const prisma = new PrismaClient();
 
 const SEED_NAME = process.env.ADMIN_SEED_NAME || 'Super Admin';
 const SEED_EMAIL = process.env.ADMIN_SEED_EMAIL || 'admin@sportsmart.com';
-const SEED_PASSWORD = process.env.ADMIN_SEED_PASSWORD;
 
-if (!SEED_PASSWORD) {
+if (!process.env.ADMIN_SEED_PASSWORD) {
   console.error('ADMIN_SEED_PASSWORD is required. Set it in .env before seeding.');
   process.exit(1);
 }
+const SEED_PASSWORD: string = process.env.ADMIN_SEED_PASSWORD;
 
 const SYSTEM_ROLES: { name: UserRole; description: string }[] = [
   { name: UserRole.CUSTOMER, description: 'Customer role' },
@@ -51,7 +51,7 @@ async function main() {
     return;
   }
 
-  const passwordHash = await bcrypt.hash(SEED_PASSWORD, 12);
+  const passwordHash: string = await bcrypt.hash(SEED_PASSWORD, 12);
 
   const admin = await prisma.admin.create({
     data: {

@@ -49,7 +49,7 @@ export class VariantGeneratorService {
       price: product?.basePrice ? Number(product.basePrice) : 0,
       compareAtPrice: product?.compareAtPrice ? Number(product.compareAtPrice) : null,
       costPrice: product?.costPrice ? Number(product.costPrice) : null,
-      stock: product?.baseStock ?? 0,
+      stock: 0,
       weight: product?.weight ? Number(product.weight) : null,
       weightUnit: product?.weightUnit || 'kg',
       length: product?.length ? Number(product.length) : null,

@@ -31,6 +31,7 @@ import { AdminRejectProductDto } from '../../dtos/admin-reject-product.dto';
 import { AdminRequestChangesDto } from '../../dtos/admin-request-changes.dto';
 import { AdminUpdateProductStatusDto } from '../../dtos/admin-update-status.dto';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
+import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
 
 @ApiTags('Admin Products')
@@ -39,6 +40,7 @@ import { CartPublicFacade } from '../../../../cart/application/facades/cart-publ
 export class AdminProductsController {
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
+    @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
     private readonly slugService: ProductSlugService,
     private readonly productCodeService: ProductCodeService,
@@ -70,10 +72,12 @@ export class AdminProductsController {
 
     const mapped = products.map((p: any) => {
       const sellerStock = p.sellerMappings?.reduce((sum: number, m: any) => sum + Math.max(0, (m.stockQty || 0) - (m.reservedQty || 0)), 0) ?? 0;
+      const variantStock = p.variants?.reduce((sum: number, v: any) => sum + (v.stock ?? 0), 0) ?? 0;
+      const computedStock = sellerStock > 0 ? sellerStock : (p.hasVariants ? variantStock : (p.baseStock ?? 0));
       return {
         ...p,
         variantCount: p._count?.variants ?? 0,
-        totalStock: sellerStock,
+        totalStock: computedStock,
         primaryImageUrl: p.images?.[0]?.url ?? null,
         _count: undefined, images: undefined, variants: undefined, sellerMappings: undefined,
       };
@@ -124,14 +128,19 @@ export class AdminProductsController {
     const slug = await this.slugService.generateUniqueSlug(dto.title);
     const productCode = await this.productCodeService.generateProductCode();
 
+    // When admin creates a product for a seller, it goes straight to ACTIVE
+    // (admin-created = pre-approved). Otherwise DRAFT for platform products.
+    const initialStatus = seller ? 'ACTIVE' : 'DRAFT';
+
     const product = await this.productRepo.createInTransaction(
       {
         sellerId: seller?.id || null, productCode, title: dto.title, slug,
         shortDescription: dto.shortDescription, description: dto.description,
         categoryId, brandId, hasVariants: dto.hasVariants,
-        moderationStatus: 'APPROVED',
+        status: initialStatus, moderationStatus: 'APPROVED',
         procurementPrice: dto.procurementPrice,
-        basePrice: dto.basePrice, baseSku: dto.baseSku, baseStock: dto.baseStock,
+        basePrice: dto.basePrice, compareAtPrice: dto.compareAtPrice, costPrice: dto.costPrice,
+        baseSku: dto.baseSku, baseStock: dto.baseStock,
         weight: dto.weight, weightUnit: dto.weightUnit,
         length: dto.length, width: dto.width, height: dto.height, dimensionUnit: dto.dimensionUnit,
         returnPolicy: dto.returnPolicy, warrantyInfo: dto.warrantyInfo,
@@ -139,7 +148,7 @@ export class AdminProductsController {
       dto.tags,
       dto.seo,
       dto.variants,
-      { fromStatus: null, toStatus: 'DRAFT', changedBy: adminId, reason: 'Product created by admin' },
+      { fromStatus: null, toStatus: initialStatus, changedBy: adminId, reason: 'Product created by admin' },
     );
 
     this.logger.log(
@@ -151,8 +160,41 @@ export class AdminProductsController {
       try {
         const sellerProfile = await this.productRepo.findSellerById(seller.id);
         const fullProduct = await this.productRepo.findFullProduct(product.id);
-        // Auto-mapping logic handled at product repo level — simplified here
-        this.logger.log(`Auto-created seller mapping for admin-created product ${product.id}`);
+        const variants = fullProduct?.variants || [];
+
+        if (variants.length > 0) {
+          // Create a mapping per variant
+          for (const variant of variants) {
+            await this.sellerMappingRepo.create({
+              sellerId: seller.id,
+              productId: product.id,
+              variantId: variant.id,
+              stockQty: variant.stock ?? 0,
+              settlementPrice: variant.price ? Number(variant.price) : (fullProduct?.basePrice ? Number(fullProduct.basePrice) : undefined),
+              pickupAddress: sellerProfile?.storeAddress || null,
+              pickupPincode: sellerProfile?.sellerZipCode || null,
+              dispatchSla: 2,
+              approvalStatus: 'APPROVED',
+              isActive: true,
+            });
+          }
+        } else {
+          // Simple product — single mapping
+          await this.sellerMappingRepo.create({
+            sellerId: seller.id,
+            productId: product.id,
+            variantId: null,
+            stockQty: dto.baseStock ?? 0,
+            settlementPrice: dto.basePrice ? Number(dto.basePrice) : undefined,
+            pickupAddress: sellerProfile?.storeAddress || null,
+            pickupPincode: sellerProfile?.sellerZipCode || null,
+            dispatchSla: 2,
+            approvalStatus: 'APPROVED',
+            isActive: true,
+          });
+        }
+
+        this.logger.log(`Auto-created seller mapping(s) for admin-created product ${product.id}`);
       } catch (mappingError) {
         this.logger.warn(`Failed to auto-create seller mapping for admin product ${product.id}: ${mappingError}`);
       }
@@ -273,12 +315,20 @@ export class AdminProductsController {
     const adminId = (req as any).adminId;
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    if (product.status !== 'SUBMITTED') throw new AppException('Only SUBMITTED products can be approved', 'BAD_REQUEST');
+    // Already active/approved — idempotent success
+    if (product.status === 'ACTIVE' || product.status === 'APPROVED') {
+      return { success: true, message: 'Product is already active', data: null };
+    }
+
+    const approvableStatuses = ['SUBMITTED', 'DRAFT', 'REJECTED', 'CHANGES_REQUESTED'];
+    if (!approvableStatuses.includes(product.status)) {
+      throw new AppException(`Cannot approve a product with status ${product.status}`, 'BAD_REQUEST');
+    }
 
     await this.productRepo.approveInTransaction(
       productId,
       [
-        { fromStatus: 'SUBMITTED', toStatus: 'APPROVED', changedBy: adminId, reason: 'Product approved' },
+        { fromStatus: product.status, toStatus: 'APPROVED', changedBy: adminId, reason: 'Product approved' },
         { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after approval' },
       ],
       { moderatorId: adminId },
@@ -305,12 +355,15 @@ export class AdminProductsController {
     const adminId = (req as any).adminId;
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    if (product.status !== 'SUBMITTED') throw new AppException('Only SUBMITTED products can be rejected', 'BAD_REQUEST');
+    const rejectableStatuses = ['SUBMITTED', 'DRAFT', 'ACTIVE', 'APPROVED'];
+    if (!rejectableStatuses.includes(product.status)) {
+      throw new AppException(`Cannot reject a product with status ${product.status}`, 'BAD_REQUEST');
+    }
 
     await this.productRepo.rejectInTransaction(
       productId,
       dto.reason,
-      { fromStatus: 'SUBMITTED', toStatus: 'REJECTED', changedBy: adminId, reason: dto.reason },
+      { fromStatus: product.status, toStatus: 'REJECTED', changedBy: adminId, reason: dto.reason },
       { moderatorId: adminId },
     );
 
@@ -335,12 +388,15 @@ export class AdminProductsController {
     const adminId = (req as any).adminId;
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    if (product.status !== 'SUBMITTED') throw new AppException('Only SUBMITTED products can have changes requested', 'BAD_REQUEST');
+    const changeableStatuses = ['SUBMITTED', 'DRAFT', 'ACTIVE', 'APPROVED'];
+    if (!changeableStatuses.includes(product.status)) {
+      throw new AppException(`Cannot request changes on a product with status ${product.status}`, 'BAD_REQUEST');
+    }
 
     await this.productRepo.requestChangesInTransaction(
       productId,
       dto.note,
-      { fromStatus: 'SUBMITTED', toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: dto.note },
+      { fromStatus: product.status, toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: dto.note },
       { moderatorId: adminId },
     );
 

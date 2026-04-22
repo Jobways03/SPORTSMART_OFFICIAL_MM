@@ -18,7 +18,13 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
 
   async findByProduct(productId: string): Promise<any[]> {
     return this.prisma.sellerProductMapping.findMany({
-      where: { productId },
+      where: {
+        productId,
+        OR: [
+          { variantId: null },
+          { variant: { isDeleted: false } },
+        ],
+      },
       include: {
         seller: { select: MAPPING_SELLER_SELECT },
         variant: { select: MAPPING_VARIANT_SELECT },
@@ -29,16 +35,26 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
 
   async findAllPaginated(params: SellerMappingListParams): Promise<{ mappings: any[]; total: number }> {
     const { page, limit, sellerId, productId, isActive, approvalStatus, search } = params;
-    const where: any = {};
+    const where: any = {
+      // Exclude mappings for soft-deleted variants
+      OR: [
+        { variantId: null },
+        { variant: { isDeleted: false } },
+      ],
+    };
     if (sellerId) where.sellerId = sellerId;
     if (productId) where.productId = productId;
     if (isActive !== undefined) where.isActive = isActive;
     if (approvalStatus) where.approvalStatus = approvalStatus;
     if (search) {
-      where.OR = [
-        { product: { title: { contains: search, mode: 'insensitive' } } },
-        { seller: { sellerName: { contains: search, mode: 'insensitive' } } },
-        { seller: { sellerShopName: { contains: search, mode: 'insensitive' } } },
+      where.AND = [
+        {
+          OR: [
+            { product: { title: { contains: search, mode: 'insensitive' } } },
+            { seller: { sellerName: { contains: search, mode: 'insensitive' } } },
+            { seller: { sellerShopName: { contains: search, mode: 'insensitive' } } },
+          ],
+        },
       ];
     }
 
@@ -60,7 +76,14 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
   }
 
   async findPendingPaginated(page: number, limit: number): Promise<{ mappings: any[]; total: number }> {
-    const where = { approvalStatus: 'PENDING_APPROVAL' as const };
+    const where = {
+      approvalStatus: 'PENDING_APPROVAL' as const,
+      // Exclude mappings for soft-deleted variants
+      OR: [
+        { variantId: null },
+        { variant: { isDeleted: false } },
+      ],
+    };
     const [mappings, total] = await Promise.all([
       this.prisma.sellerProductMapping.findMany({
         where,
@@ -127,7 +150,7 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
   async findBySellerForProduct(sellerId: string, productId: string): Promise<any[]> {
     return this.prisma.sellerProductMapping.findMany({
       where: { sellerId, productId },
-      select: { variantId: true },
+      select: { id: true, variantId: true },
     });
   }
 
@@ -203,7 +226,13 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
           brand: { select: { id: true, name: true } },
           images: { orderBy: { sortOrder: 'asc' }, take: 1 },
           sellerMappings: {
-            where: { sellerId },
+            where: {
+              sellerId,
+              OR: [
+                { variantId: null },
+                { variant: { isDeleted: false } },
+              ],
+            },
             include: {
               variant: {
                 select: {
@@ -265,6 +294,67 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     return this.prisma.sellerServiceArea.findUnique({
       where: { sellerId_pincode: { sellerId, pincode } },
     });
+  }
+
+  async autoRepairMissingMappingsForSeller(sellerId: string): Promise<number> {
+    // Find products owned by this seller that have NO seller mappings
+    const ownedWithoutMappings = await this.prisma.product.findMany({
+      where: {
+        sellerId,
+        isDeleted: false,
+        sellerMappings: { none: { sellerId } },
+      },
+      include: {
+        variants: { where: { isDeleted: false }, select: { id: true, stock: true, price: true } },
+        seller: { select: { storeAddress: true, sellerZipCode: true } },
+      },
+    });
+
+    if (ownedWithoutMappings.length === 0) return 0;
+
+    let totalCreated = 0;
+    for (const product of ownedWithoutMappings) {
+      const seller = product.seller;
+      const variants = product.variants || [];
+
+      if (product.hasVariants && variants.length > 0) {
+        for (const variant of variants) {
+          await this.prisma.sellerProductMapping.create({
+            data: {
+              sellerId,
+              productId: product.id,
+              variantId: variant.id,
+              stockQty: variant.stock ?? 0,
+              settlementPrice: variant.price ? Number(variant.price) : (product.basePrice ? Number(product.basePrice) : 0),
+              pickupAddress: seller?.storeAddress || null,
+              pickupPincode: seller?.sellerZipCode || null,
+              dispatchSla: 2,
+              approvalStatus: 'APPROVED',
+              isActive: true,
+            },
+          });
+          totalCreated++;
+        }
+      } else {
+        await this.prisma.sellerProductMapping.create({
+          data: {
+            sellerId,
+            productId: product.id,
+            variantId: null,
+            stockQty: product.baseStock ?? 0,
+            settlementPrice: product.basePrice ? Number(product.basePrice) : 0,
+            pickupAddress: seller?.storeAddress || null,
+            pickupPincode: seller?.sellerZipCode || null,
+            dispatchSla: 2,
+            approvalStatus: 'APPROVED',
+            isActive: true,
+          },
+        });
+        totalCreated++;
+      }
+    }
+
+    return totalCreated;
   }
 
   async findProductForMapping(productId: string): Promise<any | null> {

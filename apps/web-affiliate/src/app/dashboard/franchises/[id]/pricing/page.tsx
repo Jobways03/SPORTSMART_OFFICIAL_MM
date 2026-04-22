@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
+import { useModal } from '@sportsmart/ui';
 
 // A row in the render table. The admin sees every catalog mapping the
 // franchise has (so they can set a price on any of them) plus a
@@ -29,7 +30,7 @@ const fmt = (v: number | string | null | undefined) => {
 };
 
 export default function FranchisePricingPage() {
-  const params = useParams();
+const params = useParams();
   const franchiseId = String(params?.id ?? '');
 
   const [rows, setRows] = useState<Row[]>([]);
@@ -133,12 +134,11 @@ export default function FranchisePricingPage() {
     }
   };
 
-  const handleRemove = async (row: Row) => {
-    if (!row.overrideId) return;
+  const handleRemove = async (row: Row) => {if (!row.overrideId) return;
     if (
-      !confirm(
+      !(await confirmDialog(
         'Remove this negotiated price? Approval will fall back to the variant default.',
-      )
+      ))
     ) {
       return;
     }

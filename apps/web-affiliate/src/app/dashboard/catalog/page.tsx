@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
+import { useModal } from '@sportsmart/ui';
 
 // Must match the server-side MappingApprovalStatus enum in
 // prisma/schema/_base.prisma. Keep in sync if the enum ever gains
@@ -45,7 +46,8 @@ const APPROVAL_COLORS: Record<ApprovalStatus, { bg: string; fg: string }> = {
 };
 
 export default function FranchiseCatalogPage() {
-  const [mappings, setMappings] = useState<CatalogMapping[]>([]);
+  const { notify, confirmDialog } = useModal();
+const [mappings, setMappings] = useState<CatalogMapping[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -91,8 +93,7 @@ export default function FranchiseCatalogPage() {
     }
   };
 
-  const handleStop = async (mappingId: string) => {
-    if (!confirm('Stop this franchise catalog mapping? The franchise will no longer sell this product.')) return;
+  const handleStop = async (mappingId: string) => {if (!(await confirmDialog('Stop this franchise catalog mapping? The franchise will no longer sell this product.'))) return;
     setPendingAction(mappingId);
     try {
       await adminFranchisesService.stopCatalogMapping(mappingId);

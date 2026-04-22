@@ -10,6 +10,7 @@ import {
   FranchiseInventoryItem,
   FranchiseOrderItem,
 } from '@/services/admin-franchises.service';
+import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 import FranchiseStatusModal from '../components/franchise-status-modal';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
@@ -69,6 +70,7 @@ function getMappingStatusClass(status: string): string {
 }
 
 export default function AdminFranchiseDetailPage() {
+  const { notify, confirmDialog } = useModal();
   const router = useRouter();
   const params = useParams();
   const franchiseId = params.id as string;
@@ -129,8 +131,7 @@ export default function AdminFranchiseDetailPage() {
     });
   };
 
-  const handleEditSave = async () => {
-    if (!franchise) return;
+  const handleEditSave = async () => {if (!franchise) return;
     setEditSaving(true);
     try {
       await adminFranchisesService.editFranchise(franchise.id, editForm);
@@ -139,7 +140,7 @@ export default function AdminFranchiseDetailPage() {
       setTimeout(() => setEditSuccess(''), 3000);
       await fetchFranchiseRef();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : 'Failed to save');
+      void notify(err instanceof ApiError ? err.message : 'Failed to save');
     } finally {
       setEditSaving(false);
     }
@@ -812,7 +813,7 @@ export default function AdminFranchiseDetailPage() {
                                   try {
                                     await adminFranchisesService.markOrderDelivered(o.id);
                                     fetchOrders();
-                                  } catch { alert('Failed to mark delivered'); }
+                                  } catch { void notify('Failed to mark delivered'); }
                                 }}
                               >
                                 Mark Delivered
@@ -975,7 +976,7 @@ export default function AdminFranchiseDetailPage() {
                                   try {
                                     await adminFranchisesService.approveSettlement(s.id);
                                     fetchSettlements();
-                                  } catch { alert('Failed to approve'); }
+                                  } catch { void notify('Failed to approve'); }
                                 }}
                               >
                                 Approve
@@ -989,7 +990,7 @@ export default function AdminFranchiseDetailPage() {
                                   try {
                                     await adminFranchisesService.markSettlementPaid(s.id);
                                     fetchSettlements();
-                                  } catch { alert('Failed to mark paid'); }
+                                  } catch { void notify('Failed to mark paid'); }
                                 }}
                               >
                                 Mark Paid
