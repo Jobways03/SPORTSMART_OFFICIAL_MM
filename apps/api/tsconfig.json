@@ -8,8 +8,6 @@
     "allowSyntheticDefaultImports": true,
     "target": "ES2022",
     "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
     "baseUrl": "./",
     // "composite": true,
     "incremental": true,
@@ -17,7 +15,7 @@
     "strict": true,
     "strictPropertyInitialization": false,
     "moduleResolution": "node",
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@src/*": ["src/*"],
       "@core/*": ["src/core/*"],
@@ -26,6 +24,6 @@
       "@integrations/*": ["src/integrations/*"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "prisma/**/*"],
   "exclude": ["node_modules", "dist"]
 }

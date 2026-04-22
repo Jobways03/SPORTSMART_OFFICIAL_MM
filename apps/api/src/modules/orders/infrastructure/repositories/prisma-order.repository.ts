@@ -33,6 +33,13 @@ export class PrismaOrderRepository implements OrderRepository {
             },
           },
         },
+        // Surface return status to the admin list so ops can spot orders
+        // with open return flows without drilling into each detail page.
+        // Sorted newest-first so the UI can show the most recent state.
+        returns: {
+          select: { id: true, returnNumber: true, status: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip,

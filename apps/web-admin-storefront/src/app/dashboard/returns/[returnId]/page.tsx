@@ -365,7 +365,10 @@ export default function AdminReturnDetailPage() {
   const canInitiateRefund = ['QC_APPROVED', 'PARTIALLY_APPROVED'].includes(data.status);
   const canConfirmOrFail = data.status === 'REFUND_PROCESSING';
   const canRetryRefund = data.status === 'REFUND_PROCESSING' && (data.refundAttempts ?? 0) > 0;
-  const canClose = ['REFUNDED', 'QC_REJECTED', 'COMPLETED'].includes(data.status);
+  // Only return-terminal states awaiting admin closure — matches the
+  // backend guard (`REFUNDED`, `QC_REJECTED`). Once closed the return
+  // moves to `COMPLETED`, which should not show the button.
+  const canClose = ['REFUNDED', 'QC_REJECTED'].includes(data.status);
 
   const orderNumber = data.masterOrder?.orderNumber ?? data.subOrder?.masterOrder?.orderNumber ?? '—';
   const totalReturnQty = data.items.reduce((s, it) => s + (it.quantity ?? 0), 0);

@@ -187,17 +187,27 @@ export default function OrdersPage() {
         ) : (
           <div className="orders-list">
             {data.orders.map((order) => {
-              const allItems = order.subOrders.flatMap((so) => so.items);
-              const overallFulfillment = order.subOrders.length > 0
-                ? order.subOrders.every((so) => so.fulfillmentStatus === 'DELIVERED')
+              // When a seller rejects, the router spawns a fresh sub-order on
+              // another seller — the rejected row stays in the DB with
+              // acceptStatus=REJECTED / fulfillmentStatus=CANCELLED but
+              // surfacing it on the customer page is misleading (they see
+              // both "Paid + Completed" and "Cancelled" for the same order).
+              // Collapse the view to the *active* sub-orders unless the
+              // entire order was actually cancelled.
+              const activeSubs = order.subOrders.filter((so) => so.acceptStatus !== 'REJECTED');
+              const relevantSubs = activeSubs.length > 0 ? activeSubs : order.subOrders;
+
+              const allItems = relevantSubs.flatMap((so) => so.items);
+              const overallFulfillment = relevantSubs.length > 0
+                ? relevantSubs.every((so) => so.fulfillmentStatus === 'DELIVERED')
                   ? 'DELIVERED'
-                  : order.subOrders.every((so) => so.fulfillmentStatus === 'FULFILLED' || so.fulfillmentStatus === 'DELIVERED')
+                  : relevantSubs.every((so) => so.fulfillmentStatus === 'FULFILLED' || so.fulfillmentStatus === 'DELIVERED')
                     ? 'FULFILLED'
-                    : order.subOrders.some((so) => so.fulfillmentStatus === 'SHIPPED')
+                    : relevantSubs.some((so) => so.fulfillmentStatus === 'SHIPPED')
                       ? 'SHIPPED'
-                      : order.subOrders.some((so) => so.fulfillmentStatus === 'PACKED')
+                      : relevantSubs.some((so) => so.fulfillmentStatus === 'PACKED')
                         ? 'PACKED'
-                        : order.subOrders.some((so) => so.fulfillmentStatus === 'CANCELLED')
+                        : relevantSubs.every((so) => so.fulfillmentStatus === 'CANCELLED')
                           ? 'CANCELLED'
                           : 'UNFULFILLED'
                 : 'UNFULFILLED';
@@ -207,6 +217,15 @@ export default function OrdersPage() {
 
               const paymentLabel = order.paymentStatus === 'CANCELLED' ? 'Cancelled' : order.paymentStatus === 'PAID' ? 'Paid' : 'Payment Pending';
               const paymentColor = order.paymentStatus === 'CANCELLED' ? '#dc2626' : order.paymentStatus === 'PAID' ? '#16a34a' : '#d97706';
+
+              // Collapse redundant status chatter: when the order is fully
+              // cancelled, the single "Cancelled" banner from MiniProgressBar
+              // is enough — we don't also need the Payment and Status pills
+              // repeating the word three times.
+              const isCancelled =
+                order.orderStatus === 'CANCELLED' ||
+                overallFulfillment === 'CANCELLED' ||
+                order.paymentStatus === 'CANCELLED';
 
               return (
                 <Link key={order.id} href={`/orders/${order.orderNumber}`} className="orders-card">
@@ -219,11 +238,14 @@ export default function OrdersPage() {
                     <span className="orders-card-amount">{formatPrice(Number(order.totalAmount))}</span>
                   </div>
 
-                  {/* Status row */}
-                  <div className="orders-card-status-row">
-                    <span className="orders-status-badge" style={{ background: paymentColor + '15', color: paymentColor }}>{paymentLabel}</span>
-                    <span className="orders-status-badge" style={{ background: displayColor + '15', color: displayColor }}>{displayLabel}</span>
-                  </div>
+                  {/* Status row — hidden for cancelled orders since the
+                      MiniProgressBar already shows "Cancelled" prominently. */}
+                  {!isCancelled && (
+                    <div className="orders-card-status-row">
+                      <span className="orders-status-badge" style={{ background: paymentColor + '15', color: paymentColor }}>{paymentLabel}</span>
+                      <span className="orders-status-badge" style={{ background: displayColor + '15', color: displayColor }}>{displayLabel}</span>
+                    </div>
+                  )}
 
                   {/* Progress */}
                   <MiniProgressBar orderStatus={order.orderStatus} fulfillmentStatus={overallFulfillment} paymentStatus={order.paymentStatus} />
