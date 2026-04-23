@@ -6,10 +6,15 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { UserAuthGuard } from '../../../../core/guards';
+import { BadRequestAppException } from '../../../../core/exceptions';
+import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
 import { ReturnService } from '../../application/services/return.service';
 import { CreateReturnDto } from '../dtos/create-return.dto';
 import { CustomerMarkHandedOverDto } from '../dtos/customer-mark-handed-over.dto';
@@ -18,7 +23,33 @@ import { CustomerMarkHandedOverDto } from '../dtos/customer-mark-handed-over.dto
 @Controller('customer/returns')
 @UseGuards(UserAuthGuard)
 export class CustomerReturnsController {
-  constructor(private readonly returnService: ReturnService) {}
+  constructor(
+    private readonly returnService: ReturnService,
+    private readonly cloudinary: CloudinaryAdapter,
+  ) {}
+
+  // POST /customer/returns/evidence — upload a single issue photo before
+  // submitting the return. Returns { url } which the client batches into
+  // `evidenceFileUrls` on the create payload. 5MB cap per image.
+  @Post('evidence')
+  @UseInterceptors(FileInterceptor('image', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadEvidence(
+    @Req() req: any,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file?.buffer) {
+      throw new BadRequestAppException('Image file is required');
+    }
+    const result = await this.cloudinary.upload(file.buffer, {
+      folder: `sportsmart/returns/evidence/${req.userId}`,
+      resourceType: 'image',
+    });
+    return {
+      success: true,
+      message: 'Evidence uploaded',
+      data: { url: result.secureUrl, publicId: result.publicId },
+    };
+  }
 
   // GET /customer/returns/eligibility/:masterOrderId — check what items can be returned
   @Get('eligibility/:masterOrderId')

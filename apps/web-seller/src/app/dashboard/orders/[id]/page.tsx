@@ -35,6 +35,25 @@ interface CommissionRecord {
   createdAt: string;
 }
 
+interface ReturnItem {
+  id: string;
+  orderItemId: string;
+  quantity: number;
+  reasonCategory: string;
+  reasonDetail?: string | null;
+  qcOutcome?: string | null;
+  qcQuantityApproved?: number | null;
+  refundAmount?: string | number | null;
+}
+
+interface ReturnLite {
+  id: string;
+  returnNumber: string;
+  status: string;
+  createdAt: string;
+  items?: ReturnItem[];
+}
+
 interface SubOrderDetail {
   id: string;
   subTotal: number;
@@ -52,6 +71,7 @@ interface SubOrderDetail {
   courierName: string | null;
   items: OrderItem[];
   commissionRecords: CommissionRecord[];
+  returns?: ReturnLite[];
   masterOrder: {
     orderNumber: string;
     paymentMethod: string;
@@ -655,6 +675,11 @@ const { id } = useParams<{ id: string }>();
             <SellerDeliveryCard order={order} onRefresh={fetchOrder} />
           )}
 
+          {/* -- RETURNS -- */}
+          {(order.returns?.length ?? 0) > 0 && (
+            <SellerReturnsCard order={order} />
+          )}
+
           {/* -- ADDITIONAL ORDER DETAILS -- */}
           <div style={sideCard}>
             <h3 style={sideCardTitle}>ADDITIONAL ORDER DETAILS</h3>
@@ -1112,6 +1137,159 @@ function SellerDeliveryCard({ order, onRefresh }: { order: SubOrderDetail; onRef
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* -- returns card for seller --
+   Surface each return request tied to this sub-order so the seller can
+   see what the customer sent back, why, and where it is in the QC /
+   refund pipeline. Read-only — sellers don't drive the return flow, the
+   admin does. */
+function SellerReturnsCard({ order }: { order: SubOrderDetail }) {
+  const returns = order.returns ?? [];
+
+  const statusStyle = (s: string): { label: string; bg: string; color: string } => {
+    switch (s) {
+      case 'REQUESTED': return { label: 'Requested', bg: '#fef3c7', color: '#92400e' };
+      case 'APPROVED': return { label: 'Approved', bg: '#dbeafe', color: '#1e40af' };
+      case 'REJECTED': return { label: 'Rejected', bg: '#fee2e2', color: '#991b1b' };
+      case 'PICKUP_SCHEDULED': return { label: 'Pickup Scheduled', bg: '#e0e7ff', color: '#3730a3' };
+      case 'IN_TRANSIT': return { label: 'In Transit', bg: '#e0e7ff', color: '#3730a3' };
+      case 'RECEIVED': return { label: 'Received', bg: '#ccfbf1', color: '#115e59' };
+      case 'QC_APPROVED': return { label: 'QC Approved', bg: '#d1fae5', color: '#065f46' };
+      case 'QC_REJECTED': return { label: 'QC Rejected', bg: '#fee2e2', color: '#991b1b' };
+      case 'PARTIALLY_APPROVED': return { label: 'Partially Approved', bg: '#fef3c7', color: '#92400e' };
+      case 'REFUND_PROCESSING': return { label: 'Refund Processing', bg: '#e0e7ff', color: '#3730a3' };
+      case 'REFUNDED': return { label: 'Refunded', bg: '#d1fae5', color: '#065f46' };
+      case 'COMPLETED': return { label: 'Completed', bg: '#d1fae5', color: '#065f46' };
+      case 'CANCELLED': return { label: 'Cancelled', bg: '#f3f4f6', color: '#374151' };
+      default: return { label: s, bg: '#f3f4f6', color: '#374151' };
+    }
+  };
+
+  const prettyReason = (r: string) =>
+    r
+      .toLowerCase()
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  return (
+    <div style={{ ...sideCard, borderLeft: '3px solid #f59e0b' }}>
+      <h3 style={sideCardTitle}>
+        RETURNS
+        <span
+          style={{
+            marginLeft: 8,
+            fontSize: 11,
+            fontWeight: 700,
+            padding: '2px 8px',
+            borderRadius: 999,
+            background: '#fef3c7',
+            color: '#92400e',
+          }}
+        >
+          {returns.length}
+        </span>
+      </h3>
+      <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 14px 0' }}>
+        The customer has requested a return on this order. Admin handles
+        the approval, pickup, and refund.
+      </p>
+
+      {returns.map((r) => {
+        const s = statusStyle(r.status);
+        return (
+          <div
+            key={r.id}
+            style={{
+              border: '1px solid #e5e7eb',
+              borderRadius: 8,
+              padding: 12,
+              marginBottom: 10,
+              background: '#fffbeb',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 6,
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ fontWeight: 700, color: '#92400e', fontSize: 13 }}>{r.returnNumber}</div>
+              <span
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: 999,
+                  background: s.bg,
+                  color: s.color,
+                  fontSize: 11,
+                  fontWeight: 700,
+                }}
+              >
+                {s.label}
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 8 }}>
+              Opened {fmtDateTime(r.createdAt)}
+            </div>
+
+            {r.items && r.items.length > 0 && (
+              <div
+                style={{
+                  borderTop: '1px dashed #fde68a',
+                  paddingTop: 8,
+                  marginTop: 8,
+                }}
+              >
+                {r.items.map((ri) => {
+                  const productTitle =
+                    order.items.find((it: any) => it.id === ri.orderItemId)?.productTitle ??
+                    'Item';
+                  return (
+                    <div
+                      key={ri.id}
+                      style={{
+                        padding: '6px 0',
+                        fontSize: 12,
+                        borderBottom: '1px dashed #fde68a',
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, color: '#374151' }}>
+                        {productTitle}
+                      </div>
+                      <div style={{ color: '#6b7280', marginTop: 2 }}>
+                        Qty returned: <strong>{ri.quantity}</strong> · Reason:{' '}
+                        <strong>{prettyReason(ri.reasonCategory)}</strong>
+                      </div>
+                      {ri.reasonDetail && (
+                        <div style={{ color: '#92400e', marginTop: 2, fontStyle: 'italic' }}>
+                          “{ri.reasonDetail}”
+                        </div>
+                      )}
+                      {ri.qcOutcome && (
+                        <div style={{ color: '#374151', marginTop: 2 }}>
+                          QC: <strong>{prettyReason(ri.qcOutcome)}</strong> · Approved qty:{' '}
+                          <strong>{ri.qcQuantityApproved ?? 0}</strong>
+                        </div>
+                      )}
+                      {ri.refundAmount != null && ri.refundAmount !== '' && (
+                        <div style={{ color: '#059669', fontWeight: 600, marginTop: 2 }}>
+                          Refund: {fmt(Number(ri.refundAmount))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

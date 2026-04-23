@@ -287,6 +287,13 @@ export class PrismaReturnRepository implements ReturnRepository {
               },
             },
           },
+          // The `Return` model has its own direct relation to MasterOrder
+          // alongside the one nested under SubOrder. Surface it at the top
+          // level so the seller/franchise UI can read `r.masterOrder` just
+          // like the admin list does.
+          masterOrder: {
+            select: { id: true, orderNumber: true },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip,

@@ -191,6 +191,16 @@ export default function ReturnDetailPage() {
         >
           Schedule Pickup
         </button>,
+        // Admin can still reject post-approval — covers the case where
+        // the system auto-approved but on manual review the claim looks
+        // bogus. Pickup hasn't been booked yet so there's no courier cost.
+        <button
+          key="reject-post-approval"
+          className="return-action-btn danger"
+          onClick={() => setActiveModal('reject')}
+        >
+          Cancel &amp; Reject
+        </button>,
       );
     }
 
@@ -214,6 +224,14 @@ export default function ReturnDetailPage() {
           onClick={() => setActiveModal('schedulePickup')}
         >
           Edit Pickup
+        </button>,
+        // Last chance to bail out before the item physically moves.
+        <button
+          key="reject-pre-transit"
+          className="return-action-btn danger"
+          onClick={() => setActiveModal('reject')}
+        >
+          Cancel &amp; Reject
         </button>,
       );
     }

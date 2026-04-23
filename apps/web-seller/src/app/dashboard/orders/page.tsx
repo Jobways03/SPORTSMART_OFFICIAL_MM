@@ -4,6 +4,13 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 
+interface ReturnLite {
+  id: string;
+  returnNumber: string;
+  status: string;
+  createdAt: string;
+}
+
 interface SubOrder {
   id: string;
   subTotal: number;
@@ -12,6 +19,7 @@ interface SubOrder {
   acceptStatus: string;
   acceptDeadlineAt: string | null;
   items: { productTitle: string; quantity: number; totalPrice: number }[];
+  returns?: ReturnLite[];
   masterOrder: {
     orderNumber: string;
     paymentMethod: string;
@@ -19,6 +27,26 @@ interface SubOrder {
     customer: { firstName: string; lastName: string };
   };
 }
+
+// Collapse the 13-state return lifecycle into 4 display buckets for the
+// FULFILLMENT column. Matches the mapping used on the admin pages so
+// sellers see the same vocabulary as ops.
+const returnToFulfillmentLabel = (returnStatus: string): { label: string; color: string } => {
+  switch (returnStatus) {
+    case 'REQUESTED':
+      return { label: 'Return Requested', color: '#d97706' };
+    case 'REJECTED':
+    case 'QC_REJECTED':
+      return { label: 'Return Rejected', color: '#dc2626' };
+    case 'REFUNDED':
+    case 'COMPLETED':
+      return { label: 'Refunded', color: '#059669' };
+    case 'CANCELLED':
+      return { label: 'Cancelled', color: '#dc2626' };
+    default:
+      return { label: 'Return In Progress', color: '#7c3aed' };
+  }
+};
 
 interface OrdersResponse {
   subOrders: SubOrder[];
@@ -264,15 +292,30 @@ export default function SellerOrdersPage() {
                       {badge(so.paymentStatus, so.paymentStatus === 'PAID' ? '#16a34a' : '#d97706')}
                     </td>
                     <td style={tdStyle}>
-                      {badge(
-                        fulfillmentLabel(so.fulfillmentStatus),
-                        so.fulfillmentStatus === 'DELIVERED' ? '#7c3aed'
-                        : so.fulfillmentStatus === 'FULFILLED' ? '#16a34a'
-                        : so.fulfillmentStatus === 'SHIPPED' ? '#2563eb'
-                        : so.fulfillmentStatus === 'PACKED' ? '#d97706'
-                        : so.fulfillmentStatus === 'CANCELLED' ? '#dc2626'
-                        : '#6366f1'
-                      )}
+                      {(() => {
+                        const latestReturn = (so.returns ?? [])[0];
+                        if (latestReturn) {
+                          const r = returnToFulfillmentLabel(latestReturn.status);
+                          return (
+                            <>
+                              {badge(r.label, r.color)}
+                              <div style={{ fontSize: 10, color: '#6b7280', marginTop: 3 }}>
+                                {latestReturn.returnNumber}
+                                {(so.returns?.length ?? 0) > 1 && ` +${(so.returns!.length - 1)}`}
+                              </div>
+                            </>
+                          );
+                        }
+                        return badge(
+                          fulfillmentLabel(so.fulfillmentStatus),
+                          so.fulfillmentStatus === 'DELIVERED' ? '#7c3aed'
+                          : so.fulfillmentStatus === 'FULFILLED' ? '#16a34a'
+                          : so.fulfillmentStatus === 'SHIPPED' ? '#2563eb'
+                          : so.fulfillmentStatus === 'PACKED' ? '#d97706'
+                          : so.fulfillmentStatus === 'CANCELLED' ? '#dc2626'
+                          : '#6366f1'
+                        );
+                      })()}
                     </td>
                     <td style={tdStyle}>
                       <div>

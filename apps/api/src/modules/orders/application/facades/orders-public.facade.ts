@@ -131,6 +131,13 @@ export class OrdersPublicFacade {
             select: { id: true, orderNumber: true, customerId: true, shippingAddressSnapshot: true, orderStatus: true },
             include: { customer: { select: { firstName: true, lastName: true, email: true } } },
           },
+          // Surface returns so the seller-facing and franchise-facing
+          // orders lists can flip their "order status" column when a
+          // customer opens a return.
+          returns: {
+            select: { id: true, returnNumber: true, status: true, createdAt: true },
+            orderBy: { createdAt: 'desc' },
+          },
         },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
@@ -152,6 +159,20 @@ export class OrdersPublicFacade {
         fulfillmentStatus: 'DELIVERED',
         commissionProcessed: false,
         returnWindowEndsAt: { lt: new Date() },
+        // Skip sub-orders that have a live return. If the return is
+        // already terminally-failed (admin rejected it, QC rejected it,
+        // or the customer cancelled), commission can still be locked.
+        // Everything else — REQUESTED, APPROVED, IN_TRANSIT, RECEIVED,
+        // QC_APPROVED, PARTIALLY_APPROVED, REFUND_PROCESSING, REFUNDED,
+        // COMPLETED — means the money is either already being refunded
+        // or soon will be, so we must not double-count.
+        NOT: {
+          returns: {
+            some: {
+              status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] },
+            },
+          },
+        },
       },
       include: {
         items: true,
@@ -172,6 +193,13 @@ export class OrdersPublicFacade {
         commissionProcessed: false,
         returnWindowEndsAt: { lt: new Date() },
         franchiseId: { not: null },
+        NOT: {
+          returns: {
+            some: {
+              status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] },
+            },
+          },
+        },
       },
       include: {
         items: true,

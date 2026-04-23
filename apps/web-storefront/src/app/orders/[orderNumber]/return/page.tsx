@@ -42,6 +42,12 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const [itemStates, setItemStates] = useState<Record<string, SelectedItemState>>({});
   const [customerNotes, setCustomerNotes] = useState('');
 
+  // Fair-forfeit photo evidence + explicit consent. Both required before
+  // the Submit button on the Review step enables.
+  const [evidenceUrls, setEvidenceUrls] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [forfeitConsent, setForfeitConsent] = useState(false);
+
   const loadEligibility = useCallback(async () => {
     setLoading(true);
     try {
@@ -159,7 +165,54 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     setStep('review');
   };
 
-  const handleSubmit = async () => {if (!selectedSubOrderId) return;
+  const handleEvidenceUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const remaining = 5 - evidenceUrls.length;
+    if (remaining <= 0) {
+      void notify('You can attach up to 5 photos.');
+      return;
+    }
+    const toUpload = Array.from(files).slice(0, remaining);
+    setUploading(true);
+    try {
+      const uploadedUrls: string[] = [];
+      for (const file of toUpload) {
+        if (file.size > 5 * 1024 * 1024) {
+          void notify(`"${file.name}" is larger than 5MB — skipped.`);
+          continue;
+        }
+        const fd = new FormData();
+        fd.append('image', file);
+        const res = await apiClient<{ url: string; publicId: string }>(
+          '/customer/returns/evidence',
+          { method: 'POST', body: fd },
+        );
+        if (res.data?.url) uploadedUrls.push(res.data.url);
+      }
+      if (uploadedUrls.length > 0) {
+        setEvidenceUrls((prev) => [...prev, ...uploadedUrls]);
+      }
+    } catch (e: any) {
+      void notify(e?.body?.message || e?.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeEvidence = (idx: number) => {
+    setEvidenceUrls((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedSubOrderId) return;
+    if (evidenceUrls.length === 0) {
+      void notify('Please attach at least one photo of the issue.');
+      return;
+    }
+    if (!forfeitConsent) {
+      void notify('Please acknowledge the forfeit policy before submitting.');
+      return;
+    }
     setSubmitting(true);
     try {
       const payload: CreateReturnPayload = {
@@ -171,6 +224,8 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           reasonDetail: it.reasonDetail || undefined,
         })),
         customerNotes: customerNotes || undefined,
+        forfeitConsent: true,
+        evidenceFileUrls: evidenceUrls,
       };
       const res = await returnsService.create(payload);
       if (res.success && res.data) {
@@ -481,9 +536,13 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                             </div>
                           )}
                           <div style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>
-                            Not eligible for return
-                            {item.alreadyReturnedQty > 0 &&
-                              ` \u00B7 Already returned: ${item.alreadyReturnedQty}`}
+                            {item.ineligibleReason === 'PREVIOUSLY_REJECTED'
+                              ? 'Previously rejected — forfeit policy blocks re-submission'
+                              : item.ineligibleReason === 'WINDOW_EXPIRED'
+                                ? 'Return window expired'
+                                : item.ineligibleReason === 'ALREADY_RETURNED'
+                                  ? `Already returned: ${item.alreadyReturnedQty} of ${item.quantity}`
+                                  : 'Not eligible for return'}
                           </div>
                         </div>
                       </div>
@@ -937,6 +996,137 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
               </div>
             )}
 
+            {/* Photo evidence — required for the return to be accepted */}
+            <div
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: 10,
+                padding: 14,
+                marginBottom: 14,
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+                Attach photos of the issue <span style={{ color: '#dc2626' }}>*</span>
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+                Upload clear photos showing the defect or reason you're returning.
+                At least one photo is required (up to 5, max 5MB each).
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                {evidenceUrls.map((url, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      position: 'relative',
+                      width: 80,
+                      height: 80,
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      border: '1px solid #e5e7eb',
+                    }}
+                  >
+                    <img
+                      src={url}
+                      alt=""
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeEvidence(i)}
+                      style={{
+                        position: 'absolute',
+                        top: 3,
+                        right: 3,
+                        width: 20,
+                        height: 20,
+                        borderRadius: '50%',
+                        border: 'none',
+                        background: 'rgba(0,0,0,0.6)',
+                        color: '#fff',
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                      }}
+                      aria-label="Remove photo"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {evidenceUrls.length < 5 && (
+                  <label
+                    style={{
+                      width: 80,
+                      height: 80,
+                      borderRadius: 8,
+                      border: '1px dashed #d1d5db',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: uploading ? 'wait' : 'pointer',
+                      background: uploading ? '#f9fafb' : '#fff',
+                      color: '#6b7280',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      textAlign: 'center',
+                    }}
+                  >
+                    {uploading ? 'Uploading…' : '+ Add photo'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      disabled={uploading}
+                      onChange={(e) => {
+                        handleEvidenceUpload(e.target.files);
+                        e.currentTarget.value = '';
+                      }}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                )}
+              </div>
+            </div>
+
+            {/* Fair-forfeit disclosure + consent */}
+            <div
+              style={{
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 10,
+                padding: 14,
+                marginBottom: 16,
+                fontSize: 13,
+                color: '#7f1d1d',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                Important — please read before submitting
+              </div>
+              <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
+                After pickup, our team inspects the item against your photos and
+                reason. <strong>If the claim is found to be invalid</strong> (item
+                was used beyond normal inspection, doesn't match the reported
+                issue, or was damaged after delivery), <strong>the item will not
+                be shipped back to you and no refund will be issued</strong>. This
+                policy protects genuine customers from higher prices caused by
+                fraudulent returns.
+              </div>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={forfeitConsent}
+                  onChange={(e) => setForfeitConsent(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  I understand and accept that if my return is rejected after
+                  inspection, the item will not be sent back and no refund will be
+                  issued.
+                </span>
+              </label>
+            </div>
+
             <div
               style={{
                 background: '#fffbeb',
@@ -979,7 +1169,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
               </button>
               <button
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={submitting || evidenceUrls.length === 0 || !forfeitConsent}
                 style={{
                   padding: '10px 24px',
                   fontSize: 14,
@@ -988,8 +1178,8 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                   background: '#16a34a',
                   color: '#fff',
                   borderRadius: 8,
-                  cursor: submitting ? 'not-allowed' : 'pointer',
-                  opacity: submitting ? 0.7 : 1,
+                  cursor: submitting || evidenceUrls.length === 0 || !forfeitConsent ? 'not-allowed' : 'pointer',
+                  opacity: submitting || evidenceUrls.length === 0 || !forfeitConsent ? 0.5 : 1,
                 }}
               >
                 {submitting ? 'Submitting...' : 'Submit Return Request'}

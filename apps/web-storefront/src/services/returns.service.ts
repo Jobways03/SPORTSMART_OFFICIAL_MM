@@ -20,6 +20,11 @@ export interface ReturnEligibility {
       alreadyReturnedQty: number;
       availableForReturn: number;
       eligible: boolean;
+      previouslyRejected?: boolean;
+      ineligibleReason?:
+        | 'WINDOW_EXPIRED'
+        | 'ALREADY_RETURNED'
+        | 'PREVIOUSLY_REJECTED';
     }>;
   }>;
 }
@@ -30,12 +35,24 @@ export interface ReturnItem {
   quantity: number;
   reasonCategory: string;
   reasonDetail: string | null;
+  qcOutcome?: string | null;
+  qcQuantityApproved?: number | null;
+  qcNotes?: string | null;
+  refundAmount?: string | number | null;
   orderItem?: {
     productTitle: string;
     variantTitle: string | null;
     imageUrl: string | null;
     unitPrice: number;
   };
+}
+
+export interface ReturnEvidence {
+  id: string;
+  uploadedBy: string; // 'CUSTOMER' | 'ADMIN' | 'SELLER' | 'FRANCHISE'
+  fileUrl: string;
+  description: string | null;
+  createdAt: string;
 }
 
 export interface ReturnDetail {
@@ -48,6 +65,7 @@ export interface ReturnDetail {
   refundReference: string | null;
   refundProcessedAt: string | null;
   rejectionReason: string | null;
+  qcNotes?: string | null;
   pickupScheduledAt: string | null;
   pickupCourier: string | null;
   pickupTrackingNumber: string | null;
@@ -57,6 +75,7 @@ export interface ReturnDetail {
   closedAt: string | null;
   createdAt: string;
   items: ReturnItem[];
+  evidence?: ReturnEvidence[];
   statusHistory?: Array<{
     id: string;
     fromStatus: string | null;
@@ -82,6 +101,8 @@ export interface CreateReturnPayload {
     reasonDetail?: string;
   }>;
   customerNotes?: string;
+  forfeitConsent: boolean;
+  evidenceFileUrls: string[];
 }
 
 export interface ListReturnsResponse {

@@ -21,6 +21,10 @@ export interface EligibleItem {
   alreadyReturnedQty: number;
   availableForReturn: number;
   eligible: boolean;
+  // True if this item was part of a return that was REJECTED (pre-pickup
+  // or at QC). Under the forfeit policy the customer cannot try again.
+  previouslyRejected?: boolean;
+  ineligibleReason?: 'WINDOW_EXPIRED' | 'ALREADY_RETURNED' | 'PREVIOUSLY_REJECTED';
 }
 
 export interface EligibleSubOrder {
@@ -96,11 +100,35 @@ export class ReturnEligibilityService {
           ? now > subOrder.returnWindowEndsAt
           : false;
 
+        // Per-item previously-rejected lookup. Under the forfeit policy,
+        // once a return for this item was closed as REJECTED (pre-pickup)
+        // or QC_REJECTED, the customer cannot re-submit — they already
+        // used their one shot. A CANCELLED return (customer pulled it
+        // themselves) does NOT disqualify them.
+        const rejectedItemIds = new Set(
+          (
+            await this.prisma.returnItem.findMany({
+              where: {
+                orderItemId: { in: subOrder.items.map((i) => i.id) },
+                return: { status: { in: ['REJECTED', 'QC_REJECTED'] } },
+              },
+              select: { orderItemId: true },
+            })
+          ).map((r) => r.orderItemId),
+        );
+
         const items: EligibleItem[] = await Promise.all(
           subOrder.items.map(async (item) => {
             const alreadyReturnedQty =
               await this.returnRepo.getReturnedQuantityForOrderItem(item.id);
             const availableForReturn = item.quantity - alreadyReturnedQty;
+            const previouslyRejected = rejectedItemIds.has(item.id);
+
+            let ineligibleReason: EligibleItem['ineligibleReason'] | undefined;
+            if (windowExpired) ineligibleReason = 'WINDOW_EXPIRED';
+            else if (previouslyRejected) ineligibleReason = 'PREVIOUSLY_REJECTED';
+            else if (availableForReturn <= 0) ineligibleReason = 'ALREADY_RETURNED';
+
             return {
               orderItemId: item.id,
               productTitle: item.productTitle,
@@ -111,7 +139,12 @@ export class ReturnEligibilityService {
               unitPrice: Number(item.unitPrice),
               alreadyReturnedQty,
               availableForReturn,
-              eligible: !windowExpired && availableForReturn > 0,
+              previouslyRejected,
+              ineligibleReason,
+              eligible:
+                !windowExpired &&
+                !previouslyRejected &&
+                availableForReturn > 0,
             };
           }),
         );
@@ -190,6 +223,22 @@ export class ReturnEligibilityService {
       if (requestedItem.quantity > availableForReturn) {
         throw new BadRequestAppException(
           `Cannot return ${requestedItem.quantity} of ${orderItem.productTitle}. Only ${availableForReturn} available for return.`,
+        );
+      }
+      // Forfeit-policy block: an item that was previously rejected
+      // (pre-pickup or at QC) cannot be submitted again by the same
+      // customer. Frontend hides the entry, but we re-validate here
+      // so a direct API call can't bypass the rule.
+      const hasRejectedReturn = await this.prisma.returnItem.findFirst({
+        where: {
+          orderItemId: orderItem.id,
+          return: { status: { in: ['REJECTED', 'QC_REJECTED'] } },
+        },
+        select: { id: true },
+      });
+      if (hasRejectedReturn) {
+        throw new BadRequestAppException(
+          `A previous return for ${orderItem.productTitle} was rejected. Under the forfeit policy you accepted, re-submission is not allowed for this item.`,
         );
       }
       validatedItems.push({

@@ -189,8 +189,16 @@ export class ReturnCommissionReversalService {
           where: { id: commissionRecord.id },
           data: {
             refundedAdminEarning: { increment: refundedMarginDec },
-            // Mark as REFUNDED once cumulative approved qty covers every unit.
-            status: isFullyRefunded ? 'REFUNDED' : commissionRecord.status,
+            // Settle the parent status based on what just happened:
+            //   · Fully refunded  → REFUNDED (final, no more payout)
+            //   · Partial refund  → PENDING (seller still earns on the
+            //     unreturned portion; unfreeze from ON_HOLD if needed)
+            //   · Nothing new     → keep whatever status it already had
+            status: isFullyRefunded
+              ? 'REFUNDED'
+              : commissionRecord.status === 'ON_HOLD'
+                ? 'PENDING'
+                : commissionRecord.status,
           },
         });
 

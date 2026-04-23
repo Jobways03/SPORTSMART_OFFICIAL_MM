@@ -14,6 +14,13 @@ interface SubOrder {
   items: { productTitle: string; quantity: number }[];
 }
 
+interface ReturnLite {
+  id: string;
+  returnNumber: string;
+  status: string;
+  createdAt: string;
+}
+
 interface Order {
   id: string;
   orderNumber: string;
@@ -26,6 +33,7 @@ interface Order {
   createdAt: string;
   customer: { firstName: string; lastName: string; email: string };
   subOrders: SubOrder[];
+  returns?: ReturnLite[];
 }
 
 interface OrdersResponse {
@@ -57,6 +65,13 @@ const orderStatusColor = (status: string): string => {
     case 'DELIVERED': return '#15803d';
     case 'CANCELLED': return '#dc2626';
     case 'EXCEPTION_QUEUE': return '#dc2626';
+    // Return-derived statuses (client-side only — no master-order enum
+    // for them yet, but we reflect the return lifecycle here so ops can
+    // see at a glance that a delivered order is now in a return flow).
+    case 'RETURN_REQUESTED': return '#d97706';
+    case 'RETURN_IN_PROGRESS': return '#7c3aed';
+    case 'RETURN_REJECTED': return '#dc2626';
+    case 'REFUNDED': return '#059669';
     default: return '#6b7280';
   }
 };
@@ -72,7 +87,31 @@ const orderStatusLabel = (status: string): string => {
     case 'DELIVERED': return 'Delivered';
     case 'CANCELLED': return 'Cancelled';
     case 'EXCEPTION_QUEUE': return 'Exception';
+    case 'RETURN_REQUESTED': return 'Return Requested';
+    case 'RETURN_IN_PROGRESS': return 'Return In Progress';
+    case 'RETURN_REJECTED': return 'Return Rejected';
+    case 'REFUNDED': return 'Refunded';
     default: return status;
+  }
+};
+
+// Collapse the 13-state return lifecycle into 4 display buckets so the
+// Order Status column stays readable while still flipping away from
+// "Delivered" the moment a return is opened.
+const returnToOrderStatus = (returnStatus: string): string => {
+  switch (returnStatus) {
+    case 'REQUESTED':
+      return 'RETURN_REQUESTED';
+    case 'REJECTED':
+    case 'QC_REJECTED':
+      return 'RETURN_REJECTED';
+    case 'REFUNDED':
+    case 'COMPLETED':
+      return 'REFUNDED';
+    case 'CANCELLED':
+      return 'CANCELLED';
+    default:
+      return 'RETURN_IN_PROGRESS';
   }
 };
 
@@ -232,11 +271,30 @@ export default function AdminOrdersPage() {
               </thead>
               <tbody>
                 {data.orders.map((order) => {
-                  const sellers = order.subOrders
+                  // When the first seller rejects, the router spawns a fresh
+                  // sub-order on a different seller. The rejected row stays
+                  // in the DB (acceptStatus=REJECTED, fulfillmentStatus=
+                  // CANCELLED), but showing it alongside the successful
+                  // re-route reads as "Delivered + Cancelled" which confuses
+                  // everyone. Hide rejected sub-orders unless *all* were
+                  // rejected (i.e. the whole order really failed).
+                  const activeSubs = order.subOrders.filter((so) => so.acceptStatus !== 'REJECTED');
+                  const relevantSubs = activeSubs.length > 0 ? activeSubs : order.subOrders;
+                  const wasRerouted = activeSubs.length > 0 && activeSubs.length < order.subOrders.length;
+
+                  const sellers = relevantSubs
                     .map((so) => so.seller?.sellerShopName || '-')
                     .filter((v, i, a) => a.indexOf(v) === i);
-                  const fulfillmentStatuses = order.subOrders.map((so) => so.fulfillmentStatus);
-                  const acceptStatuses = order.subOrders.map((so) => so.acceptStatus);
+                  const fulfillmentStatuses = [...new Set(relevantSubs.map((so) => so.fulfillmentStatus))];
+                  const acceptStatuses = [...new Set(relevantSubs.map((so) => so.acceptStatus))];
+
+                  // When a return exists, its lifecycle supersedes the
+                  // master-order status — a delivered order that's now
+                  // being refunded shouldn't keep reading "Delivered".
+                  const latestReturn = (order.returns ?? [])[0];
+                  const effectiveStatus = latestReturn
+                    ? returnToOrderStatus(latestReturn.status)
+                    : (order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED'));
 
                   return (
                     <tr
@@ -246,7 +304,27 @@ export default function AdminOrdersPage() {
                       onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                     >
-                      <td style={tdStyle}><strong style={{ color: '#2563eb' }}>{order.orderNumber}</strong></td>
+                      <td style={tdStyle}>
+                        <strong style={{ color: '#2563eb' }}>{order.orderNumber}</strong>
+                        {wasRerouted && (
+                          <div
+                            title="This order was rejected by one seller and re-routed to another. Click to see the full history."
+                            style={{
+                              display: 'inline-block',
+                              marginLeft: 6,
+                              padding: '1px 6px',
+                              background: '#fef3c7',
+                              color: '#92400e',
+                              borderRadius: 999,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            Re-routed
+                          </div>
+                        )}
+                      </td>
                       <td style={tdStyle}>
                         <div style={{ fontWeight: 500 }}>{order.customer.firstName} {order.customer.lastName}</div>
                         <div style={{ fontSize: 11, color: '#6b7280' }}>{order.customer.email}</div>
@@ -259,14 +337,27 @@ export default function AdminOrdersPage() {
                         </div>
                       </td>
                       <td style={tdStyle}>
-                        {orderStatusBadge(order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED'))}
+                        {orderStatusBadge(effectiveStatus)}
+                        {latestReturn && (
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              router.push(`/dashboard/returns/${latestReturn.id}`);
+                            }}
+                            title={`View ${latestReturn.returnNumber}`}
+                            style={{ fontSize: 10, color: '#6b7280', marginTop: 3, cursor: 'pointer', textDecoration: 'underline dotted' }}
+                          >
+                            {latestReturn.returnNumber}
+                            {(order.returns?.length ?? 0) > 1 && ` +${(order.returns!.length - 1)}`}
+                          </div>
+                        )}
                       </td>
                       <td style={tdStyle}>
                         {badge(order.paymentStatus, order.paymentStatus === 'PAID' ? '#16a34a' : order.paymentStatus === 'CANCELLED' ? '#dc2626' : '#d97706')}
                       </td>
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          {[...new Set(fulfillmentStatuses)].map((fs, idx) => (
+                          {fulfillmentStatuses.map((fs, idx) => (
                             <span key={idx}>
                               {badge(
                                 fulfillmentLabel(fs),
@@ -283,7 +374,7 @@ export default function AdminOrdersPage() {
                       </td>
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          {[...new Set(acceptStatuses)].map((as2, idx) => (
+                          {acceptStatuses.map((as2, idx) => (
                             <span key={idx}>
                               {badge(as2, as2 === 'ACCEPTED' ? '#16a34a' : as2 === 'REJECTED' ? '#dc2626' : '#6b7280')}
                             </span>

@@ -195,6 +195,26 @@ export class PrismaOrderRepository implements OrderRepository {
       include: {
         items: true,
         commissionRecords: true,
+        // Surface returns + the items inside each return so the seller
+        // detail page can show "Customer returned X of item Y" inline
+        // instead of the seller having to hunt for it on the returns app.
+        returns: {
+          orderBy: { createdAt: 'desc' },
+          include: {
+            items: {
+              select: {
+                id: true,
+                orderItemId: true,
+                quantity: true,
+                reasonCategory: true,
+                reasonDetail: true,
+                qcOutcome: true,
+                qcQuantityApproved: true,
+                refundAmount: true,
+              },
+            },
+          },
+        },
         masterOrder: {
           select: {
             orderNumber: true,
@@ -270,6 +290,14 @@ export class PrismaOrderRepository implements OrderRepository {
               select: { firstName: true, lastName: true },
             },
           },
+        },
+        // Surface returns on the seller orders list so the FULFILLMENT
+        // column can flip to "Return Requested / Refunded" whenever the
+        // customer opens a return. Sellers can't act on returns (admin
+        // owns that flow), but they need visibility here.
+        returns: {
+          select: { id: true, returnNumber: true, status: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
         },
       },
       orderBy: { createdAt: 'desc' },

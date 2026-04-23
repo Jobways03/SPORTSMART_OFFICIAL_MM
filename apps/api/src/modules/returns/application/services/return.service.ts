@@ -28,6 +28,13 @@ export interface CreateReturnInput {
     reasonDetail?: string;
   }>;
   customerNotes?: string;
+  // Fair-forfeit acknowledgment — validated at the DTO layer but we
+  // thread it through to the service so the audit trail records that
+  // the customer accepted the policy at submission time.
+  forfeitConsent: boolean;
+  // Photo URLs the customer uploaded to evidence the issue. Must be
+  // at least one (also enforced at the DTO).
+  evidenceFileUrls: string[];
 }
 
 export interface ListCustomerReturnsParams {
@@ -117,6 +124,19 @@ export class ReturnService {
     // Generate return number
     const returnNumber = await this.returnRepo.generateNextReturnNumber();
 
+    // Enforce the fair-forfeit consent gate. DTO already validates this
+    // but we double-check here so any internal caller can't skip it.
+    if (!input.forfeitConsent) {
+      throw new BadRequestAppException(
+        'Customer must accept the forfeit policy before a return can be created.',
+      );
+    }
+    if (!input.evidenceFileUrls || input.evidenceFileUrls.length === 0) {
+      throw new BadRequestAppException(
+        'At least one photo of the issue is required to submit a return.',
+      );
+    }
+
     // Create return
     const created = await this.returnRepo.create({
       returnNumber,
@@ -133,6 +153,40 @@ export class ReturnService {
         reasonDetail: i.reasonDetail,
       })),
     });
+
+    // Persist the customer-supplied issue photos as ReturnEvidence rows
+    // so QC has context and so forfeit cases are defensible.
+    await this.prisma.returnEvidence.createMany({
+      data: input.evidenceFileUrls.map((url) => ({
+        returnId: created.id,
+        uploadedBy: 'CUSTOMER',
+        uploaderId: customerId,
+        fileType: 'IMAGE',
+        fileUrl: url,
+        description: 'Customer-submitted issue evidence',
+      })),
+    });
+
+    // Log consent in the status history so there's an immutable record.
+    await this.returnRepo.recordStatusChange(
+      created.id,
+      null,
+      'REQUESTED',
+      'CUSTOMER',
+      customerId,
+      'Customer acknowledged forfeit policy at submission',
+    );
+
+    // Freeze commission the moment a return is requested. Any PENDING
+    // commission row tied to this sub-order flips to ON_HOLD so it
+    // stops being eligible for the next settlement cycle. This covers
+    // the race where commission was processed BEFORE the customer
+    // decided to return. My earlier query-level guard handles the
+    // other direction (return opened before processor tick).
+    await this.freezeCommissionForSubOrder(
+      subOrder.id,
+      `Held pending return ${returnNumber}`,
+    );
 
     // Publish requested event (best-effort)
     try {
@@ -272,6 +326,13 @@ export class ReturnService {
       'Cancelled by customer',
     );
 
+    // Customer voluntarily cancelled — seller is entitled to their
+    // commission, so lift the ON_HOLD freeze.
+    await this.unfreezeCommissionForSubOrder(
+      ret.subOrderId,
+      `Return ${ret.returnNumber} cancelled by customer`,
+    );
+
     // Publish event (best-effort)
     try {
       await this.eventBus.publish({
@@ -374,11 +435,21 @@ export class ReturnService {
   async rejectReturn(returnId: string, adminId: string, reason: string) {
     const ret = await this.returnRepo.findById(returnId);
     if (!ret) throw new NotFoundAppException('Return not found');
-    if (ret.status !== 'REQUESTED') {
+    // Admin can reject any time before the item physically arrives at
+    // the warehouse. `REQUESTED` is the classic review step; `APPROVED`
+    // covers the case where the auto-approval service let something
+    // through and admin wants to overrule. `PICKUP_SCHEDULED` is still
+    // reversible — we haven't spent courier money yet at the routing
+    // layer (scheduling only creates an intent). Once `IN_TRANSIT` or
+    // later, the item is physically moving and we must go through QC.
+    const preMovementStatuses = ['REQUESTED', 'APPROVED', 'PICKUP_SCHEDULED'];
+    if (!preMovementStatuses.includes(ret.status)) {
       throw new BadRequestAppException(
-        `Return must be in REQUESTED status to reject (current: ${ret.status})`,
+        `Return cannot be rejected from status ${ret.status}. Reject is only allowed before the item ships (REQUESTED / APPROVED / PICKUP_SCHEDULED). For items already at the warehouse, use the QC flow.`,
       );
     }
+
+    const fromStatus = ret.status;
 
     const updated = await this.returnRepo.update(returnId, {
       status: 'REJECTED',
@@ -390,11 +461,19 @@ export class ReturnService {
 
     await this.returnRepo.recordStatusChange(
       returnId,
-      'REQUESTED',
+      fromStatus,
       'REJECTED',
       'ADMIN',
       adminId,
       reason,
+    );
+
+    // Admin-rejected pre-pickup → return was invalid → seller keeps the
+    // commission. Lift the ON_HOLD freeze so the record is eligible for
+    // the next settlement cycle.
+    await this.unfreezeCommissionForSubOrder(
+      ret.subOrderId,
+      `Return ${ret.returnNumber} rejected by admin — commission reinstated`,
     );
 
     try {
@@ -540,6 +619,16 @@ export class ReturnService {
     if (ret.customerId !== customerId) {
       throw new ForbiddenAppException('You do not have access to this return');
     }
+    // Customers can only mark handed-over AFTER admin has scheduled the
+    // pickup. Before scheduling there's no courier to hand the package
+    // to — the APPROVED → IN_TRANSIT jump is reserved for admin/system.
+    if (ret.status !== 'PICKUP_SCHEDULED') {
+      throw new BadRequestAppException(
+        ret.status === 'APPROVED'
+          ? 'Please wait for the pickup to be scheduled before marking the package as handed over.'
+          : `Package can only be marked handed over when a pickup is scheduled (current status: ${ret.status}).`,
+      );
+    }
     return this.markInTransit(returnId, 'CUSTOMER', customerId, trackingNumber);
   }
 
@@ -676,6 +765,20 @@ export class ReturnService {
         throw new BadRequestAppException(
           `qcQuantityApproved cannot be negative`,
         );
+      }
+      // REJECTED / DAMAGED forfeit the customer's item + refund, so the
+      // reason must be documented. Accept the reason from EITHER the
+      // per-item note OR the overall notes — admins write wherever their
+      // UI puts focus and we shouldn't be pedantic about which field as
+      // long as *something* explains the decision to the customer.
+      if (decision.qcOutcome === 'REJECTED' || decision.qcOutcome === 'DAMAGED') {
+        const perItemOk = (decision.qcNotes ?? '').trim().length >= 15;
+        const overallOk = (input.overallNotes ?? '').trim().length >= 15;
+        if (!perItemOk && !overallOk) {
+          throw new BadRequestAppException(
+            `A ${decision.qcOutcome.toLowerCase()} decision requires a reason (min 15 characters) explaining what was found during inspection. Write it in the per-item Notes field or the Overall Notes field.`,
+          );
+        }
       }
     }
 
@@ -825,6 +928,18 @@ export class ReturnService {
 
       return totalRefund;
     });
+
+    // When QC fully rejects every item, the customer's claim was
+    // invalid. Lift the ON_HOLD freeze so the seller earns commission.
+    // For APPROVED / PARTIAL paths, the commission-reversal service
+    // above has already flipped the relevant records to REFUNDED so
+    // ON_HOLD doesn't survive there either.
+    if (newStatus === 'QC_REJECTED') {
+      await this.unfreezeCommissionForSubOrder(
+        ret.subOrderId,
+        `Return ${ret.returnNumber} rejected at QC — commission reinstated`,
+      );
+    }
 
     try {
       await this.eventBus.publish({
@@ -1332,5 +1447,51 @@ export class ReturnService {
 
   async getCustomerReturnHistory(customerId: string) {
     return this.returnRepo.getReturnsByCustomer(customerId);
+  }
+
+  // ── Commission freeze / unfreeze helpers ──────────────────────────────
+  //
+  // Called from the return lifecycle so seller commissions follow the
+  // customer's return journey in real time:
+  //
+  //   · Return created   → freeze   (PENDING → ON_HOLD)
+  //   · Return rejected  → unfreeze (ON_HOLD → PENDING) — seller earns
+  //   · Return cancelled → unfreeze (ON_HOLD → PENDING) — seller earns
+  //   · QC fully rejects → unfreeze (ON_HOLD → PENDING) — seller earns
+  //   · Return refunded  → existing reversal service flips ON_HOLD→REFUNDED
+  //
+  // SETTLED rows are NEVER touched here — those are payouts that already
+  // happened; refund-transactions handle money reversal via a separate
+  // ledger path. We only nudge records that are still in a pre-payout
+  // state so the settlement cycle picks the right ones.
+
+  private async freezeCommissionForSubOrder(subOrderId: string, reason: string) {
+    const result = await this.prisma.commissionRecord.updateMany({
+      where: { subOrderId, status: 'PENDING' },
+      data: {
+        status: 'ON_HOLD',
+        adjustmentReason: reason,
+      },
+    });
+    if (result.count > 0) {
+      this.logger.log(
+        `Commission frozen for sub-order ${subOrderId}: ${result.count} record(s) PENDING → ON_HOLD (${reason})`,
+      );
+    }
+  }
+
+  private async unfreezeCommissionForSubOrder(subOrderId: string, reason: string) {
+    const result = await this.prisma.commissionRecord.updateMany({
+      where: { subOrderId, status: 'ON_HOLD' },
+      data: {
+        status: 'PENDING',
+        adjustmentReason: reason,
+      },
+    });
+    if (result.count > 0) {
+      this.logger.log(
+        `Commission unfrozen for sub-order ${subOrderId}: ${result.count} record(s) ON_HOLD → PENDING (${reason})`,
+      );
+    }
   }
 }

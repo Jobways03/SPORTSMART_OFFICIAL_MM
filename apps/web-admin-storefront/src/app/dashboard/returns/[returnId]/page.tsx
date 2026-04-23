@@ -61,6 +61,13 @@ export default function AdminReturnDetailPage() {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
 
+  // Customer-evidence lightbox — opens a full-screen photo viewer when
+  // admin clicks "View Customer Photos". Admin can scroll through every
+  // photo + caption the customer submitted and use that to decide
+  // whether to approve or reject before paying for a pickup.
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryIdx, setGalleryIdx] = useState(0);
+
   // QC modal
   const [qcOpen, setQcOpen] = useState(false);
   const [qcRows, setQcRows] = useState<QcRow[]>([]);
@@ -208,6 +215,22 @@ export default function AdminReturnDetailPage() {
       if (r.qcOutcome === 'APPROVED' || r.qcOutcome === 'PARTIAL') {
         if (r.qcQuantityApproved < 0) {
           void notify('Approved quantity cannot be negative');
+          return;
+        }
+      }
+      // Rejecting / marking damaged forfeits the customer's item + refund.
+      // Require a substantive inspector note — accept it from EITHER the
+      // per-item Notes field or the Overall Notes field (admin may write
+      // wherever is convenient; customer sees whichever is populated).
+      if (r.qcOutcome === 'REJECTED' || r.qcOutcome === 'DAMAGED') {
+        const perItemOk = (r.qcNotes ?? '').trim().length >= 15;
+        const overallOk = qcOverallNotes.trim().length >= 15;
+        if (!perItemOk && !overallOk) {
+          void notify(
+            'Please write at least 15 characters explaining why the item was ' +
+              (r.qcOutcome === 'REJECTED' ? 'rejected' : 'marked damaged') +
+              '. You can use the per-item Notes field or the Overall Notes field — the customer will see this.',
+          );
           return;
         }
       }
@@ -369,6 +392,10 @@ export default function AdminReturnDetailPage() {
   // backend guard (`REFUNDED`, `QC_REJECTED`). Once closed the return
   // moves to `COMPLETED`, which should not show the button.
   const canClose = ['REFUNDED', 'QC_REJECTED'].includes(data.status);
+  // Admin can still cancel/reject a return any time before the item
+  // actually moves (covers auto-approved returns that need overrule).
+  // Backend allows reject from REQUESTED, APPROVED, PICKUP_SCHEDULED.
+  const canRejectPostApproval = ['APPROVED', 'PICKUP_SCHEDULED'].includes(data.status);
 
   const orderNumber = data.masterOrder?.orderNumber ?? data.subOrder?.masterOrder?.orderNumber ?? '—';
   const totalReturnQty = data.items.reduce((s, it) => s + (it.quantity ?? 0), 0);
@@ -432,17 +459,58 @@ export default function AdminReturnDetailPage() {
       >
         {isRequested && (
           <>
+            {(() => {
+              const customerPhotos = (data.evidence ?? []).filter((e) => e.uploadedBy === 'CUSTOMER');
+              return customerPhotos.length > 0 ? (
+                <button
+                  onClick={() => { setGalleryIdx(0); setGalleryOpen(true); }}
+                  disabled={busy}
+                  style={{
+                    padding: '9px 16px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    border: '1px solid #6366f1',
+                    borderRadius: 8,
+                    background: '#eef2ff',
+                    color: '#3730a3',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  View Customer Photos
+                  <span
+                    style={{
+                      padding: '1px 8px',
+                      background: '#6366f1',
+                      color: '#fff',
+                      borderRadius: 999,
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {customerPhotos.length}
+                  </span>
+                </button>
+              ) : null;
+            })()}
             <button onClick={handleApprove} disabled={busy} style={approveBtn}>
-              Approve
+              Approve & Schedule Pickup
             </button>
             <button onClick={() => setRejectOpen(true)} disabled={busy} style={rejectBtn}>
-              Reject
+              Reject Return
             </button>
           </>
         )}
         {canMarkReceived && (
           <button onClick={handleMarkReceived} disabled={busy} style={approveBtn}>
             Mark Received
+          </button>
+        )}
+        {canRejectPostApproval && (
+          <button onClick={() => setRejectOpen(true)} disabled={busy} style={rejectBtn}>
+            Cancel &amp; Reject
           </button>
         )}
         {canRunQc && (
@@ -487,6 +555,124 @@ export default function AdminReturnDetailPage() {
             </div>
           )}
       </div>
+
+      {/* Customer Evidence card — shown only when the customer attached
+          photos. Lets admin see exactly what the customer is claiming
+          before spending money on a pickup. Click any thumb to open the
+          full lightbox. Decision guidance is embedded in the footer so
+          new admins know when to reject vs. when to receive for QC. */}
+      {(() => {
+        const customerPhotos = (data.evidence ?? []).filter((e) => e.uploadedBy === 'CUSTOMER');
+        if (customerPhotos.length === 0) return null;
+        return (
+          <div style={{ ...cardStyleV2, marginBottom: 20, borderLeft: '4px solid #6366f1' }}>
+            <div style={cardHeaderV2}>
+              <span>Customer Evidence</span>
+              <span
+                style={{
+                  padding: '2px 10px',
+                  borderRadius: 999,
+                  background: '#eef2ff',
+                  color: '#3730a3',
+                  fontSize: 11,
+                  fontWeight: 700,
+                }}
+              >
+                {customerPhotos.length} photo{customerPhotos.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            <div style={{ padding: 16 }}>
+              {/* Customer's own reason snippet — pulled from the first
+                  item's reasonDetail (or the order-level customerNotes
+                  fallback) so admin doesn't have to scroll to find it. */}
+              {(() => {
+                const firstDetail = data.items.find((i) => i.reasonDetail)?.reasonDetail;
+                const headline = firstDetail || data.customerNotes;
+                if (!headline) return null;
+                return (
+                  <div
+                    style={{
+                      background: '#fafbfc',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: '#6b7280',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        marginBottom: 4,
+                      }}
+                    >
+                      Customer's Stated Reason
+                    </div>
+                    <div style={{ fontSize: 13, color: '#111827', lineHeight: 1.5 }}>
+                      {headline}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Thumbnails */}
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                {customerPhotos.map((ev, i) => (
+                  <button
+                    key={ev.id}
+                    onClick={() => { setGalleryIdx(i); setGalleryOpen(true); }}
+                    style={{
+                      width: 120,
+                      height: 120,
+                      borderRadius: 10,
+                      overflow: 'hidden',
+                      border: '1px solid #e5e7eb',
+                      padding: 0,
+                      cursor: 'pointer',
+                      background: '#fff',
+                    }}
+                    title={`Open photo ${i + 1} in full view`}
+                  >
+                    <img
+                      src={ev.fileUrl}
+                      alt={`Customer evidence ${i + 1}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                    />
+                  </button>
+                ))}
+              </div>
+
+              {/* Decision guidance — reminds the admin when to use each
+                  button, keeps the flow consistent across operators. */}
+              {isRequested && (
+                <div
+                  style={{
+                    background: '#fffbeb',
+                    border: '1px solid #fde68a',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    fontSize: 12,
+                    color: '#78350f',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>Decision guide:</strong> If these photos <strong>clearly show</strong> the
+                  item is used, damaged post-delivery, or doesn't match the reported
+                  issue, use <strong>Reject Return</strong> — no pickup will be booked and the
+                  customer keeps the item (they acknowledged forfeit at submission).{' '}
+                  <strong>When in doubt</strong>, use <strong>Approve &amp; Schedule
+                  Pickup</strong> so the item comes to the warehouse and you can run QC
+                  in person.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20 }}>
         {/* Left: Items */}
@@ -866,7 +1052,20 @@ export default function AdminReturnDetailPage() {
                         </div>
                       </div>
                       <div style={{ marginTop: 8 }}>
-                        <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Notes</label>
+                        <label
+                          style={{
+                            fontSize: 11,
+                            color:
+                              (row.qcOutcome === 'REJECTED' || row.qcOutcome === 'DAMAGED')
+                                ? '#b91c1c'
+                                : '#6b7280',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {row.qcOutcome === 'REJECTED' || row.qcOutcome === 'DAMAGED'
+                            ? 'Reason (required, min 15 chars — customer will see this)'
+                            : 'Notes (optional)'}
+                        </label>
                         <input
                           type="text"
                           value={row.qcNotes}
@@ -984,6 +1183,191 @@ export default function AdminReturnDetailPage() {
             </ModalShell>
           )}
 
+          {galleryOpen && (() => {
+            const customerPhotos = (data.evidence ?? []).filter((e) => e.uploadedBy === 'CUSTOMER');
+            if (customerPhotos.length === 0) return null;
+            const cur = customerPhotos[Math.min(galleryIdx, customerPhotos.length - 1)];
+            const prev = () => setGalleryIdx((i) => (i - 1 + customerPhotos.length) % customerPhotos.length);
+            const next = () => setGalleryIdx((i) => (i + 1) % customerPhotos.length);
+            return (
+              <div
+                onClick={() => setGalleryOpen(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowLeft') prev();
+                  if (e.key === 'ArrowRight') next();
+                  if (e.key === 'Escape') setGalleryOpen(false);
+                }}
+                tabIndex={-1}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  background: 'rgba(0,0,0,0.85)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 1100,
+                  padding: 24,
+                }}
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    color: '#fff',
+                    fontSize: 13,
+                    marginBottom: 14,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 16,
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>
+                    Photo {Math.min(galleryIdx, customerPhotos.length - 1) + 1} of {customerPhotos.length}
+                  </span>
+                  <button
+                    onClick={() => setGalleryOpen(false)}
+                    style={{
+                      padding: '6px 14px',
+                      background: 'rgba(255,255,255,0.1)',
+                      border: '1px solid rgba(255,255,255,0.3)',
+                      color: '#fff',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Close (Esc)
+                  </button>
+                </div>
+
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    maxWidth: '100%',
+                    maxHeight: '75vh',
+                  }}
+                >
+                  {customerPhotos.length > 1 && (
+                    <button
+                      onClick={prev}
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: '50%',
+                        border: 'none',
+                        background: 'rgba(255,255,255,0.15)',
+                        color: '#fff',
+                        fontSize: 20,
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                      aria-label="Previous"
+                    >
+                      ‹
+                    </button>
+                  )}
+                  <img
+                    src={cur.fileUrl}
+                    alt=""
+                    style={{
+                      maxWidth: 'min(1100px, 85vw)',
+                      maxHeight: '75vh',
+                      borderRadius: 10,
+                      background: '#000',
+                      objectFit: 'contain',
+                    }}
+                  />
+                  {customerPhotos.length > 1 && (
+                    <button
+                      onClick={next}
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: '50%',
+                        border: 'none',
+                        background: 'rgba(255,255,255,0.15)',
+                        color: '#fff',
+                        fontSize: 20,
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                      aria-label="Next"
+                    >
+                      ›
+                    </button>
+                  )}
+                </div>
+
+                {cur.description && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      color: '#e5e7eb',
+                      fontSize: 13,
+                      marginTop: 14,
+                      textAlign: 'center',
+                      maxWidth: 700,
+                    }}
+                  >
+                    {cur.description}
+                  </div>
+                )}
+
+                {/* Action shortcuts from inside the gallery — lets admin
+                    decide without closing the lightbox. Only visible when
+                    the return is still awaiting a decision. */}
+                {isRequested && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      display: 'flex',
+                      gap: 10,
+                      marginTop: 20,
+                      flexWrap: 'wrap',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <button
+                      onClick={() => { setGalleryOpen(false); handleApprove(); }}
+                      disabled={busy}
+                      style={{
+                        padding: '9px 18px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        border: 'none',
+                        borderRadius: 8,
+                        background: '#16a34a',
+                        color: '#fff',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Approve &amp; Schedule Pickup
+                    </button>
+                    <button
+                      onClick={() => { setGalleryOpen(false); setRejectOpen(true); }}
+                      disabled={busy}
+                      style={{
+                        padding: '9px 18px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        border: '1px solid #fecaca',
+                        borderRadius: 8,
+                        background: '#fff',
+                        color: '#dc2626',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Reject — No Pickup
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {rejectOpen && (
             <div
               onClick={() => !busy && setRejectOpen(false)}
@@ -1008,18 +1392,51 @@ export default function AdminReturnDetailPage() {
                   boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
                 }}
               >
-                <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 12 }}>
-                  Reject Return
+                <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>
+                  {data.status === 'APPROVED' || data.status === 'PICKUP_SCHEDULED'
+                    ? 'Cancel & Reject Return'
+                    : 'Reject Return — No Pickup'}
                 </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-                  Tell the customer why this return was rejected.
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: '#991b1b',
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 6,
+                    padding: '8px 10px',
+                    marginBottom: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {data.status === 'APPROVED' || data.status === 'PICKUP_SCHEDULED' ? (
+                    <>
+                      <strong>This cancels the return.</strong> Any pickup scheduled will
+                      be aborted. The customer keeps the item and receives no refund.
+                      Seller's commission will be reinstated (PENDING). Use this when
+                      the system auto-approved but manual review finds the claim
+                      invalid.
+                    </>
+                  ) : (
+                    <>
+                      <strong>This skips pickup entirely.</strong> Only use this when the
+                      customer's photos clearly show the item is used/damaged and the
+                      claim is invalid. The customer keeps the item and receives no
+                      refund. If you're unsure, close this and use{' '}
+                      <strong>Approve &amp; Schedule Pickup</strong> instead so the item
+                      comes to the warehouse for QC.
+                    </>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, color: '#374151', marginBottom: 8, fontWeight: 600 }}>
+                  Reason shown to the customer
                 </div>
                 <textarea
                   autoFocus
                   value={rejectReason}
                   onChange={(e) => setRejectReason(e.target.value)}
                   rows={4}
-                  placeholder="Reason for rejection..."
+                  placeholder="e.g. Photos show item has been used — soles are worn, tags removed."
                   style={{
                     width: '100%',
                     padding: '10px 12px',

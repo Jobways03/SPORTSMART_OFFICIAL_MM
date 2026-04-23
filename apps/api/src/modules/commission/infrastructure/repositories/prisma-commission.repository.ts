@@ -220,8 +220,18 @@ export class PrismaCommissionRepository implements CommissionRepository {
       where.commissionType = filter.commissionType;
     }
 
-    if (filter.status && ['PENDING', 'SETTLED', 'REFUNDED'].includes(filter.status)) {
+    if (
+      filter.status &&
+      ['PENDING', 'ON_HOLD', 'SETTLED', 'REFUNDED'].includes(filter.status)
+    ) {
       where.status = filter.status;
+    } else {
+      // Hide reversed/refunded AND held commissions from the default list
+      // — the money has been given back to the customer (REFUNDED) or is
+      // in limbo pending a return decision (ON_HOLD), so showing them
+      // mixed in with live PENDING/SETTLED records confuses admins.
+      // Users can still opt in by picking the explicit status filter.
+      where.status = { notIn: ['REFUNDED', 'ON_HOLD'] };
     }
 
     if (filter.dateFrom || filter.dateTo) {

@@ -108,8 +108,12 @@ export type ReturnStatus =
 
 const RETURN_STATUS_TRANSITIONS: Record<ReturnStatus, readonly ReturnStatus[]> = {
   REQUESTED: ['APPROVED', 'REJECTED', 'CANCELLED'],
-  APPROVED: ['PICKUP_SCHEDULED', 'CANCELLED'],
-  PICKUP_SCHEDULED: ['IN_TRANSIT', 'CANCELLED'],
+  // Admin can overrule auto-approval (or bail out of a manual approval)
+  // any time before the item starts moving. Jumping straight to REJECTED
+  // is allowed for APPROVED / PICKUP_SCHEDULED because scheduling is a
+  // soft intent — the courier hasn't been dispatched yet.
+  APPROVED: ['PICKUP_SCHEDULED', 'REJECTED', 'CANCELLED'],
+  PICKUP_SCHEDULED: ['IN_TRANSIT', 'REJECTED', 'CANCELLED'],
   IN_TRANSIT: ['RECEIVED'],
   RECEIVED: ['QC_APPROVED', 'QC_REJECTED', 'PARTIALLY_APPROVED'],
   // QC outcomes that proceed to refund

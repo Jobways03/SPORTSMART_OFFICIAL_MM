@@ -344,8 +344,15 @@ export class SettlementService {
     const skip = (page - 1) * limit;
     const where: any = { sellerId };
 
-    if (status && ['PENDING', 'SETTLED', 'REFUNDED'].includes(status)) {
+    if (status && ['PENDING', 'ON_HOLD', 'SETTLED', 'REFUNDED'].includes(status)) {
       where.status = status;
+    } else {
+      // Mirror the admin list behaviour: refunded + held commissions are
+      // hidden by default. Sellers can opt in by picking the explicit
+      // filter. "Held" records will flip back to PENDING automatically
+      // when admin rejects the return (seller earns) or stay frozen
+      // while the return is in progress.
+      where.status = { notIn: ['REFUNDED', 'ON_HOLD'] };
     }
 
     if (search) {

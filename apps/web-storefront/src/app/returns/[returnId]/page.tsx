@@ -127,7 +127,10 @@ const { returnId } = useParams<{ returnId: string }>();
   const statusColor = getReturnStatusColor(ret.status);
 
   const canCancel = ret.status === 'REQUESTED';
-  const canMarkHandedOver = ['APPROVED', 'PICKUP_SCHEDULED'].includes(ret.status);
+  // Only show the "Package handed over" button once admin has actually
+  // scheduled a pickup. Before that, the customer shouldn't be able to
+  // mark it handed over — there's no courier to hand it to yet.
+  const canMarkHandedOver = ret.status === 'PICKUP_SCHEDULED';
 
   return (
     <>
@@ -197,6 +200,221 @@ const { returnId } = useParams<{ returnId: string }>();
             <div style={{ fontSize: 13, color: '#7f1d1d' }}>{ret.rejectionReason}</div>
           </div>
         )}
+
+        {/* Inspection proof — shown whenever QC ran (approved, rejected,
+            partial, or damaged) so the customer can see exactly what our
+            team found during the quality check. Under the forfeit policy,
+            this is the evidence backing the decision. */}
+        {(() => {
+          const adminEvidence = (ret.evidence ?? []).filter((e) => e.uploadedBy === 'ADMIN');
+          const customerEvidence = (ret.evidence ?? []).filter((e) => e.uploadedBy === 'CUSTOMER');
+          const perItemQc = (ret.items ?? []).filter((it) => it.qcOutcome);
+          const isQcRejected = ['QC_REJECTED'].includes(ret.status);
+          const hasQcData = adminEvidence.length > 0 || perItemQc.length > 0 || ret.qcNotes;
+          if (!hasQcData && customerEvidence.length === 0) return null;
+
+          return (
+            <>
+              {/* Customer's own photos */}
+              {customerEvidence.length > 0 && (
+                <div
+                  style={{
+                    background: '#fff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 10,
+                    padding: 14,
+                    marginBottom: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+                    Photos you submitted
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {customerEvidence.map((ev) => (
+                      <a
+                        key={ev.id}
+                        href={ev.fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          width: 88,
+                          height: 88,
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          border: '1px solid #e5e7eb',
+                          display: 'block',
+                        }}
+                      >
+                        <img
+                          src={ev.fileUrl}
+                          alt=""
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* QC inspection findings — show the admin's written note as
+                  the main message, paired with warehouse photo(s). Strip out
+                  redundant "Outcome: Rejected / Decision per item" chatter
+                  since the status badge at the top already conveys the
+                  outcome. */}
+              {hasQcData && (() => {
+                // Collect every admin-written reason — prefer per-item notes
+                // (which now have a 15-char minimum on reject/damaged), fall
+                // back to the overall ret.qcNotes. Each note is paired with
+                // its item name when possible.
+                const itemNotes = perItemQc
+                  .filter((it) => it.qcNotes && it.qcNotes.trim().length > 0)
+                  .map((it) => ({
+                    productTitle: it.orderItem?.productTitle ?? 'Item',
+                    note: it.qcNotes as string,
+                  }));
+
+                return (
+                  <div
+                    style={{
+                      background: isQcRejected ? '#fef2f2' : '#ecfdf5',
+                      border: `1px solid ${isQcRejected ? '#fecaca' : '#a7f3d0'}`,
+                      borderRadius: 10,
+                      padding: 14,
+                      marginBottom: 16,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: isQcRejected ? '#991b1b' : '#065f46',
+                        marginBottom: 10,
+                      }}
+                    >
+                      Warehouse Inspection Findings
+                    </div>
+
+                    {/* Admin's written reason — the main message */}
+                    {itemNotes.length > 0 ? (
+                      itemNotes.map((n, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            background: '#fff',
+                            border: `1px solid ${isQcRejected ? '#fecaca' : '#a7f3d0'}`,
+                            borderRadius: 8,
+                            padding: '10px 12px',
+                            marginBottom: 10,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: isQcRejected ? '#7f1d1d' : '#065f46',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
+                              marginBottom: 4,
+                            }}
+                          >
+                            Inspector note · {n.productTitle}
+                          </div>
+                          <div style={{ fontSize: 13, color: '#111827', lineHeight: 1.5 }}>
+                            {n.note}
+                          </div>
+                        </div>
+                      ))
+                    ) : ret.qcNotes ? (
+                      <div
+                        style={{
+                          background: '#fff',
+                          border: `1px solid ${isQcRejected ? '#fecaca' : '#a7f3d0'}`,
+                          borderRadius: 8,
+                          padding: '10px 12px',
+                          marginBottom: 10,
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: isQcRejected ? '#7f1d1d' : '#065f46',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                            marginBottom: 4,
+                          }}
+                        >
+                          Inspector note
+                        </div>
+                        <div style={{ fontSize: 13, color: '#111827', lineHeight: 1.5 }}>
+                          {ret.qcNotes}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Warehouse photos — each with its own caption below if
+                        admin provided one on upload. */}
+                    {adminEvidence.length > 0 && (
+                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+                        {adminEvidence.map((ev) => (
+                          <div key={ev.id} style={{ maxWidth: 140 }}>
+                            <a
+                              href={ev.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                width: 140,
+                                height: 140,
+                                borderRadius: 8,
+                                overflow: 'hidden',
+                                border: `1px solid ${isQcRejected ? '#fecaca' : '#a7f3d0'}`,
+                                display: 'block',
+                              }}
+                            >
+                              <img
+                                src={ev.fileUrl}
+                                alt=""
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                              />
+                            </a>
+                            {ev.description && (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: '#374151',
+                                  marginTop: 6,
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                {ev.description}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Forfeit message if rejected */}
+                    {isQcRejected && (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          paddingTop: 10,
+                          borderTop: '1px solid #fecaca',
+                          fontSize: 12,
+                          color: '#7f1d1d',
+                        }}
+                      >
+                        As per the return policy you acknowledged at submission, the
+                        item will not be shipped back and no refund will be issued.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </>
+          );
+        })()}
 
         {/* Customer Notes */}
         {ret.customerNotes && (

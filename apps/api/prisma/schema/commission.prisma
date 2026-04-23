@@ -12,6 +12,7 @@ enum CommissionType {
 
 enum CommissionRecordStatus {
   PENDING
+  ON_HOLD
   SETTLED
   REFUNDED
 }

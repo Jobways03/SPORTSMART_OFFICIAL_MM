@@ -252,6 +252,14 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  // Summary of whether the Return Items button should be enabled. Set
+  // from the eligibility endpoint after the order loads. When disabled,
+  // we also capture a reason so the customer sees *why* (forfeit policy
+  // after rejection vs. window expired vs. nothing left to return).
+  const [returnEligibility, setReturnEligibility] = useState<{
+    enabled: boolean;
+    reason: string;
+  } | null>(null);
 
   const fetchOrder = useCallback(() => {
     apiClient<OrderDetail>(`/customer/orders/${orderNumber}`)
@@ -266,6 +274,52 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     } catch { router.push('/login'); return; }
     fetchOrder();
   }, [fetchOrder]);
+
+  // Once we have the order + it's delivered, check return eligibility so
+  // the Return Items button accurately reflects whether any items can
+  // still be returned (window open + not previously rejected).
+  useEffect(() => {
+    if (!order) return;
+    const anyDelivered = order.subOrders.some((so) => so.fulfillmentStatus === 'DELIVERED');
+    if (!anyDelivered) {
+      setReturnEligibility({ enabled: false, reason: 'Order not delivered yet' });
+      return;
+    }
+    apiClient<any>(`/customer/returns/eligibility/${order.id}`)
+      .then((res) => {
+        const data = res.data;
+        if (!data) {
+          setReturnEligibility({ enabled: false, reason: 'Unable to check return eligibility' });
+          return;
+        }
+        const allItems = (data.eligibleSubOrders ?? []).flatMap((so: any) => so.items ?? []);
+        const anyEligible = allItems.some((i: any) => i.eligible);
+        if (anyEligible) {
+          setReturnEligibility({ enabled: true, reason: '' });
+          return;
+        }
+        // Nothing eligible — prefer the most specific reason to show.
+        const reasons = new Set(allItems.map((i: any) => i.ineligibleReason));
+        if (reasons.has('PREVIOUSLY_REJECTED')) {
+          setReturnEligibility({
+            enabled: false,
+            reason:
+              'A previous return for this order was rejected. Under the forfeit policy you accepted, re-submission is not allowed.',
+          });
+        } else if (reasons.has('WINDOW_EXPIRED')) {
+          setReturnEligibility({ enabled: false, reason: 'Return window has expired' });
+        } else if (reasons.has('ALREADY_RETURNED')) {
+          setReturnEligibility({ enabled: false, reason: 'All items have already been returned' });
+        } else {
+          setReturnEligibility({ enabled: false, reason: 'No items eligible for return' });
+        }
+      })
+      .catch(() => {
+        // Fail-open: if eligibility check errors, let the dedicated return
+        // page handle it (that flow also re-checks on submit).
+        setReturnEligibility({ enabled: true, reason: '' });
+      });
+  }, [order]);
 
   const handleCancel = async () => {if (!(await confirmDialog('Are you sure you want to cancel this order?'))) return;
     setCancelling(true);
@@ -471,21 +525,44 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {displaySubOrders.some((so: any) => so.fulfillmentStatus === 'DELIVERED') && (
-              <Link
-                href={`/orders/${order.orderNumber}/return`}
-                style={{
-                  padding: '10px 24px',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  border: '1px solid #2563eb',
-                  background: '#fff',
-                  color: '#2563eb',
-                  borderRadius: 8,
-                  textDecoration: 'none',
-                }}
-              >
-                Return Items
-              </Link>
+              returnEligibility?.enabled ? (
+                <Link
+                  href={`/orders/${order.orderNumber}/return`}
+                  style={{
+                    padding: '10px 24px',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    border: '1px solid #2563eb',
+                    background: '#fff',
+                    color: '#2563eb',
+                    borderRadius: 8,
+                    textDecoration: 'none',
+                  }}
+                >
+                  Return Items
+                </Link>
+              ) : returnEligibility ? (
+                <span
+                  title={returnEligibility.reason}
+                  style={{
+                    display: 'inline-flex',
+                    flexDirection: 'column',
+                    padding: '10px 24px',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    border: '1px solid #e5e7eb',
+                    background: '#f9fafb',
+                    color: '#9ca3af',
+                    borderRadius: 8,
+                    cursor: 'not-allowed',
+                  }}
+                >
+                  Return Items
+                  <span style={{ fontSize: 11, fontWeight: 500, color: '#6b7280', marginTop: 2 }}>
+                    {returnEligibility.reason}
+                  </span>
+                </span>
+              ) : null
             )}
             {canCancel && (
               <button
