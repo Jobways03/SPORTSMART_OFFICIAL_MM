@@ -56,7 +56,7 @@ function resolveApiBase(): string {
       'NEXT_PUBLIC_API_URL must be set in production — refusing to default to localhost.',
     );
   }
-  return 'http://localhost:4000';
+  return 'http://localhost:8000';
 }
 
 export function createApiClient(config: ApiClientConfig): ApiClient {

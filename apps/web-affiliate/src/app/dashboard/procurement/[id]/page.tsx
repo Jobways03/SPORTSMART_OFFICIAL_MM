@@ -42,7 +42,8 @@ type ApproveDraft = Record<
 >;
 
 export default function AdminProcurementDetailPage() {
-const params = useParams();
+  const { notify, confirmDialog } = useModal();
+  const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 

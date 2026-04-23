@@ -157,6 +157,8 @@ export interface PlaceOrderTransactionInput {
   itemCount: number;
   paymentMethod?: 'COD' | 'ONLINE';
   fulfillmentGroups: Record<string, FulfillmentGroupInput>;
+  discountCode?: string | null;
+  discountAmount?: number;
 }
 
 export interface PlaceOrderTransactionResult {

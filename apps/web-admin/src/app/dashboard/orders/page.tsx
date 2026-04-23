@@ -26,6 +26,7 @@ interface Order {
   orderNumber: string;
   orderStatus: string;
   totalAmount: number;
+  discountAmount?: number;
   paymentStatus: string;
   paymentMethod: string;
   itemCount: number;
@@ -382,7 +383,11 @@ export default function AdminOrdersPage() {
                         </div>
                       </td>
                       <td style={tdStyle}>{formatDate(order.createdAt)}</td>
-                      <td style={tdStyle}><strong>{formatPrice(Number(order.totalAmount))}</strong></td>
+                      <td style={tdStyle}>
+                        <strong>
+                          {formatPrice(Number(order.totalAmount) + Number(order.discountAmount || 0))}
+                        </strong>
+                      </td>
                     </tr>
                   );
                 })}

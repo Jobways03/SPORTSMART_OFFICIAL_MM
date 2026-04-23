@@ -43,7 +43,7 @@ export class DiscountsService {
     ]);
 
     return {
-      discounts,
+      discounts: discounts.map((d) => this.withEffectiveStatus(d)),
       pagination: {
         page,
         limit,
@@ -56,7 +56,27 @@ export class DiscountsService {
   async get(id: string) {
     const discount = await this.discountRepo.findByIdWithRelations(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
-    return discount;
+    return this.withEffectiveStatus(discount);
+  }
+
+  // Derive the current effective status from the date window, so a SCHEDULED
+  // discount whose `startsAt` has passed shows as ACTIVE (and one past its
+  // `endsAt` shows as EXPIRED) without needing a background job to rewrite
+  // the stored label. DRAFT is preserved — it's the explicit disabled state.
+  private withEffectiveStatus<T extends {
+    status: string;
+    startsAt: Date | string | null;
+    endsAt: Date | string | null;
+  }>(d: T): T {
+    if (!d || d.status === 'DRAFT') return d;
+    const now = new Date();
+    const start = d.startsAt ? new Date(d.startsAt) : null;
+    const end = d.endsAt ? new Date(d.endsAt) : null;
+    let effective: string = d.status;
+    if (start && start > now) effective = 'SCHEDULED';
+    else if (end && end < now) effective = 'EXPIRED';
+    else effective = 'ACTIVE';
+    return { ...d, status: effective };
   }
 
   async create(data: any) {
@@ -174,7 +194,7 @@ export class DiscountsService {
     const discount = await this.discountRepo.findById(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
 
-    const { productIds, collectionIds, startsAt, endsAt, ...fields } = body;
+    const { productIds, collectionIds, buyProductIds, getProductIds, startsAt, endsAt, ...fields } = body;
     const data: any = {};
 
     // Same bounds guard as create — if the caller is changing the value
@@ -243,6 +263,18 @@ export class DiscountsService {
         );
       }
     }
+    if (buyProductIds !== undefined) {
+      await this.discountRepo.deleteProductLinks(id, 'BUY');
+      if (buyProductIds.length) {
+        await this.discountRepo.createProductLinks(id, buyProductIds, 'BUY');
+      }
+    }
+    if (getProductIds !== undefined) {
+      await this.discountRepo.deleteProductLinks(id, 'GET');
+      if (getProductIds.length) {
+        await this.discountRepo.createProductLinks(id, getProductIds, 'GET');
+      }
+    }
     return updated;
   }
 
@@ -250,6 +282,207 @@ export class DiscountsService {
     const discount = await this.discountRepo.findById(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
     await this.discountRepo.delete(id);
+  }
+
+  /**
+   * Customer-side coupon validation used at checkout. Returns the resolved
+   * discount + amount or throws with a caller-friendly message. The amount
+   * is rounded to 2dp and capped at `subtotal` so a flat coupon larger
+   * than the cart never produces a negative total.
+   */
+  async validateCouponForCheckout(
+    code: string,
+    subtotal: number,
+    items: Array<{ productId: string; quantity: number; unitPrice: number }> = [],
+  ): Promise<{
+    discountId: string;
+    code: string;
+    title: string | null;
+    valueType: string;
+    value: number;
+    discountAmount: number;
+  }> {
+    const trimmed = (code || '').trim().toUpperCase();
+    if (!trimmed) {
+      throw new BadRequestAppException('Enter a coupon code');
+    }
+    const discount = await this.discountRepo.findByCodeWithProducts(trimmed);
+    if (!discount) {
+      throw new BadRequestAppException('Invalid coupon code');
+    }
+    if (discount.method !== 'CODE') {
+      throw new BadRequestAppException('This code cannot be applied manually');
+    }
+    // DRAFT is the explicit "disabled" state set by an admin — always reject.
+    // For ACTIVE/SCHEDULED/EXPIRED the stored status can go stale (it's only
+    // snapshotted at create/update time), so trust the date window as the
+    // source of truth instead of the stored label.
+    if (discount.status === 'DRAFT') {
+      throw new BadRequestAppException('This coupon is no longer available');
+    }
+    if (discount.type === 'FREE_SHIPPING') {
+      throw new BadRequestAppException(
+        'Free-shipping coupons are not available — delivery is already free on this order.',
+      );
+    }
+    const now = new Date();
+    if (discount.startsAt && new Date(discount.startsAt) > now) {
+      throw new BadRequestAppException('This coupon is not active yet');
+    }
+    if (discount.endsAt && new Date(discount.endsAt) < now) {
+      throw new BadRequestAppException('This coupon has expired');
+    }
+    if (
+      discount.maxUses !== null &&
+      discount.maxUses !== undefined &&
+      discount.usedCount >= discount.maxUses
+    ) {
+      throw new BadRequestAppException('This coupon has reached its usage limit');
+    }
+    if (
+      discount.minRequirement === 'MIN_PURCHASE_AMOUNT' &&
+      discount.minRequirementValue !== null &&
+      Number(subtotal) < Number(discount.minRequirementValue)
+    ) {
+      throw new BadRequestAppException(
+        `This coupon requires a minimum order of ₹${Number(
+          discount.minRequirementValue,
+        ).toLocaleString('en-IN')}`,
+      );
+    }
+
+    // ── Flat cart discounts (AMOUNT_OFF_ORDER / AMOUNT_OFF_PRODUCTS) ─────
+    // Both apply against the subtotal today. (AMOUNT_OFF_PRODUCTS would
+    // ideally be narrowed to matching line items, but we fall back to the
+    // whole subtotal here — same as what the rest of the pipeline expects.)
+    if (discount.type !== 'BUY_X_GET_Y') {
+      const valueType: string = discount.valueType || 'PERCENTAGE';
+      const value = Number(discount.value || 0);
+      let amount = 0;
+      if (valueType === 'PERCENTAGE') {
+        amount = (Number(subtotal) * value) / 100;
+      } else {
+        amount = value;
+      }
+      amount = Math.max(0, Math.min(amount, Number(subtotal)));
+      amount = Math.round(amount * 100) / 100;
+      return {
+        discountId: discount.id,
+        code: discount.code!,
+        title: discount.title ?? null,
+        valueType,
+        value,
+        discountAmount: amount,
+      };
+    }
+
+    // ── BUY_X_GET_Y ──────────────────────────────────────────────────────
+    // Requires cart line items. The buy/get product sets are inferred from
+    // DiscountProduct rows (scopes BUY / GET). An empty set means "any
+    // product qualifies" — mirrors Shopify's default.
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new BadRequestAppException(
+        'Add the required items to your cart before applying this coupon.',
+      );
+    }
+    const buyProductIds = new Set<string>(
+      (discount.products || [])
+        .filter((p: any) => p.scope === 'BUY')
+        .map((p: any) => p.productId),
+    );
+    const getProductIds = new Set<string>(
+      (discount.products || [])
+        .filter((p: any) => p.scope === 'GET')
+        .map((p: any) => p.productId),
+    );
+    const isBuyEligible = (pid: string) =>
+      buyProductIds.size === 0 || buyProductIds.has(pid);
+    const isGetEligible = (pid: string) =>
+      getProductIds.size === 0 || getProductIds.has(pid);
+
+    // Check buy condition
+    let buyCount = 0;
+    let buyAmount = 0;
+    for (const it of items) {
+      if (isBuyEligible(it.productId)) {
+        buyCount += Number(it.quantity) || 0;
+        buyAmount += (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
+      }
+    }
+    const buyValueNum = Number(discount.buyValue || 0);
+    if (discount.buyType === 'MIN_QUANTITY' && buyCount < buyValueNum) {
+      throw new BadRequestAppException(
+        `Add ${buyValueNum - buyCount} more qualifying item(s) to unlock this coupon.`,
+      );
+    }
+    if (discount.buyType === 'MIN_AMOUNT' && buyAmount < buyValueNum) {
+      throw new BadRequestAppException(
+        `This coupon requires qualifying items worth ₹${buyValueNum.toLocaleString('en-IN')} in cart.`,
+      );
+    }
+
+    // Collect get-eligible units, cheapest first, up to getQuantity.
+    // When the same product qualifies for both buy and get (and is not
+    // over-stocked), we reserve `buyValueNum` units for the buy side (when
+    // buyType is MIN_QUANTITY) so we don't discount the customer's entry
+    // ticket into the promo.
+    const getQuantity = Math.max(1, Number(discount.getQuantity || 1));
+    const perUnit: Array<{ unitPrice: number; productId: string }> = [];
+    for (const it of items) {
+      if (!isGetEligible(it.productId)) continue;
+      let availableQty = Number(it.quantity) || 0;
+      if (
+        discount.buyType === 'MIN_QUANTITY' &&
+        isBuyEligible(it.productId) &&
+        buyProductIds.size > 0 &&
+        getProductIds.size > 0 &&
+        buyProductIds.has(it.productId) &&
+        getProductIds.has(it.productId)
+      ) {
+        availableQty = Math.max(0, availableQty - buyValueNum);
+      }
+      for (let i = 0; i < availableQty; i++) {
+        perUnit.push({ unitPrice: Number(it.unitPrice) || 0, productId: it.productId });
+      }
+    }
+    perUnit.sort((a, b) => a.unitPrice - b.unitPrice);
+    const discounted = perUnit.slice(0, getQuantity);
+    if (discounted.length === 0) {
+      throw new BadRequestAppException(
+        'Add the free/discounted item to your cart to apply this coupon.',
+      );
+    }
+
+    let amount = 0;
+    const gdType = discount.getDiscountType || 'FREE';
+    const gdValue = Number(discount.getDiscountValue || 0);
+    for (const u of discounted) {
+      if (gdType === 'FREE') amount += u.unitPrice;
+      else if (gdType === 'PERCENTAGE') amount += (u.unitPrice * gdValue) / 100;
+      else if (gdType === 'AMOUNT_OFF') amount += Math.min(u.unitPrice, gdValue);
+    }
+    amount = Math.max(0, Math.min(amount, Number(subtotal)));
+    amount = Math.round(amount * 100) / 100;
+
+    // Report a sensible display `value` for the UI pill. PERCENTAGE and
+    // AMOUNT_OFF use getDiscountValue directly. FREE is 100% off matching
+    // units, so show 100 as a percent.
+    const displayValueType =
+      gdType === 'AMOUNT_OFF' ? 'FIXED_AMOUNT' : 'PERCENTAGE';
+    const displayValue = gdType === 'FREE' ? 100 : gdValue;
+
+    return {
+      discountId: discount.id,
+      code: discount.code!,
+      title: discount.title ?? null,
+      valueType: displayValueType,
+      value: displayValue,
+      discountAmount: amount,
+    };
+  }
+
+  async incrementUsedCount(id: string): Promise<void> {
+    await this.discountRepo.incrementUsedCount(id);
   }
 
   /**

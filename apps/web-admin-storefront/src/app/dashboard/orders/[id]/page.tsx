@@ -77,6 +77,8 @@ interface OrderDetail {
   orderNumber: string;
   orderStatus: string;
   totalAmount: number;
+  discountCode?: string | null;
+  discountAmount?: number;
   paymentStatus: string;
   paymentMethod: string;
   verified: boolean;
@@ -103,10 +105,110 @@ interface OrderDetail {
   };
   subOrders: SubOrder[];
   reassignmentLogs?: ReassignmentLog[];
+  discount?: DiscountDetail | null;
+}
+
+interface DiscountProductLink {
+  id: string;
+  scope: 'APPLIES' | 'BUY' | 'GET';
+  productId: string;
+  product: {
+    id: string;
+    title: string;
+    basePrice: number | string;
+    images: { url: string }[];
+  } | null;
+}
+
+interface DiscountDetail {
+  id: string;
+  code: string | null;
+  title: string | null;
+  type: 'AMOUNT_OFF_PRODUCTS' | 'BUY_X_GET_Y' | 'AMOUNT_OFF_ORDER' | 'FREE_SHIPPING';
+  method: 'CODE' | 'AUTOMATIC';
+  valueType: 'PERCENTAGE' | 'FIXED_AMOUNT';
+  value: number | string;
+  appliesTo: string;
+  minRequirement: string;
+  minRequirementValue: number | string | null;
+  maxUses: number | null;
+  onePerCustomer: boolean;
+  usedCount: number;
+  startsAt: string;
+  endsAt: string | null;
+  buyType: string | null;
+  buyValue: number | string | null;
+  getQuantity: number | null;
+  getDiscountType: 'PERCENTAGE' | 'AMOUNT_OFF' | 'FREE' | null;
+  getDiscountValue: number | string | null;
+  products: DiscountProductLink[];
 }
 
 /* ────────── helpers ────────── */
 const fmt = (n: number) => `\u20B9${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const humanizeDiscountType = (t: DiscountDetail['type']): string => {
+  switch (t) {
+    case 'AMOUNT_OFF_ORDER': return 'Amount off order';
+    case 'AMOUNT_OFF_PRODUCTS': return 'Amount off products';
+    case 'BUY_X_GET_Y': return 'Buy X get Y';
+    case 'FREE_SHIPPING': return 'Free shipping';
+    default: return String(t);
+  }
+};
+
+const humanizeAppliesTo = (a: string): string => {
+  switch (a) {
+    case 'ALL_PRODUCTS': return 'All products';
+    case 'SPECIFIC_COLLECTIONS': return 'Specific collections';
+    case 'SPECIFIC_PRODUCTS': return 'Specific products';
+    default: return a;
+  }
+};
+
+function ProductChipList({
+  heading,
+  items,
+  emptyLabel,
+}: {
+  heading: string;
+  items: DiscountProductLink[];
+  emptyLabel: string;
+}) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+        {heading}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontSize: 13, color: '#6b7280', fontStyle: 'italic' }}>{emptyLabel}</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {items.map((row) => (
+            <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 6, background: '#fff', border: '1px solid #e5e7eb', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {row.product?.images?.[0]?.url ? (
+                  <img src={row.product.images[0].url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <span style={{ color: '#d1d5db', fontSize: 14 }}>&#128722;</span>
+                )}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {row.product?.title || '(removed product)'}
+                </div>
+                {row.product?.basePrice && (
+                  <div style={{ fontSize: 11, color: '#6b7280' }}>{fmt(Number(row.product.basePrice))}</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 const fmtDate = (d: string) =>
   new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) +
@@ -431,6 +533,9 @@ export default function OrderDetailPage() {
   const currentStatus = order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED');
   const isPlaced = currentStatus === 'PLACED' || currentStatus === 'PENDING_VERIFICATION';
   const isExceptionQueue = currentStatus === 'EXCEPTION_QUEUE';
+  const discountAmount = Number(order.discountAmount || 0);
+  const nominalTotal = Number(order.totalAmount) + discountAmount;
+  const hasDiscount = discountAmount > 0;
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto' }}>
@@ -771,13 +876,39 @@ export default function OrderDetailPage() {
                 <tr>
                   <td style={payTd}>Subtotal</td>
                   <td style={payTdRight}>{totalItems} item{totalItems !== 1 ? 's' : ''}</td>
-                  <td style={{ ...payTdRight, fontWeight: 600 }}>{fmt(Number(order.totalAmount))}</td>
+                  <td style={{ ...payTdRight, fontWeight: 600 }}>{fmt(nominalTotal)}</td>
                 </tr>
                 <tr>
                   <td style={payTd}>Shipping</td>
                   <td style={payTdRight}>Free Shipping</td>
                   <td style={{ ...payTdRight, fontWeight: 600 }}>{fmt(0)}</td>
                 </tr>
+                {hasDiscount && (
+                  <tr>
+                    <td style={{ ...payTd, color: '#047857' }}>
+                      Discount
+                      {order.discountCode && (
+                        <span style={{
+                          marginLeft: 8,
+                          padding: '2px 8px',
+                          background: '#ecfdf5',
+                          border: '1px solid #a7f3d0',
+                          borderRadius: 999,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: '#065f46',
+                          letterSpacing: 0.4,
+                        }}>{order.discountCode}</span>
+                      )}
+                    </td>
+                    <td style={{ ...payTdRight, color: '#6b7280', fontSize: 12 }}>
+                      {order.discountCode ? 'Coupon applied' : 'Applied'}
+                    </td>
+                    <td style={{ ...payTdRight, fontWeight: 600, color: '#047857' }}>
+                      -{fmt(discountAmount)}
+                    </td>
+                  </tr>
+                )}
                 <tr style={{ borderTop: '1px solid #e5e7eb' }}>
                   <td style={{ ...payTd, fontWeight: 700, paddingTop: 12 }}>Total</td>
                   <td style={payTdRight} />
@@ -827,6 +958,144 @@ export default function OrderDetailPage() {
               )}
             </div>
           </div>
+
+          {/* -- Applied Discount (super-admin only breakdown) -- */}
+          {order.discount && hasDiscount && (
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Applied Discount</h3>
+                {order.discount.code && (
+                  <span style={{
+                    padding: '3px 10px',
+                    background: '#ecfdf5',
+                    border: '1px solid #a7f3d0',
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: '#065f46',
+                    letterSpacing: 0.4,
+                  }}>{order.discount.code}</span>
+                )}
+              </div>
+              <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 16px' }}>
+                Full breakdown of the coupon applied to this order. Visible only to super-admin.
+              </p>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', rowGap: 8, columnGap: 12, fontSize: 13 }}>
+                <div style={{ color: '#6b7280' }}>Type</div>
+                <div style={{ fontWeight: 600 }}>{humanizeDiscountType(order.discount.type)}</div>
+
+                <div style={{ color: '#6b7280' }}>Method</div>
+                <div>
+                  {order.discount.method === 'CODE' ? 'Coupon code (manual)' : 'Automatic'}
+                </div>
+
+                {order.discount.type !== 'BUY_X_GET_Y' && (
+                  <>
+                    <div style={{ color: '#6b7280' }}>Value</div>
+                    <div>
+                      {order.discount.valueType === 'PERCENTAGE'
+                        ? `${Number(order.discount.value)}% off`
+                        : `${fmt(Number(order.discount.value))} flat off`}
+                    </div>
+                  </>
+                )}
+
+                {order.discount.type === 'BUY_X_GET_Y' && (
+                  <>
+                    <div style={{ color: '#6b7280' }}>Buy rule</div>
+                    <div>
+                      {order.discount.buyType === 'MIN_QUANTITY'
+                        ? `Minimum ${Number(order.discount.buyValue)} qty`
+                        : `Minimum ₹${Number(order.discount.buyValue).toLocaleString('en-IN')}`}
+                      {' of qualifying product(s)'}
+                    </div>
+
+                    <div style={{ color: '#6b7280' }}>Get rule</div>
+                    <div>
+                      {Number(order.discount.getQuantity) || 1} unit(s){' '}
+                      {order.discount.getDiscountType === 'FREE'
+                        ? 'FREE'
+                        : order.discount.getDiscountType === 'PERCENTAGE'
+                        ? `at ${Number(order.discount.getDiscountValue)}% off`
+                        : `with ₹${Number(order.discount.getDiscountValue)} off each`}
+                    </div>
+                  </>
+                )}
+
+                <div style={{ color: '#6b7280' }}>Applies to</div>
+                <div>{humanizeAppliesTo(order.discount.appliesTo)}</div>
+
+                <div style={{ color: '#6b7280' }}>Minimum requirement</div>
+                <div>
+                  {order.discount.minRequirement === 'NONE'
+                    ? 'None'
+                    : order.discount.minRequirement === 'MIN_PURCHASE_AMOUNT'
+                    ? `Cart ≥ ₹${Number(order.discount.minRequirementValue || 0).toLocaleString('en-IN')}`
+                    : `Cart ≥ ${Number(order.discount.minRequirementValue || 0)} items`}
+                </div>
+
+                <div style={{ color: '#6b7280' }}>Usage limit</div>
+                <div>
+                  {order.discount.maxUses
+                    ? `${order.discount.usedCount} / ${order.discount.maxUses} uses`
+                    : `${order.discount.usedCount} uses (unlimited)`}
+                  {order.discount.onePerCustomer && ' · one per customer'}
+                </div>
+
+                <div style={{ color: '#6b7280' }}>Active window</div>
+                <div>
+                  {fmtDate(order.discount.startsAt)}
+                  {order.discount.endsAt ? ` → ${fmtDate(order.discount.endsAt)}` : ' (no end date)'}
+                </div>
+              </div>
+
+              {/* Qualifying products */}
+              {order.discount.type === 'BUY_X_GET_Y' && (
+                <>
+                  <ProductChipList
+                    heading="Customer buys"
+                    items={order.discount.products.filter((p) => p.scope === 'BUY')}
+                    emptyLabel="Any product qualifies"
+                  />
+                  <ProductChipList
+                    heading="Customer gets"
+                    items={order.discount.products.filter((p) => p.scope === 'GET')}
+                    emptyLabel="Any product qualifies"
+                  />
+                </>
+              )}
+              {order.discount.type === 'AMOUNT_OFF_PRODUCTS' && (
+                <ProductChipList
+                  heading="Applies to products"
+                  items={order.discount.products.filter((p) => p.scope === 'APPLIES')}
+                  emptyLabel="All products"
+                />
+              )}
+
+              {/* Savings summary */}
+              <div style={{
+                marginTop: 16,
+                padding: '12px 14px',
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: 8,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}>
+                <div>
+                  <div style={{ fontSize: 12, color: '#065f46', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Customer saved</div>
+                  <div style={{ fontSize: 11, color: '#047857' }}>
+                    Subtotal {fmt(nominalTotal)} → charged {fmt(Number(order.totalAmount))}
+                  </div>
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#065f46' }}>
+                  -{fmt(discountAmount)}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* -- Reassignment History -- */}
           {order.reassignmentLogs && order.reassignmentLogs.length > 0 && (

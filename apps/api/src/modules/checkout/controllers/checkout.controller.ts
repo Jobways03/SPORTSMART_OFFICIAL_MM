@@ -53,11 +53,12 @@ export class CheckoutController {
   @Post('place-order')
   async placeOrder(
     @Req() req: any,
-    @Body() body: { paymentMethod?: string },
+    @Body() body: { paymentMethod?: string; couponCode?: string },
   ) {
     const data = await this.checkoutService.placeOrder(
       req.userId,
       body.paymentMethod,
+      body.couponCode,
     );
     const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {

@@ -56,6 +56,13 @@ export class PrismaDiscountRepository implements DiscountRepository {
     return this.prisma.discount.findUnique({ where: { code } });
   }
 
+  async findByCodeWithProducts(code: string): Promise<any | null> {
+    return this.prisma.discount.findUnique({
+      where: { code },
+      include: { products: true },
+    });
+  }
+
   async create(data: any): Promise<any> {
     return this.prisma.discount.create({ data });
   }
@@ -107,6 +114,13 @@ export class PrismaDiscountRepository implements DiscountRepository {
   ): Promise<void> {
     await this.prisma.discountCollection.deleteMany({
       where: { discountId, scope },
+    });
+  }
+
+  async incrementUsedCount(id: string): Promise<void> {
+    await this.prisma.discount.update({
+      where: { id },
+      data: { usedCount: { increment: 1 } },
     });
   }
 }

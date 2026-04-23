@@ -54,6 +54,8 @@ interface OrderDetail {
   orderNumber: string;
   orderStatus: string;
   totalAmount: number;
+  discountCode: string | null;
+  discountAmount: number;
   paymentStatus: string;
   paymentMethod: string;
   verified: boolean;
@@ -550,7 +552,10 @@ export default function OrderDetailPage() {
                   label="PAYMENT STATUS"
                   value={<Badge text={order.paymentStatus} color={badgeColor(order.paymentStatus)} />}
                 />
-                <SideRow label="SUB TOTAL" value={fmt(Number(order.totalAmount))} />
+                <SideRow
+                  label="SUB TOTAL"
+                  value={fmt(Number(order.totalAmount) + Number(order.discountAmount || 0))}
+                />
                 <SideRow label="SHIPPING" value={fmt(0)} />
                 <SideRow label="TOTAL TAX (Inclusive)" value={fmt(0)} />
               </tbody>
@@ -568,7 +573,7 @@ export default function OrderDetailPage() {
               }}
             >
               <span>NET PAYMENT -</span>
-              <span>{fmt(Number(order.totalAmount))}</span>
+              <span>{fmt(Number(order.totalAmount) + Number(order.discountAmount || 0))}</span>
             </div>
 
             <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>

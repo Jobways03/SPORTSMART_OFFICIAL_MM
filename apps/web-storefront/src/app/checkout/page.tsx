@@ -19,6 +19,7 @@ interface Address {
 
 interface CartItem {
   id: string;
+  productId?: string;
   productTitle: string;
   variantTitle: string | null;
   imageUrl: string | null;
@@ -77,6 +78,18 @@ export default function CheckoutPage() {
   const [removingUnserviceable, setRemovingUnserviceable] = useState(false);
   const [error, setError] = useState('');
   const [checkoutData, setCheckoutData] = useState<CheckoutData | null>(null);
+
+  // Coupon state
+  const [couponInput, setCouponInput] = useState('');
+  const [couponApplying, setCouponApplying] = useState(false);
+  const [couponError, setCouponError] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string;
+    title: string | null;
+    valueType: string;
+    value: number;
+    discountAmount: number;
+  } | null>(null);
 
   // New address form
   const [form, setForm] = useState({
@@ -346,6 +359,67 @@ export default function CheckoutPage() {
     }
   };
 
+  // Apply coupon (validates against current serviceable subtotal)
+  const handleApplyCoupon = async () => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) {
+      setCouponError('Enter a coupon code');
+      return;
+    }
+    const subtotalForValidation = checkoutData
+      ? checkoutData.serviceableAmount
+      : cart?.totalAmount ?? 0;
+    // Send line items so BXGY coupons (and any product-scoped rules) can
+    // evaluate which cart items qualify. Prefer the post-allocation
+    // checkoutData items (serviceable only); fall back to the raw cart.
+    const itemsForValidation = checkoutData
+      ? checkoutData.items
+          .filter((i) => i.serviceable)
+          .map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+          }))
+      : (cart?.items ?? []).map((i) => ({
+          productId: i.productId ?? '',
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+        }));
+    setCouponApplying(true);
+    setCouponError('');
+    try {
+      const res = await apiClient<{
+        code: string;
+        title: string | null;
+        valueType: string;
+        value: number;
+        discountAmount: number;
+      }>('/customer/coupons/validate', {
+        method: 'POST',
+        body: JSON.stringify({
+          code,
+          subtotal: subtotalForValidation,
+          items: itemsForValidation,
+        }),
+      });
+      if (res.data) {
+        setAppliedCoupon(res.data);
+        setCouponInput(res.data.code);
+      }
+    } catch (err: any) {
+      setCouponError(err?.body?.message || err?.message || 'Invalid coupon');
+      setAppliedCoupon(null);
+    } finally {
+      setCouponApplying(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponInput('');
+    setCouponError('');
+  };
+
   // Place order via the new checkout endpoint
   const handlePlaceOrder = async () => {
     if (!checkoutData) {
@@ -364,7 +438,10 @@ export default function CheckoutPage() {
     try {
       const res = await apiClient<{ orderNumber: string }>('/customer/checkout/place-order', {
         method: 'POST',
-        body: JSON.stringify({ paymentMethod: 'COD' }),
+        body: JSON.stringify({
+          paymentMethod: 'COD',
+          ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
+        }),
         signal: abort.signal,
       });
       window.dispatchEvent(new Event('cart-updated'));
@@ -393,6 +470,17 @@ export default function CheckoutPage() {
   };
 
   const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
+
+  useEffect(() => {
+    if (!appliedCoupon) return;
+    const currentSubtotal = checkoutData
+      ? checkoutData.serviceableAmount
+      : cart?.totalAmount ?? 0;
+    if (appliedCoupon.discountAmount > Number(currentSubtotal) + 0.01) {
+      setAppliedCoupon(null);
+      setCouponError('Coupon removed — the order total changed. Re-apply if needed.');
+    }
+  }, [checkoutData, cart?.totalAmount, appliedCoupon]);
 
   // Redirect empty-cart visitors to /cart. Runs in useEffect because
   // calling router.push() during render updates Router state mid-render
@@ -929,6 +1017,105 @@ export default function CheckoutPage() {
               </div>
             </div>
 
+            {/* Coupon input */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Have a coupon?</div>
+              {appliedCoupon ? (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  padding: '10px 12px',
+                  background: '#ecfdf5',
+                  border: '1px solid #a7f3d0',
+                  borderRadius: 8,
+                }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#065f46' }}>
+                      {appliedCoupon.code} applied
+                    </div>
+                    <div style={{ fontSize: 12, color: '#047857', marginTop: 2 }}>
+                      You save {formatPrice(appliedCoupon.discountAmount)}
+                      {appliedCoupon.valueType === 'PERCENTAGE' ? ` (${appliedCoupon.value}% off)` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveCoupon}
+                    style={{
+                      flex: '0 0 auto',
+                      background: 'none',
+                      border: 'none',
+                      color: '#065f46',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      placeholder="Enter coupon code"
+                      value={couponInput}
+                      maxLength={40}
+                      onChange={(e) => {
+                        setCouponInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''));
+                        if (couponError) setCouponError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !couponApplying) {
+                          e.preventDefault();
+                          handleApplyCoupon();
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: '9px 11px',
+                        borderWidth: 1,
+                        borderStyle: 'solid',
+                        borderColor: couponError ? '#dc2626' : '#d1d5db',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        outline: 'none',
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.5,
+                      }}
+                      aria-invalid={!!couponError}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleApplyCoupon}
+                      disabled={couponApplying || !couponInput.trim()}
+                      style={{
+                        padding: '9px 14px',
+                        background: !couponInput.trim() || couponApplying ? '#9ca3af' : '#111',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: !couponInput.trim() || couponApplying ? 'not-allowed' : 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {couponApplying ? 'Applying...' : 'Apply'}
+                    </button>
+                  </div>
+                  {couponError && (
+                    <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>
+                      {couponError}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
             {checkoutData ? (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14 }}>
@@ -945,9 +1132,15 @@ export default function CheckoutPage() {
                   <span>Delivery</span>
                   <span style={{ color: '#16a34a' }}>FREE</span>
                 </div>
+                {appliedCoupon && appliedCoupon.discountAmount > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14, color: '#16a34a' }}>
+                    <span>Coupon ({appliedCoupon.code})</span>
+                    <span>-{formatPrice(appliedCoupon.discountAmount)}</span>
+                  </div>
+                )}
                 <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 12, paddingTop: 12, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
                   <span>Total</span>
-                  <span>{formatPrice(checkoutData.serviceableAmount)}</span>
+                  <span>{formatPrice(Math.max(0, checkoutData.serviceableAmount - (appliedCoupon?.discountAmount ?? 0)))}</span>
                 </div>
 
                 {/* Reservation timer */}
@@ -1010,9 +1203,15 @@ export default function CheckoutPage() {
                   <span>Delivery</span>
                   <span style={{ color: '#16a34a' }}>FREE</span>
                 </div>
+                {appliedCoupon && appliedCoupon.discountAmount > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14, color: '#16a34a' }}>
+                    <span>Coupon ({appliedCoupon.code})</span>
+                    <span>-{formatPrice(appliedCoupon.discountAmount)}</span>
+                  </div>
+                )}
                 <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 12, paddingTop: 12, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
                   <span>Total</span>
-                  <span>{formatPrice(cart.totalAmount)}</span>
+                  <span>{formatPrice(Math.max(0, cart.totalAmount - (appliedCoupon?.discountAmount ?? 0)))}</span>
                 </div>
 
                 <button

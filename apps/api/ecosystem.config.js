@@ -8,11 +8,11 @@ module.exports = {
       max_memory_restart: '512M', // Auto-restart if memory exceeds 512MB
       env: {
         NODE_ENV: 'development',
-        PORT: 4000,
+        PORT: 8000,
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 4000,
+        PORT: 8000,
       },
 
       // Graceful shutdown

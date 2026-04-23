@@ -146,7 +146,34 @@ export class OrdersService {
       }),
     );
 
-    return { ...order, reassignmentLogs: enrichedLogs };
+    // When a coupon was applied, look up the underlying Discount so the
+    // super-admin order detail can explain exactly what rule fired.
+    let discount: any = null;
+    if (order.discountCode) {
+      discount = await this.prisma.discount.findUnique({
+        where: { code: order.discountCode },
+        include: {
+          products: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  title: true,
+                  basePrice: true,
+                  images: {
+                    where: { isPrimary: true },
+                    select: { url: true },
+                    take: 1,
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    return { ...order, reassignmentLogs: enrichedLogs, discount };
   }
 
   /**

@@ -21,6 +21,7 @@ interface RecentOrder {
   id: string;
   orderNumber: string;
   totalAmount: number;
+  discountAmount?: number;
   paymentStatus: string;
   itemCount: number;
   createdAt: string;
@@ -136,7 +137,9 @@ export default function AdminDashboardPage() {
                         <td style={tdStyle}>
                           {order.customer?.firstName} {order.customer?.lastName}
                         </td>
-                        <td style={tdStyle}>{formatCurrency(Number(order.totalAmount))}</td>
+                        <td style={tdStyle}>
+                          {formatCurrency(Number(order.totalAmount) + Number(order.discountAmount || 0))}
+                        </td>
                         <td style={tdStyle}>
                           <span style={{
                             display: 'inline-block',

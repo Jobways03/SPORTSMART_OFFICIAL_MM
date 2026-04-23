@@ -15,7 +15,7 @@
     "strict": true,
     "strictPropertyInitialization": false,
     "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "paths": {
       "@src/*": ["src/*"],
       "@core/*": ["src/core/*"],

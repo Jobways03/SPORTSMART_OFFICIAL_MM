@@ -67,8 +67,12 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   const [selectedProducts, setSelectedProducts] = useState<SelectedProduct[]>([]);
   const [selectedCollections, setSelectedCollections] = useState<SelectedCollection[]>([]);
 
+  // Buy X Get Y — product pickers
+  const [selectedBuyProducts, setSelectedBuyProducts] = useState<SelectedProduct[]>([]);
+  const [selectedGetProducts, setSelectedGetProducts] = useState<SelectedProduct[]>([]);
+
   // Browse modals
-  const [browseMode, setBrowseMode] = useState<'products' | 'collections' | 'customers' | null>(null);
+  const [browseMode, setBrowseMode] = useState<'products' | 'collections' | 'customers' | 'buy-products' | 'get-products' | null>(null);
   const [browseItems, setBrowseItems] = useState<any[]>([]);
   const [browseSearch, setBrowseSearch] = useState('');
   const [browseSelected, setBrowseSelected] = useState<Set<string>>(new Set());
@@ -115,6 +119,15 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         if (d.getQuantity) setGetQuantity(String(d.getQuantity));
         if (d.getDiscountType) setGetDiscountType(d.getDiscountType);
         if (d.getDiscountValue) setGetDiscountValue(String(Number(d.getDiscountValue)));
+        if (Array.isArray(d.products)) {
+          const toSel = (row: any) => ({
+            id: row.product?.id ?? row.productId,
+            title: row.product?.title ?? '',
+            imageUrl: row.product?.images?.[0]?.url ?? null,
+          });
+          setSelectedBuyProducts(d.products.filter((r: any) => r.scope === 'BUY').map(toSel));
+          setSelectedGetProducts(d.products.filter((r: any) => r.scope === 'GET').map(toSel));
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -123,7 +136,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   // Browse products/collections
   const fetchBrowseItems = useCallback(() => {
     setBrowseLoading(true);
-    if (browseMode === 'products') {
+    if (browseMode === 'products' || browseMode === 'buy-products' || browseMode === 'get-products') {
       const p = new URLSearchParams({ limit: '50', status: 'ACTIVE' });
       if (browseSearch.trim()) p.set('search', browseSearch.trim());
       apiClient<{ products: any[] }>(`/admin/products?${p}`)
@@ -159,10 +172,15 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
     }
   }, [browseMode, browseSearch]);
 
-  const openBrowse = (mode: 'products' | 'collections' | 'customers') => {
+  const openBrowse = (mode: 'products' | 'collections' | 'customers' | 'buy-products' | 'get-products') => {
     setBrowseMode(mode);
     setBrowseSearch('');
-    const existing = mode === 'products' ? selectedProducts.map((p) => p.id) : mode === 'collections' ? selectedCollections.map((c) => c.id) : selectedCustomers.map((c) => c.id);
+    const existing =
+      mode === 'products' ? selectedProducts.map((p) => p.id)
+      : mode === 'buy-products' ? selectedBuyProducts.map((p) => p.id)
+      : mode === 'get-products' ? selectedGetProducts.map((p) => p.id)
+      : mode === 'collections' ? selectedCollections.map((c) => c.id)
+      : selectedCustomers.map((c) => c.id);
     setBrowseSelected(new Set(existing));
     setTimeout(() => fetchBrowseItems(), 0);
   };
@@ -170,11 +188,17 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   useEffect(() => { if (browseMode) fetchBrowseItems(); }, [browseMode, fetchBrowseItems]);
 
   const handleBrowseAdd = () => {
-    if (browseMode === 'products') {
+    if (browseMode === 'products' || browseMode === 'buy-products' || browseMode === 'get-products') {
+      const target =
+        browseMode === 'buy-products' ? selectedBuyProducts
+        : browseMode === 'get-products' ? selectedGetProducts
+        : selectedProducts;
       const newProds = browseItems
-        .filter((i) => browseSelected.has(i.id) && !selectedProducts.some((p) => p.id === i.id))
+        .filter((i) => browseSelected.has(i.id) && !target.some((p) => p.id === i.id))
         .map((i) => ({ id: i.id, title: i.title, imageUrl: i.imageUrl }));
-      setSelectedProducts((prev) => [...prev, ...newProds]);
+      if (browseMode === 'buy-products') setSelectedBuyProducts((prev) => [...prev, ...newProds]);
+      else if (browseMode === 'get-products') setSelectedGetProducts((prev) => [...prev, ...newProds]);
+      else setSelectedProducts((prev) => [...prev, ...newProds]);
     } else if (browseMode === 'collections') {
       const newColls = browseItems
         .filter((i) => browseSelected.has(i.id) && !selectedCollections.some((c) => c.id === i.id))
@@ -224,6 +248,8 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         payload.getItemsFrom = 'SPECIFIC_PRODUCTS';
         payload.getDiscountType = getDiscountType;
         payload.getDiscountValue = getDiscountType !== 'FREE' ? parseFloat(getDiscountValue) || 0 : 0;
+        payload.buyProductIds = selectedBuyProducts.map((p) => p.id);
+        payload.getProductIds = selectedGetProducts.map((p) => p.id);
       }
 
       if (isEdit) {
@@ -376,17 +402,61 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
                 <RadioOption name="buyType" value="MIN_QUANTITY" checked={buyType === 'MIN_QUANTITY'} onChange={() => setBuyType('MIN_QUANTITY')} label="Minimum quantity of items" />
                 <RadioOption name="buyType" value="MIN_AMOUNT" checked={buyType === 'MIN_AMOUNT'} onChange={() => setBuyType('MIN_AMOUNT')} label="Minimum purchase amount" />
               </div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-                <div><label style={label}>Quantity</label><input type="number" value={buyValue} onChange={(e) => setBuyValue(e.target.value)} style={{ ...input, width: 80 }} /></div>
-                <div style={{ flex: 1 }}><label style={label}>Any items from</label><select style={input} disabled><option>Specific products</option></select></div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                <div><label style={label}>Quantity</label><input type="number" value={buyValue} onChange={(e) => setBuyValue(e.target.value)} style={{ ...input, width: 100 }} /></div>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Any items from</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', fontSize: 14 }}>&#128269;</span>
+                      <input placeholder="Search products" style={{ ...input, paddingLeft: 32 }} onFocus={() => openBrowse('buy-products')} readOnly />
+                    </div>
+                    <button onClick={() => openBrowse('buy-products')} style={outBtn}>Browse</button>
+                  </div>
+                </div>
               </div>
+              {selectedBuyProducts.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  {selectedBuyProducts.map((p) => (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 6, background: '#f3f4f6', border: '1px solid #e5e7eb', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {p.imageUrl ? <img src={p.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ color: '#d1d5db', fontSize: 14 }}>&#128722;</span>}
+                      </div>
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{p.title}</span>
+                      <button onClick={() => setSelectedBuyProducts((prev) => prev.filter((x) => x.id !== p.id))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 16 }}>&times;</button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <h3 style={{ ...cardTitle, marginTop: 20 }}>Customer gets</h3>
               <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 12px' }}>Customers must add the quantity of items specified below to their cart.</p>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-                <div><label style={label}>Quantity</label><input type="number" value={getQuantity} onChange={(e) => setGetQuantity(e.target.value)} style={{ ...input, width: 80 }} /></div>
-                <div style={{ flex: 1 }}><label style={label}>Any items from</label><select style={input} disabled><option>Specific products</option></select></div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                <div><label style={label}>Quantity</label><input type="number" value={getQuantity} onChange={(e) => setGetQuantity(e.target.value)} style={{ ...input, width: 100 }} /></div>
+                <div style={{ flex: 1 }}>
+                  <label style={label}>Any items from</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ position: 'relative', flex: 1 }}>
+                      <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', fontSize: 14 }}>&#128269;</span>
+                      <input placeholder="Search products" style={{ ...input, paddingLeft: 32 }} onFocus={() => openBrowse('get-products')} readOnly />
+                    </div>
+                    <button onClick={() => openBrowse('get-products')} style={outBtn}>Browse</button>
+                  </div>
+                </div>
               </div>
+              {selectedGetProducts.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  {selectedGetProducts.map((p) => (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 6, background: '#f3f4f6', border: '1px solid #e5e7eb', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {p.imageUrl ? <img src={p.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ color: '#d1d5db', fontSize: 14 }}>&#128722;</span>}
+                      </div>
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{p.title}</span>
+                      <button onClick={() => setSelectedGetProducts((prev) => prev.filter((x) => x.id !== p.id))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: 16 }}>&times;</button>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>At a discounted value</div>
               <RadioOption name="getType" value="PERCENTAGE" checked={getDiscountType === 'PERCENTAGE'} onChange={() => setGetDiscountType('PERCENTAGE')} label="Percentage" />
@@ -524,14 +594,20 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div style={{ background: '#fff', borderRadius: 14, width: 600, maxHeight: '82vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 60px rgba(0,0,0,0.25)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 22px', borderBottom: '1px solid #e5e7eb' }}>
-              <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Add {browseMode}</h2>
+              <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>
+                {browseMode === 'buy-products'
+                  ? 'Add products customers buy'
+                  : browseMode === 'get-products'
+                  ? 'Add products customers get'
+                  : `Add ${browseMode}`}
+              </h2>
               <button onClick={() => setBrowseMode(null)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280' }}>&times;</button>
             </div>
             <div style={{ padding: '14px 22px', borderBottom: '1px solid #e5e7eb' }}>
               <div style={{ position: 'relative' }}>
                 <span style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', fontSize: 14 }}>&#128269;</span>
                 <input
-                  type="text" placeholder={`Search ${browseMode}`}
+                  type="text" placeholder={`Search ${browseMode === 'buy-products' || browseMode === 'get-products' ? 'products' : browseMode}`}
                   value={browseSearch} onChange={(e) => setBrowseSearch(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && fetchBrowseItems()}
                   style={{ ...input, paddingLeft: 32, borderColor: '#2563eb', boxShadow: '0 0 0 2px rgba(37,99,235,0.15)' }}
@@ -544,8 +620,8 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
               {browseLoading ? (
                 <div style={{ textAlign: 'center', padding: 50, color: '#9ca3af' }}>Loading...</div>
               ) : browseItems.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: 50, color: '#9ca3af' }}>No {browseMode} found</div>
-              ) : browseMode === 'products' ? (
+                <div style={{ textAlign: 'center', padding: 50, color: '#9ca3af' }}>No {browseMode === 'buy-products' || browseMode === 'get-products' ? 'products' : browseMode} found</div>
+              ) : (browseMode === 'products' || browseMode === 'buy-products' || browseMode === 'get-products') ? (
                 <>
                   <div style={{ display: 'flex', padding: '8px 22px', borderBottom: '1px solid #e5e7eb', background: '#fafbfc' }}>
                     <span style={{ width: 32 }} />
@@ -601,7 +677,9 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', borderTop: '1px solid #e5e7eb', background: '#fafbfc', borderRadius: '0 0 14px 14px' }}>
-              <span style={{ fontSize: 13, color: '#6b7280' }}>{browseSelected.size} {browseMode} selected</span>
+              <span style={{ fontSize: 13, color: '#6b7280' }}>
+                {browseSelected.size} {browseMode === 'buy-products' || browseMode === 'get-products' ? 'products' : browseMode} selected
+              </span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={() => setBrowseMode(null)} style={outBtn}>Cancel</button>
                 <button onClick={handleBrowseAdd} style={priBtn}>Add</button>

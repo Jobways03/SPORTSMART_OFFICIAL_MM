@@ -95,11 +95,14 @@ export default function AdminLoginPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <div className="auth-header">
+        <header className="auth-header">
+          <span className="auth-badge">
+            <span className="auth-badge-dot" aria-hidden="true" />
+            Seller Admin
+          </span>
           <h1 className="auth-logo">SPORTSMART</h1>
-          <p className="auth-badge">SELLER ADMIN</p>
-          <h2 className="auth-title">Sign in to seller admin</h2>
-        </div>
+          <h2 className="auth-title">Sign in to manage your storefront.</h2>
+        </header>
 
         {serverError && (
           <div className={alertClass} role="alert">
@@ -109,7 +112,7 @@ export default function AdminLoginPage() {
 
         <form onSubmit={handleSubmit} noValidate>
           <div className="form-group">
-            <label htmlFor="email">Email *</label>
+            <label htmlFor="email">Email</label>
             <input
               id="email"
               type="email"
@@ -130,7 +133,7 @@ export default function AdminLoginPage() {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Password *</label>
+            <label htmlFor="password">Password</label>
             <div className="password-wrapper">
               <input
                 id="password"
@@ -166,7 +169,14 @@ export default function AdminLoginPage() {
             disabled={isSubmitting}
             aria-busy={isSubmitting}
           >
-            {isSubmitting ? 'Signing in...' : 'Sign In'}
+            {isSubmitting ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Signing in
+              </>
+            ) : (
+              'Sign in'
+            )}
           </button>
         </form>
 

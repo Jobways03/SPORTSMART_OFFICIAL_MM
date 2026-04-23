@@ -21,6 +21,8 @@ export interface DiscountRepository {
 
   findByCode(code: string): Promise<any | null>;
 
+  findByCodeWithProducts(code: string): Promise<any | null>;
+
   create(data: any): Promise<any>;
 
   update(id: string, data: any): Promise<any>;
@@ -42,6 +44,8 @@ export interface DiscountRepository {
   deleteProductLinks(discountId: string, scope: string): Promise<void>;
 
   deleteCollectionLinks(discountId: string, scope: string): Promise<void>;
+
+  incrementUsedCount(id: string): Promise<void>;
 }
 
 export const DISCOUNT_REPOSITORY = Symbol('DiscountRepository');

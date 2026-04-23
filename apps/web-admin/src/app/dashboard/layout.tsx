@@ -156,10 +156,10 @@ export default function DashboardLayout({
               aria-haspopup="true"
             >
               <div className="navbar-user-info">
-                <div className="navbar-user-name">{admin.name}</div>
-                <div className="navbar-user-role">{formatRole(admin.role)}</div>
+                <div className="navbar-user-name">Seller Admin</div>
+                <div className="navbar-user-role">Seller Admin</div>
               </div>
-              <div className="navbar-avatar">{initials}</div>
+              <div className="navbar-avatar">SA</div>
               <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`}>
                 &#9660;
               </span>

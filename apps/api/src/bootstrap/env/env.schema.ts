@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
-  PORT: z.coerce.number().default(4000),
+  PORT: z.coerce.number().default(8000),
 
   APP_NAME: z.string().default('sportsmart-api'),
-  APP_URL: z.string().default('http://localhost:4000'),
-  CORS_ORIGINS: z.string().default('http://localhost:3001'),
+  APP_URL: z.string().default('http://localhost:8000'),
+  CORS_ORIGINS: z.string().default('http://localhost:4005'),
 
   // Database
   DATABASE_URL: z.string().min(1),

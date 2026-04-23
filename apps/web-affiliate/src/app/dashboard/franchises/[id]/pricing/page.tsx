@@ -30,7 +30,8 @@ const fmt = (v: number | string | null | undefined) => {
 };
 
 export default function FranchisePricingPage() {
-const params = useParams();
+  const { notify, confirmDialog } = useModal();
+  const params = useParams();
   const franchiseId = String(params?.id ?? '');
 
   const [rows, setRows] = useState<Row[]>([]);

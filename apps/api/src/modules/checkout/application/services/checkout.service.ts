@@ -14,6 +14,7 @@ import {
   AllocationResult,
 } from '../../../catalog/application/facades/catalog-public.facade';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
+import { DiscountPublicFacade } from '../../../discounts/application/facades/discount-public.facade';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
@@ -36,6 +37,7 @@ export class CheckoutService {
     private readonly sessionService: CheckoutSessionService,
     private readonly catalogFacade: CatalogPublicFacade,
     private readonly franchiseFacade: FranchisePublicFacade,
+    private readonly discountFacade: DiscountPublicFacade,
     private readonly razorpayAdapter: RazorpayAdapter,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
@@ -377,7 +379,7 @@ export class CheckoutService {
 
   // ── Place Order ────────────────────────────────────────────────────────
 
-  async placeOrder(userId: string, paymentMethod?: string) {
+  async placeOrder(userId: string, paymentMethod?: string, couponCode?: string) {
     // Per-user lock: prevents double-submit (UI double-click or client
     // retry) from committing two MasterOrders against the same checkout
     // session. Without it, two concurrent calls both pass session.get()
@@ -395,13 +397,13 @@ export class CheckoutService {
     }
 
     try {
-      return await this.placeOrderLocked(userId, paymentMethod);
+      return await this.placeOrderLocked(userId, paymentMethod, couponCode);
     } finally {
       await this.redis.releaseLock(lockKey);
     }
   }
 
-  private async placeOrderLocked(userId: string, paymentMethod?: string) {
+  private async placeOrderLocked(userId: string, paymentMethod?: string, couponCode?: string) {
     const method: 'COD' | 'ONLINE' =
       paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
     const session = await this.sessionService.get(userId);
@@ -466,15 +468,41 @@ export class CheckoutService {
       }
     }
 
+    // Re-validate coupon server-side against the session subtotal. Never
+    // trust a client-reported discount amount — the only safe input from
+    // the UI is the coupon code, which we resolve against the DB here.
+    let discountCode: string | null = null;
+    let discountAmount = 0;
+    let discountId: string | null = null;
+    const trimmedCouponCode = (couponCode || '').trim();
+    if (trimmedCouponCode) {
+      const sessionItems = session.items.map((i) => ({
+        productId: i.productId,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+      }));
+      const resolved = await this.discountFacade.validateCouponForCheckout(
+        trimmedCouponCode,
+        session.totalAmount,
+        sessionItems,
+      );
+      discountCode = resolved.code;
+      discountAmount = resolved.discountAmount;
+      discountId = resolved.discountId;
+    }
+    const chargedTotal = Math.max(0, session.totalAmount - discountAmount);
+
     let result;
     try {
       result = await this.repo.placeOrderTransaction({
         customerId: userId,
         addressSnapshot: session.addressSnapshot,
-        totalAmount: session.totalAmount,
+        totalAmount: chargedTotal,
         itemCount: session.itemCount,
         paymentMethod: method,
         fulfillmentGroups,
+        discountCode,
+        discountAmount,
       });
     } catch (err) {
       // Compensating action: release franchise reservations on failure
@@ -509,6 +537,16 @@ export class CheckoutService {
 
     // Remove checkout session
     await this.sessionService.delete(userId);
+
+    // Bump usedCount on the applied coupon. Best-effort; the order is
+    // already committed so we don't fail placement if the increment fails.
+    if (discountId) {
+      try {
+        await this.discountFacade.incrementUsedCount(discountId);
+      } catch {
+        // ignore — a retry path can be added later if needed
+      }
+    }
 
     // Publish domain events for order creation
     try {

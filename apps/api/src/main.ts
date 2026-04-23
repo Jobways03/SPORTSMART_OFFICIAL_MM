@@ -69,7 +69,7 @@ async function bootstrap() {
     setupSwagger(app);
   }
 
-  const port = envService.getNumber('PORT', 4000);
+  const port = envService.getNumber('PORT', 8000);
 
   await app.listen(port);
 

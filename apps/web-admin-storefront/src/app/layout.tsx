@@ -3,8 +3,8 @@ import { ModalProvider } from '@sportsmart/ui';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'SPORTSMART Admin',
-  description: 'Main administration for SPORTSMART marketplace',
+  title: 'SPORTSMART Super Admin',
+  description: 'Super admin portal for SPORTSMART marketplace',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

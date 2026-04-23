@@ -95,6 +95,12 @@ model MasterOrder {
   verificationRemarks     String?            @map("verification_remarks")
   itemCount               Int                @map("item_count")
 
+  // Discount / coupon (AMOUNT_OFF_ORDER applied at checkout). totalAmount
+  // above is the post-discount charged amount; subtract discountAmount to
+  // reconstruct the pre-discount subtotal.
+  discountCode            String?            @map("discount_code")
+  discountAmount          Decimal            @default(0) @map("discount_amount") @db.Decimal(10, 2)
+
   // Online payment tracking (Razorpay)
   razorpayOrderId         String?            @map("razorpay_order_id")
   razorpayPaymentId       String?            @map("razorpay_payment_id")

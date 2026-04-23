@@ -70,7 +70,8 @@ function getMappingStatusClass(status: string): string {
 }
 
 export default function AdminFranchiseDetailPage() {
-const router = useRouter();
+  const { notify, confirmDialog } = useModal();
+  const router = useRouter();
   const params = useParams();
   const franchiseId = params.id as string;
 

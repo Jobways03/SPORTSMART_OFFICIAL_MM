@@ -337,8 +337,75 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     loadProfile();
   }, []);
 
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  // ── Regex / validators ────────────────────────────────────────────────
+  // India PAN: 5 letters, 4 digits, 1 letter (exactly 10 chars).
+  const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+  // India GSTIN: 15 chars — 2 digit state + 10-char PAN + 1 entity + 1 Z + 1 check.
+  const GST_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+  // India pincode — 6 digits, can't start with 0.
+  const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
+
+  // Hard-input filters applied at keystroke time so the user can't type
+  // characters that would never be valid. Kept permissive enough not to
+  // frustrate copy-paste (we still coerce on input).
+  const sanitize = {
+    // PAN: letters + digits only, max 10, uppercase.
+    pan: (v: string) => v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10),
+    // GST: letters + digits only, max 15, uppercase.
+    gst: (v: string) => v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15),
+    // Digits only, exact max.
+    digitsMax: (v: string, max: number) => v.replace(/\D/g, '').slice(0, max),
+    // Name: letters + spaces + basic punctuation, no digits.
+    name: (v: string) => v.replace(/[0-9]/g, '').slice(0, 80),
+  };
+
+  // Per-field validator that returns an error string or empty.
+  const validateField = (field: keyof FormState, value: string): string => {
+    const trimmed = (value ?? '').trim();
+    switch (field) {
+      case 'panNumber':
+        if (!trimmed) return '';
+        if (trimmed.length !== 10) return 'PAN must be exactly 10 characters';
+        if (!PAN_REGEX.test(trimmed))
+          return 'Invalid PAN format (e.g. ABCDE1234F — 5 letters, 4 digits, 1 letter)';
+        return '';
+      case 'gstNumber':
+        if (!trimmed) return '';
+        if (trimmed.length !== 15) return 'GSTIN must be exactly 15 characters';
+        if (!GST_REGEX.test(trimmed))
+          return 'Invalid GSTIN format (15 chars: 2 digits + 10-char PAN + 3 alphanumeric)';
+        return '';
+      case 'pincode':
+      case 'warehousePincode':
+        if (!trimmed) return '';
+        if (!PINCODE_REGEX.test(trimmed))
+          return 'Pincode must be 6 digits and cannot start with 0';
+        return '';
+      case 'ownerName':
+      case 'businessName':
+        if (!trimmed) return '';
+        if (/[0-9]/.test(trimmed)) return 'Name cannot contain digits';
+        return '';
+      default:
+        return '';
+    }
+  };
+
   const handleChange = (field: keyof FormState, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    // Apply per-field hard sanitization so invalid characters never enter
+    // the state to begin with — the textbox physically refuses them.
+    let next = value;
+    if (field === 'panNumber') next = sanitize.pan(value);
+    else if (field === 'gstNumber') next = sanitize.gst(value);
+    else if (field === 'pincode' || field === 'warehousePincode')
+      next = sanitize.digitsMax(value, 6);
+    else if (field === 'ownerName' || field === 'businessName')
+      next = sanitize.name(value);
+
+    setForm((prev) => ({ ...prev, [field]: next }));
+    setFieldErrors((prev) => ({ ...prev, [field]: validateField(field, next) }));
   };
 
   const handleEdit = () => {
@@ -365,6 +432,29 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     e.preventDefault();
     setError('');
     setSuccessMessage('');
+
+    // Pre-submit re-validation of every constrained field. If any fails,
+    // populate all errors at once so the user sees everything that needs
+    // fixing in one pass rather than one-at-a-time.
+    const fields: Array<keyof FormState> = [
+      'ownerName',
+      'businessName',
+      'panNumber',
+      'gstNumber',
+      'pincode',
+      'warehousePincode',
+    ];
+    const errors: Record<string, string> = {};
+    for (const f of fields) {
+      const err = validateField(f, (form as any)[f] ?? '');
+      if (err) errors[f] = err;
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setError('Please fix the highlighted fields before saving.');
+      return;
+    }
+
     setIsSaving(true);
 
     try {
@@ -591,13 +681,19 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                     maxLength={6}
                     value={form.pincode}
                     onChange={(e) => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-                      handleChange('pincode', val);
-                      lookupPincode(val);
+                      handleChange('pincode', e.target.value);
+                      const sanitized = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      lookupPincode(sanitized);
                     }}
                     disabled={isSaving}
                     placeholder="ZIP / PIN code"
+                    style={fieldErrors.pincode ? { borderColor: '#dc2626' } : undefined}
                   />
+                  {fieldErrors.pincode && (
+                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
+                      {fieldErrors.pincode}
+                    </small>
+                  )}
                   {pincodeLoading && (
                     <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
                       Looking up pincode…
@@ -724,13 +820,29 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
             <div className="field">
               <label htmlFor="gstNumber">GST Number</label>
               {isEditing ? (
-                <input
-                  id="gstNumber"
-                  type="text"
-                  value={form.gstNumber}
-                  onChange={(e) => handleChange('gstNumber', e.target.value)}
-                  disabled={isSaving}
-                />
+                <>
+                  <input
+                    id="gstNumber"
+                    type="text"
+                    maxLength={15}
+                    value={form.gstNumber}
+                    onChange={(e) => handleChange('gstNumber', e.target.value)}
+                    disabled={isSaving}
+                    placeholder="e.g. 27AAAPA1234A1Z5"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    style={fieldErrors.gstNumber ? { borderColor: '#dc2626' } : undefined}
+                  />
+                  {fieldErrors.gstNumber ? (
+                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
+                      {fieldErrors.gstNumber}
+                    </small>
+                  ) : (
+                    <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
+                      15 characters · {form.gstNumber.length}/15
+                    </small>
+                  )}
+                </>
               ) : (
                 <div className={`value${profile.gstNumber ? '' : ' muted'}`}>
                   {profile.gstNumber || 'Not set'}
@@ -741,13 +853,29 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
             <div className="field">
               <label htmlFor="panNumber">PAN Number</label>
               {isEditing ? (
-                <input
-                  id="panNumber"
-                  type="text"
-                  value={form.panNumber}
-                  onChange={(e) => handleChange('panNumber', e.target.value)}
-                  disabled={isSaving}
-                />
+                <>
+                  <input
+                    id="panNumber"
+                    type="text"
+                    maxLength={10}
+                    value={form.panNumber}
+                    onChange={(e) => handleChange('panNumber', e.target.value)}
+                    disabled={isSaving}
+                    placeholder="e.g. ABCDE1234F"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    style={fieldErrors.panNumber ? { borderColor: '#dc2626' } : undefined}
+                  />
+                  {fieldErrors.panNumber ? (
+                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
+                      {fieldErrors.panNumber}
+                    </small>
+                  ) : (
+                    <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
+                      10 characters · 5 letters + 4 digits + 1 letter · {form.panNumber.length}/10
+                    </small>
+                  )}
+                </>
               ) : (
                 <div className={`value${profile.panNumber ? '' : ' muted'}`}>
                   {profile.panNumber || 'Not set'}
@@ -788,17 +916,23 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                     maxLength={6}
                     value={form.warehousePincode}
                     onChange={(e) => {
-                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
-                      handleChange('warehousePincode', val);
-                      lookupWarehousePincode(val);
+                      handleChange('warehousePincode', e.target.value);
+                      const sanitized = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      lookupWarehousePincode(sanitized);
                     }}
                     disabled={isSaving}
                     placeholder="6-digit pincode"
+                    style={fieldErrors.warehousePincode ? { borderColor: '#dc2626' } : undefined}
                   />
+                  {fieldErrors.warehousePincode && (
+                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
+                      {fieldErrors.warehousePincode}
+                    </small>
+                  )}
                   {warehousePincodeLoading && (
                     <small style={{ color: '#6b7280' }}>Looking up pincode…</small>
                   )}
-                  {warehousePincodeError && (
+                  {warehousePincodeError && !fieldErrors.warehousePincode && (
                     <small style={{ color: '#dc2626' }}>{warehousePincodeError}</small>
                   )}
                   {warehousePincodeData && !warehousePincodeError && !warehousePincodeLoading && (

@@ -293,6 +293,8 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           paymentStatus: isOnline ? 'PENDING' : 'PENDING',
           orderStatus: isOnline ? 'PENDING_PAYMENT' : 'PLACED',
           itemCount: input.itemCount,
+          discountCode: input.discountCode ?? null,
+          discountAmount: input.discountAmount ?? 0,
         },
       });
 

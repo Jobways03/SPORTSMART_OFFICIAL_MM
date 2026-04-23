@@ -17,4 +17,16 @@ export class DiscountPublicFacade {
   }) {
     return this.discountsService.list(filters);
   }
+
+  async validateCouponForCheckout(
+    code: string,
+    subtotal: number,
+    items: Array<{ productId: string; quantity: number; unitPrice: number }> = [],
+  ) {
+    return this.discountsService.validateCouponForCheckout(code, subtotal, items);
+  }
+
+  async incrementUsedCount(id: string) {
+    return this.discountsService.incrementUsedCount(id);
+  }
 }
