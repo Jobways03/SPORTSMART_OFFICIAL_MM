@@ -51,7 +51,9 @@ export class AdminCustomerService {
       const { addresses, orders, ...rest } = c;
       return {
         ...rest,
-        location: addr ? `${addr.city} ${addr.state}, ${addr.country}` : null,
+        location: addr
+          ? [addr.city, addr.state, addr.country].filter(Boolean).join(', ')
+          : null,
         orderCount,
         amountSpent,
       };

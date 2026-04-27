@@ -96,90 +96,146 @@ const fmtDateTime = (d: string) => {
   );
 };
 
-/* -- order status helpers -- */
-const orderStatusColor = (status: string): string => {
-  switch (status) {
-    case 'PLACED': return '#d97706';
-    case 'PENDING_VERIFICATION': return '#d97706';
-    case 'VERIFIED': return '#2563eb';
-    case 'ROUTED_TO_SELLER': return '#7c3aed';
-    case 'SELLER_ACCEPTED': return '#16a34a';
-    case 'DISPATCHED': return '#0d9488';
-    case 'DELIVERED': return '#15803d';
-    case 'CANCELLED': return '#dc2626';
-    case 'EXCEPTION_QUEUE': return '#dc2626';
-    default: return '#6b7280';
-  }
+/* -- pill tones (shared design language) -- */
+type PillTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+const pillTones: Record<
+  PillTone,
+  { bg: string; color: string; border: string; dot: string }
+> = {
+  success: {
+    bg: 'rgba(22, 163, 74, 0.08)',
+    color: '#15803d',
+    border: 'rgba(22, 163, 74, 0.2)',
+    dot: '#16a34a',
+  },
+  warning: {
+    bg: 'rgba(245, 158, 11, 0.1)',
+    color: '#b45309',
+    border: 'rgba(245, 158, 11, 0.25)',
+    dot: '#f59e0b',
+  },
+  danger: {
+    bg: 'rgba(220, 38, 38, 0.08)',
+    color: '#b91c1c',
+    border: 'rgba(220, 38, 38, 0.2)',
+    dot: '#dc2626',
+  },
+  info: {
+    bg: 'rgba(14, 116, 144, 0.08)',
+    color: '#0e7490',
+    border: 'rgba(14, 116, 144, 0.2)',
+    dot: '#0891b2',
+  },
+  neutral: {
+    bg: '#f1f5f9',
+    color: '#475569',
+    border: '#e2e8f0',
+    dot: '#94a3b8',
+  },
 };
 
-const orderStatusLabel = (status: string): string => {
-  switch (status) {
-    case 'PLACED': return 'Placed';
-    case 'PENDING_VERIFICATION': return 'Pending Verification';
-    case 'VERIFIED': return 'Verified';
-    case 'ROUTED_TO_SELLER': return 'Routed to Seller';
-    case 'SELLER_ACCEPTED': return 'Seller Accepted';
-    case 'DISPATCHED': return 'Dispatched';
-    case 'DELIVERED': return 'Delivered';
-    case 'CANCELLED': return 'Cancelled';
-    case 'EXCEPTION_QUEUE': return 'Exception Queue';
-    default: return status;
-  }
-};
-
-function Badge({ text, color }: { text: string; color: string }) {
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        fontSize: 11,
-        fontWeight: 700,
-        padding: '3px 10px',
-        borderRadius: 4,
-        background: color,
-        color: '#fff',
-        textTransform: 'capitalize',
-      }}
-    >
-      {text}
-    </span>
-  );
-}
-
-function OrderStatusBadge({ status }: { status: string }) {
-  const color = orderStatusColor(status);
-  const label = orderStatusLabel(status);
+function Pill({
+  label,
+  tone,
+  size = 'sm',
+}: {
+  label: string;
+  tone: PillTone;
+  size?: 'xs' | 'sm';
+}) {
+  const t = pillTones[tone];
   return (
     <span
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        fontSize: 12,
-        fontWeight: 700,
-        padding: '4px 12px',
-        borderRadius: 6,
-        background: color + '15',
-        color,
-        border: `1px solid ${color}30`,
+        padding: size === 'xs' ? '2px 8px 2px 6px' : '3px 10px 3px 8px',
+        fontSize: size === 'xs' ? 11 : 12,
+        fontWeight: 500,
+        borderRadius: 999,
+        border: `1px solid ${t.border}`,
+        background: t.bg,
+        color: t.color,
+        lineHeight: 1.4,
+        whiteSpace: 'nowrap',
       }}
     >
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: t.dot,
+          flexShrink: 0,
+        }}
+      />
       {label}
     </span>
   );
 }
 
-function badgeColor(status: string) {
-  if (status === 'PAID' || status === 'FULFILLED' || status === 'ACCEPTED') return '#22c55e';
-  if (status === 'REJECTED' || status === 'CANCELLED' || status === 'VOIDED') return '#ef4444';
-  return '#f59e0b';
+/* -- status → pill mappings -- */
+const orderStatusPill = (status: string): { label: string; tone: PillTone } => {
+  switch (status) {
+    case 'PLACED':
+      return { label: 'Placed', tone: 'warning' };
+    case 'PENDING_VERIFICATION':
+      return { label: 'Pending verification', tone: 'warning' };
+    case 'VERIFIED':
+      return { label: 'Verified', tone: 'info' };
+    case 'ROUTED_TO_SELLER':
+      return { label: 'Routed to seller', tone: 'info' };
+    case 'SELLER_ACCEPTED':
+      return { label: 'Seller accepted', tone: 'success' };
+    case 'DISPATCHED':
+      return { label: 'Dispatched', tone: 'info' };
+    case 'DELIVERED':
+      return { label: 'Delivered', tone: 'success' };
+    case 'CANCELLED':
+      return { label: 'Cancelled', tone: 'danger' };
+    case 'EXCEPTION_QUEUE':
+      return { label: 'Exception queue', tone: 'danger' };
+    default:
+      return { label: status.replace(/_/g, ' ').toLowerCase(), tone: 'neutral' };
+  }
+};
+
+function OrderStatusBadge({ status }: { status: string }) {
+  const p = orderStatusPill(status);
+  return <Pill label={p.label} tone={p.tone} />;
+}
+
+const deriveBadgeTone = (text: string): PillTone => {
+  const up = text.toUpperCase();
+  // Success signals
+  if (['PAID', 'FULFILLED', 'ACCEPTED', 'DELIVERED'].includes(up)) return 'success';
+  // Danger signals
+  if (['REJECTED', 'CANCELLED', 'VOIDED', 'REFUNDED'].includes(up)) return 'danger';
+  // Info (in-motion)
+  if (['SHIPPED', 'OUT FOR DELIVERY', 'IN TRANSIT', 'DISPATCHED'].includes(up))
+    return 'info';
+  // Warning (pending)
+  if (['PACKED', 'UNFULFILLED', 'PENDING', 'OPEN'].includes(up))
+    return 'warning';
+  return 'neutral';
+};
+
+function Badge({ text }: { text: string; color?: string }) {
+  // Back-compat shim — `color` prop is ignored; tone derived from text.
+  const tone = deriveBadgeTone(text);
+  const label = text
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return <Pill label={label} tone={tone} size="xs" />;
 }
 
 const fulfillmentLabel = (status: string) => {
   switch (status) {
     case 'DELIVERED': return 'Delivered';
-    case 'FULFILLED': return 'Out for Delivery';
+    case 'FULFILLED': return 'Out for delivery';
     case 'SHIPPED': return 'Shipped';
     case 'PACKED': return 'Packed';
     case 'CANCELLED': return 'Cancelled';
@@ -187,16 +243,25 @@ const fulfillmentLabel = (status: string) => {
   }
 };
 
-const fulfillmentColor = (status: string) => {
+const fulfillmentPillTone = (status: string): PillTone => {
   switch (status) {
-    case 'DELIVERED': return '#7c3aed';
-    case 'FULFILLED': return '#22c55e';
-    case 'SHIPPED': return '#2563eb';
-    case 'PACKED': return '#d97706';
-    case 'CANCELLED': return '#ef4444';
-    default: return '#f59e0b';
+    case 'DELIVERED': return 'success';
+    case 'FULFILLED': return 'info';
+    case 'SHIPPED': return 'info';
+    case 'PACKED': return 'warning';
+    case 'CANCELLED': return 'danger';
+    default: return 'warning';
   }
 };
+
+// Back-compat: existing code calls `fulfillmentColor(status)` and feeds it
+// to the old <Badge>. Keep the export but have it return an arbitrary hex —
+// the Badge shim no longer uses it.
+const fulfillmentColor = (_status: string) => '#94a3b8';
+
+// Back-compat alias for accept-status <Badge> callers (unused by Badge now
+// but kept so any direct callers still compile).
+const badgeColor = (_status: string) => '#94a3b8';
 
 /* -- page -- */
 export default function OrderDetailPage() {
@@ -252,14 +317,70 @@ export default function OrderDetailPage() {
   };
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: 60, color: '#6b7280' }}>Loading order...</div>;
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 12,
+          padding: '80px 20px',
+          color: '#64748b',
+          fontSize: 13,
+        }}
+      >
+        <div
+          style={{
+            width: 24,
+            height: 24,
+            border: '2px solid #e2e8f0',
+            borderTopColor: '#0f172a',
+            borderRadius: '50%',
+            animation: 'order-detail-spin 0.8s linear infinite',
+          }}
+          aria-hidden="true"
+        />
+        <style>{`@keyframes order-detail-spin { to { transform: rotate(360deg); } }`}</style>
+        Loading order…
+      </div>
+    );
   }
   if (!order) {
     return (
-      <div style={{ textAlign: 'center', padding: 60 }}>
-        <h3 style={{ fontWeight: 600, marginBottom: 8 }}>Order not found</h3>
-        <Link href="/dashboard/orders" style={{ color: '#2563eb' }}>
-          Back to Orders
+      <div
+        style={{
+          maxWidth: 420,
+          margin: '60px auto 0',
+          textAlign: 'center',
+          padding: '40px 24px',
+          background: '#ffffff',
+          border: '1px solid #e2e8f0',
+          borderRadius: 12,
+        }}
+      >
+        <h3
+          style={{
+            margin: 0,
+            fontSize: 18,
+            fontWeight: 600,
+            color: '#0f172a',
+          }}
+        >
+          Order not found
+        </h3>
+        <p style={{ margin: '6px 0 20px', fontSize: 13, color: '#64748b' }}>
+          This order may have been removed or the link is invalid.
+        </p>
+        <Link
+          href="/dashboard/orders"
+          style={{
+            fontSize: 13,
+            fontWeight: 500,
+            color: '#00805f',
+            textDecoration: 'none',
+          }}
+        >
+          ← Back to Orders
         </Link>
       </div>
     );
@@ -272,30 +393,93 @@ export default function OrderDetailPage() {
   const isExceptionQueue = currentStatus === 'EXCEPTION_QUEUE';
 
   return (
-    <div>
+    <div
+      style={{
+        color: '#0f172a',
+        fontFamily:
+          '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+      }}
+    >
       {/* -- breadcrumb -- */}
-      <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>
-        <Link href="/dashboard/orders" style={{ color: '#6b7280', textDecoration: 'none' }}>
-          ORDERS
-        </Link>{' '}
-        &rsaquo; ORDER DETAILS
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 13,
+          marginBottom: 12,
+        }}
+      >
+        <Link
+          href="/dashboard/orders"
+          style={{
+            color: '#64748b',
+            textDecoration: 'none',
+            fontWeight: 500,
+          }}
+        >
+          Orders
+        </Link>
+        <span style={{ color: '#cbd5e1' }} aria-hidden="true">
+          /
+        </span>
+        <span style={{ color: '#0f172a', fontWeight: 500 }}>
+          #{order.orderNumber}
+        </span>
       </div>
 
       {/* -- header -- */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
-            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Order {order.orderNumber}</h1>
+      <header
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: 16,
+          marginBottom: 24,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              marginBottom: 6,
+              flexWrap: 'wrap',
+            }}
+          >
+            <h1
+              style={{
+                fontSize: 24,
+                fontWeight: 700,
+                margin: 0,
+                letterSpacing: '-0.01em',
+                color: '#0f172a',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              Order #{order.orderNumber}
+            </h1>
             <OrderStatusBadge status={currentStatus} />
             {order.paymentStatus === 'CANCELLED' && (
-              <Badge text="CANCELLED" color="#dc2626" />
+              <Pill label="Payment cancelled" tone="danger" size="xs" />
             )}
           </div>
-          <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>
-            {order.subOrders.length} sub-order{order.subOrders.length !== 1 ? 's' : ''} | {totalItems} item{totalItems !== 1 ? 's' : ''}
+          <p
+            style={{
+              fontSize: 13,
+              color: '#64748b',
+              margin: 0,
+            }}
+          >
+            {order.subOrders.length} sub-order
+            {order.subOrders.length !== 1 ? 's' : ''} · {totalItems} item
+            {totalItems !== 1 ? 's' : ''} · Placed{' '}
+            {fmtDateTime(order.createdAt)}
           </p>
         </div>
-      </div>
+      </header>
 
       {/* -- Exception Queue Banner -- */}
       {isExceptionQueue && (
@@ -873,16 +1057,16 @@ function SideRow({ label, value }: { label: string; value: React.ReactNode }) {
 
 /* -- styles -- */
 const cardStyle: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: '#ffffff',
+  border: '1px solid #e2e8f0',
   borderRadius: 10,
   padding: 20,
   marginBottom: 16,
 };
 
 const sideCard: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
+  background: '#ffffff',
+  border: '1px solid #e2e8f0',
   borderRadius: 10,
   padding: 18,
   marginBottom: 14,
@@ -890,41 +1074,47 @@ const sideCard: React.CSSProperties = {
 
 const sectionTitle: React.CSSProperties = {
   fontSize: 15,
-  fontWeight: 700,
+  fontWeight: 600,
   margin: '0 0 4px 0',
-  textTransform: 'uppercase',
-  letterSpacing: '0.02em',
+  color: '#0f172a',
+  letterSpacing: '-0.01em',
 };
 
 const colTitle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#374151',
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#64748b',
   textTransform: 'uppercase',
+  letterSpacing: '0.05em',
   margin: '0 0 10px 0',
 };
 
 const sideCardTitle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 700,
-  margin: '0 0 4px 0',
-  textTransform: 'uppercase',
-  letterSpacing: '0.02em',
+  fontSize: 13,
+  fontWeight: 600,
+  margin: '0 0 8px 0',
+  color: '#0f172a',
+  letterSpacing: '-0.005em',
 };
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',
-  padding: '10px 10px',
+  padding: '10px',
   fontWeight: 600,
   fontSize: 11,
-  color: '#6b7280',
+  color: '#64748b',
   textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  background: '#f8fafc',
+  borderBottom: '1px solid #e2e8f0',
   whiteSpace: 'nowrap',
 };
 
 const tdStyle: React.CSSProperties = {
   padding: '10px',
   verticalAlign: 'middle',
+  color: '#0f172a',
+  fontSize: 13,
 };
 
 const btnSuccess: React.CSSProperties = {

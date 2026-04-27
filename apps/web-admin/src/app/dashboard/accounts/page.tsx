@@ -26,6 +26,30 @@ function formatNumber(value: number): string {
   return (Number(value) || 0).toLocaleString('en-IN');
 }
 
+function initials(str: string): string {
+  return (
+    str
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((s) => s[0])
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+function avatarColor(seed: string): { bg: string; fg: string } {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = seed.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash) % 360;
+  return {
+    bg: `hsl(${hue}, 42%, 94%)`,
+    fg: `hsl(${hue}, 48%, 30%)`,
+  };
+}
+
 export default function AccountsDashboardPage() {
   const router = useRouter();
   const [platform, setPlatform] = useState<PlatformOverview | null>(null);
@@ -252,29 +276,39 @@ export default function AccountsDashboardPage() {
                     <p>No sellers data available.</p>
                   </div>
                 ) : (
-                  (topPerformers?.topSellers || []).slice(0, 5).map((seller, idx) => (
-                    <div
-                      key={seller.sellerId}
-                      className={`top-performer-row${
-                        idx === 0 ? ' gold' : idx === 1 ? ' silver' : idx === 2 ? ' bronze' : ''
-                      }`}
-                    >
-                      <div className="top-performer-rank">{idx + 1}</div>
-                      <div className="top-performer-info">
-                        <div className="top-performer-name">{seller.sellerName}</div>
-                        <div className="top-performer-meta">
-                          {formatNumber(seller.totalOrders)} orders
+                  (topPerformers?.topSellers || []).slice(0, 5).map((seller, idx) => {
+                    const c = avatarColor(seller.sellerName + seller.sellerId);
+                    return (
+                      <div
+                        key={seller.sellerId}
+                        className={`top-performer-row${
+                          idx === 0 ? ' gold' : idx === 1 ? ' silver' : idx === 2 ? ' bronze' : ''
+                        }`}
+                      >
+                        <div className="top-performer-rank">{idx + 1}</div>
+                        <div
+                          className="top-performer-avatar"
+                          style={{ background: c.bg, color: c.fg }}
+                          aria-hidden="true"
+                        >
+                          {initials(seller.sellerName)}
+                        </div>
+                        <div className="top-performer-info">
+                          <div className="top-performer-name">{seller.sellerName}</div>
+                          <div className="top-performer-meta">
+                            {formatNumber(seller.totalOrders)} orders
+                          </div>
+                        </div>
+                        <div className="top-performer-value">
+                          {formatCurrency(seller.totalRevenue)}
+                          <span className="margin">
+                            Margin: {formatCurrency(seller.platformMargin)} (
+                            {(Number(seller.marginPercentage) || 0).toFixed(1)}%)
+                          </span>
                         </div>
                       </div>
-                      <div className="top-performer-value">
-                        {formatCurrency(seller.totalRevenue)}
-                        <span className="margin">
-                          Margin: {formatCurrency(seller.platformMargin)} (
-                          {(Number(seller.marginPercentage) || 0).toFixed(1)}%)
-                        </span>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             ) : (
@@ -284,29 +318,39 @@ export default function AccountsDashboardPage() {
                     <p>No franchises data available.</p>
                   </div>
                 ) : (
-                  (topPerformers?.topFranchises || []).slice(0, 5).map((franchise, idx) => (
-                    <div
-                      key={franchise.franchiseId}
-                      className={`top-performer-row${
-                        idx === 0 ? ' gold' : idx === 1 ? ' silver' : idx === 2 ? ' bronze' : ''
-                      }`}
-                    >
-                      <div className="top-performer-rank">{idx + 1}</div>
-                      <div className="top-performer-info">
-                        <div className="top-performer-name">{franchise.franchiseName}</div>
-                        <div className="top-performer-meta">
-                          {formatNumber(franchise.totalOnlineOrders)} online orders &middot;{' '}
-                          {formatNumber(franchise.totalProcurements)} procurements
+                  (topPerformers?.topFranchises || []).slice(0, 5).map((franchise, idx) => {
+                    const c = avatarColor(franchise.franchiseName + franchise.franchiseId);
+                    return (
+                      <div
+                        key={franchise.franchiseId}
+                        className={`top-performer-row${
+                          idx === 0 ? ' gold' : idx === 1 ? ' silver' : idx === 2 ? ' bronze' : ''
+                        }`}
+                      >
+                        <div className="top-performer-rank">{idx + 1}</div>
+                        <div
+                          className="top-performer-avatar"
+                          style={{ background: c.bg, color: c.fg }}
+                          aria-hidden="true"
+                        >
+                          {initials(franchise.franchiseName)}
+                        </div>
+                        <div className="top-performer-info">
+                          <div className="top-performer-name">{franchise.franchiseName}</div>
+                          <div className="top-performer-meta">
+                            {formatNumber(franchise.totalOnlineOrders)} online orders &middot;{' '}
+                            {formatNumber(franchise.totalProcurements)} procurements
+                          </div>
+                        </div>
+                        <div className="top-performer-value">
+                          {formatCurrency(franchise.totalRevenue)}
+                          <span className="margin">
+                            Earning: {formatCurrency(franchise.platformEarning)}
+                          </span>
                         </div>
                       </div>
-                      <div className="top-performer-value">
-                        {formatCurrency(franchise.totalRevenue)}
-                        <span className="margin">
-                          Earning: {formatCurrency(franchise.platformEarning)}
-                        </span>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             )}

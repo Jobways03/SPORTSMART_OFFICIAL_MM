@@ -70,7 +70,6 @@ export default function StorefrontCommissionPage() {
     new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
   const totalCommission = data?.records.reduce((a, r) => a + Number(r.totalCommission), 0) ?? 0;
-  const totalAdminEarning = data?.records.reduce((a, r) => a + Number(r.adminEarning), 0) ?? 0;
   const totalSellerEarning = data?.records.reduce((a, r) => a + Number(r.productEarning), 0) ?? 0;
   const totalRefunded = data?.records.reduce((a, r) => a + Number(r.refundedAdminEarning), 0) ?? 0;
 
@@ -130,7 +129,6 @@ export default function StorefrontCommissionPage() {
       {data && data.records.length > 0 && (
         <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
           <SummaryCard label="Total Commission" value={fmt(totalCommission)} color="#2563eb" />
-          <SummaryCard label="Admin Earning" value={fmt(totalAdminEarning)} color="#16a34a" />
           <SummaryCard label="Seller Earning" value={fmt(totalSellerEarning)} color="#7c3aed" />
           <SummaryCard label="Refunded" value={fmt(totalRefunded)} color="#dc2626" />
           <SummaryCard label="Total Records" value={String(data.pagination.total)} color="#374151" />
@@ -163,9 +161,7 @@ export default function StorefrontCommissionPage() {
                     <Th label="QTY" />
                     <Th label="UNIT PRICE" />
                     <Th label="TOTAL PRICE" />
-                    <Th label="RATE" />
                     <Th label="COMMISSION" />
-                    <Th label="ADMIN EARNING" />
                     <Th label="SELLER EARNING" />
                     <Th label="REFUNDED" />
                   </tr>
@@ -194,9 +190,7 @@ export default function StorefrontCommissionPage() {
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{r.quantity}</td>
                       <td style={tdNumStyle}>{fmt(Number(r.unitPrice))}</td>
                       <td style={tdNumStyle}>{fmt(Number(r.totalPrice))}</td>
-                      <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>{r.commissionRate}</td>
                       <td style={{ ...tdNumStyle, fontWeight: 600, color: '#dc2626' }}>{fmt(Number(r.totalCommission))}</td>
-                      <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 600 }}>{fmt(Number(r.adminEarning))}</td>
                       <td style={{ ...tdNumStyle, color: '#7c3aed', fontWeight: 600 }}>{fmt(Number(r.productEarning))}</td>
                       <td style={{
                         ...tdNumStyle,

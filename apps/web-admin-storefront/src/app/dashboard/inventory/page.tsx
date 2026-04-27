@@ -67,11 +67,13 @@ export default function InventoryDashboardPage() {
   const [lowStockItems, setLowStockItems] = useState<LowStockItem[]>([]);
   const [lowStockPagination, setLowStockPagination] = useState<Pagination>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [lowStockLoading, setLowStockLoading] = useState(false);
+  const [lowStockFetched, setLowStockFetched] = useState(false);
 
   // Out of stock data
   const [outOfStockItems, setOutOfStockItems] = useState<OutOfStockProduct[]>([]);
   const [outOfStockPagination, setOutOfStockPagination] = useState<Pagination>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [outOfStockLoading, setOutOfStockLoading] = useState(false);
+  const [outOfStockFetched, setOutOfStockFetched] = useState(false);
 
   const fetchOverview = useCallback(async () => {
     setOverviewLoading(true);
@@ -105,6 +107,7 @@ export default function InventoryDashboardPage() {
       }
     } finally {
       setLowStockLoading(false);
+      setLowStockFetched(true);
     }
   }, [router]);
 
@@ -125,6 +128,7 @@ export default function InventoryDashboardPage() {
       }
     } finally {
       setOutOfStockLoading(false);
+      setOutOfStockFetched(true);
     }
   }, [router]);
 
@@ -133,13 +137,13 @@ export default function InventoryDashboardPage() {
   }, [fetchOverview]);
 
   useEffect(() => {
-    if (activeTab === 'lowStock' && lowStockItems.length === 0 && !lowStockLoading) {
+    if (activeTab === 'lowStock' && !lowStockFetched && !lowStockLoading) {
       fetchLowStock();
     }
-    if (activeTab === 'outOfStock' && outOfStockItems.length === 0 && !outOfStockLoading) {
+    if (activeTab === 'outOfStock' && !outOfStockFetched && !outOfStockLoading) {
       fetchOutOfStock();
     }
-  }, [activeTab, lowStockItems.length, outOfStockItems.length, lowStockLoading, outOfStockLoading, fetchLowStock, fetchOutOfStock]);
+  }, [activeTab, lowStockFetched, outOfStockFetched, lowStockLoading, outOfStockLoading, fetchLowStock, fetchOutOfStock]);
 
   // ---- Styles ----
 

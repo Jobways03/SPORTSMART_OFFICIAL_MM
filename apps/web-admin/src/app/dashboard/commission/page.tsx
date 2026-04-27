@@ -112,8 +112,14 @@ interface Reconciliation {
   mismatches: string[];
 }
 
-function Th({ label }: { label: string }) {
-  return <th style={thStyle}>{label}</th>;
+function Th({
+  label,
+  align = 'left',
+}: {
+  label: string;
+  align?: 'left' | 'right' | 'center';
+}) {
+  return <th style={{ ...thStyle, textAlign: align }}>{label}</th>;
 }
 
 type TabType = 'records' | 'sellers' | 'cycles' | 'reconciliation';
@@ -226,26 +232,34 @@ export default function AdminCommissionPage() {
   const hasFilters = search || dateFrom || dateTo || statusFilter;
 
   const statusBadge = (s: string) => {
-    const colors: Record<string, { bg: string; color: string }> = {
-      PENDING: { bg: '#fef3c7', color: '#92400e' },
-      SETTLED: { bg: '#d1fae5', color: '#065f46' },
-      PAID: { bg: '#d1fae5', color: '#065f46' },
-      APPROVED: { bg: '#dbeafe', color: '#1e40af' },
-      DRAFT: { bg: '#f3f4f6', color: '#374151' },
-      PREVIEWED: { bg: '#e0e7ff', color: '#3730a3' },
-      REFUNDED: { bg: '#fee2e2', color: '#991b1b' },
+    const tones: Record<string, { bg: string; color: string; border: string; dot: string }> = {
+      PENDING: { bg: 'rgba(245, 158, 11, 0.1)', color: '#b45309', border: 'rgba(245, 158, 11, 0.25)', dot: '#f59e0b' },
+      SETTLED: { bg: 'rgba(22, 163, 74, 0.08)', color: '#15803d', border: 'rgba(22, 163, 74, 0.2)', dot: '#16a34a' },
+      PAID: { bg: 'rgba(22, 163, 74, 0.08)', color: '#15803d', border: 'rgba(22, 163, 74, 0.2)', dot: '#16a34a' },
+      APPROVED: { bg: 'rgba(14, 116, 144, 0.08)', color: '#0e7490', border: 'rgba(14, 116, 144, 0.2)', dot: '#0891b2' },
+      DRAFT: { bg: '#f1f5f9', color: '#475569', border: '#e2e8f0', dot: '#94a3b8' },
+      PREVIEWED: { bg: 'rgba(14, 116, 144, 0.08)', color: '#0e7490', border: 'rgba(14, 116, 144, 0.2)', dot: '#0891b2' },
+      REFUNDED: { bg: 'rgba(220, 38, 38, 0.08)', color: '#b91c1c', border: 'rgba(220, 38, 38, 0.2)', dot: '#dc2626' },
     };
-    const c = colors[s] || { bg: '#f3f4f6', color: '#374151' };
+    const t = tones[s] || { bg: '#f1f5f9', color: '#475569', border: '#e2e8f0', dot: '#94a3b8' };
+    const label = s.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
     return (
       <span style={{
-        padding: '2px 8px',
-        borderRadius: 4,
-        fontSize: 11,
-        fontWeight: 600,
-        background: c.bg,
-        color: c.color,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '3px 10px 3px 8px',
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 500,
+        background: t.bg,
+        color: t.color,
+        border: `1px solid ${t.border}`,
+        lineHeight: 1.4,
+        whiteSpace: 'nowrap',
       }}>
-        {s}
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.dot, flexShrink: 0 }} />
+        {label}
       </span>
     );
   };
@@ -316,63 +330,95 @@ export default function AdminCommissionPage() {
   };
 
   return (
-    <div>
+    <div style={{ color: '#0f172a', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Commission & Settlements</h1>
-          <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, letterSpacing: '-0.01em', color: '#0f172a' }}>
+            Commission &amp; Settlements
+          </h1>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
             Platform margin tracking, settlement cycles, and reconciliation.
           </p>
         </div>
         <Link
           href="/dashboard/commission/settings"
           style={{
-            padding: '10px 22px',
-            fontSize: 13,
-            fontWeight: 600,
-            background: '#2563eb',
-            color: '#fff',
-            borderRadius: 6,
-            textDecoration: 'none',
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
+            height: 38,
+            padding: '0 16px',
+            fontSize: 13,
+            fontWeight: 600,
+            background: '#0f172a',
+            color: '#ffffff',
+            border: '1px solid #0f172a',
+            borderRadius: 8,
+            textDecoration: 'none',
           }}
         >
-          Commission Settings
+          Commission settings
         </Link>
       </div>
 
       {/* Summary cards */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
-        <SummaryCard label="Total Platform Revenue" value={fmt(marginSummary?.totalPlatformRevenue ?? 0)} color="#2563eb" />
-        <SummaryCard label="Total Seller Payouts" value={fmt(marginSummary?.totalSellerPayouts ?? 0)} color="#dc2626" />
-        <SummaryCard label="Total Platform Margin" value={fmt(marginSummary?.totalPlatformMargin ?? 0)} color="#16a34a" />
-        <SummaryCard label="Pending Settlement" value={fmt(marginSummary?.pendingSettlementAmount ?? 0)} color="#d97706" />
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: 12,
+        marginBottom: 20,
+      }}>
+        <SummaryCard label="Total platform revenue" value={fmt(marginSummary?.totalPlatformRevenue ?? 0)} />
+        <SummaryCard label="Total seller payouts" value={fmt(marginSummary?.totalSellerPayouts ?? 0)} />
+        <SummaryCard label="Total platform margin" value={fmt(marginSummary?.totalPlatformMargin ?? 0)} valueColor="#15803d" />
+        <SummaryCard label="Pending settlement" value={fmt(marginSummary?.pendingSettlementAmount ?? 0)} valueColor="#b45309" />
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e5e7eb', marginBottom: 20 }}>
-        {(['records', 'sellers', 'cycles', 'reconciliation'] as TabType[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{
-              padding: '10px 24px',
-              fontSize: 13,
-              fontWeight: 600,
-              border: 'none',
-              borderBottom: activeTab === tab ? '2px solid #2563eb' : '2px solid transparent',
-              background: 'none',
-              color: activeTab === tab ? '#2563eb' : '#6b7280',
-              cursor: 'pointer',
-              marginBottom: -2,
-            }}
-          >
-            {tab === 'records' ? 'Records' : tab === 'sellers' ? 'Seller Breakdown' : tab === 'cycles' ? 'Settlement Cycles' : 'Reconciliation'}
-          </button>
-        ))}
+      {/* Tab bar — segmented pill style */}
+      <div
+        role="tablist"
+        aria-label="Commission tabs"
+        style={{
+          display: 'inline-flex',
+          gap: 4,
+          padding: 4,
+          background: '#f1f5f9',
+          border: '1px solid #e2e8f0',
+          borderRadius: 10,
+          marginBottom: 16,
+          flexWrap: 'wrap',
+        }}
+      >
+        {(['records', 'sellers', 'cycles', 'reconciliation'] as TabType[]).map((tab) => {
+          const active = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setActiveTab(tab)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                height: 30,
+                padding: '0 14px',
+                fontSize: 13,
+                fontWeight: active ? 600 : 500,
+                border: 'none',
+                borderRadius: 7,
+                background: active ? '#ffffff' : 'transparent',
+                color: active ? '#0f172a' : '#475569',
+                cursor: 'pointer',
+                boxShadow: active ? '0 1px 2px rgba(15, 23, 42, 0.06)' : 'none',
+                fontFamily: 'inherit',
+                transition: 'background-color 0.12s, color 0.12s',
+              }}
+            >
+              {tab === 'records' ? 'Records' : tab === 'sellers' ? 'Seller breakdown' : tab === 'cycles' ? 'Settlement cycles' : 'Reconciliation'}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Tab: Commission Records ── */}
@@ -443,10 +489,10 @@ export default function AdminCommissionPage() {
                         <Th label="DATE" />
                         <Th label="SELLER" />
                         <Th label="PRODUCT" />
-                        <Th label="QTY" />
-                        <Th label="PLATFORM PRICE" />
-                        <Th label="SETTLEMENT PRICE" />
-                        <Th label="PLATFORM MARGIN" />
+                        <Th label="QTY" align="center" />
+                        <Th label="PLATFORM PRICE" align="right" />
+                        <Th label="SETTLEMENT PRICE" align="right" />
+                        <Th label="PLATFORM MARGIN" align="right" />
                         <Th label="STATUS" />
                       </tr>
                     </thead>
@@ -507,11 +553,11 @@ export default function AdminCommissionPage() {
                     <thead>
                       <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
                         <Th label="SELLER" />
-                        <Th label="RECORDS" />
-                        <Th label="PLATFORM AMOUNT" />
-                        <Th label="SETTLEMENT AMOUNT" />
-                        <Th label="PLATFORM MARGIN" />
-                        <Th label="MARGIN %" />
+                        <Th label="RECORDS" align="right" />
+                        <Th label="PLATFORM AMOUNT" align="right" />
+                        <Th label="SETTLEMENT AMOUNT" align="right" />
+                        <Th label="PLATFORM MARGIN" align="right" />
+                        <Th label="MARGIN %" align="right" />
                       </tr>
                     </thead>
                     <tbody>
@@ -625,11 +671,11 @@ export default function AdminCommissionPage() {
                   <thead>
                     <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
                       <Th label="SELLER" />
-                      <Th label="ORDERS" />
-                      <Th label="ITEMS" />
-                      <Th label="PLATFORM AMT" />
-                      <Th label="SETTLEMENT AMT" />
-                      <Th label="MARGIN" />
+                      <Th label="ORDERS" align="center" />
+                      <Th label="ITEMS" align="center" />
+                      <Th label="PLATFORM AMT" align="right" />
+                      <Th label="SETTLEMENT AMT" align="right" />
+                      <Th label="MARGIN" align="right" />
                       <Th label="STATUS" />
                       <Th label="UTR" />
                       <Th label="ACTIONS" />
@@ -806,29 +852,56 @@ export default function AdminCommissionPage() {
 
 /* ── Components ── */
 
-function SummaryCard({ label, value, color }: { label: string; value: string; color: string }) {
+function SummaryCard({
+  label,
+  value,
+  valueColor,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+  valueColor?: string;
+}) {
   return (
-    <div style={{ flex: '1 1 200px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '16px 20px', borderTop: `3px solid ${color}` }}>
-      <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+    <div style={{
+      background: '#ffffff',
+      border: '1px solid #e2e8f0',
+      borderRadius: 10,
+      padding: '16px 18px',
+    }}>
+      <div style={{
+        fontSize: 11,
+        color: '#64748b',
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        marginBottom: 8,
+      }}>{label}</div>
+      <div style={{
+        fontSize: 22,
+        fontWeight: 700,
+        color: valueColor ?? '#0f172a',
+        letterSpacing: '-0.01em',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{value}</div>
     </div>
   );
 }
 
 function MiniCard({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 16px' }}>
-      <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: '#111827' }}>{value}</div>
+    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px' }}>
+      <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
     </div>
   );
 }
 
 function ReconcileCard({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '16px 20px' }}>
-      <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: '#111827' }}>{value}</div>
+    <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '16px 18px' }}>
+      <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
     </div>
   );
 }
@@ -839,64 +912,79 @@ const filterLabelStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 11,
   fontWeight: 600,
-  color: '#6b7280',
+  color: '#64748b',
   textTransform: 'uppercase',
-  letterSpacing: '0.03em',
+  letterSpacing: '0.05em',
   marginBottom: 4,
 };
 
 const filterInputStyle: React.CSSProperties = {
   width: '100%',
-  padding: '8px 10px',
+  height: 38,
+  padding: '0 12px',
   fontSize: 13,
-  border: '1px solid #d1d5db',
-  borderRadius: 6,
-  background: '#fff',
+  color: '#0f172a',
+  border: '1px solid #e2e8f0',
+  borderRadius: 8,
+  background: '#ffffff',
   outline: 'none',
   boxSizing: 'border-box',
+  fontFamily: 'inherit',
 };
 
 const filterBtnStyle: React.CSSProperties = {
-  padding: '8px 20px',
+  height: 38,
+  padding: '0 18px',
   fontSize: 13,
   fontWeight: 600,
-  border: 'none',
-  borderRadius: 6,
-  background: '#2563eb',
-  color: '#fff',
+  border: '1px solid #0f172a',
+  borderRadius: 8,
+  background: '#0f172a',
+  color: '#ffffff',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+  fontFamily: 'inherit',
 };
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',
-  padding: '12px 10px',
+  padding: '10px 12px',
   fontWeight: 600,
-  fontSize: 10,
-  color: '#6b7280',
+  fontSize: 11,
+  color: '#64748b',
   textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  letterSpacing: '0.05em',
   whiteSpace: 'nowrap',
+  background: '#f8fafc',
+  borderBottom: '1px solid #e2e8f0',
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: '12px 10px',
+  padding: '12px 12px',
   verticalAlign: 'middle',
   whiteSpace: 'nowrap',
+  fontSize: 13,
+  color: '#0f172a',
+  borderBottom: '1px solid #f1f5f9',
 };
 
 const tdNumStyle: React.CSSProperties = {
   ...tdStyle,
-  fontFamily: 'monospace',
-  fontSize: 12,
+  fontVariantNumeric: 'tabular-nums',
   textAlign: 'right',
+  fontWeight: 500,
 };
 
 const pageBtnStyle: React.CSSProperties = {
-  padding: '8px 16px',
-  border: '1px solid #d1d5db',
-  borderRadius: 6,
-  background: '#fff',
+  minWidth: 32,
+  height: 32,
+  padding: '0 12px',
+  border: '1px solid #e2e8f0',
+  borderRadius: 8,
+  background: '#ffffff',
+  color: '#334155',
   fontSize: 13,
+  fontWeight: 500,
   cursor: 'pointer',
+  fontFamily: 'inherit',
 };

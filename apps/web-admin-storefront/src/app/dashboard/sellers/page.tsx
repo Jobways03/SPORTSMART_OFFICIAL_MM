@@ -1,42 +1,56 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 
-interface Customer {
-  id: string;
-  firstName: string;
-  lastName: string;
+interface Seller {
+  sellerId: string;
+  sellerName: string;
+  sellerShopName: string;
   email: string;
-  phone: string | null;
+  phoneNumber: string | null;
   status: string;
-  emailVerified: boolean;
+  verificationStatus: string;
+  isEmailVerified: boolean;
+  profileCompletionPercentage: number;
+  isProfileCompleted: boolean;
+  profileImageUrl: string | null;
   createdAt: string;
-  location: string | null;
-  orderCount: number;
-  amountSpent: number;
+  lastLoginAt: string | null;
 }
 
-interface CustomersResponse {
-  customers: Customer[];
+interface SellersResponse {
+  sellers: Seller[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
-type FilterKey = 'all' | 'verified' | 'unverified' | 'buyers';
+type FilterKey =
+  | 'all'
+  | 'active'
+  | 'pending'
+  | 'suspended'
+  | 'deactivated';
 
-const NEW_CUSTOMER_DAYS = 7;
+type PillTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
 
-/* ── Formatting helpers ─────────────────────────────────────── */
+/* ── Formatting ─────────────────────────────────────────────── */
 
-const inr = (n: number) =>
-  `₹${Number(n).toLocaleString('en-IN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+const fmtDate = (d: string) =>
+  new Date(d).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 
-const initials = (first: string, last: string) =>
-  `${first?.[0] ?? ''}${last?.[0] ?? ''}`.toUpperCase() || '?';
+const initials = (str: string) =>
+  str
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0])
+    .join('')
+    .toUpperCase() || '?';
 
 function avatarColor(seed: string): { bg: string; fg: string } {
   let hash = 0;
@@ -50,10 +64,11 @@ function avatarColor(seed: string): { bg: string; fg: string } {
   };
 }
 
-function relativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  if (isNaN(diffMs) || diffMs < 0) return '';
-  const s = diffMs / 1000;
+function relativeTime(iso: string | null): string {
+  if (!iso) return 'Never';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (isNaN(diff) || diff < 0) return '';
+  const s = diff / 1000;
   if (s < 60) return 'just now';
   const m = s / 60;
   if (m < 60) return `${Math.round(m)}m ago`;
@@ -69,28 +84,64 @@ function relativeTime(iso: string): string {
   return `${Math.round(y)}y ago`;
 }
 
-function isNewCustomer(iso: string): boolean {
-  const diffDays = (Date.now() - new Date(iso).getTime()) / 86_400_000;
-  return !isNaN(diffDays) && diffDays <= NEW_CUSTOMER_DAYS;
+function sellerStatusPill(status: string): { label: string; tone: PillTone } {
+  switch (status) {
+    case 'ACTIVE':
+      return { label: 'Active', tone: 'success' };
+    case 'PENDING_APPROVAL':
+      return { label: 'Pending approval', tone: 'warning' };
+    case 'SUSPENDED':
+      return { label: 'Suspended', tone: 'danger' };
+    case 'DEACTIVATED':
+      return { label: 'Deactivated', tone: 'neutral' };
+    default:
+      return { label: status.toLowerCase(), tone: 'neutral' };
+  }
 }
 
-/* ── Page ────────────────────────────────────────────────────── */
+function verificationPill(status: string): { label: string; tone: PillTone } {
+  switch (status) {
+    case 'APPROVED':
+    case 'VERIFIED':
+      return { label: 'Verified', tone: 'success' };
+    case 'PENDING':
+    case 'IN_REVIEW':
+      return { label: 'In review', tone: 'warning' };
+    case 'REJECTED':
+      return { label: 'Rejected', tone: 'danger' };
+    case 'NOT_VERIFIED':
+    default:
+      return { label: 'Not verified', tone: 'neutral' };
+  }
+}
 
-export default function CustomersPage() {
+/* ── Page ───────────────────────────────────────────────────── */
+
+export default function SellersPage() {
   const router = useRouter();
-  const [data, setData] = useState<CustomersResponse | null>(null);
+  const searchParams = useSearchParams();
+  const initialFilter = (searchParams.get('filter') as FilterKey) || 'all';
+  const initialSearch = searchParams.get('search') || '';
+
+  const [data, setData] = useState<SellersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const [search, setSearch] = useState(initialSearch);
+  const [filter, setFilter] = useState<FilterKey>(
+    ['all', 'active', 'pending', 'suspended', 'deactivated'].includes(
+      initialFilter,
+    )
+      ? initialFilter
+      : 'all',
+  );
 
-  const fetchCustomers = useCallback(
+  const fetchSellers = useCallback(
     (p: number) => {
       setLoading(true);
       const params = new URLSearchParams({ page: String(p), limit: '50' });
       if (search.trim()) params.set('search', search.trim());
 
-      apiClient<CustomersResponse>(`/admin/customers?${params}`)
+      apiClient<SellersResponse>(`/admin/sellers?${params}`)
         .then((res) => {
           if (res.data) setData(res.data);
         })
@@ -101,33 +152,36 @@ export default function CustomersPage() {
   );
 
   useEffect(() => {
-    fetchCustomers(page);
-  }, [page, fetchCustomers]);
+    fetchSellers(page);
+  }, [page, fetchSellers]);
 
   const handleSearch = () => {
     setPage(1);
-    fetchCustomers(1);
+    fetchSellers(1);
   };
 
   const filterCounts = useMemo(() => {
-    const list = data?.customers ?? [];
+    const list = data?.sellers ?? [];
     return {
       all: list.length,
-      verified: list.filter((c) => c.emailVerified).length,
-      unverified: list.filter((c) => !c.emailVerified).length,
-      buyers: list.filter((c) => c.orderCount > 0).length,
+      active: list.filter((s) => s.status === 'ACTIVE').length,
+      pending: list.filter((s) => s.status === 'PENDING_APPROVAL').length,
+      suspended: list.filter((s) => s.status === 'SUSPENDED').length,
+      deactivated: list.filter((s) => s.status === 'DEACTIVATED').length,
     };
   }, [data]);
 
   const visible = useMemo(() => {
-    const list = data?.customers ?? [];
+    const list = data?.sellers ?? [];
     switch (filter) {
-      case 'verified':
-        return list.filter((c) => c.emailVerified);
-      case 'unverified':
-        return list.filter((c) => !c.emailVerified);
-      case 'buyers':
-        return list.filter((c) => c.orderCount > 0);
+      case 'active':
+        return list.filter((s) => s.status === 'ACTIVE');
+      case 'pending':
+        return list.filter((s) => s.status === 'PENDING_APPROVAL');
+      case 'suspended':
+        return list.filter((s) => s.status === 'SUSPENDED');
+      case 'deactivated':
+        return list.filter((s) => s.status === 'DEACTIVATED');
       default:
         return list;
     }
@@ -137,19 +191,19 @@ export default function CustomersPage() {
 
   return (
     <div style={styles.page}>
-      {/* ── Page header ─────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────── */}
       <header style={styles.header}>
         <div>
-          <h1 style={styles.h1}>Customers</h1>
+          <h1 style={styles.h1}>Sellers</h1>
           <p style={styles.headerSub}>
-            Shoppers who have created an account on your storefront.
+            Marketplace sellers and their shop accounts.
           </p>
         </div>
       </header>
 
-      {/* ── Toolbar: tabs + search ──────────────────────────── */}
+      {/* ── Toolbar ────────────────────────────────────────── */}
       <div style={styles.toolbar}>
-        <div style={styles.tabs} role="tablist" aria-label="Customer filter">
+        <div style={styles.tabs} role="tablist" aria-label="Seller filter">
           <Tab
             label="All"
             count={filterCounts.all}
@@ -157,23 +211,31 @@ export default function CustomersPage() {
             onSelect={() => setFilter('all')}
           />
           <Tab
-            label="Verified"
-            count={filterCounts.verified}
-            active={filter === 'verified'}
-            onSelect={() => setFilter('verified')}
+            label="Active"
+            count={filterCounts.active}
+            active={filter === 'active'}
+            onSelect={() => setFilter('active')}
           />
           <Tab
-            label="Not verified"
-            count={filterCounts.unverified}
-            active={filter === 'unverified'}
-            onSelect={() => setFilter('unverified')}
+            label="Pending"
+            count={filterCounts.pending}
+            active={filter === 'pending'}
+            onSelect={() => setFilter('pending')}
           />
           <Tab
-            label="With orders"
-            count={filterCounts.buyers}
-            active={filter === 'buyers'}
-            onSelect={() => setFilter('buyers')}
+            label="Suspended"
+            count={filterCounts.suspended}
+            active={filter === 'suspended'}
+            onSelect={() => setFilter('suspended')}
           />
+          {filterCounts.deactivated > 0 && (
+            <Tab
+              label="Deactivated"
+              count={filterCounts.deactivated}
+              active={filter === 'deactivated'}
+              onSelect={() => setFilter('deactivated')}
+            />
+          )}
         </div>
 
         <div style={styles.searchWrap}>
@@ -188,17 +250,17 @@ export default function CustomersPage() {
           </svg>
           <input
             type="search"
-            placeholder="Search by name, email, or phone"
+            placeholder="Search by name, shop, email, or phone"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             style={styles.searchInput}
-            aria-label="Search customers"
+            aria-label="Search sellers"
           />
         </div>
       </div>
 
-      {/* ── States ──────────────────────────────────────────── */}
+      {/* ── States ─────────────────────────────────────────── */}
       {loading && !data ? (
         <SkeletonTable />
       ) : !data || visible.length === 0 ? (
@@ -208,34 +270,24 @@ export default function CustomersPage() {
           <div style={styles.card}>
             <div style={styles.tableScroll}>
               <table style={styles.table}>
-                <colgroup>
-                  <col style={{ width: '38%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col />
-                  <col style={{ width: 90 }} />
-                  <col style={{ width: 140 }} />
-                  <col style={{ width: 36 }} />
-                </colgroup>
                 <thead>
                   <tr>
-                    <th style={styles.th}>Customer</th>
-                    <th style={styles.th}>Email status</th>
-                    <th style={styles.th}>Location</th>
-                    <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                      Orders
-                    </th>
-                    <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                      Spent
-                    </th>
-                    <th style={{ ...styles.th, width: 36 }} aria-hidden="true" />
+                    <th style={styles.th}>Seller</th>
+                    <th style={styles.th}>Status</th>
+                    <th style={styles.th}>Verification</th>
+                    <th style={styles.th}>Profile</th>
+                    <th style={styles.th}>Last login</th>
+                    <th style={styles.th}>Joined</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visible.map((c) => (
-                    <CustomerRow
-                      key={c.id}
-                      customer={c}
-                      onOpen={() => router.push(`/dashboard/customers/${c.id}`)}
+                  {visible.map((s) => (
+                    <SellerRow
+                      key={s.sellerId}
+                      seller={s}
+                      onOpen={() =>
+                        router.push(`/dashboard/sellers/${s.sellerId}`)
+                      }
                     />
                   ))}
                 </tbody>
@@ -304,16 +356,17 @@ function Tab({
 
 /* ── Row ────────────────────────────────────────────────────── */
 
-function CustomerRow({
-  customer: c,
+function SellerRow({
+  seller: s,
   onOpen,
 }: {
-  customer: Customer;
+  seller: Seller;
   onOpen: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const isNew = isNewCustomer(c.createdAt);
-  const color = avatarColor(`${c.firstName}${c.lastName}${c.id}`);
+  const color = avatarColor(`${s.sellerName}${s.sellerId}`);
+  const status = sellerStatusPill(s.status);
+  const verify = verificationPill(s.verificationStatus);
 
   return (
     <tr
@@ -334,94 +387,74 @@ function CustomerRow({
     >
       <td style={styles.td}>
         <div style={styles.nameCell}>
-          <div
-            style={{
-              ...styles.avatar,
-              background: color.bg,
-              color: color.fg,
-            }}
-            aria-hidden="true"
-          >
-            {initials(c.firstName, c.lastName)}
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={styles.nameRow}>
-              <span style={styles.nameText}>
-                {c.firstName} {c.lastName}
-              </span>
-              {isNew && <span style={styles.newBadge}>New</span>}
+          {s.profileImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={s.profileImageUrl}
+              alt=""
+              style={styles.avatarImg}
+            />
+          ) : (
+            <div
+              style={{
+                ...styles.avatar,
+                background: color.bg,
+                color: color.fg,
+              }}
+              aria-hidden="true"
+            >
+              {initials(s.sellerName)}
             </div>
-            <div style={styles.metaRow}>
-              <span style={styles.emailText} title={c.email}>
-                {c.email}
-              </span>
-              <span style={styles.metaDivider} aria-hidden="true">
-                •
-              </span>
-              <span style={styles.joinedText}>
-                Joined {relativeTime(c.createdAt)}
-              </span>
+          )}
+          <div style={{ minWidth: 0 }}>
+            <div style={styles.nameText}>{s.sellerName}</div>
+            <div style={styles.metaText} title={s.sellerShopName}>
+              {s.sellerShopName}
             </div>
           </div>
         </div>
       </td>
       <td style={styles.td}>
-        {c.emailVerified ? (
-          <span style={{ ...styles.pill, ...styles.pillPositive }}>
-            <span style={{ ...styles.pillDot, background: '#16a34a' }} />
-            Verified
-          </span>
-        ) : (
-          <span style={{ ...styles.pill, ...styles.pillNeutral }}>
-            <span style={{ ...styles.pillDot, background: '#94a3b8' }} />
-            Not verified
-          </span>
-        )}
+        <Pill label={status.label} tone={status.tone} />
       </td>
-      <td style={{ ...styles.td, color: c.location ? '#0f172a' : '#94a3b8' }}>
-        {c.location || '—'}
+      <td style={styles.td}>
+        <Pill label={verify.label} tone={verify.tone} />
       </td>
-      <td style={{ ...styles.td, textAlign: 'right' as const }}>
-        {c.orderCount === 0 ? (
-          <span style={{ color: '#94a3b8' }}>—</span>
-        ) : (
-          <span style={{ color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>
-            {c.orderCount}
-          </span>
-        )}
+      <td style={styles.td}>
+        <ProfileBar percent={s.profileCompletionPercentage} />
       </td>
-      <td
-        style={{
-          ...styles.td,
-          textAlign: 'right' as const,
-          fontWeight: 600,
-          color: '#0f172a',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {inr(c.amountSpent)}
+      <td style={{ ...styles.td, color: '#475569' }}>
+        {relativeTime(s.lastLoginAt)}
       </td>
-      <td style={{ ...styles.td, padding: 0, textAlign: 'right' }}>
-        <svg
-          viewBox="0 0 20 20"
-          style={{
-            ...styles.rowChevron,
-            opacity: hover ? 1 : 0,
-            color: hover ? '#64748b' : 'transparent',
-          }}
-          aria-hidden="true"
-        >
-          <path
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M8 4l6 6-6 6"
-          />
-        </svg>
+      <td style={{ ...styles.td, color: '#475569' }}>
+        {fmtDate(s.createdAt)}
       </td>
     </tr>
+  );
+}
+
+/* ── Profile bar ────────────────────────────────────────────── */
+
+function ProfileBar({ percent }: { percent: number }) {
+  const p = Math.max(0, Math.min(100, percent));
+  const color = p >= 90 ? '#16a34a' : p >= 50 ? '#f59e0b' : '#dc2626';
+  return (
+    <div style={styles.profileBarWrap}>
+      <div style={styles.profileBarTrack}>
+        <div
+          style={{
+            ...styles.profileBarFill,
+            width: `${p}%`,
+            background: color,
+          }}
+        />
+      </div>
+      <span
+        style={{ ...styles.profileBarLabel, color }}
+      >
+        {p}%
+      </span>
+    </div>
   );
 }
 
@@ -513,6 +546,64 @@ function Pagination({
   );
 }
 
+/* ── Pill ───────────────────────────────────────────────────── */
+
+function Pill({ label, tone }: { label: string; tone: PillTone }) {
+  const toneStyles = pillTones[tone];
+  return (
+    <span style={{ ...styles.pill, ...toneStyles.wrap }}>
+      <span style={{ ...styles.pillDot, background: toneStyles.dot }} />
+      {label}
+    </span>
+  );
+}
+
+const pillTones: Record<
+  PillTone,
+  { wrap: React.CSSProperties; dot: string }
+> = {
+  success: {
+    wrap: {
+      background: 'rgba(22, 163, 74, 0.08)',
+      color: '#15803d',
+      borderColor: 'rgba(22, 163, 74, 0.2)',
+    },
+    dot: '#16a34a',
+  },
+  warning: {
+    wrap: {
+      background: 'rgba(245, 158, 11, 0.1)',
+      color: '#b45309',
+      borderColor: 'rgba(245, 158, 11, 0.25)',
+    },
+    dot: '#f59e0b',
+  },
+  danger: {
+    wrap: {
+      background: 'rgba(220, 38, 38, 0.08)',
+      color: '#b91c1c',
+      borderColor: 'rgba(220, 38, 38, 0.2)',
+    },
+    dot: '#dc2626',
+  },
+  info: {
+    wrap: {
+      background: 'rgba(14, 116, 144, 0.08)',
+      color: '#0e7490',
+      borderColor: 'rgba(14, 116, 144, 0.2)',
+    },
+    dot: '#0891b2',
+  },
+  neutral: {
+    wrap: {
+      background: '#f1f5f9',
+      color: '#475569',
+      borderColor: '#e2e8f0',
+    },
+    dot: '#94a3b8',
+  },
+};
+
 /* ── Loading skeleton ───────────────────────────────────────── */
 
 function SkeletonTable() {
@@ -522,15 +613,12 @@ function SkeletonTable() {
         <table style={styles.table}>
           <thead>
             <tr>
-              <th style={styles.th}>Customer</th>
-              <th style={styles.th}>Email status</th>
-              <th style={styles.th}>Location</th>
-              <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                Orders
-              </th>
-              <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                Spent
-              </th>
+              <th style={styles.th}>Seller</th>
+              <th style={styles.th}>Status</th>
+              <th style={styles.th}>Verification</th>
+              <th style={styles.th}>Profile</th>
+              <th style={styles.th}>Last login</th>
+              <th style={styles.th}>Joined</th>
             </tr>
           </thead>
           <tbody>
@@ -540,28 +628,27 @@ function SkeletonTable() {
                   <div style={styles.nameCell}>
                     <div style={{ ...styles.avatar, ...styles.shimmer }} />
                     <div>
-                      <div style={{ ...styles.skelLine, width: 160 }} />
+                      <div style={{ ...styles.skelLine, width: 140 }} />
                       <div
-                        style={{ ...styles.skelLine, width: 220, marginTop: 6 }}
+                        style={{ ...styles.skelLine, width: 180, marginTop: 6 }}
                       />
                     </div>
                   </div>
                 </td>
                 <td style={styles.td}>
-                  <div style={{ ...styles.skelLine, width: 96, height: 22 }} />
+                  <div style={{ ...styles.skelLine, width: 80, height: 22 }} />
                 </td>
                 <td style={styles.td}>
-                  <div style={{ ...styles.skelLine, width: 160 }} />
+                  <div style={{ ...styles.skelLine, width: 92, height: 22 }} />
                 </td>
-                <td style={{ ...styles.td, textAlign: 'right' as const }}>
-                  <div
-                    style={{ ...styles.skelLine, width: 36, marginLeft: 'auto' }}
-                  />
+                <td style={styles.td}>
+                  <div style={{ ...styles.skelLine, width: 96, height: 10 }} />
                 </td>
-                <td style={{ ...styles.td, textAlign: 'right' as const }}>
-                  <div
-                    style={{ ...styles.skelLine, width: 80, marginLeft: 'auto' }}
-                  />
+                <td style={styles.td}>
+                  <div style={{ ...styles.skelLine, width: 60 }} />
+                </td>
+                <td style={styles.td}>
+                  <div style={{ ...styles.skelLine, width: 80 }} />
                 </td>
               </tr>
             ))}
@@ -585,15 +672,15 @@ function EmptyState({
   let title: string;
   let body: string;
   if (search) {
-    title = 'No customers match your search';
-    body = 'Try a different name, email, or phone number.';
+    title = 'No sellers match your search';
+    body = 'Try a different name, shop, email, or phone number.';
   } else if (filter !== 'all') {
-    title = 'No customers match this filter';
-    body = 'Switch to "All" to see every customer.';
+    title = 'No sellers match this filter';
+    body = 'Switch to "All" to see every seller.';
   } else {
-    title = 'No customers yet';
+    title = 'No sellers yet';
     body =
-      'Customers will appear here once someone creates an account on your storefront.';
+      'Sellers will appear here once someone registers and applies to your marketplace.';
   }
 
   return (
@@ -605,7 +692,7 @@ function EmptyState({
           strokeWidth="1.8"
           strokeLinecap="round"
           strokeLinejoin="round"
-          d="M24 26a7 7 0 100-14 7 7 0 000 14zM10 40c1.4-6.6 7.3-11 14-11s12.6 4.4 14 11"
+          d="M12 20h24v18a2 2 0 01-2 2H14a2 2 0 01-2-2V20zM8 20l4-8h24l4 8M18 28h12"
         />
       </svg>
       <h3 style={styles.emptyTitle}>{title}</h3>
@@ -617,7 +704,7 @@ function EmptyState({
 /* ── Styles ─────────────────────────────────────────────────── */
 
 const shimmerKeyframes = `
-@keyframes customers-shimmer {
+@keyframes sellers-shimmer {
   0%   { background-position: -400px 0; }
   100% { background-position:  400px 0; }
 }
@@ -630,10 +717,7 @@ const styles: Record<string, React.CSSProperties> = {
       '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
   },
 
-  /* Header */
-  header: {
-    marginBottom: 20,
-  },
+  header: { marginBottom: 20 },
   h1: {
     margin: 0,
     fontSize: 24,
@@ -647,7 +731,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#64748b',
   },
 
-  /* Toolbar */
   toolbar: {
     display: 'flex',
     alignItems: 'center',
@@ -662,7 +745,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 4,
     background: '#f1f5f9',
     borderRadius: 10,
-    border: '1px solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
   },
   tab: {
     display: 'inline-flex',
@@ -731,17 +816,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     color: '#0f172a',
     background: '#ffffff',
-    border: '1px solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
     borderRadius: 8,
     outline: 'none',
     boxSizing: 'border-box',
     transition: 'border-color 0.12s, box-shadow 0.12s',
   },
 
-  /* Table */
   card: {
     background: '#ffffff',
-    border: '1px solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
     borderRadius: 10,
     overflow: 'hidden',
   },
@@ -778,7 +866,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#0f172a',
   },
 
-  /* Customer cell */
   nameCell: {
     display: 'flex',
     alignItems: 'center',
@@ -797,11 +884,15 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     letterSpacing: '0.02em',
   },
-  nameRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    minWidth: 0,
+  avatarImg: {
+    width: 36,
+    height: 36,
+    borderRadius: '50%',
+    objectFit: 'cover',
+    flexShrink: 0,
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
   },
   nameText: {
     fontWeight: 600,
@@ -810,42 +901,39 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
-  newBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    padding: '1px 7px',
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    color: '#00604a',
-    background: 'rgba(0, 128, 96, 0.10)',
-    border: '1px solid rgba(0, 128, 96, 0.2)',
-    borderRadius: 4,
-    flexShrink: 0,
-  },
-  metaRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 2,
+  metaText: {
     fontSize: 12,
     color: '#64748b',
-    minWidth: 0,
-  },
-  emailText: {
+    marginTop: 2,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    maxWidth: '100%',
   },
-  metaDivider: {
-    color: '#cbd5e1',
-    flexShrink: 0,
+
+  profileBarWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 110,
   },
-  joinedText: {
-    flexShrink: 0,
-    whiteSpace: 'nowrap',
+  profileBarTrack: {
+    flex: 1,
+    height: 6,
+    background: '#f1f5f9',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  profileBarFill: {
+    height: '100%',
+    borderRadius: 3,
+    transition: 'width 0.2s ease',
+  },
+  profileBarLabel: {
+    fontSize: 12,
+    fontWeight: 600,
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: 36,
+    textAlign: 'right',
   },
 
   /* Pill */
@@ -857,7 +945,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontWeight: 500,
     borderRadius: 999,
-    border: '1px solid',
+    borderWidth: 1,
+    borderStyle: 'solid',
     lineHeight: 1.4,
     whiteSpace: 'nowrap',
   },
@@ -866,25 +955,6 @@ const styles: Record<string, React.CSSProperties> = {
     height: 6,
     borderRadius: '50%',
     flexShrink: 0,
-  },
-  pillPositive: {
-    background: 'rgba(22, 163, 74, 0.08)',
-    color: '#15803d',
-    borderColor: 'rgba(22, 163, 74, 0.2)',
-  },
-  pillNeutral: {
-    background: '#f1f5f9',
-    color: '#475569',
-    borderColor: '#e2e8f0',
-  },
-
-  /* Row chevron */
-  rowChevron: {
-    width: 16,
-    height: 16,
-    display: 'inline-block',
-    marginRight: 12,
-    transition: 'opacity 0.12s, color 0.12s',
   },
 
   /* Pagination */
@@ -912,7 +982,9 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    border: '1px solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
     borderRadius: 8,
     background: '#ffffff',
     cursor: 'pointer',
@@ -934,7 +1006,9 @@ const styles: Record<string, React.CSSProperties> = {
   /* Empty */
   empty: {
     background: '#ffffff',
-    border: '1px solid #e2e8f0',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
     borderRadius: 10,
     padding: '56px 24px',
     textAlign: 'center',
@@ -965,11 +1039,11 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     background:
       'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 37%, #f1f5f9 63%) 0 0 / 800px 100%',
-    animation: 'customers-shimmer 1.2s ease-in-out infinite',
+    animation: 'sellers-shimmer 1.2s ease-in-out infinite',
   },
   shimmer: {
     background:
       'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 37%, #f1f5f9 63%) 0 0 / 800px 100%',
-    animation: 'customers-shimmer 1.2s ease-in-out infinite',
+    animation: 'sellers-shimmer 1.2s ease-in-out infinite',
   },
 };

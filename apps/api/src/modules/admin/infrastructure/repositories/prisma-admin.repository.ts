@@ -230,8 +230,11 @@ export class PrismaAdminRepository implements AdminRepository {
           emailVerified: true,
           createdAt: true,
           addresses: {
-            where: { isDefault: true },
             select: { city: true, state: true, country: true },
+            orderBy: [
+              { isDefault: 'desc' as const },
+              { createdAt: 'desc' as const },
+            ],
             take: 1,
           },
           orders: {

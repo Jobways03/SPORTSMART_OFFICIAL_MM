@@ -97,30 +97,43 @@ function profileToFormData(p: SellerProfileData): FormData {
   };
 }
 
-// What the backend actually has (nulls become empty strings)
+// Baseline for dirty-checking. MUST apply the same defaults as
+// profileToFormData so a freshly-loaded form isn't treated as dirty
+// just because the UI defaults "+91" / "India" while the backend
+// stored those fields as null/empty. Otherwise the Save Changes button
+// stays enabled on every page load and the beforeunload guard fires
+// spuriously.
 function profileToInitialData(p: SellerProfileData): FormData {
-  return {
-    sellerName: p.sellerName || '',
-    sellerShopName: p.sellerShopName || '',
-    sellerContactCountryCode: p.sellerContactCountryCode || '',
-    sellerContactNumber: p.sellerContactNumber || '',
-    storeAddress: p.storeAddress || '',
-    locality: (p as any).locality || '',
-    city: p.city || '',
-    state: p.state || '',
-    country: p.country || '',
-    sellerZipCode: p.sellerZipCode || '',
-    shortStoreDescription: p.shortStoreDescription || '',
-    detailedStoreDescription: p.detailedStoreDescription || '',
-    sellerPolicy: p.sellerPolicy || '',
-  };
+  return profileToFormData(p);
+}
+
+// Rich-text editors (ReactQuill) replace an empty string with markup
+// like "<p><br></p>" the moment they mount, even though the user hasn't
+// typed anything. Treat that as empty when comparing so the form
+// doesn't appear dirty on a fresh page load.
+const RICH_TEXT_FIELDS: ReadonlyArray<keyof FormData> = [
+  'shortStoreDescription',
+  'detailedStoreDescription',
+  'sellerPolicy',
+];
+const EMPTY_RICH_TEXT_RE = /^\s*(<p>(\s|<br\s*\/?>)*<\/p>\s*)+$/i;
+
+function normalizeFieldValue(key: keyof FormData, value: string): string {
+  if (RICH_TEXT_FIELDS.includes(key)) {
+    if (!value || EMPTY_RICH_TEXT_RE.test(value)) return '';
+  }
+  return value ?? '';
+}
+
+function fieldsEqual(key: keyof FormData, a: string, b: string): boolean {
+  return normalizeFieldValue(key, a) === normalizeFieldValue(key, b);
 }
 
 function computeDiff(current: FormData, initial: FormData): UpdateProfilePayload {
   const diff: UpdateProfilePayload = {};
   const keys = Object.keys(current) as (keyof FormData)[];
   for (const key of keys) {
-    if (current[key] !== initial[key]) {
+    if (!fieldsEqual(key, current[key], initial[key])) {
       (diff as Record<string, string>)[key] = current[key];
     }
   }
@@ -477,26 +490,44 @@ export default function SellerProfilePage() {
   }, [token, pwCurrentPassword, pwNewPassword, pwConfirmPassword, pwSubmitting, addToast, router]);
 
   // --- Unsaved changes guard ---
-  const isDirty = initialFormData
-    ? Object.keys(formData).some(
-        k => formData[k as keyof FormData] !== initialFormData[k as keyof FormData],
-      )
+  // hasInteracted is the real gate: until the user actually edits a
+  // field, the form is not dirty — no matter what Quill's "empty" HTML
+  // representation differs by from the backend's empty string, and
+  // regardless of any other on-mount normalization quirks.
+  const [hasInteracted, setHasInteracted] = useState(false);
+  const valuesDiffer = initialFormData
+    ? Object.keys(formData).some((k) => {
+        const key = k as keyof FormData;
+        return !fieldsEqual(key, formData[key], initialFormData[key]);
+      })
     : false;
+  const isDirty = hasInteracted && valuesDiffer;
+
+  // Mirror `isDirty` into a ref so the beforeunload handler always sees
+  // the current value rather than a stale closure. Without this, a
+  // refresh issued in the same tick as a save/reset would read the
+  // pre-save `isDirty = true` and fire the "unsaved changes" prompt
+  // even though nothing is actually dirty.
+  const isDirtyRef = useRef(false);
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      if (isDirty) {
+      if (isDirtyRef.current) {
         e.preventDefault();
         e.returnValue = '';
       }
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [isDirty]);
+  }, []);
 
   // --- Field handlers ---
   const updateField = (field: keyof FormData, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    if (!hasInteracted) setHasInteracted(true);
     // Clear error on edit
     if (errors[field]) {
       setErrors(prev => {
@@ -627,17 +658,23 @@ export default function SellerProfilePage() {
     setIsSaving(true);
     try {
       const result = await sellerProfileService.updateProfile(token, diff);
+      // Always clear the dirty state on a successful save. Some PATCH
+      // responses include the full updated record in `data`; others
+      // return only `{success: true}`. Either way the server accepted
+      // the diff, so the current form values become the new baseline.
+      setInitialFormData(formData);
+      setHasInteracted(false);
       if (result.data) {
         setFormData(profileToFormData(result.data));
         setInitialFormData(profileToInitialData(result.data));
         setProfile(result.data);
         setCompletion(result.data.profileCompletionPercentage);
         setIsComplete(result.data.isProfileCompleted);
-        setErrors({});
-        setSaveSuccess(true);
-        setTimeout(() => setSaveSuccess(false), 1500);
-        addToast('success', 'Profile updated successfully');
       }
+      setErrors({});
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 1500);
+      addToast('success', 'Profile updated successfully');
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 401) { router.replace('/login'); return; }

@@ -23,10 +23,6 @@ function getInitials(name: string): string {
     .toUpperCase();
 }
 
-function formatRole(role: string): string {
-  return role.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
 export default function DashboardLayout({
   children,
 }: {
@@ -126,7 +122,7 @@ export default function DashboardLayout({
             >
               <div className="navbar-user-info">
                 <div className="navbar-user-name">{admin.name}</div>
-                <div className="navbar-user-role">{formatRole(admin.role)}</div>
+                <div className="navbar-user-role">Franchise Admin</div>
               </div>
               <div className="navbar-avatar">{initials}</div>
               <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`}>
@@ -144,7 +140,7 @@ export default function DashboardLayout({
                     {admin.email}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                    {formatRole(admin.role)}
+                    Franchise Admin
                   </div>
                 </div>
                 <div className="navbar-dropdown-divider" />

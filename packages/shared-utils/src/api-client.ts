@@ -197,6 +197,15 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
           message: `Request failed with status ${response.status}`,
         } as ApiResponse<T>;
       }
+      // The Nest GlobalExceptionFilter always wraps `message` in an array,
+      // but every caller expects a string. Flatten it here so consumers
+      // don't silently render `[object Object]` or fall back to generic copy.
+      if (Array.isArray((body as { message?: unknown }).message)) {
+        const arr = (body as unknown as { message: unknown[] }).message;
+        (body as { message: string }).message = arr
+          .map((m) => (typeof m === 'string' ? m : JSON.stringify(m)))
+          .join('; ');
+      }
       return { ok: response.ok, status: response.status, body };
     } finally {
       cleanup();
