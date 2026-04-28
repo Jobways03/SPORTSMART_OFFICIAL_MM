@@ -82,6 +82,17 @@ export class PrismaOrderRepository implements OrderRepository {
                 email: true,
               },
             },
+            // Sub-orders routed to a franchise carry franchiseId instead of
+            // sellerId. Include the franchise so the order detail UI can
+            // show the assignee's name regardless of node type.
+            franchise: {
+              select: {
+                id: true,
+                businessName: true,
+                status: true,
+                warehousePincode: true,
+              },
+            },
           },
         },
       },

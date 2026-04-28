@@ -65,6 +65,7 @@ enum ModerationStatus {
 enum MappingApprovalStatus {
   PENDING_APPROVAL
   APPROVED
+  REJECTED
   STOPPED
 }
 

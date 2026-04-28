@@ -208,12 +208,19 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     setMediaError('');
     setMediaSaving(kind);
     try {
+      // Patch only the relevant image field on the profile snapshot so the
+      // newly uploaded image renders without re-fetching the whole profile —
+      // a full reload would overwrite the form state and wipe out any
+      // unsaved edits the user is in the middle of typing.
       if (kind === 'profile') {
-        await franchiseProfileService.uploadProfileImage(file);
+        const res = await franchiseProfileService.uploadProfileImage(file);
+        const url = res.data?.profileImageUrl ?? null;
+        setProfile((prev) => (prev ? { ...prev, profileImageUrl: url } : prev));
       } else {
-        await franchiseProfileService.uploadLogo(file);
+        const res = await franchiseProfileService.uploadLogo(file);
+        const url = res.data?.logoUrl ?? null;
+        setProfile((prev) => (prev ? { ...prev, logoUrl: url } : prev));
       }
-      await loadProfile();
       setSuccessMessage(
         kind === 'profile' ? 'Profile image updated' : 'Logo updated',
       );
@@ -232,12 +239,15 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     setMediaError('');
     setMediaSaving(kind);
     try {
+      // Patch only the relevant image field — same reason as upload above:
+      // calling loadProfile() would clobber any unsaved form edits.
       if (kind === 'profile') {
         await franchiseProfileService.deleteProfileImage();
+        setProfile((prev) => (prev ? { ...prev, profileImageUrl: null } : prev));
       } else {
         await franchiseProfileService.deleteLogo();
+        setProfile((prev) => (prev ? { ...prev, logoUrl: null } : prev));
       }
-      await loadProfile();
       setSuccessMessage(
         kind === 'profile' ? 'Profile image removed' : 'Logo removed',
       );
@@ -384,9 +394,13 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
           return 'Pincode must be 6 digits and cannot start with 0';
         return '';
       case 'ownerName':
-      case 'businessName':
         if (!trimmed) return '';
-        if (/[0-9]/.test(trimmed)) return 'Name cannot contain digits';
+        if (/[0-9]/.test(trimmed)) return 'Owner name cannot contain digits';
+        return '';
+      case 'businessName':
+        // Business names commonly include digits (e.g. "3M", "7-Eleven", "Demo1"),
+        // so we don't reject them here. Length cap is enforced by the input's
+        // sanitize.name() in handleChange.
         return '';
       default:
         return '';
@@ -452,6 +466,19 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       setError('Please fix the highlighted fields before saving.');
+      // Scroll the first invalid field into view so the user can actually
+      // see what failed — without this, the inline + banner errors are
+      // far up the page and a user near the Save button just sees nothing.
+      const firstInvalid = Object.keys(errors)[0];
+      if (typeof window !== 'undefined' && firstInvalid) {
+        const el = document.getElementById(firstInvalid);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          (el as HTMLInputElement).focus?.();
+        } else {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
       return;
     }
 

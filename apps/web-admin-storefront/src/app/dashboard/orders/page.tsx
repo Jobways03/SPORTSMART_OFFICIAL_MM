@@ -45,7 +45,7 @@ const ORDER_STATUS_OPTIONS = [
   { value: 'PLACED', label: 'Placed (Pending Verification)' },
   { value: 'PENDING_VERIFICATION', label: 'Pending Verification' },
   { value: 'VERIFIED', label: 'Verified' },
-  { value: 'ROUTED_TO_SELLER', label: 'Routed to Seller' },
+  { value: 'ROUTED_TO_SELLER', label: 'Routed' },
   { value: 'SELLER_ACCEPTED', label: 'Seller Accepted' },
   { value: 'DISPATCHED', label: 'Dispatched' },
   { value: 'DELIVERED', label: 'Delivered' },
@@ -80,7 +80,7 @@ const orderStatusLabel = (status: string): string => {
     case 'PLACED': return 'Placed';
     case 'PENDING_VERIFICATION': return 'Pending Verification';
     case 'VERIFIED': return 'Verified';
-    case 'ROUTED_TO_SELLER': return 'Routed to Seller';
+    case 'ROUTED_TO_SELLER': return 'Routed';
     case 'SELLER_ACCEPTED': return 'Seller Accepted';
     case 'DISPATCHED': return 'Dispatched';
     case 'DELIVERED': return 'Delivered';
@@ -259,7 +259,7 @@ export default function OrdersPage() {
           {[
             { value: '', label: 'All Orders' },
             { value: 'PLACED', label: 'Pending Verification' },
-            { value: 'ROUTED_TO_SELLER', label: 'Routed to Seller' },
+            { value: 'ROUTED_TO_SELLER', label: 'Routed' },
             { value: 'DISPATCHED', label: 'Shipped' },
             { value: 'DELIVERED', label: 'Delivered' },
             { value: 'EXCEPTION_QUEUE', label: 'Exception Queue', count: exceptionCount },

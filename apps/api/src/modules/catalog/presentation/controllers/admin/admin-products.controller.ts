@@ -33,6 +33,7 @@ import { AdminUpdateProductStatusDto } from '../../dtos/admin-update-status.dto'
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
+import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 
 @ApiTags('Admin Products')
 @Controller('admin/products')
@@ -46,6 +47,7 @@ export class AdminProductsController {
     private readonly productCodeService: ProductCodeService,
     private readonly eventBus: EventBusService,
     private readonly cartFacade: CartPublicFacade,
+    private readonly prisma: PrismaService,
   ) {
     this.logger.setContext('AdminProductsController');
   }
@@ -70,15 +72,150 @@ export class AdminProductsController {
       categoryId, sellerId, hasSellers: hasSellers === 'true',
     });
 
+    // Bulk-load franchise mappings + their stock for the page's product
+    // set, so the list view can render a per-product inventory summary
+    // without N+1 calls. We index by productId so the per-row .map()
+    // below stays O(1).
+    const productIds: string[] = (products as any[]).map((p) => p.id);
+    const franchiseMappings = productIds.length
+      ? await this.prisma.franchiseCatalogMapping.findMany({
+          where: { productId: { in: productIds } },
+          select: {
+            productId: true,
+            variantId: true,
+            franchiseId: true,
+            approvalStatus: true,
+            isActive: true,
+            isListedForOnlineFulfillment: true,
+            franchise: { select: { status: true } },
+          },
+        })
+      : [];
+    const franchiseStock = productIds.length
+      ? await this.prisma.franchiseStock.findMany({
+          where: { productId: { in: productIds } },
+          select: {
+            productId: true,
+            variantId: true,
+            franchiseId: true,
+            onHandQty: true,
+            reservedQty: true,
+            availableQty: true,
+            lowStockThreshold: true,
+          },
+        })
+      : [];
+
+    const fmByProduct = new Map<string, typeof franchiseMappings>();
+    for (const fm of franchiseMappings) {
+      const arr = fmByProduct.get(fm.productId) ?? [];
+      arr.push(fm);
+      fmByProduct.set(fm.productId, arr);
+    }
+    const fsKey = (pid: string, fid: string, vid: string | null) =>
+      `${pid}:${fid}:${vid ?? 'null'}`;
+    const fsByKey = new Map<string, (typeof franchiseStock)[number]>();
+    for (const s of franchiseStock) {
+      fsByKey.set(fsKey(s.productId, s.franchiseId, s.variantId), s);
+    }
+
     const mapped = products.map((p: any) => {
-      const sellerStock = p.sellerMappings?.reduce((sum: number, m: any) => sum + Math.max(0, (m.stockQty || 0) - (m.reservedQty || 0)), 0) ?? 0;
-      const variantStock = p.variants?.reduce((sum: number, v: any) => sum + (v.stock ?? 0), 0) ?? 0;
-      const computedStock = sellerStock > 0 ? sellerStock : (p.hasVariants ? variantStock : (p.baseStock ?? 0));
+      // Seller side ── available = stockQty - reservedQty (clamp ≥ 0).
+      // We reduce twice: once for "total" (sum of approved-and-not-stopped
+      // stockQty, the headline number sellers usually report) and once
+      // for "available" (post-reservation, what the storefront sees).
+      const approvedSellerMappings = (p.sellerMappings || []).filter(
+        (m: any) => m.approvalStatus === 'APPROVED' && m.isActive !== false,
+      );
+      const sellerTotal = approvedSellerMappings.reduce(
+        (sum: number, m: any) => sum + (m.stockQty || 0),
+        0,
+      );
+      const sellerAvailable = approvedSellerMappings.reduce(
+        (sum: number, m: any) => sum + Math.max(0, (m.stockQty || 0) - (m.reservedQty || 0)),
+        0,
+      );
+      const sellerLowStockCount = approvedSellerMappings.filter(
+        (m: any) =>
+          (m.stockQty || 0) - (m.reservedQty || 0) <= 5 &&
+          (m.stockQty || 0) - (m.reservedQty || 0) >= 0,
+      ).length;
+      const sellerCount = new Set(
+        approvedSellerMappings.map((m: any) => m.sellerId).filter(Boolean),
+      ).size;
+
+      // Franchise side ── only count mappings that are actually live for
+      // routing: APPROVED mapping + ACTIVE/APPROVED franchise + isActive.
+      // Anything else is shelf decoration and shouldn't pad the headline.
+      const productMappings = fmByProduct.get(p.id) ?? [];
+      const liveFranchiseMappings = productMappings.filter(
+        (m) =>
+          m.approvalStatus === 'APPROVED' &&
+          m.isActive &&
+          (m.franchise.status === 'ACTIVE' || m.franchise.status === 'APPROVED'),
+      );
+
+      let franchiseTotal = 0;
+      let franchiseAvailable = 0;
+      let franchiseReserved = 0;
+      let franchiseLowStockCount = 0;
+      const franchisesWithStock = new Set<string>();
+      for (const m of liveFranchiseMappings) {
+        const stock =
+          fsByKey.get(fsKey(p.id, m.franchiseId, m.variantId)) ??
+          // Variant-mapping with product-level stock fallback — same
+          // pattern the franchise admin catalog endpoint uses.
+          fsByKey.get(fsKey(p.id, m.franchiseId, null));
+        if (!stock) continue;
+        franchiseTotal += stock.onHandQty;
+        franchiseAvailable += stock.availableQty;
+        franchiseReserved += stock.reservedQty;
+        if (stock.availableQty <= stock.lowStockThreshold && stock.onHandQty > 0) {
+          franchiseLowStockCount++;
+        }
+        if (stock.onHandQty > 0) franchisesWithStock.add(m.franchiseId);
+      }
+
+      const variantStock = p.variants?.reduce(
+        (sum: number, v: any) => sum + (v.stock ?? 0),
+        0,
+      ) ?? 0;
+
+      // Headline `totalStock` — preserves prior semantics for callers
+      // that already read this field. Prefer aggregated seller stock,
+      // fall back to variant aggregate, then to product baseStock.
+      const computedStock =
+        sellerTotal > 0
+          ? sellerTotal
+          : p.hasVariants
+            ? variantStock
+            : (p.baseStock ?? 0);
+
+      const totalStockAll = sellerTotal + franchiseTotal;
+      const totalAvailable = sellerAvailable + franchiseAvailable;
+      const totalReserved =
+        approvedSellerMappings.reduce(
+          (sum: number, m: any) => sum + (m.reservedQty || 0),
+          0,
+        ) + franchiseReserved;
+      const lowStockCount = sellerLowStockCount + franchiseLowStockCount;
+
       return {
         ...p,
         variantCount: p._count?.variants ?? 0,
         totalStock: computedStock,
         primaryImageUrl: p.images?.[0]?.url ?? null,
+        // New summary fields ── consumed by the product list page so it
+        // can render an inline inventory snapshot per row without
+        // making per-product API calls.
+        inventorySummary: {
+          totalStock: totalStockAll,
+          totalAvailable,
+          totalReserved,
+          sellerCount,
+          franchiseCount: franchisesWithStock.size,
+          lowStockCount,
+        },
         _count: undefined, images: undefined, variants: undefined, sellerMappings: undefined,
       };
     });

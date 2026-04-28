@@ -147,6 +147,7 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
       globalSku: string;
       franchiseSku?: string;
       barcode?: string;
+      isListedForOnlineFulfillment?: boolean;
     }>,
   ): Promise<number> {
     const result = await this.prisma.franchiseCatalogMapping.createMany({
@@ -190,12 +191,18 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
       isDeleted: false,
     };
 
+    // Combine the search clause and the franchise-exclusion clause via
+    // an explicit AND so they don't collide on the top-level OR slot.
+    const andClauses: any[] = [];
+
     if (params.search) {
-      where.OR = [
-        { title: { contains: params.search, mode: 'insensitive' } },
-        { baseSku: { contains: params.search, mode: 'insensitive' } },
-        { productCode: { contains: params.search, mode: 'insensitive' } },
-      ];
+      andClauses.push({
+        OR: [
+          { title: { contains: params.search, mode: 'insensitive' } },
+          { baseSku: { contains: params.search, mode: 'insensitive' } },
+          { productCode: { contains: params.search, mode: 'insensitive' } },
+        ],
+      });
     }
 
     if (params.categoryId) {
@@ -204,6 +211,46 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
 
     if (params.brandId) {
       where.brandId = params.brandId;
+    }
+
+    // Hide a product from Browse only when *all* its slots are taken:
+    //   - Non-variant product: hide once a product-level mapping exists
+    //     (variantId=null) for this franchise.
+    //   - Variant product: hide only when every active variant already
+    //     has a mapping. If even one variant is still unmapped, the
+    //     product stays visible so the franchise can add the rest.
+    // This relies on the ProductVariant.franchiseCatalogMappings back
+    // relation (declared on the variant model) for the inner `none`
+    // query.
+    if (params.excludeFranchiseId) {
+      andClauses.push({
+        OR: [
+          {
+            hasVariants: false,
+            franchiseCatalogMappings: {
+              none: {
+                franchiseId: params.excludeFranchiseId,
+                variantId: null,
+              },
+            },
+          },
+          {
+            hasVariants: true,
+            variants: {
+              some: {
+                isDeleted: false,
+                franchiseCatalogMappings: {
+                  none: { franchiseId: params.excludeFranchiseId },
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    if (andClauses.length > 0) {
+      where.AND = andClauses;
     }
 
     const skip = (params.page - 1) * params.limit;
@@ -228,6 +275,16 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
               status: true,
             },
           },
+          // Surface this franchise's existing mappings on each product
+          // so the Add-to-Catalog modal can pre-disable variants that
+          // are already in the catalog (preventing duplicate-key
+          // errors and making the partial-mapping state visible).
+          franchiseCatalogMappings: params.excludeFranchiseId
+            ? {
+                where: { franchiseId: params.excludeFranchiseId },
+                select: { id: true, variantId: true, approvalStatus: true },
+              }
+            : false,
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -260,6 +317,28 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     return this.prisma.franchiseCatalogMapping.update({
       where: { id },
       data: { approvalStatus: 'STOPPED', isActive: false },
+      include: {
+        product: {
+          include: {
+            category: true,
+            brand: true,
+            images: { where: { sortOrder: 0 }, take: 1 },
+          },
+        },
+        variant: true,
+      },
+    });
+  }
+
+  async reject(id: string): Promise<any> {
+    // Rejection puts the mapping into a "needs fixing" state. The
+    // franchise can edit and re-submit, which flips the status back
+    // to PENDING_APPROVAL via FranchiseCatalogService.updateMapping.
+    // We set isActive=false so the row doesn't accidentally become
+    // routing-eligible while in REJECTED limbo.
+    return this.prisma.franchiseCatalogMapping.update({
+      where: { id },
+      data: { approvalStatus: 'REJECTED', isActive: false },
       include: {
         product: {
           include: {

@@ -613,14 +613,19 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
   }): Promise<AllocatedSeller[]> {
     const { productId, variantId, quantity, customerLat, customerLon } = input;
 
-    // 1. Find all approved + active catalog mappings for this product
+    // 1. Find all approved + active catalog mappings for this product.
+    //    A franchise qualifies if it has either a variant-specific mapping
+    //    OR a product-level (variantId=NULL) mapping that implicitly covers
+    //    all variants. Variant-specific wins on conflict.
     const catalogWhere: any = {
       productId,
       isActive: true,
       approvalStatus: 'APPROVED',
       isListedForOnlineFulfillment: true,
     };
-    if (variantId) catalogWhere.variantId = variantId;
+    if (variantId) {
+      catalogWhere.OR = [{ variantId }, { variantId: null }];
+    }
 
     const catalogMappings = await this.prisma.franchiseCatalogMapping.findMany({
       where: catalogWhere,
@@ -635,7 +640,8 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           },
         },
       },
-      orderBy: { id: 'asc' },
+      // Variant-specific rows first so dedup keeps them over product-level fallbacks.
+      orderBy: [{ variantId: 'desc' }, { id: 'asc' }],
     });
 
     const candidates: AllocatedSeller[] = [];
@@ -646,18 +652,30 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     for (const mapping of catalogMappings) {
       const franchise = mapping.franchise;
 
-      // Skip non-active or deleted franchises
-      if (franchise.status !== 'ACTIVE' || franchise.isDeleted) continue;
+      // Allow both ACTIVE and APPROVED — same precedent as procurement.service.ts.
+      // APPROVED means admin has approved the franchise; ACTIVE means fully
+      // activated. Both states are operational for fulfillment purposes.
+      // Only PENDING / SUSPENDED / DEACTIVATED / soft-deleted are excluded.
+      const operational =
+        franchise.status === 'ACTIVE' || franchise.status === 'APPROVED';
+      if (!operational || franchise.isDeleted) continue;
       if (seen.has(franchise.id)) continue;
       seen.add(franchise.id);
 
-      // 2. Check FranchiseStock: available qty >= requested quantity
-      const stockWhere: any = { franchiseId: franchise.id, productId };
-      if (variantId) stockWhere.variantId = variantId;
-
-      const stock = await this.prisma.franchiseStock.findFirst({
-        where: stockWhere,
-      });
+      // 2. Check FranchiseStock: try variant-specific row first, then fall
+      //    back to product-level (variantId=NULL) so a product-level
+      //    franchise can still fulfill a variant order.
+      let stock = null as Awaited<ReturnType<typeof this.prisma.franchiseStock.findFirst>>;
+      if (variantId) {
+        stock = await this.prisma.franchiseStock.findFirst({
+          where: { franchiseId: franchise.id, productId, variantId },
+        });
+      }
+      if (!stock) {
+        stock = await this.prisma.franchiseStock.findFirst({
+          where: { franchiseId: franchise.id, productId, variantId: null },
+        });
+      }
 
       if (!stock || stock.availableQty < quantity) continue;
 

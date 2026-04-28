@@ -1129,7 +1129,10 @@ function ReceiptModal({
                           type="number"
                           min={0}
                           max={maxReceived}
-                          value={current.receivedQty}
+                          inputMode="numeric"
+                          placeholder="0"
+                          value={current.receivedQty === 0 ? '' : current.receivedQty}
+                          onFocus={(e) => e.target.select()}
                           onChange={(e) =>
                             onChange(
                               it.id,
@@ -1153,7 +1156,10 @@ function ReceiptModal({
                           type="number"
                           min={0}
                           max={current.receivedQty}
-                          value={current.damagedQty}
+                          inputMode="numeric"
+                          placeholder="0"
+                          value={current.damagedQty === 0 ? '' : current.damagedQty}
+                          onFocus={(e) => e.target.select()}
                           onChange={(e) =>
                             onChange(
                               it.id,

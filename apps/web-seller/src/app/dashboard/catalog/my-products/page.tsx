@@ -15,7 +15,13 @@ interface MappingRow {
   variantId: string;
   variantSku: string | null;
   variantOptions: { option: string; value: string }[] | null;
+  // stockQty = total physical units this seller holds.
+  // reservedQty = units locked by in-flight customer orders that have
+  //   reserved but not yet paid (15-min TTL).
+  // Available = stockQty - reservedQty — that's what the storefront
+  //   shows customers and what the seller actually has free to sell.
   stockQty: number;
+  reservedQty?: number;
   dispatchSla: number;
   pickupPincode: string | null;
   isActive: boolean;
@@ -166,6 +172,17 @@ export default function MyProductsPage() {
   // ===== Helpers for product-level aggregation =====
   const getTotalStock = (product: MappedProduct): number =>
     product.mappings.reduce((sum, m) => sum + m.stockQty, 0);
+
+  // Total reserved across all variant mappings of this product. This
+  // is what's locked by in-flight customer orders right now.
+  const getTotalReserved = (product: MappedProduct): number =>
+    product.mappings.reduce((sum, m) => sum + (m.reservedQty ?? 0), 0);
+
+  // Available = total stock minus reserved. Floor at 0 in case a row
+  // ever drifts (race conditions caught by the API are rare but the
+  // UI shouldn't show negative numbers).
+  const getTotalAvailable = (product: MappedProduct): number =>
+    Math.max(0, getTotalStock(product) - getTotalReserved(product));
 
   const getOverallActive = (product: MappedProduct): boolean =>
     product.mappings.some(m => m.isActive);
@@ -439,6 +456,8 @@ export default function MyProductsPage() {
                 {products.flatMap(product => {
                   const isExpanded = expandedIds.has(product.id);
                   const totalStock = getTotalStock(product);
+                  const totalReserved = getTotalReserved(product);
+                  const totalAvailable = getTotalAvailable(product);
                   const overallActive = getOverallActive(product);
                   const variantCount = product.mappings.length;
 
@@ -472,7 +491,29 @@ export default function MyProductsPage() {
                           {variantCount} variant{variantCount !== 1 ? 's' : ''}
                         </span>
                       </td>
-                      <td><span className="product-stock">{totalStock}</span></td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 }}>
+                          <span
+                            className="product-stock"
+                            style={{
+                              fontVariantNumeric: 'tabular-nums',
+                              color: totalAvailable === 0 ? '#b91c1c' : undefined,
+                            }}
+                            title={
+                              totalReserved > 0
+                                ? `${totalAvailable} available · ${totalReserved} reserved (in pending orders) · ${totalStock} total`
+                                : `${totalStock} units in stock`
+                            }
+                          >
+                            {totalAvailable}
+                          </span>
+                          {totalReserved > 0 && (
+                            <span style={{ fontSize: 11, color: '#854d0e' }}>
+                              {totalReserved} reserved · {totalStock} total
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td>
                         {(() => {
                           // Show dominant approval status across all mappings
@@ -536,7 +577,34 @@ export default function MyProductsPage() {
                                 <button onClick={cancelStockEdit} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontSize: 16, padding: '2px 4px' }} title="Cancel">&#10005;</button>
                               </div>
                             ) : (
-                              <span className="product-stock" onClick={() => startStockEdit(mapping)} style={{ cursor: 'pointer', borderBottom: '1px dashed #9ca3af', paddingBottom: 1 }} title="Click to edit stock">{mapping.stockQty}</span>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 }}>
+                                <span
+                                  className="product-stock"
+                                  onClick={() => startStockEdit(mapping)}
+                                  style={{
+                                    cursor: 'pointer',
+                                    borderBottom: '1px dashed #9ca3af',
+                                    paddingBottom: 1,
+                                    fontVariantNumeric: 'tabular-nums',
+                                    color:
+                                      Math.max(0, mapping.stockQty - (mapping.reservedQty ?? 0)) === 0
+                                        ? '#b91c1c'
+                                        : undefined,
+                                  }}
+                                  title={
+                                    (mapping.reservedQty ?? 0) > 0
+                                      ? `${Math.max(0, mapping.stockQty - (mapping.reservedQty ?? 0))} available · ${mapping.reservedQty} reserved · ${mapping.stockQty} total. Click to edit total stock.`
+                                      : `${mapping.stockQty} total · click to edit`
+                                  }
+                                >
+                                  {Math.max(0, mapping.stockQty - (mapping.reservedQty ?? 0))}
+                                </span>
+                                {(mapping.reservedQty ?? 0) > 0 && (
+                                  <span style={{ fontSize: 10, color: '#854d0e' }}>
+                                    {mapping.reservedQty} reserved · {mapping.stockQty} total
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td>

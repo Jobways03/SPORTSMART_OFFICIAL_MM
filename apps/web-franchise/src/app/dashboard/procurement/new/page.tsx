@@ -122,15 +122,6 @@ const router = useRouter();
     });
   };
 
-  const estimatedTotal = useMemo(
-    () =>
-      selectedItems.reduce(
-        (sum, it) => sum + (it.basePrice || 0) * it.quantity,
-        0,
-      ),
-    [selectedItems],
-  );
-
   const buildPayload = (): CreateProcurementPayload => ({
     items: selectedItems.map((it) => ({
       productId: it.productId,
@@ -391,7 +382,7 @@ const router = useRouter();
                         borderBottom: '1px solid #e5e7eb',
                       }}
                     >
-                      {['Product', 'SKU', 'Base Price', 'Quantity'].map((h) => (
+                      {['Product', 'SKU', 'Selling Price', 'Quantity'].map((h) => (
                         <th
                           key={h}
                           style={{
@@ -484,7 +475,10 @@ const router = useRouter();
                             <input
                               type="number"
                               min={0}
-                              value={selected?.quantity ?? 0}
+                              inputMode="numeric"
+                              placeholder="0"
+                              value={selected?.quantity ?? ''}
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) =>
                                 handleQuantityChange(m, e.target.value)
                               }
@@ -550,116 +544,74 @@ const router = useRouter();
                         borderBottom: '1px solid #e5e7eb',
                       }}
                     >
-                      {['Product', 'SKU', 'Qty', 'Est. Price', 'Est. Subtotal', ''].map(
-                        (h) => (
-                          <th
-                            key={h}
-                            style={{
-                              padding: '10px 14px',
-                              textAlign: 'left',
-                              fontSize: 11,
-                              fontWeight: 600,
-                              color: '#6b7280',
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.5px',
-                            }}
-                          >
-                            {h}
-                          </th>
-                        ),
-                      )}
+                      {['Product', 'SKU', 'Qty', ''].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            padding: '10px 14px',
+                            textAlign: 'left',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: '#6b7280',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px',
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedItems.map((it) => {
-                      const subtotal = (it.basePrice || 0) * it.quantity;
-                      return (
-                        <tr
-                          key={it.mappingId}
-                          style={{ borderBottom: '1px solid #f3f4f6' }}
-                        >
-                          <td style={{ padding: '12px 14px' }}>
-                            <div style={{ fontWeight: 600, color: '#111827' }}>
-                              {it.productTitle}
+                    {selectedItems.map((it) => (
+                      <tr
+                        key={it.mappingId}
+                        style={{ borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ fontWeight: 600, color: '#111827' }}>
+                            {it.productTitle}
+                          </div>
+                          {it.variantTitle && (
+                            <div style={{ fontSize: 12, color: '#6b7280' }}>
+                              {it.variantTitle}
                             </div>
-                            {it.variantTitle && (
-                              <div style={{ fontSize: 12, color: '#6b7280' }}>
-                                {it.variantTitle}
-                              </div>
-                            )}
-                          </td>
-                          <td
+                          )}
+                        </td>
+                        <td
+                          style={{
+                            padding: '12px 14px',
+                            fontFamily:
+                              'ui-monospace, SFMono-Regular, Menlo, monospace',
+                            fontSize: 12,
+                            color: '#374151',
+                          }}
+                        >
+                          {it.globalSku}
+                        </td>
+                        <td style={{ padding: '12px 14px', color: '#111827' }}>
+                          {it.quantity}
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSelected(it.mappingId)}
                             style={{
-                              padding: '12px 14px',
-                              fontFamily:
-                                'ui-monospace, SFMono-Regular, Menlo, monospace',
-                              fontSize: 12,
-                              color: '#374151',
+                              background: 'none',
+                              border: 'none',
+                              color: '#dc2626',
+                              fontSize: 13,
+                              cursor: 'pointer',
+                              fontWeight: 600,
                             }}
+                            disabled={saving}
                           >
-                            {it.globalSku}
-                          </td>
-                          <td style={{ padding: '12px 14px', color: '#111827' }}>
-                            {it.quantity}
-                          </td>
-                          <td style={{ padding: '12px 14px', color: '#374151' }}>
-                            {it.basePrice != null
-                              ? formatProcurementCurrency(it.basePrice)
-                              : '—'}
-                          </td>
-                          <td style={{ padding: '12px 14px', color: '#111827' }}>
-                            {it.basePrice != null
-                              ? formatProcurementCurrency(subtotal)
-                              : '—'}
-                          </td>
-                          <td style={{ padding: '12px 14px' }}>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveSelected(it.mappingId)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: '#dc2626',
-                                fontSize: 13,
-                                cursor: 'pointer',
-                                fontWeight: 600,
-                              }}
-                              disabled={saving}
-                            >
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
-                  <tfoot>
-                    <tr style={{ background: '#f9fafb' }}>
-                      <td
-                        colSpan={4}
-                        style={{
-                          padding: '12px 14px',
-                          textAlign: 'right',
-                          fontWeight: 600,
-                          color: '#374151',
-                          fontSize: 13,
-                        }}
-                      >
-                        Estimated Total
-                      </td>
-                      <td
-                        colSpan={2}
-                        style={{
-                          padding: '12px 14px',
-                          fontWeight: 700,
-                          color: '#111827',
-                          fontSize: 14,
-                        }}
-                      >
-                        {formatProcurementCurrency(estimatedTotal)}
-                      </td>
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
             )}
@@ -720,18 +672,20 @@ const router = useRouter();
                 className="btn btn-secondary"
                 onClick={handleSaveDraft}
                 disabled={saving || selectedCount === 0}
+                title="Save this request as a draft so you can edit and send it later"
               >
-                {saving && submitMode === 'draft' ? 'Saving...' : 'Save as Draft'}
+                {saving && submitMode === 'draft' ? 'Saving…' : 'Save Draft'}
               </button>
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={handleSubmitForApproval}
                 disabled={saving || selectedCount === 0}
+                title="Send this stock request to the admin team for approval"
               >
                 {saving && submitMode === 'submit'
-                  ? 'Submitting...'
-                  : 'Submit for Approval'}
+                  ? 'Sending…'
+                  : 'Send Request to Admin'}
               </button>
             </div>
           </div>

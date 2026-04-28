@@ -44,9 +44,11 @@ interface SubOrder {
   returnWindowEndsAt: string | null;
   commissionProcessed: boolean;
   acceptDeadline: string | null;
+  fulfillmentNodeType?: 'SELLER' | 'FRANCHISE';
   items: OrderItem[];
   commissionRecords: CommissionRecord[];
-  seller: { id: string; sellerShopName: string } | null;
+  seller: { id: string; sellerShopName: string; sellerName?: string } | null;
+  franchise: { id: string; businessName: string; warehousePincode?: string | null; status?: string } | null;
 }
 
 interface ReassignmentLog {
@@ -62,10 +64,10 @@ interface ReassignmentLog {
   createdAt: string;
 }
 
-interface EligibleSeller {
-  sellerId: string;
-  sellerName: string;
-  shopName: string;
+interface EligibleNode {
+  nodeType: 'SELLER' | 'FRANCHISE';
+  nodeId: string;
+  name: string;
   distanceKm: number;
   dispatchSla: number;
   availableStock: number;
@@ -236,7 +238,7 @@ const orderStatusLabel = (status: string): string => {
     case 'PLACED': return 'Placed - Pending Verification';
     case 'PENDING_VERIFICATION': return 'Pending Verification';
     case 'VERIFIED': return 'Verified';
-    case 'ROUTED_TO_SELLER': return 'Routed to Seller';
+    case 'ROUTED_TO_SELLER': return 'Routed';
     case 'SELLER_ACCEPTED': return 'Seller Accepted';
     case 'DISPATCHED': return 'Dispatched';
     case 'DELIVERED': return 'Delivered';
@@ -414,7 +416,7 @@ export default function OrderDetailPage() {
 
   // Reassignment state
   const [reassignSubOrderId, setReassignSubOrderId] = useState<string | null>(null);
-  const [eligibleSellers, setEligibleSellers] = useState<EligibleSeller[]>([]);
+  const [eligibleNodes, setEligibleNodes] = useState<EligibleNode[]>([]);
   const [loadingEligible, setLoadingEligible] = useState(false);
   const [reassignReason, setReassignReason] = useState('');
   const [reassigning, setReassigning] = useState(false);
@@ -476,31 +478,35 @@ export default function OrderDetailPage() {
 
   const openReassignModal = async (subOrderId: string) => {
     setReassignSubOrderId(subOrderId);
-    setEligibleSellers([]);
+    setEligibleNodes([]);
     setReassignReason('');
     setReassignError('');
     setLoadingEligible(true);
     try {
-      const res = await apiClient<EligibleSeller[]>(`/admin/orders/sub-orders/${subOrderId}/eligible-sellers`);
-      if (res.data) setEligibleSellers(res.data);
+      const res = await apiClient<EligibleNode[]>(`/admin/orders/sub-orders/${subOrderId}/eligible-nodes`);
+      if (res.data) setEligibleNodes(res.data);
     } catch (err: any) {
-      setReassignError(err?.body?.message || 'Failed to fetch eligible sellers');
+      setReassignError(err?.body?.message || 'Failed to fetch eligible fulfillment nodes');
     } finally {
       setLoadingEligible(false);
     }
   };
 
-  const handleReassign = async (sellerId: string) => {
+  const handleReassign = async (node: EligibleNode) => {
     if (!reassignSubOrderId) return;
     setReassigning(true);
     setReassignError('');
     try {
       await apiClient(`/admin/orders/sub-orders/${reassignSubOrderId}/reassign`, {
         method: 'POST',
-        body: JSON.stringify({ sellerId, reason: reassignReason || undefined }),
+        body: JSON.stringify({
+          nodeType: node.nodeType,
+          nodeId: node.nodeId,
+          reason: reassignReason || undefined,
+        }),
       });
       setReassignSubOrderId(null);
-      setEligibleSellers([]);
+      setEligibleNodes([]);
       setReassignReason('');
       fetchOrder();
     } catch (err: any) {
@@ -739,13 +745,31 @@ export default function OrderDetailPage() {
                 />
               </div>
 
-              {/* Seller + shipping info */}
+              {/* Assignee + shipping info — show whichever fulfillment node owns this sub-order. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#f9fafb', borderRadius: 8, marginBottom: 14, fontSize: 13, color: '#374151' }}>
                 <span>&#128666;</span>
                 <span>Free Shipping</span>
-                {so.seller && (
-                  <span style={{ marginLeft: 'auto', fontWeight: 500, color: '#6b7280' }}>
-                    Seller: {so.seller.sellerShopName}
+                {so.franchise ? (
+                  <span style={{ marginLeft: 'auto', fontWeight: 500, color: '#6b7280', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{
+                      display: 'inline-block', padding: '1px 8px', fontSize: 10, fontWeight: 700,
+                      borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.04em',
+                      background: '#ecfeff', color: '#0e7490',
+                    }}>Franchise</span>
+                    {so.franchise.businessName}
+                  </span>
+                ) : so.seller ? (
+                  <span style={{ marginLeft: 'auto', fontWeight: 500, color: '#6b7280', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{
+                      display: 'inline-block', padding: '1px 8px', fontSize: 10, fontWeight: 700,
+                      borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.04em',
+                      background: '#eef2ff', color: '#4338ca',
+                    }}>Seller</span>
+                    {so.seller.sellerShopName}
+                  </span>
+                ) : (
+                  <span style={{ marginLeft: 'auto', fontWeight: 500, color: '#9ca3af', fontStyle: 'italic' }}>
+                    Unassigned
                   </span>
                 )}
               </div>
@@ -1248,11 +1272,11 @@ export default function OrderDetailPage() {
         <div style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
-        }} onClick={() => { if (!reassigning) { setReassignSubOrderId(null); setEligibleSellers([]); setReassignError(''); } }}>
+        }} onClick={() => { if (!reassigning) { setReassignSubOrderId(null); setEligibleNodes([]); setReassignError(''); } }}>
           <div
             style={{
               background: '#fff', borderRadius: 16, padding: 28,
-              width: '100%', maxWidth: 700, maxHeight: '80vh',
+              width: '100%', maxWidth: 760, maxHeight: '80vh',
               overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
             }}
             onClick={(e) => e.stopPropagation()}
@@ -1260,7 +1284,7 @@ export default function OrderDetailPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Reassign Sub-Order</h2>
               <button
-                onClick={() => { if (!reassigning) { setReassignSubOrderId(null); setEligibleSellers([]); setReassignError(''); } }}
+                onClick={() => { if (!reassigning) { setReassignSubOrderId(null); setEligibleNodes([]); setReassignError(''); } }}
                 style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#6b7280', padding: 4 }}
               >
                 &#10005;
@@ -1291,23 +1315,24 @@ export default function OrderDetailPage() {
             )}
 
             {loadingEligible ? (
-              <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading eligible sellers...</div>
-            ) : eligibleSellers.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading eligible fulfillment nodes...</div>
+            ) : eligibleNodes.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>
                 <div style={{ fontSize: 32, marginBottom: 12 }}>&#128683;</div>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>No eligible sellers found</div>
-                <div style={{ fontSize: 13 }}>No other sellers can fulfill this order at this time.</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>No eligible nodes found</div>
+                <div style={{ fontSize: 13 }}>No other sellers or franchises can fulfill this order at this time.</div>
               </div>
             ) : (
               <div>
                 <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-                  {eligibleSellers.length} eligible seller{eligibleSellers.length !== 1 ? 's' : ''} found, ranked by allocation score:
+                  {eligibleNodes.length} eligible node{eligibleNodes.length !== 1 ? 's' : ''} found (sellers + franchises), ranked by allocation score:
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
                       <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Rank</th>
-                      <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Seller</th>
+                      <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Type</th>
+                      <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Name</th>
                       <th style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Distance</th>
                       <th style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Dispatch SLA</th>
                       <th style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, fontSize: 11, color: '#6b7280', textTransform: 'uppercase' }}>Stock</th>
@@ -1316,52 +1341,62 @@ export default function OrderDetailPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {eligibleSellers.map((seller, idx) => (
-                      <tr key={seller.sellerId} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                        <td style={{ padding: '10px' }}>
-                          <span style={{
-                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            width: 24, height: 24, borderRadius: '50%', fontSize: 12, fontWeight: 700,
-                            background: idx === 0 ? '#dcfce7' : '#f3f4f6',
-                            color: idx === 0 ? '#166534' : '#374151',
-                          }}>
-                            {idx + 1}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px' }}>
-                          <div style={{ fontWeight: 600, color: '#111' }}>{seller.shopName || seller.sellerName}</div>
-                          {seller.shopName && seller.shopName !== seller.sellerName && (
-                            <div style={{ fontSize: 12, color: '#6b7280' }}>{seller.sellerName}</div>
-                          )}
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{seller.distanceKm} km</td>
-                        <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{seller.dispatchSla} day{seller.dispatchSla !== 1 ? 's' : ''}</td>
-                        <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{seller.availableStock}</td>
-                        <td style={{ padding: '10px', textAlign: 'right' }}>
-                          <span style={{
-                            fontWeight: 700, fontSize: 12, padding: '2px 8px', borderRadius: 4,
-                            background: seller.score >= 0.7 ? '#dcfce7' : seller.score >= 0.4 ? '#fef3c7' : '#fee2e2',
-                            color: seller.score >= 0.7 ? '#166534' : seller.score >= 0.4 ? '#92400e' : '#991b1b',
-                          }}>
-                            {(seller.score * 100).toFixed(0)}%
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'right' }}>
-                          <button
-                            onClick={() => handleReassign(seller.sellerId)}
-                            disabled={reassigning}
-                            style={{
-                              padding: '6px 14px', fontSize: 12, fontWeight: 700,
-                              border: 'none', borderRadius: 6, cursor: 'pointer',
-                              background: idx === 0 ? '#7c3aed' : '#111',
-                              color: '#fff',
-                            }}
-                          >
-                            {reassigning ? '...' : 'Reassign'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {eligibleNodes.map((node, idx) => {
+                      const isFranchise = node.nodeType === 'FRANCHISE';
+                      return (
+                        <tr key={`${node.nodeType}:${node.nodeId}`} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                          <td style={{ padding: '10px' }}>
+                            <span style={{
+                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                              width: 24, height: 24, borderRadius: '50%', fontSize: 12, fontWeight: 700,
+                              background: idx === 0 ? '#dcfce7' : '#f3f4f6',
+                              color: idx === 0 ? '#166534' : '#374151',
+                            }}>
+                              {idx + 1}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px' }}>
+                            <span style={{
+                              display: 'inline-block', padding: '2px 8px', fontSize: 11, fontWeight: 700,
+                              borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.04em',
+                              background: isFranchise ? '#ecfeff' : '#eef2ff',
+                              color: isFranchise ? '#0e7490' : '#4338ca',
+                            }}>
+                              {isFranchise ? 'Franchise' : 'Seller'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px' }}>
+                            <div style={{ fontWeight: 600, color: '#111' }}>{node.name}</div>
+                          </td>
+                          <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{node.distanceKm} km</td>
+                          <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{node.dispatchSla} day{node.dispatchSla !== 1 ? 's' : ''}</td>
+                          <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{node.availableStock}</td>
+                          <td style={{ padding: '10px', textAlign: 'right' }}>
+                            <span style={{
+                              fontWeight: 700, fontSize: 12, padding: '2px 8px', borderRadius: 4,
+                              background: node.score >= 0.7 ? '#dcfce7' : node.score >= 0.4 ? '#fef3c7' : '#fee2e2',
+                              color: node.score >= 0.7 ? '#166534' : node.score >= 0.4 ? '#92400e' : '#991b1b',
+                            }}>
+                              {(node.score * 100).toFixed(0)}%
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px', textAlign: 'right' }}>
+                            <button
+                              onClick={() => handleReassign(node)}
+                              disabled={reassigning}
+                              style={{
+                                padding: '6px 14px', fontSize: 12, fontWeight: 700,
+                                border: 'none', borderRadius: 6, cursor: 'pointer',
+                                background: idx === 0 ? '#7c3aed' : '#111',
+                                color: '#fff',
+                              }}
+                            >
+                              {reassigning ? '...' : 'Reassign'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

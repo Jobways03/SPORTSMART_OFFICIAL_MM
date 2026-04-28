@@ -107,6 +107,7 @@ export class FranchiseCatalogService {
       globalSku: string;
       franchiseSku?: string;
       barcode?: string;
+      isListedForOnlineFulfillment?: boolean;
     }>,
   ) {
     // Validate all products exist and are ACTIVE before creating any mappings
@@ -165,7 +166,21 @@ export class FranchiseCatalogService {
       throw new NotFoundAppException('Catalog mapping not found');
     }
 
-    return this.catalogRepo.update(mappingId, data);
+    // Any edit on a non-pending mapping re-opens admin review.
+    // Rationale: the admin originally approved a specific SKU /
+    // barcode / listing-flag combo; if the franchise changes any of
+    // those, the new combination needs a fresh review before the
+    // mapping is treated as live again. Same rule applies to:
+    //   - APPROVED → PENDING_APPROVAL (live mapping, was vetted)
+    //   - REJECTED → PENDING_APPROVAL (the "fix and resubmit" loop)
+    //   - STOPPED  → PENDING_APPROVAL (admin had paused; edit reopens)
+    // PENDING_APPROVAL edits stay pending — no change needed.
+    const updateData: Record<string, unknown> = { ...data };
+    if (mapping.approvalStatus !== 'PENDING_APPROVAL') {
+      updateData.approvalStatus = 'PENDING_APPROVAL';
+    }
+
+    return this.catalogRepo.update(mappingId, updateData);
   }
 
   async removeMapping(franchiseId: string, mappingId: string) {

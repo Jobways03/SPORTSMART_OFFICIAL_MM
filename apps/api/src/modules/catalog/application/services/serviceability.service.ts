@@ -11,11 +11,45 @@ interface ServiceableSeller {
   estimatedDeliveryDays: number;
 }
 
+interface ServiceableFranchise {
+  franchiseId: string;
+  franchiseName: string;
+  distance: number | null;
+  dispatchSla: number;
+  stockQty: number;
+  estimatedDeliveryDays: number;
+}
+
 interface ServiceabilityResult {
   serviceable: boolean;
   sellers: ServiceableSeller[];
+  franchises: ServiceableFranchise[];
   deliveryEstimate: string | null;
   estimatedDays: number | null;
+}
+
+function pickClosestSource(
+  sellers: ServiceableSeller[],
+  franchises: ServiceableFranchise[],
+): { distance: number | null; estimatedDeliveryDays: number } | null {
+  const candidates: { distance: number | null; estimatedDeliveryDays: number }[] = [
+    ...sellers.map((s) => ({
+      distance: s.distance,
+      estimatedDeliveryDays: s.estimatedDeliveryDays,
+    })),
+    ...franchises.map((f) => ({
+      distance: f.distance,
+      estimatedDeliveryDays: f.estimatedDeliveryDays,
+    })),
+  ];
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    if (a.distance === null && b.distance === null) return 0;
+    if (a.distance === null) return 1;
+    if (b.distance === null) return -1;
+    return a.distance - b.distance;
+  });
+  return candidates[0];
 }
 
 @Injectable()
@@ -76,15 +110,6 @@ export class ServiceabilityService {
       (m) => m.seller.status === 'ACTIVE',
     );
 
-    if (activeMappings.length === 0) {
-      return {
-        serviceable: false,
-        sellers: [],
-        deliveryEstimate: null,
-        estimatedDays: null,
-      };
-    }
-
     const customerLat = customerLocation?.latitude
       ? Number(customerLocation.latitude)
       : null;
@@ -131,7 +156,7 @@ export class ServiceabilityService {
       }
     }
 
-    // 6. Sort by distance ASC (null distances go last)
+    // 4. Sort sellers by distance ASC (null distances go last)
     serviceableSellers.sort((a, b) => {
       if (a.distance === null && b.distance === null) return 0;
       if (a.distance === null) return 1;
@@ -139,15 +164,30 @@ export class ServiceabilityService {
       return a.distance - b.distance;
     });
 
-    // 7. Build response
-    const isServiceable = serviceableSellers.length > 0;
-    const bestSeller = serviceableSellers[0] ?? null;
+    // 5. Find serviceable franchises that stock this product
+    const serviceableFranchises = await this.findServiceableFranchises(
+      productId,
+      variantId,
+      customerLat,
+      customerLon,
+    );
+
+    // 6. Build response
+    const isServiceable =
+      serviceableSellers.length > 0 || serviceableFranchises.length > 0;
+
+    // Pick the closest fulfillment source (seller or franchise) for the
+    // headline delivery estimate so the customer sees the best available SLA.
+    const bestSource = pickClosestSource(
+      serviceableSellers,
+      serviceableFranchises,
+    );
 
     let deliveryEstimate: string | null = null;
     let estimatedDays: number | null = null;
 
-    if (bestSeller) {
-      estimatedDays = bestSeller.estimatedDeliveryDays;
+    if (bestSource) {
+      estimatedDays = bestSource.estimatedDeliveryDays;
       if (estimatedDays <= 1) {
         deliveryEstimate = 'Delivery by tomorrow';
       } else if (estimatedDays <= 3) {
@@ -162,9 +202,122 @@ export class ServiceabilityService {
     return {
       serviceable: isServiceable,
       sellers: serviceableSellers,
+      franchises: serviceableFranchises,
       deliveryEstimate,
       estimatedDays,
     };
+  }
+
+  /**
+   * Find serviceable franchises for the product. Mirrors the eligibility
+   * gates used by SellerAllocationService.findEligibleFranchises so the
+   * storefront pincode checker shows the same fulfillment sources the
+   * order router will actually pick from.
+   */
+  private async findServiceableFranchises(
+    productId: string,
+    variantId: string | null,
+    customerLat: number | null,
+    customerLon: number | null,
+  ): Promise<ServiceableFranchise[]> {
+    // A franchise qualifies if it has either a variant-specific mapping
+    // OR a product-level (variantId=NULL) mapping that implicitly covers
+    // all variants. Variant-specific wins on conflict.
+    const catalogWhere: any = {
+      productId,
+      isActive: true,
+      approvalStatus: 'APPROVED',
+      isListedForOnlineFulfillment: true,
+    };
+    if (variantId) {
+      catalogWhere.OR = [{ variantId }, { variantId: null }];
+    }
+
+    const catalogMappings = await this.prisma.franchiseCatalogMapping.findMany({
+      where: catalogWhere,
+      include: {
+        franchise: {
+          select: {
+            id: true,
+            businessName: true,
+            status: true,
+            warehousePincode: true,
+            isDeleted: true,
+          },
+        },
+      },
+      // Variant-specific first so dedup keeps it over product-level fallback.
+      orderBy: [{ variantId: 'desc' }, { id: 'asc' }],
+    });
+
+    const out: ServiceableFranchise[] = [];
+    const seen = new Set<string>();
+
+    for (const mapping of catalogMappings) {
+      const franchise = mapping.franchise;
+      // Operational = ACTIVE or APPROVED. Matches procurement.service precedent.
+      const operational =
+        franchise.status === 'ACTIVE' || franchise.status === 'APPROVED';
+      if (!operational || franchise.isDeleted) continue;
+      if (seen.has(franchise.id)) continue;
+      seen.add(franchise.id);
+
+      // Try variant-specific stock row first, then product-level fallback.
+      let stock = null as Awaited<ReturnType<typeof this.prisma.franchiseStock.findFirst>>;
+      if (variantId) {
+        stock = await this.prisma.franchiseStock.findFirst({
+          where: { franchiseId: franchise.id, productId, variantId },
+        });
+      }
+      if (!stock) {
+        stock = await this.prisma.franchiseStock.findFirst({
+          where: { franchiseId: franchise.id, productId, variantId: null },
+        });
+      }
+      if (!stock || stock.availableQty <= 0) continue;
+
+      let distance: number | null = null;
+      if (customerLat && customerLon && franchise.warehousePincode) {
+        const warehousePO = await this.prisma.postOffice.findFirst({
+          where: {
+            pincode: franchise.warehousePincode,
+            latitude: { not: null },
+          },
+          select: { latitude: true, longitude: true },
+        });
+        if (warehousePO?.latitude && warehousePO?.longitude) {
+          distance = this.calculateDistance(
+            customerLat,
+            customerLon,
+            Number(warehousePO.latitude),
+            Number(warehousePO.longitude),
+          );
+        }
+      }
+
+      const dispatchSla = 1; // franchise default dispatch SLA
+      out.push({
+        franchiseId: franchise.id,
+        franchiseName: franchise.businessName,
+        distance:
+          distance !== null ? Math.round(distance * 100) / 100 : null,
+        dispatchSla,
+        stockQty: stock.availableQty,
+        estimatedDeliveryDays: this.estimateDeliveryDays(
+          distance ?? 0,
+          dispatchSla,
+        ),
+      });
+    }
+
+    out.sort((a, b) => {
+      if (a.distance === null && b.distance === null) return 0;
+      if (a.distance === null) return 1;
+      if (b.distance === null) return -1;
+      return a.distance - b.distance;
+    });
+
+    return out;
   }
 
   /**

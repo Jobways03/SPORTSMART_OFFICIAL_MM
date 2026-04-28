@@ -59,6 +59,14 @@ export class StorefrontServiceabilityController {
           stockQty: s.stockQty,
           estimatedDeliveryDays: s.estimatedDeliveryDays,
         })),
+        franchises: result.franchises.map((f) => ({
+          franchiseId: f.franchiseId,
+          franchiseName: f.franchiseName,
+          distance: f.distance,
+          dispatchSla: f.dispatchSla,
+          stockQty: f.stockQty,
+          estimatedDeliveryDays: f.estimatedDeliveryDays,
+        })),
       },
     };
   }

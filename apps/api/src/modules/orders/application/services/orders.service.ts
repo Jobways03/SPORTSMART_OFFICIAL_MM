@@ -1001,20 +1001,35 @@ export class OrdersService {
           `Franchise ${newTarget.nodeId} not found`,
         );
       }
-      if (franchise.status !== 'ACTIVE') {
+      // Operational = ACTIVE or APPROVED. APPROVED franchises can fulfill
+      // orders just like ACTIVE ones; only PENDING / SUSPENDED / DEACTIVATED
+      // are blocked. Same precedent as procurement.service.ts.
+      const operational =
+        franchise.status === 'ACTIVE' || franchise.status === 'APPROVED';
+      if (!operational) {
         throw new BadRequestAppException(
-          `Franchise ${newTarget.nodeId} is not active (status: ${franchise.status})`,
+          `Franchise ${newTarget.nodeId} is not operational (status: ${franchise.status}). Only ACTIVE or APPROVED franchises can be assigned orders.`,
         );
       }
       for (const item of subOrder.items) {
+        // Accept either a variant-specific mapping or a product-level
+        // (variantId=NULL) mapping that implicitly covers all variants.
+        const mappingWhere: any = {
+          franchiseId: newTarget.nodeId,
+          productId: item.productId,
+          isActive: true,
+          approvalStatus: 'APPROVED',
+        };
+        if (item.variantId) {
+          mappingWhere.OR = [
+            { variantId: item.variantId },
+            { variantId: null },
+          ];
+        } else {
+          mappingWhere.variantId = null;
+        }
         const mapping = await this.prisma.franchiseCatalogMapping.findFirst({
-          where: {
-            franchiseId: newTarget.nodeId,
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            isActive: true,
-            approvalStatus: 'APPROVED',
-          },
+          where: mappingWhere,
           select: { id: true },
         });
         if (!mapping) {
@@ -1022,14 +1037,29 @@ export class OrdersService {
             `Franchise ${newTarget.nodeId} does not have an approved mapping for product ${item.productId}${item.variantId ? ` / variant ${item.variantId}` : ''}`,
           );
         }
-        const stock = await this.prisma.franchiseStock.findFirst({
-          where: {
-            franchiseId: newTarget.nodeId,
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-          },
-          select: { availableQty: true },
-        });
+
+        // Stock lookup: prefer variant-specific row, fall back to product-level.
+        let stock: { availableQty: number } | null = null;
+        if (item.variantId) {
+          stock = await this.prisma.franchiseStock.findFirst({
+            where: {
+              franchiseId: newTarget.nodeId,
+              productId: item.productId,
+              variantId: item.variantId,
+            },
+            select: { availableQty: true },
+          });
+        }
+        if (!stock) {
+          stock = await this.prisma.franchiseStock.findFirst({
+            where: {
+              franchiseId: newTarget.nodeId,
+              productId: item.productId,
+              variantId: null,
+            },
+            select: { availableQty: true },
+          });
+        }
         if (!stock || stock.availableQty < item.quantity) {
           throw new BadRequestAppException(
             `Franchise ${newTarget.nodeId} has insufficient stock for product ${item.productId}: available=${stock?.availableQty ?? 0}, required=${item.quantity}`,

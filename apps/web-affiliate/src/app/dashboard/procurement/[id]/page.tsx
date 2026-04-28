@@ -363,8 +363,7 @@ export default function AdminProcurementDetailPage() {
               </button>
               <button
                 type="button"
-                className="btn btn-secondary"
-                style={{ color: '#b91c1c' }}
+                className="btn btn-danger-solid"
                 onClick={() => {
                   setRejectOpen(true);
                   setActionError('');
@@ -697,7 +696,10 @@ export default function AdminProcurementDetailPage() {
                           type="number"
                           min={0}
                           max={it.requestedQty}
-                          value={draft.approvedQty}
+                          inputMode="numeric"
+                          placeholder="0"
+                          value={draft.approvedQty === 0 ? '' : draft.approvedQty}
+                          onFocus={(e) => e.target.select()}
                           onChange={(e) =>
                             setApproveDraft((prev) => ({
                               ...prev,
@@ -718,7 +720,10 @@ export default function AdminProcurementDetailPage() {
                           type="number"
                           min={0}
                           step={0.01}
-                          value={draft.landedUnitCost}
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          value={draft.landedUnitCost === 0 ? '' : draft.landedUnitCost}
+                          onFocus={(e) => e.target.select()}
                           onChange={(e) =>
                             setApproveDraft((prev) => ({
                               ...prev,

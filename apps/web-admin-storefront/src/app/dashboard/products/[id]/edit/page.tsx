@@ -182,6 +182,27 @@ const router = useRouter();
   const [sellerMappingsSortField, setSellerMappingsSortField] = useState<'stockQty' | 'availableQty' | 'mappingDisplayStatus'>('stockQty');
   const [sellerMappingsSortDir, setSellerMappingsSortDir] = useState<'asc' | 'desc'>('desc');
 
+  // Franchise inventory state — parallel structure to seller inventory.
+  interface FranchiseMapping {
+    id: string;
+    franchise: { id: string; businessName: string; status: string; warehousePincode: string | null };
+    variant: { id: string; sku: string; title: string } | null;
+    variantId: string | null;
+    globalSku: string;
+    franchiseSku: string | null;
+    stockQty: number;
+    reservedQty: number;
+    availableQty: number;
+    lowStockThreshold: number;
+    mappingDisplayStatus: string;
+    approvalStatus: string;
+    isActive: boolean;
+    isListedForOnlineFulfillment: boolean;
+    updatedAt: string;
+  }
+  const [franchiseMappings, setFranchiseMappings] = useState<FranchiseMapping[]>([]);
+  const [franchiseMappingsLoading, setFranchiseMappingsLoading] = useState(false);
+
   const loadSellerMappings = useCallback(async () => {
     setSellerMappingsLoading(true);
     try {
@@ -195,6 +216,22 @@ const router = useRouter();
       // Non-critical, silently fail
     } finally {
       setSellerMappingsLoading(false);
+    }
+  }, [productId]);
+
+  const loadFranchiseMappings = useCallback(async () => {
+    setFranchiseMappingsLoading(true);
+    try {
+      const res = await apiClient<{ product: any; mappings: FranchiseMapping[]; total: number }>(
+        `/admin/products/${productId}/franchise-mappings`,
+      );
+      if (res.data?.mappings) {
+        setFranchiseMappings(res.data.mappings);
+      }
+    } catch {
+      // Non-critical, silently fail
+    } finally {
+      setFranchiseMappingsLoading(false);
     }
   }, [productId]);
 
@@ -226,8 +263,11 @@ const router = useRouter();
   };
 
   useEffect(() => {
-    if (productId) loadSellerMappings();
-  }, [productId, loadSellerMappings]);
+    if (productId) {
+      loadSellerMappings();
+      loadFranchiseMappings();
+    }
+  }, [productId, loadSellerMappings, loadFranchiseMappings]);
 
   useEffect(() => {
     if (product && (product as any).potentialDuplicateOf) {
@@ -2158,84 +2198,31 @@ const router = useRouter();
         ) : sellerMappings.length === 0 ? (
           <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', padding: '16px 0' }}>No sellers mapped to this product yet.</p>
         ) : (
-          <>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid var(--color-border, #e3e3e3)' }}>
-                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Seller</th>
-                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Pincode</th>
-                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Internal SKU</th>
-                    <th
-                      style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: '#374151', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
-                      onClick={() => toggleSellerSort('stockQty')}
-                    >
-                      Stock {sellerMappingsSortField === 'stockQty' ? (sellerMappingsSortDir === 'asc' ? '\u25B2' : '\u25BC') : ''}
-                    </th>
-                    <th
-                      style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: '#374151', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
-                      onClick={() => toggleSellerSort('availableQty')}
-                    >
-                      Available {sellerMappingsSortField === 'availableQty' ? (sellerMappingsSortDir === 'asc' ? '\u25B2' : '\u25BC') : ''}
-                    </th>
-                    <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>SLA</th>
-                    <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Approval</th>
-                    <th
-                      style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#374151', cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
-                      onClick={() => toggleSellerSort('mappingDisplayStatus')}
-                    >
-                      Status {sellerMappingsSortField === 'mappingDisplayStatus' ? (sellerMappingsSortDir === 'asc' ? '\u25B2' : '\u25BC') : ''}
-                    </th>
-                    <th style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Updated</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedSellerMappings.map((m) => (
-                    <tr key={m.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                      <td style={{ padding: '8px 10px', fontWeight: 500 }}>{m.seller.sellerName}</td>
-                      <td style={{ padding: '8px 10px', color: '#6b7280' }}>{m.seller.sellerZipCode || m.pickupPincode || '\u2014'}</td>
-                      <td style={{ padding: '8px 10px', color: (m.sellerInternalSku || m.variant?.sku) ? '#374151' : '#9ca3af', fontFamily: (m.sellerInternalSku || m.variant?.sku) ? 'monospace' : 'inherit', fontSize: 12 }}>{m.sellerInternalSku || m.variant?.sku || '\u2014'}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>{m.stockQty}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>{m.availableQty}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center', color: '#6b7280' }}>{m.dispatchSla}d</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '2px 10px',
-                          borderRadius: 12,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                          ...getApprovalStatusStyle(m.approvalStatus),
-                        }}>
-                          {formatApprovalStatus(m.approvalStatus)}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '2px 10px',
-                          borderRadius: 12,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                          ...getMappingStatusStyle(m.mappingDisplayStatus),
-                        }}>
-                          {m.mappingDisplayStatus.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: '#6b7280', fontSize: 12, whiteSpace: 'nowrap' }}>{formatTimeAgo(m.updatedAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ marginTop: 12, padding: '10px 0 0', borderTop: '1px solid #f3f4f6', fontSize: 13, color: '#6b7280', display: 'flex', gap: 16 }}>
-              <span>Total: <strong style={{ color: '#374151' }}>{sellerMappings.length}</strong> seller{sellerMappings.length !== 1 ? 's' : ''}</span>
-              <span>Total Stock: <strong style={{ color: '#374151' }}>{sellerMappings.reduce((s, m) => s + m.stockQty, 0).toLocaleString()}</strong></span>
-              <span>Total Available: <strong style={{ color: '#374151' }}>{sellerMappings.reduce((s, m) => s + m.availableQty, 0).toLocaleString()}</strong></span>
-            </div>
-          </>
+          <SellerGroupedList sellers={sortedSellerMappings} />
+        )}
+      </div>
+
+      {/* Franchise Inventory */}
+      <div className="form-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div className="form-card-title" style={{ marginBottom: 0 }}>FRANCHISE INVENTORY</div>
+          <button
+            type="button"
+            className="form-btn"
+            style={{ padding: '4px 14px', fontSize: 12, fontWeight: 500 }}
+            onClick={loadFranchiseMappings}
+            disabled={franchiseMappingsLoading}
+          >
+            {franchiseMappingsLoading ? 'Loading...' : 'Refresh'}
+          </button>
+        </div>
+
+        {franchiseMappingsLoading && franchiseMappings.length === 0 ? (
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', padding: '16px 0' }}>Loading franchise inventory...</p>
+        ) : franchiseMappings.length === 0 ? (
+          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', padding: '16px 0' }}>No franchises mapped to this product yet.</p>
+        ) : (
+          <FranchiseGroupedList franchises={franchiseMappings} />
         )}
       </div>
 
@@ -2454,6 +2441,341 @@ function StatusHistoryPanel({ entries }: { entries: StatusHistoryEntry[] }) {
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Inventory cards — same pattern as the product list page.
+   One card per partner (seller / franchise), click chevron to see
+   per-variant rows inside the card. Replaces the dense flat tables
+   that used to live in the SELLER INVENTORY / FRANCHISE INVENTORY
+   panels here.
+   ───────────────────────────────────────────────────────────────── */
+
+interface InventorySellerInput {
+  id: string;
+  seller: { id: string; sellerName: string; sellerZipCode?: string | null; sellerShopName?: string };
+  variant: { id: string; sku: string; title: string } | null;
+  stockQty: number;
+  reservedQty: number;
+  availableQty: number;
+  lowStockThreshold: number;
+  approvalStatus: string | null;
+  sellerInternalSku: string | null;
+  dispatchSla: number;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+interface InventoryFranchiseInput {
+  id: string;
+  franchise: { id: string; businessName: string; status: string; warehousePincode: string | null };
+  variant: { id: string; sku: string; title: string } | null;
+  globalSku: string;
+  franchiseSku: string | null;
+  stockQty: number;
+  reservedQty: number;
+  availableQty: number;
+  lowStockThreshold: number;
+  approvalStatus: string;
+  isActive: boolean;
+  isListedForOnlineFulfillment: boolean;
+  updatedAt: string;
+}
+
+interface PartnerRow {
+  id: string;
+  sku: string;
+  label: string;
+  stock: number;
+  available: number;
+  reserved: number;
+  slaDays?: number;
+  approval: string | null;
+  isActive: boolean;
+  lowThreshold: number;
+  updated: string;
+  extra?: string;
+}
+
+function SellerGroupedList({ sellers }: { sellers: InventorySellerInput[] }) {
+  const grouped = useMemo(() => {
+    const map = new Map<string, { name: string; rows: InventorySellerInput[] }>();
+    for (const m of sellers) {
+      const key = m.seller.id;
+      if (!map.has(key)) map.set(key, { name: m.seller.sellerName, rows: [] });
+      map.get(key)!.rows.push(m);
+    }
+    return Array.from(map.entries());
+  }, [sellers]);
+
+  const totalStock = sellers.reduce((s, r) => s + r.stockQty, 0);
+  const totalAvailable = sellers.reduce((s, r) => s + r.availableQty, 0);
+
+  return (
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {grouped.map(([id, group]) => (
+          <PartnerCard
+            key={id}
+            name={group.name}
+            subtitle={group.rows[0]?.seller.sellerZipCode ? `Pincode ${group.rows[0].seller.sellerZipCode}` : undefined}
+            totals={{
+              stock: group.rows.reduce((s, r) => s + r.stockQty, 0),
+              available: group.rows.reduce((s, r) => s + r.availableQty, 0),
+              variants: group.rows.length,
+            }}
+            rows={group.rows.map((r) => ({
+              id: r.id,
+              sku: r.sellerInternalSku || r.variant?.sku || '—',
+              label: r.variant?.title || 'Default',
+              stock: r.stockQty,
+              available: r.availableQty,
+              reserved: r.reservedQty,
+              slaDays: r.dispatchSla,
+              approval: r.approvalStatus,
+              isActive: r.isActive,
+              lowThreshold: r.lowStockThreshold,
+              updated: r.updatedAt,
+            }))}
+          />
+        ))}
+      </div>
+      <div style={{ marginTop: 12, padding: '10px 0 0', borderTop: '1px solid #f3f4f6', fontSize: 13, color: '#6b7280', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <span>Total: <strong style={{ color: '#374151' }}>{grouped.length}</strong> seller{grouped.length !== 1 ? 's' : ''}</span>
+        <span>Total Stock: <strong style={{ color: '#374151' }}>{totalStock.toLocaleString()}</strong></span>
+        <span>Total Available: <strong style={{ color: '#374151' }}>{totalAvailable.toLocaleString()}</strong></span>
+      </div>
+    </>
+  );
+}
+
+function FranchiseGroupedList({ franchises }: { franchises: InventoryFranchiseInput[] }) {
+  const grouped = useMemo(() => {
+    const map = new Map<string, { name: string; pincode: string | null; status: string; rows: InventoryFranchiseInput[] }>();
+    for (const m of franchises) {
+      const key = m.franchise.id;
+      if (!map.has(key)) {
+        map.set(key, {
+          name: m.franchise.businessName,
+          pincode: m.franchise.warehousePincode,
+          status: m.franchise.status,
+          rows: [],
+        });
+      }
+      map.get(key)!.rows.push(m);
+    }
+    return Array.from(map.entries());
+  }, [franchises]);
+
+  const totalStock = franchises.reduce((s, r) => s + r.stockQty, 0);
+  const totalAvailable = franchises.reduce((s, r) => s + r.availableQty, 0);
+  const eligible = franchises.filter(
+    (m) =>
+      (m.franchise.status === 'ACTIVE' || m.franchise.status === 'APPROVED') &&
+      m.approvalStatus === 'APPROVED' &&
+      m.isActive &&
+      m.isListedForOnlineFulfillment &&
+      m.availableQty > 0,
+  ).length;
+
+  return (
+    <>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {grouped.map(([id, group]) => (
+          <PartnerCard
+            key={id}
+            name={group.name}
+            tone="franchise"
+            subtitle={group.pincode ? `Pincode ${group.pincode} · ${group.status}` : group.status}
+            totals={{
+              stock: group.rows.reduce((s, r) => s + r.stockQty, 0),
+              available: group.rows.reduce((s, r) => s + r.availableQty, 0),
+              variants: group.rows.length,
+            }}
+            rows={group.rows.map((r) => ({
+              id: r.id,
+              sku: r.franchiseSku || r.globalSku || '—',
+              label: r.variant?.title || 'Product-level',
+              stock: r.stockQty,
+              available: r.availableQty,
+              reserved: r.reservedQty,
+              slaDays: undefined,
+              approval: r.approvalStatus,
+              isActive: r.isActive,
+              lowThreshold: r.lowStockThreshold,
+              updated: r.updatedAt,
+              extra: r.isListedForOnlineFulfillment ? 'Listed' : 'Hidden',
+            }))}
+          />
+        ))}
+      </div>
+      <div style={{ marginTop: 12, padding: '10px 0 0', borderTop: '1px solid #f3f4f6', fontSize: 13, color: '#6b7280', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <span>Total: <strong style={{ color: '#374151' }}>{franchises.length}</strong> mapping{franchises.length !== 1 ? 's' : ''}</span>
+        <span>Total Stock: <strong style={{ color: '#374151' }}>{totalStock.toLocaleString()}</strong></span>
+        <span>Total Available: <strong style={{ color: '#374151' }}>{totalAvailable.toLocaleString()}</strong></span>
+        <span>Routing-eligible: <strong style={{ color: '#374151' }}>{eligible}</strong></span>
+      </div>
+    </>
+  );
+}
+
+function rowHealth(available: number, threshold: number, approval: string | null, isActive: boolean): 'healthy' | 'low' | 'out' | 'inactive' {
+  if (!isActive || (approval && approval !== 'APPROVED')) return 'inactive';
+  if (available === 0) return 'out';
+  if (available <= threshold) return 'low';
+  return 'healthy';
+}
+
+function HealthDot({ status }: { status: 'healthy' | 'low' | 'out' | 'inactive' }) {
+  const palette = {
+    healthy: { bg: '#16a34a', label: 'Healthy' },
+    low: { bg: '#d97706', label: 'Low stock' },
+    out: { bg: '#dc2626', label: 'Out of stock' },
+    inactive: { bg: '#94a3b8', label: 'Inactive' },
+  };
+  const p = palette[status];
+  return (
+    <span title={p.label} aria-label={p.label} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: p.bg, flexShrink: 0 }} />
+  );
+}
+
+function PartnerCard({
+  name,
+  subtitle,
+  totals,
+  rows,
+  tone = 'seller',
+}: {
+  name: string;
+  subtitle?: string;
+  totals: { stock: number; available: number; variants: number };
+  rows: PartnerRow[];
+  tone?: 'seller' | 'franchise';
+}) {
+  const [open, setOpen] = useState(false);
+  const initial = (name || '?').charAt(0).toUpperCase();
+  const palette =
+    tone === 'franchise'
+      ? { stripe: '#7c3aed', avatarBg: '#ede9fe', avatarFg: '#6d28d9' }
+      : { stripe: '#2563eb', avatarBg: '#dbeafe', avatarFg: '#1d4ed8' };
+  const availableTone =
+    totals.available === 0 ? '#b91c1c' : totals.available <= 5 ? '#b45309' : '#16a34a';
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', borderLeft: `3px solid ${palette.stripe}` }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen(!open);
+          }
+        }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          padding: '14px 18px',
+          cursor: 'pointer',
+          userSelect: 'none',
+          background: open ? '#f8fafc' : '#fff',
+        }}
+      >
+        <div style={{ width: 36, height: 36, borderRadius: '50%', background: palette.avatarBg, color: palette.avatarFg, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, flexShrink: 0 }}>
+          {initial}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', lineHeight: 1.2 }}>{name}</div>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+            {subtitle ? `${subtitle} · ` : ''}{totals.variants} variant{totals.variants === 1 ? '' : 's'} · {totals.stock} in stock
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontSize: 22, fontWeight: 700, color: availableTone, lineHeight: 1 }}>
+            {totals.available}
+          </span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            avail
+          </span>
+        </div>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" style={{ color: '#94a3b8', transform: open ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.15s', flexShrink: 0 }}>
+          <path fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6l4 4 4-4" />
+        </svg>
+      </div>
+      {open && (
+        <div style={{ borderTop: '1px solid #e2e8f0' }}>
+          {rows.map((r, idx) => {
+            const health = rowHealth(r.available, r.lowThreshold, r.approval, r.isActive);
+            const availableColor =
+              health === 'out' ? '#b91c1c' : health === 'low' ? '#b45309' : '#0f172a';
+            return (
+              <div
+                key={r.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  padding: '12px 18px 12px 14px',
+                  borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9',
+                }}
+              >
+                <HealthDot status={health} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', lineHeight: 1.3 }}>
+                    {r.label}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                    <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#475569' }}>{r.sku}</span>
+                    <span style={{ color: '#cbd5e1' }}>·</span>
+                    <span>{r.stock} in stock</span>
+                    {r.reserved > 0 && (
+                      <>
+                        <span style={{ color: '#cbd5e1' }}>·</span>
+                        <span style={{ color: '#854d0e', fontWeight: 600 }}>{r.reserved} reserved</span>
+                      </>
+                    )}
+                    {r.approval && r.approval !== 'APPROVED' && (
+                      <>
+                        <span style={{ color: '#cbd5e1' }}>·</span>
+                        <span style={{ color: '#475569', fontWeight: 600 }}>{r.approval.replace(/_/g, ' ')}</span>
+                      </>
+                    )}
+                    {r.extra && (
+                      <>
+                        <span style={{ color: '#cbd5e1' }}>·</span>
+                        <span>{r.extra}</span>
+                      </>
+                    )}
+                    {r.slaDays !== undefined && (
+                      <>
+                        <span style={{ color: '#cbd5e1' }}>·</span>
+                        <span>{r.slaDays}d SLA</span>
+                      </>
+                    )}
+                    <span style={{ color: '#cbd5e1' }}>·</span>
+                    <span style={{ color: '#94a3b8' }}>
+                      {new Date(r.updated).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: availableColor, lineHeight: 1 }}>
+                    {r.available}
+                  </div>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 2 }}>
+                    available
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

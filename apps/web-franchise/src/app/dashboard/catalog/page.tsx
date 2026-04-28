@@ -87,17 +87,37 @@ export default function CatalogPage() {
   // ---- Edit mapping modal ----
   const [editMapping, setEditMapping] = useState<CatalogMapping | null>(null);
   const [editForm, setEditForm] = useState<UpdateMappingPayload>({});
+  // Snapshot of the form values when the modal opened — used to
+  // detect whether the user has actually changed anything. Save is
+  // disabled until at least one field differs from this snapshot.
+  const [originalEditForm, setOriginalEditForm] = useState<UpdateMappingPayload>({});
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
   // ---- Add mapping modal ----
-  const [addProduct, setAddProduct] = useState<AvailableProduct | null>(null);
-  const [addForm, setAddForm] = useState<{
+  // One row per variant (or one row total for products without variants).
+  // Each row carries its own SKU + barcode + listed flag so the franchise
+  // can map every variant in a single submit instead of opening the modal
+  // once per variant.
+  interface AddRow {
+    variantId: string | null;
+    label: string;
+    masterSku: string | null;
+    included: boolean;
     franchiseSku: string;
     barcode: string;
-    isListedForOnlineFulfillment: boolean;
-    variantId: string | null;
-  }>({ franchiseSku: '', barcode: '', isListedForOnlineFulfillment: true, variantId: null });
+    isListed: boolean;
+    // Already mapped by this franchise — the row is rendered as a
+    // disabled/dimmed preview and is excluded from submit. Avoids
+    // hitting the unique-mapping constraint at save time.
+    alreadyMapped: boolean;
+    // The status of the existing mapping (only meaningful when
+    // alreadyMapped=true), so the row can show "In catalog" vs
+    // "Pending review" vs "Rejected".
+    existingStatus?: string;
+  }
+  const [addProduct, setAddProduct] = useState<AvailableProduct | null>(null);
+  const [addRows, setAddRows] = useState<AddRow[]>([]);
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState('');
 
@@ -183,11 +203,15 @@ export default function CatalogPage() {
 
   const openEditModal = (mapping: CatalogMapping) => {
     setEditMapping(mapping);
-    setEditForm({
+    const initial: UpdateMappingPayload = {
       franchiseSku: mapping.franchiseSku || '',
       barcode: mapping.barcode || '',
       isListedForOnlineFulfillment: mapping.isListedForOnlineFulfillment,
-    });
+    };
+    setEditForm(initial);
+    // Snapshot for the dirty-check. Save stays disabled until the
+    // user changes at least one of these three fields.
+    setOriginalEditForm(initial);
     setEditError('');
   };
 
@@ -202,6 +226,12 @@ export default function CatalogPage() {
     if (!editMapping) return;
     setEditError('');
     setEditSaving(true);
+    // Capture the status before the save so we can show the right
+    // success message. The server's updateMapping flips the status
+    // back to PENDING_APPROVAL for any non-pending edit, so the
+    // toast should reflect that rather than implying the change is
+    // already live.
+    const wasNonPending = editMapping.approvalStatus !== 'PENDING_APPROVAL';
     try {
       const payload: UpdateMappingPayload = {
         franchiseSku: (editForm.franchiseSku || '').trim() || undefined,
@@ -210,7 +240,11 @@ export default function CatalogPage() {
       };
       await franchiseCatalogService.updateMapping(editMapping.id, payload);
       setEditMapping(null);
-      flashSuccess('Mapping updated');
+      flashSuccess(
+        wasNonPending
+          ? 'Submitted for admin review'
+          : 'Mapping updated',
+      );
       await loadMappings();
     } catch (err) {
       if (err instanceof ApiError) {
@@ -249,17 +283,50 @@ export default function CatalogPage() {
 
   const openAddModal = (product: AvailableProduct) => {
     setAddProduct(product);
-    // If the product has exactly one variant, preselect it so the
-    // operator doesn't have to click. Multi-variant products force an
-    // explicit choice before the submit button enables.
     const variants = product.variants ?? [];
-    const preselect = variants.length === 1 ? variants[0].id : null;
-    setAddForm({
-      franchiseSku: '',
-      barcode: '',
-      isListedForOnlineFulfillment: true,
-      variantId: preselect,
-    });
+    // Index existing mappings by variantId (null = product-level)
+    // so we can mark already-mapped rows as disabled previews.
+    const mappedByVariant = new Map<string | null, string>();
+    for (const m of product.franchiseCatalogMappings ?? []) {
+      mappedByVariant.set(m.variantId, m.approvalStatus);
+    }
+    if (variants.length === 0) {
+      // Product without variants: a single product-level row.
+      const existingStatus = mappedByVariant.get(null);
+      setAddRows([{
+        variantId: null,
+        label: product.title,
+        masterSku: product.baseSku,
+        included: !existingStatus,
+        franchiseSku: '',
+        barcode: '',
+        isListed: true,
+        alreadyMapped: Boolean(existingStatus),
+        existingStatus,
+      }]);
+    } else {
+      // Product with variants: one row per variant. Variants the
+      // franchise has already mapped come in disabled and unchecked,
+      // with a preview label. The remaining variants are checkable
+      // and selected by default — that lets the franchise add the
+      // rest in a single submit.
+      setAddRows(
+        variants.map((v) => {
+          const existingStatus = mappedByVariant.get(v.id);
+          return {
+            variantId: v.id,
+            label: v.title || v.sku || v.masterSku || v.id.slice(0, 8),
+            masterSku: v.sku || v.masterSku,
+            included: !existingStatus,
+            franchiseSku: '',
+            barcode: '',
+            isListed: true,
+            alreadyMapped: Boolean(existingStatus),
+            existingStatus,
+          };
+        }),
+      );
+    }
     setAddError('');
   };
 
@@ -273,28 +340,61 @@ export default function CatalogPage() {
     e.preventDefault();
     if (!addProduct) return;
 
-    // Multi-variant products must pick a variant. Fail fast with a
-    // friendly message rather than sending an ambiguous payload the
-    // backend's assertVariantBelongsToProduct will reject at runtime.
-    const variants = addProduct.variants ?? [];
-    if (variants.length > 0 && !addForm.variantId) {
-      setAddError('Please pick a variant to map.');
+    const selected = addRows.filter((r) => r.included);
+    if (selected.length === 0) {
+      setAddError('Select at least one variant to add.');
       return;
+    }
+
+    // Franchise SKU is OPTIONAL — when blank, the system falls back
+    // to the master/global SKU everywhere it's displayed and scanned.
+    // We only validate that any *manually entered* franchise SKUs in
+    // this batch are unique among themselves, so the franchise can't
+    // type the same value twice by accident.
+    const skuSeen = new Map<string, number>();
+    for (const r of selected) {
+      const sku = r.franchiseSku.trim();
+      if (!sku) continue;
+      if (skuSeen.has(sku)) {
+        setAddError(`Franchise SKU "${sku}" is repeated. Each variant needs a unique SKU.`);
+        return;
+      }
+      skuSeen.set(sku, 1);
     }
 
     setAddError('');
     setAddSaving(true);
     try {
-      const payload: AddMappingPayload = {
-        productId: addProduct.id,
-        variantId: addForm.variantId || undefined,
-        franchiseSku: addForm.franchiseSku.trim() || undefined,
-        barcode: addForm.barcode.trim() || undefined,
-        isListedForOnlineFulfillment: addForm.isListedForOnlineFulfillment,
-      };
-      await franchiseCatalogService.addMapping(payload);
+      if (selected.length === 1) {
+        // Single row → use the existing single-mapping endpoint so the
+        // backend's per-row error message comes back cleanly.
+        const r = selected[0];
+        const payload: AddMappingPayload = {
+          productId: addProduct.id,
+          variantId: r.variantId || undefined,
+          franchiseSku: r.franchiseSku.trim() || undefined,
+          barcode: r.barcode.trim() || undefined,
+          isListedForOnlineFulfillment: r.isListed,
+        };
+        await franchiseCatalogService.addMapping(payload);
+      } else {
+        // Multiple rows → use the bulk endpoint. The backend creates one
+        // FranchiseCatalogMapping per row, each with its own SKU.
+        const payloads: AddMappingPayload[] = selected.map((r) => ({
+          productId: addProduct.id,
+          variantId: r.variantId || undefined,
+          franchiseSku: r.franchiseSku.trim() || undefined,
+          barcode: r.barcode.trim() || undefined,
+          isListedForOnlineFulfillment: r.isListed,
+        }));
+        await franchiseCatalogService.bulkAddMappings(payloads);
+      }
       setAddProduct(null);
-      flashSuccess('Added to your catalog');
+      flashSuccess(
+        selected.length === 1
+          ? 'Added to your catalog'
+          : `${selected.length} variants added to your catalog`,
+      );
       // Refresh both tabs' data so switching tab shows the new mapping
       await loadProducts();
     } catch (err) {
@@ -396,11 +496,60 @@ export default function CatalogPage() {
         <div style={overlayStyle} onClick={closeEditModal}>
           <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 4px 0', fontSize: 18, fontWeight: 700 }}>
-              Edit Catalog Mapping
+              {editMapping.approvalStatus === 'REJECTED'
+                ? 'Fix Rejected Mapping'
+                : 'Edit Catalog Mapping'}
             </h3>
-            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 20px 0' }}>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px 0' }}>
               {editMapping.product?.title || editMapping.globalSku}
             </p>
+
+            {/* When the mapping was rejected by an admin, surface a
+                clear banner that explains what happens next: edits
+                here resubmit the row for re-review. Without this, the
+                franchise would think saving means the row goes live. */}
+            {editMapping.approvalStatus === 'REJECTED' && (
+              <div
+                role="status"
+                style={{
+                  padding: '10px 12px',
+                  marginBottom: 16,
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: 8,
+                  fontSize: 12,
+                  color: '#991b1b',
+                  lineHeight: 1.45,
+                }}
+              >
+                <strong style={{ fontWeight: 700 }}>This mapping was rejected by the admin.</strong> Update the SKU or barcode below and click Save Changes — your submission will be sent back for re-review.
+              </div>
+            )}
+
+            {/* Edits to an approved/stopped mapping reset the status
+                to PENDING_APPROVAL — the admin must re-verify the new
+                SKU / barcode / listing combination before the mapping
+                goes live again. Make that consequence visible up
+                front so the franchise doesn't accidentally pull a
+                live product offline by tweaking a typo. */}
+            {(editMapping.approvalStatus === 'APPROVED' ||
+              editMapping.approvalStatus === 'STOPPED') && (
+              <div
+                role="status"
+                style={{
+                  padding: '10px 12px',
+                  marginBottom: 16,
+                  background: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  borderRadius: 8,
+                  fontSize: 12,
+                  color: '#92400e',
+                  lineHeight: 1.45,
+                }}
+              >
+                <strong style={{ fontWeight: 700 }}>Heads up:</strong> saving changes resets this mapping to <strong>Pending review</strong>. The admin must re-approve before it goes live again.
+              </div>
+            )}
 
             <form onSubmit={handleEditSubmit} noValidate>
               <div style={{ marginBottom: 14 }}>
@@ -417,17 +566,25 @@ export default function CatalogPage() {
               </div>
 
               <div style={{ marginBottom: 14 }}>
-                <label style={modalLabelStyle}>Franchise SKU</label>
+                <label style={modalLabelStyle}>
+                  Franchise SKU
+                  <span style={{ fontWeight: 500, color: '#9ca3af', marginLeft: 6, fontSize: 11 }}>
+                    (optional)
+                  </span>
+                </label>
                 <input
                   type="text"
                   value={editForm.franchiseSku || ''}
                   onChange={(e) =>
                     setEditForm((p) => ({ ...p, franchiseSku: e.target.value }))
                   }
-                  placeholder="Your internal SKU"
+                  placeholder={editMapping.globalSku || 'Same as Master SKU'}
                   disabled={editSaving}
                   style={modalInputStyle}
                 />
+                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                  Leave blank to use the Master SKU ({editMapping.globalSku || '—'}). Only set this if your warehouse / POS system uses its own internal codes.
+                </div>
               </div>
 
               <div style={{ marginBottom: 14 }}>
@@ -486,28 +643,73 @@ export default function CatalogPage() {
                 </div>
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                <button
-                  type="button"
-                  onClick={closeEditModal}
-                  disabled={editSaving}
-                  className="btn btn-secondary"
-                >
-                  Cancel
-                </button>
-                <button type="submit" disabled={editSaving} className="btn btn-primary">
-                  {editSaving ? 'Saving...' : 'Save Changes'}
-                </button>
-              </div>
+              {(() => {
+                // Dirty-check — the franchise can only submit when at
+                // least one of franchiseSku / barcode / isListed has
+                // changed from the original snapshot. Treat null and
+                // empty-string as the same value (both render as a
+                // blank input but the API accepts undefined).
+                const norm = (v: unknown) =>
+                  typeof v === 'string' ? v.trim() : v ?? '';
+                const isDirty =
+                  norm(editForm.franchiseSku) !== norm(originalEditForm.franchiseSku) ||
+                  norm(editForm.barcode) !== norm(originalEditForm.barcode) ||
+                  Boolean(editForm.isListedForOnlineFulfillment) !==
+                    Boolean(originalEditForm.isListedForOnlineFulfillment);
+                const submitLabel = editSaving
+                  ? 'Saving…'
+                  : editMapping.approvalStatus === 'REJECTED'
+                    ? 'Resubmit for Review'
+                    : editMapping.approvalStatus === 'APPROVED' ||
+                        editMapping.approvalStatus === 'STOPPED'
+                      ? 'Save & Send for Review'
+                      : 'Save Changes';
+                return (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, alignItems: 'center' }}>
+                    {!isDirty && (
+                      <span style={{ fontSize: 11, color: '#9ca3af', marginRight: 'auto' }}>
+                        No changes to save
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={closeEditModal}
+                      disabled={editSaving}
+                      className="btn btn-secondary"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={editSaving || !isDirty}
+                      className="btn btn-primary"
+                      title={
+                        !isDirty
+                          ? 'Make a change to enable Save'
+                          : editMapping.approvalStatus === 'APPROVED' ||
+                              editMapping.approvalStatus === 'STOPPED'
+                            ? 'Saving will reset this mapping to Pending review'
+                            : undefined
+                      }
+                    >
+                      {submitLabel}
+                    </button>
+                  </div>
+                );
+              })()}
             </form>
           </div>
         </div>
       )}
 
-      {/* Add Mapping Modal */}
+      {/* Add Mapping Modal — wider than the default modal so the
+          per-variant rows below have room for inline SKU/barcode inputs. */}
       {addProduct && (
         <div style={overlayStyle} onClick={closeAddModal}>
-          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+          <div
+            style={{ ...modalStyle, width: 920, maxWidth: '95vw' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 style={{ margin: '0 0 4px 0', fontSize: 18, fontWeight: 700 }}>
               Add to Catalog
             </h3>
@@ -578,115 +780,305 @@ export default function CatalogPage() {
             </div>
 
             <form onSubmit={handleAddSubmit} noValidate>
-              {(addProduct.variants ?? []).length > 0 && (
-                <div style={{ marginBottom: 14 }}>
-                  <label style={modalLabelStyle}>
-                    Variant{(addProduct.variants ?? []).length > 1 ? ' *' : ''}
+
+              {/* Per-variant rows in a compact tabular layout — scales
+                  cleanly to many variants. One horizontal row per variant
+                  with inline SKU + barcode + listed inputs. */}
+              <div style={{ marginBottom: 14 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 8,
+                  }}
+                >
+                  <label style={{ ...modalLabelStyle, marginBottom: 0 }}>
+                    {(addProduct.variants ?? []).length > 0 ? (
+                      (() => {
+                        const selectable = addRows.filter((r) => !r.alreadyMapped).length;
+                        const selected = addRows.filter((r) => r.included && !r.alreadyMapped).length;
+                        const lockedCount = addRows.length - selectable;
+                        return (
+                          <>
+                            Variants ({selected}/{selectable} selected)
+                            {lockedCount > 0 && (
+                              <span style={{ fontWeight: 500, color: '#6b7280', marginLeft: 6, fontSize: 11 }}>
+                                · {lockedCount} already in catalog
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()
+                    ) : 'Catalog details'}
                   </label>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-                      gap: 8,
-                      maxHeight: 220,
-                      overflowY: 'auto',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: 6,
-                      padding: 8,
-                      background: '#fafafa',
-                    }}
-                  >
-                    {(addProduct.variants ?? []).map((v) => {
-                      const selected = addForm.variantId === v.id;
-                      return (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      type="button"
+                      disabled={addSaving}
+                      onClick={() => {
+                        // Copy each variant's master SKU into the
+                        // franchise SKU input as a starting value. The
+                        // franchise can edit afterwards if they want a
+                        // different internal code, otherwise leaving
+                        // the master SKU is the right default — every
+                        // place that displays / scans the SKU falls
+                        // back to globalSku when franchiseSku is blank,
+                        // so this is purely a convenience to make the
+                        // value visible / editable in the input.
+                        setAddRows((prev) =>
+                          prev.map((r) => {
+                            if (r.alreadyMapped) return r;
+                            if (!r.included) return r;
+                            if (r.franchiseSku.trim()) return r;
+                            const seed = (r.masterSku && r.masterSku.trim()) || '';
+                            return seed ? { ...r, franchiseSku: seed } : r;
+                          }),
+                        );
+                      }}
+                      style={{ ...bulkBtnStyle, color: '#1d4ed8', borderColor: '#bfdbfe' }}
+                      title="Pre-fill empty fields with the Master SKU. You can still edit each one or leave blank to use the Master SKU automatically."
+                    >
+                      Copy from Master SKU
+                    </button>
+                    {addRows.length > 1 && (
+                      <>
                         <button
-                          key={v.id}
                           type="button"
                           disabled={addSaving}
                           onClick={() =>
-                            setAddForm((p) => ({ ...p, variantId: v.id }))
+                            setAddRows((prev) =>
+                              prev.map((r) => (r.alreadyMapped ? r : { ...r, included: true })),
+                            )
                           }
-                          style={{
-                            textAlign: 'left',
-                            padding: '10px 12px',
-                            background: selected ? '#eff6ff' : '#fff',
-                            border: `1px solid ${selected ? '#3b82f6' : '#e5e7eb'}`,
-                            borderRadius: 6,
-                            cursor: addSaving ? 'not-allowed' : 'pointer',
-                            fontSize: 12,
-                            lineHeight: 1.4,
-                          }}
+                          style={bulkBtnStyle}
                         >
-                          <div style={{ fontWeight: 600, color: '#111827', marginBottom: 2 }}>
-                            {v.title || v.sku || v.masterSku || v.id.slice(0, 8)}
-                          </div>
-                          <div style={{ color: '#6b7280', fontFamily: 'monospace', fontSize: 11 }}>
-                            {v.sku || v.masterSku || '\u2014'}
-                          </div>
-                          <div style={{ color: '#6b7280', fontSize: 11 }}>
-                            {formatPrice(v.price)}
-                            {typeof v.stock === 'number' ? ` \u00B7 stock ${v.stock}` : ''}
-                          </div>
+                          Select all
                         </button>
+                        <button
+                          type="button"
+                          disabled={addSaving}
+                          onClick={() =>
+                            setAddRows((prev) =>
+                              prev.map((r) => (r.alreadyMapped ? r : { ...r, included: false })),
+                            )
+                          }
+                          style={bulkBtnStyle}
+                        >
+                          Clear all
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 6,
+                    background: '#fff',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Sticky column header row */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '32px minmax(180px, 1.4fr) 1.2fr 1.1fr 92px',
+                      gap: 8,
+                      padding: '8px 12px',
+                      background: '#f9fafb',
+                      borderBottom: '1px solid #e5e7eb',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      color: '#6b7280',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 1,
+                    }}
+                  >
+                    <div></div>
+                    <div>Variant</div>
+                    <div title="Optional — leave blank to use the Master SKU">
+                      Franchise SKU
+                      <span
+                        style={{
+                          fontWeight: 500,
+                          color: '#9ca3af',
+                          marginLeft: 4,
+                          fontSize: 10,
+                          textTransform: 'none',
+                          letterSpacing: 0,
+                        }}
+                      >
+                        (optional)
+                      </span>
+                    </div>
+                    <div>Barcode</div>
+                    <div style={{ textAlign: 'center' }}>Listed</div>
+                  </div>
+
+                  {/* Scrollable body */}
+                  <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+                    {addRows.map((row, idx) => {
+                      const updateRow = (patch: Partial<AddRow>) =>
+                        setAddRows((prev) =>
+                          prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)),
+                        );
+                      // Three states for a row:
+                      //   alreadyMapped → locked, shown as a preview tag,
+                      //                   excluded from submit
+                      //   !included     → unchecked-by-user, dimmed
+                      //   included      → active row
+                      const dim = row.alreadyMapped || !row.included;
+                      const lockedStatusLabel = row.alreadyMapped
+                        ? row.existingStatus === 'PENDING_APPROVAL'
+                          ? 'Pending review'
+                          : row.existingStatus === 'REJECTED'
+                            ? 'Rejected'
+                            : row.existingStatus === 'STOPPED'
+                              ? 'Stopped'
+                              : 'In catalog'
+                        : null;
+                      return (
+                        <div
+                          key={row.variantId ?? 'product-level'}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '32px minmax(180px, 1.4fr) 1.2fr 1.1fr 92px',
+                            gap: 8,
+                            alignItems: 'center',
+                            padding: '8px 12px',
+                            borderBottom:
+                              idx === addRows.length - 1 ? 'none' : '1px solid #f1f5f9',
+                            background: row.alreadyMapped
+                              ? '#f8fafc'
+                              : !row.included
+                                ? '#fafafa'
+                                : idx % 2 === 0 ? '#fff' : '#fcfcfd',
+                            opacity: dim ? 0.6 : 1,
+                            transition: 'opacity 0.12s, background 0.12s',
+                          }}
+                          title={row.alreadyMapped ? 'This variant is already in your catalog. Manage it from My Catalog.' : undefined}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={row.included}
+                            onChange={(e) => updateRow({ included: e.target.checked })}
+                            disabled={addSaving || row.alreadyMapped}
+                            style={{
+                              justifySelf: 'center',
+                              cursor: addSaving || row.alreadyMapped ? 'not-allowed' : 'pointer',
+                            }}
+                          />
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                fontSize: 13,
+                                color: '#111827',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                              }}
+                            >
+                              {row.label}
+                            </div>
+                            {row.masterSku && (
+                              <div
+                                style={{
+                                  fontFamily: 'monospace',
+                                  fontSize: 11,
+                                  color: '#9ca3af',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {row.masterSku}
+                              </div>
+                            )}
+                          </div>
+                          {row.alreadyMapped ? (
+                            // Locked preview — span the SKU + Barcode + Listed
+                            // cells so the row reads as one clear "already in
+                            // catalog" tag, not three empty inputs.
+                            <div
+                              style={{
+                                gridColumn: 'span 3',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'flex-end',
+                                gap: 8,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  padding: '4px 10px',
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  color: '#475569',
+                                  background: '#e2e8f0',
+                                  borderRadius: 999,
+                                }}
+                              >
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 16 16"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  aria-hidden="true"
+                                >
+                                  <path d="M3 8l3 3 7-7" />
+                                </svg>
+                                {lockedStatusLabel}
+                              </span>
+                            </div>
+                          ) : (
+                            <>
+                          <input
+                            type="text"
+                            value={row.franchiseSku}
+                            onChange={(e) => updateRow({ franchiseSku: e.target.value })}
+                            placeholder={row.masterSku || 'Same as Master SKU'}
+                            title="Optional — leave blank to use the Master SKU"
+                            disabled={addSaving || dim}
+                            style={inlineInputStyle}
+                          />
+                          <input
+                            type="text"
+                            value={row.barcode}
+                            onChange={(e) => updateRow({ barcode: e.target.value })}
+                            placeholder="EAN / UPC"
+                            disabled={addSaving || dim}
+                            style={inlineInputStyle}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={row.isListed}
+                              onChange={(e) => updateRow({ isListed: e.target.checked })}
+                              disabled={addSaving || dim}
+                              style={{ cursor: addSaving || dim ? 'not-allowed' : 'pointer' }}
+                              title="List for online fulfillment"
+                            />
+                          </div>
+                            </>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
                 </div>
-              )}
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={modalLabelStyle}>Franchise SKU (optional)</label>
-                <input
-                  type="text"
-                  value={addForm.franchiseSku}
-                  onChange={(e) =>
-                    setAddForm((p) => ({ ...p, franchiseSku: e.target.value }))
-                  }
-                  placeholder="Your internal SKU"
-                  disabled={addSaving}
-                  style={modalInputStyle}
-                />
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
-                <label style={modalLabelStyle}>Barcode (optional)</label>
-                <input
-                  type="text"
-                  value={addForm.barcode}
-                  onChange={(e) =>
-                    setAddForm((p) => ({ ...p, barcode: e.target.value }))
-                  }
-                  placeholder="EAN / UPC"
-                  disabled={addSaving}
-                  style={modalInputStyle}
-                />
-              </div>
-
-              <div style={{ marginBottom: 18 }}>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    fontSize: 13,
-                    fontWeight: 500,
-                    color: '#111827',
-                    cursor: addSaving ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={addForm.isListedForOnlineFulfillment}
-                    onChange={(e) =>
-                      setAddForm((p) => ({
-                        ...p,
-                        isListedForOnlineFulfillment: e.target.checked,
-                      }))
-                    }
-                    disabled={addSaving}
-                  />
-                  List for online fulfillment
-                </label>
               </div>
 
               {addError && (
@@ -926,10 +1318,18 @@ function MyCatalogTab(props: {
               <tbody>
                 {mappings.map((mapping) => {
                   const img = primaryImage(mapping.product?.images);
+                  // Rejected mappings get a subtle red row tint so the
+                  // franchise can spot them at a glance and fix them.
+                  // Once the franchise saves changes, the API flips the
+                  // status back to PENDING_APPROVAL automatically.
+                  const isRejected = mapping.approvalStatus === 'REJECTED';
                   return (
                     <tr
                       key={mapping.id}
-                      style={{ borderBottom: '1px solid #f3f4f6' }}
+                      style={{
+                        borderBottom: '1px solid #f3f4f6',
+                        background: isRejected ? '#fef2f2' : 'transparent',
+                      }}
                     >
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -981,9 +1381,26 @@ function MyCatalogTab(props: {
                         </span>
                       </td>
                       <td style={tdStyle}>
-                        <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                          {mapping.franchiseSku || '—'}
-                        </span>
+                        {mapping.franchiseSku ? (
+                          <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                            {mapping.franchiseSku}
+                          </span>
+                        ) : (
+                          // No override set — fall back to the master/global
+                          // SKU and label it muted so the franchise knows
+                          // it's the platform default, not a value they
+                          // typed in.
+                          <span
+                            style={{
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              color: '#9ca3af',
+                            }}
+                            title="Uses Master SKU (no override set)"
+                          >
+                            {mapping.globalSku || '—'}
+                          </span>
+                        )}
                       </td>
                       <td style={tdStyle}>
                         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
@@ -1040,19 +1457,24 @@ function MyCatalogTab(props: {
                           <button
                             type="button"
                             onClick={() => onEdit(mapping)}
+                            title={
+                              isRejected
+                                ? 'Fix the issue and re-submit for admin review'
+                                : 'Edit catalog mapping'
+                            }
                             style={{
                               padding: '6px 14px',
                               fontSize: 12,
                               fontWeight: 600,
-                              border: '1px solid #d1d5db',
+                              border: isRejected ? '1px solid #b91c1c' : '1px solid #d1d5db',
                               borderRadius: 6,
-                              background: '#f9fafb',
-                              color: '#111827',
+                              background: isRejected ? '#b91c1c' : '#f9fafb',
+                              color: isRejected ? '#fff' : '#111827',
                               cursor: 'pointer',
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            Edit
+                            {isRejected ? 'Fix & Resubmit' : 'Edit'}
                           </button>
                           <button
                             type="button"
@@ -1377,6 +1799,28 @@ const pageBtnStyle: React.CSSProperties = {
   background: '#fff',
   fontSize: 13,
   cursor: 'pointer',
+};
+
+const bulkBtnStyle: React.CSSProperties = {
+  padding: '4px 10px',
+  border: '1px solid #d1d5db',
+  borderRadius: 4,
+  background: '#fff',
+  fontSize: 11,
+  fontWeight: 500,
+  color: '#374151',
+  cursor: 'pointer',
+};
+
+const inlineInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '6px 8px',
+  fontSize: 12,
+  border: '1px solid #d1d5db',
+  borderRadius: 4,
+  background: '#fff',
+  fontFamily: 'inherit',
+  boxSizing: 'border-box',
 };
 
 const overlayStyle: React.CSSProperties = {

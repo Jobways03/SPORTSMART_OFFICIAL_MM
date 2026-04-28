@@ -133,6 +133,7 @@ export class FranchiseCatalogController {
       globalSku: '',
       franchiseSku: m.franchiseSku,
       barcode: m.barcode,
+      isListedForOnlineFulfillment: m.isListedForOnlineFulfillment,
     }));
 
     const count = await this.catalogService.addMappings(franchiseId, mappingsData);

@@ -102,6 +102,18 @@ export interface FranchiseCatalogMapping {
   sku: string | null;
   createdAt: string;
   updatedAt: string;
+  // Live FranchiseStock joined server-side. `null` when no stock row
+  // exists yet for this (franchise, product, variant) tuple — i.e.
+  // the franchise has been approved but never received any units.
+  stock?: {
+    onHandQty: number;
+    reservedQty: number;
+    availableQty: number;
+    damagedQty: number;
+    inTransitQty: number;
+    lowStockThreshold: number;
+    lastRestockedAt: string | null;
+  } | null;
 }
 
 export interface FranchiseCatalogListResponse {
@@ -223,6 +235,12 @@ export const adminFranchisesService = {
 
   stopCatalogMapping(mappingId: string): Promise<ApiResponse> {
     return apiClient(`/admin/franchise-catalog/${mappingId}/stop`, {
+      method: 'PATCH',
+    });
+  },
+
+  rejectCatalogMapping(mappingId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/franchise-catalog/${mappingId}/reject`, {
       method: 'PATCH',
     });
   },

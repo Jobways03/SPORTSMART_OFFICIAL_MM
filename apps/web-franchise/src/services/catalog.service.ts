@@ -18,6 +18,7 @@ export interface AvailableProduct {
   baseSku: string | null;
   basePrice: number | null;
   status: string;
+  hasVariants?: boolean;
   category?: { id: string; name: string };
   brand?: { id: string; name: string };
   images?: Array<{ url: string; isPrimary: boolean }>;
@@ -27,6 +28,18 @@ export interface AvailableProduct {
    * already scopes this with `isDeleted: false` in the catalog repo.
    */
   variants?: AvailableProductVariant[];
+  /**
+   * The current franchise's existing mappings for this product. Used
+   * by the Add-to-Catalog modal to pre-disable variants that are
+   * already in the franchise's catalog (so the franchise can't try
+   * to re-add a variant they've already mapped). `variantId === null`
+   * means a product-level mapping (non-variant product).
+   */
+  franchiseCatalogMappings?: Array<{
+    id: string;
+    variantId: string | null;
+    approvalStatus: string;
+  }>;
 }
 
 export interface CatalogMapping {

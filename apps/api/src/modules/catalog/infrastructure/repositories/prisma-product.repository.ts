@@ -43,8 +43,19 @@ export class PrismaProductRepository implements IProductRepository {
           images: { orderBy: { sortOrder: 'asc' }, take: 1 },
           variants: { where: { isDeleted: false }, select: { stock: true } },
           sellerMappings: {
-            where: { approvalStatus: 'APPROVED', isActive: true },
-            select: { stockQty: true, reservedQty: true },
+            // Don't filter by approvalStatus/isActive here — the
+            // controller needs to see PENDING + STOPPED rows for the
+            // inventory summary so it can compute "low stock count" and
+            // distinct-seller count correctly. The controller filters
+            // for APPROVED+isActive when computing the *headline*
+            // totals.
+            select: {
+              sellerId: true,
+              approvalStatus: true,
+              isActive: true,
+              stockQty: true,
+              reservedQty: true,
+            },
           },
           _count: { select: { variants: true } },
         },

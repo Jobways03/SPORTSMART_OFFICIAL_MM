@@ -1,5 +1,14 @@
 import { apiClient, ApiResponse, ApiError } from '@/lib/api-client';
 
+export interface ProductInventorySummary {
+  totalStock: number;
+  totalAvailable: number;
+  totalReserved: number;
+  sellerCount: number;
+  franchiseCount: number;
+  lowStockCount: number;
+}
+
 export interface ProductListItem {
   id: string;
   title: string;
@@ -19,6 +28,9 @@ export interface ProductListItem {
   potentialDuplicateOf: string | null;
   createdAt: string;
   updatedAt: string;
+  // Pre-aggregated server-side so the list view can render an inline
+  // inventory snapshot without per-row API calls.
+  inventorySummary?: ProductInventorySummary;
 }
 
 export interface ProductListResponse {

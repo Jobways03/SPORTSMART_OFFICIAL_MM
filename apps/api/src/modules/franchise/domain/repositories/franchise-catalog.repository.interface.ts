@@ -38,6 +38,7 @@ export interface FranchiseCatalogRepository {
       globalSku: string;
       franchiseSku?: string;
       barcode?: string;
+      isListedForOnlineFulfillment?: boolean;
     }>,
   ): Promise<number>;
 
@@ -57,6 +58,8 @@ export interface FranchiseCatalogRepository {
   approve(id: string): Promise<any>;
 
   stop(id: string): Promise<any>;
+
+  reject(id: string): Promise<any>;
 
   findAllPaginated(params: {
     page: number;
