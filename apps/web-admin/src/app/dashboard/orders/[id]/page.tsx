@@ -44,9 +44,11 @@ interface SubOrder {
   returnWindowEndsAt: string | null;
   commissionProcessed: boolean;
   acceptDeadline: string | null;
+  fulfillmentNodeType?: 'SELLER' | 'FRANCHISE' | string;
   items: OrderItem[];
   commissionRecords: CommissionRecord[];
   seller: { id: string; sellerName: string; sellerShopName: string; email: string } | null;
+  franchise?: { id: string; businessName: string; status?: string; warehousePincode?: string } | null;
 }
 
 interface OrderDetail {
@@ -177,7 +179,15 @@ function Pill({
 }
 
 /* -- status → pill mappings -- */
-const orderStatusPill = (status: string): { label: string; tone: PillTone } => {
+// `ROUTED_TO_SELLER` is the legacy enum name from when only sellers
+// fulfilled. Today a master order can route to a franchise instead;
+// the OrderStatus enum still says ROUTED_TO_SELLER but each sub-order
+// records its own `fulfillmentNodeType` + franchise/seller pointer.
+// The label has to look at the sub-orders to render correctly.
+const orderStatusPill = (
+  status: string,
+  subOrders?: Array<Pick<SubOrder, 'fulfillmentNodeType'>>,
+): { label: string; tone: PillTone } => {
   switch (status) {
     case 'PLACED':
       return { label: 'Placed', tone: 'warning' };
@@ -185,10 +195,19 @@ const orderStatusPill = (status: string): { label: string; tone: PillTone } => {
       return { label: 'Pending verification', tone: 'warning' };
     case 'VERIFIED':
       return { label: 'Verified', tone: 'info' };
-    case 'ROUTED_TO_SELLER':
-      return { label: 'Routed to seller', tone: 'info' };
+    case 'ROUTED_TO_SELLER': {
+      const types = (subOrders ?? [])
+        .map((s) => s.fulfillmentNodeType)
+        .filter(Boolean);
+      const hasFranchise = types.includes('FRANCHISE');
+      const hasSeller = types.includes('SELLER');
+      if (hasFranchise && !hasSeller) return { label: 'Routed to franchise', tone: 'info' };
+      if (hasSeller && !hasFranchise) return { label: 'Routed to seller', tone: 'info' };
+      if (hasFranchise && hasSeller) return { label: 'Routed (split)', tone: 'info' };
+      return { label: 'Routed', tone: 'info' };
+    }
     case 'SELLER_ACCEPTED':
-      return { label: 'Seller accepted', tone: 'success' };
+      return { label: 'Accepted', tone: 'success' };
     case 'DISPATCHED':
       return { label: 'Dispatched', tone: 'info' };
     case 'DELIVERED':
@@ -202,8 +221,14 @@ const orderStatusPill = (status: string): { label: string; tone: PillTone } => {
   }
 };
 
-function OrderStatusBadge({ status }: { status: string }) {
-  const p = orderStatusPill(status);
+function OrderStatusBadge({
+  status,
+  subOrders,
+}: {
+  status: string;
+  subOrders?: Array<Pick<SubOrder, 'fulfillmentNodeType'>>;
+}) {
+  const p = orderStatusPill(status, subOrders);
   return <Pill label={p.label} tone={p.tone} />;
 }
 
@@ -461,7 +486,7 @@ export default function OrderDetailPage() {
             >
               Order #{order.orderNumber}
             </h1>
-            <OrderStatusBadge status={currentStatus} />
+            <OrderStatusBadge status={currentStatus} subOrders={order.subOrders} />
             {order.paymentStatus === 'CANCELLED' && (
               <Pill label="Payment cancelled" tone="danger" size="xs" />
             )}
@@ -655,7 +680,7 @@ export default function OrderDetailPage() {
                   <tbody>
                     <DetailRow
                       label="Order Status"
-                      value={<OrderStatusBadge status={currentStatus} />}
+                      value={<OrderStatusBadge status={currentStatus} subOrders={order.subOrders} />}
                     />
                     <DetailRow label="Name" value={addr.fullName} />
                     <DetailRow label="Address" value={addr.addressLine1 + (addr.addressLine2 ? `, ${addr.addressLine2}` : '')} />
@@ -730,7 +755,7 @@ export default function OrderDetailPage() {
                 <SideRow label="DELIVERY METHOD" value="Free Shipping" />
                 <SideRow
                   label="ORDER STATUS"
-                  value={<OrderStatusBadge status={currentStatus} />}
+                  value={<OrderStatusBadge status={currentStatus} subOrders={order.subOrders} />}
                 />
                 <SideRow
                   label="PAYMENT STATUS"

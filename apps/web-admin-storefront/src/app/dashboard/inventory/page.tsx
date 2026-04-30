@@ -16,10 +16,20 @@ interface InventoryOverview {
   outOfStockCount: number;
 }
 
+type NodeType = 'SELLER' | 'FRANCHISE';
+type NodeFilter = 'ALL' | NodeType;
+
+interface FulfillmentNode {
+  type: NodeType;
+  id: string;
+  name: string;
+}
+
 interface LowStockItem {
   id: string;
-  sellerId: string;
-  sellerName: string;
+  sellerId: string | null;
+  sellerName: string | null;
+  node: FulfillmentNode;
   productId: string;
   productTitle: string;
   variantId: string | null;
@@ -42,6 +52,7 @@ interface OutOfStockProduct {
   totalStock: number;
   totalReserved: number;
   sellerCount: number;
+  node: FulfillmentNode;
 }
 
 interface Pagination {
@@ -75,6 +86,9 @@ export default function InventoryDashboardPage() {
   const [outOfStockLoading, setOutOfStockLoading] = useState(false);
   const [outOfStockFetched, setOutOfStockFetched] = useState(false);
 
+  // Node-type filter shared by both list tabs (sellers vs franchises vs all)
+  const [nodeFilter, setNodeFilter] = useState<NodeFilter>('ALL');
+
   const fetchOverview = useCallback(async () => {
     setOverviewLoading(true);
     try {
@@ -90,11 +104,13 @@ export default function InventoryDashboardPage() {
     }
   }, [router]);
 
-  const fetchLowStock = useCallback(async (page = 1) => {
+  const fetchLowStock = useCallback(async (page = 1, node: NodeFilter = 'ALL') => {
     setLowStockLoading(true);
     try {
+      const params = new URLSearchParams({ page: String(page), limit: '20' });
+      if (node !== 'ALL') params.set('nodeType', node);
       const res = await apiClient<{ items: LowStockItem[]; pagination: Pagination }>(
-        `/admin/inventory/low-stock?page=${page}&limit=20`,
+        `/admin/inventory/low-stock?${params.toString()}`,
       );
       if (res.data) {
         setLowStockItems(res.data.items);
@@ -111,11 +127,13 @@ export default function InventoryDashboardPage() {
     }
   }, [router]);
 
-  const fetchOutOfStock = useCallback(async (page = 1) => {
+  const fetchOutOfStock = useCallback(async (page = 1, node: NodeFilter = 'ALL') => {
     setOutOfStockLoading(true);
     try {
+      const params = new URLSearchParams({ page: String(page), limit: '20' });
+      if (node !== 'ALL') params.set('nodeType', node);
       const res = await apiClient<{ items: OutOfStockProduct[]; pagination: Pagination }>(
-        `/admin/inventory/out-of-stock?page=${page}&limit=20`,
+        `/admin/inventory/out-of-stock?${params.toString()}`,
       );
       if (res.data) {
         setOutOfStockItems(res.data.items);
@@ -138,12 +156,23 @@ export default function InventoryDashboardPage() {
 
   useEffect(() => {
     if (activeTab === 'lowStock' && !lowStockFetched && !lowStockLoading) {
-      fetchLowStock();
+      fetchLowStock(1, nodeFilter);
     }
     if (activeTab === 'outOfStock' && !outOfStockFetched && !outOfStockLoading) {
-      fetchOutOfStock();
+      fetchOutOfStock(1, nodeFilter);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, lowStockFetched, outOfStockFetched, lowStockLoading, outOfStockLoading, fetchLowStock, fetchOutOfStock]);
+
+  // When the node filter changes on either tab, re-fetch from page 1.
+  useEffect(() => {
+    if (activeTab === 'lowStock') {
+      fetchLowStock(1, nodeFilter);
+    } else if (activeTab === 'outOfStock') {
+      fetchOutOfStock(1, nodeFilter);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeFilter]);
 
   // ---- Styles ----
 
@@ -384,18 +413,21 @@ export default function InventoryDashboardPage() {
       {/* Low Stock Tab */}
       {activeTab === 'lowStock' && (
         <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a' }}>Low Stock Items</div>
-            <button
-              onClick={() => fetchLowStock(lowStockPagination.page)}
-              disabled={lowStockLoading}
-              style={{
-                padding: '6px 14px', fontSize: 12, fontWeight: 500,
-                border: '1px solid #e3e3e3', borderRadius: 8, background: '#fff', cursor: 'pointer',
-              }}
-            >
-              {lowStockLoading ? 'Loading...' : 'Refresh'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <NodeFilterPills value={nodeFilter} onChange={setNodeFilter} />
+              <button
+                onClick={() => fetchLowStock(lowStockPagination.page, nodeFilter)}
+                disabled={lowStockLoading}
+                style={{
+                  padding: '6px 14px', fontSize: 12, fontWeight: 500,
+                  border: '1px solid #e3e3e3', borderRadius: 8, background: '#fff', cursor: 'pointer',
+                }}
+              >
+                {lowStockLoading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
           </div>
 
           {lowStockLoading && lowStockItems.length === 0 ? (
@@ -410,7 +442,7 @@ export default function InventoryDashboardPage() {
                     <tr>
                       <th style={thStyle}>Product</th>
                       <th style={thStyle}>Variant</th>
-                      <th style={thStyle}>Seller</th>
+                      <th style={thStyle}>Source</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Stock</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Threshold</th>
                       <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
@@ -425,7 +457,9 @@ export default function InventoryDashboardPage() {
                         <td style={{ ...tdStyle, color: '#6b7280' }}>
                           {item.masterSku || item.variantSku || '\u2014'}
                         </td>
-                        <td style={tdStyle}>{item.sellerName}</td>
+                        <td style={tdStyle}>
+                          <SourceCell node={item.node} />
+                        </td>
                         <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{item.stockQty}</td>
                         <td style={{ ...tdStyle, textAlign: 'right' }}>{item.lowStockThreshold}</td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
@@ -478,18 +512,21 @@ export default function InventoryDashboardPage() {
       {/* Out of Stock Tab */}
       {activeTab === 'outOfStock' && (
         <div style={cardStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a' }}>Out of Stock Products</div>
-            <button
-              onClick={() => fetchOutOfStock(outOfStockPagination.page)}
-              disabled={outOfStockLoading}
-              style={{
-                padding: '6px 14px', fontSize: 12, fontWeight: 500,
-                border: '1px solid #e3e3e3', borderRadius: 8, background: '#fff', cursor: 'pointer',
-              }}
-            >
-              {outOfStockLoading ? 'Loading...' : 'Refresh'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <NodeFilterPills value={nodeFilter} onChange={setNodeFilter} />
+              <button
+                onClick={() => fetchOutOfStock(outOfStockPagination.page, nodeFilter)}
+                disabled={outOfStockLoading}
+                style={{
+                  padding: '6px 14px', fontSize: 12, fontWeight: 500,
+                  border: '1px solid #e3e3e3', borderRadius: 8, background: '#fff', cursor: 'pointer',
+                }}
+              >
+                {outOfStockLoading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
           </div>
 
           {outOfStockLoading && outOfStockItems.length === 0 ? (
@@ -506,13 +543,13 @@ export default function InventoryDashboardPage() {
                       <th style={thStyle}>Code</th>
                       <th style={thStyle}>Variant</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Stock</th>
-                      <th style={{ ...thStyle, textAlign: 'right' }}>Sellers</th>
+                      <th style={thStyle}>Source</th>
                       <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {outOfStockItems.map((item, idx) => (
-                      <tr key={`${item.productId}-${item.variantId || idx}`}>
+                      <tr key={`${item.node.type}-${item.node.id}-${item.productId}-${item.variantId || idx}`}>
                         <td style={{ ...tdStyle, fontWeight: 500, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {item.productTitle}
                         </td>
@@ -520,8 +557,10 @@ export default function InventoryDashboardPage() {
                         <td style={{ ...tdStyle, color: '#6b7280' }}>
                           {item.variantSku || (item.hasVariants ? '\u2014' : 'Base')}
                         </td>
+                        <td style={tdStyle}>
+                          <SourceCell node={item.node} />
+                        </td>
                         <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{item.totalStock}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>{item.sellerCount}</td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <span style={{
                             display: 'inline-block',
@@ -568,6 +607,70 @@ export default function InventoryDashboardPage() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Sub-components ───────────────────────────────────────────
+
+function SourceCell({ node }: { node: FulfillmentNode }) {
+  const isSeller = node.type === 'SELLER';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span
+        style={{
+          padding: '2px 7px',
+          fontSize: 10,
+          fontWeight: 700,
+          borderRadius: 4,
+          background: isSeller ? '#e0e7ff' : '#fce7f3',
+          color: isSeller ? '#3730a3' : '#9d174d',
+          letterSpacing: 0.4,
+        }}
+      >
+        {isSeller ? 'SELLER' : 'FRANCHISE'}
+      </span>
+      <span style={{ fontSize: 13, color: '#374151' }}>{node.name}</span>
+    </div>
+  );
+}
+
+function NodeFilterPills({
+  value,
+  onChange,
+}: {
+  value: NodeFilter;
+  onChange: (next: NodeFilter) => void;
+}) {
+  const options: Array<{ key: NodeFilter; label: string }> = [
+    { key: 'ALL', label: 'All' },
+    { key: 'SELLER', label: 'Sellers' },
+    { key: 'FRANCHISE', label: 'Franchises' },
+  ];
+  return (
+    <div style={{ display: 'inline-flex', padding: 2, background: '#f3f4f6', borderRadius: 999 }}>
+      {options.map((opt) => {
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            onClick={() => onChange(opt.key)}
+            style={{
+              padding: '5px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              border: 'none',
+              borderRadius: 999,
+              background: active ? '#fff' : 'transparent',
+              color: active ? '#1a1a1a' : '#6b7280',
+              cursor: 'pointer',
+              boxShadow: active ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -8,12 +8,14 @@ import {
   DiscountRepository,
   DISCOUNT_REPOSITORY,
 } from '../../domain/repositories/discount.repository.interface';
+import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
 
 @Injectable()
 export class DiscountsService {
   constructor(
     @Inject(DISCOUNT_REPOSITORY)
     private readonly discountRepo: DiscountRepository,
+    private readonly affiliatePublicFacade: AffiliatePublicFacade,
   ) {}
 
   async list(filters: {
@@ -308,6 +310,22 @@ export class DiscountsService {
     }
     const discount = await this.discountRepo.findByCodeWithProducts(trimmed);
     if (!discount) {
+      // Fall through to affiliate-coupon lookup. Affiliate codes
+      // (issued in AffiliateCouponCode on approval) live outside the
+      // regular Discount table — without this fallback the storefront
+      // rejects every affiliate code as "Invalid".
+      try {
+        const aff = await this.affiliatePublicFacade.validateAffiliateCouponForCustomer({
+          code: trimmed,
+          subtotal,
+        });
+        if (aff) return aff;
+      } catch (err: any) {
+        // Facade throws a plain Error with a customer-safe message
+        // when the code is ours but a constraint failed (expired,
+        // min-order, etc.). Surface it via the standard exception.
+        throw new BadRequestAppException(err?.message ?? 'Invalid coupon code');
+      }
       throw new BadRequestAppException('Invalid coupon code');
     }
     if (discount.method !== 'CODE') {

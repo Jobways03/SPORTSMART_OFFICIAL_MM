@@ -44,14 +44,21 @@ export class AdminInventoryController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('sellerId') sellerId?: string,
+    @Query('nodeType') nodeType?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
+
+    const validNode =
+      nodeType === 'SELLER' || nodeType === 'FRANCHISE' || nodeType === 'ALL'
+        ? (nodeType as 'SELLER' | 'FRANCHISE' | 'ALL')
+        : undefined;
 
     const result = await this.inventoryService.getAdminLowStock(
       pageNum,
       limitNum,
       sellerId,
+      validNode,
     );
 
     return {
@@ -78,13 +85,20 @@ export class AdminInventoryController {
   async getOutOfStock(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('nodeType') nodeType?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
 
+    const validNode =
+      nodeType === 'SELLER' || nodeType === 'FRANCHISE' || nodeType === 'ALL'
+        ? (nodeType as 'SELLER' | 'FRANCHISE' | 'ALL')
+        : undefined;
+
     const result = await this.inventoryService.getOutOfStockProducts(
       pageNum,
       limitNum,
+      validNode,
     );
 
     return {

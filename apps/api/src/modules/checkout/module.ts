@@ -25,10 +25,17 @@ import { UserAuthGuard } from '../../core/guards';
 import { CatalogModule } from '../catalog/module';
 import { FranchiseModule } from '../franchise/module';
 import { DiscountsModule } from '../discounts/discounts.module';
+import { AffiliateModule } from '../affiliate/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 
 @Module({
-  imports: [CatalogModule, FranchiseModule, DiscountsModule, RazorpayModule],
+  imports: [
+    CatalogModule,
+    FranchiseModule,
+    DiscountsModule,
+    AffiliateModule,
+    RazorpayModule,
+  ],
   controllers: [
     CustomerAddressController,
     CustomerOrdersController,

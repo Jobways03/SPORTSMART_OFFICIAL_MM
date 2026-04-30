@@ -238,4 +238,188 @@ export class FranchisePublicFacade {
       reversalAmount: params.reversalAmount,
     });
   }
+
+  // ── Admin-side inventory readers ───────────────────────────
+  // Used by the unified Inventory Overview page so a single admin
+  // surface can show both seller and franchise stock with one
+  // mental model. The shape mirrors InventoryManagementService's
+  // LowStockItem so the inventory service can map across.
+
+  async findFranchiseLowStockRows(): Promise<
+    Array<{
+      id: string;
+      franchiseId: string;
+      franchiseName: string;
+      productId: string;
+      productTitle: string;
+      variantId: string | null;
+      variantSku: string | null;
+      masterSku: string | null;
+      stockQty: number;
+      reservedQty: number;
+      availableStock: number;
+      lowStockThreshold: number;
+    }>
+  > {
+    // FranchiseStock only has a `franchise` relation in the schema
+    // (no `product` / `variant` relations), so we look those up
+    // separately and join in memory. Cheaper than the alternative
+    // (adding cross-module relations into the schema).
+    const rows = await this.prisma.franchiseStock.findMany({
+      where: {
+        franchise: { status: 'ACTIVE' },
+        availableQty: { gt: 0 },
+      },
+      include: { franchise: { select: { id: true, businessName: true } } },
+    });
+    const lowRows = rows.filter((r) => r.availableQty <= r.lowStockThreshold);
+    if (lowRows.length === 0) return [];
+
+    const productIds = Array.from(new Set(lowRows.map((r) => r.productId)));
+    const variantIds = Array.from(
+      new Set(lowRows.map((r) => r.variantId).filter(Boolean) as string[]),
+    );
+    const [products, variants] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, title: true },
+      }),
+      variantIds.length
+        ? this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, sku: true, masterSku: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const variantById = new Map(variants.map((v) => [v.id, v]));
+
+    return lowRows.map((r) => ({
+      id: r.id,
+      franchiseId: r.franchiseId,
+      franchiseName: r.franchise.businessName,
+      productId: r.productId,
+      productTitle: productById.get(r.productId)?.title ?? '(unknown product)',
+      variantId: r.variantId,
+      variantSku: r.variantId ? variantById.get(r.variantId)?.sku ?? null : null,
+      masterSku: r.variantId
+        ? variantById.get(r.variantId)?.masterSku ?? null
+        : null,
+      stockQty: r.onHandQty,
+      reservedQty: r.reservedQty,
+      availableStock: r.availableQty,
+      lowStockThreshold: r.lowStockThreshold,
+    }));
+  }
+
+  async findFranchiseOutOfStockRows(): Promise<
+    Array<{
+      productId: string;
+      productTitle: string;
+      productCode: string;
+      hasVariants: boolean;
+      variantId: string | null;
+      variantSku: string | null;
+      franchiseId: string;
+      franchiseName: string;
+      totalStock: number;
+      totalReserved: number;
+    }>
+  > {
+    const rows = await this.prisma.franchiseStock.findMany({
+      where: {
+        franchise: { status: 'ACTIVE' },
+        availableQty: { lte: 0 },
+      },
+      include: { franchise: { select: { id: true, businessName: true } } },
+    });
+    if (rows.length === 0) return [];
+
+    const productIds = Array.from(new Set(rows.map((r) => r.productId)));
+    const variantIds = Array.from(
+      new Set(rows.map((r) => r.variantId).filter(Boolean) as string[]),
+    );
+    const [products, variants] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { id: { in: productIds } },
+        // Product schema uses `productCode` and `hasVariants` columns —
+        // keep both available for downstream consumers.
+        select: {
+          id: true,
+          title: true,
+          productCode: true,
+          hasVariants: true,
+        },
+      }),
+      variantIds.length
+        ? this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, sku: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const variantById = new Map(variants.map((v) => [v.id, v]));
+
+    return rows.map((r) => {
+      const product = productById.get(r.productId);
+      return {
+        productId: r.productId,
+        productTitle: product?.title ?? '(unknown product)',
+        productCode: product?.productCode ?? '',
+        hasVariants: product?.hasVariants ?? false,
+        variantId: r.variantId,
+        variantSku: r.variantId
+          ? variantById.get(r.variantId)?.sku ?? null
+          : null,
+        franchiseId: r.franchiseId,
+        franchiseName: r.franchise.businessName,
+        totalStock: r.onHandQty,
+        totalReserved: r.reservedQty,
+      };
+    });
+  }
+
+  async getFranchiseInventoryStats(): Promise<{
+    distinctProducts: number;
+    distinctVariants: number;
+    totalStock: number;
+    totalReserved: number;
+    lowStockCount: number;
+    outOfStockCount: number;
+  }> {
+    const rows = await this.prisma.franchiseStock.findMany({
+      where: { franchise: { status: 'ACTIVE' } },
+      select: {
+        productId: true,
+        variantId: true,
+        onHandQty: true,
+        reservedQty: true,
+        availableQty: true,
+        lowStockThreshold: true,
+      },
+    });
+    const productIds = new Set(rows.map((r) => r.productId));
+    const variantIds = new Set(
+      rows.filter((r) => r.variantId).map((r) => r.variantId as string),
+    );
+    let totalStock = 0;
+    let totalReserved = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    for (const r of rows) {
+      totalStock += r.onHandQty;
+      totalReserved += r.reservedQty;
+      if (r.availableQty <= 0) outOfStockCount += 1;
+      else if (r.availableQty <= r.lowStockThreshold) lowStockCount += 1;
+    }
+    return {
+      distinctProducts: productIds.size,
+      distinctVariants: variantIds.size,
+      totalStock,
+      totalReserved,
+      lowStockCount,
+      outOfStockCount,
+    };
+  }
 }

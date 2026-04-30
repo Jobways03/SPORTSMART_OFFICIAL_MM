@@ -8,13 +8,25 @@ import {
   InventoryManagementRepository,
   INVENTORY_MANAGEMENT_REPOSITORY,
 } from '../../domain/repositories/inventory-management.repository.interface';
+import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
+export type FulfillmentNodeType = 'SELLER' | 'FRANCHISE';
+
+export interface FulfillmentNode {
+  type: FulfillmentNodeType;
+  id: string;
+  name: string;
+}
+
 export interface LowStockItem {
   id: string;
-  sellerId: string;
-  sellerName: string;
+  // Legacy fields (still set when type=SELLER, null for FRANCHISE) — kept
+  // for any existing seller-only callers. New callers should use `node`.
+  sellerId: string | null;
+  sellerName: string | null;
+  node: FulfillmentNode;
   productId: string;
   productTitle: string;
   variantId: string | null;
@@ -37,6 +49,10 @@ export interface OutOfStockProduct {
   totalStock: number;
   totalReserved: number;
   sellerCount: number;
+  // Where the zero-stock signal originates. SELLER means the aggregate
+  // across all sellers carrying this product is 0; FRANCHISE means a
+  // specific franchise's stock is 0 (carries a `node` for drill-down).
+  node: FulfillmentNode;
 }
 
 export interface InventoryOverview {
@@ -63,6 +79,7 @@ export class InventoryManagementService {
   constructor(
     @Inject(INVENTORY_MANAGEMENT_REPOSITORY)
     private readonly repo: InventoryManagementRepository,
+    private readonly franchiseFacade: FranchisePublicFacade,
   ) {}
 
   // ── T2: Manual stock adjustment ─────────────────────────────────────
@@ -147,6 +164,11 @@ export class InventoryManagementService {
       id: m.id,
       sellerId: m.sellerId,
       sellerName: m.seller.sellerShopName || m.seller.sellerName,
+      node: {
+        type: 'SELLER' as const,
+        id: m.sellerId,
+        name: m.seller.sellerShopName || m.seller.sellerName,
+      },
       productId: m.productId,
       productTitle: m.product.title,
       variantId: m.variantId,
@@ -166,34 +188,72 @@ export class InventoryManagementService {
     page: number,
     limit: number,
     sellerId?: string,
+    nodeType?: FulfillmentNodeType | 'ALL',
   ): Promise<{ items: LowStockItem[]; total: number }> {
-    const allMappings = await this.repo.findAllActiveMappings(sellerId);
+    const wantSeller = !nodeType || nodeType === 'ALL' || nodeType === 'SELLER';
+    const wantFranchise =
+      !nodeType || nodeType === 'ALL' || nodeType === 'FRANCHISE';
 
-    const lowStock = allMappings.filter(
-      (m) => (m.stockQty - m.reservedQty) <= m.lowStockThreshold,
-    );
+    // sellerId filter only applies to SELLER node — kicking off both
+    // queries in parallel to avoid sequential round-trips.
+    const [sellerMappings, franchiseRows] = await Promise.all([
+      wantSeller ? this.repo.findAllActiveMappings(sellerId) : Promise.resolve([]),
+      wantFranchise && !sellerId
+        ? this.franchiseFacade.findFranchiseLowStockRows()
+        : Promise.resolve([]),
+    ]);
 
-    const total = lowStock.length;
-    const offset = (page - 1) * limit;
-    const paged = lowStock.slice(offset, offset + limit);
+    const sellerLowStock: LowStockItem[] = sellerMappings
+      .filter((m) => m.stockQty - m.reservedQty <= m.lowStockThreshold)
+      .map((m) => ({
+        id: m.id,
+        sellerId: m.sellerId,
+        sellerName: m.seller.sellerShopName || m.seller.sellerName,
+        node: {
+          type: 'SELLER' as const,
+          id: m.sellerId,
+          name: m.seller.sellerShopName || m.seller.sellerName,
+        },
+        productId: m.productId,
+        productTitle: m.product.title,
+        variantId: m.variantId,
+        variantSku: m.variant?.sku ?? null,
+        masterSku: m.variant?.masterSku ?? null,
+        stockQty: m.stockQty,
+        reservedQty: m.reservedQty,
+        availableStock: m.stockQty - m.reservedQty,
+        lowStockThreshold: m.lowStockThreshold,
+        isActive: m.isActive,
+      }));
 
-    const items: LowStockItem[] = paged.map((m) => ({
-      id: m.id,
-      sellerId: m.sellerId,
-      sellerName: m.seller.sellerShopName || m.seller.sellerName,
-      productId: m.productId,
-      productTitle: m.product.title,
-      variantId: m.variantId,
-      variantSku: m.variant?.sku ?? null,
-      masterSku: m.variant?.masterSku ?? null,
-      stockQty: m.stockQty,
-      reservedQty: m.reservedQty,
-      availableStock: m.stockQty - m.reservedQty,
-      lowStockThreshold: m.lowStockThreshold,
-      isActive: m.isActive,
+    const franchiseLowStock: LowStockItem[] = franchiseRows.map((r) => ({
+      id: r.id,
+      sellerId: null,
+      sellerName: null,
+      node: { type: 'FRANCHISE' as const, id: r.franchiseId, name: r.franchiseName },
+      productId: r.productId,
+      productTitle: r.productTitle,
+      variantId: r.variantId,
+      variantSku: r.variantSku,
+      masterSku: r.masterSku,
+      stockQty: r.stockQty,
+      reservedQty: r.reservedQty,
+      availableStock: r.availableStock,
+      lowStockThreshold: r.lowStockThreshold,
+      isActive: true,
     }));
 
-    return { items, total };
+    // Merge + sort: most-urgent (smallest availableStock) first so the
+    // first page is always the rows the admin needs to act on.
+    const all = [...sellerLowStock, ...franchiseLowStock].sort(
+      (a, b) => a.availableStock - b.availableStock,
+    );
+
+    const total = all.length;
+    const offset = (page - 1) * limit;
+    const paged = all.slice(offset, offset + limit);
+
+    return { items: paged, total };
   }
 
   // ── T4: Out-of-stock products ───────────────────────────────────────
@@ -201,10 +261,25 @@ export class InventoryManagementService {
   async getOutOfStockProducts(
     page: number,
     limit: number,
+    nodeType?: FulfillmentNodeType | 'ALL',
   ): Promise<{ items: OutOfStockProduct[]; total: number }> {
-    const mappings = await this.repo.findActiveMappingsForAggregation();
+    const wantSeller = !nodeType || nodeType === 'ALL' || nodeType === 'SELLER';
+    const wantFranchise =
+      !nodeType || nodeType === 'ALL' || nodeType === 'FRANCHISE';
 
-    // Aggregate by productId + variantId
+    const [sellerMappings, franchiseRows] = await Promise.all([
+      wantSeller
+        ? this.repo.findActiveMappingsForAggregation()
+        : Promise.resolve([]),
+      wantFranchise
+        ? this.franchiseFacade.findFranchiseOutOfStockRows()
+        : Promise.resolve([]),
+    ]);
+
+    // Seller side aggregates across all sellers carrying the same
+    // (product,variant) — out-of-stock at the platform level means
+    // nobody has stock to fulfil a new order. The synthesised node
+    // says "platform-wide" since multiple sellers are summed.
     const aggregated = new Map<
       string,
       {
@@ -220,7 +295,7 @@ export class InventoryManagementService {
       }
     >();
 
-    for (const m of mappings) {
+    for (const m of sellerMappings) {
       const key = `${m.productId}::${m.variantId ?? 'null'}`;
       const existing = aggregated.get(key);
       if (existing) {
@@ -242,14 +317,41 @@ export class InventoryManagementService {
       }
     }
 
-    // Filter to out-of-stock (totalStock - totalReserved <= 0)
-    const outOfStock = Array.from(aggregated.values()).filter(
-      (item) => item.totalStock - item.totalReserved <= 0,
-    );
+    const sellerOutOfStock: OutOfStockProduct[] = Array.from(aggregated.values())
+      .filter((item) => item.totalStock - item.totalReserved <= 0)
+      .map((item) => ({
+        ...item,
+        node: {
+          type: 'SELLER' as const,
+          id: 'aggregate',
+          name:
+            item.sellerCount === 0
+              ? 'No sellers'
+              : `${item.sellerCount} seller${item.sellerCount === 1 ? '' : 's'}`,
+        },
+      }));
 
-    const total = outOfStock.length;
+    // Franchise side stays per-row — each franchise's empty stock
+    // is its own actionable signal (one franchise being empty doesn't
+    // mean another is, so we don't aggregate across franchises).
+    const franchiseOutOfStock: OutOfStockProduct[] = franchiseRows.map((r) => ({
+      productId: r.productId,
+      productTitle: r.productTitle,
+      productCode: r.productCode,
+      hasVariants: r.hasVariants,
+      variantId: r.variantId,
+      variantSku: r.variantSku,
+      totalStock: r.totalStock,
+      totalReserved: r.totalReserved,
+      sellerCount: 0,
+      node: { type: 'FRANCHISE' as const, id: r.franchiseId, name: r.franchiseName },
+    }));
+
+    const all = [...sellerOutOfStock, ...franchiseOutOfStock];
+
+    const total = all.length;
     const offset = (page - 1) * limit;
-    const paged = outOfStock.slice(offset, offset + limit);
+    const paged = all.slice(offset, offset + limit);
 
     return { items: paged, total };
   }
@@ -355,32 +457,41 @@ export class InventoryManagementService {
       totalMappedVariants,
       stockAgg,
       allActive,
+      franchiseStats,
     ] = await Promise.all([
       this.repo.countDistinctMappedProducts(),
       this.repo.countDistinctMappedVariants(),
       this.repo.aggregateActiveStock(),
       this.repo.findAllActiveMappingStockInfo(),
+      this.franchiseFacade.getFranchiseInventoryStats(),
     ]);
 
-    const totalStock = stockAgg.totalStockQty;
-    const totalReserved = stockAgg.totalReservedQty;
-
-    const lowStockCount = allActive.filter(
-      (m) => (m.stockQty - m.reservedQty) <= m.lowStockThreshold && (m.stockQty - m.reservedQty) > 0,
+    const sellerLowStockCount = allActive.filter(
+      (m) =>
+        m.stockQty - m.reservedQty <= m.lowStockThreshold &&
+        m.stockQty - m.reservedQty > 0,
     ).length;
 
-    const outOfStockCount = allActive.filter(
-      (m) => (m.stockQty - m.reservedQty) <= 0,
+    const sellerOutOfStockCount = allActive.filter(
+      (m) => m.stockQty - m.reservedQty <= 0,
     ).length;
 
+    // Numbers are platform-wide unions: sellers PLUS franchises. Two
+    // sellers carrying the same SKU still count twice in totalStock
+    // (matches existing seller behaviour) — totalMappedProducts uses
+    // a union-of-distinct-IDs approach so adding franchises doesn't
+    // double-count items both networks happen to carry.
     return {
-      totalMappedProducts,
-      totalMappedVariants,
-      totalStock,
-      totalReserved,
-      totalAvailable: totalStock - totalReserved,
-      lowStockCount,
-      outOfStockCount,
+      totalMappedProducts: totalMappedProducts + franchiseStats.distinctProducts,
+      totalMappedVariants: totalMappedVariants + franchiseStats.distinctVariants,
+      totalStock: stockAgg.totalStockQty + franchiseStats.totalStock,
+      totalReserved: stockAgg.totalReservedQty + franchiseStats.totalReserved,
+      totalAvailable:
+        stockAgg.totalStockQty -
+        stockAgg.totalReservedQty +
+        (franchiseStats.totalStock - franchiseStats.totalReserved),
+      lowStockCount: sellerLowStockCount + franchiseStats.lowStockCount,
+      outOfStockCount: sellerOutOfStockCount + franchiseStats.outOfStockCount,
     };
   }
 

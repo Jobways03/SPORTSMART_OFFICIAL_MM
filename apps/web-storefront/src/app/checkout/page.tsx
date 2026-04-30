@@ -63,6 +63,23 @@ interface CheckoutData {
   expiresAt: string;
 }
 
+/** Read a single cookie's value by name, or null if absent. Used to
+ *  pull the affiliate referral cookie (sm_ref) at checkout time. */
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie
+    .split(';')
+    .map((c) => c.trim())
+    .find((c) => c.startsWith(`${name}=`));
+  if (!match) return null;
+  const v = match.slice(name.length + 1);
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartData | null>(null);
@@ -436,11 +453,17 @@ export default function CheckoutPage() {
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 60_000);
     try {
+      // Affiliate referral cookie (SRS §7.1). If the customer arrived
+      // via `?ref=AFXXXX` at any point in the last 30 days, the
+      // sm_ref cookie still carries that value — pass it along so
+      // the order gets attributed even if no coupon is applied.
+      const referralCode = readCookie('sm_ref');
       const res = await apiClient<{ orderNumber: string }>('/customer/checkout/place-order', {
         method: 'POST',
         body: JSON.stringify({
           paymentMethod: 'COD',
           ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
+          ...(referralCode ? { referralCode } : {}),
         }),
         signal: abort.signal,
       });

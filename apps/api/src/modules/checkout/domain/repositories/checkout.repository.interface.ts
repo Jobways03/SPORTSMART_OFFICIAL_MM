@@ -159,6 +159,14 @@ export interface PlaceOrderTransactionInput {
   fulfillmentGroups: Record<string, FulfillmentGroupInput>;
   discountCode?: string | null;
   discountAmount?: number;
+  // Affiliate attribution resolved by the AffiliatePublicFacade.
+  // null when the order has no affiliate. When set, the repo writes
+  // a ReferralAttribution row inside the same transaction.
+  affiliateAttribution?: {
+    affiliateId: string;
+    source: 'LINK' | 'COUPON';
+    code: string;
+  } | null;
 }
 
 export interface PlaceOrderTransactionResult {

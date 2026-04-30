@@ -5,6 +5,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// `url` here is also configured in `prisma.config.ts` (datasource.url),
+// where it takes precedence at runtime. The IDE Prisma extension may
+// flag this as deprecated for Prisma 7 — Prisma 6.19 still requires it
+// in the schema, so leave it until we upgrade.
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")

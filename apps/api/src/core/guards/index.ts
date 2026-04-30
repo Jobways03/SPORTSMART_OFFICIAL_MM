@@ -4,4 +4,5 @@ export { AdminAuthGuard } from './admin-auth.guard';
 export { SellerAuthGuard } from './seller-auth.guard';
 export { UserAuthGuard } from './user-auth.guard';
 export { FranchiseAuthGuard } from './franchise-auth.guard';
+export { AffiliateAuthGuard } from './affiliate-auth.guard';
 export { AnyAuthGuard } from './any-auth.guard';
