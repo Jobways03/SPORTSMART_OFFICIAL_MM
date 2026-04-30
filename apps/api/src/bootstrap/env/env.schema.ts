@@ -21,6 +21,11 @@ export const envSchema = z.object({
   JWT_SELLER_SECRET: z.string().min(32),
   JWT_FRANCHISE_SECRET: z.string().min(32),
   JWT_ADMIN_SECRET: z.string().min(32),
+  JWT_AFFILIATE_SECRET: z.string().min(32),
+  // App-layer key for encrypting affiliate PAN / Aadhaar / bank
+  // account numbers at rest. 32 bytes (64 hex chars or 44 base64
+  // chars) for AES-256. Generate with `openssl rand -hex 32`.
+  AFFILIATE_ENCRYPTION_KEY: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   JWT_ACCESS_TTL: z.string().default('7d'),
   JWT_REFRESH_TTL: z.string().default('30d'),

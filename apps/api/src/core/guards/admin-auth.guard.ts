@@ -16,6 +16,7 @@ const ADMIN_ROLES = [
   'SELLER_ADMIN',
   'SELLER_SUPPORT',
   'SELLER_OPERATIONS',
+  'AFFILIATE_ADMIN',
 ];
 
 @Injectable()

@@ -28,6 +28,10 @@ model User {
   carts             Cart[]
   orders            MasterOrder[]
   returns           Return[]
+  // Optional 1:1 link to an affiliate record. Set when a User signs
+  // up with the same email as an existing affiliate. Most users are
+  // never affiliates so this stays null forever.
+  affiliate         Affiliate?
 
   @@map("users")
 }

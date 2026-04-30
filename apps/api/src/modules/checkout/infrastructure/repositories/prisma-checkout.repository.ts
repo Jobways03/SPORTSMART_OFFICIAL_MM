@@ -298,6 +298,33 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         },
       });
 
+      // Affiliate attribution — write the ReferralAttribution row in
+      // the same transaction so the (order ← affiliate) binding is
+      // atomic with order creation. The actual commission is NOT
+      // created here; that fires on payments.payment.captured (so
+      // unpaid orders don't accrue affiliate earnings, per SRS §8.5).
+      if (input.affiliateAttribution) {
+        await tx.referralAttribution.create({
+          data: {
+            orderId: masterOrder.id,
+            affiliateId: input.affiliateAttribution.affiliateId,
+            source: input.affiliateAttribution.source,
+            code: input.affiliateAttribution.code,
+          },
+        });
+        // Bump the coupon-code usedCount counter when the attribution
+        // came in via a COUPON. Best-effort — failure here shouldn't
+        // break order placement.
+        if (input.affiliateAttribution.source === 'COUPON') {
+          await tx.affiliateCouponCode
+            .update({
+              where: { code: input.affiliateAttribution.code },
+              data: { usedCount: { increment: 1 } },
+            })
+            .catch(() => undefined);
+        }
+      }
+
       // Create sub-orders per fulfillment node (seller or franchise)
       const createdSubOrders: PlaceOrderTransactionResult['createdSubOrders'] = [];
       for (const [_groupKey, group] of Object.entries(input.fulfillmentGroups)) {

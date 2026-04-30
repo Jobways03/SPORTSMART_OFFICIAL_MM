@@ -239,9 +239,10 @@ SPORTSMART uses a **strict modular monolith** architecture (per ADR-001). This m
 |---------|------------|-------------|
 | **Customer** | web-storefront (:3001) | Browse, search, cart, checkout, track orders, manage returns |
 | **Seller** | web-seller (:3002) | Onboard, list products, manage inventory, accept/fulfill orders, view earnings |
-| **Admin** | web-admin (:3003) | Moderate catalog, verify orders, manage sellers, configure commissions, run settlements |
-| **Admin (Storefront)** | web-admin-storefront (:3006) | Manage storefront products, collections, discounts, inventory |
-| **Affiliate** | web-affiliate (:3004) | Generate referral links, track commissions (future) |
+| **Super Admin** | web-admin-storefront (:4000) | Top-level platform admin — moderate catalog, verify orders, configure commissions, run settlements |
+| **Seller Admin** | web-admin (:4001) | Seller-facing admin — manage storefront products, collections, discounts, inventory |
+| **Franchise Admin** | web-franchise-admin (:4002) | Approve franchise partners, manage franchise catalog, settlements, fraud monitoring |
+| **Affiliate** | web-affiliate (:4007) | Generate referral links, track commissions (planned) |
 | **Franchise** | web-franchise (:3005) | Manage regional fulfillment, track earnings (future) |
 
 ---
@@ -268,8 +269,10 @@ sportsmart-mm/
 |   +-- web-seller/                   # Seller portal (Port 3002)
 |   +-- web-admin/                    # Admin dashboard (Port 3003)
 |   +-- web-admin-storefront/         # Admin storefront mgmt (Port 3006)
-|   +-- web-affiliate/                # Affiliate portal (Port 3004) [scaffold]
-|   +-- web-franchise/                # Franchise portal (Port 3005) [scaffold]
+|   +-- web-franchise-admin/          # Franchise admin panel (Port 4002)
+|   +-- web-affiliate/                # Affiliate portal (Port 4007) [scaffold]
+|   +-- web-affiliate-admin/          # Affiliate admin panel (Port 4006) [scaffold]
+|   +-- web-franchise/                # Franchise portal (Port 4004)
 |
 +-- packages/
 |   +-- config/                       # Shared configuration
@@ -1831,7 +1834,10 @@ Write Scaling (Future):
 | 3001 | web-storefront (Customer) |
 | 3002 | web-seller (Seller portal) |
 | 3003 | web-admin (Admin dashboard) |
-| 3004 | web-affiliate (Future) |
+| 4002 | web-franchise-admin (Franchise admin panel) |
+| 4003 | web-seller (Seller portal) |
+| 4006 | web-affiliate-admin (Affiliate admin panel) |
+| 4007 | web-affiliate (Affiliate portal — planned) |
 | 3005 | web-franchise (Future) |
 | 3006 | web-admin-storefront |
 | 4000 | API backend (NestJS) |

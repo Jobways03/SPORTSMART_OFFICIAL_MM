@@ -15,6 +15,7 @@ import {
 } from '../../../catalog/application/facades/catalog-public.facade';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { DiscountPublicFacade } from '../../../discounts/application/facades/discount-public.facade';
+import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
@@ -38,6 +39,7 @@ export class CheckoutService {
     private readonly catalogFacade: CatalogPublicFacade,
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly discountFacade: DiscountPublicFacade,
+    private readonly affiliateFacade: AffiliatePublicFacade,
     private readonly razorpayAdapter: RazorpayAdapter,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
@@ -379,7 +381,12 @@ export class CheckoutService {
 
   // ── Place Order ────────────────────────────────────────────────────────
 
-  async placeOrder(userId: string, paymentMethod?: string, couponCode?: string) {
+  async placeOrder(
+    userId: string,
+    paymentMethod?: string,
+    couponCode?: string,
+    referralCode?: string,
+  ) {
     // Per-user lock: prevents double-submit (UI double-click or client
     // retry) from committing two MasterOrders against the same checkout
     // session. Without it, two concurrent calls both pass session.get()
@@ -397,13 +404,18 @@ export class CheckoutService {
     }
 
     try {
-      return await this.placeOrderLocked(userId, paymentMethod, couponCode);
+      return await this.placeOrderLocked(userId, paymentMethod, couponCode, referralCode);
     } finally {
       await this.redis.releaseLock(lockKey);
     }
   }
 
-  private async placeOrderLocked(userId: string, paymentMethod?: string, couponCode?: string) {
+  private async placeOrderLocked(
+    userId: string,
+    paymentMethod?: string,
+    couponCode?: string,
+    referralCode?: string,
+  ) {
     const method: 'COD' | 'ONLINE' =
       paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
     const session = await this.sessionService.get(userId);
@@ -492,6 +504,16 @@ export class CheckoutService {
     }
     const chargedTotal = Math.max(0, session.totalAmount - discountAmount);
 
+    // Affiliate attribution — resolved BEFORE the order transaction so
+    // we can pass it through and persist the ReferralAttribution row
+    // atomically with MasterOrder creation. Returns null when neither
+    // the coupon nor the referral code maps to an active affiliate
+    // (silent fall-through per SRS §6.2 + §7.5 — never an error).
+    const attribution = await this.affiliateFacade.resolveAttribution({
+      couponCode: trimmedCouponCode || null,
+      referralCode: referralCode || null,
+    });
+
     let result;
     try {
       result = await this.repo.placeOrderTransaction({
@@ -503,6 +525,7 @@ export class CheckoutService {
         fulfillmentGroups,
         discountCode,
         discountAmount,
+        affiliateAttribution: attribution,
       });
     } catch (err) {
       // Compensating action: release franchise reservations on failure

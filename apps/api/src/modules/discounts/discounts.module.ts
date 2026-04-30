@@ -6,8 +6,10 @@ import { DiscountPublicFacade } from './application/facades/discount-public.faca
 import { PrismaDiscountRepository } from './infrastructure/repositories/prisma-discount.repository';
 import { DISCOUNT_REPOSITORY } from './domain/repositories/discount.repository.interface';
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
+import { AffiliateModule } from '../affiliate/module';
 
 @Module({
+  imports: [AffiliateModule],
   controllers: [AdminDiscountsController, CustomerDiscountsController],
   providers: [
     AdminAuthGuard,

@@ -687,6 +687,29 @@ export class OrdersService {
         });
       }
     });
+
+    // Mirror the same domain event the online (Razorpay) and payments-
+    // facade paths emit. The affiliate commission handler subscribes
+    // to this — without the emit, COD orders marked paid here never
+    // produce an AffiliateCommission row.
+    try {
+      await this.eventBus.publish({
+        eventName: 'payments.payment.captured',
+        aggregate: 'MasterOrder',
+        aggregateId: id,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: id,
+          orderNumber: order.orderNumber,
+          customerId: order.customerId,
+          amount: Number(order.totalAmount),
+          paymentMethod: order.paymentMethod,
+          source: 'admin.markAsPaid',
+        },
+      });
+    } catch {
+      // best-effort — the DB state is the source of truth
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────────

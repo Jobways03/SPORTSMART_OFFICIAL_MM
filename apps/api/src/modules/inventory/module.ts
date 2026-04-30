@@ -5,11 +5,16 @@ import { SellerInventoryController } from './presentation/controllers/seller-inv
 import { AdminInventoryController } from './presentation/controllers/admin-inventory.controller';
 import { PrismaInventoryManagementRepository } from './infrastructure/repositories/prisma-inventory-management.repository';
 import { INVENTORY_MANAGEMENT_REPOSITORY } from './domain/repositories/inventory-management.repository.interface';
+import { FranchiseModule } from '../franchise/module';
 
 // Guards
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
 
 @Module({
+  // FranchiseModule exports FranchisePublicFacade, which the admin
+  // inventory service uses to merge franchise stock into the unified
+  // overview / low-stock / out-of-stock queries.
+  imports: [FranchiseModule],
   controllers: [
     SellerInventoryController,
     AdminInventoryController,

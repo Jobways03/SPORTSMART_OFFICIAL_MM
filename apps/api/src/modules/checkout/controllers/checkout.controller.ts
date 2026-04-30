@@ -53,12 +53,23 @@ export class CheckoutController {
   @Post('place-order')
   async placeOrder(
     @Req() req: any,
-    @Body() body: { paymentMethod?: string; couponCode?: string },
+    @Body()
+    body: {
+      paymentMethod?: string;
+      couponCode?: string;
+      // Affiliate referral code from URL ?ref= cookie. Independent of
+      // couponCode — a customer can apply both (a discount coupon AND
+      // an affiliate referral code), or just one, or neither. The
+      // attribution rule (SRS §7.3) is "coupon wins" if the coupon
+      // itself is also an affiliate-owned code.
+      referralCode?: string;
+    },
   ) {
     const data = await this.checkoutService.placeOrder(
       req.userId,
       body.paymentMethod,
       body.couponCode,
+      body.referralCode,
     );
     const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {

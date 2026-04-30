@@ -1,10 +1,8 @@
 import type { Metadata } from 'next';
-import { ModalProvider } from '@sportsmart/ui';
-import '../styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'SPORTSMART Franchise Admin',
-  description: 'Franchise admin portal for SPORTSMART marketplace',
+  title: 'SportsMart — Affiliate Portal',
+  description: 'Manage your referral links, coupon codes, commissions, and payouts.',
 };
 
 export default function RootLayout({
@@ -14,8 +12,17 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <ModalProvider>{children}</ModalProvider>
+      <body
+        style={{
+          margin: 0,
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          background: '#f8fafc',
+          color: '#0f172a',
+          minHeight: '100vh',
+        }}
+      >
+        {children}
       </body>
     </html>
   );
