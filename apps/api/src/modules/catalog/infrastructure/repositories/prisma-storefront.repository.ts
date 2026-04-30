@@ -87,6 +87,13 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
           (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1),
           (SELECT pvi.url FROM product_variant_images pvi JOIN product_variants pv ON pv.id = pvi.variant_id WHERE pv.product_id = p.id AND pv.is_deleted = false ORDER BY pvi.sort_order ASC LIMIT 1)
         ) AS "primaryImageUrl",
+        COALESCE(
+          (SELECT array_agg(url ORDER BY rn) FROM (
+            SELECT pi.url, ROW_NUMBER() OVER (ORDER BY pi.is_primary DESC, pi.sort_order ASC) AS rn
+            FROM product_images pi WHERE pi.product_id = p.id LIMIT 4
+          ) t),
+          '{}'::text[]
+        ) AS "imageUrls",
         COALESCE(agg.total_available_stock, 0)::int AS "totalAvailableStock",
         COALESCE(agg.seller_count, 0)::int AS "sellerCount",
         COALESCE(vc.variant_count, 0)::int AS "variantCount"

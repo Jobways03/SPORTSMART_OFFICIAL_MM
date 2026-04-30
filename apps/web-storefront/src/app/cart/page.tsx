@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { Minus, Plus, Trash2, ShoppingBag, Lock, ArrowRight } from 'lucide-react';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 
 interface CartItem {
@@ -27,6 +28,8 @@ interface CartData {
   itemCount: number;
 }
 
+const formatINR = (n: number) => '₹' + Number(n).toLocaleString('en-IN');
+
 export default function CartPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartData | null>(null);
@@ -35,30 +38,23 @@ export default function CartPage() {
 
   const fetchCart = () => {
     apiClient<CartData>('/customer/cart')
-      .then((res) => {
-        if (res.data) setCart(res.data);
-      })
-      .catch(() => {
-        router.push('/login');
-      })
+      .then((res) => res.data && setCart(res.data))
+      .catch(() => router.push('/login'))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     try {
       const token = sessionStorage.getItem('accessToken');
-      if (!token) {
-        router.push('/login');
-        return;
-      }
+      if (!token) return router.push('/login');
     } catch {
-      router.push('/login');
-      return;
+      return router.push('/login');
     }
     fetchCart();
   }, []);
 
   const updateQuantity = async (itemId: string, quantity: number) => {
+    if (quantity < 1) return removeItem(itemId);
     setUpdating(itemId);
     try {
       await apiClient(`/customer/cart/items/${itemId}`, {
@@ -67,8 +63,6 @@ export default function CartPage() {
       });
       fetchCart();
       window.dispatchEvent(new Event('cart-updated'));
-    } catch {
-      // ignore
     } finally {
       setUpdating(null);
     }
@@ -77,152 +71,205 @@ export default function CartPage() {
   const removeItem = async (itemId: string) => {
     setUpdating(itemId);
     try {
-      await apiClient(`/customer/cart/items/${itemId}`, {
-        method: 'DELETE',
-      });
+      await apiClient(`/customer/cart/items/${itemId}`, { method: 'DELETE' });
       fetchCart();
       window.dispatchEvent(new Event('cart-updated'));
-    } catch {
-      // ignore
     } finally {
       setUpdating(null);
     }
   };
 
-  const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
-
   if (loading) {
     return (
-      <>
-        <Navbar />
-        <div className="products-loading">
-          <div className="loading-spinner"></div>
-          <span>Loading cart...</span>
+      <StorefrontShell>
+        <div className="container-x py-16">
+          <div className="h-8 w-48 bg-ink-100 animate-pulse mb-6" />
+          <div className="grid lg:grid-cols-[1fr_360px] gap-8">
+            <div className="space-y-4">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-32 bg-ink-100 animate-pulse" />
+              ))}
+            </div>
+            <div className="h-72 bg-ink-100 animate-pulse" />
+          </div>
         </div>
-      </>
+      </StorefrontShell>
     );
   }
 
-  const totalItems = cart?.items.reduce((sum, i) => sum + i.quantity, 0) || 0;
+  const totalItems = cart?.items.reduce((s, i) => s + i.quantity, 0) ?? 0;
+  const isEmpty = !cart || cart.items.length === 0;
 
   return (
-    <>
-      <Navbar />
-      <div className="cart-page">
-        <h1>Shopping Cart</h1>
-        <p className="cart-subtitle">
-          {cart && cart.items.length > 0
-            ? `${totalItems} item${totalItems !== 1 ? 's' : ''} in your cart`
-            : ''}
-        </p>
+    <StorefrontShell>
+      <div className="container-x py-8 sm:py-12">
+        <div className="text-caption uppercase tracking-wider text-ink-600 mb-3">
+          <Link href="/" className="hover:text-ink-900">Home</Link>
+          {' / '}
+          <span>Cart</span>
+        </div>
 
-        {!cart || cart.items.length === 0 ? (
-          <div className="cart-empty">
-            <span className="cart-empty-icon">&#128722;</span>
-            <h3>Your cart is empty</h3>
-            <p>Looks like you haven&#39;t added anything yet. Start shopping!</p>
-            <Link href="/" className="cart-empty-btn">
-              Continue Shopping
+        <h1 className="font-display text-h1 sm:text-5xl text-ink-900 leading-none">Your cart</h1>
+        {!isEmpty && (
+          <p className="mt-2 text-body text-ink-600">
+            {totalItems} {totalItems === 1 ? 'item' : 'items'}
+          </p>
+        )}
+
+        {isEmpty ? (
+          <div className="mt-12 py-24 text-center border border-ink-200 rounded-2xl bg-white">
+            <ShoppingBag className="size-12 mx-auto text-ink-400" strokeWidth={1.25} />
+            <h3 className="mt-4 font-display text-h2 text-ink-900">Your cart is empty</h3>
+            <p className="mt-3 text-body-lg text-ink-600 max-w-md mx-auto">
+              Add a couple of items and they&apos;ll show up here.
+            </p>
+            <Link
+              href="/products"
+              className="mt-8 inline-flex items-center gap-2 h-12 px-6 bg-ink-900 text-white font-semibold hover:bg-ink-800 rounded-full"
+            >
+              Browse products
+              <ArrowRight className="size-4" />
             </Link>
           </div>
         ) : (
-          <div className="cart-layout">
-            {/* Cart Items */}
-            <div className="cart-items">
-              {cart.items.map((item) => (
-                <div
-                  key={item.id}
-                  className={`cart-item${updating === item.id ? ' updating' : ''}`}
-                >
-                  <div className="cart-item-image">
-                    {item.imageUrl ? (
-                      <img src={item.imageUrl} alt={item.productTitle} />
-                    ) : (
-                      <span className="placeholder">&#128722;</span>
-                    )}
-                  </div>
-                  <div className="cart-item-details">
-                    <Link href={`/products/${item.slug}`} className="cart-item-title">
-                      {item.productTitle}
+          <div className="mt-8 grid lg:grid-cols-[1fr_360px] gap-8">
+            <ul className="border-y border-ink-200 divide-y divide-ink-200">
+              {cart!.items.map((item) => {
+                const isUpdating = updating === item.id;
+                return (
+                  <li
+                    key={item.id}
+                    className={`grid grid-cols-[96px_1fr_auto] sm:grid-cols-[120px_1fr_auto] gap-4 sm:gap-6 py-5 transition-opacity ${
+                      isUpdating ? 'opacity-50' : ''
+                    }`}
+                  >
+                    <Link
+                      href={`/products/${item.slug}`}
+                      className="aspect-square bg-ink-100 overflow-hidden"
+                    >
+                      {item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt={item.productTitle}
+                          className="size-full object-contain"
+                        />
+                      ) : (
+                        <div className="size-full grid place-items-center text-ink-400 font-display text-2xl">
+                          SM
+                        </div>
+                      )}
                     </Link>
-                    {item.variantTitle && (
-                      <div className="cart-item-variant">{item.variantTitle}</div>
-                    )}
-                    {item.sellerShopName && (
-                      <div className="cart-item-seller">Sold by {item.sellerShopName}</div>
-                    )}
-                    <div className="cart-item-unit-price">
-                      {formatPrice(item.unitPrice)} each
-                    </div>
-                    <div className="cart-item-actions">
-                      <div className="cart-qty-control">
+
+                    <div className="min-w-0">
+                      <Link
+                        href={`/products/${item.slug}`}
+                        className="text-body-lg font-medium text-ink-900 hover:underline line-clamp-2"
+                      >
+                        {item.productTitle}
+                      </Link>
+                      {item.variantTitle && (
+                        <div className="mt-1 text-caption text-ink-600">{item.variantTitle}</div>
+                      )}
+                      {item.sellerShopName && (
+                        <div className="text-caption text-ink-500">Sold by {item.sellerShopName}</div>
+                      )}
+                      <div className="mt-2 text-body text-ink-700 tabular">
+                        {formatINR(item.unitPrice)} each
+                      </div>
+
+                      <div className="mt-3 flex items-center gap-3">
+                        <div className="inline-flex items-center border border-ink-300">
+                          <button
+                            onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                            disabled={isUpdating}
+                            className="size-8 grid place-items-center hover:bg-ink-100 disabled:opacity-50"
+                            aria-label="Decrease quantity"
+                          >
+                            <Minus className="size-3.5" />
+                          </button>
+                          <span className="w-8 text-center text-body font-medium tabular">
+                            {item.quantity}
+                          </span>
+                          <button
+                            onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                            disabled={isUpdating || item.quantity >= item.stock}
+                            className="size-8 grid place-items-center hover:bg-ink-100 disabled:opacity-50"
+                            aria-label="Increase quantity"
+                          >
+                            <Plus className="size-3.5" />
+                          </button>
+                        </div>
                         <button
-                          className="cart-qty-btn"
-                          onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                          disabled={updating === item.id}
+                          onClick={() => removeItem(item.id)}
+                          disabled={isUpdating}
+                          className="inline-flex items-center gap-1.5 text-caption text-ink-600 hover:text-danger transition-colors"
                         >
-                          &#8722;
-                        </button>
-                        <span className="cart-qty-value">{item.quantity}</span>
-                        <button
-                          className="cart-qty-btn"
-                          onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                          disabled={updating === item.id || item.quantity >= item.stock}
-                        >
-                          +
+                          <Trash2 className="size-3.5" /> Remove
                         </button>
                       </div>
-                      <button
-                        className="cart-remove-btn"
-                        onClick={() => removeItem(item.id)}
-                        disabled={updating === item.id}
-                      >
-                        Remove
-                      </button>
                     </div>
-                  </div>
-                  <div className="cart-item-price">
-                    {formatPrice(item.lineTotal)}
-                  </div>
-                </div>
-              ))}
-            </div>
 
-            {/* Order Summary */}
-            <div className="cart-summary">
-              <h3>Order Summary</h3>
-              <div className="cart-summary-row">
-                <span>Subtotal ({totalItems} item{totalItems !== 1 ? 's' : ''})</span>
-                <span>{formatPrice(cart.totalAmount)}</span>
+                    <div className="text-right text-body-lg font-semibold text-ink-900 tabular">
+                      {formatINR(item.lineTotal)}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+
+            {/* Summary */}
+            <aside className="lg:sticky lg:top-24 lg:self-start">
+              <div className="border border-ink-200 p-6 bg-white rounded-2xl">
+                <h3 className="font-display text-h3 text-ink-900 mb-4">Order summary</h3>
+                <dl className="space-y-2.5 text-body">
+                  <div className="flex justify-between">
+                    <dt className="text-ink-600">Subtotal · {totalItems} items</dt>
+                    <dd className="text-ink-900 tabular font-medium">
+                      {formatINR(cart!.totalAmount)}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-ink-600">Delivery</dt>
+                    <dd className="text-success font-medium uppercase tracking-wider text-caption">
+                      Free
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-ink-600">Estimated tax</dt>
+                    <dd className="text-ink-600 text-caption">Calculated at checkout</dd>
+                  </div>
+                </dl>
+                <hr className="my-4 border-ink-200" />
+                <div className="flex justify-between items-baseline">
+                  <span className="text-body-lg font-semibold text-ink-900">Total</span>
+                  <span className="font-display text-3xl text-ink-900 tabular">
+                    {formatINR(cart!.totalAmount)}
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => router.push('/checkout')}
+                  className="mt-6 w-full h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 inline-flex items-center justify-center gap-2 rounded-full"
+                >
+                  Proceed to checkout
+                  <ArrowRight className="size-4" />
+                </button>
+
+                <Link
+                  href="/products"
+                  className="mt-3 w-full h-11 border border-ink-300 hover:border-ink-900 inline-flex items-center justify-center text-body font-medium text-ink-900 rounded-full"
+                >
+                  Continue shopping
+                </Link>
+
+                <div className="mt-5 flex items-center gap-2 text-caption text-ink-600">
+                  <Lock className="size-3.5" /> Secure checkout · 256-bit SSL
+                </div>
               </div>
-              <div className="cart-summary-row">
-                <span>Delivery</span>
-                <span className="free">FREE</span>
-              </div>
-              <hr className="cart-summary-divider" />
-              <div className="cart-summary-total">
-                <span>Total</span>
-                <span>{formatPrice(cart.totalAmount)}</span>
-              </div>
-              <div className="cart-summary-savings">
-                You save on delivery!
-              </div>
-              <button
-                className="cart-checkout-btn"
-                onClick={() => router.push('/checkout')}
-              >
-                Proceed to Checkout
-              </button>
-              <Link href="/" className="cart-continue-link">
-                Continue Shopping
-              </Link>
-              <div className="cart-secure-note">
-                <span>&#128274;</span> Secure checkout
-              </div>
-            </div>
+            </aside>
           </div>
         )}
       </div>
-    </>
+    </StorefrontShell>
   );
 }

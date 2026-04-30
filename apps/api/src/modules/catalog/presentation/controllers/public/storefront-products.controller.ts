@@ -78,6 +78,7 @@ export class StorefrontProductsController {
           price: p.basePrice ? Number(p.basePrice) : null,
           compareAtPrice: p.compareAtPrice ? Number(p.compareAtPrice) : null,
           primaryImageUrl: p.primaryImageUrl,
+          imageUrls: Array.isArray(p.imageUrls) ? p.imageUrls : [],
           totalAvailableStock: p.totalAvailableStock, sellerCount: p.sellerCount,
           hasVariants: p.hasVariants, variantCount: p.variantCount,
         }));

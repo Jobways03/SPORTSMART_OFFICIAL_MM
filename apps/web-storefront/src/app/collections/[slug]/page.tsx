@@ -3,26 +3,16 @@
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { ChevronLeft, ChevronRight, SlidersHorizontal, X } from 'lucide-react';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
+import {
+  ProductCard,
+  ProductCardSkeleton,
+  type ProductCardData,
+} from '@/components/ui/ProductCard';
 import FilterSidebar from '@/components/FilterSidebar';
 import ActiveFilterChips from '@/components/ActiveFilterChips';
 import { apiClient } from '@/lib/api-client';
-
-interface Product {
-  id: string;
-  title: string;
-  slug: string;
-  shortDescription: string | null;
-  price: number | null;
-  basePrice: number | null;
-  compareAtPrice: number | null;
-  primaryImageUrl: string | null;
-  categoryName: string | null;
-  brandName: string | null;
-  totalAvailableStock: number;
-  sellerCount: number;
-  hasVariants: boolean;
-}
 
 interface CollectionInfo {
   id: string;
@@ -48,60 +38,19 @@ function CollectionContent() {
   const maxPrice = searchParams.get('maxPrice') || '';
   const currentPage = parseInt(searchParams.get('page') || '1', 10);
 
-  // Parse active metafield filters from URL
   const activeFilters: Record<string, string[]> = {};
   searchParams.forEach((value, key) => {
-    const match = key.match(/^filter\[(\w+)\]$/);
-    if (match) {
-      activeFilters[match[1]] = value.split(',').filter(Boolean);
-    }
+    const m = key.match(/^filter\[(\w+)\]$/);
+    if (m) activeFilters[m[1]] = value.split(',').filter(Boolean);
   });
 
   const [collection, setCollection] = useState<CollectionInfo | null>(null);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<ProductCardData[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 20, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
-
-  // Filter value labels (for active filter chips)
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterLabels, setFilterLabels] = useState<Record<string, Record<string, string>>>({});
 
-  // Fetch filter labels when collection loads
-  useEffect(() => {
-    if (!collection) return;
-    const params = new URLSearchParams();
-    params.set('collectionId', collection.id);
-    apiClient<{ filters: any[] }>(`/storefront/filters?${params}`)
-      .then((res) => {
-        const labels: Record<string, Record<string, string>> = {};
-        for (const f of res.data?.filters || []) {
-          if (f.values && Array.isArray(f.values)) {
-            labels[f.key] = {};
-            for (const v of f.values) {
-              labels[f.key][v.value] = v.label;
-            }
-          }
-        }
-        setFilterLabels(labels);
-      })
-      .catch(() => {});
-  }, [collection]);
-
-  // Helpers
-  const getDisplayPrice = (product: Product): number | null => {
-    return product.price ?? product.basePrice ?? null;
-  };
-
-  const formatPrice = (price: number | null) => {
-    if (price == null) return '--';
-    return `\u20B9${Number(price).toLocaleString('en-IN')}`;
-  };
-
-  const getDiscount = (price: number | null, compare: number | null) => {
-    if (!price || !compare || compare <= price) return null;
-    return Math.round(((compare - price) / compare) * 100);
-  };
-
-  // Build URL params helper
   const buildParams = useCallback((overrides?: {
     filters?: Record<string, string[]>;
     minP?: string; maxP?: string;
@@ -121,21 +70,20 @@ function CollectionContent() {
       if (values.length > 0) params.set(`filter[${key}]`, values.join(','));
     }
     return params;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams.toString()]);
 
-  // Fetch collection info once
+  // Fetch collection metadata
   useEffect(() => {
     apiClient<{ collection: CollectionInfo }>(`/catalog/collections/${slug}?page=1&limit=1`)
-      .then((res) => { if (res.data?.collection) setCollection(res.data.collection); })
+      .then((res) => res.data?.collection && setCollection(res.data.collection))
       .catch(() => {});
   }, [slug]);
 
-  // Fetch products with filters
+  // Fetch products
   useEffect(() => {
     if (!collection) return;
     setLoading(true);
-
     const params = new URLSearchParams();
     params.set('limit', '20');
     params.set('page', String(currentPage));
@@ -146,58 +94,41 @@ function CollectionContent() {
     for (const [key, values] of Object.entries(activeFilters)) {
       if (values.length > 0) params.set(`filter[${key}]`, values.join(','));
     }
-
-    apiClient<{ products: Product[]; pagination: Pagination }>(`/storefront/products?${params}`)
+    apiClient<{ products: ProductCardData[]; pagination: Pagination }>(
+      `/storefront/products?${params}`,
+    )
       .then((res) => {
-        setProducts(res.data?.products || []);
-        setPagination(res.data?.pagination || { page: 1, limit: 20, total: 0, totalPages: 0 });
+        setProducts(res.data?.products ?? []);
+        setPagination(res.data?.pagination ?? { page: 1, limit: 20, total: 0, totalPages: 0 });
       })
-      .catch(() => { setProducts([]); })
+      .catch(() => setProducts([]))
       .finally(() => setLoading(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collection, searchParams.toString()]);
 
-  // Filter handlers
+  const navigate = (params: URLSearchParams) => {
+    const qs = params.toString();
+    router.push(qs ? `/collections/${slug}?${qs}` : `/collections/${slug}`);
+  };
+
   const handleFilterChange = (key: string, values: string[]) => {
     const newFilters = { ...activeFilters, [key]: values };
     if (values.length === 0) delete newFilters[key];
-    const params = buildParams({ filters: newFilters, page: 1 });
-    router.push(`/collections/${slug}?${params}`);
+    navigate(buildParams({ filters: newFilters, page: 1 }));
   };
 
-  const handlePriceChange = (min: string, max: string) => {
-    const params = buildParams({ minP: min, maxP: max, page: 1 });
-    router.push(`/collections/${slug}?${params}`);
-  };
-
-  const handleClearAll = () => {
-    router.push(`/collections/${slug}`);
-  };
+  const handlePriceChange = (min: string, max: string) =>
+    navigate(buildParams({ minP: min, maxP: max, page: 1 }));
 
   const handleRemoveFilter = (key: string, value: string) => {
-    if (key === '_price') {
-      const params = buildParams({ minP: '', maxP: '', page: 1 });
-      router.push(`/collections/${slug}?${params}`);
-      return;
-    }
     const current = activeFilters[key] || [];
-    const next = current.filter((v) => v !== value);
-    handleFilterChange(key, next);
+    handleFilterChange(key, current.filter((v) => v !== value));
   };
 
-  const handleSortChange = (newSort: string) => {
-    const params = buildParams({ sort: newSort, page: 1 });
-    router.push(`/collections/${slug}?${params}`);
-  };
+  const handleClearAll = () => navigate(new URLSearchParams());
 
-  const goToPage = (page: number) => {
-    const params = buildParams({ page });
-    router.push(`/collections/${slug}?${params}`);
-  };
+  const goToPage = (page: number) => navigate(buildParams({ page }));
 
-  const hasActiveFilters = Object.values(activeFilters).some((v) => v.length > 0) || !!minPrice || !!maxPrice;
-
-  // Pagination renderer
   const renderPagination = () => {
     if (pagination.totalPages <= 1) return null;
     const pages: (number | string)[] = [];
@@ -205,194 +136,201 @@ function CollectionContent() {
     const current = pagination.page;
     pages.push(1);
     if (current > 3) pages.push('...');
-    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) {
+    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++)
       pages.push(i);
-    }
     if (current < total - 2) pages.push('...');
     if (total > 1) pages.push(total);
 
     return (
-      <div className="pagination">
-        <button className="pagination-btn" disabled={current <= 1} onClick={() => goToPage(current - 1)}>
-          Previous
+      <nav aria-label="Pagination" className="mt-12 flex items-center justify-center gap-1">
+        <button
+          disabled={current <= 1}
+          onClick={() => goToPage(current - 1)}
+          className="size-10 grid place-items-center border border-ink-300 hover:border-ink-900 disabled:opacity-40 disabled:hover:border-ink-300"
+          aria-label="Previous page"
+        >
+          <ChevronLeft className="size-4" />
         </button>
-        {pages.map((p, i) =>
+        {pages.map((p, idx) =>
           typeof p === 'string' ? (
-            <span key={`e${i}`} className="pagination-ellipsis">{p}</span>
+            <span key={`e-${idx}`} className="px-2 text-ink-500">{p}</span>
           ) : (
             <button
               key={p}
-              className={`pagination-btn${p === current ? ' active' : ''}`}
               onClick={() => goToPage(p)}
+              className={`min-w-10 h-10 px-3 grid place-items-center border tabular ${
+                p === current
+                  ? 'bg-ink-900 text-white border-ink-900'
+                  : 'border-ink-300 hover:border-ink-900'
+              }`}
+              aria-current={p === current ? 'page' : undefined}
             >
               {p}
             </button>
           ),
         )}
-        <button className="pagination-btn" disabled={current >= total} onClick={() => goToPage(current + 1)}>
-          Next
+        <button
+          disabled={current >= total}
+          onClick={() => goToPage(current + 1)}
+          className="size-10 grid place-items-center border border-ink-300 hover:border-ink-900 disabled:opacity-40 disabled:hover:border-ink-300"
+          aria-label="Next page"
+        >
+          <ChevronRight className="size-4" />
         </button>
-      </div>
+      </nav>
     );
   };
 
-  if (!collection && loading) {
-    return (
-      <>
-        <Navbar />
-        <main className="storefront-main">
-          <div style={{ textAlign: 'center', padding: 60, color: '#6b7280' }}>Loading collection...</div>
-        </main>
-      </>
-    );
-  }
-
-  if (!collection) {
-    return (
-      <>
-        <Navbar />
-        <main className="storefront-main" style={{ textAlign: 'center' }}>
-          <h2 style={{ fontWeight: 700, marginBottom: 8 }}>Collection not found</h2>
-          <Link href="/" style={{ color: '#2563eb' }}>Back to shop</Link>
-        </main>
-      </>
-    );
-  }
+  // Strip any HTML and check for actual content; some collections come back with
+  // empty <p></p> that we don't want to render.
+  const cleanDescription = (() => {
+    if (!collection?.description) return null;
+    const text = collection.description.replace(/<[^>]*>/g, '').trim();
+    return text.length > 0 ? text : null;
+  })();
 
   return (
-    <>
-      <Navbar />
-      <div id="products" className="products-section">
-        {/* Active filter chips */}
-        {hasActiveFilters && (
-          <div style={{ padding: '0 0 8px' }}>
+    <StorefrontShell>
+      <div className="container-wide py-6 sm:py-10">
+        <div className="text-caption uppercase tracking-wider text-ink-600 mb-3">
+          <Link href="/" className="hover:text-ink-900">Home</Link>
+          {' / '}
+          <Link href="/products" className="hover:text-ink-900">Collections</Link>
+          {' / '}
+          <span className="text-ink-900">{collection?.name ?? slug}</span>
+        </div>
+
+        <div className="flex items-baseline gap-3 flex-wrap">
+          <h1 className="font-semibold text-2xl sm:text-3xl text-ink-900 leading-tight tracking-tight">
+            {collection?.name ?? 'Collection'}
+          </h1>
+          {!loading && (
+            <span className="text-body text-ink-600 tabular">
+              — {pagination.total.toLocaleString('en-IN')} item
+              {pagination.total !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+
+        {cleanDescription && (
+          <p className="mt-3 max-w-3xl text-body text-ink-700">{cleanDescription}</p>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-3 py-3 border-y border-ink-200">
+          <button
+            onClick={() => setFiltersOpen(true)}
+            className="lg:hidden mr-auto inline-flex items-center gap-2 h-9 px-3 border border-ink-300 hover:border-ink-900 text-body font-medium"
+          >
+            <SlidersHorizontal className="size-4" />
+            Filters
+          </button>
+          <label className="inline-flex items-center gap-2">
+            <span className="text-caption uppercase tracking-wider text-ink-600 hidden sm:inline">
+              Sort by:
+            </span>
+            <select
+              value={sortBy}
+              onChange={(e) => navigate(buildParams({ sort: e.target.value, page: 1 }))}
+              className="h-9 pl-3 pr-9 border border-ink-300 hover:border-ink-900 text-body bg-white focus:outline-none focus:border-ink-900 cursor-pointer"
+            >
+              <option value="">Recommended</option>
+              <option value="newest">Newest first</option>
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
+              <option value="name_asc">Name: A–Z</option>
+              <option value="name_desc">Name: Z–A</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="flex gap-8 mt-4 items-start">
+          <aside
+            className={
+              filtersOpen
+                ? 'fixed inset-0 z-50 bg-white p-6 overflow-y-auto'
+                : 'hidden lg:block w-64 shrink-0 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-2 [scrollbar-width:thin]'
+            }
+          >
+            {filtersOpen && (
+              <div className="flex items-center justify-between mb-4 lg:hidden">
+                <h2 className="font-semibold text-h3">Filters</h2>
+                <button
+                  onClick={() => setFiltersOpen(false)}
+                  className="size-10 grid place-items-center hover:bg-ink-100"
+                  aria-label="Close filters"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+            )}
+            <FilterSidebar
+              activeFilters={activeFilters}
+              minPrice={minPrice || undefined}
+              maxPrice={maxPrice || undefined}
+              collectionId={collection?.id}
+              onFilterChange={handleFilterChange}
+              onPriceChange={handlePriceChange}
+              onClearAll={handleClearAll}
+              onLabelsChange={setFilterLabels}
+            />
+          </aside>
+
+          <div className="flex-1 min-w-0">
             <ActiveFilterChips
               activeFilters={activeFilters}
-              minPrice={minPrice}
-              maxPrice={maxPrice}
+              minPrice={minPrice || undefined}
+              maxPrice={maxPrice || undefined}
               filterLabels={filterLabels}
               onRemoveFilter={handleRemoveFilter}
               onRemovePrice={() => handlePriceChange('', '')}
               onClearAll={handleClearAll}
             />
-          </div>
-        )}
-
-        <div className="products-layout">
-          {/* Filter Sidebar */}
-          <FilterSidebar
-            collectionId={collection.id}
-            activeFilters={activeFilters}
-            minPrice={minPrice}
-            maxPrice={maxPrice}
-            onFilterChange={handleFilterChange}
-            onPriceChange={handlePriceChange}
-            onClearAll={handleClearAll}
-          />
-
-          {/* Products */}
-          <div className="products-main">
-            <div className="products-section-header">
-              <h2 style={{ textTransform: 'capitalize' }}>{collection.name}</h2>
-              <div className="products-header-right">
-                {!loading && (
-                  <span className="products-count">
-                    {pagination.total} product{pagination.total !== 1 ? 's' : ''}
-                  </span>
-                )}
-                <select
-                  className="products-sort"
-                  value={sortBy}
-                  onChange={(e) => handleSortChange(e.target.value)}
-                >
-                  <option value="">Sort: Relevance</option>
-                  <option value="price_asc">Price: Low to High</option>
-                  <option value="price_desc">Price: High to Low</option>
-                  <option value="newest">Newest First</option>
-                  <option value="title_asc">Name: A to Z</option>
-                </select>
-              </div>
-            </div>
 
             {loading ? (
-              <div className="products-loading">
-                <span>Loading products...</span>
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-4 gap-y-10">
+                {Array.from({ length: 9 }).map((_, i) => <ProductCardSkeleton key={i} />)}
               </div>
             ) : products.length === 0 ? (
-              <div className="products-empty">
-                <span className="products-empty-icon">&#128722;</span>
-                <h3>No products found</h3>
-                <p>Try adjusting your filters or browse all products.</p>
-                {hasActiveFilters && (
-                  <button onClick={handleClearAll} style={{
-                    marginTop: 12, padding: '8px 20px', border: '1px solid #d1d5db',
-                    borderRadius: 6, background: '#fff', cursor: 'pointer', fontSize: 13,
-                  }}>
-                    Clear all filters
-                  </button>
-                )}
+              <div className="py-24 text-center border border-ink-200">
+                <h3 className="font-display text-h2 text-ink-900">Nothing here yet</h3>
+                <p className="mt-3 text-body-lg text-ink-600 max-w-md mx-auto">
+                  No products match the current filters. Try clearing them.
+                </p>
+                <button
+                  onClick={handleClearAll}
+                  className="mt-6 inline-flex items-center h-11 px-5 bg-ink-900 text-white font-medium hover:bg-ink-800"
+                >
+                  Clear filters
+                </button>
               </div>
             ) : (
               <>
-                <div className="products-grid">
-                  {products.map((product) => {
-                    const displayPrice = getDisplayPrice(product);
-                    const discount = getDiscount(displayPrice, product.compareAtPrice);
-                    return (
-                      <Link
-                        key={product.id}
-                        href={`/products/${product.slug}`}
-                        className="product-card"
-                      >
-                        <div className="product-card-image">
-                          {product.primaryImageUrl ? (
-                            <img src={product.primaryImageUrl} alt={product.title} />
-                          ) : (
-                            <span className="product-card-placeholder">&#128722;</span>
-                          )}
-                          {discount && (
-                            <span className="product-card-badge">{discount}% OFF</span>
-                          )}
-                        </div>
-                        <div className="product-card-body">
-                          {product.categoryName && (
-                            <div className="product-card-category">{product.categoryName}</div>
-                          )}
-                          <div className="product-card-title">{product.title}</div>
-                          {product.brandName && (
-                            <div className="product-card-brand">{product.brandName}</div>
-                          )}
-                          <div className="product-card-price">
-                            {product.compareAtPrice && Number(product.compareAtPrice) > Number(displayPrice) && (
-                              <span className="compare">{formatPrice(product.compareAtPrice)}</span>
-                            )}
-                            <span className="current">{formatPrice(displayPrice)}</span>
-                          </div>
-                        </div>
-                      </Link>
-                    );
-                  })}
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-4 gap-y-10">
+                  {products.map((p) => <ProductCard key={p.id} product={p} />)}
                 </div>
                 {renderPagination()}
               </>
             )}
-          </div>{/* .products-main */}
-        </div>{/* .products-layout */}
+          </div>
+        </div>
       </div>
-    </>
+    </StorefrontShell>
   );
 }
 
 export default function CollectionPage() {
   return (
-    <Suspense fallback={
-      <>
-        <Navbar />
-        <div className="products-section">
-          <div style={{ textAlign: 'center', padding: 60, color: '#6b7280' }}>Loading collection...</div>
-        </div>
-      </>
-    }>
+    <Suspense
+      fallback={
+        <StorefrontShell>
+          <div className="container-wide py-12">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-x-4 gap-y-10">
+              {Array.from({ length: 9 }).map((_, i) => <ProductCardSkeleton key={i} />)}
+            </div>
+          </div>
+        </StorefrontShell>
+      }
+    >
       <CollectionContent />
     </Suspense>
   );

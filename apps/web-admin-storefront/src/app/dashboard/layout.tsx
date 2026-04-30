@@ -17,6 +17,7 @@ const navItems = [
   { label: 'Marketing', href: '/dashboard/marketing', icon: '📣' },
   { label: 'Discounts', href: '/dashboard/discounts', icon: '🏷️' },
   { label: 'Content', href: '/dashboard/content', icon: '📝' },
+  { label: 'Navigation', href: '/dashboard/menus', icon: '🧭' },
   { label: 'Analytics', href: '/dashboard/analytics', icon: '📊' },
 ];
 

@@ -1,0 +1,52 @@
+// Storefront navigation menus (Shopify-style).
+// A menu is a named tree of items; each item points at a collection,
+// category, brand, page, or external URL. The storefront fetches a menu
+// by handle (e.g. "main-menu") and renders it as the top navigation.
+
+enum MenuLinkType {
+  COLLECTION
+  CATEGORY
+  BRAND
+  PRODUCT
+  PAGE
+  URL
+  NONE
+}
+
+model StorefrontMenu {
+  id        String               @id @default(cuid())
+  handle    String               @unique
+  name      String
+  items     StorefrontMenuItem[]
+  createdAt DateTime             @default(now()) @map("created_at")
+  updatedAt DateTime             @updatedAt      @map("updated_at")
+
+  @@map("storefront_menus")
+}
+
+model StorefrontMenuItem {
+  id         String               @id @default(cuid())
+  menuId     String               @map("menu_id")
+  menu       StorefrontMenu       @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  parentId   String?              @map("parent_id")
+  parent     StorefrontMenuItem?  @relation("MenuItemTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children   StorefrontMenuItem[] @relation("MenuItemTree")
+  position   Int                  @default(0)
+  label      String
+  linkType   MenuLinkType         @default(NONE) @map("link_type")
+  // Polymorphic ref. Interpretation depends on linkType:
+  //   COLLECTION/CATEGORY/BRAND/PRODUCT → entity id
+  //   PAGE → page slug
+  //   URL  → absolute or root-relative URL string
+  //   NONE → null (the item is just a header / non-clickable group)
+  linkRef    String?              @map("link_ref")
+  // Optional Shopify-style tag filter applied to a COLLECTION link
+  // ("hats,blue,summer" → adds ?tags=hats,blue,summer to the link).
+  filterTags String[]             @default([])   @map("filter_tags")
+  createdAt  DateTime             @default(now()) @map("created_at")
+  updatedAt  DateTime             @updatedAt      @map("updated_at")
+
+  @@index([menuId, parentId, position])
+  @@index([menuId])
+  @@map("storefront_menu_items")
+}

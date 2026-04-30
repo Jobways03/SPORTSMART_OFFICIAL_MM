@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { CommissionRecordStatus } from '@prisma/client';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
@@ -1467,9 +1468,9 @@ export class ReturnService {
 
   private async freezeCommissionForSubOrder(subOrderId: string, reason: string) {
     const result = await this.prisma.commissionRecord.updateMany({
-      where: { subOrderId, status: 'PENDING' },
+      where: { subOrderId, status: CommissionRecordStatus.PENDING },
       data: {
-        status: 'ON_HOLD',
+        status: CommissionRecordStatus.ON_HOLD,
         adjustmentReason: reason,
       },
     });
@@ -1482,9 +1483,9 @@ export class ReturnService {
 
   private async unfreezeCommissionForSubOrder(subOrderId: string, reason: string) {
     const result = await this.prisma.commissionRecord.updateMany({
-      where: { subOrderId, status: 'ON_HOLD' },
+      where: { subOrderId, status: CommissionRecordStatus.ON_HOLD },
       data: {
-        status: 'PENDING',
+        status: CommissionRecordStatus.PENDING,
         adjustmentReason: reason,
       },
     });

@@ -22,6 +22,10 @@ export class ProductSeoDto {
 
   @IsOptional()
   @IsString()
+  metaKeywords?: string;
+
+  @IsOptional()
+  @IsString()
   handle?: string;
 }
 

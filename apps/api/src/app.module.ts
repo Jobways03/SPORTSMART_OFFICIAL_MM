@@ -36,6 +36,7 @@ import { CommissionModule } from './modules/commission/module';
 import { DiscountsModule } from './modules/discounts/discounts.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AccountsModule } from './modules/accounts/module';
+import { StorefrontMenuModule } from './modules/storefront-menu/storefront-menu.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { AccountsModule } from './modules/accounts/module';
     DiscountsModule,
     AiModule,
     AccountsModule,
+    StorefrontMenuModule,
   ],
   controllers: [HealthController],
 })

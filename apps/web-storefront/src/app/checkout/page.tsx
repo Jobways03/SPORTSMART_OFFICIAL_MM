@@ -3,7 +3,21 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import {
+  Wallet,
+  Plus,
+  Pencil,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Image as ImageIcon,
+  ShieldCheck,
+  Truck,
+  Tag,
+  ArrowRight,
+} from 'lucide-react';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 
 interface Address {
@@ -63,6 +77,12 @@ interface CheckoutData {
   expiresAt: string;
 }
 
+const inputBase =
+  'w-full h-11 px-3.5 border bg-white text-body placeholder:text-ink-400 focus:outline-none transition-colors rounded-full';
+const inputOk = 'border-ink-300 hover:border-ink-500 focus:border-ink-900';
+const inputErr = 'border-danger focus:border-danger';
+const inputAuto = 'border-accent bg-accent-soft/40 focus:border-accent-dark';
+
 export default function CheckoutPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartData | null>(null);
@@ -79,7 +99,6 @@ export default function CheckoutPage() {
   const [error, setError] = useState('');
   const [checkoutData, setCheckoutData] = useState<CheckoutData | null>(null);
 
-  // Coupon state
   const [couponInput, setCouponInput] = useState('');
   const [couponApplying, setCouponApplying] = useState(false);
   const [couponError, setCouponError] = useState('');
@@ -91,20 +110,16 @@ export default function CheckoutPage() {
     discountAmount: number;
   } | null>(null);
 
-  // New address form
   const [form, setForm] = useState({
-    fullName: '',
-    phone: '',
-    addressLine1: '',
-    addressLine2: '',
-    city: '',
-    state: '',
-    postalCode: '',
-    locality: '',
+    fullName: '', phone: '', addressLine1: '', addressLine2: '',
+    city: '', state: '', postalCode: '', locality: '',
   });
 
-  // Pincode auto-fill state
-  const [pincodeData, setPincodeData] = useState<{ district: string; state: string; places: { name: string; type: string; delivery: string }[] } | null>(null);
+  const [pincodeData, setPincodeData] = useState<{
+    district: string;
+    state: string;
+    places: { name: string; type: string; delivery: string }[];
+  } | null>(null);
   const [pincodeLoading, setPincodeLoading] = useState(false);
   const [pincodeError, setPincodeError] = useState('');
   const [selectedPlace, setSelectedPlace] = useState('');
@@ -118,27 +133,21 @@ export default function CheckoutPage() {
       setSelectedPlace('');
       return;
     }
-
     setPincodeLoading(true);
     setPincodeError('');
     try {
       const data = await apiClient<any>(`/pincodes/${pincode}`);
-
       if (data.success && data.data) {
         setPincodeData(data.data);
         setPincodeAutoFilled(true);
         setSelectedPlace('');
-        setForm(prev => ({
-          ...prev,
-          city: data.data.district,
-          state: data.data.state,
-        }));
+        setForm((prev) => ({ ...prev, city: data.data.district, state: data.data.state }));
       } else {
         setPincodeError('Invalid pincode');
         setPincodeData(null);
         setPincodeAutoFilled(false);
         setSelectedPlace('');
-        setForm(prev => ({ ...prev, city: '', state: '' }));
+        setForm((prev) => ({ ...prev, city: '', state: '' }));
       }
     } catch {
       setPincodeError('Failed to lookup pincode');
@@ -152,9 +161,14 @@ export default function CheckoutPage() {
   useEffect(() => {
     try {
       const token = sessionStorage.getItem('accessToken');
-      if (!token) { router.push('/login'); return; }
-    } catch { router.push('/login'); return; }
-
+      if (!token) {
+        router.push('/login');
+        return;
+      }
+    } catch {
+      router.push('/login');
+      return;
+    }
     Promise.all([
       apiClient<CartData>('/customer/cart'),
       apiClient<Address[]>('/customer/addresses'),
@@ -163,15 +177,13 @@ export default function CheckoutPage() {
         if (cartRes.data) setCart(cartRes.data);
         if (addrRes.data) {
           setAddresses(addrRes.data);
-          if (addrRes.data.length > 0) {
-            setSelectedAddressId(addrRes.data[0].id);
-          } else {
-            setShowNewAddress(true);
-          }
+          if (addrRes.data.length > 0) setSelectedAddressId(addrRes.data[0].id);
+          else setShowNewAddress(true);
         }
       })
       .catch(() => router.push('/login'))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const validateAddressField = (name: string, value: string): string => {
@@ -271,21 +283,15 @@ export default function CheckoutPage() {
     try {
       const res = isEditing
         ? await apiClient<Address>(`/customer/addresses/${editingAddressId}`, {
-            method: 'PATCH',
-            body: JSON.stringify(form),
+            method: 'PATCH', body: JSON.stringify(form),
           })
         : await apiClient<Address>('/customer/addresses', {
-            method: 'POST',
-            body: JSON.stringify(form),
+            method: 'POST', body: JSON.stringify(form),
           });
       if (res.data) {
         if (isEditing) {
           setAddresses((prev) => prev.map((a) => (a.id === res.data!.id ? res.data! : a)));
-          // If the edited address was selected, keep it selected & reset any
-          // cached serviceability/allocation tied to the old values.
-          if (selectedAddressId === res.data.id) {
-            setCheckoutData(null);
-          }
+          if (selectedAddressId === res.data.id) setCheckoutData(null);
         } else {
           setAddresses((prev) => [res.data!, ...prev]);
           setSelectedAddressId(res.data.id);
@@ -298,7 +304,6 @@ export default function CheckoutPage() {
     }
   };
 
-  // T3/T6: Initiate checkout with seller allocation
   const handleInitiateCheckout = useCallback(async () => {
     if (!selectedAddressId) {
       setError('Please select or add a shipping address');
@@ -309,8 +314,7 @@ export default function CheckoutPage() {
     setCheckoutData(null);
     try {
       const res = await apiClient<CheckoutData>('/customer/checkout/initiate', {
-        method: 'POST',
-        body: JSON.stringify({ addressId: selectedAddressId }),
+        method: 'POST', body: JSON.stringify({ addressId: selectedAddressId }),
       });
       if (res.data) {
         setCheckoutData(res.data);
@@ -325,7 +329,6 @@ export default function CheckoutPage() {
     }
   }, [selectedAddressId]);
 
-  // T8: Remove unserviceable items
   const handleRemoveUnserviceable = async () => {
     setRemovingUnserviceable(true);
     setError('');
@@ -348,7 +351,6 @@ export default function CheckoutPage() {
             expiresAt: prev.expiresAt,
           };
         });
-        // Also update the cart display
         const cartRes = await apiClient<CartData>('/customer/cart');
         if (cartRes.data) setCart(cartRes.data);
       }
@@ -359,7 +361,6 @@ export default function CheckoutPage() {
     }
   };
 
-  // Apply coupon (validates against current serviceable subtotal)
   const handleApplyCoupon = async () => {
     const code = couponInput.trim().toUpperCase();
     if (!code) {
@@ -369,17 +370,10 @@ export default function CheckoutPage() {
     const subtotalForValidation = checkoutData
       ? checkoutData.serviceableAmount
       : cart?.totalAmount ?? 0;
-    // Send line items so BXGY coupons (and any product-scoped rules) can
-    // evaluate which cart items qualify. Prefer the post-allocation
-    // checkoutData items (serviceable only); fall back to the raw cart.
     const itemsForValidation = checkoutData
       ? checkoutData.items
           .filter((i) => i.serviceable)
-          .map((i) => ({
-            productId: i.productId,
-            quantity: i.quantity,
-            unitPrice: i.unitPrice,
-          }))
+          .map((i) => ({ productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice }))
       : (cart?.items ?? []).map((i) => ({
           productId: i.productId ?? '',
           quantity: i.quantity,
@@ -389,18 +383,11 @@ export default function CheckoutPage() {
     setCouponError('');
     try {
       const res = await apiClient<{
-        code: string;
-        title: string | null;
-        valueType: string;
-        value: number;
-        discountAmount: number;
+        code: string; title: string | null; valueType: string;
+        value: number; discountAmount: number;
       }>('/customer/coupons/validate', {
         method: 'POST',
-        body: JSON.stringify({
-          code,
-          subtotal: subtotalForValidation,
-          items: itemsForValidation,
-        }),
+        body: JSON.stringify({ code, subtotal: subtotalForValidation, items: itemsForValidation }),
       });
       if (res.data) {
         setAppliedCoupon(res.data);
@@ -420,7 +407,6 @@ export default function CheckoutPage() {
     setCouponError('');
   };
 
-  // Place order via the new checkout endpoint
   const handlePlaceOrder = async () => {
     if (!checkoutData) {
       setError('Please initiate checkout first');
@@ -432,7 +418,6 @@ export default function CheckoutPage() {
     }
     setPlacing(true);
     setError('');
-    // 60-second client-side timeout so the button can never hang forever.
     const abort = new AbortController();
     const timer = setTimeout(() => abort.abort(), 60_000);
     try {
@@ -451,9 +436,6 @@ export default function CheckoutPage() {
         setPlacing(false);
         return;
       }
-      // Flip to a success screen immediately so the user isn't staring at
-      // "Placing Order..." while Next.js compiles/loads /orders/[id] in dev
-      // mode. Kick off the navigation in the background.
       setPlacedOrderNumber(orderNumber);
       router.prefetch(`/orders/${orderNumber}`);
       router.replace(`/orders/${orderNumber}`);
@@ -469,7 +451,8 @@ export default function CheckoutPage() {
     }
   };
 
-  const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
+  const formatPrice = (price: number) => `₹${Number(price).toLocaleString('en-IN')}`;
+  const itemNoun = (n: number) => (n === 1 ? 'item' : 'items');
 
   useEffect(() => {
     if (!appliedCoupon) return;
@@ -482,277 +465,273 @@ export default function CheckoutPage() {
     }
   }, [checkoutData, cart?.totalAmount, appliedCoupon]);
 
-  // Redirect empty-cart visitors to /cart. Runs in useEffect because
-  // calling router.push() during render updates Router state mid-render
-  // and React refuses (`Cannot update a component while rendering a
-  // different component`). Gate on !loading so we don't bounce the
-  // user while the initial cart fetch is still in flight.
   useEffect(() => {
-    if (!loading && (!cart || cart.items.length === 0)) {
-      router.push('/cart');
-    }
+    if (!loading && (!cart || cart.items.length === 0)) router.push('/cart');
   }, [loading, cart, router]);
 
   if (loading) {
     return (
-      <>
-        <Navbar />
-        <div className="products-loading">Loading checkout...</div>
-      </>
+      <StorefrontShell>
+        <div className="container-x py-12">
+          <div className="h-8 w-32 bg-ink-100 animate-pulse mb-8" />
+          <div className="grid lg:grid-cols-[1fr_360px] gap-8">
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-24 bg-ink-100 animate-pulse" />
+              ))}
+            </div>
+            <div className="h-80 bg-ink-100 animate-pulse" />
+          </div>
+        </div>
+      </StorefrontShell>
     );
   }
 
-  if (!cart || cart.items.length === 0) {
-    // Render a blank shell while the useEffect above queues the
-    // redirect. No router.push() here — doing so would re-trigger the
-    // setState-during-render error.
-    return null;
-  }
+  if (!cart || cart.items.length === 0) return null;
 
-  // Success overlay shown from the moment the server confirms the order.
-  // Takes over the viewport so the user isn't watching a "Placing Order…"
-  // button while Next.js compiles/loads /orders/[orderNumber] in dev mode.
   if (placedOrderNumber) {
     return (
-      <>
-        <Navbar />
-        <div
-          style={{
-            minHeight: '70vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-          }}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: 12,
-              padding: '32px 28px',
-              textAlign: 'center',
-              maxWidth: 420,
-              width: '100%',
-              boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
-            }}
-          >
-            <div
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: '50%',
-                background: '#d1fae5',
-                color: '#16a34a',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 30,
-                fontWeight: 700,
-                margin: '0 auto 16px',
-              }}
-            >
-              ✓
+      <StorefrontShell>
+        <div className="container-x min-h-[70vh] flex items-center justify-center py-16">
+          <div className="bg-white border border-ink-200 p-10 max-w-md w-full text-center rounded-2xl">
+            <div className="size-16 mx-auto rounded-full bg-green-50 grid place-items-center mb-5">
+              <CheckCircle2 className="size-8 text-success" strokeWidth={1.75} />
             </div>
-            <h2 style={{ margin: '0 0 8px', fontSize: 20, color: '#111' }}>
-              Order placed
-            </h2>
-            <p style={{ margin: 0, fontSize: 14, color: '#4b5563' }}>
+            <h2 className="font-display text-h2 text-ink-900">Order placed</h2>
+            <p className="mt-2 text-body text-ink-600 tabular">
               Order #{placedOrderNumber}
             </p>
-            <p
-              style={{
-                margin: '18px 0 0',
-                fontSize: 13,
-                color: '#6b7280',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 14,
-                  height: 14,
-                  border: '2px solid #d1d5db',
-                  borderTopColor: '#2563eb',
-                  borderRadius: '50%',
-                  display: 'inline-block',
-                  animation: 'sm-spin 0.8s linear infinite',
-                }}
-              />
+            <p className="mt-5 inline-flex items-center gap-2 text-caption text-ink-500">
+              <Loader2 className="size-3.5 animate-spin" />
               Opening your order…
             </p>
-            <div style={{ marginTop: 18 }}>
+            <div className="mt-4">
               <Link
                 href={`/orders/${placedOrderNumber}`}
-                style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+                className="text-caption font-semibold text-accent-dark hover:text-ink-900 hover:underline underline-offset-2"
               >
                 Tap here if the page doesn&apos;t load
               </Link>
             </div>
           </div>
         </div>
-        <style>{`@keyframes sm-spin { to { transform: rotate(360deg); } }`}</style>
-      </>
+      </StorefrontShell>
     );
   }
 
+  const currentSubtotal = checkoutData ? checkoutData.serviceableAmount : cart.totalAmount;
+  const currentItemCount = checkoutData ? checkoutData.itemCount : cart.itemCount;
+  const total = Math.max(0, currentSubtotal - (appliedCoupon?.discountAmount ?? 0));
+
   return (
-    <>
-      <Navbar />
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 60px' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24 }}>Checkout</h1>
+    <StorefrontShell>
+      <div className="container-x py-8 sm:py-12">
+        {/* Breadcrumb */}
+        <div className="text-caption uppercase tracking-wider text-ink-600 mb-3">
+          <Link href="/" className="hover:text-ink-900">Home</Link>
+          {' / '}
+          <Link href="/cart" className="hover:text-ink-900">Cart</Link>
+          {' / '}
+          <span className="text-ink-900">Checkout</span>
+        </div>
+
+        <div className="flex items-end justify-between gap-4 flex-wrap mb-8">
+          <h1 className="font-display text-h1 text-ink-900 leading-none tracking-tight">
+            Checkout
+          </h1>
+          <p className="text-body text-ink-600">
+            {currentItemCount} {itemNoun(currentItemCount)} &middot; {formatPrice(total)}
+          </p>
+        </div>
 
         {error && (
-          <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', marginBottom: 16, color: '#991b1b', fontSize: 14 }}>
-            {error}
+          <div
+            role="alert"
+            className="mb-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-danger text-body"
+          >
+            <AlertCircle className="size-4 mt-0.5 shrink-0" />
+            <span>{error}</span>
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-          {/* Left column */}
-          <div style={{ flex: '1 1 400px' }}>
-            {/* ── Step 1: Shipping Address ────────────────────────────── */}
-            <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Shipping Address</h2>
-
-            {addresses.length > 0 && !showNewAddress && (
-              <div style={{ marginBottom: 16 }}>
-                {addresses.map((addr) => (
-                  <div
-                    key={addr.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: 10,
-                      padding: 14,
-                      border: `2px solid ${selectedAddressId === addr.id ? '#111' : '#e5e7eb'}`,
-                      borderRadius: 8,
-                      marginBottom: 8,
-                    }}
+        <div className="grid lg:grid-cols-[1fr_380px] gap-8 items-start">
+          {/* ─── Left column ────────────────────────── */}
+          <div>
+            {/* Shipping address */}
+            <section>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display text-h3 text-ink-900">Shipping address</h2>
+                {addresses.length > 0 && !showNewAddress && (
+                  <button
+                    type="button"
+                    onClick={() => { resetAddressForm(); setShowNewAddress(true); }}
+                    className="inline-flex items-center gap-1.5 text-caption font-semibold text-accent-dark hover:text-ink-900 underline-offset-2 hover:underline"
                   >
-                    <label style={{ flex: 1, cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        name="address"
-                        checked={selectedAddressId === addr.id}
-                        onChange={() => {
-                          setSelectedAddressId(addr.id);
-                          setCheckoutData(null); // Reset checkout when address changes
-                        }}
-                        style={{ marginRight: 10 }}
-                      />
-                      <strong>{addr.fullName}</strong> - {addr.phone}
-                      <div style={{ fontSize: 13, color: '#6b7280', marginTop: 4, marginLeft: 24 }}>
-                        {addr.addressLine1}{addr.addressLine2 && `, ${addr.addressLine2}`}, {addr.city}, {addr.state} - {addr.postalCode}
-                      </div>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => startEditAddress(addr)}
-                      style={{
-                        flex: '0 0 auto',
-                        background: 'none',
-                        border: 'none',
-                        color: '#2563eb',
-                        fontSize: 13,
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        padding: '4px 8px',
-                      }}
-                    >
-                      Edit
-                    </button>
-                  </div>
-                ))}
-                <button
-                  onClick={() => setShowNewAddress(true)}
-                  style={{ marginTop: 8, border: '1px dashed #d1d5db', background: 'none', borderRadius: 8, padding: '10px 16px', width: '100%', cursor: 'pointer', color: '#6b7280', fontSize: 14 }}
-                >
-                  + Add new address
-                </button>
+                    <Plus className="size-3.5" />
+                    Add new
+                  </button>
+                )}
               </div>
-            )}
 
-            {showNewAddress && (
-              <div style={{ background: '#f9fafb', borderRadius: 12, padding: 20, marginBottom: 16 }}>
-                <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
-                  {editingAddressId ? 'Edit Address' : 'New Address'}
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div>
-                    <input
-                      placeholder="Full Name *"
-                      value={form.fullName}
-                      maxLength={60}
-                      onChange={(e) => {
-                        // Strip anything that isn't a letter, space, . ' -
-                        const cleaned = e.target.value.replace(/[^A-Za-z .'\-]/g, '');
-                        setForm({ ...form, fullName: cleaned });
-                        clearFieldError('fullName');
-                      }}
-                      onBlur={(e) => {
-                        const msg = validateAddressField('fullName', e.target.value);
-                        setFieldErrors((p) => ({ ...p, fullName: msg })) ;
-                      }}
-                      style={{ ...inputStyle, borderColor: fieldErrors.fullName ? '#dc2626' : inputStyle.borderColor }}
-                      aria-invalid={!!fieldErrors.fullName}
-                    />
-                    {fieldErrors.fullName && (
-                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.fullName}</span>
+              {addresses.length > 0 && !showNewAddress && (
+                <div className="space-y-2.5 mb-6">
+                  {addresses.map((addr) => {
+                    const selected = selectedAddressId === addr.id;
+                    return (
+                      <label
+                        key={addr.id}
+                        className={`flex items-start gap-3 p-4 cursor-pointer transition-colors border ${
+                          selected
+                            ? 'border-ink-900 bg-accent-soft/30'
+                            : 'border-ink-200 hover:border-ink-500 bg-white'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="address"
+                          checked={selected}
+                          onChange={() => {
+                            setSelectedAddressId(addr.id);
+                            setCheckoutData(null);
+                          }}
+                          className="mt-1 accent-ink-900"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-body font-semibold text-ink-900">
+                              {addr.fullName}
+                            </span>
+                            <span className="text-caption text-ink-600 tabular">
+                              {addr.phone}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-body text-ink-700">
+                            {addr.addressLine1}
+                            {addr.addressLine2 ? `, ${addr.addressLine2}` : ''}, {addr.city}, {addr.state} - {addr.postalCode}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); startEditAddress(addr); }}
+                          className="inline-flex items-center gap-1 text-caption font-semibold text-ink-700 hover:text-ink-900"
+                        >
+                          <Pencil className="size-3" />
+                          Edit
+                        </button>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
+              {showNewAddress && (
+                <div className="bg-white border border-ink-200 p-5 mb-6 rounded-2xl">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-body font-semibold text-ink-900">
+                      {editingAddressId ? 'Edit address' : 'New address'}
+                    </h3>
+                    {(addresses.length > 0 || editingAddressId) && (
+                      <button
+                        type="button"
+                        onClick={() => { setShowNewAddress(false); resetAddressForm(); }}
+                        aria-label="Close"
+                        className="size-7 grid place-items-center text-ink-500 hover:text-ink-900 hover:bg-ink-100"
+                      >
+                        <X className="size-4" />
+                      </button>
                     )}
                   </div>
-                  <div>
-                    <input
-                      placeholder="Phone *"
-                      value={form.phone}
-                      inputMode="numeric"
-                      maxLength={10}
-                      onChange={(e) => {
-                        // Keep digits only, drop leading 0-5 so first digit must be 6-9,
-                        // cap at 10 digits.
-                        let digits = e.target.value.replace(/\D/g, '');
-                        while (digits.length > 0 && !/^[6-9]/.test(digits)) {
-                          digits = digits.slice(1);
-                        }
-                        digits = digits.slice(0, 10);
-                        setForm({ ...form, phone: digits });
-                        clearFieldError('phone');
-                      }}
-                      onBlur={(e) => {
-                        const msg = validateAddressField('phone', e.target.value);
-                        setFieldErrors((p) => ({ ...p, phone: msg }));
-                      }}
-                      style={{ ...inputStyle, borderColor: fieldErrors.phone ? '#dc2626' : inputStyle.borderColor }}
-                      aria-invalid={!!fieldErrors.phone}
-                    />
-                    {fieldErrors.phone && (
-                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.phone}</span>
-                    )}
-                  </div>
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <input
-                      placeholder="Address Line 1 *"
-                      value={form.addressLine1}
-                      onChange={(e) => { setForm({ ...form, addressLine1: e.target.value }); clearFieldError('addressLine1'); }}
-                      onBlur={(e) => {
-                        const msg = validateAddressField('addressLine1', e.target.value);
-                        setFieldErrors((p) => ({ ...p, addressLine1: msg }));
-                      }}
-                      style={{ ...inputStyle, borderColor: fieldErrors.addressLine1 ? '#dc2626' : inputStyle.borderColor, width: '100%' }}
-                      aria-invalid={!!fieldErrors.addressLine1}
-                    />
-                    {fieldErrors.addressLine1 && (
-                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.addressLine1}</span>
-                    )}
-                  </div>
-                  <input placeholder="Address Line 2" value={form.addressLine2} onChange={(e) => setForm({ ...form, addressLine2: e.target.value })} style={{ ...inputStyle, gridColumn: '1 / -1' }} />
-                  <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        Full name
+                      </label>
                       <input
-                        placeholder="Postal Code (PIN) *"
+                        value={form.fullName}
+                        maxLength={60}
+                        onChange={(e) => {
+                          const cleaned = e.target.value.replace(/[^A-Za-z .'\-]/g, '');
+                          setForm({ ...form, fullName: cleaned });
+                          clearFieldError('fullName');
+                        }}
+                        onBlur={(e) => {
+                          const msg = validateAddressField('fullName', e.target.value);
+                          setFieldErrors((p) => ({ ...p, fullName: msg }));
+                        }}
+                        placeholder="Riya Sharma"
+                        aria-invalid={!!fieldErrors.fullName}
+                        className={`${inputBase} ${fieldErrors.fullName ? inputErr : inputOk}`}
+                      />
+                      {fieldErrors.fullName && (
+                        <p className="mt-1 text-caption text-danger">{fieldErrors.fullName}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        Phone
+                      </label>
+                      <input
+                        value={form.phone}
+                        inputMode="numeric"
+                        maxLength={10}
+                        onChange={(e) => {
+                          let digits = e.target.value.replace(/\D/g, '');
+                          while (digits.length > 0 && !/^[6-9]/.test(digits)) digits = digits.slice(1);
+                          digits = digits.slice(0, 10);
+                          setForm({ ...form, phone: digits });
+                          clearFieldError('phone');
+                        }}
+                        onBlur={(e) => {
+                          const msg = validateAddressField('phone', e.target.value);
+                          setFieldErrors((p) => ({ ...p, phone: msg }));
+                        }}
+                        placeholder="98xxxxxxxx"
+                        aria-invalid={!!fieldErrors.phone}
+                        className={`${inputBase} ${fieldErrors.phone ? inputErr : inputOk} tabular`}
+                      />
+                      {fieldErrors.phone && (
+                        <p className="mt-1 text-caption text-danger">{fieldErrors.phone}</p>
+                      )}
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        Address line 1
+                      </label>
+                      <input
+                        value={form.addressLine1}
+                        onChange={(e) => { setForm({ ...form, addressLine1: e.target.value }); clearFieldError('addressLine1'); }}
+                        onBlur={(e) => {
+                          const msg = validateAddressField('addressLine1', e.target.value);
+                          setFieldErrors((p) => ({ ...p, addressLine1: msg }));
+                        }}
+                        placeholder="House / flat / building"
+                        aria-invalid={!!fieldErrors.addressLine1}
+                        className={`${inputBase} ${fieldErrors.addressLine1 ? inputErr : inputOk}`}
+                      />
+                      {fieldErrors.addressLine1 && (
+                        <p className="mt-1 text-caption text-danger">{fieldErrors.addressLine1}</p>
+                      )}
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        Address line 2 <span className="text-ink-400 normal-case">(optional)</span>
+                      </label>
+                      <input
+                        value={form.addressLine2}
+                        onChange={(e) => setForm({ ...form, addressLine2: e.target.value })}
+                        placeholder="Street, area, landmark"
+                        className={`${inputBase} ${inputOk}`}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        Pincode
+                      </label>
+                      <input
                         value={form.postalCode}
                         inputMode="numeric"
+                        maxLength={6}
                         onChange={(e) => {
                           const val = e.target.value.replace(/\D/g, '').slice(0, 6);
                           setForm({ ...form, postalCode: val });
@@ -763,279 +742,235 @@ export default function CheckoutPage() {
                           const msg = validateAddressField('postalCode', e.target.value);
                           setFieldErrors((p) => ({ ...p, postalCode: msg }));
                         }}
-                        style={{ ...inputStyle, borderColor: fieldErrors.postalCode ? '#dc2626' : inputStyle.borderColor }}
-                        maxLength={6}
+                        placeholder="6-digit PIN"
                         aria-invalid={!!fieldErrors.postalCode}
+                        className={`${inputBase} ${fieldErrors.postalCode ? inputErr : inputOk} tabular`}
                       />
-                      {fieldErrors.postalCode && (
-                        <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.postalCode}</span>
-                      )}
-                      {!fieldErrors.postalCode && pincodeLoading && (
-                        <span style={{ fontSize: 12, color: '#6b7280', marginTop: 4, display: 'block' }}>Looking up pincode...</span>
-                      )}
-                      {!fieldErrors.postalCode && pincodeError && (
-                        <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{pincodeError}</span>
-                      )}
-                      {!fieldErrors.postalCode && pincodeData && !pincodeError && (
-                        <span style={{ fontSize: 12, color: '#16a34a', marginTop: 4, display: 'block' }}>{pincodeData.district}, {pincodeData.state}</span>
-                      )}
+                      {fieldErrors.postalCode ? (
+                        <p className="mt-1 text-caption text-danger">{fieldErrors.postalCode}</p>
+                      ) : pincodeLoading ? (
+                        <p className="mt-1 inline-flex items-center gap-1 text-caption text-ink-500">
+                          <Loader2 className="size-3 animate-spin" /> Looking up pincode…
+                        </p>
+                      ) : pincodeError ? (
+                        <p className="mt-1 text-caption text-danger">{pincodeError}</p>
+                      ) : pincodeData ? (
+                        <p className="mt-1 inline-flex items-center gap-1 text-caption text-success">
+                          <CheckCircle2 className="size-3" />
+                          {pincodeData.district}, {pincodeData.state}
+                        </p>
+                      ) : null}
                     </div>
                     <div />
-                  </div>
-                  <div>
-                    <input
-                      placeholder="City / District *"
-                      value={form.city}
-                      onChange={(e) => {
-                        setForm({ ...form, city: e.target.value });
-                        clearFieldError('city');
-                        if (pincodeAutoFilled) setPincodeAutoFilled(false);
-                      }}
-                      onBlur={(e) => {
-                        const msg = validateAddressField('city', e.target.value);
-                        setFieldErrors((p) => ({ ...p, city: msg }));
-                      }}
-                      style={{
-                        ...inputStyle,
-                        borderColor: fieldErrors.city ? '#dc2626' : (pincodeAutoFilled ? '#86efac' : inputStyle.borderColor),
-                        ...(pincodeAutoFilled ? { background: '#f0fdf4' } : {}),
-                      }}
-                      readOnly={pincodeAutoFilled}
-                      aria-invalid={!!fieldErrors.city}
-                    />
-                    {fieldErrors.city && (
-                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.city}</span>
+                    <div>
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        City / district
+                      </label>
+                      <input
+                        value={form.city}
+                        onChange={(e) => {
+                          setForm({ ...form, city: e.target.value });
+                          clearFieldError('city');
+                          if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                        }}
+                        onBlur={(e) => {
+                          const msg = validateAddressField('city', e.target.value);
+                          setFieldErrors((p) => ({ ...p, city: msg }));
+                        }}
+                        readOnly={pincodeAutoFilled}
+                        placeholder="City"
+                        aria-invalid={!!fieldErrors.city}
+                        className={`${inputBase} ${
+                          fieldErrors.city ? inputErr : pincodeAutoFilled ? inputAuto : inputOk
+                        }`}
+                      />
+                      {fieldErrors.city && (
+                        <p className="mt-1 text-caption text-danger">{fieldErrors.city}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                        State
+                      </label>
+                      <input
+                        value={form.state}
+                        onChange={(e) => {
+                          setForm({ ...form, state: e.target.value });
+                          clearFieldError('state');
+                          if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                        }}
+                        onBlur={(e) => {
+                          const msg = validateAddressField('state', e.target.value);
+                          setFieldErrors((p) => ({ ...p, state: msg }));
+                        }}
+                        readOnly={pincodeAutoFilled}
+                        placeholder="State"
+                        aria-invalid={!!fieldErrors.state}
+                        className={`${inputBase} ${
+                          fieldErrors.state ? inputErr : pincodeAutoFilled ? inputAuto : inputOk
+                        }`}
+                      />
+                      {fieldErrors.state && (
+                        <p className="mt-1 text-caption text-danger">{fieldErrors.state}</p>
+                      )}
+                    </div>
+                    {pincodeData && pincodeData.places && pincodeData.places.length > 0 && (
+                      <div className="col-span-2">
+                        <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
+                          Locality
+                        </label>
+                        <select
+                          value={selectedPlace}
+                          onChange={(e) => {
+                            setSelectedPlace(e.target.value);
+                            setForm((prev) => ({ ...prev, locality: e.target.value }));
+                          }}
+                          className={`${inputBase} ${inputOk} cursor-pointer`}
+                        >
+                          <option value="">Select your locality</option>
+                          {pincodeData.places.map((place, idx) => (
+                            <option key={idx} value={place.name}>{place.name}</option>
+                          ))}
+                        </select>
+                      </div>
                     )}
                   </div>
-                  <div>
-                    <input
-                      placeholder="State *"
-                      value={form.state}
-                      onChange={(e) => {
-                        setForm({ ...form, state: e.target.value });
-                        clearFieldError('state');
-                        if (pincodeAutoFilled) setPincodeAutoFilled(false);
-                      }}
-                      onBlur={(e) => {
-                        const msg = validateAddressField('state', e.target.value);
-                        setFieldErrors((p) => ({ ...p, state: msg }));
-                      }}
-                      style={{
-                        ...inputStyle,
-                        borderColor: fieldErrors.state ? '#dc2626' : (pincodeAutoFilled ? '#86efac' : inputStyle.borderColor),
-                        ...(pincodeAutoFilled ? { background: '#f0fdf4' } : {}),
-                      }}
-                      aria-invalid={!!fieldErrors.state}
-                    />
-                    {fieldErrors.state && (
-                      <span style={{ fontSize: 12, color: '#dc2626', marginTop: 4, display: 'block' }}>{fieldErrors.state}</span>
+
+                  <div className="mt-5 flex items-center gap-3">
+                    <button
+                      onClick={handleCreateAddress}
+                      className="inline-flex items-center h-11 px-5 bg-ink-900 text-white font-semibold hover:bg-ink-800 transition-colors rounded-full"
+                    >
+                      {editingAddressId ? 'Update address' : 'Save address'}
+                    </button>
+                    {(addresses.length > 0 || editingAddressId) && (
+                      <button
+                        onClick={() => { setShowNewAddress(false); resetAddressForm(); }}
+                        className="inline-flex items-center h-11 px-5 border border-ink-300 hover:border-ink-900 text-body font-medium rounded-full"
+                      >
+                        Cancel
+                      </button>
                     )}
                   </div>
-                  {pincodeData && pincodeData.places && pincodeData.places.length > 0 && (
-                    <select
-                      value={selectedPlace}
-                      onChange={(e) => { setSelectedPlace(e.target.value); setForm(prev => ({ ...prev, locality: e.target.value })); }}
-                      style={{ ...inputStyle, gridColumn: '1 / -1', cursor: 'pointer' }}
-                    >
-                      <option value="">Select your locality</option>
-                      {pincodeData.places.map((place, idx) => (
-                        <option key={idx} value={place.name}>{place.name}</option>
-                      ))}
-                    </select>
-                  )}
                 </div>
-                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                  <button onClick={handleCreateAddress} style={{ padding: '10px 20px', background: '#111', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
-                    {editingAddressId ? 'Update Address' : 'Save Address'}
-                  </button>
-                  {(addresses.length > 0 || editingAddressId) && (
-                    <button
-                      onClick={() => {
-                        setShowNewAddress(false);
-                        resetAddressForm();
-                      }}
-                      style={{ padding: '10px 20px', background: 'none', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, cursor: 'pointer' }}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
+              )}
+            </section>
 
-            {/* ── Step 2: Check Serviceability ─────────────────────── */}
-            {!checkoutData && (
-              <div style={{ marginTop: 16, marginBottom: 24 }}>
-                <button
-                  onClick={handleInitiateCheckout}
-                  disabled={initiating || !selectedAddressId}
-                  style={{
-                    width: '100%',
-                    padding: '14px 20px',
-                    fontSize: 15,
-                    fontWeight: 700,
-                    border: 'none',
-                    background: initiating ? '#9ca3af' : '#2563eb',
-                    color: '#fff',
-                    borderRadius: 8,
-                    cursor: initiating ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {initiating ? 'Checking availability...' : 'Check Delivery & Continue'}
-                </button>
-              </div>
-            )}
+            {/* Order items */}
+            <section className="mt-10">
+              <h2 className="font-display text-h3 text-ink-900 mb-4">Order items</h2>
 
-            {/* ── Step 3: Allocated Items ──────────────────────────── */}
-            {checkoutData && (
-              <>
-                <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12, marginTop: 24 }}>Order Items</h2>
-
-                {/* Unserviceable banner */}
-                {!checkoutData.allServiceable && (
-                  <div style={{
-                    background: '#fef3c7',
-                    border: '1px solid #fbbf24',
-                    borderRadius: 8,
-                    padding: '12px 14px',
-                    marginBottom: 16,
-                    color: '#92400e',
-                    fontSize: 14,
-                  }}>
-                    <strong>{checkoutData.unserviceableCount} item(s)</strong> cannot be delivered to your address.
-                    Remove them to proceed.
-                    <button
-                      onClick={handleRemoveUnserviceable}
-                      disabled={removingUnserviceable}
-                      style={{
-                        display: 'block',
-                        marginTop: 8,
-                        padding: '8px 16px',
-                        background: '#92400e',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 6,
-                        fontSize: 13,
-                        fontWeight: 600,
-                        cursor: removingUnserviceable ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {removingUnserviceable ? 'Removing...' : 'Remove Unserviceable Items'}
-                    </button>
+              {checkoutData && !checkoutData.allServiceable && (
+                <div className="mb-4 p-4 border border-warning/30 bg-amber-50 text-warning">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="size-4 mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-body font-semibold">
+                        {checkoutData.unserviceableCount} {itemNoun(checkoutData.unserviceableCount)} can&apos;t be delivered to this address
+                      </p>
+                      <p className="text-caption mt-1 text-amber-800">
+                        Remove the marked items to continue checking out.
+                      </p>
+                      <button
+                        onClick={handleRemoveUnserviceable}
+                        disabled={removingUnserviceable}
+                        className="mt-3 inline-flex items-center h-9 px-3.5 bg-warning text-white text-caption font-semibold hover:bg-amber-700 disabled:opacity-60 rounded-full"
+                      >
+                        {removingUnserviceable ? 'Removing…' : 'Remove unserviceable items'}
+                      </button>
+                    </div>
                   </div>
-                )}
+                </div>
+              )}
 
-                {checkoutData.items.map((item, idx) => (
-                  <div
+              <ul className="bg-white border border-ink-200 divide-y divide-ink-100 rounded-2xl overflow-hidden">
+                {(checkoutData ? checkoutData.items : cart.items.map((c) => ({
+                  cartItemId: c.id, productId: c.productId ?? '', variantId: null,
+                  productTitle: c.productTitle, variantTitle: c.variantTitle,
+                  imageUrl: c.imageUrl, sku: null, quantity: c.quantity,
+                  unitPrice: c.unitPrice, lineTotal: c.lineTotal, serviceable: true,
+                  allocatedSellerName: null, estimatedDeliveryDays: null,
+                  reservationId: null,
+                } as CheckoutItem))).map((item, idx) => (
+                  <li
                     key={idx}
-                    style={{
-                      display: 'flex',
-                      gap: 12,
-                      paddingBottom: 12,
-                      marginBottom: 12,
-                      borderBottom: '1px solid #f3f4f6',
-                      opacity: item.serviceable ? 1 : 0.55,
-                    }}
+                    className={`flex gap-4 p-4 ${item.serviceable ? '' : 'opacity-60'}`}
                   >
-                    <div style={{ width: 50, height: 50, borderRadius: 6, background: '#f3f4f6', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className="size-16 bg-ink-100 grid place-items-center overflow-hidden shrink-0">
                       {item.imageUrl ? (
-                        <img src={item.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={item.imageUrl} alt="" loading="lazy" className="size-full object-contain p-1" />
                       ) : (
-                        <span style={{ fontSize: 20, color: '#d1d5db' }}>&#128722;</span>
+                        <ImageIcon className="size-5 text-ink-400" strokeWidth={1.5} />
                       )}
                     </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 500, fontSize: 14 }}>{item.productTitle}</div>
-                      {item.variantTitle && <div style={{ fontSize: 12, color: '#6b7280' }}>{item.variantTitle}</div>}
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>Qty: {item.quantity}</div>
-
-                      {/* T4: Delivery estimate */}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-body font-medium text-ink-900 truncate">
+                        {item.productTitle}
+                      </div>
+                      {item.variantTitle && (
+                        <div className="text-caption text-ink-600 truncate">{item.variantTitle}</div>
+                      )}
+                      <div className="text-caption text-ink-500 mt-0.5">
+                        Qty: {item.quantity}
+                      </div>
                       {item.serviceable && item.estimatedDeliveryDays !== null && (
-                        <div style={{ fontSize: 12, color: '#16a34a', marginTop: 2 }}>
-                          Est. delivery: {item.estimatedDeliveryDays} day{item.estimatedDeliveryDays !== 1 ? 's' : ''}
+                        <div className="mt-1 inline-flex items-center gap-1 text-caption text-success">
+                          <Truck className="size-3" />
+                          Delivery in {item.estimatedDeliveryDays} day{item.estimatedDeliveryDays !== 1 ? 's' : ''}
                         </div>
                       )}
-
-                      {/* T8: Unserviceable message */}
                       {!item.serviceable && (
-                        <div style={{ fontSize: 12, color: '#dc2626', marginTop: 2, fontWeight: 500 }}>
-                          {item.unserviceableReason || 'This item cannot be delivered to your address'}
+                        <div className="mt-1 inline-flex items-center gap-1 text-caption text-danger font-medium">
+                          <AlertCircle className="size-3" />
+                          {item.unserviceableReason || 'Cannot be delivered to this address'}
                         </div>
                       )}
                     </div>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>
-                      {item.serviceable ? formatPrice(item.lineTotal) : (
-                        <span style={{ color: '#dc2626', textDecoration: 'line-through' }}>{formatPrice(item.lineTotal)}</span>
-                      )}
+                    <div className="text-body font-semibold text-ink-900 tabular">
+                      {item.serviceable
+                        ? formatPrice(item.lineTotal)
+                        : <span className="text-danger line-through">{formatPrice(item.lineTotal)}</span>}
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </>
-            )}
-
-            {/* Fallback: show cart items if checkout not yet initiated */}
-            {!checkoutData && (
-              <>
-                <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12, marginTop: 24 }}>Order Items</h2>
-                {cart.items.map((item, idx) => (
-                  <div key={idx} style={{ display: 'flex', gap: 12, paddingBottom: 10, marginBottom: 10, borderBottom: '1px solid #f3f4f6' }}>
-                    <div style={{ width: 50, height: 50, borderRadius: 6, background: '#f3f4f6', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {item.imageUrl ? (
-                        <img src={item.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : (
-                        <span style={{ fontSize: 20, color: '#d1d5db' }}>&#128722;</span>
-                      )}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 500, fontSize: 14 }}>{item.productTitle}</div>
-                      {item.variantTitle && <div style={{ fontSize: 12, color: '#6b7280' }}>{item.variantTitle}</div>}
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>Qty: {item.quantity}</div>
-                    </div>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{formatPrice(item.lineTotal)}</div>
-                  </div>
-                ))}
-              </>
-            )}
+              </ul>
+            </section>
           </div>
 
-          {/* ── Right column: Summary + Place Order ───────────────── */}
-          <div style={{
-            flex: '0 0 280px',
-            background: '#f9fafb',
-            borderRadius: 12,
-            padding: 20,
-            height: 'fit-content',
-            position: 'sticky',
-            top: 80,
-          }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Payment</h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, padding: 12, background: '#fff', borderRadius: 8, border: '2px solid #111' }}>
-              <span style={{ fontSize: 18 }}>&#128176;</span>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>Cash on Delivery</div>
-                <div style={{ fontSize: 12, color: '#6b7280' }}>Pay when you receive</div>
+          {/* ─── Right column ────────────────────────── */}
+          <aside className="lg:sticky lg:top-24 bg-white border border-ink-200 p-5 rounded-2xl">
+            <h3 className="font-display text-h3 text-ink-900 mb-4">Order summary</h3>
+
+            {/* Payment method */}
+            <div className="mb-5">
+              <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
+                Payment
+              </div>
+              <div className="flex items-center gap-3 p-3 border-2 border-ink-900 bg-accent-soft/30">
+                <div className="size-9 grid place-items-center bg-ink-900 text-white">
+                  <Wallet className="size-4" strokeWidth={1.75} />
+                </div>
+                <div>
+                  <div className="text-body font-semibold text-ink-900">Cash on Delivery</div>
+                  <div className="text-caption text-ink-600">Pay when you receive</div>
+                </div>
               </div>
             </div>
 
-            {/* Coupon input */}
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6 }}>Have a coupon?</div>
+            {/* Coupon */}
+            <div className="mb-5">
+              <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2 flex items-center gap-1.5">
+                <Tag className="size-3.5" />
+                Have a coupon?
+              </div>
               {appliedCoupon ? (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  padding: '10px 12px',
-                  background: '#ecfdf5',
-                  border: '1px solid #a7f3d0',
-                  borderRadius: 8,
-                }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, color: '#065f46' }}>
+                <div className="flex items-start justify-between gap-2 p-3 bg-green-50 border border-green-200">
+                  <div className="min-w-0">
+                    <div className="text-body font-bold text-success">
                       {appliedCoupon.code} applied
                     </div>
-                    <div style={{ fontSize: 12, color: '#047857', marginTop: 2 }}>
+                    <div className="text-caption text-success/80 mt-0.5">
                       You save {formatPrice(appliedCoupon.discountAmount)}
                       {appliedCoupon.valueType === 'PERCENTAGE' ? ` (${appliedCoupon.value}% off)` : ''}
                     </div>
@@ -1043,25 +978,16 @@ export default function CheckoutPage() {
                   <button
                     type="button"
                     onClick={handleRemoveCoupon}
-                    style={{
-                      flex: '0 0 auto',
-                      background: 'none',
-                      border: 'none',
-                      color: '#065f46',
-                      fontSize: 12,
-                      fontWeight: 600,
-                      textDecoration: 'underline',
-                      cursor: 'pointer',
-                    }}
+                    className="text-caption font-semibold text-success hover:text-ink-900 underline underline-offset-2"
                   >
                     Remove
                   </button>
                 </div>
               ) : (
                 <>
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  <div className="flex gap-2">
                     <input
-                      placeholder="Enter coupon code"
+                      placeholder="Enter code"
                       value={couponInput}
                       maxLength={40}
                       onChange={(e) => {
@@ -1074,179 +1000,128 @@ export default function CheckoutPage() {
                           handleApplyCoupon();
                         }
                       }}
-                      style={{
-                        flex: 1,
-                        padding: '9px 11px',
-                        borderWidth: 1,
-                        borderStyle: 'solid',
-                        borderColor: couponError ? '#dc2626' : '#d1d5db',
-                        borderRadius: 8,
-                        fontSize: 13,
-                        outline: 'none',
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.5,
-                      }}
                       aria-invalid={!!couponError}
+                      className={`flex-1 h-10 px-3 border bg-white text-body uppercase tracking-wider focus:outline-none rounded-full ${
+                        couponError ? inputErr : inputOk
+                      }`}
                     />
                     <button
                       type="button"
                       onClick={handleApplyCoupon}
                       disabled={couponApplying || !couponInput.trim()}
-                      style={{
-                        padding: '9px 14px',
-                        background: !couponInput.trim() || couponApplying ? '#9ca3af' : '#111',
-                        color: '#fff',
-                        border: 'none',
-                        borderRadius: 8,
-                        fontSize: 13,
-                        fontWeight: 600,
-                        cursor: !couponInput.trim() || couponApplying ? 'not-allowed' : 'pointer',
-                        whiteSpace: 'nowrap',
-                      }}
+                      className="h-10 px-4 bg-ink-900 text-white text-caption font-semibold hover:bg-ink-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-full"
                     >
-                      {couponApplying ? 'Applying...' : 'Apply'}
+                      {couponApplying ? 'Applying…' : 'Apply'}
                     </button>
                   </div>
                   {couponError && (
-                    <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>
-                      {couponError}
-                    </div>
+                    <p className="mt-1.5 text-caption text-danger">{couponError}</p>
                   )}
                 </>
               )}
             </div>
 
-            {checkoutData ? (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14 }}>
-                  <span>Subtotal ({checkoutData.itemCount} items)</span>
-                  <span>{formatPrice(checkoutData.serviceableAmount)}</span>
+            {/* Totals */}
+            <div className="space-y-2 text-body pb-4 border-b border-ink-200">
+              <div className="flex justify-between">
+                <span className="text-ink-700">
+                  Subtotal <span className="text-ink-500">({currentItemCount} {itemNoun(currentItemCount)})</span>
+                </span>
+                <span className="text-ink-900 tabular">{formatPrice(currentSubtotal)}</span>
+              </div>
+              {checkoutData && checkoutData.unserviceableCount > 0 && (
+                <div className="flex justify-between text-danger">
+                  <span>Unserviceable ({checkoutData.unserviceableCount})</span>
+                  <span className="tabular">
+                    -{formatPrice(checkoutData.totalAmount - checkoutData.serviceableAmount)}
+                  </span>
                 </div>
-                {checkoutData.unserviceableCount > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13, color: '#dc2626' }}>
-                    <span>Unserviceable ({checkoutData.unserviceableCount})</span>
-                    <span>-{formatPrice(checkoutData.totalAmount - checkoutData.serviceableAmount)}</span>
-                  </div>
-                )}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14 }}>
-                  <span>Delivery</span>
-                  <span style={{ color: '#16a34a' }}>FREE</span>
+              )}
+              <div className="flex justify-between">
+                <span className="text-ink-700">Delivery</span>
+                <span className="text-success font-semibold uppercase tracking-wider text-caption">
+                  Free
+                </span>
+              </div>
+              {appliedCoupon && appliedCoupon.discountAmount > 0 && (
+                <div className="flex justify-between text-success">
+                  <span>Coupon ({appliedCoupon.code})</span>
+                  <span className="tabular">-{formatPrice(appliedCoupon.discountAmount)}</span>
                 </div>
-                {appliedCoupon && appliedCoupon.discountAmount > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14, color: '#16a34a' }}>
-                    <span>Coupon ({appliedCoupon.code})</span>
-                    <span>-{formatPrice(appliedCoupon.discountAmount)}</span>
-                  </div>
-                )}
-                <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 12, paddingTop: 12, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
-                  <span>Total</span>
-                  <span>{formatPrice(Math.max(0, checkoutData.serviceableAmount - (appliedCoupon?.discountAmount ?? 0)))}</span>
-                </div>
+              )}
+            </div>
 
-                {/* Reservation timer */}
-                <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8, textAlign: 'center' }}>
-                  Stock reserved until {new Date(checkoutData.expiresAt).toLocaleTimeString()}
-                </div>
+            <div className="flex justify-between items-baseline pt-4 mb-5">
+              <span className="text-body font-semibold text-ink-900">Total</span>
+              <span className="font-display text-h3 text-ink-900 tabular">
+                {formatPrice(total)}
+              </span>
+            </div>
 
-                <button
-                  onClick={handlePlaceOrder}
-                  disabled={placing || !checkoutData.allServiceable || checkoutData.items.length === 0}
-                  aria-busy={placing}
-                  style={{
-                    width: '100%',
-                    marginTop: 16,
-                    padding: '14px 20px',
-                    fontSize: 15,
-                    fontWeight: 700,
-                    border: 'none',
-                    background: !checkoutData.allServiceable ? '#9ca3af' : '#111',
-                    color: '#fff',
-                    borderRadius: 8,
-                    cursor: (placing || !checkoutData.allServiceable) ? 'not-allowed' : 'pointer',
-                    opacity: placing ? 0.85 : 1,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 10,
-                    transition: 'opacity 120ms ease',
-                  }}
-                >
-                  {placing && (
-                    <span
-                      aria-hidden="true"
-                      style={{
-                        width: 16,
-                        height: 16,
-                        border: '2px solid rgba(255,255,255,0.35)',
-                        borderTopColor: '#fff',
-                        borderRadius: '50%',
-                        display: 'inline-block',
-                        animation: 'sm-spin 0.8s linear infinite',
-                      }}
-                    />
-                  )}
-                  {placing
-                    ? 'Placing Order...'
-                    : !checkoutData.allServiceable
-                      ? 'Remove Unserviceable Items First'
-                      : 'Place Order (COD)'}
-                </button>
-                <style>{`@keyframes sm-spin { to { transform: rotate(360deg); } }`}</style>
-              </>
-            ) : (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14 }}>
-                  <span>Subtotal ({cart.itemCount} items)</span>
-                  <span>{formatPrice(cart.totalAmount)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14 }}>
-                  <span>Delivery</span>
-                  <span style={{ color: '#16a34a' }}>FREE</span>
-                </div>
-                {appliedCoupon && appliedCoupon.discountAmount > 0 && (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 14, color: '#16a34a' }}>
-                    <span>Coupon ({appliedCoupon.code})</span>
-                    <span>-{formatPrice(appliedCoupon.discountAmount)}</span>
-                  </div>
-                )}
-                <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 12, paddingTop: 12, display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 16 }}>
-                  <span>Total</span>
-                  <span>{formatPrice(Math.max(0, cart.totalAmount - (appliedCoupon?.discountAmount ?? 0)))}</span>
-                </div>
-
-                <button
-                  onClick={handleInitiateCheckout}
-                  disabled={initiating || !selectedAddressId}
-                  style={{
-                    width: '100%',
-                    marginTop: 16,
-                    padding: '14px 20px',
-                    fontSize: 15,
-                    fontWeight: 700,
-                    border: 'none',
-                    background: initiating ? '#9ca3af' : '#111',
-                    color: '#fff',
-                    borderRadius: 8,
-                    cursor: initiating ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {initiating ? 'Checking...' : 'Check Delivery & Continue'}
-                </button>
-              </>
+            {/* Reservation timer */}
+            {checkoutData && (
+              <p className="mb-3 text-caption text-ink-500 text-center">
+                Stock reserved until {new Date(checkoutData.expiresAt).toLocaleTimeString()}
+              </p>
             )}
-          </div>
+
+            {/* CTA */}
+            {checkoutData ? (
+              <button
+                onClick={handlePlaceOrder}
+                disabled={placing || !checkoutData.allServiceable || checkoutData.items.length === 0}
+                aria-busy={placing}
+                className={`w-full h-12 inline-flex items-center justify-center gap-2 font-semibold text-body transition-colors ${
+                  !checkoutData.allServiceable
+                    ? 'bg-ink-300 text-ink-600 cursor-not-allowed'
+                    : 'bg-ink-900 text-white hover:bg-ink-800 disabled:opacity-70'
+                }`}
+              >
+                {placing && <Loader2 className="size-4 animate-spin" />}
+                {placing
+                  ? 'Placing order…'
+                  : !checkoutData.allServiceable
+                    ? 'Remove unserviceable items first'
+                    : (
+                      <>
+                        Place order (COD)
+                        <ArrowRight className="size-4" />
+                      </>
+                    )}
+              </button>
+            ) : (
+              <button
+                onClick={handleInitiateCheckout}
+                disabled={initiating || !selectedAddressId}
+                aria-busy={initiating}
+                className="w-full h-12 inline-flex items-center justify-center gap-2 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-full"
+              >
+                {initiating && <Loader2 className="size-4 animate-spin" />}
+                {initiating ? 'Checking availability…' : (
+                  <>
+                    Check delivery &amp; continue
+                    <ArrowRight className="size-4" />
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* Trust strip */}
+            <div className="mt-5 pt-4 border-t border-ink-200 grid grid-cols-3 gap-2">
+              {[
+                { icon: ShieldCheck, label: 'Secure checkout' },
+                { icon: Truck,       label: 'Free shipping' },
+                { icon: Wallet,      label: 'Pay on delivery' },
+              ].map(({ icon: Icon, label }) => (
+                <div key={label} className="flex flex-col items-center text-center gap-1">
+                  <Icon className="size-4 text-accent-dark" strokeWidth={1.75} />
+                  <span className="text-[11px] text-ink-600 leading-tight">{label}</span>
+                </div>
+              ))}
+            </div>
+          </aside>
         </div>
       </div>
-    </>
+    </StorefrontShell>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  borderWidth: 1,
-  borderStyle: 'solid',
-  borderColor: '#d1d5db',
-  borderRadius: 8,
-  fontSize: 14,
-  outline: 'none',
-};

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { CommissionRecordStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -195,9 +195,9 @@ export class ReturnCommissionReversalService {
             //     unreturned portion; unfreeze from ON_HOLD if needed)
             //   · Nothing new     → keep whatever status it already had
             status: isFullyRefunded
-              ? 'REFUNDED'
-              : commissionRecord.status === 'ON_HOLD'
-                ? 'PENDING'
+              ? CommissionRecordStatus.REFUNDED
+              : commissionRecord.status === CommissionRecordStatus.ON_HOLD
+                ? CommissionRecordStatus.PENDING
                 : commissionRecord.status,
           },
         });
