@@ -2,12 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
+import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 
 export interface RefundGatewayResult {
   success: boolean;
   gatewayRefundId?: string;
   failureReason?: string;
   requiresManualProcessing?: boolean;
+  /**
+   * True when the refund is fully settled inside our system (e.g. wallet
+   * credit) and no async polling is needed. The return service uses this
+   * to jump straight to REFUNDED instead of REFUND_PROCESSING.
+   */
+  completed?: boolean;
 }
 
 export interface RefundGatewayInput {
@@ -18,6 +26,8 @@ export interface RefundGatewayInput {
   customerId: string;
   returnId: string;
   returnNumber: string;
+  /** Resolved refund destination: WALLET / ORIGINAL_PAYMENT / BANK_TRANSFER / CASH. */
+  refundMethod?: string;
 }
 
 export interface RefundGatewayStatus {
@@ -37,6 +47,8 @@ export class RefundGatewayService {
     private readonly logger: AppLoggerService,
     private readonly razorpayAdapter: RazorpayAdapter,
     private readonly prisma: PrismaService,
+    private readonly walletFacade: WalletPublicFacade,
+    private readonly paymentOps: PaymentOpsFacade,
   ) {
     this.logger.setContext('RefundGatewayService');
   }
@@ -49,6 +61,36 @@ export class RefundGatewayService {
   async processRefund(
     input: RefundGatewayInput,
   ): Promise<RefundGatewayResult> {
+    // Wallet refund — settle synchronously by crediting the customer's
+    // wallet ledger. No external gateway, no polling, no manual step.
+    if (input.refundMethod === 'WALLET') {
+      try {
+        const result = await this.walletFacade.creditFromRefund({
+          userId: input.customerId,
+          amountInPaise: Math.round(input.amount * 100),
+          refundId: input.returnId,
+          description: `Refund for return ${input.returnNumber}`,
+        });
+        this.logger.log(
+          `Wallet refund credited — return=${input.returnNumber}, amount=₹${input.amount}, walletTx=${result.transaction.id}`,
+        );
+        return {
+          success: true,
+          gatewayRefundId: `wallet:${result.transaction.id}`,
+          completed: true,
+        };
+      } catch (err) {
+        const msg = (err as Error).message;
+        this.logger.error(
+          `Wallet refund failed for return ${input.returnNumber}: ${msg}`,
+        );
+        return {
+          success: false,
+          failureReason: `Wallet credit failed: ${msg}`,
+        };
+      }
+    }
+
     if (input.paymentMethod === 'COD') {
       // COD refunds require manual processing (bank transfer/cash)
       this.logger.log(
@@ -114,6 +156,19 @@ export class RefundGatewayService {
         },
       );
 
+      // Payment-ops audit trail — record success path.
+      this.paymentOps
+        .recordAttempt({
+          masterOrderId: input.orderId,
+          orderNumber: input.orderNumber,
+          kind: 'REFUND',
+          status: 'SUCCESS',
+          providerPaymentId: order.razorpayPaymentId,
+          providerRefundId: refundResult.providerRefundId,
+          amountInPaise: Math.round(input.amount * 100),
+        })
+        .catch(() => undefined);
+
       if (refundResult.status === 'processed') {
         this.logger.log(
           `Refund processed via Razorpay: ${refundResult.providerRefundId} for return=${input.returnNumber}, amount=₹${input.amount}`,
@@ -136,6 +191,18 @@ export class RefundGatewayService {
       this.logger.error(
         `Razorpay refund failed for return ${input.returnNumber}: ${(error as Error).message}`,
       );
+      // Payment-ops audit trail — record failure path so admins can
+      // see the gateway error in the alerts queue.
+      this.paymentOps
+        .recordAttempt({
+          masterOrderId: input.orderId,
+          orderNumber: input.orderNumber,
+          kind: 'REFUND',
+          status: 'FAILURE',
+          amountInPaise: Math.round(input.amount * 100),
+          failureReason: (error as Error).message,
+        })
+        .catch(() => undefined);
       return {
         success: false,
         requiresManualProcessing: true,

@@ -20,6 +20,7 @@ import { VerifyAdminResetOtpUseCase } from '../../application/use-cases/verify-a
 import { ResendAdminResetOtpUseCase } from '../../application/use-cases/resend-admin-reset-otp.use-case';
 import { ResetAdminPasswordUseCase } from '../../application/use-cases/reset-admin-password.use-case';
 import { AdminAuthGuard } from '../../../../core/guards';
+import { AccessLogService } from '../../../access-log/application/services/access-log.service';
 
 @ApiTags('Admin Auth')
 @Controller('admin/auth')
@@ -32,24 +33,55 @@ export class AdminAuthController {
     private readonly verifyResetOtpUseCase: VerifyAdminResetOtpUseCase,
     private readonly resendResetOtpUseCase: ResendAdminResetOtpUseCase,
     private readonly resetPasswordUseCase: ResetAdminPasswordUseCase,
+    private readonly accessLog: AccessLogService,
   ) {}
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(@Body() dto: AdminLoginDto, @Req() req: Request) {
-    const data = await this.loginUseCase.execute({
-      email: dto.email,
-      password: dto.password,
-      userAgent: req.headers['user-agent'],
-      ipAddress: req.ip,
-    });
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    try {
+      const data = await this.loginUseCase.execute({
+        email: dto.email,
+        password: dto.password,
+        userAgent,
+        ipAddress,
+      });
 
-    return {
-      success: true,
-      message: 'Admin login successful',
-      data,
-    };
+      const adminId = (data as any)?.admin?.id ?? (data as any)?.adminId;
+      if (adminId) {
+        this.accessLog
+          .record({
+            actorType: 'ADMIN',
+            actorId: adminId,
+            kind: 'LOGIN_SUCCESS',
+            ipAddress,
+            userAgent,
+          })
+          .catch(() => undefined);
+      }
+
+      return {
+        success: true,
+        message: 'Admin login successful',
+        data,
+      };
+    } catch (err) {
+      this.accessLog
+        .record({
+          actorType: 'ADMIN',
+          actorId: dto.email,
+          kind: 'LOGIN_FAILURE',
+          ipAddress,
+          userAgent,
+          succeeded: false,
+          reason: (err as Error).message,
+        })
+        .catch(() => undefined);
+      throw err;
+    }
   }
 
   @Post('logout')
@@ -58,6 +90,16 @@ export class AdminAuthController {
   async logout(@Req() req: Request) {
     const adminId = (req as any).adminId;
     await this.logoutUseCase.execute(adminId);
+
+    this.accessLog
+      .record({
+        actorType: 'ADMIN',
+        actorId: adminId,
+        kind: 'LOGOUT',
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      })
+      .catch(() => undefined);
 
     return {
       success: true,

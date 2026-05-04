@@ -115,7 +115,15 @@ model Product {
   rejectionReason   String?   @map("rejection_reason")
   changeRequestNote String?   @map("change_request_note")
 
-  hasVariants      Boolean          @default(false) @map("has_variants")
+  hasVariants Boolean @default(false) @map("has_variants")
+
+  // NOVA SM own-brand discriminator. SELLER = third-party marketplace
+  // listing (existing default — stock lives in SellerProductMapping).
+  // OWN_BRAND = NOVA-owned, fulfilled from OwnBrandWarehouse stock.
+  productSource ProductSource @default(SELLER) @map("product_source")
+  // Internal NOVA SKU. Format: NV-YYYY-NNNNNN, generated on creation
+  // when productSource=OWN_BRAND. Null for SELLER products.
+  ownBrandSku   String?       @unique @map("own_brand_sku")
 
   // Platform pricing (customer-facing price, admin-controlled)
   // procurementPrice: platform-wide default landed cost used by the
@@ -156,18 +164,18 @@ model Product {
   category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   brand    Brand?    @relation(fields: [brandId], references: [id], onDelete: SetNull)
 
-  variants       ProductVariant[]
-  options        ProductOption[]
-  optionValues   ProductOptionValue[]
-  images         ProductImage[]
-  tags           ProductTag[]
-  seo            ProductSeo?
-  statusHistory  ProductStatusHistory[]
-  collectionMaps ProductCollectionMap[]
-  discounts      DiscountProduct[]
-  cartItems      CartItem[]
-  sellerMappings          SellerProductMapping[]
-  metafields              ProductMetafield[]
+  variants                 ProductVariant[]
+  options                  ProductOption[]
+  optionValues             ProductOptionValue[]
+  images                   ProductImage[]
+  tags                     ProductTag[]
+  seo                      ProductSeo?
+  statusHistory            ProductStatusHistory[]
+  collectionMaps           ProductCollectionMap[]
+  discounts                DiscountProduct[]
+  cartItems                CartItem[]
+  sellerMappings           SellerProductMapping[]
+  metafields               ProductMetafield[]
   franchiseCatalogMappings FranchiseCatalogMapping[]
 
   @@index([sellerId])
@@ -210,35 +218,35 @@ model ProductOptionValue {
 }
 
 model ProductVariant {
-  id             String        @id @default(uuid())
-  productId      String        @map("product_id")
-  masterSku      String?       @unique @map("master_sku") // Auto-generated PRD-XXXXXX-BLU-08
-  title          String?
-  sku            String?
-  barcode        String?
-  price          Decimal       @db.Decimal(10, 2)
-  procurementPrice Decimal?    @map("procurement_price") @db.Decimal(10, 2)
-  compareAtPrice Decimal?      @map("compare_at_price") @db.Decimal(10, 2)
-  costPrice      Decimal?      @map("cost_price") @db.Decimal(10, 2)
-  stock          Int           @default(0)
-  weight         Decimal?      @db.Decimal(10, 3)
-  weightUnit     String?       @default("kg") @map("weight_unit")
-  length         Decimal?      @db.Decimal(10, 2)
-  width          Decimal?      @db.Decimal(10, 2)
-  height         Decimal?      @db.Decimal(10, 2)
-  dimensionUnit  String?       @default("cm") @map("dimension_unit")
-  status         VariantStatus @default(DRAFT)
-  sortOrder      Int           @default(0) @map("sort_order")
-  isDeleted      Boolean       @default(false) @map("is_deleted")
-  deletedAt      DateTime?     @map("deleted_at")
-  createdAt      DateTime      @default(now()) @map("created_at")
-  updatedAt      DateTime      @updatedAt @map("updated_at")
+  id               String        @id @default(uuid())
+  productId        String        @map("product_id")
+  masterSku        String?       @unique @map("master_sku") // Auto-generated PRD-XXXXXX-BLU-08
+  title            String?
+  sku              String?
+  barcode          String?
+  price            Decimal       @db.Decimal(10, 2)
+  procurementPrice Decimal?      @map("procurement_price") @db.Decimal(10, 2)
+  compareAtPrice   Decimal?      @map("compare_at_price") @db.Decimal(10, 2)
+  costPrice        Decimal?      @map("cost_price") @db.Decimal(10, 2)
+  stock            Int           @default(0)
+  weight           Decimal?      @db.Decimal(10, 3)
+  weightUnit       String?       @default("kg") @map("weight_unit")
+  length           Decimal?      @db.Decimal(10, 2)
+  width            Decimal?      @db.Decimal(10, 2)
+  height           Decimal?      @db.Decimal(10, 2)
+  dimensionUnit    String?       @default("cm") @map("dimension_unit")
+  status           VariantStatus @default(DRAFT)
+  sortOrder        Int           @default(0) @map("sort_order")
+  isDeleted        Boolean       @default(false) @map("is_deleted")
+  deletedAt        DateTime?     @map("deleted_at")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
-  product        Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  optionValues   ProductVariantOptionValue[]
-  images         ProductVariantImage[]
-  cartItems               CartItem[]
-  sellerMappings          SellerProductMapping[]
+  product                  Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  optionValues             ProductVariantOptionValue[]
+  images                   ProductVariantImage[]
+  cartItems                CartItem[]
+  sellerMappings           SellerProductMapping[]
   franchiseCatalogMappings FranchiseCatalogMapping[]
 
   @@index([productId])
@@ -382,31 +390,31 @@ model ProductCodeSequence {
 
 model MetafieldDefinition {
   id          String        @id @default(uuid())
-  namespace   String        // e.g. "taxonomy", "custom"
-  key         String        // e.g. "material", "care_instructions"
-  name        String        // Human-readable: "Material"
+  namespace   String // e.g. "taxonomy", "custom"
+  key         String // e.g. "material", "care_instructions"
+  name        String // Human-readable: "Material"
   description String?
   type        MetafieldType
 
   // For SINGLE_SELECT / MULTI_SELECT: predefined choices
   // Stored as JSON array of { value, label, sortOrder, colorHex? }
-  validations Json?         // e.g. { min, max, regex }
-  choices     Json?         // e.g. [{ value: "cotton", label: "Cotton" }]
+  validations Json? // e.g. { min, max, regex }
+  choices     Json? // e.g. [{ value: "cotton", label: "Cotton" }]
 
   // Ownership
-  ownerType   String        @default("CATEGORY") @map("owner_type") // CATEGORY or CUSTOM
-  categoryId  String?       @map("category_id")  // null for CUSTOM (merchant-level)
+  ownerType  String  @default("CATEGORY") @map("owner_type") // CATEGORY or CUSTOM
+  categoryId String? @map("category_id") // null for CUSTOM (merchant-level)
 
   // Display
-  pinned      Boolean       @default(false)
-  sortOrder   Int           @default(0) @map("sort_order")
-  isRequired  Boolean       @default(false) @map("is_required")
-  isActive    Boolean       @default(true) @map("is_active")
+  pinned     Boolean @default(false)
+  sortOrder  Int     @default(0) @map("sort_order")
+  isRequired Boolean @default(false) @map("is_required")
+  isActive   Boolean @default(true) @map("is_active")
 
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  category        Category?            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  category        Category?          @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   metafieldValues ProductMetafield[]
   filterConfigs   StorefrontFilter[]
 
@@ -421,22 +429,22 @@ model MetafieldDefinition {
 // Stores the actual metafield value for a specific product.
 
 model ProductMetafield {
-  id                    String   @id @default(uuid())
-  productId             String   @map("product_id")
-  metafieldDefinitionId String   @map("metafield_definition_id")
+  id                    String @id @default(uuid())
+  productId             String @map("product_id")
+  metafieldDefinitionId String @map("metafield_definition_id")
 
   // Value storage — use the appropriate column based on type
-  valueText     String?   @map("value_text")
-  valueNumeric  Decimal?  @map("value_numeric") @db.Decimal(15, 4)
-  valueBoolean  Boolean?  @map("value_boolean")
-  valueDate     DateTime? @map("value_date")
-  valueJson     Json?     @map("value_json")    // DIMENSION, WEIGHT, VOLUME, MULTI_SELECT, JSON
+  valueText    String?   @map("value_text")
+  valueNumeric Decimal?  @map("value_numeric") @db.Decimal(15, 4)
+  valueBoolean Boolean?  @map("value_boolean")
+  valueDate    DateTime? @map("value_date")
+  valueJson    Json?     @map("value_json") // DIMENSION, WEIGHT, VOLUME, MULTI_SELECT, JSON
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  product              Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
-  metafieldDefinition  MetafieldDefinition  @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
+  product             Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  metafieldDefinition MetafieldDefinition @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
 
   @@unique([productId, metafieldDefinitionId])
   @@index([productId])
@@ -451,28 +459,28 @@ model ProductMetafield {
 // Admins configure which metafields/built-in fields become storefront filters.
 
 model StorefrontFilter {
-  id                    String   @id @default(uuid())
-  metafieldDefinitionId String?  @map("metafield_definition_id")
+  id                    String  @id @default(uuid())
+  metafieldDefinitionId String? @map("metafield_definition_id")
 
   // Built-in filter type (when metafieldDefinitionId is null)
-  builtInType           String?  @map("built_in_type") // "price_range", "brand", "availability", "variant_option"
+  builtInType String? @map("built_in_type") // "price_range", "brand", "availability", "variant_option"
 
   // Display
-  label         String
-  filterType    String   @map("filter_type") // "checkbox", "price_range", "boolean_toggle", "color_swatch", "text_input"
-  sortOrder     Int      @default(0) @map("sort_order")
-  isActive      Boolean  @default(true) @map("is_active")
+  label      String
+  filterType String  @map("filter_type") // "checkbox", "price_range", "boolean_toggle", "color_swatch", "text_input"
+  sortOrder  Int     @default(0) @map("sort_order")
+  isActive   Boolean @default(true) @map("is_active")
 
   // Scope
-  scopeType     String?  @map("scope_type")  // "CATEGORY", "COLLECTION", "GLOBAL"
-  scopeId       String?  @map("scope_id")    // categoryId or collectionId
+  scopeType String? @map("scope_type") // "CATEGORY", "COLLECTION", "GLOBAL"
+  scopeId   String? @map("scope_id") // categoryId or collectionId
 
   // Behavior
-  collapsed     Boolean  @default(false)
-  showCounts    Boolean  @default(true) @map("show_counts")
+  collapsed  Boolean @default(false)
+  showCounts Boolean @default(true) @map("show_counts")
 
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   metafieldDefinition MetafieldDefinition? @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
 

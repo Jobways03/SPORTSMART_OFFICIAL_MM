@@ -663,13 +663,13 @@ const router = useRouter();
 
     setSelfStatusSaving(true);
     try {
-      await productService.setSelfStatus(token, product.id, target);
+      await sellerProductService.setSelfStatus(token, product.id, target);
       showToast(
         'success',
         target === 'SUSPENDED' ? 'Product paused.' : 'Product is live again.',
       );
       // Refetch to pick up the new status + updated statusHistory entry
-      const refreshed = await productService.getProduct(token, product.id);
+      const refreshed = await sellerProductService.getProduct(token, product.id);
       if (refreshed.data) setProduct(refreshed.data);
     } catch (err) {
       const msg =
@@ -1643,7 +1643,7 @@ type StatusHistoryEntry = {
   id: string;
   fromStatus: string | null;
   toStatus: string;
-  changedBy: string | null;
+  changedBy?: string | null;
   reason: string | null;
   createdAt: string | Date;
 };

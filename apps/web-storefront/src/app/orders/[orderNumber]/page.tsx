@@ -3,34 +3,16 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 import { useModal } from '@sportsmart/ui';
-
-interface OrderItem {
-  id: string;
-  productTitle: string;
-  variantTitle: string | null;
-  sku: string | null;
-  imageUrl: string | null;
-  unitPrice: number;
-  quantity: number;
-  totalPrice: number;
-}
-
-interface SubOrder {
-  id: string;
-  subTotal: number;
-  paymentStatus: string;
-  fulfillmentStatus: string;
-  acceptStatus: string;
-  deliveredAt: string | null;
-  returnWindowEndsAt: string | null;
-  fulfilledBy?: string;
-  trackingNumber?: string | null;
-  courierName?: string | null;
-  items: OrderItem[];
-}
+import type {
+  OrderDetail,
+  SubOrder,
+  ReturnEligibilityResponse,
+  ReturnEligibilityItem,
+} from '@/types/order';
 
 /**
  * Build a best-effort direct-tracking URL for common Indian carriers plus
@@ -56,27 +38,6 @@ function courierTrackingUrl(
   return `https://www.shiprocket.in/shipment-tracking/?awb=${a}`;
 }
 
-interface OrderDetail {
-  id: string;
-  orderNumber: string;
-  orderStatus: string;
-  orderStatusLabel: string;
-  totalAmount: number;
-  paymentStatus: string;
-  paymentMethod: string;
-  itemCount: number;
-  createdAt: string;
-  shippingAddressSnapshot: {
-    fullName: string;
-    phone: string;
-    addressLine1: string;
-    addressLine2?: string;
-    city: string;
-    state: string;
-    postalCode: string;
-  };
-  subOrders: SubOrder[];
-}
 
 const customerStatusLabel = (status: string, paymentStatus?: string): string => {
   if (paymentStatus === 'PAID' && status === 'DELIVERED') return 'Completed';
@@ -268,12 +229,12 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
       .finally(() => setLoading(false));
   }, [orderNumber]);
 
+  const authStatus = useAuthGuard();
+
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) { router.push('/login'); return; }
-    } catch { router.push('/login'); return; }
+    if (authStatus !== 'authed') return;
     fetchOrder();
-  }, [fetchOrder]);
+  }, [authStatus, fetchOrder]);
 
   // Once we have the order + it's delivered, check return eligibility so
   // the Return Items button accurately reflects whether any items can
@@ -285,21 +246,23 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
       setReturnEligibility({ enabled: false, reason: 'Order not delivered yet' });
       return;
     }
-    apiClient<any>(`/customer/returns/eligibility/${order.id}`)
+    apiClient<ReturnEligibilityResponse>(`/customer/returns/eligibility/${order.id}`)
       .then((res) => {
         const data = res.data;
         if (!data) {
           setReturnEligibility({ enabled: false, reason: 'Unable to check return eligibility' });
           return;
         }
-        const allItems = (data.eligibleSubOrders ?? []).flatMap((so: any) => so.items ?? []);
-        const anyEligible = allItems.some((i: any) => i.eligible);
+        const allItems: ReturnEligibilityItem[] = (data.eligibleSubOrders ?? []).flatMap(
+          (so) => so.items ?? [],
+        );
+        const anyEligible = allItems.some((i) => i.eligible);
         if (anyEligible) {
           setReturnEligibility({ enabled: true, reason: '' });
           return;
         }
         // Nothing eligible — prefer the most specific reason to show.
-        const reasons = new Set(allItems.map((i: any) => i.ineligibleReason));
+        const reasons = new Set(allItems.map((i) => i.ineligibleReason));
         if (reasons.has('PREVIOUSLY_REJECTED')) {
           setReturnEligibility({
             enabled: false,
@@ -345,22 +308,22 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   );
 
   if (loading) {
-    return (<><Navbar /><div className="products-loading">Loading order...</div></>);
+    return (<StorefrontShell><div className="products-loading">Loading order...</div></StorefrontShell>);
   }
 
   if (!order) {
     return (
-      <><Navbar /><div style={{ maxWidth: 800, margin: '0 auto', padding: '60px 16px', textAlign: 'center' }}>
+      <StorefrontShell><div style={{ maxWidth: 800, margin: '0 auto', padding: '60px 16px', textAlign: 'center' }}>
         <h3>Order not found</h3>
         <Link href="/orders" style={{ marginTop: 16, display: 'inline-block' }}>Back to Orders</Link>
-      </div></>
+      </div></StorefrontShell>
     );
   }
 
   const addr = order.shippingAddressSnapshot;
 
   // Only consider active (non-rejected) sub-orders for status
-  const activeSubOrders = order.subOrders.filter((so: any) => so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED');
+  const activeSubOrders = order.subOrders.filter((so: SubOrder) => so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED');
   const displaySubOrders = activeSubOrders.length > 0 ? activeSubOrders : order.subOrders;
 
   // Determine if order can be cancelled
@@ -368,15 +331,14 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     order.paymentStatus !== 'PAID' &&
     order.orderStatus !== 'CANCELLED' &&
     order.orderStatus !== 'DELIVERED' &&
-    !displaySubOrders.some((so: any) => so.fulfillmentStatus === 'DELIVERED' || so.fulfillmentStatus === 'SHIPPED' || so.fulfillmentStatus === 'FULFILLED');
+    !displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED' || so.fulfillmentStatus === 'SHIPPED' || so.fulfillmentStatus === 'FULFILLED');
 
   // Use clean customer-friendly status labels
   const displayStatusLabel = customerStatusLabel(order.orderStatus || 'PLACED', order.paymentStatus);
   const displayStatusColor = orderStatusColor(order.orderStatus || 'PLACED', order.paymentStatus);
 
   return (
-    <>
-      <Navbar />
+    <StorefrontShell>
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 60px' }}>
         <Link href="/orders" style={{ fontSize: 14, color: '#6b7280', textDecoration: 'none', marginBottom: 16, display: 'inline-block' }}>
           &#8592; Back to Orders
@@ -407,13 +369,13 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
             paymentStatus={order.paymentStatus}
             fulfillmentStatus={
               displaySubOrders.length > 0
-                ? displaySubOrders.every((so: any) => so.fulfillmentStatus === 'DELIVERED')
+                ? displaySubOrders.every((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED')
                   ? 'DELIVERED'
-                  : displaySubOrders.every((so: any) => ['FULFILLED', 'DELIVERED'].includes(so.fulfillmentStatus))
+                  : displaySubOrders.every((so: SubOrder) => ['FULFILLED', 'DELIVERED'].includes(so.fulfillmentStatus))
                     ? 'FULFILLED'
-                    : displaySubOrders.some((so: any) => so.fulfillmentStatus === 'SHIPPED')
+                    : displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'SHIPPED')
                       ? 'SHIPPED'
-                      : displaySubOrders.some((so: any) => so.fulfillmentStatus === 'PACKED')
+                      : displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'PACKED')
                         ? 'PACKED'
                         : 'UNFULFILLED'
                 : 'UNFULFILLED'
@@ -524,7 +486,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
             Payment Method: <strong>{order.paymentMethod === 'COD' ? 'Cash on Delivery' : order.paymentMethod}</strong>
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {displaySubOrders.some((so: any) => so.fulfillmentStatus === 'DELIVERED') && (
+            {displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED') && (
               returnEligibility?.enabled ? (
                 <Link
                   href={`/orders/${order.orderNumber}/return`}
@@ -589,6 +551,6 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
         </div>
       </div>
-    </>
+    </StorefrontShell>
   );
 }

@@ -27,12 +27,12 @@ enum AffiliateKycStatus {
 }
 
 enum AffiliateCommissionStatus {
-  PENDING       // Order paid, return window still open
-  HOLD          // Exchange in progress / order modification pending
-  CONFIRMED     // Return window closed without return — eligible for payout
-  PAID          // Settled into a payout
-  CANCELLED     // Refund/return killed it before payout (terminal)
-  REVERSED      // Refund/return after payout — clawed back (terminal)
+  PENDING // Order paid, return window still open
+  HOLD // Exchange in progress / order modification pending
+  CONFIRMED // Return window closed without return — eligible for payout
+  PAID // Settled into a payout
+  CANCELLED // Refund/return killed it before payout (terminal)
+  REVERSED // Refund/return after payout — clawed back (terminal)
 }
 
 enum AffiliateCommissionSource {
@@ -57,67 +57,67 @@ enum AffiliatePayoutStatus {
 // ============================================
 
 model Affiliate {
-  id                   String          @id @default(uuid())
+  id     String  @id @default(uuid())
   // Optional User binding. An affiliate can register WITHOUT an
   // existing user account — admin approval converts the application
   // into an affiliate record. If a User later signs up with the same
   // email, link them.
-  userId               String?         @unique @map("user_id")
+  userId String? @unique @map("user_id")
 
   // Identity
-  email                String          @unique
-  phone                String?         @unique
-  firstName            String          @map("first_name")
-  lastName             String          @map("last_name")
+  email     String  @unique
+  phone     String? @unique
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
 
   // Application metadata (SRS §5.1)
-  websiteUrl           String?         @map("website_url")
-  socialHandle         String?         @map("social_handle")
-  joinReason           String?         @map("join_reason") @db.Text
+  websiteUrl   String? @map("website_url")
+  socialHandle String? @map("social_handle")
+  joinReason   String? @map("join_reason") @db.Text
 
   // Lifecycle
-  status               AffiliateStatus @default(PENDING_APPROVAL)
-  approvedAt           DateTime?       @map("approved_at")
-  approvedById         String?         @map("approved_by_id")
-  rejectedAt           DateTime?       @map("rejected_at")
-  rejectionReason      String?         @map("rejection_reason") @db.Text
-  suspendedAt          DateTime?       @map("suspended_at")
-  suspensionReason     String?         @map("suspension_reason") @db.Text
+  status           AffiliateStatus @default(PENDING_APPROVAL)
+  approvedAt       DateTime?       @map("approved_at")
+  approvedById     String?         @map("approved_by_id")
+  rejectedAt       DateTime?       @map("rejected_at")
+  rejectionReason  String?         @map("rejection_reason") @db.Text
+  suspendedAt      DateTime?       @map("suspended_at")
+  suspensionReason String?         @map("suspension_reason") @db.Text
 
   // Commission rate override (SRS §8.2). null → use Settings default.
-  commissionPercentage Decimal?        @map("commission_percentage") @db.Decimal(5, 2)
+  commissionPercentage Decimal? @map("commission_percentage") @db.Decimal(5, 2)
 
   // Denormalised KYC summary for fast eligibility checks (SRS §15.1).
   // Full KYC details live on AffiliateKyc.
-  kycStatus            AffiliateKycStatus @default(NOT_STARTED) @map("kyc_status")
-  kycVerifiedAt        DateTime?       @map("kyc_verified_at")
+  kycStatus     AffiliateKycStatus @default(NOT_STARTED) @map("kyc_status")
+  kycVerifiedAt DateTime?          @map("kyc_verified_at")
 
   // Auth — affiliate login is separate from User login (SRS §16.1).
   // Brute-force guard parity with Seller / Franchise / Admin.
-  passwordHash         String          @map("password_hash")
-  failedLoginAttempts  Int             @default(0) @map("failed_login_attempts")
-  lockUntil            DateTime?       @map("lock_until")
-  emailVerified        Boolean         @default(false) @map("email_verified")
-  phoneVerified        Boolean         @default(false) @map("phone_verified")
-  phoneVerifiedAt      DateTime?       @map("phone_verified_at")
+  passwordHash        String    @map("password_hash")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockUntil           DateTime? @map("lock_until")
+  emailVerified       Boolean   @default(false) @map("email_verified")
+  phoneVerified       Boolean   @default(false) @map("phone_verified")
+  phoneVerifiedAt     DateTime? @map("phone_verified_at")
 
   // Fraud (SRS §14)
-  fraudFlagCount       Int             @default(0) @map("fraud_flag_count")
-  isFlagged            Boolean         @default(false) @map("is_flagged")
+  fraudFlagCount Int     @default(0) @map("fraud_flag_count")
+  isFlagged      Boolean @default(false) @map("is_flagged")
 
-  createdAt            DateTime        @default(now()) @map("created_at")
-  updatedAt            DateTime        @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  user                 User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
-  couponCodes          AffiliateCouponCode[]
-  referrals            Referral[]
-  attributions         ReferralAttribution[]
-  commissions          AffiliateCommission[]
-  kyc                  AffiliateKyc?
-  payoutMethods        AffiliatePayoutMethodRecord[]
-  payoutRequests       AffiliatePayoutRequest[]
-  tdsRecords           AffiliateTdsRecord[]
-  passwordResetOtps    AffiliatePasswordResetOtp[]
+  user                  User?                           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  couponCodes           AffiliateCouponCode[]
+  referrals             Referral[]
+  attributions          ReferralAttribution[]
+  commissions           AffiliateCommission[]
+  kyc                   AffiliateKyc?
+  payoutMethods         AffiliatePayoutMethodRecord[]
+  payoutRequests        AffiliatePayoutRequest[]
+  tdsRecords            AffiliateTdsRecord[]
+  passwordResetOtps     AffiliatePasswordResetOtp[]
   phoneVerificationOtps AffiliatePhoneVerificationOtp[]
 
   @@index([status])
@@ -133,17 +133,17 @@ model Affiliate {
 // happen atomically with the OTP exchange — without that, an attacker
 // could swap the affiliate's phone field between send and verify.
 model AffiliatePhoneVerificationOtp {
-  id            String    @id @default(uuid())
-  affiliateId   String    @map("affiliate_id")
-  phoneCandidate String   @map("phone_candidate")
-  otpHash       String    @map("otp_hash")
-  attempts      Int       @default(0)
-  maxAttempts   Int       @default(5) @map("max_attempts")
-  verifiedAt    DateTime? @map("verified_at")
-  expiresAt     DateTime  @map("expires_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
+  id             String    @id @default(uuid())
+  affiliateId    String    @map("affiliate_id")
+  phoneCandidate String    @map("phone_candidate")
+  otpHash        String    @map("otp_hash")
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5) @map("max_attempts")
+  verifiedAt     DateTime? @map("verified_at")
+  expiresAt      DateTime  @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
 
-  affiliate     Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@index([affiliateId])
   @@map("affiliate_phone_verification_otps")
@@ -189,7 +189,7 @@ model AffiliatePasswordResetOtp {
   expiresAt   DateTime  @map("expires_at")
   createdAt   DateTime  @default(now()) @map("created_at")
 
-  affiliate   Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@index([affiliateId])
   @@map("affiliate_password_reset_otps")
@@ -200,29 +200,29 @@ model AffiliatePasswordResetOtp {
 // flagged primary. Code uniqueness is global so customer entry
 // resolves unambiguously.
 model AffiliateCouponCode {
-  id                    String    @id @default(uuid())
-  affiliateId           String    @map("affiliate_id")
-  code                  String    @unique
-  isPrimary             Boolean   @default(true) @map("is_primary")
+  id          String  @id @default(uuid())
+  affiliateId String  @map("affiliate_id")
+  code        String  @unique
+  isPrimary   Boolean @default(true) @map("is_primary")
 
-  isActive              Boolean   @default(true) @map("is_active")
-  expiresAt             DateTime? @map("expires_at")
-  maxUses               Int?      @map("max_uses")
-  usedCount             Int       @default(0) @map("used_count")
-  perUserLimit          Int       @default(1) @map("per_user_limit")
-  minOrderValue         Decimal?  @map("min_order_value") @db.Decimal(10, 2)
+  isActive      Boolean   @default(true) @map("is_active")
+  expiresAt     DateTime? @map("expires_at")
+  maxUses       Int?      @map("max_uses")
+  usedCount     Int       @default(0) @map("used_count")
+  perUserLimit  Int       @default(1) @map("per_user_limit")
+  minOrderValue Decimal?  @map("min_order_value") @db.Decimal(10, 2)
 
   // Optional customer-facing discount when this code is applied.
   // Decoupled from commission — having a discount value here does
   // NOT affect commission base (per SRS §8.1, commission is on the
   // post-discount subtotal).
-  customerDiscountType  String?   @map("customer_discount_type") // PERCENT | FIXED
-  customerDiscountValue Decimal?  @map("customer_discount_value") @db.Decimal(10, 2)
+  customerDiscountType  String?  @map("customer_discount_type") // PERCENT | FIXED
+  customerDiscountValue Decimal? @map("customer_discount_value") @db.Decimal(10, 2)
 
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  affiliate             Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@index([affiliateId])
   @@index([isActive])
@@ -234,28 +234,28 @@ model AffiliateCouponCode {
 // (visitorId | userId) wins. Used by attribution at order placement
 // and by fraud detection (click-rate, IP collisions).
 model Referral {
-  id          String                    @id @default(uuid())
-  affiliateId String                    @map("affiliate_id")
+  id          String @id @default(uuid())
+  affiliateId String @map("affiliate_id")
 
   // Anonymous visitor ID set in cookie before login.
-  visitorId   String?                   @map("visitor_id")
+  visitorId String? @map("visitor_id")
   // Bound when the visitor is logged in — enables cross-device
   // attribution (SRS §7.8).
-  userId      String?                   @map("user_id")
+  userId    String? @map("user_id")
 
-  source      AffiliateCommissionSource @default(LINK)
-  code        String?                   // For COUPON-source rows; null for LINK
+  source AffiliateCommissionSource @default(LINK)
+  code   String? // For COUPON-source rows; null for LINK
 
   // Forensics — fraud detection (SRS §14)
-  ipHash      String?                   @map("ip_hash")
-  userAgent   String?                   @map("user_agent") @db.Text
-  landingUrl  String?                   @map("landing_url") @db.Text
+  ipHash     String? @map("ip_hash")
+  userAgent  String? @map("user_agent") @db.Text
+  landingUrl String? @map("landing_url") @db.Text
 
   // 30-day cookie expiry per SRS §7.1
-  expiresAt   DateTime                  @map("expires_at")
-  createdAt   DateTime                  @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  affiliate   Affiliate                 @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@index([affiliateId])
   @@index([visitorId])
@@ -273,10 +273,10 @@ model ReferralAttribution {
   orderId     String                    @unique @map("order_id")
   affiliateId String                    @map("affiliate_id")
   source      AffiliateCommissionSource
-  code        String?                   // Coupon code if source=COUPON
+  code        String? // Coupon code if source=COUPON
   capturedAt  DateTime                  @default(now()) @map("captured_at")
 
-  affiliate   Affiliate                 @relation(fields: [affiliateId], references: [id])
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id])
 
   @@index([affiliateId])
   @@index([code])
@@ -287,9 +287,9 @@ model ReferralAttribution {
 // One per attributed order, lifecycle PENDING→…→PAID/CANCELLED/
 // REVERSED. UNIQUE on orderId for the same idempotency reason.
 model AffiliateCommission {
-  id                   String                    @id @default(uuid())
-  orderId              String                    @unique @map("order_id")
-  affiliateId          String                    @map("affiliate_id")
+  id          String @id @default(uuid())
+  orderId     String @unique @map("order_id")
+  affiliateId String @map("affiliate_id")
 
   // Snapshot at order time — never recalculated (SRS §8.3)
   source               AffiliateCommissionSource
@@ -302,30 +302,30 @@ model AffiliateCommission {
   // value used for payout.
   adjustedAmount       Decimal                   @map("adjusted_amount") @db.Decimal(12, 2)
 
-  status               AffiliateCommissionStatus @default(PENDING)
+  status AffiliateCommissionStatus @default(PENDING)
 
   // Lifecycle timestamps (SRS §10, §11, §12)
-  returnWindowEndsAt   DateTime?                 @map("return_window_ends_at")
-  confirmedAt          DateTime?                 @map("confirmed_at")
-  paidAt               DateTime?                 @map("paid_at")
-  cancelledAt          DateTime?                 @map("cancelled_at")
-  reversedAt           DateTime?                 @map("reversed_at")
-  holdReason           String?                   @map("hold_reason") @db.Text
+  returnWindowEndsAt DateTime? @map("return_window_ends_at")
+  confirmedAt        DateTime? @map("confirmed_at")
+  paidAt             DateTime? @map("paid_at")
+  cancelledAt        DateTime? @map("cancelled_at")
+  reversedAt         DateTime? @map("reversed_at")
+  holdReason         String?   @map("hold_reason") @db.Text
 
   // Payout linkage — null until commission is bundled into a payout request.
   // For PAID, points at the paying request. For REVERSED, stays pointing at
   // the original paying request (audit), and `reversalNettedInPayoutRequestId`
   // is set when the clawback is netted into a future payout (SRS §13.4).
-  payoutRequestId                 String?         @map("payout_request_id")
-  reversalNettedInPayoutRequestId String?         @map("reversal_netted_in_payout_request_id")
+  payoutRequestId                 String? @map("payout_request_id")
+  reversalNettedInPayoutRequestId String? @map("reversal_netted_in_payout_request_id")
 
-  notes                String?                   @db.Text
-  createdAt            DateTime                  @default(now()) @map("created_at")
-  updatedAt            DateTime                  @updatedAt @map("updated_at")
+  notes     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  affiliate            Affiliate                 @relation(fields: [affiliateId], references: [id])
-  payoutRequest        AffiliatePayoutRequest?   @relation(fields: [payoutRequestId], references: [id])
-  adjustments          AffiliateCommissionAdjustment[]
+  affiliate     Affiliate                       @relation(fields: [affiliateId], references: [id])
+  payoutRequest AffiliatePayoutRequest?         @relation(fields: [payoutRequestId], references: [id])
+  adjustments   AffiliateCommissionAdjustment[]
 
   @@index([affiliateId, status])
   @@index([status, returnWindowEndsAt])
@@ -337,19 +337,19 @@ model AffiliateCommission {
 // Partial refund (SRS §8.4), exchange resolution (§13.3), manual
 // admin adjustment. Never delete — audit trail.
 model AffiliateCommissionAdjustment {
-  id           String   @id @default(uuid())
-  commissionId String   @map("commission_id")
+  id           String @id @default(uuid())
+  commissionId String @map("commission_id")
 
-  kind         String   // PARTIAL_REFUND | EXCHANGE_RESOLVE | MANUAL_ADJUST
-  deltaAmount  Decimal  @map("delta_amount") @db.Decimal(12, 2)
-  beforeAmount Decimal  @map("before_amount") @db.Decimal(12, 2)
-  afterAmount  Decimal  @map("after_amount") @db.Decimal(12, 2)
-  reason       String?  @db.Text
-  actorId      String?  @map("actor_id")
+  kind         String // PARTIAL_REFUND | EXCHANGE_RESOLVE | MANUAL_ADJUST
+  deltaAmount  Decimal @map("delta_amount") @db.Decimal(12, 2)
+  beforeAmount Decimal @map("before_amount") @db.Decimal(12, 2)
+  afterAmount  Decimal @map("after_amount") @db.Decimal(12, 2)
+  reason       String? @db.Text
+  actorId      String? @map("actor_id")
 
-  createdAt    DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  commission   AffiliateCommission @relation(fields: [commissionId], references: [id], onDelete: Cascade)
+  commission AffiliateCommission @relation(fields: [commissionId], references: [id], onDelete: Cascade)
 
   @@index([commissionId])
   @@map("affiliate_commission_adjustments")
@@ -360,30 +360,30 @@ model AffiliateCommissionAdjustment {
 // PAN/Aadhaar — column-level via a KMS-style helper. Last-4 stored
 // in plaintext for searchable lookups (e.g. duplicate-PAN fraud).
 model AffiliateKyc {
-  id                 String             @id @default(uuid())
-  affiliateId        String             @unique @map("affiliate_id")
+  id          String @id @default(uuid())
+  affiliateId String @unique @map("affiliate_id")
 
-  panNumberEnc       String             @map("pan_number_enc")
-  panNumberIv        String             @map("pan_number_iv")
-  panLast4           String             @map("pan_last4")
+  panNumberEnc String @map("pan_number_enc")
+  panNumberIv  String @map("pan_number_iv")
+  panLast4     String @map("pan_last4")
 
-  aadhaarNumberEnc   String?            @map("aadhaar_number_enc")
-  aadhaarNumberIv    String?            @map("aadhaar_number_iv")
-  aadhaarLast4       String?            @map("aadhaar_last4")
+  aadhaarNumberEnc String? @map("aadhaar_number_enc")
+  aadhaarNumberIv  String? @map("aadhaar_number_iv")
+  aadhaarLast4     String? @map("aadhaar_last4")
 
-  panDocumentUrl     String?            @map("pan_document_url")
-  aadhaarDocumentUrl String?            @map("aadhaar_document_url")
+  panDocumentUrl     String? @map("pan_document_url")
+  aadhaarDocumentUrl String? @map("aadhaar_document_url")
 
-  status             AffiliateKycStatus @default(PENDING)
-  verifiedAt         DateTime?          @map("verified_at")
-  verifiedById       String?            @map("verified_by_id")
-  rejectedAt         DateTime?          @map("rejected_at")
-  rejectionReason    String?            @map("rejection_reason") @db.Text
+  status          AffiliateKycStatus @default(PENDING)
+  verifiedAt      DateTime?          @map("verified_at")
+  verifiedById    String?            @map("verified_by_id")
+  rejectedAt      DateTime?          @map("rejected_at")
+  rejectionReason String?            @map("rejection_reason") @db.Text
 
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  affiliate          Affiliate          @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@index([panLast4])
@@ -395,30 +395,30 @@ model AffiliateKyc {
 // account number (last-4 plaintext for display + duplicate-bank
 // fraud detection).
 model AffiliatePayoutMethodRecord {
-  id                String                       @id @default(uuid())
-  affiliateId       String                       @map("affiliate_id")
-  type              AffiliatePayoutMethodType
+  id          String                    @id @default(uuid())
+  affiliateId String                    @map("affiliate_id")
+  type        AffiliatePayoutMethodType
 
   // Bank fields — populated when type=BANK
-  accountNumberEnc  String?                      @map("account_number_enc")
-  accountNumberIv   String?                      @map("account_number_iv")
-  accountLast4      String?                      @map("account_last4")
-  ifscCode          String?                      @map("ifsc_code")
-  accountHolderName String?                      @map("account_holder_name")
-  bankName          String?                      @map("bank_name")
+  accountNumberEnc  String? @map("account_number_enc")
+  accountNumberIv   String? @map("account_number_iv")
+  accountLast4      String? @map("account_last4")
+  ifscCode          String? @map("ifsc_code")
+  accountHolderName String? @map("account_holder_name")
+  bankName          String? @map("bank_name")
 
   // UPI — populated when type=UPI
-  upiId             String?                      @map("upi_id")
+  upiId String? @map("upi_id")
 
-  isPrimary         Boolean                      @default(false) @map("is_primary")
-  isVerified        Boolean                      @default(false) @map("is_verified")
-  verifiedAt        DateTime?                    @map("verified_at")
+  isPrimary  Boolean   @default(false) @map("is_primary")
+  isVerified Boolean   @default(false) @map("is_verified")
+  verifiedAt DateTime? @map("verified_at")
 
-  createdAt         DateTime                     @default(now()) @map("created_at")
-  updatedAt         DateTime                     @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  affiliate         Affiliate                    @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
-  payoutRequests    AffiliatePayoutRequest[]
+  affiliate      Affiliate                @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  payoutRequests AffiliatePayoutRequest[]
 
   @@index([affiliateId])
   @@index([accountLast4])
@@ -429,45 +429,45 @@ model AffiliatePayoutMethodRecord {
 // Bundle of CONFIRMED commissions submitted for payout. TDS is
 // computed at request time based on cumulative FY total.
 model AffiliatePayoutRequest {
-  id              String                @id @default(uuid())
-  affiliateId     String                @map("affiliate_id")
-  payoutMethodId  String                @map("payout_method_id")
+  id             String @id @default(uuid())
+  affiliateId    String @map("affiliate_id")
+  payoutMethodId String @map("payout_method_id")
 
   // Amounts. SRS §13.4 + §15.4 + §16:
   //   grossAmount   = sum of CONFIRMED commissions in this bundle
   //   reversalDebit = sum of unsettled REVERSED commissions clawed back here
   //   tdsAmount     = §194H deduction (10% above ₹15k FY cumulative)
   //   netAmount     = grossAmount - reversalDebit - tdsAmount
-  grossAmount     Decimal               @map("gross_amount") @db.Decimal(12, 2)
-  reversalDebit   Decimal               @default(0) @map("reversal_debit") @db.Decimal(12, 2)
-  tdsAmount       Decimal               @default(0) @map("tds_amount") @db.Decimal(12, 2)
-  netAmount       Decimal               @map("net_amount") @db.Decimal(12, 2)
+  grossAmount   Decimal @map("gross_amount") @db.Decimal(12, 2)
+  reversalDebit Decimal @default(0) @map("reversal_debit") @db.Decimal(12, 2)
+  tdsAmount     Decimal @default(0) @map("tds_amount") @db.Decimal(12, 2)
+  netAmount     Decimal @map("net_amount") @db.Decimal(12, 2)
 
   // The financial year this payout falls in (for TDS aggregation),
   // e.g. "2026-27" for the FY starting Apr 2026.
-  financialYear   String                @map("financial_year")
+  financialYear String @map("financial_year")
 
-  status          AffiliatePayoutStatus @default(REQUESTED)
+  status AffiliatePayoutStatus @default(REQUESTED)
 
-  requestedAt     DateTime              @default(now()) @map("requested_at")
-  approvedAt      DateTime?             @map("approved_at")
-  approvedById    String?               @map("approved_by_id")
-  processedAt     DateTime?             @map("processed_at")
-  paidAt          DateTime?             @map("paid_at")
-  failedAt        DateTime?             @map("failed_at")
-  failureReason   String?               @map("failure_reason") @db.Text
+  requestedAt   DateTime  @default(now()) @map("requested_at")
+  approvedAt    DateTime? @map("approved_at")
+  approvedById  String?   @map("approved_by_id")
+  processedAt   DateTime? @map("processed_at")
+  paidAt        DateTime? @map("paid_at")
+  failedAt      DateTime? @map("failed_at")
+  failureReason String?   @map("failure_reason") @db.Text
 
   // Bank-side reference set after the actual transfer.
-  transactionRef  String?               @map("transaction_ref")
+  transactionRef String? @map("transaction_ref")
 
-  notes           String?               @db.Text
+  notes String? @db.Text
 
-  createdAt       DateTime              @default(now()) @map("created_at")
-  updatedAt       DateTime              @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  affiliate       Affiliate             @relation(fields: [affiliateId], references: [id])
-  payoutMethod    AffiliatePayoutMethodRecord @relation(fields: [payoutMethodId], references: [id])
-  commissions     AffiliateCommission[]
+  affiliate    Affiliate                   @relation(fields: [affiliateId], references: [id])
+  payoutMethod AffiliatePayoutMethodRecord @relation(fields: [payoutMethodId], references: [id])
+  commissions  AffiliateCommission[]
 
   @@index([affiliateId, status])
   @@index([status])
@@ -480,18 +480,18 @@ model AffiliatePayoutRequest {
 // whether the ₹15,000 threshold has been crossed for the FY.
 // Single row per (affiliate, financialYear) — upsert on each payout.
 model AffiliateTdsRecord {
-  id                  String    @id @default(uuid())
-  affiliateId         String    @map("affiliate_id")
-  financialYear       String    @map("financial_year")
-  cumulativeGross     Decimal   @default(0) @map("cumulative_gross") @db.Decimal(14, 2)
-  cumulativeTds       Decimal   @default(0) @map("cumulative_tds") @db.Decimal(14, 2)
-  cumulativeNet       Decimal   @default(0) @map("cumulative_net") @db.Decimal(14, 2)
-  thresholdCrossedAt  DateTime? @map("threshold_crossed_at")
+  id                 String    @id @default(uuid())
+  affiliateId        String    @map("affiliate_id")
+  financialYear      String    @map("financial_year")
+  cumulativeGross    Decimal   @default(0) @map("cumulative_gross") @db.Decimal(14, 2)
+  cumulativeTds      Decimal   @default(0) @map("cumulative_tds") @db.Decimal(14, 2)
+  cumulativeNet      Decimal   @default(0) @map("cumulative_net") @db.Decimal(14, 2)
+  thresholdCrossedAt DateTime? @map("threshold_crossed_at")
 
-  updatedAt           DateTime  @updatedAt @map("updated_at")
-  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  affiliate           Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@unique([affiliateId, financialYear])
   @@index([financialYear])

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 interface Address {
   id: string;
@@ -102,6 +103,7 @@ function readCookie(name: string): string | null {
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const authStatus = useAuthGuard();
   const [cart, setCart] = useState<CartData | null>(null);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState('');
@@ -126,6 +128,11 @@ export default function CheckoutPage() {
     value: number;
     discountAmount: number;
   } | null>(null);
+
+  // Wallet — UI scaffolding only this phase. The actual debit on order
+  // placement is wired up in Phase 7 (checkout integration).
+  const [walletBalanceInPaise, setWalletBalanceInPaise] = useState(0);
+  const [walletApplied, setWalletApplied] = useState(false);
 
   const [form, setForm] = useState({
     fullName: '', phone: '', addressLine1: '', addressLine2: '',
@@ -176,16 +183,12 @@ export default function CheckoutPage() {
   }
 
   useEffect(() => {
-    try {
-      const token = sessionStorage.getItem('accessToken');
-      if (!token) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
+    if (authStatus !== 'authed') return;
+    // Wallet balance fetched in parallel; failure is non-blocking — checkout
+    // still works without wallet, just no apply-wallet option shown.
+    apiClient<{ balanceInPaise: number; currency: string }>('/customer/wallet')
+      .then((res) => res.data && setWalletBalanceInPaise(res.data.balanceInPaise))
+      .catch(() => {});
     Promise.all([
       apiClient<CartData>('/customer/cart'),
       apiClient<Address[]>('/customer/addresses'),
@@ -201,7 +204,7 @@ export default function CheckoutPage() {
       .catch(() => router.push('/login'))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authStatus]);
 
   const validateAddressField = (name: string, value: string): string => {
     const v = (value || '').trim();
@@ -443,12 +446,18 @@ export default function CheckoutPage() {
       // sm_ref cookie still carries that value — pass it along so
       // the order gets attributed even if no coupon is applied.
       const referralCode = readCookie('sm_ref');
+      // Wallet portion the buyer chose to apply. Server clamps + verifies
+      // available balance, so we just pass the requested amount in paise.
+      const walletApplyAmountInPaise = walletApplied
+        ? Math.round(walletApplyAmount * 100)
+        : 0;
       const res = await apiClient<{ orderNumber: string }>('/customer/checkout/place-order', {
         method: 'POST',
         body: JSON.stringify({
           paymentMethod: 'COD',
           ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
           ...(referralCode ? { referralCode } : {}),
+          ...(walletApplyAmountInPaise > 0 ? { walletApplyAmountInPaise } : {}),
         }),
         signal: abort.signal,
       });
@@ -545,6 +554,11 @@ export default function CheckoutPage() {
   const currentSubtotal = checkoutData ? checkoutData.serviceableAmount : cart.totalAmount;
   const currentItemCount = checkoutData ? checkoutData.itemCount : cart.itemCount;
   const total = Math.max(0, currentSubtotal - (appliedCoupon?.discountAmount ?? 0));
+  // Wallet apply amount (rupees) capped at order total. Server-side enforces
+  // the same cap on order placement (Phase 7).
+  const walletBalanceInRupees = walletBalanceInPaise / 100;
+  const walletApplyAmount = walletApplied ? Math.min(walletBalanceInRupees, total) : 0;
+  const payable = Math.max(0, total - walletApplyAmount);
 
   return (
     <StorefrontShell>
@@ -1044,6 +1058,38 @@ export default function CheckoutPage() {
               )}
             </div>
 
+            {/* Wallet apply (UI scaffold — server-side debit lands in Phase 7) */}
+            {walletBalanceInPaise > 0 && (
+              <div className="border border-ink-200 rounded-2xl p-4 mb-4 bg-accent-soft/40">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={walletApplied}
+                    onChange={(e) => setWalletApplied(e.target.checked)}
+                    className="mt-1 size-4 rounded accent-ink-900"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-body font-semibold text-ink-900">
+                        Use wallet balance
+                      </span>
+                      <span className="text-body font-semibold text-accent-dark tabular">
+                        ₹{walletBalanceInRupees.toLocaleString('en-IN', {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                    <p className="text-caption text-ink-600 mt-0.5">
+                      {walletApplied
+                        ? `₹${walletApplyAmount.toLocaleString('en-IN')} will be deducted from your wallet.`
+                        : 'Pay any portion from your Sportsmart wallet.'}
+                    </p>
+                  </div>
+                </label>
+              </div>
+            )}
+
             {/* Totals */}
             <div className="space-y-2 text-body pb-4 border-b border-ink-200">
               <div className="flex justify-between">
@@ -1072,12 +1118,20 @@ export default function CheckoutPage() {
                   <span className="tabular">-{formatPrice(appliedCoupon.discountAmount)}</span>
                 </div>
               )}
+              {walletApplied && walletApplyAmount > 0 && (
+                <div className="flex justify-between text-accent-dark">
+                  <span>Wallet</span>
+                  <span className="tabular">-{formatPrice(walletApplyAmount)}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between items-baseline pt-4 mb-5">
-              <span className="text-body font-semibold text-ink-900">Total</span>
+              <span className="text-body font-semibold text-ink-900">
+                {walletApplied && walletApplyAmount > 0 ? 'You pay' : 'Total'}
+              </span>
               <span className="font-display text-h3 text-ink-900 tabular">
-                {formatPrice(total)}
+                {formatPrice(payable)}
               </span>
             </div>
 

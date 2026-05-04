@@ -1,0 +1,94 @@
+// Notifications module — log of every send attempt across channels.
+//
+// Rows are append-only audit trail: one row per job-attempt. The
+// queue (Redis list `notifications:queue`) holds *pending* work; once
+// the worker dequeues a job it inserts a row here per attempt with
+// status QUEUED → SENT or FAILED. Retried jobs get fresh rows so the
+// history is preserved.
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  QUEUED // accepted, not yet processed by worker
+  SENT // provider returned success
+  FAILED // provider returned a non-retryable error
+  RETRY // transient failure; will be re-enqueued
+}
+
+// Editable templates per (event_key, channel). Worker fetches by key
+// and renders Handlebars-style `{{vars}}` against the event payload.
+// Code-side fallbacks live in `template-registry.service.ts` so the
+// system delivers something sensible even before the table is seeded.
+model NotificationTemplate {
+  id          String              @id @default(uuid())
+  key         String              @unique // e.g. "order.placed.email"
+  channel     NotificationChannel
+  subject     String? // EMAIL only — null for SMS/WhatsApp
+  body        String              @db.Text
+  description String?
+  active      Boolean             @default(true)
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  @@map("notification_templates")
+}
+
+// Per-user opt-in/out. Convention: opt-in is the default — the absence
+// of a row means "enabled". Users opt out by inserting `enabled=false`.
+// `eventClass` is intentionally coarse (order / refund / ticket /
+// wallet / marketing) so users can mute marketing without losing
+// transactional alerts.
+model NotificationPreference {
+  id         String              @id @default(uuid())
+  userId     String              @map("user_id")
+  eventClass String              @map("event_class")
+  channel    NotificationChannel
+  enabled    Boolean             @default(true)
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
+
+  @@unique([userId, eventClass, channel])
+  @@index([userId])
+  @@map("notification_preferences")
+}
+
+model NotificationLog {
+  id      String              @id @default(uuid())
+  channel NotificationChannel
+  status  NotificationStatus
+
+  // Recipient identity. Either a platform user id (lookup name/email
+  // from User/Seller/etc) OR a raw destination string for ad-hoc sends.
+  recipientId String? @map("recipient_id")
+  destination String // email address, phone number, or wa.me id
+
+  // Optional template the worker rendered + variables passed in.
+  templateKey String? @map("template_key")
+  subject     String?
+  body        String  @db.Text
+
+  // What triggered this notification. e.g. ('order', '<order-id>'),
+  // ('refund', '<refund-id>'), ('ticket', '<ticket-id>'). Lets ops
+  // trace "why did this email get sent?".
+  eventType String? @map("event_type")
+  eventId   String? @map("event_id")
+
+  // Provider response on success / error message on failure.
+  providerMessageId String? @map("provider_message_id")
+  failureReason     String? @map("failure_reason") @db.Text
+
+  // Retry bookkeeping. attemptNumber starts at 1.
+  attemptNumber Int @default(1) @map("attempt_number")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  sentAt    DateTime? @map("sent_at")
+
+  @@index([recipientId, createdAt(sort: Desc)])
+  @@index([eventType, eventId])
+  @@index([channel, status, createdAt(sort: Desc)])
+  @@map("notification_logs")
+}

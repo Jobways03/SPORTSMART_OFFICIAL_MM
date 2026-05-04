@@ -36,6 +36,8 @@ import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.ada
 import { AdminAuthController } from './presentation/controllers/admin-auth.controller';
 import { AdminSellersController } from './presentation/controllers/admin-sellers.controller';
 import { AdminCustomersController } from './presentation/controllers/admin-customers.controller';
+import { AdminRolesController } from './presentation/controllers/admin-roles.controller';
+import { RoleService } from './application/services/role.service';
 
 // Policies
 import { SellerStatusTransitionPolicy } from '../seller/application/policies/seller-status-transition.policy';
@@ -45,9 +47,11 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     AdminAuthController,
     AdminSellersController,
     AdminCustomersController,
+    AdminRolesController,
   ],
   providers: [
     AdminAuthGuard,
+    RoleService,
     {
       provide: ADMIN_REPOSITORY,
       useClass: PrismaAdminRepository,

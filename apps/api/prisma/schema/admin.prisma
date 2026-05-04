@@ -146,3 +146,52 @@ model AdminSellerMessage {
   @@index([createdAt])
   @@map("admin_seller_messages")
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Admin-side custom RBAC. Distinct from identity's Role/Permission
+// (which is for end-users). Admin module owns AdminCustomRole + its
+// AdminCustomRolePermission grants + AdminRoleAssignment join.
+// ─────────────────────────────────────────────────────────────────
+
+model AdminCustomRole {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  // System roles (mapped 1:1 from AdminRole enum) carry isSystem=true
+  // and cannot be deleted or have permissions edited.
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  permissions AdminCustomRolePermission[]
+  assignments AdminRoleAssignment[]
+
+  @@map("admin_custom_roles")
+}
+
+model AdminCustomRolePermission {
+  id            String @id @default(uuid())
+  roleId        String @map("role_id")
+  // Permission key from the code-side PERMISSIONS registry.
+  permissionKey String @map("permission_key")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  role AdminCustomRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionKey])
+  @@index([permissionKey])
+  @@map("admin_custom_role_permissions")
+}
+
+model AdminRoleAssignment {
+  id        String @id @default(uuid())
+  adminId   String @map("admin_id")
+  roleId    String @map("role_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  role AdminCustomRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([adminId, roleId])
+  @@index([adminId])
+  @@map("admin_role_assignments")
+}

@@ -1,0 +1,158 @@
+// Support & Helpdesk module.
+//
+// Tickets are filed by any of the four account types (buyer / seller /
+// franchise / affiliate). Each tenant lives in its own table, so the
+// creator linkage is polymorphic — we store `creatorType` + `creatorId`
+// without a Prisma relation. Same for message senders and the assigned
+// support admin.
+//
+// Numbering convention matches orders / returns: TKT-YYYY-NNNNNN, generated
+// in the service layer (Phase 9).
+//
+// Attachments reuse the existing `FileAttachment` polymorphic table with
+// `resource='ticket_message'` + `resourceId=messageId` — no new attachment
+// model required.
+
+enum TicketStatus {
+  OPEN // newly created, no admin reply yet
+  IN_PROGRESS // admin has acknowledged / is working on it
+  WAITING_ON_CUSTOMER // admin asked for info, awaiting customer response
+  RESOLVED // admin marks as resolved (re-open window applies)
+  CLOSED // permanently closed
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// Discriminator for the polymorphic creator + message-sender fields.
+// Kept separate from `UserRole` (which has SELLER_STAFF / SUPPORT values
+// that are not relevant to ticket actors).
+enum TicketActorType {
+  CUSTOMER
+  ADMIN
+  SELLER
+  FRANCHISE
+  AFFILIATE
+}
+
+// Single-row counter incremented in a Serializable transaction to mint
+// the next ticket number. Mirrors `OrderSequence` / `ReturnSequence`.
+model TicketSequence {
+  id         Int @id @default(1)
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("ticket_sequence")
+}
+
+model TicketCategory {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  // Restricts a category to a specific account type. Null = available
+  // to every actor (e.g. "Other"). Buyer never sees seller-only
+  // categories like "Payout dispute" and vice versa.
+  scopedTo    TicketActorType?
+  // Display order in the buyer/seller/admin pickers.
+  sortOrder   Int              @default(0)
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  tickets Ticket[]
+
+  @@index([scopedTo, sortOrder])
+  @@map("ticket_categories")
+}
+
+model Ticket {
+  id           String         @id @default(uuid())
+  ticketNumber String         @unique @map("ticket_number")
+  subject      String
+  status       TicketStatus   @default(OPEN)
+  priority     TicketPriority @default(NORMAL)
+
+  // ── Polymorphic creator ─────────────────────────────────────────
+  creatorType  TicketActorType @map("creator_type")
+  creatorId    String          @map("creator_id")
+  // Snapshot for cheap list rendering — frozen at ticket creation.
+  creatorName  String          @map("creator_name")
+  creatorEmail String          @map("creator_email")
+
+  // ── Assignment (admin owner of the ticket) ──────────────────────
+  // Null = unassigned, lives in the queue.
+  assignedAdminId String? @map("assigned_admin_id")
+
+  // ── Categorization ──────────────────────────────────────────────
+  categoryId String? @map("category_id")
+
+  // ── Optional links to underlying domain records ─────────────────
+  // Buyer reporting an issue with an order / return links the ticket
+  // for context. Admin can deep-link from the ticket into the order.
+  relatedOrderId  String? @map("related_order_id")
+  relatedReturnId String? @map("related_return_id")
+
+  // ── Activity tracking ───────────────────────────────────────────
+  // Denormalized so the queue can sort by recency without aggregating
+  // the messages table per row.
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+
+  resolvedAt      DateTime? @map("resolved_at")
+  closedAt        DateTime? @map("closed_at")
+  closedByAdminId String?   @map("closed_by_admin_id")
+  // Free-text summary captured when admin closes the ticket. Surfaced
+  // back to the customer in the closed-state UI and stored for audit.
+  resolutionSummary String? @map("resolution_summary")
+
+  // ── SLA targets (computed at create / on priority change) ───────
+  // First-response target — when the admin must reply for SLA to be
+  // green. Computed from priority:
+  //   URGENT → 4h, HIGH → 24h, NORMAL → 48h, LOW → 5 days.
+  slaTargetAt     DateTime? @map("sla_target_at")
+  // Number of times the SLA breach handler has bumped this ticket.
+  escalationLevel Int       @default(0) @map("escalation_level")
+  escalatedAt     DateTime? @map("escalated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  category TicketCategory? @relation(fields: [categoryId], references: [id])
+  messages TicketMessage[]
+
+  // Buyer/seller "my tickets" view
+  @@index([creatorType, creatorId, lastMessageAt(sort: Desc)])
+  // Admin queue: sort by activity, optionally filtered by status
+  @@index([status, lastMessageAt(sort: Desc)])
+  @@index([assignedAdminId, status])
+  // Cross-link from order/return detail pages
+  @@index([relatedOrderId])
+  @@index([relatedReturnId])
+  @@map("tickets")
+}
+
+model TicketMessage {
+  id       String @id @default(uuid())
+  ticketId String @map("ticket_id")
+
+  senderType TicketActorType @map("sender_type")
+  senderId   String          @map("sender_id")
+  // Snapshot for cheap rendering without join.
+  senderName String          @map("sender_name")
+
+  body String
+
+  // Admin-only message hidden from the customer-facing thread. Used
+  // for assignee notes, escalation context, etc. Surfaced in admin UI
+  // with a distinct visual treatment.
+  isInternalNote Boolean @default(false) @map("is_internal_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_messages")
+}

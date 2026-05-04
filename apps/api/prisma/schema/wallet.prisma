@@ -1,0 +1,86 @@
+// Wallet ledger.
+// One wallet per user. Balance is the sum of all COMPLETED transactions
+// (we also denormalize `balance_after_in_paise` on each row so the running
+// balance is auditable without re-summing the ledger).
+//
+// Money is stored in paise (₹1 = 100 paise) as Int — same convention as the
+// orders / payments / settlements tables — to avoid float drift.
+
+enum WalletTransactionType {
+  TOPUP // user-initiated load (via payment gateway)
+  REFUND // credit from a refunded return / cancelled order
+  CREDIT_ADJUSTMENT // admin manual credit (goodwill, promo)
+  DEBIT // user spent at checkout
+  DEBIT_ADJUSTMENT // admin manual debit (chargeback, fraud reversal)
+}
+
+enum WalletTransactionStatus {
+  PENDING // initiated, awaiting external confirmation (e.g. gateway webhook)
+  COMPLETED
+  FAILED
+  REVERSED // posted then reversed (chargeback / dispute upheld against us)
+}
+
+model Wallet {
+  id             String   @id @default(uuid())
+  userId         String   @unique @map("user_id")
+  // Sum of COMPLETED transactions. Maintained transactionally with the
+  // ledger row insert so the two never disagree.
+  balanceInPaise Int      @default(0) @map("balance_in_paise")
+  // Currency is fixed to INR for the platform but stored explicitly so
+  // analytics + statement endpoints don't need to scrape it from elsewhere.
+  currency       String   @default("INR")
+  // Optimistic-locking guard. Bumped on every credit/debit so concurrent
+  // mutations (refund + checkout deduction at the same instant) detect
+  // conflict at the DB layer instead of silently overwriting.
+  version        Int      @default(0)
+  // Admin-controlled freeze. When true, all credit/debit calls reject
+  // unless the caller passes `bypassBlock: true` (only the unblock
+  // endpoint should ever set that). Used for fraud holds & disputes.
+  isBlocked        Boolean   @default(false) @map("is_blocked")
+  blockedReason    String?   @map("blocked_reason")
+  blockedAt        DateTime? @map("blocked_at")
+  blockedByAdminId String?   @map("blocked_by_admin_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id                  String                  @id @default(uuid())
+  walletId            String                  @map("wallet_id")
+  // Denormalized for cheap per-user history queries without a join.
+  userId              String                  @map("user_id")
+  type                WalletTransactionType
+  status              WalletTransactionStatus @default(COMPLETED)
+  // Signed amount in paise: credits positive, debits negative.
+  amountInPaise       Int                     @map("amount_in_paise")
+  // Wallet balance immediately after this row was applied. Lets us
+  // render statements + reconcile without re-summing the ledger.
+  balanceAfterInPaise Int                     @map("balance_after_in_paise")
+  // Polymorphic linkage to the upstream record that caused this entry.
+  // e.g. ('REFUND', '<refund-id>'), ('TOPUP', '<razorpay-payment-id>'),
+  // ('DEBIT', '<order-id>'). Optional for admin-manual adjustments
+  // where the only record is the reason / notes themselves.
+  referenceType       String?                 @map("reference_type")
+  referenceId         String?                 @map("reference_id")
+  // Customer-visible description (rendered in /account/wallet).
+  description         String
+  // Admin-only notes (rendered in admin wallet view, not surfaced to user).
+  internalNotes       String?                 @map("internal_notes")
+  // For admin manual entries: which admin actor created it. Null for
+  // system-generated entries (refund, top-up).
+  createdByAdminId    String?                 @map("created_by_admin_id")
+  createdAt           DateTime                @default(now()) @map("created_at")
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([referenceType, referenceId])
+  @@map("wallet_transactions")
+}

@@ -3,17 +3,17 @@
 // ============================================
 
 model Return {
-  id            String       @id @default(uuid())
-  returnNumber  String       @unique @map("return_number") // RET-2026-000001
-  subOrderId    String       @map("sub_order_id")
-  masterOrderId String       @map("master_order_id")
-  customerId    String       @map("customer_id")
+  id            String @id @default(uuid())
+  returnNumber  String @unique @map("return_number") // RET-2026-000001
+  subOrderId    String @map("sub_order_id")
+  masterOrderId String @map("master_order_id")
+  customerId    String @map("customer_id")
 
-  status        ReturnStatus @default(REQUESTED)
+  status ReturnStatus @default(REQUESTED)
 
   // Initiator
-  initiatedBy   String       @default("CUSTOMER") @map("initiated_by") // CUSTOMER, ADMIN, SELLER, FRANCHISE
-  initiatorId   String?      @map("initiator_id")
+  initiatedBy String  @default("CUSTOMER") @map("initiated_by") // CUSTOMER, ADMIN, SELLER, FRANCHISE
+  initiatorId String? @map("initiator_id")
 
   // Approval
   approvedAt      DateTime? @map("approved_at")
@@ -57,13 +57,13 @@ model Return {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  subOrder      SubOrder              @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
-  masterOrder   MasterOrder           @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
-  customer      User                  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  items               ReturnItem[]
-  evidence            ReturnEvidence[]
-  statusHistory       ReturnStatusHistory[]
-  refundTransactions  RefundTransaction[]
+  subOrder           SubOrder              @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  masterOrder        MasterOrder           @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  customer           User                  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items              ReturnItem[]
+  evidence           ReturnEvidence[]
+  statusHistory      ReturnStatusHistory[]
+  refundTransactions RefundTransaction[]
 
   @@index([customerId])
   @@index([subOrderId])
@@ -145,16 +145,16 @@ enum RefundTransactionStatus {
 }
 
 model RefundTransaction {
-  id               String                   @id @default(uuid())
-  returnId         String                   @map("return_id")
-  attemptNumber    Int                      @map("attempt_number")
-  amount           Decimal                  @map("amount") @db.Decimal(10, 2)
-  gatewayRefundId  String?                  @map("gateway_refund_id")
-  status           RefundTransactionStatus  @default(INITIATED)
-  failureReason    String?                  @map("failure_reason")
-  actorType        String                   @map("actor_type") // ADMIN, SYSTEM
-  actorId          String?                  @map("actor_id")
-  createdAt        DateTime                 @default(now()) @map("created_at")
+  id              String                  @id @default(uuid())
+  returnId        String                  @map("return_id")
+  attemptNumber   Int                     @map("attempt_number")
+  amount          Decimal                 @map("amount") @db.Decimal(10, 2)
+  gatewayRefundId String?                 @map("gateway_refund_id")
+  status          RefundTransactionStatus @default(INITIATED)
+  failureReason   String?                 @map("failure_reason")
+  actorType       String                  @map("actor_type") // ADMIN, SYSTEM
+  actorId         String?                 @map("actor_id")
+  createdAt       DateTime                @default(now()) @map("created_at")
 
   return Return @relation(fields: [returnId], references: [id], onDelete: Cascade)
 

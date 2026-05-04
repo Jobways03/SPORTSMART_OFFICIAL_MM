@@ -3,14 +3,14 @@
 // ============================================
 
 model FranchisePartner {
-  id                String                      @id @default(uuid())
-  franchiseCode     String                      @unique @map("franchise_code")
-  ownerName         String                      @map("owner_name")
-  businessName      String                      @map("business_name")
-  email             String                      @unique
-  phoneNumber       String                      @unique @map("phone_number")
-  passwordHash      String                      @map("password_hash")
-  status            FranchiseStatus              @default(PENDING)
+  id                 String                      @id @default(uuid())
+  franchiseCode      String                      @unique @map("franchise_code")
+  ownerName          String                      @map("owner_name")
+  businessName       String                      @map("business_name")
+  email              String                      @unique
+  phoneNumber        String                      @unique @map("phone_number")
+  passwordHash       String                      @map("password_hash")
+  status             FranchiseStatus             @default(PENDING)
   verificationStatus FranchiseVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
 
   // Login tracking
@@ -32,7 +32,7 @@ model FranchisePartner {
 
   // Commission rates (per-franchise configurable)
   onlineFulfillmentRate Decimal @default(15) @map("online_fulfillment_rate") @db.Decimal(5, 2)
-  procurementFeeRate    Decimal @default(5)  @map("procurement_fee_rate")   @db.Decimal(5, 2)
+  procurementFeeRate    Decimal @default(5) @map("procurement_fee_rate") @db.Decimal(5, 2)
 
   // Contract
   contractStartDate DateTime? @map("contract_start_date")
@@ -43,14 +43,14 @@ model FranchisePartner {
   warehousePincode String? @map("warehouse_pincode")
 
   // Profile & branding
-  profileImageUrl             String?  @map("profile_image_url")
-  profileImagePublicId        String?  @map("profile_image_public_id")
-  logoUrl                     String?  @map("logo_url")
-  logoPublicId                String?  @map("logo_public_id")
-  assignedZone                String?  @map("assigned_zone")
-  profileCompletionPercentage Int      @default(0) @map("profile_completion_percentage")
-  isProfileCompleted          Boolean  @default(false) @map("is_profile_completed")
-  isEmailVerified             Boolean  @default(false) @map("is_email_verified")
+  profileImageUrl             String? @map("profile_image_url")
+  profileImagePublicId        String? @map("profile_image_public_id")
+  logoUrl                     String? @map("logo_url")
+  logoPublicId                String? @map("logo_public_id")
+  assignedZone                String? @map("assigned_zone")
+  profileCompletionPercentage Int     @default(0) @map("profile_completion_percentage")
+  isProfileCompleted          Boolean @default(false) @map("is_profile_completed")
+  isEmailVerified             Boolean @default(false) @map("is_email_verified")
 
   // Soft delete
   isDeleted Boolean   @default(false) @map("is_deleted")
@@ -60,9 +60,9 @@ model FranchisePartner {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  sessions          FranchiseSession[]
-  passwordResetOtps FranchisePasswordResetOtp[]
-  catalogMappings   FranchiseCatalogMapping[]
+  sessions            FranchiseSession[]
+  passwordResetOtps   FranchisePasswordResetOtp[]
+  catalogMappings     FranchiseCatalogMapping[]
   stock               FranchiseStock[]
   inventoryLedger     FranchiseInventoryLedger[]
   subOrders           SubOrder[]
@@ -98,15 +98,15 @@ model FranchisePartner {
 //
 // variantId is nullable for product-level mappings (rare).
 model FranchiseProcurementPrice {
-  id              String   @id @default(uuid())
-  franchiseId     String   @map("franchise_id")
-  productId       String   @map("product_id")
-  variantId       String?  @map("variant_id")
-  landedUnitCost  Decimal  @map("landed_unit_cost") @db.Decimal(10, 2)
-  notes           String?
-  createdBy       String?  @map("created_by")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  franchiseId    String   @map("franchise_id")
+  productId      String   @map("product_id")
+  variantId      String?  @map("variant_id")
+  landedUnitCost Decimal  @map("landed_unit_cost") @db.Decimal(10, 2)
+  notes          String?
+  createdBy      String?  @map("created_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
 
@@ -154,18 +154,18 @@ model FranchisePasswordResetOtp {
 // ── Catalog Mapping (global SKU → franchise local SKU) ─────
 
 model FranchiseCatalogMapping {
-  id                          String                @id @default(uuid())
-  franchiseId                 String                @map("franchise_id")
-  productId                   String                @map("product_id")
-  variantId                   String?               @map("variant_id")
-  globalSku                   String                @map("global_sku")
-  franchiseSku                String?               @map("franchise_sku")
-  barcode                     String?
-  isListedForOnlineFulfillment Boolean              @default(true) @map("is_listed_for_online_fulfillment")
-  isActive                    Boolean               @default(true) @map("is_active")
-  approvalStatus              MappingApprovalStatus  @default(PENDING_APPROVAL) @map("approval_status")
-  createdAt                   DateTime              @default(now()) @map("created_at")
-  updatedAt                   DateTime              @updatedAt @map("updated_at")
+  id                           String                @id @default(uuid())
+  franchiseId                  String                @map("franchise_id")
+  productId                    String                @map("product_id")
+  variantId                    String?               @map("variant_id")
+  globalSku                    String                @map("global_sku")
+  franchiseSku                 String?               @map("franchise_sku")
+  barcode                      String?
+  isListedForOnlineFulfillment Boolean               @default(true) @map("is_listed_for_online_fulfillment")
+  isActive                     Boolean               @default(true) @map("is_active")
+  approvalStatus               MappingApprovalStatus @default(PENDING_APPROVAL) @map("approval_status")
+  createdAt                    DateTime              @default(now()) @map("created_at")
+  updatedAt                    DateTime              @updatedAt @map("updated_at")
 
   franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   product   Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -181,23 +181,23 @@ model FranchiseCatalogMapping {
 // ── Franchise Stock (computed snapshot) ─────────────────────
 
 model FranchiseStock {
-  id                String   @id @default(uuid())
-  franchiseId       String   @map("franchise_id")
-  productId         String   @map("product_id")
-  variantId         String?  @map("variant_id")
-  globalSku         String   @map("global_sku")
-  franchiseSku      String?  @map("franchise_sku")
+  id           String  @id @default(uuid())
+  franchiseId  String  @map("franchise_id")
+  productId    String  @map("product_id")
+  variantId    String? @map("variant_id")
+  globalSku    String  @map("global_sku")
+  franchiseSku String? @map("franchise_sku")
 
-  onHandQty         Int      @default(0) @map("on_hand_qty")
-  reservedQty       Int      @default(0) @map("reserved_qty")
-  availableQty      Int      @default(0) @map("available_qty")
-  damagedQty        Int      @default(0) @map("damaged_qty")
-  inTransitQty      Int      @default(0) @map("in_transit_qty")
-  lowStockThreshold Int      @default(5) @map("low_stock_threshold")
+  onHandQty         Int @default(0) @map("on_hand_qty")
+  reservedQty       Int @default(0) @map("reserved_qty")
+  availableQty      Int @default(0) @map("available_qty")
+  damagedQty        Int @default(0) @map("damaged_qty")
+  inTransitQty      Int @default(0) @map("in_transit_qty")
+  lowStockThreshold Int @default(5) @map("low_stock_threshold")
 
-  lastRestockedAt   DateTime? @map("last_restocked_at")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
+  lastRestockedAt DateTime? @map("last_restocked_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
 
@@ -239,39 +239,39 @@ model FranchiseInventoryLedger {
 // ── Procurement (franchise stock replenishment) ────────────
 
 model ProcurementRequest {
-  id                    String            @id @default(uuid())
-  requestNumber         String            @unique @map("request_number")
-  franchiseId           String            @map("franchise_id")
-  status                ProcurementStatus @default(DRAFT)
+  id            String            @id @default(uuid())
+  requestNumber String            @unique @map("request_number")
+  franchiseId   String            @map("franchise_id")
+  status        ProcurementStatus @default(DRAFT)
 
-  totalRequestedAmount  Decimal           @default(0) @map("total_requested_amount") @db.Decimal(12, 2)
-  totalApprovedAmount   Decimal           @default(0) @map("total_approved_amount") @db.Decimal(12, 2)
-  procurementFeeRate    Decimal           @default(5) @map("procurement_fee_rate") @db.Decimal(5, 2)
-  procurementFeeAmount  Decimal           @default(0) @map("procurement_fee_amount") @db.Decimal(12, 2)
-  finalPayableAmount    Decimal           @default(0) @map("final_payable_amount") @db.Decimal(12, 2)
+  totalRequestedAmount Decimal @default(0) @map("total_requested_amount") @db.Decimal(12, 2)
+  totalApprovedAmount  Decimal @default(0) @map("total_approved_amount") @db.Decimal(12, 2)
+  procurementFeeRate   Decimal @default(5) @map("procurement_fee_rate") @db.Decimal(5, 2)
+  procurementFeeAmount Decimal @default(0) @map("procurement_fee_amount") @db.Decimal(12, 2)
+  finalPayableAmount   Decimal @default(0) @map("final_payable_amount") @db.Decimal(12, 2)
 
-  requestedAt           DateTime?         @map("requested_at")
-  approvedAt            DateTime?         @map("approved_at")
-  approvedBy            String?           @map("approved_by")
-  dispatchedAt          DateTime?         @map("dispatched_at")
-  receivedAt            DateTime?         @map("received_at")
-  settledAt             DateTime?         @map("settled_at")
+  requestedAt  DateTime? @map("requested_at")
+  approvedAt   DateTime? @map("approved_at")
+  approvedBy   String?   @map("approved_by")
+  dispatchedAt DateTime? @map("dispatched_at")
+  receivedAt   DateTime? @map("received_at")
+  settledAt    DateTime? @map("settled_at")
 
   // Shipment tracking — captured by admin on /dispatch so the franchise can
   // answer "where is my shipment?" without a support ping.
-  trackingNumber        String?           @map("tracking_number")
-  carrierName           String?           @map("carrier_name")
-  expectedDeliveryAt    DateTime?         @map("expected_delivery_at")
+  trackingNumber     String?   @map("tracking_number")
+  carrierName        String?   @map("carrier_name")
+  expectedDeliveryAt DateTime? @map("expected_delivery_at")
 
   // Rejection reason separated from `notes` so the audit trail stays clean.
   // `notes` stays for free-form commentary from either side.
-  rejectionReason       String?           @map("rejection_reason")
+  rejectionReason String? @map("rejection_reason")
 
-  notes                 String?
-  createdAt             DateTime          @default(now()) @map("created_at")
-  updatedAt             DateTime          @updatedAt @map("updated_at")
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  franchise FranchisePartner       @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  franchise FranchisePartner         @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   items     ProcurementRequestItem[]
 
   @@index([franchiseId, status])
@@ -281,29 +281,29 @@ model ProcurementRequest {
 }
 
 model ProcurementRequestItem {
-  id                       String                @id @default(uuid())
-  procurementRequestId     String                @map("procurement_request_id")
-  productId                String                @map("product_id")
-  variantId                String?               @map("variant_id")
-  globalSku                String                @map("global_sku")
-  productTitle             String                @default("") @map("product_title")
-  variantTitle             String?               @map("variant_title")
-  status                   ProcurementItemStatus @default(PENDING)
+  id                   String                @id @default(uuid())
+  procurementRequestId String                @map("procurement_request_id")
+  productId            String                @map("product_id")
+  variantId            String?               @map("variant_id")
+  globalSku            String                @map("global_sku")
+  productTitle         String                @default("") @map("product_title")
+  variantTitle         String?               @map("variant_title")
+  status               ProcurementItemStatus @default(PENDING)
 
-  requestedQty             Int                   @map("requested_qty")
-  approvedQty              Int                   @default(0) @map("approved_qty")
-  sourcedQty               Int                   @default(0) @map("sourced_qty")
-  dispatchedQty            Int                   @default(0) @map("dispatched_qty")
-  receivedQty              Int                   @default(0) @map("received_qty")
-  damagedQty               Int                   @default(0) @map("damaged_qty")
+  requestedQty  Int @map("requested_qty")
+  approvedQty   Int @default(0) @map("approved_qty")
+  sourcedQty    Int @default(0) @map("sourced_qty")
+  dispatchedQty Int @default(0) @map("dispatched_qty")
+  receivedQty   Int @default(0) @map("received_qty")
+  damagedQty    Int @default(0) @map("damaged_qty")
 
-  sourceSellerId           String?               @map("source_seller_id")
-  landedUnitCost           Decimal?              @map("landed_unit_cost") @db.Decimal(10, 2)
-  procurementFeePerUnit    Decimal?              @map("procurement_fee_per_unit") @db.Decimal(10, 2)
-  finalUnitCostToFranchise Decimal?              @map("final_unit_cost_to_franchise") @db.Decimal(10, 2)
+  sourceSellerId           String?  @map("source_seller_id")
+  landedUnitCost           Decimal? @map("landed_unit_cost") @db.Decimal(10, 2)
+  procurementFeePerUnit    Decimal? @map("procurement_fee_per_unit") @db.Decimal(10, 2)
+  finalUnitCostToFranchise Decimal? @map("final_unit_cost_to_franchise") @db.Decimal(10, 2)
 
-  createdAt                DateTime              @default(now()) @map("created_at")
-  updatedAt                DateTime              @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   procurementRequest ProcurementRequest @relation(fields: [procurementRequestId], references: [id], onDelete: Cascade)
 
@@ -321,28 +321,28 @@ model ProcurementSequence {
 // ── POS Sales (offline/walk-in tracking) ───────────────────
 
 model FranchisePosSale {
-  id              String        @id @default(uuid())
-  saleNumber      String        @unique @map("sale_number")
-  franchiseId     String        @map("franchise_id")
-  saleType        String        @default("WALK_IN") @map("sale_type") // WALK_IN, PHONE_ORDER, LOCAL_DELIVERY
-  customerName    String?       @map("customer_name")
-  customerPhone   String?       @map("customer_phone")
+  id            String  @id @default(uuid())
+  saleNumber    String  @unique @map("sale_number")
+  franchiseId   String  @map("franchise_id")
+  saleType      String  @default("WALK_IN") @map("sale_type") // WALK_IN, PHONE_ORDER, LOCAL_DELIVERY
+  customerName  String? @map("customer_name")
+  customerPhone String? @map("customer_phone")
 
-  grossAmount     Decimal       @map("gross_amount") @db.Decimal(10, 2)
-  discountAmount  Decimal       @default(0) @map("discount_amount") @db.Decimal(10, 2)
-  taxAmount       Decimal       @default(0) @map("tax_amount") @db.Decimal(10, 2)
-  netAmount       Decimal       @map("net_amount") @db.Decimal(10, 2)
+  grossAmount    Decimal @map("gross_amount") @db.Decimal(10, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(10, 2)
+  netAmount      Decimal @map("net_amount") @db.Decimal(10, 2)
 
-  paymentMethod   String        @default("CASH") @map("payment_method") // CASH, UPI, CARD
-  status          PosSaleStatus @default(COMPLETED)
+  paymentMethod String        @default("CASH") @map("payment_method") // CASH, UPI, CARD
+  status        PosSaleStatus @default(COMPLETED)
 
-  soldAt          DateTime      @default(now()) @map("sold_at")
-  createdByStaffId String?      @map("created_by_staff_id")
-  voidedAt        DateTime?     @map("voided_at")
-  voidReason      String?       @map("void_reason")
-  createdAt       DateTime      @default(now()) @map("created_at")
+  soldAt           DateTime  @default(now()) @map("sold_at")
+  createdByStaffId String?   @map("created_by_staff_id")
+  voidedAt         DateTime? @map("voided_at")
+  voidReason       String?   @map("void_reason")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
-  franchise FranchisePartner     @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  franchise FranchisePartner       @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   items     FranchisePosSaleItem[]
 
   @@index([franchiseId, soldAt])
@@ -352,18 +352,18 @@ model FranchisePosSale {
 }
 
 model FranchisePosSaleItem {
-  id           String  @id @default(uuid())
-  saleId       String  @map("sale_id")
-  productId    String  @map("product_id")
-  variantId    String? @map("variant_id")
-  globalSku    String  @map("global_sku")
-  franchiseSku String? @map("franchise_sku")
-  productTitle String  @map("product_title")
-  variantTitle String? @map("variant_title")
+  id           String   @id @default(uuid())
+  saleId       String   @map("sale_id")
+  productId    String   @map("product_id")
+  variantId    String?  @map("variant_id")
+  globalSku    String   @map("global_sku")
+  franchiseSku String?  @map("franchise_sku")
+  productTitle String   @map("product_title")
+  variantTitle String?  @map("variant_title")
   quantity     Int
-  unitPrice    Decimal @map("unit_price") @db.Decimal(10, 2)
-  lineDiscount Decimal @default(0) @map("line_discount") @db.Decimal(10, 2)
-  lineTotal    Decimal @map("line_total") @db.Decimal(10, 2)
+  unitPrice    Decimal  @map("unit_price") @db.Decimal(10, 2)
+  lineDiscount Decimal  @default(0) @map("line_discount") @db.Decimal(10, 2)
+  lineTotal    Decimal  @map("line_total") @db.Decimal(10, 2)
   createdAt    DateTime @default(now()) @map("created_at")
 
   sale FranchisePosSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
@@ -392,27 +392,27 @@ model FranchiseCodeSequence {
 // ── Finance Ledger (franchise commission tracking) ─────────
 
 model FranchiseFinanceLedger {
-  id                 String                @id @default(uuid())
-  franchiseId        String                @map("franchise_id")
-  sourceType         FranchiseLedgerSource @map("source_type")
-  sourceId           String                @map("source_id")
-  description        String?
+  id          String                @id @default(uuid())
+  franchiseId String                @map("franchise_id")
+  sourceType  FranchiseLedgerSource @map("source_type")
+  sourceId    String                @map("source_id")
+  description String?
 
-  baseAmount         Decimal               @map("base_amount") @db.Decimal(12, 2)
-  rate               Decimal               @db.Decimal(5, 2)
-  computedAmount     Decimal               @map("computed_amount") @db.Decimal(12, 2)
+  baseAmount     Decimal @map("base_amount") @db.Decimal(12, 2)
+  rate           Decimal @db.Decimal(5, 2)
+  computedAmount Decimal @map("computed_amount") @db.Decimal(12, 2)
 
-  platformEarning    Decimal               @default(0) @map("platform_earning") @db.Decimal(12, 2)
-  franchiseEarning   Decimal               @default(0) @map("franchise_earning") @db.Decimal(12, 2)
+  platformEarning  Decimal @default(0) @map("platform_earning") @db.Decimal(12, 2)
+  franchiseEarning Decimal @default(0) @map("franchise_earning") @db.Decimal(12, 2)
 
-  status             FranchiseLedgerStatus @default(PENDING)
-  settlementBatchId  String?               @map("settlement_batch_id")
+  status            FranchiseLedgerStatus @default(PENDING)
+  settlementBatchId String?               @map("settlement_batch_id")
 
-  createdAt          DateTime              @default(now()) @map("created_at")
-  updatedAt          DateTime              @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  franchise          FranchisePartner      @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
-  settlementBatch    FranchiseSettlement?  @relation(fields: [settlementBatchId], references: [id])
+  franchise       FranchisePartner     @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  settlementBatch FranchiseSettlement? @relation(fields: [settlementBatchId], references: [id])
 
   @@index([franchiseId, status])
   @@index([sourceType, sourceId])
@@ -424,39 +424,39 @@ model FranchiseFinanceLedger {
 // ── Franchise Settlement (payout cycles) ───────────────────
 
 model FranchiseSettlement {
-  id                        String                     @id @default(uuid())
-  cycleId                   String                     @map("cycle_id")
-  franchiseId               String                     @map("franchise_id")
-  franchiseName             String                     @map("franchise_name")
+  id            String @id @default(uuid())
+  cycleId       String @map("cycle_id")
+  franchiseId   String @map("franchise_id")
+  franchiseName String @map("franchise_name")
 
-  totalOnlineOrders         Int                        @default(0) @map("total_online_orders")
-  totalOnlineAmount         Decimal                    @default(0) @map("total_online_amount") @db.Decimal(12, 2)
-  totalOnlineCommission     Decimal                    @default(0) @map("total_online_commission") @db.Decimal(12, 2)
+  totalOnlineOrders     Int     @default(0) @map("total_online_orders")
+  totalOnlineAmount     Decimal @default(0) @map("total_online_amount") @db.Decimal(12, 2)
+  totalOnlineCommission Decimal @default(0) @map("total_online_commission") @db.Decimal(12, 2)
 
-  totalProcurements         Int                        @default(0) @map("total_procurements")
-  totalProcurementAmount    Decimal                    @default(0) @map("total_procurement_amount") @db.Decimal(12, 2)
-  totalProcurementFees      Decimal                    @default(0) @map("total_procurement_fees") @db.Decimal(12, 2)
+  totalProcurements      Int     @default(0) @map("total_procurements")
+  totalProcurementAmount Decimal @default(0) @map("total_procurement_amount") @db.Decimal(12, 2)
+  totalProcurementFees   Decimal @default(0) @map("total_procurement_fees") @db.Decimal(12, 2)
 
-  totalPosSales             Int                        @default(0) @map("total_pos_sales")
-  totalPosAmount            Decimal                    @default(0) @map("total_pos_amount") @db.Decimal(12, 2)
-  totalPosFees              Decimal                    @default(0) @map("total_pos_fees") @db.Decimal(12, 2)
+  totalPosSales  Int     @default(0) @map("total_pos_sales")
+  totalPosAmount Decimal @default(0) @map("total_pos_amount") @db.Decimal(12, 2)
+  totalPosFees   Decimal @default(0) @map("total_pos_fees") @db.Decimal(12, 2)
 
-  reversalAmount            Decimal                    @default(0) @map("reversal_amount") @db.Decimal(12, 2)
-  adjustmentAmount          Decimal                    @default(0) @map("adjustment_amount") @db.Decimal(12, 2)
+  reversalAmount   Decimal @default(0) @map("reversal_amount") @db.Decimal(12, 2)
+  adjustmentAmount Decimal @default(0) @map("adjustment_amount") @db.Decimal(12, 2)
 
-  grossFranchiseEarning     Decimal                    @default(0) @map("gross_franchise_earning") @db.Decimal(12, 2)
-  totalPlatformEarning      Decimal                    @default(0) @map("total_platform_earning") @db.Decimal(12, 2)
-  netPayableToFranchise     Decimal                    @default(0) @map("net_payable_to_franchise") @db.Decimal(12, 2)
+  grossFranchiseEarning Decimal @default(0) @map("gross_franchise_earning") @db.Decimal(12, 2)
+  totalPlatformEarning  Decimal @default(0) @map("total_platform_earning") @db.Decimal(12, 2)
+  netPayableToFranchise Decimal @default(0) @map("net_payable_to_franchise") @db.Decimal(12, 2)
 
-  status                    FranchiseSettlementStatus  @default(PENDING)
-  paidAt                    DateTime?                  @map("paid_at")
-  paymentReference          String?                    @map("payment_reference")
-  createdAt                 DateTime                   @default(now()) @map("created_at")
-  updatedAt                 DateTime                   @updatedAt @map("updated_at")
+  status           FranchiseSettlementStatus @default(PENDING)
+  paidAt           DateTime?                 @map("paid_at")
+  paymentReference String?                   @map("payment_reference")
+  createdAt        DateTime                  @default(now()) @map("created_at")
+  updatedAt        DateTime                  @updatedAt @map("updated_at")
 
-  cycle                     SettlementCycle            @relation(fields: [cycleId], references: [id], onDelete: Cascade)
-  franchise                 FranchisePartner           @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
-  ledgerEntries             FranchiseFinanceLedger[]
+  cycle         SettlementCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  franchise     FranchisePartner         @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  ledgerEntries FranchiseFinanceLedger[]
 
   @@unique([cycleId, franchiseId])
   @@index([cycleId])
@@ -468,17 +468,17 @@ model FranchiseSettlement {
 // ── Franchise Staff ───────────────────────────────────────────
 
 model FranchiseStaff {
-  id            String             @id @default(uuid())
-  franchiseId   String             @map("franchise_id")
-  name          String
-  email         String             @unique
-  phone         String?
-  passwordHash  String             @map("password_hash")
-  role          FranchiseStaffRole @default(POS_OPERATOR)
-  isActive      Boolean            @default(true) @map("is_active")
+  id           String             @id @default(uuid())
+  franchiseId  String             @map("franchise_id")
+  name         String
+  email        String             @unique
+  phone        String?
+  passwordHash String             @map("password_hash")
+  role         FranchiseStaffRole @default(POS_OPERATOR)
+  isActive     Boolean            @default(true) @map("is_active")
 
-  createdAt     DateTime           @default(now()) @map("created_at")
-  updatedAt     DateTime           @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
 

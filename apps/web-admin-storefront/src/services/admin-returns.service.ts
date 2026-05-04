@@ -111,6 +111,7 @@ export interface ListReturnsParams {
   fromDate?: string;
   toDate?: string;
   search?: string;
+  [key: string]: string | number | undefined;
 }
 
 function buildQuery(params: Record<string, string | number | undefined>): string {

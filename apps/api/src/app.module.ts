@@ -18,6 +18,13 @@ import { CatalogModule } from './modules/catalog/module';
 import { SearchModule } from './modules/search/module';
 import { InventoryModule } from './modules/inventory/module';
 import { CartModule } from './modules/cart/module';
+import { WalletModule } from './modules/wallet/module';
+import { SupportModule } from './modules/support/module';
+import { OwnBrandModule } from './modules/own-brand/module';
+import { PaymentOpsModule } from './modules/payments-ops/module';
+import { DisputesModule } from './modules/disputes/module';
+import { ReconciliationModule } from './modules/reconciliation/module';
+import { AnalyticsModule } from './modules/analytics/module';
 import { CheckoutModule } from './modules/checkout/module';
 import { OrdersModule } from './modules/orders/module';
 import { PaymentsModule } from './modules/payments/module';
@@ -37,6 +44,10 @@ import { DiscountsModule } from './modules/discounts/discounts.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AccountsModule } from './modules/accounts/module';
 import { StorefrontMenuModule } from './modules/storefront-menu/storefront-menu.module';
+import { AccessLogModule } from './modules/access-log/module';
+import { PayoutsModule } from './modules/payouts/module';
+import { ContentModule } from './modules/content/module';
+import { SchedulerModule } from './bootstrap/scheduler/scheduler.module';
 
 @Module({
   imports: [
@@ -56,6 +67,13 @@ import { StorefrontMenuModule } from './modules/storefront-menu/storefront-menu.
     SearchModule,
     InventoryModule,
     CartModule,
+    WalletModule,
+    SupportModule,
+    OwnBrandModule,
+    PaymentOpsModule,
+    DisputesModule,
+    ReconciliationModule,
+    AnalyticsModule,
     CheckoutModule,
     OrdersModule,
     PaymentsModule,
@@ -75,6 +93,10 @@ import { StorefrontMenuModule } from './modules/storefront-menu/storefront-menu.
     AiModule,
     AccountsModule,
     StorefrontMenuModule,
+    AccessLogModule,
+    PayoutsModule,
+    ContentModule,
+    SchedulerModule,
   ],
   controllers: [HealthController],
 })

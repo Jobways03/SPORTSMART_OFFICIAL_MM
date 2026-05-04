@@ -174,4 +174,28 @@ export class CartService {
   async countActiveItemsForProduct(productId: string): Promise<number> {
     return this.cartRepo.countActiveItemsForProduct(productId);
   }
+
+  /**
+   * Merge an anonymous-cart payload (held client-side in a cookie) into
+   * the authenticated user's cart after login. Items are added one-by-one
+   * via the existing addItem path so all validation + variant checks
+   * still run. Failures on individual items are logged + skipped — a
+   * single bad item shouldn't drop the whole merge.
+   */
+  async mergeAnonymousCart(
+    customerId: string,
+    items: Array<{ productId: string; variantId?: string; quantity: number }>,
+  ): Promise<{ merged: number; skipped: number }> {
+    let merged = 0;
+    let skipped = 0;
+    for (const it of items) {
+      try {
+        await this.addItem(customerId, it.productId, it.variantId, it.quantity);
+        merged++;
+      } catch {
+        skipped++;
+      }
+    }
+    return { merged, skipped };
+  }
 }

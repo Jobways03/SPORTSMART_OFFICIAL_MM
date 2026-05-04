@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 interface OrderItem {
   productTitle: string;
@@ -249,6 +250,7 @@ function FilterPill({
 
 export default function OrdersPage() {
   const router = useRouter();
+  const authStatus = useAuthGuard();
   const [data, setData] = useState<OrdersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -265,18 +267,10 @@ export default function OrdersPage() {
   };
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
+    if (authStatus !== 'authed') return;
     fetchOrders(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, [authStatus, page]);
 
   const { activeOrders, deliveredOrders, cancelledOrders, allOrders } = useMemo(() => {
     const orders = data?.orders ?? [];

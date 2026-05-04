@@ -59,4 +59,21 @@ export class CartController {
     await this.cartService.clearCart(req.userId);
     return { success: true, message: 'Cart cleared' };
   }
+
+  /**
+   * Merge a cookie-cart from anonymous browsing into the authed cart.
+   * Storefront calls this once right after login. Each item runs
+   * through the normal addItem flow (stock + variant validation).
+   */
+  @Post('merge')
+  async mergeAnonCart(
+    @Req() req: any,
+    @Body() body: { items: Array<{ productId: string; variantId?: string; quantity: number }> },
+  ) {
+    const data = await this.cartService.mergeAnonymousCart(
+      req.userId,
+      Array.isArray(body?.items) ? body.items : [],
+    );
+    return { success: true, message: 'Cart merged', data };
+  }
 }

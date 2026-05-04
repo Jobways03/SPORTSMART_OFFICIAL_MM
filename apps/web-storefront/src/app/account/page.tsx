@@ -3,25 +3,18 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { profileService, CustomerProfile } from '@/services/profile.service';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 export default function AccountHubPage() {
   const router = useRouter();
+  const authStatus = useAuthGuard();
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
-
+    if (authStatus !== 'authed') return;
     profileService
       .getProfile()
       .then((res) => {
@@ -29,23 +22,21 @@ export default function AccountHubPage() {
       })
       .catch(() => router.push('/login'))
       .finally(() => setLoading(false));
-  }, [router]);
+  }, [authStatus, router]);
 
   if (loading) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div className="products-loading">
           <div className="loading-spinner"></div>
           <span>Loading account...</span>
         </div>
-      </>
+      </StorefrontShell>
     );
   }
 
   return (
-    <>
-      <Navbar />
+    <StorefrontShell>
       <div className="account-page">
         <h1 className="orders-page-title">My Account</h1>
 
@@ -88,8 +79,26 @@ export default function AccountHubPage() {
             <div className="account-card-title">My Returns</div>
             <div className="account-card-desc">View and manage return requests</div>
           </Link>
+
+          <Link href="/account/wallet" className="account-card">
+            <div className="account-card-icon">&#128176;</div>
+            <div className="account-card-title">My Wallet</div>
+            <div className="account-card-desc">Balance, top-ups, refund history</div>
+          </Link>
+
+          <Link href="/account/support" className="account-card">
+            <div className="account-card-icon">&#128172;</div>
+            <div className="account-card-title">Help & Support</div>
+            <div className="account-card-desc">Open and track support tickets</div>
+          </Link>
+
+          <Link href="/account/notifications" className="account-card">
+            <div className="account-card-icon">&#128276;</div>
+            <div className="account-card-title">Notifications</div>
+            <div className="account-card-desc">Choose what we contact you about</div>
+          </Link>
         </div>
       </div>
-    </>
+    </StorefrontShell>
   );
 }

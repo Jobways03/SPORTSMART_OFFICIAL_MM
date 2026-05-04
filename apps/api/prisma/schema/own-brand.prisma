@@ -1,0 +1,191 @@
+// NOVA SM Own-Brand module.
+//
+// Same `Product` table as the marketplace, distinguished by
+// `productSource: OWN_BRAND`. Stock lives in NOVA-owned warehouses
+// (`OwnBrandWarehouse`) and is tracked separately from per-seller
+// `SellerProductMapping.stockQty`. Procurement is the sourcing flow
+// from external suppliers into our warehouses (distinct from
+// `franchise.ProcurementRequest`, which is franchises pulling stock
+// from us).
+
+enum ProductSource {
+  SELLER // marketplace product listed by a third-party seller
+  OWN_BRAND // NOVA-owned product, fulfilled from our warehouses
+}
+
+enum OwnBrandProcurementStatus {
+  DRAFT // being composed by the buyer
+  PLACED // PO sent to supplier
+  IN_TRANSIT // supplier dispatched, awaiting receipt
+  RECEIVED // fully received and stock added
+  CANCELLED
+}
+
+model OwnBrandWarehouse {
+  id          String   @id @default(uuid())
+  code        String   @unique // NV-WH-MUM-01, etc.
+  name        String
+  // Pincode the warehouse sits in — fed into the routing engine to
+  // decide if NOVA can fulfil an order to a given destination.
+  pincode     String
+  addressLine String   @map("address_line")
+  city        String
+  state       String
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  stocks            OwnBrandStock[]
+  procurementOrders OwnBrandProcurementOrder[]
+
+  @@map("own_brand_warehouses")
+}
+
+model OwnBrandStock {
+  id          String  @id @default(uuid())
+  warehouseId String  @map("warehouse_id")
+  productId   String  @map("product_id")
+  variantId   String? @map("variant_id")
+
+  stockQty          Int @default(0) @map("stock_qty")
+  reservedQty       Int @default(0) @map("reserved_qty")
+  lowStockThreshold Int @default(5) @map("low_stock_threshold")
+
+  // NOVA's internal cost — populated from the most recent
+  // procurement receipt for audit / margin reports.
+  lastLandedCost Decimal? @map("last_landed_cost") @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  warehouse OwnBrandWarehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, productId, variantId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("own_brand_stocks")
+}
+
+model OwnBrandProcurementOrder {
+  id           String                    @id @default(uuid())
+  poNumber     String                    @unique @map("po_number") // NV-PO-2026-000001
+  warehouseId  String                    @map("warehouse_id")
+  // Free-text supplier identity for now — when we model suppliers as
+  // first-class records (own-brand vendor onboarding) this becomes a FK.
+  supplierName String                    @map("supplier_name")
+  status       OwnBrandProcurementStatus @default(DRAFT)
+
+  expectedDate DateTime? @map("expected_date")
+  receivedAt   DateTime? @map("received_at")
+
+  // Money snapshot — sum of items at time of placing.
+  totalAmount Decimal @default(0) @map("total_amount") @db.Decimal(12, 2)
+
+  // Notes / PO reference from the supplier side.
+  supplierReference String? @map("supplier_reference")
+  notes             String?
+
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  warehouse OwnBrandWarehouse              @relation(fields: [warehouseId], references: [id])
+  items     OwnBrandProcurementOrderItem[]
+
+  @@index([warehouseId, status])
+  @@index([poNumber])
+  @@map("own_brand_procurement_orders")
+}
+
+model OwnBrandProcurementOrderItem {
+  id        String  @id @default(uuid())
+  poId      String  @map("po_id")
+  productId String  @map("product_id")
+  variantId String? @map("variant_id")
+
+  // Snapshot fields (so the PO line stays stable even if product is renamed).
+  productTitle String  @map("product_title")
+  variantTitle String? @map("variant_title")
+  ownBrandSku  String? @map("own_brand_sku")
+
+  quantityOrdered  Int     @map("quantity_ordered")
+  quantityReceived Int     @default(0) @map("quantity_received")
+  unitCost         Decimal @map("unit_cost") @db.Decimal(10, 2)
+  lineTotal        Decimal @map("line_total") @db.Decimal(12, 2)
+
+  po OwnBrandProcurementOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  @@index([poId])
+  @@index([productId])
+  @@map("own_brand_procurement_order_items")
+}
+
+// Single-row counter for PO numbering. Mirrors OrderSequence / TicketSequence.
+model OwnBrandProcurementSequence {
+  id         Int @id @default(1)
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("own_brand_procurement_sequence")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Stock movements ledger — append-only audit trail for every change
+// to OwnBrandStock.stockQty. Mirrors the wallet ledger pattern: the
+// `stockQty` column on OwnBrandStock is the running total, and this
+// table records the why/when/by-whom for every delta.
+// ─────────────────────────────────────────────────────────────────
+
+enum OwnBrandStockMovementKind {
+  RECEIPT      // PO receive — supplier shipment landed
+  ADJUSTMENT   // admin manual correction (damage, loss, recount)
+  SALE         // own-brand order picked + dispatched
+  TRANSFER_IN  // moved in from another warehouse
+  TRANSFER_OUT // moved out to another warehouse
+}
+
+model OwnBrandStockMovement {
+  id           String                    @id @default(uuid())
+  warehouseId  String                    @map("warehouse_id")
+  productId    String                    @map("product_id")
+  variantId    String?                   @map("variant_id")
+  kind         OwnBrandStockMovementKind
+  // Signed delta in units. Receipts/transfer-in positive,
+  // sales/adjustments-down/transfer-out negative.
+  delta        Int
+  // Stock balance immediately after this row was applied. Lets us
+  // reconstruct point-in-time stock without re-summing.
+  stockAfter   Int                       @map("stock_after")
+  // Why — required for ADJUSTMENT, snapshotted from PO/sale ref otherwise.
+  reason       String?
+  // Polymorphic linkage: which PO / order / transfer caused this.
+  refType      String?                   @map("ref_type")
+  refId        String?                   @map("ref_id")
+  // Admin actor for manual adjustments (null for system-generated).
+  createdByAdminId String?               @map("created_by_admin_id")
+  createdAt    DateTime                  @default(now()) @map("created_at")
+
+  @@index([warehouseId, productId, variantId, createdAt(sort: Desc)])
+  @@index([refType, refId])
+  @@index([kind, createdAt(sort: Desc)])
+  @@map("own_brand_stock_movements")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Per-receipt audit on procurement orders. Today the PO item carries
+// a running `quantityReceived` total; this table preserves WHO
+// received WHAT WHEN, so partial-receipt history is queryable.
+// ─────────────────────────────────────────────────────────────────
+
+model OwnBrandProcurementReceipt {
+  id               String   @id @default(uuid())
+  poId             String   @map("po_id")
+  poItemId         String   @map("po_item_id")
+  quantityReceived Int      @map("quantity_received")
+  notes            String?
+  receivedByAdminId String? @map("received_by_admin_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@index([poId, createdAt])
+  @@index([poItemId])
+  @@map("own_brand_procurement_receipts")
+}

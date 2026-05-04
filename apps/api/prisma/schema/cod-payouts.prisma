@@ -1,0 +1,94 @@
+// COD rule engine + payout batch tables.
+
+enum CodRuleKind {
+  PINCODE_ALLOW
+  PINCODE_DENY
+  VALUE_LIMIT
+  SELLER_DENY
+  CUSTOMER_RISK
+}
+
+model CodRule {
+  id          String      @id @default(uuid())
+  kind        CodRuleKind
+  // 1-1000 — lower = higher priority (evaluated first).
+  priority    Int         @default(100)
+  // Free-form match conditions. e.g. {"pincodes":["560001","560002"]} or {"maxValueInr":10000}
+  conditions  Json
+  active      Boolean     @default(true)
+  description String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  @@index([active, priority])
+  @@map("cod_rules")
+}
+
+model CodDecisionLog {
+  id            String   @id @default(uuid())
+  customerId    String?  @map("customer_id")
+  pincode       String?
+  sellerId      String?  @map("seller_id")
+  orderTotalInr Decimal? @map("order_total_inr") @db.Decimal(10, 2)
+  eligible      Boolean
+  // The rule key that decided the outcome (or "default-allow" / "default-deny").
+  decidedBy     String   @map("decided_by")
+  reason        String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([eligible, createdAt(sort: Desc)])
+  @@map("cod_decision_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Payouts — once a settlement is APPROVED, payouts wrap them into a
+// bank-export batch. Status flow:
+//   DRAFT → EXPORTED → PARTIALLY_PAID → COMPLETED   (or FAILED)
+// ─────────────────────────────────────────────────────────────────
+
+enum PayoutBatchStatus {
+  DRAFT
+  EXPORTED
+  PARTIALLY_PAID
+  COMPLETED
+  FAILED
+}
+
+model PayoutBatch {
+  id            String            @id @default(uuid())
+  status        PayoutBatchStatus @default(DRAFT)
+  exportedAt    DateTime?         @map("exported_at")
+  exportFileId  String?           @map("export_file_id")  // FileMetadata.id
+  responseFileId String?          @map("response_file_id") // bank confirmation CSV
+  notes         String?
+  createdByAdminId String?        @map("created_by_admin_id")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  payouts Payout[]
+
+  @@index([status])
+  @@map("payout_batches")
+}
+
+model Payout {
+  id            String   @id @default(uuid())
+  batchId       String   @map("batch_id")
+  // FK to SellerSettlement (cross-module — kept polymorphic-by-id, not relational).
+  settlementId String   @map("settlement_id")
+  sellerId      String   @map("seller_id")
+  amount        Decimal  @db.Decimal(12, 2)
+  status        PayoutBatchStatus @default(DRAFT)
+  utrReference  String?  @map("utr_reference")
+  failureReason String?  @map("failure_reason")
+  paidAt        DateTime? @map("paid_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  batch PayoutBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, settlementId])
+  @@index([sellerId])
+  @@index([status])
+  @@map("payouts")
+}

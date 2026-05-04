@@ -15,10 +15,16 @@ model AuditLog {
   metadata   Json?
   ipAddress  String?  @map("ip_address")
   userAgent  String?  @map("user_agent")
+  // Hash chain for tamper evidence. `prevHash` references the hash of
+  // the most recent prior row at insert time; `hash` is sha256 of this
+  // row's payload + prevHash. Detect rewrites by re-walking the chain.
+  prevHash   String?  @map("prev_hash")
+  hash       String?
   createdAt  DateTime @default(now()) @map("created_at")
 
   @@index([actorId])
   @@index([module, resource])
+  @@index([resource, resourceId])
   @@index([createdAt])
   @@map("audit_logs")
 }

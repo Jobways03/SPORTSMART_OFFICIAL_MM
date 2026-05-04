@@ -18,6 +18,7 @@ import { ResetPasswordFranchiseUseCase } from '../../application/use-cases/reset
 import { ChangePasswordFranchiseUseCase } from '../../application/use-cases/change-password-franchise.use-case';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
+import { AccessLogService } from '../../../access-log/application/services/access-log.service';
 
 @ApiTags('Franchise Auth')
 @Controller('franchise/auth')
@@ -30,6 +31,7 @@ export class FranchiseAuthController {
     private readonly resendResetOtpFranchiseUseCase: ResendResetOtpFranchiseUseCase,
     private readonly resetPasswordFranchiseUseCase: ResetPasswordFranchiseUseCase,
     private readonly changePasswordFranchiseUseCase: ChangePasswordFranchiseUseCase,
+    private readonly accessLog: AccessLogService,
   ) {}
 
   @Post('register')
@@ -55,18 +57,48 @@ export class FranchiseAuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(@Body() dto: FranchiseLoginDto, @Req() req: Request) {
-    const data = await this.loginFranchiseUseCase.execute({
-      identifier: dto.identifier,
-      password: dto.password,
-      userAgent: req.headers['user-agent'],
-      ipAddress: req.ip,
-    });
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    try {
+      const data = await this.loginFranchiseUseCase.execute({
+        identifier: dto.identifier,
+        password: dto.password,
+        userAgent,
+        ipAddress,
+      });
 
-    return {
-      success: true,
-      message: 'Login successful',
-      data,
-    };
+      const franchiseId = (data as any)?.franchise?.id ?? (data as any)?.franchiseId;
+      if (franchiseId) {
+        this.accessLog
+          .record({
+            actorType: 'FRANCHISE',
+            actorId: franchiseId,
+            kind: 'LOGIN_SUCCESS',
+            ipAddress,
+            userAgent,
+          })
+          .catch(() => undefined);
+      }
+
+      return {
+        success: true,
+        message: 'Login successful',
+        data,
+      };
+    } catch (err) {
+      this.accessLog
+        .record({
+          actorType: 'FRANCHISE',
+          actorId: dto.identifier,
+          kind: 'LOGIN_FAILURE',
+          ipAddress,
+          userAgent,
+          succeeded: false,
+          reason: (err as Error).message,
+        })
+        .catch(() => undefined);
+      throw err;
+    }
   }
 
   @Post('forgot-password')

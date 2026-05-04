@@ -20,6 +20,7 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard/kyc', label: 'KYC' },
   { href: '/dashboard/payouts', label: 'Payouts' },
   { href: '/dashboard/profile', label: 'Profile' },
+  { href: '/dashboard/support', label: 'Support' },
 ];
 
 /**

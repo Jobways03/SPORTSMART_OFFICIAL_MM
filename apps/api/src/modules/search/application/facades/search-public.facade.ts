@@ -94,4 +94,41 @@ export class SearchPublicFacade {
   async updateSearchDocument(productId: string): Promise<void> {
     this.logger.log(`Search document update for product ${productId} (Prisma fallback — no-op)`);
   }
+
+  /**
+   * Typeahead suggestions: returns up to 10 matching product titles +
+   * brand names. Cheap LIKE for now; swap to pg_trgm + GIN for perf.
+   */
+  async suggest(q: string): Promise<Array<{ type: 'product' | 'brand' | 'category'; text: string; slug?: string; id?: string }>> {
+    const term = q.trim();
+    if (term.length < 2) return [];
+
+    const [products, brands, categories] = await Promise.all([
+      this.prisma.product.findMany({
+        where: {
+          status: 'ACTIVE',
+          isDeleted: false,
+          title: { contains: term, mode: 'insensitive' },
+        },
+        select: { id: true, title: true, slug: true },
+        take: 5,
+      }),
+      this.prisma.brand.findMany({
+        where: { name: { contains: term, mode: 'insensitive' } },
+        select: { id: true, name: true },
+        take: 3,
+      }),
+      this.prisma.category.findMany({
+        where: { name: { contains: term, mode: 'insensitive' } },
+        select: { id: true, name: true },
+        take: 2,
+      }),
+    ]);
+
+    return [
+      ...products.map((p) => ({ type: 'product' as const, text: p.title, slug: p.slug, id: p.id })),
+      ...brands.map((b) => ({ type: 'brand' as const, text: b.name, id: b.id })),
+      ...categories.map((c) => ({ type: 'category' as const, text: c.name, id: c.id })),
+    ];
+  }
 }

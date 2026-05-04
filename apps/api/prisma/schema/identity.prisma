@@ -32,6 +32,9 @@ model User {
   // up with the same email as an existing affiliate. Most users are
   // never affiliates so this stays null forever.
   affiliate         Affiliate?
+  // Optional 1:1 link to a wallet record. Created lazily on first
+  // top-up / refund credit; users without wallet activity have no row.
+  wallet            Wallet?
 
   @@map("users")
 }

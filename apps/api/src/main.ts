@@ -40,15 +40,52 @@ async function bootstrap() {
     level: 6,         // Balanced speed vs compression ratio
   }));
 
+  // ── Security headers (helmet) ──
+  // CSP is intentionally tight for an API; Swagger UI in non-prod relaxes it.
+  const isProd = envService.isProduction();
   app.use(
     helmet({
       crossOriginResourcePolicy: false,
+      contentSecurityPolicy: isProd
+        ? {
+            useDefaults: true,
+            directives: {
+              defaultSrc: ["'self'"],
+              scriptSrc: ["'self'"],
+              styleSrc: ["'self'", "'unsafe-inline'"],
+              imgSrc: ["'self'", 'data:', 'https:'],
+              connectSrc: ["'self'"],
+              fontSrc: ["'self'", 'data:'],
+              frameAncestors: ["'none'"],
+              objectSrc: ["'none'"],
+              baseUri: ["'self'"],
+              formAction: ["'self'"],
+              upgradeInsecureRequests: [],
+            },
+          }
+        : false,
+      hsts: isProd
+        ? { maxAge: 60 * 60 * 24 * 365, includeSubDomains: true, preload: true }
+        : false,
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      frameguard: { action: 'deny' },
+      noSniff: true,
+      xssFilter: true,
     }),
   );
 
   app.enableCors({
     origin: envService.getCorsOrigins(),
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'X-Idempotency-Key',
+    ],
+    exposedHeaders: ['X-Request-Id'],
+    maxAge: 600,
   });
 
   app.useGlobalPipes(

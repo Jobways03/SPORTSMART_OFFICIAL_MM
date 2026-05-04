@@ -45,6 +45,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/commission', label: 'Commission', icon: '&#128202;' },
   { href: '/dashboard/earnings', label: 'Earnings', icon: '&#128176;' },
   { href: '/dashboard/staff', label: 'Staff', icon: '&#128101;' },
+  { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },
 ];
 
 export default function DashboardLayout({

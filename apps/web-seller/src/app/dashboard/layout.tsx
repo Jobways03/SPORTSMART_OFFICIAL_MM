@@ -114,6 +114,7 @@ export default function DashboardLayout({
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;', disabled: !isActive },
     { href: '/dashboard/returns', label: 'Returns', icon: '&#8617;', disabled: !isActive },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },
+    { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },
     { href: '#', label: 'Analytics', icon: '&#128200;', disabled: true },
   ];
 
