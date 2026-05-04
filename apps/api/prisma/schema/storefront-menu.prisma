@@ -19,7 +19,7 @@ model StorefrontMenu {
   name      String
   items     StorefrontMenuItem[]
   createdAt DateTime             @default(now()) @map("created_at")
-  updatedAt DateTime             @updatedAt      @map("updated_at")
+  updatedAt DateTime             @updatedAt @map("updated_at")
 
   @@map("storefront_menus")
 }
@@ -42,9 +42,9 @@ model StorefrontMenuItem {
   linkRef    String?              @map("link_ref")
   // Optional Shopify-style tag filter applied to a COLLECTION link
   // ("hats,blue,summer" → adds ?tags=hats,blue,summer to the link).
-  filterTags String[]             @default([])   @map("filter_tags")
+  filterTags String[]             @default([]) @map("filter_tags")
   createdAt  DateTime             @default(now()) @map("created_at")
-  updatedAt  DateTime             @updatedAt      @map("updated_at")
+  updatedAt  DateTime             @updatedAt @map("updated_at")
 
   @@index([menuId, parentId, position])
   @@index([menuId])

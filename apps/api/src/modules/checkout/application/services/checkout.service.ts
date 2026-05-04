@@ -16,6 +16,8 @@ import {
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { DiscountPublicFacade } from '../../../discounts/application/facades/discount-public.facade';
 import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
+import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
+import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
@@ -40,6 +42,8 @@ export class CheckoutService {
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly discountFacade: DiscountPublicFacade,
     private readonly affiliateFacade: AffiliatePublicFacade,
+    private readonly walletFacade: WalletPublicFacade,
+    private readonly paymentOpsFacade: PaymentOpsFacade,
     private readonly razorpayAdapter: RazorpayAdapter,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
@@ -386,6 +390,7 @@ export class CheckoutService {
     paymentMethod?: string,
     couponCode?: string,
     referralCode?: string,
+    walletApplyAmountInPaise?: number,
   ) {
     // Per-user lock: prevents double-submit (UI double-click or client
     // retry) from committing two MasterOrders against the same checkout
@@ -404,7 +409,13 @@ export class CheckoutService {
     }
 
     try {
-      return await this.placeOrderLocked(userId, paymentMethod, couponCode, referralCode);
+      return await this.placeOrderLocked(
+        userId,
+        paymentMethod,
+        couponCode,
+        referralCode,
+        walletApplyAmountInPaise,
+      );
     } finally {
       await this.redis.releaseLock(lockKey);
     }
@@ -415,6 +426,7 @@ export class CheckoutService {
     paymentMethod?: string,
     couponCode?: string,
     referralCode?: string,
+    walletApplyAmountInPaise?: number,
   ) {
     const method: 'COD' | 'ONLINE' =
       paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
@@ -504,6 +516,30 @@ export class CheckoutService {
     }
     const chargedTotal = Math.max(0, session.totalAmount - discountAmount);
 
+    // Wallet preflight — clamp to chargedTotal (can't pay more than the
+    // order is for) and verify the user has the balance. Done BEFORE the
+    // order transaction so we fail fast without an orphan order.
+    const walletDebitInPaise = Math.max(
+      0,
+      Math.min(
+        Math.round((walletApplyAmountInPaise ?? 0)),
+        Math.round(chargedTotal * 100),
+      ),
+    );
+    const walletDebitInRupees = walletDebitInPaise / 100;
+    const payableInRupees = Math.max(0, chargedTotal - walletDebitInRupees);
+    if (walletDebitInPaise > 0) {
+      const ok = await this.walletFacade.hasSufficientBalance(
+        userId,
+        walletDebitInPaise,
+      );
+      if (!ok) {
+        throw new BadRequestAppException(
+          'Wallet balance has changed — please refresh your cart and retry.',
+        );
+      }
+    }
+
     // Affiliate attribution — resolved BEFORE the order transaction so
     // we can pass it through and persist the ReferralAttribution row
     // atomically with MasterOrder creation. Returns null when neither
@@ -554,6 +590,31 @@ export class CheckoutService {
         await this.catalogFacade.confirmReservation(
           item.reservationId,
           result.masterOrderId,
+        );
+      }
+    }
+
+    // Wallet debit — runs AFTER the order is committed so the ledger
+    // entry references a real order id. If it fails (e.g. balance race
+    // lost the optimistic-lock retry budget), cancel the order to keep
+    // the system consistent. Stock + reservations were already confirmed
+    // above, so we mark the order CANCELLED here rather than tearing
+    // everything back down.
+    if (walletDebitInPaise > 0) {
+      try {
+        await this.walletFacade.debitForCheckout({
+          userId,
+          amountInPaise: walletDebitInPaise,
+          orderId: result.masterOrderId,
+          description: `Order ${result.orderNumber} — wallet portion`,
+        });
+      } catch (err) {
+        await this.prisma.masterOrder.update({
+          where: { id: result.masterOrderId },
+          data: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
+        });
+        throw new BadRequestAppException(
+          `Wallet debit failed: ${(err as Error).message}. Order cancelled.`,
         );
       }
     }
@@ -610,15 +671,34 @@ export class CheckoutService {
       // Events are best-effort — do not fail the order if event publishing fails
     }
 
-    // For ONLINE payments: create Razorpay order and return details for frontend
+    // For ONLINE payments: create Razorpay order and return details for frontend.
+    // The gateway charges only the *payable* portion — wallet has already
+    // covered the rest. If wallet covers the full order (payable === 0),
+    // we mark the order PAID immediately and skip the gateway round-trip.
     if (method === 'ONLINE') {
+      if (payableInRupees <= 0) {
+        await this.prisma.masterOrder.update({
+          where: { id: result.masterOrderId },
+          data: { paymentStatus: 'PAID', orderStatus: 'PLACED' },
+        });
+        return {
+          orderNumber: result.orderNumber,
+          totalAmount: result.totalAmount,
+          walletPaidAmount: walletDebitInRupees,
+          itemCount: result.itemCount,
+          paymentMethod: 'ONLINE' as const,
+          payment: { fullyCoveredByWallet: true as const },
+        };
+      }
+
       try {
         const razorpayOrder = await this.razorpayAdapter.createOrder({
-          amountInr: result.totalAmount,
+          amountInr: payableInRupees,
           receipt: result.orderNumber,
           notes: {
             masterOrderId: result.masterOrderId,
             orderNumber: result.orderNumber,
+            walletPaidPaise: String(walletDebitInPaise),
           },
         });
 
@@ -634,9 +714,23 @@ export class CheckoutService {
           },
         });
 
+        // Payment-ops: SUCCESS create-order attempt. Best-effort write
+        // — failure to log must NOT break the checkout.
+        this.paymentOpsFacade
+          .recordAttempt({
+            masterOrderId: result.masterOrderId,
+            orderNumber: result.orderNumber,
+            kind: 'CREATE_ORDER',
+            status: 'SUCCESS',
+            providerOrderId: razorpayOrder.providerOrderId,
+            amountInPaise: Math.round(payableInRupees * 100),
+          })
+          .catch(() => undefined);
+
         return {
           orderNumber: result.orderNumber,
           totalAmount: result.totalAmount,
+          walletPaidAmount: walletDebitInRupees,
           itemCount: result.itemCount,
           paymentMethod: 'ONLINE' as const,
           payment: {
@@ -648,6 +742,32 @@ export class CheckoutService {
           },
         };
       } catch (err) {
+        // Payment-ops: FAILURE create-order attempt.
+        this.paymentOpsFacade
+          .recordAttempt({
+            masterOrderId: result.masterOrderId,
+            orderNumber: result.orderNumber,
+            kind: 'CREATE_ORDER',
+            status: 'FAILURE',
+            amountInPaise: Math.round(payableInRupees * 100),
+            failureReason: (err as Error).message,
+          })
+          .catch(() => undefined);
+
+        // Compensating action: refund the wallet portion if we already
+        // debited (best-effort — surfaces in admin wallet logs if it fails).
+        if (walletDebitInPaise > 0) {
+          try {
+            await this.walletFacade.creditCheckoutCancellation({
+              userId,
+              amountInPaise: walletDebitInPaise,
+              orderId: result.masterOrderId,
+              reason: `Razorpay createOrder failed: ${(err as Error).message}`,
+            });
+          } catch {
+            // ignore — admin will reconcile via wallet logs
+          }
+        }
         await this.prisma.masterOrder.update({
           where: { id: result.masterOrderId },
           data: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
@@ -661,6 +781,7 @@ export class CheckoutService {
     return {
       orderNumber: result.orderNumber,
       totalAmount: result.totalAmount,
+      walletPaidAmount: walletDebitInRupees,
       itemCount: result.itemCount,
       paymentMethod: 'COD' as const,
     };
@@ -720,6 +841,33 @@ export class CheckoutService {
       expectedBuf.length === actualBuf.length &&
       crypto.timingSafeEqual(expectedBuf, actualBuf);
     if (!isValidSignature) {
+      // Payment-ops: FAILURE verify + auto-create SIGNATURE_INVALID alert.
+      // Both writes are fire-and-forget so they never block the throw.
+      this.paymentOpsFacade
+        .recordAttempt({
+          masterOrderId: order.id,
+          orderNumber: order.orderNumber,
+          kind: 'VERIFY_SIGNATURE',
+          status: 'FAILURE',
+          providerOrderId: input.razorpayOrderId,
+          providerPaymentId: input.razorpayPaymentId,
+          amountInPaise: Math.round(Number(order.totalAmount) * 100),
+          failureReason: 'HMAC signature mismatch',
+        })
+        .catch(() => undefined);
+      this.paymentOpsFacade
+        .flagMismatch({
+          kind: 'SIGNATURE_INVALID',
+          masterOrderId: order.id,
+          orderNumber: order.orderNumber,
+          providerPaymentId: input.razorpayPaymentId,
+          severity: 90, // high — possible tampering / replay
+          description:
+            `Signature verification failed for order ${order.orderNumber} ` +
+            `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId}). ` +
+            `Computed HMAC did not match the signature provided.`,
+        })
+        .catch(() => undefined);
       throw new BadRequestAppException('Payment verification failed — invalid signature');
     }
 
@@ -736,6 +884,19 @@ export class CheckoutService {
       where: { masterOrderId: order.id },
       data: { paymentStatus: 'PAID' },
     });
+
+    // Payment-ops: SUCCESS verify-signature attempt.
+    this.paymentOpsFacade
+      .recordAttempt({
+        masterOrderId: order.id,
+        orderNumber: order.orderNumber,
+        kind: 'VERIFY_SIGNATURE',
+        status: 'SUCCESS',
+        providerOrderId: input.razorpayOrderId,
+        providerPaymentId: input.razorpayPaymentId,
+        amountInPaise: Math.round(Number(order.totalAmount) * 100),
+      })
+      .catch(() => undefined);
 
     this.eventBus
       .publish({

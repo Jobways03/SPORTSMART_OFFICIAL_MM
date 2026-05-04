@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 import {
   returnsService,
@@ -12,6 +12,7 @@ import {
   CreateReturnPayload,
 } from '@/services/returns.service';
 import { useModal } from '@sportsmart/ui';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 interface OrderLookup {
   id: string;
@@ -32,6 +33,7 @@ export default function InitiateReturnPage() {
   const { notify, confirmDialog } = useModal();
 const { orderNumber } = useParams<{ orderNumber: string }>();
   const router = useRouter();
+  const authStatus = useAuthGuard();
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -78,17 +80,9 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   }, [orderNumber, router]);
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
+    if (authStatus !== 'authed') return;
     loadEligibility();
-  }, [loadEligibility]);
+  }, [authStatus, loadEligibility]);
 
   const selectSubOrder = (subOrderId: string, elig?: ReturnEligibility) => {
     const source = elig || eligibility;
@@ -253,17 +247,15 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
 
   if (loading) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div className="products-loading">Loading return eligibility...</div>
-      </>
+      </StorefrontShell>
     );
   }
 
   if (!eligibility || !eligibility.eligible) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div
           style={{
             maxWidth: 700,
@@ -294,7 +286,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
             Back to Order
           </Link>
         </div>
-      </>
+      </StorefrontShell>
     );
   }
 
@@ -393,8 +385,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   };
 
   return (
-    <>
-      <Navbar />
+    <StorefrontShell>
       <div style={{ maxWidth: 800, margin: '0 auto', padding: '32px 24px 60px' }}>
         <Link
           href={`/orders/${orderNumber}`}
@@ -1188,6 +1179,6 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
         )}
       </div>
-    </>
+    </StorefrontShell>
   );
 }

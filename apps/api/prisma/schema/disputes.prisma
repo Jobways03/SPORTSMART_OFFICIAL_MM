@@ -1,0 +1,125 @@
+// Disputes module — formal escalation path when a return / order is
+// contested by either side (buyer claims wrong item, seller claims
+// damage occurred in transit, QC rejected but buyer disagrees).
+//
+// Tickets module covers free-form support; disputes are the structured
+// resolution layer with evidence, internal notes, and an audit-stamped
+// final decision.
+
+enum DisputeKind {
+  RETURN_REJECTED       // buyer disputes a QC rejection
+  WRONG_ITEM_RECEIVED   // buyer says they got the wrong item
+  DAMAGED_IN_TRANSIT    // damage between dispatch and delivery
+  MISSING_FROM_PARCEL   // partial item missing on delivery
+  OTHER
+}
+
+enum DisputeStatus {
+  OPEN              // filed, awaiting first admin touch
+  UNDER_REVIEW      // admin acknowledged + investigating
+  AWAITING_INFO     // need info from buyer/seller
+  RESOLVED_BUYER    // outcome favours the buyer (refund / replacement)
+  RESOLVED_SELLER   // outcome favours the seller (no refund)
+  RESOLVED_SPLIT    // partial — e.g. partial refund
+  CLOSED            // procedural close (buyer abandoned, dup, etc.)
+}
+
+enum DisputeActorType {
+  CUSTOMER
+  SELLER
+  ADMIN
+}
+
+model Dispute {
+  id            String        @id @default(uuid())
+  disputeNumber String        @unique @map("dispute_number") // DSP-YYYY-NNNNNN
+  kind          DisputeKind
+  status        DisputeStatus @default(OPEN)
+  // 1-100 — drives queue order (90+ = urgent). Set by admin during triage.
+  severity      Int           @default(50)
+
+  // Linked records — at least one should be set.
+  masterOrderId String? @map("master_order_id")
+  subOrderId    String? @map("sub_order_id")
+  returnId      String? @map("return_id")
+
+  // Polymorphic filer (matches TicketActorType convention; admin-filed
+  // disputes happen when an admin escalates on behalf of a buyer).
+  filedByType   DisputeActorType @map("filed_by_type")
+  filedById     String           @map("filed_by_id")
+  filedByName   String           @map("filed_by_name")
+
+  // Initial complaint summary (the first message body, snapshotted).
+  summary String @db.Text
+
+  // Triage assignment.
+  assignedAdminId String? @map("assigned_admin_id")
+
+  // Decision audit (populated when status transitions to a RESOLVED_*).
+  decisionByAdminId      String?   @map("decision_by_admin_id")
+  decisionAt             DateTime? @map("decision_at")
+  decisionRationale      String?   @map("decision_rationale") @db.Text
+  // Refund amount in paise (matches money convention elsewhere). Set
+  // for RESOLVED_BUYER (full refund) or RESOLVED_SPLIT (partial). Null
+  // for RESOLVED_SELLER. The refund flow reads this to mint the actual
+  // wallet credit / gateway refund.
+  decisionAmountInPaise  Int?      @map("decision_amount_in_paise")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  messages DisputeMessage[]
+  evidence DisputeEvidence[]
+
+  @@index([status, severity(sort: Desc), createdAt(sort: Desc)])
+  @@index([filedByType, filedById])
+  @@index([masterOrderId])
+  @@index([returnId])
+  @@map("disputes")
+}
+
+model DisputeMessage {
+  id        String @id @default(uuid())
+  disputeId String @map("dispute_id")
+
+  senderType DisputeActorType @map("sender_type")
+  senderId   String           @map("sender_id")
+  senderName String           @map("sender_name")
+
+  body           String  @db.Text
+  // Internal notes hidden from buyer/seller views — admin-only triage.
+  isInternalNote Boolean @default(false) @map("is_internal_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  @@index([disputeId, createdAt])
+  @@map("dispute_messages")
+}
+
+model DisputeEvidence {
+  id        String @id @default(uuid())
+  disputeId String @map("dispute_id")
+
+  // Polymorphic linkage — same pattern as ticket attachments. Files
+  // live in the existing FileMetadata table.
+  fileId   String @map("file_id")
+  caption  String?
+
+  uploadedByType DisputeActorType @map("uploaded_by_type")
+  uploadedById   String           @map("uploaded_by_id")
+  uploadedAt     DateTime         @default(now()) @map("uploaded_at")
+
+  dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+
+  @@index([disputeId])
+  @@map("dispute_evidence")
+}
+
+model DisputeSequence {
+  id         Int @id @default(1)
+  lastNumber Int @default(0) @map("last_number")
+
+  @@map("dispute_sequence")
+}

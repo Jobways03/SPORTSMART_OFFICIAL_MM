@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Minus, Plus, Trash2, ShoppingBag, Lock, ArrowRight } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 interface CartItem {
   id: string;
@@ -32,6 +33,7 @@ const formatINR = (n: number) => '₹' + Number(n).toLocaleString('en-IN');
 
 export default function CartPage() {
   const router = useRouter();
+  const authStatus = useAuthGuard();
   const [cart, setCart] = useState<CartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
@@ -44,14 +46,10 @@ export default function CartPage() {
   };
 
   useEffect(() => {
-    try {
-      const token = sessionStorage.getItem('accessToken');
-      if (!token) return router.push('/login');
-    } catch {
-      return router.push('/login');
-    }
+    if (authStatus !== 'authed') return;
     fetchCart();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus]);
 
   const updateQuantity = async (itemId: string, quantity: number) => {
     if (quantity < 1) return removeItem(itemId);

@@ -1103,7 +1103,8 @@ export class ReturnService {
         ? 'BANK_TRANSFER'
         : 'ORIGINAL_PAYMENT');
 
-    // Try gateway processing
+    // Try gateway processing — refundMethod tells the gateway whether
+    // to use wallet (synchronous) vs Razorpay/COD (async / manual).
     const gatewayResult = await this.refundGateway.processRefund({
       orderId: masterOrder.id,
       orderNumber: masterOrder.orderNumber,
@@ -1112,6 +1113,7 @@ export class ReturnService {
       customerId: ret.customerId,
       returnId: ret.id,
       returnNumber: ret.returnNumber,
+      refundMethod: detectedMethod,
     });
 
     // Audit: record the gateway attempt before updating return state
@@ -1128,9 +1130,14 @@ export class ReturnService {
       },
     });
 
-    // Update return state
+    // Update return state. If the gateway settled synchronously (wallet
+    // credit), jump straight to REFUNDED — there's no polling step.
+    const finalStatus: 'REFUNDED' | 'REFUND_PROCESSING' = gatewayResult.completed
+      ? 'REFUNDED'
+      : 'REFUND_PROCESSING';
+
     const updateData: Record<string, unknown> = {
-      status: 'REFUND_PROCESSING',
+      status: finalStatus,
       refundMethod: detectedMethod,
       refundInitiatedBy: actorType,
       refundInitiatedAt: new Date(),
@@ -1145,16 +1152,22 @@ export class ReturnService {
       updateData.refundFailureReason = gatewayResult.failureReason;
     }
 
+    if (gatewayResult.completed) {
+      updateData.refundProcessedAt = new Date();
+    }
+
     const updated = await this.returnRepo.update(returnId, updateData);
 
     await this.returnRepo.recordStatusChange(
       returnId,
       ret.status,
-      'REFUND_PROCESSING',
+      finalStatus,
       actorType,
       actorId,
       `Refund initiated — method: ${detectedMethod}${
-        gatewayResult.requiresManualProcessing
+        gatewayResult.completed
+          ? ' (settled instantly via wallet)'
+          : gatewayResult.requiresManualProcessing
           ? ' (manual processing required)'
           : ''
       }`,
@@ -1175,6 +1188,25 @@ export class ReturnService {
           gatewayRefundId: gatewayResult.gatewayRefundId,
         },
       });
+
+      // Synchronous (wallet) refund: also emit the completed event so any
+      // notification handlers fire immediately rather than waiting on a
+      // separate confirmRefund call that will never come.
+      if (gatewayResult.completed && gatewayResult.gatewayRefundId) {
+        await this.eventBus.publish({
+          eventName: 'returns.refund.completed',
+          aggregate: 'Return',
+          aggregateId: returnId,
+          occurredAt: new Date(),
+          payload: {
+            returnId,
+            returnNumber: ret.returnNumber,
+            refundAmount: Number(ret.refundAmount),
+            refundReference: gatewayResult.gatewayRefundId,
+            processedBy: actorId,
+          },
+        });
+      }
     } catch {
       // events are best-effort
     }

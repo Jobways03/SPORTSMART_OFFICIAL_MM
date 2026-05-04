@@ -30,8 +30,8 @@ model SellerProductMapping {
 
   // Status & priority
   approvalStatus      MappingApprovalStatus @default(PENDING_APPROVAL) @map("approval_status")
-  isActive            Boolean @default(true) @map("is_active")
-  operationalPriority Int     @default(0) @map("operational_priority") // higher = preferred
+  isActive            Boolean               @default(true) @map("is_active")
+  operationalPriority Int                   @default(0) @map("operational_priority") // higher = preferred
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

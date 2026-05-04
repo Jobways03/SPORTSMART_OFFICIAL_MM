@@ -1,0 +1,91 @@
+// Reconciliation module — daily/weekly jobs that compare what we
+// expected to settle vs what actually moved (gateway payments, COD
+// remittance, payouts to sellers, refunds disbursed).
+
+enum ReconciliationKind {
+  PAYMENT       // gateway captures vs MasterOrder.totalAmount
+  COD           // courier-collected COD vs MasterOrder.totalAmount
+  SETTLEMENT    // seller settlement record vs commission engine
+  REFUND        // gateway refund disbursements vs Return.refundAmount
+  WALLET        // sum(WalletTransaction.amountInPaise) per wallet vs Wallet.balanceInPaise
+}
+
+enum ReconciliationStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum DiscrepancyKind {
+  EXPECTED_NOT_FOUND       // we expected a record, none from the source
+  UNEXPECTED_RECORD        // source has a record we didn't expect
+  AMOUNT_MISMATCH
+  STATUS_MISMATCH
+}
+
+enum DiscrepancyStatus {
+  OPEN
+  RESOLVED
+  IGNORED
+}
+
+model ReconciliationRun {
+  id     String               @id @default(uuid())
+  kind   ReconciliationKind
+  status ReconciliationStatus @default(RUNNING)
+
+  // Period covered. e.g. 2026-04-29 00:00 → 2026-04-30 00:00
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+
+  // Summary counts populated when the run completes.
+  totalExpected      Int @default(0) @map("total_expected")
+  totalMatched       Int @default(0) @map("total_matched")
+  totalDiscrepancies Int @default(0) @map("total_discrepancies")
+
+  // Money totals (paise) — useful even when counts match.
+  expectedAmountInPaise Int @default(0) @map("expected_amount_in_paise")
+  matchedAmountInPaise  Int @default(0) @map("matched_amount_in_paise")
+
+  failureReason String? @map("failure_reason") @db.Text
+
+  startedByAdminId String?   @map("started_by_admin_id")
+  startedAt        DateTime  @default(now()) @map("started_at")
+  completedAt      DateTime? @map("completed_at")
+
+  discrepancies ReconciliationDiscrepancy[]
+
+  @@index([kind, periodStart(sort: Desc)])
+  @@index([status])
+  @@map("reconciliation_runs")
+}
+
+model ReconciliationDiscrepancy {
+  id    String          @id @default(uuid())
+  runId String          @map("run_id")
+  kind  DiscrepancyKind
+
+  status DiscrepancyStatus @default(OPEN)
+
+  // Linked context (any may be null).
+  masterOrderId   String? @map("master_order_id")
+  orderNumber     String? @map("order_number")
+  externalRef     String? @map("external_ref")
+
+  expectedInPaise Int? @map("expected_in_paise")
+  actualInPaise   Int? @map("actual_in_paise")
+  description     String @db.Text
+
+  resolutionNotes   String?   @map("resolution_notes") @db.Text
+  resolvedByAdminId String?   @map("resolved_by_admin_id")
+  resolvedAt        DateTime? @map("resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  run ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([masterOrderId])
+  @@map("reconciliation_discrepancies")
+}

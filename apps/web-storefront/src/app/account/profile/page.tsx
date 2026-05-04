@@ -3,10 +3,11 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { profileService, CustomerProfile } from '@/services/profile.service';
 import { ApiError } from '@/lib/api-client';
 import { useModal } from '@sportsmart/ui';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 const formatPhoneWithCountryCode = (phone: string | null | undefined): string => {
   if (!phone) return '';
@@ -21,6 +22,7 @@ const formatPhoneWithCountryCode = (phone: string | null | undefined): string =>
 export default function ProfilePage() {
   const { notify, confirmDialog } = useModal();
 const router = useRouter();
+  const authStatus = useAuthGuard();
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -41,16 +43,7 @@ const router = useRouter();
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
-
+    if (authStatus !== 'authed') return;
     profileService
       .getProfile()
       .then((res) => {
@@ -64,7 +57,7 @@ const router = useRouter();
       })
       .catch(() => router.push('/login'))
       .finally(() => setLoading(false));
-  }, [router]);
+  }, [authStatus, router]);
 
   const handleProfileSubmit = async (e: FormEvent) => {e.preventDefault();
     setProfileError(null);
@@ -155,19 +148,17 @@ const router = useRouter();
 
   if (loading) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div className="products-loading">
           <div className="loading-spinner"></div>
           <span>Loading profile...</span>
         </div>
-      </>
+      </StorefrontShell>
     );
   }
 
   return (
-    <>
-      <Navbar />
+    <StorefrontShell>
       <div className="account-page">
         <div className="account-breadcrumb">
           <Link href="/account">My Account</Link>
@@ -309,6 +300,6 @@ const router = useRouter();
           </form>
         </section>
       </div>
-    </>
+    </StorefrontShell>
   );
 }

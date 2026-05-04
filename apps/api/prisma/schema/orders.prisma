@@ -98,16 +98,16 @@ model MasterOrder {
   // Discount / coupon (AMOUNT_OFF_ORDER applied at checkout). totalAmount
   // above is the post-discount charged amount; subtract discountAmount to
   // reconstruct the pre-discount subtotal.
-  discountCode            String?            @map("discount_code")
-  discountAmount          Decimal            @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  discountCode   String? @map("discount_code")
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(10, 2)
 
   // Online payment tracking (Razorpay)
-  razorpayOrderId         String?            @map("razorpay_order_id")
-  razorpayPaymentId       String?            @map("razorpay_payment_id")
-  paymentExpiresAt        DateTime?          @map("payment_expires_at")
+  razorpayOrderId   String?   @map("razorpay_order_id")
+  razorpayPaymentId String?   @map("razorpay_payment_id")
+  paymentExpiresAt  DateTime? @map("payment_expires_at")
 
-  createdAt               DateTime           @default(now()) @map("created_at")
-  updatedAt               DateTime           @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   customer          User               @relation(fields: [customerId], references: [id], onDelete: Cascade)
   subOrders         SubOrder[]
@@ -121,28 +121,28 @@ model MasterOrder {
 }
 
 model SubOrder {
-  id                   String                 @id @default(uuid())
-  masterOrderId        String                 @map("master_order_id")
-  sellerId             String?                @map("seller_id")
-  fulfillmentNodeType  String                 @default("SELLER") @map("fulfillment_node_type")
-  franchiseId          String?                @map("franchise_id")
-  subTotal             Decimal                @map("sub_total") @db.Decimal(10, 2)
-  paymentStatus        OrderPaymentStatus     @default(PENDING) @map("payment_status")
-  fulfillmentStatus    OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
-  acceptStatus         OrderAcceptStatus      @default(OPEN) @map("accept_status")
-  acceptDeadlineAt     DateTime?              @map("accept_deadline_at")
-  rejectionReason      String?                @map("rejection_reason")
-  rejectionNote        String?                @map("rejection_note")
-  expectedDispatchDate DateTime?              @map("expected_dispatch_date")
-  deliveredAt          DateTime?              @map("delivered_at")
-  returnWindowEndsAt   DateTime?              @map("return_window_ends_at")
-  trackingNumber       String?                @map("tracking_number")
-  courierName          String?                @map("courier_name")
-  shippingLabelUrl     String?                @map("shipping_label_url")
-  commissionProcessed     Boolean                @default(false) @map("commission_processed")
-  commissionRateSnapshot  Decimal?               @map("commission_rate_snapshot") @db.Decimal(5, 2)
-  createdAt               DateTime               @default(now()) @map("created_at")
-  updatedAt               DateTime               @updatedAt @map("updated_at")
+  id                     String                 @id @default(uuid())
+  masterOrderId          String                 @map("master_order_id")
+  sellerId               String?                @map("seller_id")
+  fulfillmentNodeType    String                 @default("SELLER") @map("fulfillment_node_type")
+  franchiseId            String?                @map("franchise_id")
+  subTotal               Decimal                @map("sub_total") @db.Decimal(10, 2)
+  paymentStatus          OrderPaymentStatus     @default(PENDING) @map("payment_status")
+  fulfillmentStatus      OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
+  acceptStatus           OrderAcceptStatus      @default(OPEN) @map("accept_status")
+  acceptDeadlineAt       DateTime?              @map("accept_deadline_at")
+  rejectionReason        String?                @map("rejection_reason")
+  rejectionNote          String?                @map("rejection_note")
+  expectedDispatchDate   DateTime?              @map("expected_dispatch_date")
+  deliveredAt            DateTime?              @map("delivered_at")
+  returnWindowEndsAt     DateTime?              @map("return_window_ends_at")
+  trackingNumber         String?                @map("tracking_number")
+  courierName            String?                @map("courier_name")
+  shippingLabelUrl       String?                @map("shipping_label_url")
+  commissionProcessed    Boolean                @default(false) @map("commission_processed")
+  commissionRateSnapshot Decimal?               @map("commission_rate_snapshot") @db.Decimal(5, 2)
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
 
   masterOrder       MasterOrder        @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
   seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
@@ -182,15 +182,15 @@ model OrderItem {
 }
 
 model OrderReassignmentLog {
-  id                String   @id @default(uuid())
-  subOrderId        String   @map("sub_order_id")
-  masterOrderId     String   @map("master_order_id")
-  fromSellerId      String   @map("from_seller_id")
-  toSellerId        String?  @map("to_seller_id")
-  reason            String
-  successful        Boolean
-  newSubOrderId     String?  @map("new_sub_order_id")
-  createdAt         DateTime @default(now()) @map("created_at")
+  id            String   @id @default(uuid())
+  subOrderId    String   @map("sub_order_id")
+  masterOrderId String   @map("master_order_id")
+  fromSellerId  String   @map("from_seller_id")
+  toSellerId    String?  @map("to_seller_id")
+  reason        String
+  successful    Boolean
+  newSubOrderId String?  @map("new_sub_order_id")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   @@index([masterOrderId])
   @@index([subOrderId])
@@ -202,4 +202,21 @@ model OrderSequence {
   lastNumber Int @default(0) @map("last_number")
 
   @@map("order_sequence")
+}
+
+// Low-stock notifications — one row per (sellerProductMappingId, threshold-cross)
+// so we don't spam admins. Cleared when stock recovers.
+model LowStockAlert {
+  id                       String   @id @default(uuid())
+  sellerProductMappingId   String   @map("seller_product_mapping_id")
+  sellerId                 String   @map("seller_id")
+  productId                String   @map("product_id")
+  currentStock             Int      @map("current_stock")
+  threshold                Int
+  resolvedAt               DateTime? @map("resolved_at")
+  createdAt                DateTime @default(now()) @map("created_at")
+
+  @@unique([sellerProductMappingId])
+  @@index([resolvedAt])
+  @@map("low_stock_alerts")
 }

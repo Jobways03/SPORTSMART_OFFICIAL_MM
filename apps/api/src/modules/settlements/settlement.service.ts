@@ -573,4 +573,66 @@ export class SettlementService {
       mismatches,
     };
   }
+
+  // ── Adjustments ─────────────────────────────────────────────────
+
+  /**
+   * Manual adjustment on a settlement. Allowed only while the parent
+   * cycle is APPROVED (not PAID) — once paid, adjustments must be
+   * done in the next cycle. Sign convention: positive adds to payout.
+   */
+  async recordAdjustment(args: {
+    settlementId: string;
+    amount: number;
+    reason: string;
+    notes?: string;
+    adminId?: string;
+  }) {
+    if (!Number.isFinite(args.amount) || args.amount === 0) {
+      throw new Error('amount must be a non-zero number');
+    }
+    if (!args.reason?.trim()) {
+      throw new Error('reason is required');
+    }
+    const settlement = await this.prisma.sellerSettlement.findUnique({
+      where: { id: args.settlementId },
+    });
+    if (!settlement) throw new Error('Settlement not found');
+    if (settlement.status === 'PAID') {
+      throw new Error('Cannot adjust a PAID settlement; use a follow-up cycle');
+    }
+
+    const adjustment = await this.prisma.settlementAdjustment.create({
+      data: {
+        settlementId: args.settlementId,
+        amount: args.amount,
+        reason: args.reason.trim(),
+        notes: args.notes?.trim() || null,
+        createdByAdminId: args.adminId ?? null,
+      },
+    });
+
+    await this.prisma.sellerSettlement.update({
+      where: { id: args.settlementId },
+      data: { totalSettlementAmount: { increment: args.amount } },
+    });
+
+    await this.audit.writeAuditLog({
+      actorId: args.adminId,
+      action: 'settlement.adjust',
+      module: 'settlements',
+      resource: 'sellerSettlement',
+      resourceId: args.settlementId,
+      newValue: { amount: args.amount, reason: args.reason },
+    });
+
+    return adjustment;
+  }
+
+  async listAdjustments(settlementId: string) {
+    return this.prisma.settlementAdjustment.findMany({
+      where: { settlementId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
 }

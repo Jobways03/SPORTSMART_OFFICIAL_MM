@@ -1,4 +1,103 @@
-// ============================================
-// Payments Module - owned tables
-// Models defined when payments module is implemented
-// ============================================
+// Payments module — observability layer.
+//
+// MasterOrder still owns the canonical payment state (paymentStatus,
+// razorpayOrderId, razorpayPaymentId). These tables sit alongside it
+// to record every gateway interaction (retry trail) and surface mismatches
+// between what we expected to receive and what the gateway actually
+// settled (alerts inbox for the admin payment-ops team).
+
+enum PaymentAttemptKind {
+  CREATE_ORDER     // POST to gateway to create a new order
+  CAPTURE          // capture an authorised payment
+  VERIFY_SIGNATURE // server-side signature verify on success callback
+  REFUND           // request a refund through the gateway
+}
+
+enum PaymentAttemptStatus {
+  SUCCESS
+  FAILURE
+}
+
+enum PaymentMismatchKind {
+  AMOUNT_MISMATCH      // expected ≠ actual settled amount
+  CURRENCY_MISMATCH
+  DUPLICATE_PAYMENT    // same payment id captured twice
+  ORPHAN_PAYMENT       // gateway settled an unknown order
+  SIGNATURE_INVALID    // post-callback verify mismatch
+}
+
+enum PaymentMismatchStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  IGNORED
+}
+
+model PaymentAttempt {
+  id String @id @default(uuid())
+
+  // Linked order context (best-effort — may be null for orphan payments).
+  masterOrderId String? @map("master_order_id")
+  orderNumber   String? @map("order_number")
+
+  kind   PaymentAttemptKind
+  status PaymentAttemptStatus
+
+  // Gateway identity. Razorpay-specific today; widen if we add more.
+  provider           String  @default("razorpay")
+  providerOrderId    String? @map("provider_order_id")
+  providerPaymentId  String? @map("provider_payment_id")
+  providerRefundId   String? @map("provider_refund_id")
+
+  // Money snapshot — paise to match the rest of the platform.
+  amountInPaise Int? @map("amount_in_paise")
+  currency      String @default("INR")
+
+  // For SUCCESS: the response body or relevant fields. For FAILURE: the
+  // gateway error / our parse error. Free-form so we can capture rich
+  // payloads without schema churn.
+  responseSummary String? @map("response_summary") @db.Text
+  failureReason   String? @map("failure_reason") @db.Text
+
+  // 1, 2, 3 etc. — counted per (masterOrderId, kind).
+  attemptNumber Int @default(1) @map("attempt_number")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([masterOrderId, kind, createdAt(sort: Desc)])
+  @@index([providerPaymentId])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("payment_attempts")
+}
+
+model PaymentMismatchAlert {
+  id String @id @default(uuid())
+
+  kind   PaymentMismatchKind
+  status PaymentMismatchStatus @default(OPEN)
+  // Optional severity — drives sort order in admin queue.
+  severity Int @default(50)
+
+  // Linked context (any may be null for orphans).
+  masterOrderId     String? @map("master_order_id")
+  orderNumber       String? @map("order_number")
+  providerPaymentId String? @map("provider_payment_id")
+
+  expectedInPaise Int? @map("expected_in_paise")
+  actualInPaise   Int? @map("actual_in_paise")
+
+  description String @db.Text
+  // Internal notes added during triage (admin-only).
+  resolutionNotes String? @map("resolution_notes") @db.Text
+
+  resolvedByAdminId String?   @map("resolved_by_admin_id")
+  resolvedAt        DateTime? @map("resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, severity(sort: Desc), createdAt(sort: Desc)])
+  @@index([masterOrderId])
+  @@index([providerPaymentId])
+  @@map("payment_mismatch_alerts")
+}

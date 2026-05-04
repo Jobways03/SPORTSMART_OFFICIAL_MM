@@ -1,6 +1,32 @@
 // ============================================
 // Files Module - owned tables
 // ============================================
+//
+// Lifecycle: client requests upload-intent (PENDING row + signed URL),
+// uploads directly to storage, then calls confirm (→ READY). Attach
+// links the file to a polymorphic resource (ticket message, dispute
+// evidence, KYC doc, invoice, product image, banner). Soft-delete
+// preserves audit trail.
+
+enum FileStatus {
+  PENDING  // upload-intent issued, awaiting client to confirm
+  READY    // confirmed; safe to attach + serve
+  DELETED  // soft-deleted (deletedAt set); no longer attachable
+}
+
+enum FilePurpose {
+  KYC_DOCUMENT
+  BANK_PROOF
+  QC_EVIDENCE
+  DISPUTE_EVIDENCE
+  INVOICE
+  PRODUCT_IMAGE
+  PRODUCT_VIDEO
+  BANNER
+  AVATAR
+  TICKET_ATTACHMENT
+  OTHER
+}
 
 model FileMetadata {
   id             String             @id @default(uuid())
@@ -8,26 +34,51 @@ model FileMetadata {
   mimeType       String             @map("mime_type")
   sizeBytes      Int                @map("size_bytes")
   classification FileClassification
+  // Per-purpose enum drives validation + folder routing + retention.
+  // Distinct from `classification` (PUBLIC/PRIVATE), this names the
+  // business intent so admin tools can filter by category.
+  purpose        FilePurpose        @default(OTHER)
+  status         FileStatus         @default(PENDING)
+
   storageKey     String             @unique @map("storage_key")
+  // Storage provider name ("s3" / "cloudinary" / "local").
+  provider       String             @default("s3")
+  // Provider-specific identifier (S3 key, Cloudinary publicId).
+  providerFileId String?            @map("provider_file_id")
+  // Optional public URL when classification=PUBLIC.
+  providerUrl    String?            @map("provider_url")
+
   uploadedBy     String             @map("uploaded_by")
+  // Pre-signed upload URL expiry — PENDING rows past this can be GC'd.
+  expiresAt      DateTime?          @map("expires_at")
+  deletedAt      DateTime?          @map("deleted_at")
+
   createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
 
   attachments FileAttachment[]
 
   @@index([uploadedBy])
   @@index([classification])
+  @@index([status])
+  @@index([purpose])
+  @@index([deletedAt])
   @@map("file_metadata")
 }
 
 model FileAttachment {
   id         String   @id @default(uuid())
   fileId     String   @map("file_id")
-  resource   String
+  resource   String   // 'ticket_message' / 'dispute_evidence' / 'seller_kyc' / etc.
   resourceId String   @map("resource_id")
+  caption    String?
+  // Who attached this. Null for system-generated (invoice rendering).
+  attachedBy String?  @map("attached_by")
   createdAt  DateTime @default(now()) @map("created_at")
 
   file FileMetadata @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
   @@index([resource, resourceId])
+  @@index([fileId])
   @@map("file_attachments")
 }

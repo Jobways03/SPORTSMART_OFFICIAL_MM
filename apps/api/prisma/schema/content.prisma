@@ -1,0 +1,61 @@
+// CMS — banners, static pages, FAQ. Backs the storefront's
+// homepage banners, /privacy, /terms, /faq, and policy pages.
+
+enum BannerSlot {
+  HOMEPAGE_HERO
+  CATEGORY_HEADER
+  BRAND_HEADER
+  CART_BANNER
+  CHECKOUT_BANNER
+}
+
+model Banner {
+  id          String     @id @default(uuid())
+  slot        BannerSlot
+  title       String
+  imageUrl    String     @map("image_url")
+  ctaUrl      String?    @map("cta_url")
+  // Optional scope id — when slot=CATEGORY_HEADER this is categoryId.
+  scopeId     String?    @map("scope_id")
+  position    Int        @default(0)
+  startsAt    DateTime?  @map("starts_at")
+  endsAt      DateTime?  @map("ends_at")
+  active      Boolean    @default(true)
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  @@index([slot, active, position])
+  @@index([scopeId])
+  @@map("banners")
+}
+
+model StaticPage {
+  id           String   @id @default(uuid())
+  slug         String   @unique
+  title        String
+  body         String   @db.Text
+  // SEO
+  metaTitle    String?  @map("meta_title")
+  metaDesc     String?  @map("meta_desc")
+  published    Boolean  @default(false)
+  publishedAt  DateTime? @map("published_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([published])
+  @@map("static_pages")
+}
+
+model FaqEntry {
+  id        String   @id @default(uuid())
+  category  String
+  question  String   @db.Text
+  answer    String   @db.Text
+  position  Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([category, active, position])
+  @@map("faq_entries")
+}

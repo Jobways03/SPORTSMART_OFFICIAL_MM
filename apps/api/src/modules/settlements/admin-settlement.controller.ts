@@ -178,4 +178,33 @@ export class AdminSettlementController {
       data,
     };
   }
+
+  /* ── Manual adjustments on a settlement ── */
+  @Post(':settlementId/adjustments')
+  async recordAdjustment(
+    @Req() req: Request,
+    @Param('settlementId') settlementId: string,
+    @Body() body: { amount: number; reason: string; notes?: string },
+  ) {
+    if (typeof body?.amount !== 'number' || body.amount === 0) {
+      throw new BadRequestException('amount must be a non-zero number');
+    }
+    if (!body?.reason?.trim()) {
+      throw new BadRequestException('reason is required');
+    }
+    const data = await this.settlementService.recordAdjustment({
+      settlementId,
+      amount: body.amount,
+      reason: body.reason,
+      notes: body.notes,
+      adminId: (req as any).adminId,
+    });
+    return { success: true, message: 'Adjustment recorded', data };
+  }
+
+  @Get(':settlementId/adjustments')
+  async listAdjustments(@Param('settlementId') settlementId: string) {
+    const data = await this.settlementService.listAdjustments(settlementId);
+    return { success: true, message: 'Adjustments retrieved', data };
+  }
 }

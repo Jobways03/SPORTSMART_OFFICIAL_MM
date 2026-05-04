@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { returnsService, ListReturnsResponse, getReturnStatusLabel } from '@/services/returns.service';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 const STATUS_FILTERS: Array<{ value: string; label: string }> = [
   { value: '',                  label: 'All' },
@@ -43,6 +44,7 @@ function returnTone(status: string): Tone {
 
 export default function ReturnsPage() {
   const router = useRouter();
+  const authStatus = useAuthGuard();
   const [data, setData] = useState<ListReturnsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -60,18 +62,10 @@ export default function ReturnsPage() {
   };
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
+    if (authStatus !== 'authed') return;
     fetchReturns(page, statusFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, statusFilter]);
+  }, [authStatus, page, statusFilter]);
 
   const formatPrice = (price: number | null) =>
     price == null ? '–' : `₹${Number(price).toLocaleString('en-IN')}`;

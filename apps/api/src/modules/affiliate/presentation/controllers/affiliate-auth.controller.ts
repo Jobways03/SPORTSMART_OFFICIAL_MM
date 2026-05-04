@@ -4,9 +4,11 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { Request } from 'express';
 import { AffiliateAuthService } from '../../application/services/affiliate-auth.service';
 import { AffiliatePasswordResetService } from '../../application/services/affiliate-password-reset.service';
 import { AffiliateLoginDto } from '../dtos/affiliate-login.dto';
@@ -15,6 +17,7 @@ import { AffiliateVerifyResetOtpDto } from '../dtos/affiliate-verify-reset-otp.d
 import { AffiliateResendResetOtpDto } from '../dtos/affiliate-resend-reset-otp.dto';
 import { AffiliateResetPasswordDto } from '../dtos/affiliate-reset-password.dto';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
+import { AccessLogService } from '../../../access-log/application/services/access-log.service';
 
 @ApiTags('Affiliate Auth')
 @Controller('affiliate/auth')
@@ -22,17 +25,50 @@ export class AffiliateAuthController {
   constructor(
     private readonly authService: AffiliateAuthService,
     private readonly passwordResetService: AffiliatePasswordResetService,
+    private readonly accessLog: AccessLogService,
   ) {}
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() dto: AffiliateLoginDto) {
-    const data = await this.authService.login(dto);
-    return {
-      success: true,
-      message: 'Login successful',
-      data,
-    };
+  async login(@Body() dto: AffiliateLoginDto, @Req() req: Request) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+    try {
+      const data = await this.authService.login(dto);
+
+      const affiliateId =
+        (data as any)?.affiliate?.id ?? (data as any)?.affiliateId;
+      if (affiliateId) {
+        this.accessLog
+          .record({
+            actorType: 'AFFILIATE',
+            actorId: affiliateId,
+            kind: 'LOGIN_SUCCESS',
+            ipAddress,
+            userAgent,
+          })
+          .catch(() => undefined);
+      }
+
+      return {
+        success: true,
+        message: 'Login successful',
+        data,
+      };
+    } catch (err) {
+      this.accessLog
+        .record({
+          actorType: 'AFFILIATE',
+          actorId: (dto as any)?.email ?? (dto as any)?.identifier ?? 'unknown',
+          kind: 'LOGIN_FAILURE',
+          ipAddress,
+          userAgent,
+          succeeded: false,
+          reason: (err as Error).message,
+        })
+        .catch(() => undefined);
+      throw err;
+    }
   }
 
   @Post('forgot-password')

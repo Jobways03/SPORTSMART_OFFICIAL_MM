@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import {
   returnsService,
   ReturnDetail,
@@ -12,6 +12,7 @@ import {
 } from '@/services/returns.service';
 import { useModal } from '@sportsmart/ui';
 import { REASON_CATEGORIES } from '@/services/returns.service';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 const getReasonLabel = (value: string) => {
   const found = REASON_CATEGORIES.find((r) => r.value === value);
@@ -22,6 +23,7 @@ export default function ReturnDetailPage() {
   const { notify, confirmDialog } = useModal();
 const { returnId } = useParams<{ returnId: string }>();
   const router = useRouter();
+  const authStatus = useAuthGuard();
   const [ret, setRet] = useState<ReturnDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -38,17 +40,9 @@ const { returnId } = useParams<{ returnId: string }>();
   }, [returnId]);
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
+    if (authStatus !== 'authed') return;
     fetchReturn();
-  }, [fetchReturn]);
+  }, [authStatus, fetchReturn]);
 
   const handleCancel = async () => {if (!(await confirmDialog('Are you sure you want to cancel this return request?'))) return;
     setActionLoading(true);
@@ -95,17 +89,15 @@ const { returnId } = useParams<{ returnId: string }>();
 
   if (loading) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div className="products-loading">Loading return...</div>
-      </>
+      </StorefrontShell>
     );
   }
 
   if (!ret) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div
           style={{
             maxWidth: 800,
@@ -119,7 +111,7 @@ const { returnId } = useParams<{ returnId: string }>();
             Back to Returns
           </Link>
         </div>
-      </>
+      </StorefrontShell>
     );
   }
 
@@ -133,8 +125,7 @@ const { returnId } = useParams<{ returnId: string }>();
   const canMarkHandedOver = ret.status === 'PICKUP_SCHEDULED';
 
   return (
-    <>
-      <Navbar />
+    <StorefrontShell>
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 60px' }}>
         <Link
           href="/returns"
@@ -709,6 +700,6 @@ const { returnId } = useParams<{ returnId: string }>();
           </div>
         )}
       </div>
-    </>
+    </StorefrontShell>
   );
 }

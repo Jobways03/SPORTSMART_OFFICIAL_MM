@@ -8,6 +8,7 @@ import {
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { FranchiseModule } from '../franchise/module';
+import { WalletModule } from '../wallet/module';
 import { RETURN_REPOSITORY } from './domain/repositories/return.repository.interface';
 import { PrismaReturnRepository } from './infrastructure/repositories/prisma-return.repository';
 import { ReturnService } from './application/services/return.service';
@@ -26,7 +27,7 @@ import { SellerReturnsController } from './presentation/controllers/seller-retur
 import { FranchiseReturnsController } from './presentation/controllers/franchise-returns.controller';
 
 @Module({
-  imports: [FranchiseModule, RazorpayModule],
+  imports: [FranchiseModule, RazorpayModule, WalletModule],
   controllers: [
     CustomerReturnsController,
     AdminReturnsController,

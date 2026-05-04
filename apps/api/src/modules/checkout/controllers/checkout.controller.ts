@@ -63,13 +63,18 @@ export class CheckoutController {
       // attribution rule (SRS §7.3) is "coupon wins" if the coupon
       // itself is also an affiliate-owned code.
       referralCode?: string;
+      // Optional wallet portion to apply to this order. Server clamps
+      // to chargedTotal and validates available balance before debit.
+      walletApplyAmountInPaise?: number;
     },
   ) {
+    const walletApply = Number(body.walletApplyAmountInPaise);
     const data = await this.checkoutService.placeOrder(
       req.userId,
       body.paymentMethod,
       body.couponCode,
       body.referralCode,
+      Number.isFinite(walletApply) && walletApply > 0 ? walletApply : undefined,
     );
     const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {

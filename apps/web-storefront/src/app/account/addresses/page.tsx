@@ -3,7 +3,7 @@
 import { useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Navbar from '@/components/Navbar';
+import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import {
   addressesService,
   CustomerAddress,
@@ -11,6 +11,7 @@ import {
 } from '@/services/addresses.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import { useAuthGuard } from '@/lib/useAuthGuard';
 
 interface FormState {
   fullName: string;
@@ -48,6 +49,7 @@ const normalizePhone = (phone: string): string => {
 export default function AddressesPage() {
   const { notify, confirmDialog } = useModal();
 const router = useRouter();
+  const authStatus = useAuthGuard();
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -69,17 +71,10 @@ const router = useRouter();
   };
 
   useEffect(() => {
-    try {
-      if (!sessionStorage.getItem('accessToken')) {
-        router.push('/login');
-        return;
-      }
-    } catch {
-      router.push('/login');
-      return;
-    }
+    if (authStatus !== 'authed') return;
     fetchAddresses();
-  }, [router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authStatus]);
 
   const openCreateModal = () => {
     setEditingId(null);
@@ -198,19 +193,17 @@ const router = useRouter();
 
   if (loading) {
     return (
-      <>
-        <Navbar />
+      <StorefrontShell>
         <div className="products-loading">
           <div className="loading-spinner"></div>
           <span>Loading addresses...</span>
         </div>
-      </>
+      </StorefrontShell>
     );
   }
 
   return (
-    <>
-      <Navbar />
+    <StorefrontShell>
       <div className="account-page">
         <div className="account-breadcrumb">
           <Link href="/account">My Account</Link>
@@ -416,6 +409,6 @@ const router = useRouter();
           </div>
         </div>
       )}
-    </>
+    </StorefrontShell>
   );
 }

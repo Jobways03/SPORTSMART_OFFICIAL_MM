@@ -26,6 +26,7 @@ import { CatalogModule } from '../catalog/module';
 import { FranchiseModule } from '../franchise/module';
 import { DiscountsModule } from '../discounts/discounts.module';
 import { AffiliateModule } from '../affiliate/module';
+import { WalletModule } from '../wallet/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 
 @Module({
@@ -34,6 +35,7 @@ import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
     FranchiseModule,
     DiscountsModule,
     AffiliateModule,
+    WalletModule,
     RazorpayModule,
   ],
   controllers: [

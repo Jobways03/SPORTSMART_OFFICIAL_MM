@@ -1,0 +1,41 @@
+// ============================================
+// Access Log Module - login & access history
+// Polymorphic actor: type + id (no FK), works across
+// User, Admin, Seller, Franchise, Affiliate.
+// ============================================
+
+enum AccessActorType {
+  CUSTOMER
+  ADMIN
+  SELLER
+  FRANCHISE
+  AFFILIATE
+}
+
+enum AccessEventKind {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  TOKEN_REFRESH
+  PASSWORD_RESET
+  NEW_DEVICE_DETECTED
+}
+
+model AccessLog {
+  id          String          @id @default(uuid())
+  actorType   AccessActorType @map("actor_type")
+  actorId     String          @map("actor_id")
+  kind        AccessEventKind
+  ipAddress   String?         @map("ip_address")
+  userAgent   String?         @map("user_agent")
+  deviceHash  String?         @map("device_hash") // sha256(userAgent + ip prefix)
+  succeeded   Boolean         @default(true)
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  @@index([actorType, actorId])
+  @@index([kind])
+  @@index([createdAt])
+  @@map("access_logs")
+}
