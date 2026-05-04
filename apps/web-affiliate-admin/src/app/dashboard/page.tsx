@@ -195,7 +195,7 @@ export default function ApplicationsPage() {
   const pendingCount = counts.PENDING_APPROVAL ?? 0;
 
   return (
-    <div style={{ maxWidth: 1200 }}>
+    <div style={{ maxWidth: 1200, marginInline: 'auto' }}>
       {/* Hero band */}
       <header
         style={{
@@ -924,6 +924,15 @@ function ManageAffiliateModal({
             <button onClick={onClose} style={btnGhost}>Close</button>
           </div>
 
+          <StatusSection
+            affiliateId={detail.id}
+            status={detail.status}
+            onChanged={async (updated) => {
+              setDetail((d) => (d ? { ...d, ...updated } : d));
+              onChanged();
+            }}
+          />
+
           <CommissionSection
             initial={detail.commissionPercentage}
             affiliateId={detail.id}
@@ -966,6 +975,195 @@ function ManageAffiliateModal({
         </>
       )}
     </Modal>
+  );
+}
+
+/**
+ * Account-status controls: suspend / deactivate / reactivate. Buttons
+ * shown depend on the current status:
+ *   - ACTIVE             → Suspend (with reason) or Deactivate
+ *   - SUSPENDED          → Reactivate
+ *   - INACTIVE           → Reactivate
+ *   - PENDING_APPROVAL   → handled by the approve/reject buttons on
+ *                          the list row, not surfaced here
+ *   - REJECTED           → terminal, no actions
+ */
+function StatusSection({
+  affiliateId,
+  status,
+  onChanged,
+}: {
+  affiliateId: string;
+  status: string;
+  onChanged: (updated: Partial<Affiliate>) => Promise<void> | void;
+}) {
+  const [mode, setMode] = useState<'idle' | 'suspend-input'>('idle');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [savedFlash, setSavedFlash] = useState('');
+
+  const callAction = async (path: string, body?: object): Promise<void> => {
+    setErr('');
+    setBusy(true);
+    try {
+      const data = await apiFetch<Affiliate>(`/admin/affiliates/${affiliateId}/${path}`, {
+        method: 'PATCH',
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      await onChanged(data);
+      setMode('idle');
+      setReason('');
+      setSavedFlash(`Affiliate ${path}d.`);
+      setTimeout(() => setSavedFlash(''), 1800);
+    } catch (e: any) {
+      setErr(e?.message ?? 'Action failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isActive = status === 'ACTIVE';
+  const isSuspended = status === 'SUSPENDED';
+  const isInactive = status === 'INACTIVE';
+  const isTerminal = status === 'REJECTED';
+  const isPending = status === 'PENDING_APPROVAL';
+
+  // Pending applications use the row's Approve/Reject buttons; rejected
+  // is terminal — neither needs status controls in this modal.
+  if (isTerminal || isPending) return null;
+
+  const tone =
+    isSuspended ? { bg: '#fef2f2', border: '#fecaca', fg: '#991b1b' } :
+    isInactive ? { bg: '#f1f5f9', border: '#cbd5e1', fg: '#475569' } :
+    { bg: '#f0fdf4', border: '#bbf7d0', fg: '#15803d' };
+
+  return (
+    <section
+      style={{
+        marginTop: 18,
+        padding: 16,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        borderRadius: 10,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h3 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 2px', color: tone.fg }}>
+            Account status
+          </h3>
+          <p style={{ fontSize: 12, color: '#64748b', margin: 0 }}>
+            {isActive && 'Affiliate is active and earning commissions.'}
+            {isSuspended && 'Affiliate cannot log in or earn commissions.'}
+            {isInactive && 'Affiliate cannot earn new commissions but can still log in to view balances.'}
+          </p>
+        </div>
+        <span
+          style={{
+            padding: '3px 10px',
+            fontSize: 11,
+            fontWeight: 700,
+            borderRadius: 999,
+            background: '#fff',
+            color: tone.fg,
+            border: `1px solid ${tone.border}`,
+            letterSpacing: '0.5px',
+            textTransform: 'uppercase',
+          }}
+        >
+          {status.replace(/_/g, ' ')}
+        </span>
+      </div>
+
+      {mode === 'idle' && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {isActive && (
+            <>
+              <button onClick={() => setMode('suspend-input')} disabled={busy} style={btnDanger}>
+                Suspend
+              </button>
+              <button
+                onClick={() => callAction('deactivate')}
+                disabled={busy}
+                style={btnGhost}
+                title="Affiliate keeps login access but stops earning new commissions."
+              >
+                Deactivate
+              </button>
+            </>
+          )}
+          {(isSuspended || isInactive) && (
+            <button onClick={() => callAction('reactivate')} disabled={busy} style={btnSuccess}>
+              {busy ? 'Reactivating…' : 'Reactivate'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {mode === 'suspend-input' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>
+            Reason for suspension <span style={{ color: '#dc2626' }}>*</span>
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            maxLength={500}
+            autoFocus
+            placeholder="e.g. Repeated coupon-stuffing detected — pausing pending review."
+            disabled={busy}
+            style={{
+              padding: '8px 10px',
+              border: '1px solid #cbd5e1',
+              borderRadius: 6,
+              fontSize: 13,
+              fontFamily: 'inherit',
+              resize: 'vertical',
+              outline: 'none',
+              boxSizing: 'border-box',
+              width: '100%',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => callAction('suspend', { reason: reason.trim() })}
+              disabled={busy || !reason.trim()}
+              style={{
+                ...btnDanger,
+                opacity: busy || !reason.trim() ? 0.5 : 1,
+                cursor: busy || !reason.trim() ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {busy ? 'Suspending…' : 'Confirm suspension'}
+            </button>
+            <button
+              onClick={() => {
+                setMode('idle');
+                setReason('');
+                setErr('');
+              }}
+              disabled={busy}
+              style={btnGhost}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {err && (
+        <div role="alert" style={{ marginTop: 10, padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#991b1b' }}>
+          {err}
+        </div>
+      )}
+      {savedFlash && (
+        <div role="status" style={{ marginTop: 10, fontSize: 12, color: '#15803d', fontWeight: 600 }}>
+          ✓ {savedFlash}
+        </div>
+      )}
+    </section>
   );
 }
 

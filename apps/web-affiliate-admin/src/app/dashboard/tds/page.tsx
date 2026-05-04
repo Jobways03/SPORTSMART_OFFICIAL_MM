@@ -63,7 +63,7 @@ export default function TdsRecordsPage() {
   );
 
   return (
-    <div style={{ maxWidth: 1200 }}>
+    <div style={{ maxWidth: 1200, marginInline: 'auto' }}>
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.02em' }}>
           TDS records

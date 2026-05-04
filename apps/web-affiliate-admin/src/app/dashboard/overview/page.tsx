@@ -111,7 +111,7 @@ export default function OverviewPage() {
   const inboxZero = actionItems.every((a) => a.n === 0);
 
   return (
-    <div style={{ maxWidth: 1200 }}>
+    <div style={{ maxWidth: 1200, marginInline: 'auto' }}>
       {/* Hero */}
       <header
         style={{

@@ -23,14 +23,9 @@ import { AffiliateRegistrationService } from '../../application/services/affilia
 import { AffiliateCommissionService } from '../../application/services/affiliate-commission.service';
 import { AffiliateKycService } from '../../application/services/affiliate-kyc.service';
 import { AffiliatePayoutService } from '../../application/services/affiliate-payout.service';
-import { AffiliatePhoneVerificationService } from '../../application/services/affiliate-phone-verification.service';
 import { SubmitAffiliateKycDto } from '../dtos/affiliate-kyc.dto';
 import { AddPayoutMethodDto } from '../dtos/affiliate-payout.dto';
 import { AffiliateUpdateProfileDto } from '../dtos/affiliate-update-profile.dto';
-import {
-  AffiliateSendPhoneOtpDto,
-  AffiliateVerifyPhoneOtpDto,
-} from '../dtos/affiliate-phone-verification.dto';
 
 const KYC_UPLOAD_MAX_BYTES = 8 * 1024 * 1024; // 8 MB — generous for high-res scans
 const KYC_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
@@ -58,7 +53,6 @@ export class AffiliateSelfController {
     private readonly kycService: AffiliateKycService,
     private readonly payoutService: AffiliatePayoutService,
     private readonly cloudinary: CloudinaryAdapter,
-    private readonly phoneVerificationService: AffiliatePhoneVerificationService,
   ) {}
 
   @Get()
@@ -87,30 +81,6 @@ export class AffiliateSelfController {
     };
   }
 
-  // ── Phone verification ──────────────────────────────────────
-
-  @Post('phone/send-otp')
-  @HttpCode(HttpStatus.OK)
-  async sendPhoneOtp(@Req() req: Request, @Body() dto: AffiliateSendPhoneOtpDto) {
-    const affiliateId = (req as any).affiliateId;
-    const data = await this.phoneVerificationService.sendOtp(affiliateId, dto.phone);
-    return {
-      success: true,
-      message: 'OTP sent. Check WhatsApp (or your inbox if WhatsApp is unavailable).',
-      data,
-    };
-  }
-
-  @Post('phone/verify-otp')
-  @HttpCode(HttpStatus.OK)
-  async verifyPhoneOtp(@Req() req: Request, @Body() dto: AffiliateVerifyPhoneOtpDto) {
-    const affiliateId = (req as any).affiliateId;
-    await this.phoneVerificationService.verifyOtp(affiliateId, dto.otp);
-    return {
-      success: true,
-      message: 'Phone verified.',
-    };
-  }
 
   @Get('balances')
   async getBalances(@Req() req: Request) {

@@ -2,14 +2,11 @@ import { Module } from '@nestjs/common';
 import { AffiliateAuthGuard } from '../../core/guards';
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
-import { WhatsAppAdapter } from '../../integrations/whatsapp/adapters/whatsapp.adapter';
-import { WhatsAppClient } from '../../integrations/whatsapp/clients/whatsapp.client';
 import { AffiliatePublicFacade } from './application/facades/affiliate-public.facade';
 import { AffiliateRegistrationService } from './application/services/affiliate-registration.service';
 import { AffiliateAuthService } from './application/services/affiliate-auth.service';
 import { AffiliatePasswordResetService } from './application/services/affiliate-password-reset.service';
 import { AffiliateSettingsService } from './application/services/affiliate-settings.service';
-import { AffiliatePhoneVerificationService } from './application/services/affiliate-phone-verification.service';
 import { AffiliateCommissionService } from './application/services/affiliate-commission.service';
 import { AffiliateEncryptionService } from './application/services/affiliate-encryption.service';
 import { AffiliateKycService } from './application/services/affiliate-kyc.service';
@@ -44,7 +41,6 @@ import { AffiliateSelfController } from './presentation/controllers/affiliate-se
     AffiliateAuthService,
     AffiliatePasswordResetService,
     AffiliateSettingsService,
-    AffiliatePhoneVerificationService,
     AffiliateCommissionService,
     AffiliateEncryptionService,
     AffiliateKycService,
@@ -53,8 +49,6 @@ import { AffiliateSelfController } from './presentation/controllers/affiliate-se
     AffiliateAuthGuard,
     CloudinaryAdapter,
     EmailOtpAdapter,
-    WhatsAppAdapter,
-    WhatsAppClient,
     // Event handlers — subscribed via @OnEvent decorators. Just
     // including them in providers is enough for Nest to register
     // the listeners with the event emitter.

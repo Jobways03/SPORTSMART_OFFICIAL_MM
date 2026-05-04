@@ -77,13 +77,12 @@ interface CheckoutData {
   expiresAt: string;
 }
 
-<<<<<<< HEAD
 const inputBase =
   'w-full h-11 px-3.5 border bg-white text-body placeholder:text-ink-400 focus:outline-none transition-colors rounded-full';
 const inputOk = 'border-ink-300 hover:border-ink-500 focus:border-ink-900';
 const inputErr = 'border-danger focus:border-danger';
 const inputAuto = 'border-accent bg-accent-soft/40 focus:border-accent-dark';
-=======
+
 /** Read a single cookie's value by name, or null if absent. Used to
  *  pull the affiliate referral cookie (sm_ref) at checkout time. */
 function readCookie(name: string): string | null {
@@ -100,7 +99,6 @@ function readCookie(name: string): string | null {
     return v;
   }
 }
->>>>>>> b3012c5828d1c42ec220aa4f1cd70c616c50e17f
 
 export default function CheckoutPage() {
   const router = useRouter();

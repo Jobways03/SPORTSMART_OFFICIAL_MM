@@ -17,6 +17,7 @@ import { AffiliatePayoutService } from '../../application/services/affiliate-pay
 import {
   MarkPayoutPaidDto,
   MarkPayoutFailedDto,
+  RejectPayoutDto,
 } from '../dtos/affiliate-payout.dto';
 
 /**
@@ -55,6 +56,27 @@ export class AdminAffiliatePayoutController {
     const adminId = (req as any).adminId;
     const data = await this.payoutService.approve({ payoutRequestId, adminId });
     return { success: true, message: 'Payout approved', data };
+  }
+
+  @Patch(':payoutRequestId/reject')
+  @HttpCode(HttpStatus.OK)
+  async reject(
+    @Req() req: Request,
+    @Param('payoutRequestId') payoutRequestId: string,
+    @Body() dto: RejectPayoutDto,
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.payoutService.reject({
+      payoutRequestId,
+      adminId,
+      reason: dto.reason,
+    });
+    return {
+      success: true,
+      message:
+        'Payout rejected. Commissions released back to CONFIRMED so the affiliate can re-request.',
+      data,
+    };
   }
 
   @Patch(':payoutRequestId/mark-paid')

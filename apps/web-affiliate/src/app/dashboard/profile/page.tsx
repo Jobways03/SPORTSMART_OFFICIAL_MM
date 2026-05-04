@@ -7,9 +7,6 @@ interface Profile {
   id: string;
   email: string;
   phone?: string | null;
-  emailVerified?: boolean;
-  phoneVerified?: boolean;
-  phoneVerifiedAt?: string | null;
   firstName: string;
   lastName: string;
   websiteUrl?: string | null;
@@ -61,7 +58,7 @@ export default function ProfilePage() {
   if (loadError) return <p style={{ color: '#b91c1c' }}>{loadError}</p>;
   if (!profile || !form) {
     return (
-      <div style={{ maxWidth: 760 }}>
+      <div style={{ maxWidth: 760, marginInline: 'auto' }}>
         <div style={{ height: 30, width: 200, background: '#f1f5f9', borderRadius: 8, marginBottom: 8 }} />
         <div style={{ height: 14, width: 360, background: '#f1f5f9', borderRadius: 6, marginBottom: 24 }} />
         <div style={{ height: 220, background: '#f1f5f9', borderRadius: 12 }} />
@@ -118,7 +115,7 @@ export default function ProfilePage() {
   const isDirty = JSON.stringify(form) !== JSON.stringify(formFromProfile(profile));
 
   return (
-    <div style={{ maxWidth: 760 }}>
+    <div style={{ maxWidth: 760, marginInline: 'auto' }}>
       <header style={{ marginBottom: 22, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.02em' }}>
@@ -224,7 +221,7 @@ export default function ProfilePage() {
               <FormField
                 label="Phone"
                 required
-                hint="10-digit Indian mobile starting with 6, 7, 8, or 9. Changing this will clear verification."
+                hint="10-digit Indian mobile starting with 6, 7, 8, or 9."
               >
                 <input
                   type="tel"
@@ -272,7 +269,7 @@ export default function ProfilePage() {
             </div>
           ) : (
             <>
-              <PhoneRow profile={profile} onVerified={(updated) => { setProfile(updated); setForm(formFromProfile(updated)); }} />
+              <Field label="Phone" value={profile.phone ?? '—'} />
               <Field label="Website" value={profile.websiteUrl ?? '—'} link={profile.websiteUrl} />
               <Field label="Social handle" value={profile.socialHandle ?? '—'} last />
             </>
@@ -365,250 +362,6 @@ export default function ProfilePage() {
     </div>
   );
 }
-
-/**
- * Inline phone verification — only renders the rich UI when phone is
- * present and unverified. When verified, just shows a pill alongside
- * the number. Hits POST /affiliate/me/phone/send-otp + /verify-otp.
- */
-function PhoneRow({
-  profile,
-  onVerified,
-}: {
-  profile: Profile;
-  onVerified: (updated: Profile) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [otp, setOtp] = useState('');
-  const [sending, setSending] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
-  const [resendCooldown, setResendCooldown] = useState(0);
-
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const t = setInterval(() => setResendCooldown((c) => Math.max(0, c - 1)), 1000);
-    return () => clearInterval(t);
-  }, [resendCooldown]);
-
-  // If the affiliate edits + saves a new phone elsewhere on the page,
-  // collapse this panel so they re-trigger the flow consciously.
-  useEffect(() => {
-    setOpen(false);
-    setOtpSent(false);
-    setOtp('');
-    setError('');
-    setInfo('');
-  }, [profile.phone]);
-
-  const sendOtp = async () => {
-    setError('');
-    setInfo('');
-    setSending(true);
-    try {
-      await apiFetch('/affiliate/me/phone/send-otp', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      setOtpSent(true);
-      setInfo('OTP sent. Check your WhatsApp (or email if WhatsApp is unavailable).');
-      setResendCooldown(60);
-    } catch (e: any) {
-      setError(e?.message ?? 'Could not send OTP. Please try again.');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const verifyOtp = async () => {
-    if (otp.length !== 6) return;
-    setError('');
-    setInfo('');
-    setVerifying(true);
-    try {
-      await apiFetch('/affiliate/me/phone/verify-otp', {
-        method: 'POST',
-        body: JSON.stringify({ otp }),
-      });
-      // Refetch to surface the new phoneVerified=true state without
-      // trusting client-side cache.
-      const updated = await apiFetch<Profile>('/affiliate/me');
-      onVerified(updated);
-      setOpen(false);
-      setOtp('');
-      setOtpSent(false);
-    } catch (e: any) {
-      setError(e?.message ?? 'Could not verify. Please try again.');
-    } finally {
-      setVerifying(false);
-    }
-  };
-
-  const phoneText = profile.phone ?? '—';
-
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '180px 1fr',
-        gap: 16,
-        padding: '12px 18px',
-        borderBottom: '1px solid #f1f5f9',
-        fontSize: 13,
-        alignItems: 'flex-start',
-      }}
-    >
-      <div style={{ color: '#64748b', fontWeight: 500, paddingTop: 2 }}>Phone</div>
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ color: '#0f172a' }}>{phoneText}</span>
-          {profile.phone && (
-            profile.phoneVerified ? (
-              <span style={{ padding: '2px 9px', fontSize: 10, fontWeight: 700, borderRadius: 999, background: '#dcfce7', color: '#15803d', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                ✓ Verified
-              </span>
-            ) : (
-              <>
-                <span style={{ padding: '2px 9px', fontSize: 10, fontWeight: 700, borderRadius: 999, background: '#fef3c7', color: '#92400e', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                  Unverified
-                </span>
-                {!open && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpen(true);
-                      sendOtp();
-                    }}
-                    disabled={sending}
-                    style={btnPrimarySmall}
-                  >
-                    {sending ? 'Sending…' : 'Verify phone'}
-                  </button>
-                )}
-              </>
-            )
-          )}
-        </div>
-
-        {open && !profile.phoneVerified && (
-          <div
-            style={{
-              marginTop: 12,
-              padding: 14,
-              border: '1px solid #bfdbfe',
-              background: '#eff6ff',
-              borderRadius: 8,
-            }}
-          >
-            <div style={{ fontSize: 12, color: '#1e3a8a', marginBottom: 10, lineHeight: 1.5 }}>
-              We&rsquo;ll send a 6-digit code to <strong>{phoneText}</strong>. It expires in 10 minutes.
-            </div>
-
-            {error && (
-              <div role="alert" style={{ padding: '8px 10px', marginBottom: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#991b1b' }}>
-                {error}
-              </div>
-            )}
-            {info && !error && (
-              <div role="status" style={{ padding: '8px 10px', marginBottom: 10, background: '#fff', border: '1px solid #bfdbfe', borderRadius: 6, fontSize: 12, color: '#1e3a8a' }}>
-                {info}
-              </div>
-            )}
-
-            {otpSent && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  pattern="\d{6}"
-                  maxLength={6}
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  placeholder="6-digit code"
-                  style={{
-                    padding: '8px 12px',
-                    fontSize: 16,
-                    letterSpacing: '0.3em',
-                    fontFamily: 'ui-monospace, Menlo, monospace',
-                    textAlign: 'center',
-                    border: '1px solid #cbd5e1',
-                    borderRadius: 6,
-                    width: 140,
-                    outline: 'none',
-                  }}
-                  autoFocus
-                />
-                <button
-                  type="button"
-                  onClick={verifyOtp}
-                  disabled={otp.length !== 6 || verifying}
-                  style={{
-                    ...btnPrimarySmall,
-                    opacity: otp.length !== 6 || verifying ? 0.5 : 1,
-                    cursor: otp.length !== 6 || verifying ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {verifying ? 'Verifying…' : 'Verify'}
-                </button>
-                <button
-                  type="button"
-                  onClick={sendOtp}
-                  disabled={sending || resendCooldown > 0}
-                  style={{
-                    ...btnGhostSmall,
-                    color: resendCooldown > 0 ? '#94a3b8' : '#475569',
-                    cursor: sending || resendCooldown > 0 ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {sending ? 'Sending…' : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend'}
-                </button>
-              </div>
-            )}
-
-            <div style={{ marginTop: 10 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  setOtp('');
-                  setError('');
-                  setInfo('');
-                }}
-                style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 12, cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const btnPrimarySmall: React.CSSProperties = {
-  padding: '6px 12px',
-  background: '#2563eb',
-  color: '#fff',
-  border: 'none',
-  borderRadius: 6,
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-
-const btnGhostSmall: React.CSSProperties = {
-  padding: '6px 12px',
-  background: '#fff',
-  border: '1px solid #cbd5e1',
-  borderRadius: 6,
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'pointer',
-};
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

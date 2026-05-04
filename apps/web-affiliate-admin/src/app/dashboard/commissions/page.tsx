@@ -83,7 +83,7 @@ export default function AdminCommissionsPage() {
   };
 
   return (
-    <div style={{ maxWidth: 1280 }}>
+    <div style={{ maxWidth: 1280, marginInline: 'auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>Commissions</h1>
       <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 16px' }}>
         Every affiliate commission across the platform.{' '}

@@ -46,3 +46,9 @@ export class MarkPayoutFailedDto {
   @Length(1, 500)
   reason!: string;
 }
+
+export class RejectPayoutDto {
+  @IsString()
+  @Length(1, 500)
+  reason!: string;
+}

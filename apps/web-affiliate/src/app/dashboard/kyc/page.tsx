@@ -78,7 +78,7 @@ export default function KycPage() {
   const canSubmit = kyc.status === 'NOT_STARTED' || kyc.status === 'REJECTED';
 
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 720, marginInline: 'auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>KYC verification</h1>
       <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 24px' }}>
         Required by Indian tax law (Section 194H). PAN is mandatory for TDS reporting; Aadhaar is optional.

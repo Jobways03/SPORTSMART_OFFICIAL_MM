@@ -81,7 +81,7 @@ export default function DashboardPage() {
   const totalCount = balances.counts.pending + balances.counts.confirmed + balances.counts.paid + balances.counts.hold;
 
   return (
-    <div style={{ maxWidth: 1080 }}>
+    <div style={{ maxWidth: 1080, marginInline: 'auto' }}>
       {/* Hero */}
       <section style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.02em' }}>

@@ -141,14 +141,6 @@ export class AffiliateRegistrationService {
       return this.getProfile(input.affiliateId);
     }
 
-    // Changing the phone invalidates verification — they have to re-verify
-    // the new number. Email isn't editable here, so emailVerified is
-    // never invalidated by this path.
-    if (data.phone !== undefined && data.phone !== existing.phone) {
-      data.phoneVerified = false;
-      data.phoneVerifiedAt = null;
-    }
-
     await this.prisma.affiliate.update({
       where: { id: input.affiliateId },
       data,
@@ -542,9 +534,6 @@ export class AffiliateRegistrationService {
       id: true,
       email: true,
       phone: true,
-      emailVerified: true,
-      phoneVerified: true,
-      phoneVerifiedAt: true,
       firstName: true,
       lastName: true,
       websiteUrl: true,

@@ -116,7 +116,7 @@ export default function PayoutsPage() {
   const canRequest = checks.every((c) => c.done);
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div style={{ maxWidth: 980, marginInline: 'auto' }}>
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.02em' }}>Payouts</h1>
         <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>

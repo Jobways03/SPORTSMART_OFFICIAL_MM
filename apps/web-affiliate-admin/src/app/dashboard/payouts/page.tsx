@@ -32,6 +32,7 @@ type Filter = (typeof FILTERS)[number];
 
 type PromptModal =
   | { kind: 'approve'; request: PayoutRequest }
+  | { kind: 'reject'; request: PayoutRequest }
   | { kind: 'mark-paid'; request: PayoutRequest }
   | { kind: 'mark-failed'; request: PayoutRequest }
   | null;
@@ -107,6 +108,24 @@ export default function PayoutsQueuePage() {
     }
   };
 
+  const runReject = async (id: string, reason: string) => {
+    setActionError('');
+    setActionLoading(true);
+    try {
+      await apiFetch(`/admin/affiliates/payouts/${id}/reject`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason }),
+      });
+      closePrompt();
+      await load();
+      await loadCounts();
+    } catch (e: any) {
+      setActionError(e?.message ?? 'Reject failed.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const runMarkPaid = async (id: string, ref: string) => {
     setActionError('');
     setActionLoading(true);
@@ -144,7 +163,7 @@ export default function PayoutsQueuePage() {
   };
 
   return (
-    <div style={{ maxWidth: 1280 }}>
+    <div style={{ maxWidth: 1280, marginInline: 'auto' }}>
       <header style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.02em' }}>Payouts</h1>
         <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
@@ -196,6 +215,7 @@ export default function PayoutsQueuePage() {
               request={r}
               busy={actionLoading}
               onApprove={() => setPromptModal({ kind: 'approve', request: r })}
+              onReject={() => setPromptModal({ kind: 'reject', request: r })}
               onMarkPaid={() => setPromptModal({ kind: 'mark-paid', request: r })}
               onMarkFailed={() => setPromptModal({ kind: 'mark-failed', request: r })}
             />
@@ -214,6 +234,21 @@ export default function PayoutsQueuePage() {
           error={actionError}
           onCancel={closePrompt}
           onConfirm={() => runApprove(promptModal.request.id)}
+        />
+      )}
+      {promptModal?.kind === 'reject' && (
+        <PromptModalText
+          tone="danger"
+          title="Reject payout request"
+          summary={promptModal.request}
+          fieldLabel="Reason for rejection (visible to the affiliate)"
+          placeholder="e.g. KYC incomplete — please verify PAN before re-requesting."
+          confirmLabel="Reject request"
+          required
+          loading={actionLoading}
+          error={actionError}
+          onCancel={closePrompt}
+          onConfirm={(value) => runReject(promptModal.request.id, value)}
         />
       )}
       {promptModal?.kind === 'mark-paid' && (
@@ -281,19 +316,25 @@ function RequestCard({
   request: r,
   busy,
   onApprove,
+  onReject,
   onMarkPaid,
   onMarkFailed,
 }: {
   request: PayoutRequest;
   busy: boolean;
   onApprove: () => void;
+  onReject: () => void;
   onMarkPaid: () => void;
   onMarkFailed: () => void;
 }) {
   const initials = `${r.affiliate?.firstName?.[0] ?? ''}${r.affiliate?.lastName?.[0] ?? ''}`.toUpperCase();
+  // Strict per-status rules: REQUESTED is approve/reject only; APPROVED
+  // or PROCESSING is mark-paid/mark-failed only. PAID / FAILED /
+  // CANCELLED are terminal — nothing to do.
   const showApprove = r.status === 'REQUESTED';
-  const showMarkPaid = ['REQUESTED', 'APPROVED', 'PROCESSING'].includes(r.status);
-  const showMarkFailed = ['REQUESTED', 'APPROVED', 'PROCESSING'].includes(r.status);
+  const showReject = r.status === 'REQUESTED';
+  const showMarkPaid = r.status === 'APPROVED' || r.status === 'PROCESSING';
+  const showMarkFailed = r.status === 'APPROVED' || r.status === 'PROCESSING';
 
   return (
     <article style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 18 }}>
@@ -367,21 +408,26 @@ function RequestCard({
         </div>
       )}
 
-      {(showApprove || showMarkPaid || showMarkFailed) && (
+      {(showApprove || showReject || showMarkPaid || showMarkFailed) && (
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {showReject && (
+            <button onClick={onReject} disabled={busy} style={btnDanger}>
+              Reject
+            </button>
+          )}
           {showApprove && (
             <button onClick={onApprove} disabled={busy} style={btnPrimary}>
               Approve
             </button>
           )}
-          {showMarkPaid && (
-            <button onClick={onMarkPaid} disabled={busy} style={btnSuccess}>
-              Mark paid
-            </button>
-          )}
           {showMarkFailed && (
             <button onClick={onMarkFailed} disabled={busy} style={btnDanger}>
               Mark failed
+            </button>
+          )}
+          {showMarkPaid && (
+            <button onClick={onMarkPaid} disabled={busy} style={btnSuccess}>
+              Mark paid
             </button>
           )}
         </div>

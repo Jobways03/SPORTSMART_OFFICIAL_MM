@@ -473,6 +473,44 @@ export class AffiliatePayoutService {
     });
   }
 
+  /**
+   * Admin rejects a payout request before approval. Only allowed from
+   * REQUESTED — once approved, the right paths are mark-paid or
+   * mark-failed. Bundled commissions go back to CONFIRMED so the
+   * affiliate can re-request after fixing whatever the admin flagged
+   * (e.g. wrong KYC, suspicious activity).
+   */
+  async reject(input: {
+    payoutRequestId: string;
+    adminId: string;
+    reason: string;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      const r = await tx.affiliatePayoutRequest.findUnique({
+        where: { id: input.payoutRequestId },
+      });
+      if (!r) throw new NotFoundAppException('Payout request not found');
+      if (r.status !== 'REQUESTED') {
+        throw new BadRequestAppException(
+          `Only REQUESTED payouts can be rejected. Current status: ${r.status}.`,
+        );
+      }
+      const updated = await tx.affiliatePayoutRequest.update({
+        where: { id: input.payoutRequestId },
+        data: {
+          status: 'CANCELLED',
+          failedAt: new Date(),
+          failureReason: input.reason,
+        },
+      });
+      await tx.affiliateCommission.updateMany({
+        where: { payoutRequestId: input.payoutRequestId },
+        data: { payoutRequestId: null },
+      });
+      return updated;
+    });
+  }
+
   // ── Helpers ─────────────────────────────────────────────────
 
   private toPublicMethod(m: any) {
