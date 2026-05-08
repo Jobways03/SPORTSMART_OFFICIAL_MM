@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { SearchPublicFacade } from '../../application/facades/search-public.facade';
 
 @ApiTags('Search')
@@ -17,7 +17,7 @@ export class SearchExtraController {
 
   /** Admin-only index rebuild trigger. */
   @Post('admin/search/reindex')
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
   async reindex() {
     await this.facade.rebuildSearchIndex();
     return { success: true, message: 'Reindex queued' };

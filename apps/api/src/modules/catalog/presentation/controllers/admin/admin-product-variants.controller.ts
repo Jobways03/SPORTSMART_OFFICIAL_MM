@@ -19,7 +19,7 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
@@ -39,7 +39,7 @@ class GenerateVariantsDto {
 
 @ApiTags('Admin Products')
 @Controller('admin/products/:productId/variants')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminProductVariantsController {
   constructor(
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,

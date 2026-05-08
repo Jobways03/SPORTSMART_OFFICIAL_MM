@@ -6,6 +6,7 @@ import { NotificationRouter } from './application/services/notification-router.s
 import { NotificationWorker } from './application/services/notification-worker.service';
 import { TemplateRegistry } from './application/services/template-registry.service';
 import { TemplateRenderer } from './application/services/template-renderer.service';
+import { NotificationGateService } from './application/services/notification-gate.service';
 import { OrderNotificationHandler } from './application/event-handlers/order-notification.handler';
 import { WalletNotificationHandler } from './application/event-handlers/wallet-notification.handler';
 import { TicketNotificationHandler } from './application/event-handlers/ticket-notification.handler';
@@ -54,6 +55,9 @@ import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port'
     TemplateRegistry,
     TemplateRenderer,
 
+    // Phase 8 (PR 8.2) — preference + suppression gate.
+    NotificationGateService,
+
     // Queue (Redis-backed today; BullMQ tomorrow — same interface)
     {
       provide: NOTIFICATION_QUEUE,
@@ -68,6 +72,6 @@ import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port'
     DisputeNotificationHandler,
     ReconciliationNotificationHandler,
   ],
-  exports: [NotificationsPublicFacade],
+  exports: [NotificationsPublicFacade, NotificationGateService],
 })
 export class NotificationsModule {}

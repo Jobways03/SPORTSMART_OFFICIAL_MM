@@ -4,6 +4,7 @@
   "rootDir": "..",
   "roots": ["<rootDir>/test/e2e", "<rootDir>/test/integration"],
   "testRegex": "\\.e2e-spec\\.ts$|\\.integration-spec\\.ts$",
+  "maxWorkers": 1,
   "transform": {
     "^.+\\.ts$": [
       "ts-jest",

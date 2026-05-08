@@ -25,6 +25,14 @@ model CommissionSetting {
   fixedCommissionType   String         @default("Product") @map("fixed_commission_type")
   enableMaxCommission   Boolean        @default(false) @map("enable_max_commission")
   maxCommissionAmount   Decimal?       @map("max_commission_amount") @db.Decimal(10, 2)
+  // Phase 1.4 paise siblings (ADR-007). Note: commission_value /
+  // second_commission_value mean different things by commissionType
+  // (PERCENTAGE → basis-points-style number, FLAT → rupees). Paise
+  // representation only meaningful when type is FLAT; for PERCENTAGE
+  // callers should continue using the Decimal column.
+  commissionValueInPaise       BigInt  @default(0) @map("commission_value_in_paise")
+  secondCommissionValueInPaise BigInt  @default(0) @map("second_commission_value_in_paise")
+  maxCommissionAmountInPaise   BigInt? @map("max_commission_amount_in_paise")
   updatedAt             DateTime       @updatedAt @map("updated_at")
 
   @@map("commission_settings")
@@ -49,6 +57,12 @@ model CommissionRecord {
   totalPlatformAmount   Decimal @map("total_platform_amount") @db.Decimal(10, 2)
   totalSettlementAmount Decimal @map("total_settlement_amount") @db.Decimal(10, 2)
   platformMargin        Decimal @map("platform_margin") @db.Decimal(10, 2)
+  // Phase 1.4 paise siblings (ADR-007).
+  platformPriceInPaise         BigInt @default(0) @map("platform_price_in_paise")
+  settlementPriceInPaise       BigInt @default(0) @map("settlement_price_in_paise")
+  totalPlatformAmountInPaise   BigInt @default(0) @map("total_platform_amount_in_paise")
+  totalSettlementAmountInPaise BigInt @default(0) @map("total_settlement_amount_in_paise")
+  platformMarginInPaise        BigInt @default(0) @map("platform_margin_in_paise")
 
   // Legacy fields (kept for backward compatibility, mapped from new logic)
   unitPrice            Decimal        @map("unit_price") @db.Decimal(10, 2)
@@ -63,6 +77,17 @@ model CommissionRecord {
   vatOnCommission      Decimal        @default(0) @map("vat_on_commission") @db.Decimal(10, 2)
   taxCommission        Decimal        @default(0) @map("tax_commission") @db.Decimal(10, 2)
   shippingCommission   Decimal        @default(0) @map("shipping_commission") @db.Decimal(10, 2)
+  // Phase 1.4 paise siblings (ADR-007).
+  unitPriceInPaise            BigInt @default(0) @map("unit_price_in_paise")
+  totalPriceInPaise           BigInt @default(0) @map("total_price_in_paise")
+  unitCommissionInPaise       BigInt @default(0) @map("unit_commission_in_paise")
+  totalCommissionInPaise      BigInt @default(0) @map("total_commission_in_paise")
+  adminEarningInPaise         BigInt @default(0) @map("admin_earning_in_paise")
+  productEarningInPaise       BigInt @default(0) @map("product_earning_in_paise")
+  refundedAdminEarningInPaise BigInt @default(0) @map("refunded_admin_earning_in_paise")
+  vatOnCommissionInPaise      BigInt @default(0) @map("vat_on_commission_in_paise")
+  taxCommissionInPaise        BigInt @default(0) @map("tax_commission_in_paise")
+  shippingCommissionInPaise   BigInt @default(0) @map("shipping_commission_in_paise")
 
   // Settlement status
   status       CommissionRecordStatus @default(PENDING) @map("status")
@@ -76,6 +101,8 @@ model CommissionRecord {
   adjustedAt           DateTime? @map("adjusted_at")
   adjustmentReason     String?   @map("adjustment_reason")
   originalAdminEarning Decimal?  @map("original_admin_earning") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007).
+  originalAdminEarningInPaise BigInt? @map("original_admin_earning_in_paise")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -116,6 +143,9 @@ model CommissionReversalRecord {
   reversedQty          Int                      @map("reversed_qty")
   totalRefundAmount    Decimal                  @map("total_refund_amount") @db.Decimal(10, 2)
   refundedAdminEarning Decimal                  @map("refunded_admin_earning") @db.Decimal(10, 2)
+  // Phase 1.4 paise siblings (ADR-007).
+  totalRefundAmountInPaise    BigInt @default(0) @map("total_refund_amount_in_paise")
+  refundedAdminEarningInPaise BigInt @default(0) @map("refunded_admin_earning_in_paise")
   actorType            String                   @map("actor_type") // SYSTEM | ADMIN
   actorId              String?                  @map("actor_id")
   note                 String?

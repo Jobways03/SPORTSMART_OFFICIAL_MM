@@ -7,8 +7,10 @@ import {
 } from '../../core/guards';
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
+import { CommissionModule } from '../commission/module';
 import { FranchiseModule } from '../franchise/module';
 import { WalletModule } from '../wallet/module';
+import { LiabilityLedgerModule } from '../liability-ledger/module';
 import { RETURN_REPOSITORY } from './domain/repositories/return.repository.interface';
 import { PrismaReturnRepository } from './infrastructure/repositories/prisma-return.repository';
 import { ReturnService } from './application/services/return.service';
@@ -18,7 +20,12 @@ import { ReturnStockRestorationService } from './application/services/return-sto
 import { ReturnCommissionReversalService } from './application/services/return-commission-reversal.service';
 import { RefundGatewayService } from './application/services/refund-gateway.service';
 import { RefundProcessorService } from './application/services/refund-processor.service';
+import { RestockingFeeCalculator } from './application/services/restocking-fee.calculator';
+import { CustomerAbuseCounterService } from './application/services/customer-abuse-counter.service';
 import { StaleReturnProcessorService } from './application/services/stale-return-processor.service';
+import { SellerResponseSweeperCron } from './application/jobs/seller-response-sweeper.cron';
+import { ReturnRiskScorerService } from './application/services/return-risk-scorer.service';
+import { ReplacementOrderService } from './application/services/replacement-order.service';
 import { ReturnsPublicFacade } from './application/facades/returns-public.facade';
 import { ReturnNotificationHandler } from './application/event-handlers/return-notification.handler';
 import { CustomerReturnsController } from './presentation/controllers/customer-returns.controller';
@@ -27,7 +34,13 @@ import { SellerReturnsController } from './presentation/controllers/seller-retur
 import { FranchiseReturnsController } from './presentation/controllers/franchise-returns.controller';
 
 @Module({
-  imports: [FranchiseModule, RazorpayModule, WalletModule],
+  imports: [
+    CommissionModule,
+    FranchiseModule,
+    RazorpayModule,
+    WalletModule,
+    LiabilityLedgerModule,
+  ],
   controllers: [
     CustomerReturnsController,
     AdminReturnsController,
@@ -43,7 +56,12 @@ import { FranchiseReturnsController } from './presentation/controllers/franchise
     ReturnCommissionReversalService,
     RefundGatewayService,
     RefundProcessorService,
+    RestockingFeeCalculator,
+    CustomerAbuseCounterService,
     StaleReturnProcessorService,
+    SellerResponseSweeperCron,
+    ReturnRiskScorerService,
+    ReplacementOrderService,
     ReturnsPublicFacade,
     ReturnNotificationHandler,
     CloudinaryAdapter,

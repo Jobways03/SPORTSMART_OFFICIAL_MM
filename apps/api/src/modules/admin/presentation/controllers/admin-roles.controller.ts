@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { RoleService } from '../../application/services/role.service';
 import { PermissionKey } from '../../application/services/permission-registry';
 
@@ -26,7 +26,7 @@ interface UpdateRoleDto {
 
 @ApiTags('Admin Roles & Permissions')
 @Controller('admin/roles')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminRolesController {
   constructor(private readonly service: RoleService) {}
 

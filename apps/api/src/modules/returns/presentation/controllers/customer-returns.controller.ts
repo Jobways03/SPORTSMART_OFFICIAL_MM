@@ -14,6 +14,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UserAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
 import { ReturnService } from '../../application/services/return.service';
 import { CreateReturnDto } from '../dtos/create-return.dto';
@@ -65,7 +66,11 @@ export class CustomerReturnsController {
   }
 
   // POST /customer/returns — create return
+  // @Idempotent: client must supply X-Idempotency-Key. A retried wizard
+  // submission (browser refresh, network blip during the final POST)
+  // returns the original response instead of creating a duplicate Return.
   @Post()
+  @Idempotent()
   async createReturn(@Req() req: any, @Body() dto: CreateReturnDto) {
     const data = await this.returnService.createReturn(req.userId, dto);
     return { success: true, message: 'Return request created', data };
@@ -120,5 +125,59 @@ export class CustomerReturnsController {
       dto?.trackingNumber,
     );
     return { success: true, message: 'Return marked in transit', data };
+  }
+
+  // Phase 13 (P1.14 follow-up) — exchange payment for the price diff.
+  //
+  // Flow:
+  //   1. POST /:id/exchange-payment-init  → mints Razorpay order, returns id
+  //   2. Customer completes payment via Razorpay's web SDK / mobile app
+  //   3. POST /:id/exchange-payment-verify (orderId, paymentId, signature)
+  //      → verifies HMAC, marks payment complete, kicks the replacement
+  //         pipeline so the actual replacement order ships
+  @Post(':returnId/exchange-payment-init')
+  async initiateExchangePayment(
+    @Req() req: any,
+    @Param('returnId') returnId: string,
+  ) {
+    const data = await this.returnService.initiateExchangePayment({
+      returnId,
+      customerId: req.userId,
+    });
+    return { success: true, message: 'Exchange payment initiated', data };
+  }
+
+  @Post(':returnId/exchange-payment-verify')
+  async verifyExchangePayment(
+    @Req() req: any,
+    @Param('returnId') returnId: string,
+    @Body()
+    body: {
+      razorpayOrderId: string;
+      razorpayPaymentId: string;
+      razorpaySignature: string;
+    },
+  ) {
+    if (
+      !body?.razorpayOrderId ||
+      !body?.razorpayPaymentId ||
+      !body?.razorpaySignature
+    ) {
+      throw new BadRequestAppException(
+        'razorpayOrderId, razorpayPaymentId, and razorpaySignature are all required',
+      );
+    }
+    const data = await this.returnService.verifyExchangePayment({
+      returnId,
+      customerId: req.userId,
+      razorpayOrderId: body.razorpayOrderId,
+      razorpayPaymentId: body.razorpayPaymentId,
+      razorpaySignature: body.razorpaySignature,
+    });
+    return {
+      success: true,
+      message: 'Exchange payment verified — replacement order shipped',
+      data,
+    };
   }
 }

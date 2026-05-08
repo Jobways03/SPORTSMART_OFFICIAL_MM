@@ -10,17 +10,19 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { OrdersService } from '../../application/services/orders.service';
 
 @ApiTags('Admin Orders')
 @Controller('admin/orders')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
+  @Permissions('orders.read')
   async listOrders(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -43,12 +45,14 @@ export class AdminOrdersController {
   }
 
   @Get(':id')
+  @Permissions('orders.read')
   async getOrder(@Param('id') id: string) {
     const data = await this.ordersService.getOrder(id);
     return { success: true, message: 'Order retrieved', data };
   }
 
   @Post(':id/verify')
+  @Permissions('orders.cancel')
   async verifyOrder(
     @Param('id') id: string,
     @Req() req: any,
@@ -60,6 +64,7 @@ export class AdminOrdersController {
 
   @Patch(':id/reject-order')
   @Roles('SUPER_ADMIN')
+  @Permissions('orders.cancel')
   async rejectOrder(@Param('id') id: string) {
     await this.ordersService.rejectOrder(id);
     return { success: true, message: 'Order rejected and cancelled — stock restored' };
@@ -75,6 +80,7 @@ export class AdminOrdersController {
   // down in admin-settlement / admin-commission / admin-sellers.
   @Patch('sub-orders/:id/accept')
   @Roles('SUPER_ADMIN')
+  @Permissions('orders.cancel')
   async acceptSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.acceptSubOrder(id);
     return { success: true, message: 'Sub-order accepted', data };
@@ -82,6 +88,7 @@ export class AdminOrdersController {
 
   @Patch('sub-orders/:id/reject')
   @Roles('SUPER_ADMIN')
+  @Permissions('orders.cancel')
   async rejectSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.rejectSubOrder(id);
     return { success: true, message: 'Sub-order rejected', data };
@@ -89,6 +96,7 @@ export class AdminOrdersController {
 
   @Patch('sub-orders/:id/fulfill')
   @Roles('SUPER_ADMIN')
+  @Permissions('orders.cancel')
   async fulfillSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.fulfillSubOrder(id);
     return { success: true, message: 'Sub-order fulfilled', data };
@@ -96,18 +104,21 @@ export class AdminOrdersController {
 
   @Patch('sub-orders/:id/deliver')
   @Roles('SUPER_ADMIN')
+  @Permissions('orders.cancel')
   async deliverSubOrder(@Param('id') id: string) {
     const data = await this.ordersService.deliverSubOrder(id);
     return { success: true, message: 'Sub-order marked as delivered — return window started', data };
   }
 
   @Post('sub-orders/:subOrderId/mark-delivered')
+  @Permissions('orders.cancel')
   async markSubOrderDelivered(@Param('subOrderId') subOrderId: string) {
     const data = await this.ordersService.deliverSubOrder(subOrderId);
     return { success: true, message: 'Sub-order marked as delivered — return window started', data };
   }
 
   @Patch(':id/mark-paid')
+  @Permissions('orders.cancel')
   async markAsPaid(@Param('id') id: string) {
     await this.ordersService.markAsPaid(id);
     return { success: true, message: 'Order marked as paid' };
@@ -116,6 +127,7 @@ export class AdminOrdersController {
   // ── Epic 2: Manual Reassignment & Exception Queue ──────────────────────
 
   @Get('sub-orders/:subOrderId/eligible-sellers')
+  @Permissions('orders.read')
   async getEligibleSellers(@Param('subOrderId') subOrderId: string) {
     const data = await this.ordersService.getEligibleSellers(subOrderId);
     return { success: true, message: 'Eligible sellers retrieved', data };
@@ -127,6 +139,7 @@ export class AdminOrdersController {
    * Prefer this over the legacy `eligible-sellers` endpoint.
    */
   @Get('sub-orders/:subOrderId/eligible-nodes')
+  @Permissions('orders.read')
   async getEligibleNodes(@Param('subOrderId') subOrderId: string) {
     const data = await this.ordersService.getEligibleNodes(subOrderId);
     return { success: true, message: 'Eligible nodes retrieved', data };
@@ -140,6 +153,7 @@ export class AdminOrdersController {
    * SELLER target.
    */
   @Post('sub-orders/:subOrderId/reassign')
+  @Permissions('orders.cancel')
   async reassignSubOrder(
     @Param('subOrderId') subOrderId: string,
     @Body()
@@ -174,6 +188,7 @@ export class AdminOrdersController {
   }
 
   @Get(':id/reassignment-history')
+  @Permissions('orders.read')
   async getReassignmentHistory(@Param('id') id: string) {
     const data = await this.ordersService.getReassignmentHistory(id);
     return { success: true, message: 'Reassignment history retrieved', data };
@@ -185,6 +200,7 @@ export class AdminOrdersController {
    * on whichever node currently owns the sub-order (seller or franchise).
    */
   @Patch('sub-orders/:subOrderId/cancel')
+  @Permissions('orders.cancel')
   async cancelSubOrder(
     @Req() req: any,
     @Param('subOrderId') subOrderId: string,

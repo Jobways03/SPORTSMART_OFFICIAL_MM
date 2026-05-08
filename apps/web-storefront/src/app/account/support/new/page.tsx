@@ -28,6 +28,13 @@ export default function NewTicketPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Optional human-readable order/return numbers — only relevant on the
+  // generic "open a ticket" path (no query params from a deep-link).
+  // Backend resolves number → id and validates ownership.
+  const hasDeepLink = Boolean(orderId || returnId);
+  const [orderNumber, setOrderNumber] = useState('');
+  const [returnNumber, setReturnNumber] = useState('');
+
   useEffect(() => {
     if (authStatus !== 'authed') return;
     supportService
@@ -62,6 +69,10 @@ export default function NewTicketPage() {
         priority,
         relatedOrderId: orderId,
         relatedReturnId: returnId,
+        relatedOrderNumber:
+          !orderId && orderNumber.trim() ? orderNumber.trim() : undefined,
+        relatedReturnNumber:
+          !returnId && returnNumber.trim() ? returnNumber.trim() : undefined,
       });
       if (res.data?.id) {
         router.push(`/account/support/${res.data.id}`);
@@ -109,6 +120,45 @@ export default function NewTicketPage() {
               required
             />
           </div>
+
+          {!hasDeepLink && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 space-y-3">
+              <p className="text-body-sm text-amber-900 font-medium">
+                Is this about a specific order or return?
+              </p>
+              <p className="text-caption text-amber-800">
+                Adding the number helps us pull up the right details and
+                resolve faster. Skip if your question isn't tied to one
+                (account, payment, general).
+              </p>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-caption font-medium text-amber-900 mb-1">
+                    Order number
+                  </label>
+                  <input
+                    type="text"
+                    value={orderNumber}
+                    onChange={(e) => setOrderNumber(e.target.value)}
+                    placeholder="SM20260062"
+                    className="w-full px-3 py-2 border border-amber-300 rounded-md text-body-sm bg-white focus:outline-none focus:border-amber-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-caption font-medium text-amber-900 mb-1">
+                    Return number
+                  </label>
+                  <input
+                    type="text"
+                    value={returnNumber}
+                    onChange={(e) => setReturnNumber(e.target.value)}
+                    placeholder="RET-2026-000017"
+                    className="w-full px-3 py-2 border border-amber-300 rounded-md text-body-sm bg-white focus:outline-none focus:border-amber-600"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid sm:grid-cols-2 gap-4">
             <div>

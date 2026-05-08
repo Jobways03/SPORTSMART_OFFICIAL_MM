@@ -132,6 +132,8 @@ export class PrismaSupportRepository implements SupportRepository {
           senderName: input.senderName,
           body: input.body,
           isInternalNote: input.isInternalNote ?? false,
+          mirroredFromDisputeMessageId:
+            input.mirroredFromDisputeMessageId ?? null,
         },
       });
       // Bump activity timestamp only for non-internal messages — internal

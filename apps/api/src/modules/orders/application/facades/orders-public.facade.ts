@@ -183,6 +183,43 @@ export class OrdersPublicFacade {
   }
 
   /**
+   * Single-sub-order variant for the immediate-commission path. Used
+   * when a return reaches a terminal-rejected state (REJECTED /
+   * QC_REJECTED / CANCELLED) — the cron's deliveredAt-window gate is
+   * irrelevant at that point because the customer's claim is already
+   * final, so we want commission to lock now instead of waiting out
+   * the remaining window. Returns null when the sub-order is missing,
+   * not delivered, already processed, or still has a non-terminal
+   * return that would otherwise block commission.
+   *
+   * Same shape as findDeliveredSubOrdersPastReturnWindow so the
+   * processor can reuse one record-builder.
+   */
+  async findSubOrderForImmediateCommission(subOrderId: string) {
+    return this.prisma.subOrder.findFirst({
+      where: {
+        id: subOrderId,
+        fulfillmentStatus: 'DELIVERED',
+        commissionProcessed: false,
+        // No returnWindowEndsAt filter — the whole point of this path
+        // is to bypass it.
+        NOT: {
+          returns: {
+            some: {
+              status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] },
+            },
+          },
+        },
+      },
+      include: {
+        items: true,
+        masterOrder: { select: { id: true, orderNumber: true } },
+        seller: { select: { id: true, sellerName: true, sellerShopName: true } },
+      },
+    });
+  }
+
+  /**
    * Find delivered franchise sub-orders past return window.
    */
   async findDeliveredFranchiseSubOrdersPastReturnWindow() {

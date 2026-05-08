@@ -17,7 +17,7 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/repositories/category.repository.interface';
 
 function toSlug(name: string): string {
@@ -30,7 +30,7 @@ function toSlug(name: string): string {
 
 @ApiTags('Admin - Categories')
 @Controller({ path: 'admin/categories', version: '1' })
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminCategoriesController {
   constructor(
     @Inject(CATEGORY_REPOSITORY) private readonly categoryRepo: ICategoryRepository,

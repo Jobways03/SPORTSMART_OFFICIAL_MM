@@ -123,14 +123,13 @@ export default function LoginPage() {
 
         <div className="relative h-full flex flex-col p-12 xl:p-16">
           {/* Top — logo */}
-          <Link href="/" className="inline-flex flex-col leading-none w-fit">
-            <span className="font-display text-3xl tracking-wide italic">
-              <span className="text-sale">SPORTSMART</span>
-              <span className="text-ink-900">.com</span>
-            </span>
-            <span className="mt-1 font-brush text-[12px] tracking-wide text-accent-dark italic lowercase">
-              play happy &middot; stay healthy
-            </span>
+          <Link href="/" aria-label="Sportsmart home" className="inline-block w-fit">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/SportsMart_Web_Banner.avif"
+              alt="SportsMart"
+              className="h-14 w-auto"
+            />
           </Link>
 
           {/* Middle — headline + tagline + stats */}

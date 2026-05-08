@@ -43,6 +43,10 @@ export interface AdminTicket {
   resolvedAt: string | null;
   closedAt: string | null;
   closedByAdminId: string | null;
+  // Phase 11 — set when this ticket has been promoted to a dispute.
+  // Surfaced in admin UI as a back-link banner; absent on the
+  // customer's view (it's never serialised to the storefront API).
+  promotedToDisputeId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -130,6 +134,41 @@ export const adminSupportService = {
   },
   listCategories(): Promise<ApiResponse<TicketCategory[]>> {
     return apiClient<TicketCategory[]>('/admin/support/categories');
+  },
+  /**
+   * Phase 11 — promote a support ticket onto the formal-dispute track.
+   * Customer never sees the dispute exists; their support thread keeps
+   * working with mirrored admin replies under the "Support" brand
+   * voice. See backend docs in DisputeService.promoteFromTicket.
+   */
+  promoteToDispute(
+    id: string,
+    payload: {
+      kind:
+        | 'RETURN_REJECTED'
+        | 'WRONG_ITEM_RECEIVED'
+        | 'DAMAGED_IN_TRANSIT'
+        | 'MISSING_FROM_PARCEL'
+        | 'OTHER';
+      severity?: number;
+      summary?: string;
+      internalNote?: string;
+    },
+  ): Promise<
+    ApiResponse<{
+      ticketId: string;
+      disputeId: string;
+      disputeNumber: string;
+    }>
+  > {
+    return apiClient<{
+      ticketId: string;
+      disputeId: string;
+      disputeNumber: string;
+    }>(`/admin/support/tickets/${id}/promote-to-dispute`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 };
 

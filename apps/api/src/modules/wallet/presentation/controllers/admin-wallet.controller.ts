@@ -13,7 +13,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard, PolicyGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Policy } from '../../../../core/decorators/policy.decorator';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { WalletService } from '../../application/services/wallet.service';
 import {
@@ -24,7 +26,7 @@ import { AdminCreditDto, AdminDebitDto } from '../dtos/wallet.dtos';
 
 @ApiTags('Admin Wallets')
 @Controller('admin/wallets')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, PolicyGuard)
 export class AdminWalletController {
   constructor(
     private readonly wallet: WalletService,
@@ -32,6 +34,7 @@ export class AdminWalletController {
   ) {}
 
   @Get()
+  @Permissions('wallets.read')
   async listWallets(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -56,6 +59,7 @@ export class AdminWalletController {
   }
 
   @Get(':userId')
+  @Permissions('wallets.read')
   async getWalletDetail(@Param('userId') userId: string) {
     const wallet = await this.repo.findByUserId(userId);
     if (!wallet) throw new NotFoundAppException('Wallet not found');
@@ -71,6 +75,12 @@ export class AdminWalletController {
   }
 
   @Post(':userId/credit')
+  @Permissions('wallets.adjust')
+  @Policy({
+    resourceType: 'wallet',
+    action: 'credit',
+    context: { amountInPaise: 'body.amountInPaise' },
+  })
   async creditWallet(
     @Req() req: any,
     @Param('userId') userId: string,
@@ -95,6 +105,12 @@ export class AdminWalletController {
   }
 
   @Post(':userId/debit')
+  @Permissions('wallets.adjust')
+  @Policy({
+    resourceType: 'wallet',
+    action: 'debit',
+    context: { amountInPaise: 'body.amountInPaise' },
+  })
   async debitWallet(
     @Req() req: any,
     @Param('userId') userId: string,
@@ -120,6 +136,7 @@ export class AdminWalletController {
 
   @Patch(':userId/block')
   @HttpCode(HttpStatus.OK)
+  @Permissions('wallets.block')
   async blockWallet(
     @Req() req: any,
     @Param('userId') userId: string,
@@ -136,6 +153,7 @@ export class AdminWalletController {
 
   @Patch(':userId/unblock')
   @HttpCode(HttpStatus.OK)
+  @Permissions('wallets.block')
   async unblockWallet(
     @Req() req: any,
     @Param('userId') userId: string,

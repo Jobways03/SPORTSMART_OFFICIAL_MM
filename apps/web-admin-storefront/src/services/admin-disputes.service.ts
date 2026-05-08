@@ -35,6 +35,18 @@ export interface Dispute {
   decisionByAdminId: string | null;
   decisionAt: string | null;
   decisionRationale: string | null;
+  // Phase 11 — populated when this dispute was promoted from a support
+  // ticket. Admin UI shows a prominent back-link banner; the customer's
+  // own portal never sees the dispute or this column.
+  sourceTicketId?: string | null;
+  // Phase 12 (ADR-016) — liability + remedy attribution.
+  liabilityParty?: 'NONE' | 'SELLER' | 'LOGISTICS' | 'PLATFORM' | 'CUSTOMER' | null;
+  customerRemedy?:
+    | 'FULL_REFUND'
+    | 'PARTIAL_REFUND'
+    | 'NO_REFUND'
+    | 'GOODWILL_CREDIT'
+    | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,14 +125,45 @@ export const adminDisputesService = {
       method: 'PATCH', body: JSON.stringify({ severity }),
     });
   },
+  /**
+   * Phase 12 (ADR-016) — decide payload now requires liabilityParty +
+   * customerRemedy. Backend validates the matrix; the UI nudges the
+   * admin to a sensible default but the backend is the source of
+   * truth.
+   */
   decide(id: string, payload: {
     outcome: 'RESOLVED_BUYER' | 'RESOLVED_SELLER' | 'RESOLVED_SPLIT';
     rationale: string;
-    /** Required for RESOLVED_BUYER + RESOLVED_SPLIT (in paise). */
+    /** Required when customerRemedy is FULL_REFUND / PARTIAL_REFUND / GOODWILL_CREDIT (in paise). */
     amountInPaise?: number;
+    liabilityParty: 'SELLER' | 'LOGISTICS' | 'PLATFORM' | 'CUSTOMER' | 'NONE';
+    customerRemedy:
+      | 'FULL_REFUND'
+      | 'PARTIAL_REFUND'
+      | 'NO_REFUND'
+      | 'GOODWILL_CREDIT';
+    logistics?: {
+      courierName?: string;
+      awbNumber?: string;
+      evidenceFileId?: string;
+      notes?: string;
+    };
   }): Promise<ApiResponse<Dispute>> {
     return apiClient<Dispute>(`/admin/disputes/${id}/decide`, {
       method: 'POST', body: JSON.stringify(payload),
+    });
+  },
+  /**
+   * Rescue path for ticket-promoted disputes that didn't inherit
+   * order/return linkage. Backend validates the order/return belongs
+   * to the dispute filer.
+   */
+  attachContext(id: string, payload: {
+    orderNumber?: string;
+    returnNumber?: string;
+  }): Promise<ApiResponse<Dispute>> {
+    return apiClient<Dispute>(`/admin/disputes/${id}/attach-context`, {
+      method: 'PATCH', body: JSON.stringify(payload),
     });
   },
 };

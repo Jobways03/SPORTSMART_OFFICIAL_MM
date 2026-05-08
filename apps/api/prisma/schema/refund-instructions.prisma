@@ -1,0 +1,144 @@
+// Phase 3 — Unified Refund System (ADR-009).
+//
+// Today's reality:
+//   - DisputeRefundHandler.onDecided directly calls
+//     walletFacade.creditFromRefund(...) the moment a dispute is decided.
+//   - ReturnService.initiateRefund uses RefundGatewayService which
+//     branches on paymentMethod and writes RefundTransaction rows for
+//     Razorpay refunds, but NOT for wallet refunds, dispute refunds,
+//     or goodwill credits.
+//
+// The result is three parallel paths to "money landed in customer's
+// wallet" — only one of them goes through an auditable record. A failed
+// dispute wallet credit is logged-and-swallowed; finance reconciliation
+// has no row to chase.
+//
+// Phase 3 fixes that. EVERY refund — return, dispute, goodwill, manual,
+// COD, replacement — first creates a RefundInstruction. The Saga
+// executor then drives the instruction to terminal state (SUCCESS /
+// FAILED / MANUAL_REQUIRED). Dispute decisions stop calling the wallet
+// directly.
+
+enum RefundSourceType {
+  RETURN
+  DISPUTE
+  GOODWILL
+  MANUAL
+  // Replacement orders that need a price-difference settle-up.
+  REPLACEMENT
+}
+
+enum RefundMethod {
+  ORIGINAL_PAYMENT
+  WALLET
+  BANK_TRANSFER
+  UPI
+  COUPON
+  MANUAL
+}
+
+enum RefundInstructionStatus {
+  PENDING_APPROVAL  // high-value or risk-flagged; awaits manager
+  APPROVED          // ready for execution
+  PROCESSING        // saga in flight
+  SUCCESS           // money landed
+  FAILED            // gateway said no AND retries exhausted
+  RETRYING          // failed once but inside retry budget
+  MANUAL_REQUIRED   // COD with no UPI/bank → ops to wire manually
+  CANCELLED         // refund was retracted before execution
+}
+
+model RefundInstruction {
+  id           String                  @id @default(uuid())
+  // Polymorphic linkage to the source — RETURN row id, DISPUTE row id,
+  // etc. Kept as a String pair (no FK) per the strict-modular-monolith
+  // ADR; cross-module FK churn would defeat the boundary discipline.
+  sourceType   RefundSourceType        @map("source_type")
+  sourceId     String                  @map("source_id")
+  customerId   String                  @map("customer_id")
+  // Optional — present for refunds that trace back to an order; absent
+  // for goodwill credits not tied to a specific order.
+  orderId      String?                 @map("order_id")
+
+  // Money — paise as canonical (ADR-004 / ADR-007).
+  amountInPaise BigInt                 @map("amount_in_paise")
+  currency      String                 @default("INR")
+
+  refundMethod  RefundMethod            @map("refund_method")
+  status        RefundInstructionStatus @default(APPROVED)
+
+  // Idempotency: when present, two callers can't accidentally produce
+  // two instructions for the same refund. Nullable because not every
+  // caller has an idempotency context (manual ops). When supplied,
+  // unique cluster-wide.
+  idempotencyKey String?                @unique @map("idempotency_key")
+
+  // Cross-system identifiers populated by the saga.
+  gatewayRefundId     String? @map("gateway_refund_id")
+  walletTransactionId String? @map("wallet_transaction_id")
+
+  failureReason String? @map("failure_reason")
+  attempts      Int     @default(0)
+
+  // Phase 12 (ADR-017) — finance approval gate. Refunds above the
+  // configured threshold (REFUND_AUTO_APPROVE_THRESHOLD_PAISE) AND all
+  // goodwill credits land here as PENDING_APPROVAL. A finance admin
+  // with `refunds.approve` permission either approves (saga runs +
+  // wallet credits) or rejects (instruction CANCELLED + reason
+  // recorded). approvedBy column was added forward-looking in
+  // 20260505140000; rejection columns added in 20260507100000.
+  approvedBy      String?    @map("approved_by")
+  approvedAt      DateTime?  @map("approved_at")
+  rejectedBy      String?    @map("rejected_by")
+  rejectedAt      DateTime?  @map("rejected_at")
+  rejectionReason String?    @map("rejection_reason")
+  processedAt     DateTime?  @map("processed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Hot indices.
+  @@index([sourceType, sourceId])
+  @@index([customerId])
+  @@index([status])
+  // For the reconciliation cron: "find PROCESSING refunds older than X".
+  @@index([status, processedAt])
+  @@map("refund_instructions")
+}
+
+enum RefundSagaStatus {
+  STARTED
+  IN_PROGRESS
+  COMPLETED
+  COMPENSATING
+  FAILED
+}
+
+// Per-saga state. Mirrors the SAGA pattern (Caitie McCaffrey, "Distributed
+// Sagas"): forward steps each have a compensating action. `steps` and
+// `compensations` are arrays of { name, status, attempts, result, error,
+// startedAt, completedAt } records — see RefundSagaService for the shape.
+model RefundSaga {
+  id             String           @id @default(uuid())
+  refundType     RefundSourceType @map("refund_type")
+  // Source aggregate id (return/dispute/etc.) — matches the
+  // corresponding RefundInstruction.sourceId.
+  sourceId       String           @map("source_id")
+  // Optional link to the instruction the saga drives. A saga can
+  // exist briefly without an instruction (in the create-instruction
+  // step), so this is nullable.
+  instructionId  String?          @map("instruction_id")
+  amountInPaise  BigInt           @map("amount_in_paise")
+  customerId     String           @map("customer_id")
+  status         RefundSagaStatus @default(STARTED)
+  steps          Json
+  compensations  Json?
+  startedAt      DateTime         @default(now()) @map("started_at")
+  completedAt    DateTime?        @map("completed_at")
+  failureReason  String?          @map("failure_reason")
+
+  @@index([status, startedAt])
+  @@index([sourceId])
+  @@index([instructionId])
+  @@map("refund_sagas")
+}

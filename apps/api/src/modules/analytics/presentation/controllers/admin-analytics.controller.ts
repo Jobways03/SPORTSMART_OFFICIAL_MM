@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { AnalyticsService, DateRange } from '../../application/services/analytics.service';
 
@@ -34,7 +34,7 @@ function parseRange(start?: string, end?: string): DateRange {
 
 @ApiTags('Admin Analytics')
 @Controller('admin/analytics')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAnalyticsController {
   constructor(private readonly service: AnalyticsService) {}
 

@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import {
   FranchiseCatalogRepository,
   FRANCHISE_CATALOG_REPOSITORY,
@@ -20,7 +20,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 @ApiTags('Admin Franchise Catalog')
 @Controller('admin')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminFranchiseCatalogController {
   constructor(
     @Inject(FRANCHISE_CATALOG_REPOSITORY)

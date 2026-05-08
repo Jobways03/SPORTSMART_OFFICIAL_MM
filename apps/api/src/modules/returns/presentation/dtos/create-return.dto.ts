@@ -73,14 +73,17 @@ export class CreateReturnDto {
   })
   forfeitConsent: boolean;
 
-  // Proof of the defect/issue the customer is claiming. At least one
-  // photo is required so QC has context and the customer has evidence
-  // of the item's condition when shipped from their end.
+  // Proof of the defect/issue the customer is claiming. The
+  // *reason-based* requirement lives in ReturnService.createReturn:
+  //   - DEFECTIVE / WRONG_ITEM / NOT_AS_DESCRIBED / DAMAGED_IN_TRANSIT
+  //     / QUALITY_ISSUE → ≥1 photo required
+  //   - CHANGED_MIND / SIZE_FIT_ISSUE → photos optional (the customer's
+  //     word is enough; nothing visually to prove)
+  // The DTO accepts an empty array so the service-level conditional
+  // enforcement actually gets a chance to run. Sending nothing is
+  // still allowed (defaults to []).
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1, {
-    message:
-      'At least one photo of the issue is required to submit a return.',
-  })
   @IsString({ each: true })
-  evidenceFileUrls: string[];
+  evidenceFileUrls?: string[];
 }

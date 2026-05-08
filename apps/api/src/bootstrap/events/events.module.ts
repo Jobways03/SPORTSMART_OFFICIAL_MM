@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { EventBusService } from './event-bus.service';
+import { OutboxPublisherService } from './outbox/outbox-publisher.service';
+import { EventDeduplicationService } from './outbox/event-deduplication.service';
 
 @Global()
 @Module({
@@ -19,7 +21,15 @@ import { EventBusService } from './event-bus.service';
       verboseMemoryLeak: true,
     }),
   ],
-  providers: [EventBusService],
-  exports: [EventBusService],
+  providers: [
+    EventBusService,
+    OutboxPublisherService,
+    EventDeduplicationService,
+  ],
+  exports: [
+    EventBusService,
+    OutboxPublisherService,
+    EventDeduplicationService,
+  ],
 })
 export class EventsModule {}

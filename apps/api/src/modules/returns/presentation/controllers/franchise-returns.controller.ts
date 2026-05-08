@@ -17,7 +17,6 @@ import { FranchiseAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { ReturnService } from '../../application/services/return.service';
 import { MarkReceivedDto } from '../dtos/mark-received.dto';
-import { SubmitQcDecisionDto } from '../dtos/submit-qc-decision.dto';
 
 const QC_EVIDENCE_UPLOAD_OPTIONS = {
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
@@ -110,24 +109,14 @@ export class FranchiseReturnsController {
     return { success: true, message: 'Evidence uploaded', data };
   }
 
-  // PATCH /franchise/returns/:returnId/qc-decision — submit per-item QC decision
-  @Patch(':returnId/qc-decision')
-  async submitQc(
-    @Req() req: any,
-    @Param('returnId') returnId: string,
-    @Body() dto: SubmitQcDecisionDto,
-  ) {
-    await this.returnService.assertNodeOwnsReturn(
-      returnId,
-      'FRANCHISE',
-      req.franchiseId,
-    );
-    const data = await this.returnService.submitQcDecision(
-      returnId,
-      'FRANCHISE',
-      req.franchiseId,
-      dto,
-    );
-    return { success: true, message: 'QC decision submitted', data };
-  }
+  // QC DECISION — intentionally admin-only.
+  //
+  // Same rationale as the seller controller: the franchise is the
+  // physical receiver and contributes evidence (photos via /qc-evidence
+  // above), but the binding QC outcome that drives the refund stays
+  // with the marketplace admin to keep a neutral arbiter between buyer
+  // and fulfillment node.
+  //
+  // Defence in depth: ReturnService.submitQcDecision additionally
+  // refuses non-ADMIN actorType.
 }

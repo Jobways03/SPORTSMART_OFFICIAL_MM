@@ -4,6 +4,7 @@ import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razo
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
+import { RefundInstructionService } from '../../../refund-instructions/application/services/refund-instruction.service';
 
 export interface RefundGatewayResult {
   success: boolean;
@@ -49,6 +50,7 @@ export class RefundGatewayService {
     private readonly prisma: PrismaService,
     private readonly walletFacade: WalletPublicFacade,
     private readonly paymentOps: PaymentOpsFacade,
+    private readonly refundInstructions: RefundInstructionService,
   ) {
     this.logger.setContext('RefundGatewayService');
   }
@@ -61,23 +63,54 @@ export class RefundGatewayService {
   async processRefund(
     input: RefundGatewayInput,
   ): Promise<RefundGatewayResult> {
-    // Wallet refund — settle synchronously by crediting the customer's
-    // wallet ledger. No external gateway, no polling, no manual step.
+    // Wallet refund — Phase 12 (ADR-017). Routed through
+    // RefundInstructionService.createForReturn so it shares the finance
+    // approval gate with disputes. Two outcomes:
+    //   - Below threshold → saga runs inline → row=SUCCESS → caller sees
+    //     completed=true and the return jumps straight to REFUNDED.
+    //   - At/above threshold (or threshold=0) → row=PENDING_APPROVAL →
+    //     caller sees completed=false with a sentinel reference; the
+    //     return sits in REFUND_PROCESSING until finance approves, at
+    //     which point approveByFinance flips it to REFUNDED.
     if (input.refundMethod === 'WALLET') {
       try {
-        const result = await this.walletFacade.creditFromRefund({
-          userId: input.customerId,
+        const instruction = await this.refundInstructions.createForReturn({
+          returnId: input.returnId,
+          returnNumber: input.returnNumber,
+          customerId: input.customerId,
+          masterOrderId: input.orderId,
           amountInPaise: Math.round(input.amount * 100),
-          refundId: input.returnId,
-          description: `Refund for return ${input.returnNumber}`,
+          refundMethod: 'WALLET',
         });
-        this.logger.log(
-          `Wallet refund credited — return=${input.returnNumber}, amount=₹${input.amount}, walletTx=${result.transaction.id}`,
-        );
+        if (instruction.status === 'SUCCESS') {
+          this.logger.log(
+            `Wallet refund settled inline (auto-approved) — return=${input.returnNumber}, amount=₹${input.amount}, instruction=${instruction.id}`,
+          );
+          return {
+            success: true,
+            gatewayRefundId:
+              instruction.walletTransactionId
+                ? `wallet:${instruction.walletTransactionId}`
+                : `instruction:${instruction.id}`,
+            completed: true,
+          };
+        }
+        if (instruction.status === 'PENDING_APPROVAL') {
+          this.logger.log(
+            `Wallet refund queued for finance approval — return=${input.returnNumber}, amount=₹${input.amount}, instruction=${instruction.id}`,
+          );
+          return {
+            success: true,
+            gatewayRefundId: `pending-approval:${instruction.id}`,
+            completed: false,
+          };
+        }
+        // FAILED or any other terminal state we didn't expect.
         return {
-          success: true,
-          gatewayRefundId: `wallet:${result.transaction.id}`,
-          completed: true,
+          success: false,
+          failureReason:
+            instruction.failureReason ??
+            `Refund instruction landed in unexpected state: ${instruction.status}`,
         };
       } catch (err) {
         const msg = (err as Error).message;

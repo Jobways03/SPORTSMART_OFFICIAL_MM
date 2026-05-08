@@ -11,7 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   BadRequestAppException,
@@ -29,7 +30,7 @@ import {
 
 @ApiTags('Support — Admin')
 @Controller('admin/support')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminSupportController {
   constructor(
     private readonly support: SupportService,
@@ -39,12 +40,14 @@ export class AdminSupportController {
   // ── Categories CRUD ──────────────────────────────────────────────
 
   @Get('categories')
+  @Permissions('support.read')
   async listCategories() {
     const data = await this.support.listCategories();
     return { success: true, message: 'Categories retrieved', data };
   }
 
   @Post('categories')
+  @Permissions('support.assign')
   async createCategory(@Body() body: CreateCategoryDto) {
     const data = await this.support.createCategory({
       name: body.name,
@@ -56,6 +59,7 @@ export class AdminSupportController {
   }
 
   @Patch('categories/:id')
+  @Permissions('support.assign')
   async updateCategory(
     @Param('id') id: string,
     @Body() body: UpdateCategoryDto,
@@ -65,6 +69,7 @@ export class AdminSupportController {
   }
 
   @Delete('categories/:id')
+  @Permissions('support.assign')
   async softDeleteCategory(@Param('id') id: string) {
     const data = await this.support.updateCategory(id, { active: false });
     return { success: true, message: 'Category deactivated', data };
@@ -73,6 +78,7 @@ export class AdminSupportController {
   // ── Tickets ──────────────────────────────────────────────────────
 
   @Get('tickets')
+  @Permissions('support.read')
   async listTickets(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -97,6 +103,7 @@ export class AdminSupportController {
   }
 
   @Get('tickets/:id')
+  @Permissions('support.read')
   async getTicket(@Req() req: any, @Param('id') id: string) {
     const data = await this.support.getTicketDetailForActor(id, {
       type: 'ADMIN',
@@ -107,6 +114,7 @@ export class AdminSupportController {
   }
 
   @Post('tickets/:id/messages')
+  @Permissions('support.reply')
   async reply(
     @Req() req: any,
     @Param('id') id: string,
@@ -131,12 +139,14 @@ export class AdminSupportController {
   }
 
   @Patch('tickets/:id/assign')
+  @Permissions('support.assign')
   async assign(@Param('id') id: string, @Body() body: AssignDto) {
     const data = await this.support.assign(id, body.adminId ?? null);
     return { success: true, message: 'Ticket assigned', data };
   }
 
   @Patch('tickets/:id/status')
+  @Permissions('support.assign')
   async setStatus(
     @Req() req: any,
     @Param('id') id: string,
@@ -155,11 +165,58 @@ export class AdminSupportController {
   }
 
   @Patch('tickets/:id/priority')
+  @Permissions('support.assign')
   async setPriority(@Param('id') id: string, @Body() body: SetPriorityDto) {
     if (!body?.priority) {
       throw new BadRequestAppException('priority is required');
     }
     const data = await this.support.setPriority(id, body.priority);
     return { success: true, message: 'Priority updated', data };
+  }
+
+  // ── Promote ticket to dispute ────────────────────────────────────
+  // Internal escalation path. Customer never sees the dispute exists —
+  // they keep replying on the ticket; admin works the dispute. Message
+  // mirroring keeps both sides synced. See docs in DisputeService.
+
+  @Post('tickets/:id/promote-to-dispute')
+  @Permissions('disputes.write')
+  async promoteToDispute(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      kind: string;
+      severity?: number;
+      summary?: string;
+      internalNote?: string;
+    },
+  ) {
+    if (!body?.kind) {
+      throw new BadRequestAppException('kind is required');
+    }
+    const allowedKinds = [
+      'RETURN_REJECTED',
+      'WRONG_ITEM_RECEIVED',
+      'DAMAGED_IN_TRANSIT',
+      'MISSING_FROM_PARCEL',
+      'OTHER',
+    ];
+    if (!allowedKinds.includes(body.kind)) {
+      throw new BadRequestAppException(
+        `kind must be one of: ${allowedKinds.join(', ')}`,
+      );
+    }
+    const adminName = req.adminName || req.adminEmail || 'Admin';
+    const data = await this.support.promoteToDispute({
+      ticketId: id,
+      adminId: req.adminId,
+      adminName,
+      kind: body.kind as any,
+      severity: body.severity,
+      summary: body.summary,
+      internalNote: body.internalNote,
+    });
+    return { success: true, message: 'Ticket promoted to dispute', data };
   }
 }

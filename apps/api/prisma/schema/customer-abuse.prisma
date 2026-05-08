@@ -1,0 +1,51 @@
+// ============================================
+// Customer Abuse Counters (Phase 5, PR 5.5)
+// ============================================
+// Rolling 90-day signals per customer. Read by the return-creation
+// path to decide whether to force manual approval ("soft hold") and
+// by the analytics dashboard to surface repeat-abuser candidates.
+//
+// The counter is upserted on every return creation (lazy refresh:
+// re-aggregate on read when stale) and rebuilt nightly by a cron in
+// case orders/returns/disputes were edited out-of-band. Storing the
+// pre-computed values means the create-return hot path doesn't run
+// a 90-day aggregate on every request.
+//
+// `requiresManualApproval` is the boolean the return service reads.
+// It's flipped by the same recompute step — putting the threshold
+// logic next to the data keeps the "what counts as abuse" rule in
+// one place rather than spread across N callers.
+
+model CustomerAbuseCounter {
+  customerId String @id @map("customer_id")
+
+  // Rolling-90-day aggregates. Updated atomically by the recompute
+  // step; readers never see partial state.
+  windowStart    DateTime @map("window_start")
+  windowEnd      DateTime @map("window_end")
+  ordersLast90d  Int      @default(0) @map("orders_last_90d")
+  returnsLast90d Int      @default(0) @map("returns_last_90d")
+  disputesLast90d Int     @default(0) @map("disputes_last_90d")
+  /// Returns / Orders × 10000 (basis points). Null when ordersLast90d
+  /// is zero — the customer hasn't ordered enough to have a rate.
+  returnRateBps  Int?     @map("return_rate_bps")
+
+  /// Set true by the recompute step when the customer crosses the
+  /// configured abuse threshold (CUSTOMER_ABUSE_MIN_RETURNS +
+  /// CUSTOMER_ABUSE_RATE_THRESHOLD_BPS). createReturn reads this and
+  /// flips the new return to admin-review mode (no auto-approval,
+  /// requires manual decision).
+  requiresManualApproval Boolean @default(false) @map("requires_manual_approval")
+
+  /// Free-form text the recompute step writes when flipping the bit on,
+  /// e.g. "12 returns in 90 days, return rate 67% (threshold 30%)". The
+  /// admin UI surfaces this when an admin opens a held return.
+  flagReason String? @map("flag_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@index([requiresManualApproval])
+  @@index([returnRateBps])
+  @@map("customer_abuse_counters")
+}

@@ -19,14 +19,14 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { StockSyncService } from '../../../application/services/stock-sync.service';
 
 @ApiTags('Admin Seller Mappings')
 @Controller('admin')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminSellerMappingsController {
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,

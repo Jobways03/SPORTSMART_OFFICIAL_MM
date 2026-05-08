@@ -8,13 +8,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
 import { ShippingPublicFacade } from '../../application/facades/shipping-public.facade';
 
 @ApiTags('Admin Shipping')
 @Controller('admin/shipping')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminShippingController {
   constructor(private readonly facade: ShippingPublicFacade) {}
 

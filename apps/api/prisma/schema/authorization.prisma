@@ -1,0 +1,134 @@
+// ============================================
+// Authorization (Phase 4) — ABAC ResourcePolicy
+//
+// Layered on top of code-side @Permissions(...) declarations. Where a
+// permission asks "can this actor invoke this route at all?", a
+// ResourcePolicy asks "given the actor and the request context, is
+// this specific call allowed?" — e.g. "tier-1 admins may initiate
+// refunds up to ₹10k".
+//
+// Evaluator is deny-by-policy / allow-by-default: a route guarded by
+// @Policy will be allowed unless a matching DENY rule fires (or, when
+// ABAC_ENABLED is on, a matching ALLOW rule must fire). See ADR-010.
+// ============================================
+
+enum PolicyEffect {
+  ALLOW
+  DENY
+}
+
+/// Principal selector. ROLE matches AdminRole enum names; PERMISSION
+/// matches a permission key from the registry (registry-driven so
+/// rules survive role rename/restructure); CUSTOM_ROLE matches an
+/// AdminCustomRole.name; ANY matches every actor.
+enum PolicyPrincipalType {
+  ROLE
+  PERMISSION
+  CUSTOM_ROLE
+  ANY
+}
+
+model ResourcePolicy {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  description String?
+  effect      PolicyEffect @default(ALLOW)
+
+  principalType PolicyPrincipalType @map("principal_type")
+  /// Value the principalType is matched against. Use '*' for ANY.
+  principalKey  String              @map("principal_key")
+
+  /// Domain object the rule gates. Free-form to keep the table
+  /// open-ended ("refund","return","dispute","settlement","wallet",
+  /// "payout","commission",...). Evaluator never enumerates these.
+  resourceType String @map("resource_type")
+  /// Action verb the rule gates ("initiate","approve","mark-paid",
+  /// "qc-decide", ...). Conventionally lowercase, hyphenated.
+  action       String
+
+  /// JSON expression matched against the request context. Supported
+  /// operators (top-level): $eq, $ne, $in, $nin, $lt, $lte, $gt, $gte,
+  /// $exists. Multiple keys = AND. See PolicyEvaluatorService.
+  ///
+  /// Example for a Tier-1 refund cap:
+  ///   { "amountInPaise": { "$lte": 1000000 } }
+  conditions Json?
+
+  /// Higher priority wins on conflict. Defaults to 100 so admins can
+  /// insert override rules at 200+ without renumbering.
+  priority Int @default(100)
+  enabled  Boolean @default(true)
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt      @map("updated_at")
+  createdByAdminId String?  @map("created_by_admin_id")
+
+  @@index([resourceType, action, enabled])
+  @@index([principalType, principalKey])
+  @@map("resource_policies")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Phase 4 (PR 4.4) — AuthorizationAudit
+//
+// Every authorization decision (allow + deny) is buffered and flushed
+// asynchronously by AuthorizationAuditService. Reads of this table
+// during incident response give a single pivot point: "show me every
+// action this admin attempted in the last 24h, allow or deny."
+//
+// Two guards write here today (PermissionsGuard, PolicyGuard); future
+// layers (AbacChainGuard, ImpersonationGuard) follow the same shape.
+// ─────────────────────────────────────────────────────────────────
+
+enum AuthorizationLayer {
+  PERMISSIONS
+  POLICY
+}
+
+enum AuthorizationDecisionEffect {
+  ALLOW
+  DENY
+}
+
+model AuthorizationAudit {
+  id String @id @default(uuid())
+
+  // ── Actor identity ───────────────────────────────────────────
+  adminId    String?  @map("admin_id")
+  actorRole  String?  @map("actor_role")
+  actorRoles String[] @default([]) @map("actor_roles")
+
+  // ── Request identity ─────────────────────────────────────────
+  routeLabel String  @map("route_label") // "<Class>.<handler>"
+  method     String?
+  path       String?
+  ipAddress  String? @map("ip_address")
+  userAgent  String? @map("user_agent")
+  requestId  String? @map("request_id")
+
+  // ── Decision ─────────────────────────────────────────────────
+  layer            AuthorizationLayer
+  decision         AuthorizationDecisionEffect
+  /// True when the guard would have blocked but allowed-through
+  /// because the corresponding strict flag was off (soak mode).
+  wouldHaveBlocked Boolean @default(false) @map("would_have_blocked")
+
+  // ── Permissions layer ────────────────────────────────────────
+  requiredPermissions String[] @default([]) @map("required_permissions")
+
+  // ── Policy layer ─────────────────────────────────────────────
+  resourceType      String? @map("resource_type")
+  action            String?
+  matchedPolicyId   String? @map("matched_policy_id")
+  matchedPolicyName String? @map("matched_policy_name")
+  context           Json?
+
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([adminId, createdAt])
+  @@index([decision, createdAt])
+  @@index([routeLabel, createdAt])
+  @@index([resourceType, action, createdAt])
+  @@map("authorization_audits")
+}

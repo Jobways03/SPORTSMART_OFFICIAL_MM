@@ -7,12 +7,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { InventoryManagementService } from '../../application/services/inventory-management.service';
 
 @ApiTags('Admin Inventory')
 @Controller('admin/inventory')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminInventoryController {
   constructor(
     private readonly inventoryService: InventoryManagementService,

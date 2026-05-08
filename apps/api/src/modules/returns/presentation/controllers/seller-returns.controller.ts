@@ -17,7 +17,6 @@ import { SellerAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { ReturnService } from '../../application/services/return.service';
 import { MarkReceivedDto } from '../dtos/mark-received.dto';
-import { SubmitQcDecisionDto } from '../dtos/submit-qc-decision.dto';
 
 const QC_EVIDENCE_UPLOAD_OPTIONS = {
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
@@ -110,24 +109,56 @@ export class SellerReturnsController {
     return { success: true, message: 'Evidence uploaded', data };
   }
 
-  // PATCH /seller/returns/:returnId/qc-decision — submit per-item QC decision
-  @Patch(':returnId/qc-decision')
-  async submitQc(
+  // PATCH /seller/returns/:returnId/respond — Phase 13 (P1.8) seller
+  // response to a fault-attribution claim. Seller can ACCEPT (agree
+  // with the customer's claim) or CONTEST (disagree, optionally with
+  // evidence URLs). Service enforces ownership, deadline, and the
+  // PENDING-only state machine.
+  @Patch(':returnId/respond')
+  async respond(
     @Req() req: any,
     @Param('returnId') returnId: string,
-    @Body() dto: SubmitQcDecisionDto,
+    @Body()
+    body: {
+      decision: 'ACCEPTED' | 'CONTESTED';
+      notes?: string;
+      evidenceFileUrls?: string[];
+    },
   ) {
-    await this.returnService.assertNodeOwnsReturn(
+    if (
+      !body?.decision ||
+      (body.decision !== 'ACCEPTED' && body.decision !== 'CONTESTED')
+    ) {
+      throw new BadRequestAppException(
+        'decision must be ACCEPTED or CONTESTED',
+      );
+    }
+    if (body.decision === 'CONTESTED' && !body.notes?.trim()) {
+      throw new BadRequestAppException(
+        'notes are required when contesting a claim — explain why',
+      );
+    }
+    const data = await this.returnService.respondAsSeller({
       returnId,
-      'SELLER',
-      req.sellerId,
-    );
-    const data = await this.returnService.submitQcDecision(
-      returnId,
-      'SELLER',
-      req.sellerId,
-      dto,
-    );
-    return { success: true, message: 'QC decision submitted', data };
+      sellerId: req.sellerId,
+      decision: body.decision,
+      notes: body.notes,
+      evidenceFileUrls: body.evidenceFileUrls,
+    });
+    return { success: true, message: 'Response recorded', data };
   }
+
+  // QC DECISION — intentionally admin-only.
+  //
+  // Sellers physically receive the returned package and contribute
+  // evidence (photos via /qc-evidence above), but the binding QC
+  // outcome that drives refund is reserved for marketplace admins
+  // (admin-returns controller's `submitQc` route). Concentrating the
+  // decision on the marketplace side keeps a neutral arbiter between
+  // buyer + seller and prevents "seller marked it rejected" disputes
+  // from short-circuiting the refund.
+  //
+  // Defence in depth: ReturnService.submitQcDecision additionally
+  // refuses non-ADMIN actorType, so even a leaked seller token can't
+  // call the service directly.
 }

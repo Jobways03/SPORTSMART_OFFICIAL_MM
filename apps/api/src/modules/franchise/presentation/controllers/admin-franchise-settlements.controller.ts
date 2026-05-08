@@ -11,8 +11,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { FranchiseSettlementService } from '../../application/services/franchise-settlement.service';
 import { FranchiseSettlementCreateDto } from '../dtos/franchise-settlement-create.dto';
 import { FranchiseSettlementPayDto } from '../dtos/franchise-settlement-pay.dto';
@@ -20,7 +21,7 @@ import { FranchiseSettlementFailDto } from '../dtos/franchise-settlement-fail.dt
 
 @ApiTags('Admin Franchise Settlements')
 @Controller('admin/franchise-settlements')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminFranchiseSettlementsController {
   constructor(
     private readonly settlementService: FranchiseSettlementService,
@@ -28,6 +29,7 @@ export class AdminFranchiseSettlementsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @Permissions('settlements.approve')
   async createSettlementCycle(@Body() dto: FranchiseSettlementCreateDto) {
     const data = await this.settlementService.createSettlementCycle(
       new Date(dto.periodStart),
@@ -42,6 +44,7 @@ export class AdminFranchiseSettlementsController {
   }
 
   @Get()
+  @Permissions('settlements.read')
   async listSettlements(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -82,6 +85,7 @@ export class AdminFranchiseSettlementsController {
   }
 
   @Get(':id')
+  @Permissions('settlements.read')
   async getSettlementDetail(@Param('id') id: string) {
     const data = await this.settlementService.getSettlementDetail(id);
 
@@ -95,6 +99,7 @@ export class AdminFranchiseSettlementsController {
   @Patch(':id/approve')
   @HttpCode(HttpStatus.OK)
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.approve')
   async approveSettlement(@Param('id') id: string) {
     const data = await this.settlementService.approveSettlement(id);
 
@@ -108,6 +113,7 @@ export class AdminFranchiseSettlementsController {
   @Patch(':id/fail')
   @HttpCode(HttpStatus.OK)
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.approve')
   async markSettlementFailed(
     @Param('id') id: string,
     @Body() dto: FranchiseSettlementFailDto,
@@ -127,6 +133,7 @@ export class AdminFranchiseSettlementsController {
   @Patch(':id/pay')
   @HttpCode(HttpStatus.OK)
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.markPaid')
   async markSettlementPaid(
     @Param('id') id: string,
     @Body() dto: FranchiseSettlementPayDto,

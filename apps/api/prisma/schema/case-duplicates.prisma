@@ -1,0 +1,45 @@
+// Phase 1.5 — business-duplicate prevention audit trail (ADR-006).
+//
+// CaseDuplicateService runs an application-level check before creating a
+// return / dispute / ticket. When a duplicate is detected the service
+// throws DuplicateCaseException AND writes a row here so support can
+// retrospectively see who tried to double-file and how often.
+//
+// This is an AUDIT table, not a constraint table — the rules are
+// enforced by service-layer SELECT-then-throw with a small race window.
+// Feature is gated by `CASE_DUPLICATE_PREVENTION_ENABLED`; default OFF
+// for the dual-write soak.
+
+enum DuplicateSourceType {
+  RETURN
+  DISPUTE
+  TICKET
+}
+
+model CaseDuplicate {
+  id String @id @default(uuid())
+
+  // The case the caller TRIED to create (and we rejected).
+  attemptedSourceType DuplicateSourceType @map("attempted_source_type")
+  // No caseNumber yet at attempt time — we capture the natural key so
+  // ops can locate the affected order/item without joining a phantom row.
+  attemptedNaturalKey Json                @map("attempted_natural_key")
+
+  // The active case that already exists.
+  duplicateOfSourceType DuplicateSourceType @map("duplicate_of_source_type")
+  duplicateOfSourceId   String              @map("duplicate_of_source_id")
+
+  // Which rule fired. Stable enum string so dashboards don't break on rename.
+  reason                String
+
+  // Actor who tried — useful for spotting abuse patterns.
+  actorType String @map("actor_type")
+  actorId   String @map("actor_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([attemptedSourceType, createdAt(sort: Desc)])
+  @@index([duplicateOfSourceType, duplicateOfSourceId])
+  @@index([actorType, actorId, createdAt(sort: Desc)])
+  @@map("case_duplicates")
+}

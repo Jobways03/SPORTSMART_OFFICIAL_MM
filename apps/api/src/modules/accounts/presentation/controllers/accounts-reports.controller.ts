@@ -8,14 +8,14 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { AccountsReportsService } from '../../application/services/accounts-reports.service';
 import { AccountsSettlementService } from '../../application/services/accounts-settlement.service';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
 @ApiTags('Admin Accounts - Reports')
 @Controller('admin/accounts/reports')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AccountsReportsController {
   constructor(
     private readonly reportsService: AccountsReportsService,

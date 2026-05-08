@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { StorefrontMenuService } from '../../services/menu.service';
 import {
   CreateItemDto,
@@ -24,7 +24,7 @@ const ok = <T>(data: T, message = 'OK') => ({ success: true, message, data });
 
 @ApiTags('Admin — Storefront Menus')
 @ApiBearerAuth()
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 @Controller('admin/storefront/menus')
 export class AdminMenusController {
   constructor(private readonly service: StorefrontMenuService) {}

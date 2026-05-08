@@ -21,7 +21,7 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { BRAND_REPOSITORY, IBrandRepository } from '../../../domain/repositories/brand.repository.interface';
 
 function toSlug(name: string): string {
@@ -34,7 +34,7 @@ function toSlug(name: string): string {
 
 @ApiTags('Admin - Brands')
 @Controller({ path: 'admin/brands', version: '1' })
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminBrandsController {
   constructor(
     @Inject(BRAND_REPOSITORY) private readonly brandRepo: IBrandRepository,

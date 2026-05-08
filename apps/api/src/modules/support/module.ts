@@ -6,6 +6,7 @@ import {
   SellerAuthGuard,
   UserAuthGuard,
 } from '../../core/guards';
+import { DisputesModule } from '../disputes/module';
 import { CustomerSupportController } from './presentation/controllers/customer-support.controller';
 import { AdminSupportController } from './presentation/controllers/admin-support.controller';
 import { SellerSupportController } from './presentation/controllers/seller-support.controller';
@@ -13,10 +14,14 @@ import { FranchiseSupportController } from './presentation/controllers/franchise
 import { AffiliateSupportController } from './presentation/controllers/affiliate-support.controller';
 import { SupportService } from './application/services/support.service';
 import { SupportPublicFacade } from './application/facades/support-public.facade';
+import { DisputeMirrorHandler } from './application/event-handlers/dispute-mirror.handler';
 import { PrismaSupportRepository } from './infrastructure/repositories/prisma-support.repository';
 import { SUPPORT_REPOSITORY } from './domain/repositories/support.repository.interface';
 
 @Module({
+  // DisputesModule exports DisputesPublicFacade for the ticket→dispute
+  // promotion path and the customer-reply mirror.
+  imports: [DisputesModule],
   controllers: [
     CustomerSupportController,
     AdminSupportController,
@@ -32,6 +37,7 @@ import { SUPPORT_REPOSITORY } from './domain/repositories/support.repository.int
     AffiliateAuthGuard,
     SupportService,
     SupportPublicFacade,
+    DisputeMirrorHandler,
     {
       provide: SUPPORT_REPOSITORY,
       useClass: PrismaSupportRepository,

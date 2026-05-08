@@ -30,11 +30,51 @@ enum DisputeActorType {
   ADMIN
 }
 
+// Phase 12 (post-Phase-11) — see ADR-016. Records who pays for the
+// customer-favoured outcome of a dispute. NONE is used when the
+// dispute is resolved against the customer (no money moves) or when
+// the resolution is administrative (CLOSED).
+enum LiabilityParty {
+  NONE
+  SELLER
+  LOGISTICS
+  PLATFORM
+  CUSTOMER
+  // Phase 13 completion — return-side attributions that don't map to
+  // any of the four core actors. Disputes never write these (the
+  // dispute DTO union stays narrow); returns can now record
+  // franchise / brand fault and INCONCLUSIVE for cases where QC
+  // can't tell who's at fault.
+  FRANCHISE
+  BRAND
+  INCONCLUSIVE
+}
+
+// Phase 12 (post-Phase-11) — separates "what the customer gets" from
+// "who pays". GOODWILL_CREDIT is a non-recourse payment booked as a
+// PlatformExpense; functionally the customer wallet is credited the
+// same as a FULL_REFUND but no recovery is attempted from any party.
+enum CustomerRemedy {
+  FULL_REFUND
+  PARTIAL_REFUND
+  NO_REFUND
+  GOODWILL_CREDIT
+  // Phase 13 (P1.14) — return-only outcomes. Disputes never write
+  // these (the dispute DTO union stays narrow); they live on the
+  // shared enum so the Return.customerRemedy column accepts them
+  // without a separate type.
+  REPLACEMENT
+  EXCHANGE
+}
+
 model Dispute {
   id            String        @id @default(uuid())
   disputeNumber String        @unique @map("dispute_number") // DSP-YYYY-NNNNNN
   kind          DisputeKind
   status        DisputeStatus @default(OPEN)
+  // Phase 5 (PR 5.2) — optimistic-lock counter. Same shape as Return.version;
+  // see returns.prisma for the full rationale.
+  version       Int           @default(0)
   // 1-100 — drives queue order (90+ = urgent). Set by admin during triage.
   severity      Int           @default(50)
 
@@ -42,6 +82,19 @@ model Dispute {
   masterOrderId String? @map("master_order_id")
   subOrderId    String? @map("sub_order_id")
   returnId      String? @map("return_id")
+
+  // Phase 11 (post-Phase-10) — ticket-as-front-door rebrand. When a
+  // support agent decides a ticket needs the formal resolution path
+  // (refund decision, audit trail, SLA), they "promote" it. The
+  // customer never sees the dispute — they keep talking on the
+  // ticket. Admin operations happen on the dispute, and message
+  // mirroring keeps both sides in sync. Null = direct-filed dispute
+  // (legacy customer/seller/admin filings still work the old way).
+  // No Prisma relation because the existing DB index isn't UNIQUE on
+  // this column; service code does an explicit `findUnique({ id: })`
+  // when it needs the ticket row. The unique side lives on Ticket
+  // (`promotedToDisputeId @unique`), which already constrains 1:1.
+  sourceTicketId String? @map("source_ticket_id")
 
   // Polymorphic filer (matches TicketActorType convention; admin-filed
   // disputes happen when an admin escalates on behalf of a buyer).
@@ -65,6 +118,17 @@ model Dispute {
   // wallet credit / gateway refund.
   decisionAmountInPaise  Int?      @map("decision_amount_in_paise")
 
+  // Phase 12 (post-Phase-11) — liability + remedy split. The decision
+  // (RESOLVED_BUYER / SPLIT / SELLER) only says *who won*; these two
+  // columns record *who pays* and *what the customer gets*. Drives:
+  //   - whether a RefundInstruction is created (and for what amount)
+  //   - which ledger row is written (SellerDebit / LogisticsClaim /
+  //     PlatformExpense)
+  //   - the linked-return status update (DISPUTE_OVERTURNED etc.)
+  // See docs/decisions/016-dispute-liability-ledger.md for the matrix.
+  liabilityParty  LiabilityParty?  @map("liability_party")
+  customerRemedy  CustomerRemedy?  @map("customer_remedy")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -75,6 +139,7 @@ model Dispute {
   @@index([filedByType, filedById])
   @@index([masterOrderId])
   @@index([returnId])
+  @@index([sourceTicketId])
   @@map("disputes")
 }
 
@@ -89,6 +154,12 @@ model DisputeMessage {
   body           String  @db.Text
   // Internal notes hidden from buyer/seller views — admin-only triage.
   isInternalNote Boolean @default(false) @map("is_internal_note")
+
+  // Phase 11 (post-Phase-10) — mirror provenance. Set when this row
+  // was auto-created from a customer/seller reply on the promoted
+  // ticket. UNIQUE so a retried mirror handler cannot double-write.
+  // Null for native dispute messages (admin replies, internal notes).
+  mirroredFromTicketMessageId String? @unique @map("mirrored_from_ticket_message_id")
 
   createdAt DateTime @default(now()) @map("created_at")
 

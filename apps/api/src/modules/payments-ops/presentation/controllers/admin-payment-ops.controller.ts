@@ -10,7 +10,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { PaymentMismatchStatus, PaymentMismatchKind } from '@prisma/client';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { PaymentOpsService } from '../../application/services/payment-ops.service';
 
@@ -21,11 +22,12 @@ interface TransitionDto {
 
 @ApiTags('Admin Payment Ops')
 @Controller('admin/payment-ops')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminPaymentOpsController {
   constructor(private readonly service: PaymentOpsService) {}
 
   @Get('alerts')
+  @Permissions('paymentOps.read')
   async listAlerts(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -48,6 +50,7 @@ export class AdminPaymentOpsController {
   }
 
   @Get('metrics')
+  @Permissions('paymentOps.read')
   async metrics(@Query('days') days?: string) {
     const data = await this.service.getMetrics(
       days ? parseInt(days, 10) : 7,
@@ -56,12 +59,14 @@ export class AdminPaymentOpsController {
   }
 
   @Get('alerts/:id')
+  @Permissions('paymentOps.read')
   async getAlert(@Param('id') id: string) {
     const data = await this.service.getAlert(id);
     return { success: true, message: 'Alert retrieved', data };
   }
 
   @Patch('alerts/:id/status')
+  @Permissions('paymentOps.transition')
   async transition(
     @Req() req: any,
     @Param('id') id: string,
@@ -78,6 +83,7 @@ export class AdminPaymentOpsController {
   }
 
   @Get('orders/:masterOrderId/attempts')
+  @Permissions('paymentOps.read')
   async attemptsForOrder(@Param('masterOrderId') masterOrderId: string) {
     const data = await this.service.listAttemptsForOrder(masterOrderId);
     return { success: true, message: 'Attempts retrieved', data };

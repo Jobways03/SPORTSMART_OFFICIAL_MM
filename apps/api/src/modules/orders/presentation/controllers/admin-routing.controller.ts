@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
 import { RoutingHealthService } from '../../application/services/routing-health.service';
 
@@ -19,7 +19,7 @@ type PreviewItem = {
 
 @ApiTags('Admin Routing')
 @Controller('admin/routing')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminRoutingController {
   constructor(
     private readonly catalogFacade: CatalogPublicFacade,

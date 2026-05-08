@@ -7,12 +7,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { FranchiseOrdersService } from '../../application/services/franchise-orders.service';
 
 @ApiTags('Admin Franchise Orders')
 @Controller('admin/franchise-orders')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminFranchiseOrdersController {
   constructor(
     private readonly franchiseOrdersService: FranchiseOrdersService,

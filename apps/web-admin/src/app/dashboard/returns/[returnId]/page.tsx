@@ -481,6 +481,66 @@ export default function ReturnDetailPage() {
             </div>
           </div>
 
+          {/* Seller Response */}
+          {ret.sellerResponseStatus && (
+            <div className="return-section">
+              <div className="return-section-header">
+                <h2>Seller Response</h2>
+                <span
+                  className={
+                    ret.sellerResponseStatus === 'CONTESTED'
+                      ? 'return-status-badge danger'
+                      : 'return-status-badge success'
+                  }
+                >
+                  {ret.sellerResponseStatus === 'CONTESTED'
+                    ? 'Contested'
+                    : 'Accepted'}
+                </span>
+              </div>
+              <div className="return-section-body">
+                <div className="return-info-grid">
+                  <div className="return-info-item">
+                    <span className="return-info-label">Responded At</span>
+                    <span className="return-info-value">
+                      {formatDateTime(ret.sellerRespondedAt)}
+                    </span>
+                  </div>
+                </div>
+                {ret.sellerResponseNotes && (
+                  <div style={{ marginTop: 14 }}>
+                    <div className="return-info-label">Seller Notes</div>
+                    <div
+                      className="return-info-value"
+                      style={{
+                        marginTop: 4,
+                        whiteSpace: 'pre-wrap',
+                        padding: 10,
+                        background: 'var(--color-bg-subtle, #f6f7f9)',
+                        borderRadius: 6,
+                      }}
+                    >
+                      {ret.sellerResponseNotes}
+                    </div>
+                  </div>
+                )}
+                {ret.sellerResponseStatus === 'CONTESTED' && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      fontSize: 12,
+                      color: 'var(--color-text-secondary)',
+                    }}
+                  >
+                    Seller contested this claim. Review the seller&rsquo;s
+                    notes and any pre-ship evidence below before issuing a QC
+                    decision.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Items */}
           <div className="return-section">
             <div className="return-section-header">

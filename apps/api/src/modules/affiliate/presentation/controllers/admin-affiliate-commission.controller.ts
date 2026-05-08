@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AffiliateCommissionService } from '../../application/services/affiliate-commission.service';
 import { AffiliateCommissionHoldDto } from '../dtos/affiliate-commission-hold.dto';
 
@@ -12,11 +13,12 @@ import { AffiliateCommissionHoldDto } from '../dtos/affiliate-commission-hold.dt
  */
 @ApiTags('Admin Affiliate Commissions')
 @Controller('admin/affiliates/commissions')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAffiliateCommissionController {
   constructor(private readonly commissionService: AffiliateCommissionService) {}
 
   @Get()
+  @Permissions('affiliates.read')
   async list(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -37,6 +39,7 @@ export class AdminAffiliateCommissionController {
   }
 
   @Get('totals')
+  @Permissions('affiliates.read')
   async totals() {
     const data = await this.commissionService.getAdminTotals();
     return { success: true, message: 'Commission totals', data };
@@ -50,6 +53,7 @@ export class AdminAffiliateCommissionController {
    */
   @Patch(':commissionId/hold')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.commission')
   async placeOnHold(
     @Param('commissionId') commissionId: string,
     @Body() dto: AffiliateCommissionHoldDto,
@@ -66,6 +70,7 @@ export class AdminAffiliateCommissionController {
    */
   @Patch(':commissionId/resume')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.commission')
   async resumeFromHold(@Param('commissionId') commissionId: string) {
     const data = await this.commissionService.resumeFromHold(commissionId);
     return { success: true, message: 'Commission resumed', data };

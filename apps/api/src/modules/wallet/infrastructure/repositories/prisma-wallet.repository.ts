@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { Wallet, WalletTransaction } from '@prisma/client';
+import type { Wallet, WalletTransaction, WalletTransactionType } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   ApplyMutationResult,
@@ -150,6 +150,22 @@ export class PrismaWalletRepository implements WalletRepository {
 
   async findTransactionById(id: string): Promise<WalletTransaction | null> {
     return this.prisma.walletTransaction.findUnique({ where: { id } });
+  }
+
+  async findTransactionByReference(args: {
+    referenceType: string;
+    referenceId: string;
+    type: WalletTransactionType;
+  }): Promise<WalletTransaction | null> {
+    // The compound unique on (reference_type, reference_id, type) lets
+    // Prisma resolve this via a single index lookup.
+    return this.prisma.walletTransaction.findFirst({
+      where: {
+        referenceType: args.referenceType,
+        referenceId: args.referenceId,
+        type: args.type,
+      },
+    });
   }
 
   async listTransactions(args: {

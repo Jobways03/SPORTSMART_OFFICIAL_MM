@@ -17,7 +17,7 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
 import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
 
@@ -27,7 +27,7 @@ const VALID_SCOPE_TYPES = ['GLOBAL', 'CATEGORY', 'COLLECTION'] as const;
 
 @ApiTags('Admin - Storefront Filters')
 @Controller({ path: 'admin/storefront-filters', version: '1' })
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminStorefrontFiltersController {
   constructor(
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,

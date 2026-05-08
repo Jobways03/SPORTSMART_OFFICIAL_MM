@@ -23,6 +23,8 @@ export type RefundMethod =
   | 'BANK_TRANSFER'
   | 'CASH';
 
+export type SellerResponseStatus = 'ACCEPTED' | 'CONTESTED';
+
 export interface ReturnOrderItemRef {
   id: string;
   productTitle?: string;
@@ -120,6 +122,9 @@ export interface ReturnListItem {
   refundInitiatedBy?: string | null;
   refundInitiatedAt?: string | null;
   customerNotes?: string | null;
+  sellerResponseStatus?: SellerResponseStatus | null;
+  sellerRespondedAt?: string | null;
+  sellerResponseNotes?: string | null;
   closedAt?: string | null;
   createdAt: string;
   updatedAt: string;

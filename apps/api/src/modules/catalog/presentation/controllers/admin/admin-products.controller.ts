@@ -22,7 +22,7 @@ import {
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { ProductSlugService } from '../../../application/services/product-slug.service';
 import { ProductCodeService } from '../../../application/services/product-code.service';
 import { AdminCreateProductDto } from '../../dtos/admin-create-product.dto';
@@ -37,7 +37,7 @@ import { PrismaService } from '../../../../../bootstrap/database/prisma.service'
 
 @ApiTags('Admin Products')
 @Controller('admin/products')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminProductsController {
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,

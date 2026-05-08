@@ -10,6 +10,11 @@ model Return {
   customerId    String @map("customer_id")
 
   status ReturnStatus @default(REQUESTED)
+  // Phase 5 (PR 5.1) — optimistic-lock counter. Incremented on every
+  // status mutation. Concurrent writers compare against the version they
+  // read; a CAS mismatch surfaces as a 409 instead of a silent state
+  // overwrite (e.g. a stale "mark-received" stomping a fresh "rejected").
+  version Int @default(0)
 
   // Initiator
   initiatedBy String  @default("CUSTOMER") @map("initiated_by") // CUSTOMER, ADMIN, SELLER, FRANCHISE
@@ -37,9 +42,63 @@ model Return {
   qcDecision    QcOutcome? @map("qc_decision")
   qcNotes       String?    @map("qc_notes")
 
+  // Phase 13 — liability attribution captured at QC time. Drives
+  // SellerDebit / LogisticsClaim / PlatformExpense ledger writes so
+  // returns and disputes share the same money-flow story (ADR-016).
+  // Both columns are nullable for back-compat with rows decided
+  // before this migration; the QC controller requires them on new
+  // submissions whenever any item is approved.
+  liabilityParty  LiabilityParty?  @map("liability_party")
+  customerRemedy  CustomerRemedy?  @map("customer_remedy")
+  qcRationale     String?          @map("qc_rationale")
+  qcInternalNotes String?          @map("qc_internal_notes")
+  qcCourierName   String?          @map("qc_courier_name")
+  qcAwbNumber     String?          @map("qc_awb_number")
+
+  // Phase 13 (P1.8) — seller-response lifecycle. Set at return-creation
+  // time based on per-item reasonCategory (see classifyReasonForSellerResponse).
+  // Null on legacy rows; QC-side code treats null as "not_required" so
+  // historical returns keep working.
+  sellerResponseStatus SellerResponseStatus? @map("seller_response_status")
+  sellerNotifiedAt     DateTime?             @map("seller_notified_at")
+  sellerResponseDueAt  DateTime?             @map("seller_response_due_at")
+  sellerRespondedAt    DateTime?             @map("seller_responded_at")
+  sellerResponseNotes  String?               @map("seller_response_notes")
+
+  // Phase 13 (P1.11) — risk scoring at intake. 0-100; null on legacy
+  // rows. risk_flags is a list of short codes (e.g. ['HIGH_VALUE_NO_EVIDENCE',
+  // 'CUSTOMER_ABUSE']) so admin can see which dimensions fired without
+  // re-running the scorer. risk_scored_at is the timestamp of the
+  // most recent score computation for staleness checks.
+  riskScore     Int?      @map("risk_score")
+  riskFlags     Json?     @map("risk_flags")
+  riskScoredAt  DateTime? @map("risk_scored_at")
+
+  // Phase 13 (P1.14) — replacement / exchange request lifecycle.
+  // replacementStatus stays NULL on legacy rows AND on returns whose
+  // outcome is a refund (the common path). When QC picks REPLACEMENT
+  // or EXCHANGE, the status moves through PENDING_STOCK_CHECK →
+  // AWAITING_FULFILMENT (or AWAITING_PAYMENT for exchange-with-diff).
+  // The order_id columns are loose pointers (no FK constraint) until
+  // the order-creation follow-up lands.
+  replacementStatus       ReplacementRequestStatus? @map("replacement_status")
+  replacementOrderId      String?                   @map("replacement_order_id")
+  exchangeOrderId         String?                   @map("exchange_order_id")
+  exchangeTargetVariantId String?                   @map("exchange_target_variant_id")
+  exchangePriceDiffPaise  BigInt?                   @map("exchange_price_diff_paise")
+  // Phase 13 (P1.14 follow-up) — Razorpay payment for the price-up
+  // exchange diff. Stamped at initiateExchangePayment, cleared once
+  // verifyExchangePayment confirms the signature.
+  exchangeRazorpayOrderId   String?   @map("exchange_razorpay_order_id")
+  exchangePaymentCompletedAt DateTime? @map("exchange_payment_completed_at")
+
   // Refund
   refundMethod      ReturnRefundMethod? @map("refund_method")
   refundAmount      Decimal?            @map("refund_amount") @db.Decimal(10, 2)
+  // Phase 1.4 — paise sibling (ADR-007). Authoritative once dual-write
+  // soak completes; until then both columns are kept in lockstep by
+  // MoneyDualWriteMiddleware whenever MONEY_DUAL_WRITE_ENABLED=true.
+  refundAmountInPaise BigInt?           @map("refund_amount_in_paise")
   refundProcessedAt DateTime?           @map("refund_processed_at")
   refundReference   String?             @map("refund_reference")
 
@@ -70,6 +129,11 @@ model Return {
   @@index([masterOrderId])
   @@index([status])
   @@index([returnNumber])
+  @@index([liabilityParty])
+  @@index([customerRemedy])
+  @@index([sellerResponseStatus, sellerResponseDueAt])
+  @@index([riskScore])
+  @@index([replacementStatus])
   @@map("returns")
 }
 
@@ -86,7 +150,9 @@ model ReturnItem {
   qcQuantityApproved Int?       @map("qc_quantity_approved")
   qcNotes            String?    @map("qc_notes")
 
-  refundAmount Decimal? @map("refund_amount") @db.Decimal(10, 2)
+  refundAmount        Decimal? @map("refund_amount") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007).
+  refundAmountInPaise BigInt?  @map("refund_amount_in_paise")
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -149,6 +215,8 @@ model RefundTransaction {
   returnId        String                  @map("return_id")
   attemptNumber   Int                     @map("attempt_number")
   amount          Decimal                 @map("amount") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007).
+  amountInPaise   BigInt                  @default(0) @map("amount_in_paise")
   gatewayRefundId String?                 @map("gateway_refund_id")
   status          RefundTransactionStatus @default(INITIATED)
   failureReason   String?                 @map("failure_reason")

@@ -9,9 +9,11 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import { AuditChainAnchorService } from '../../application/services/audit-chain-anchor.service';
 
 /**
  * Admin-only audit log surface. Reads from the hash-chained AuditLog
@@ -19,11 +21,15 @@ import { NotFoundAppException } from '../../../../core/exceptions';
  */
 @ApiTags('Admin Audit')
 @Controller('admin/audit')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAuditController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly anchors: AuditChainAnchorService,
+  ) {}
 
   @Get('logs')
+  @Permissions('audit.read')
   async list(
     @Query('module') module?: string,
     @Query('resource') resource?: string,
@@ -61,6 +67,7 @@ export class AdminAuditController {
   }
 
   @Get('logs/:id')
+  @Permissions('audit.read')
   async getOne(@Param('id') id: string) {
     const row = await this.prisma.auditLog.findUnique({ where: { id } });
     if (!row) throw new NotFoundAppException('Log not found');
@@ -72,7 +79,26 @@ export class AdminAuditController {
    * match a recomputed sha256(prevHash + payload). Catches tampering or
    * application bugs that bypassed the facade.
    */
+  /**
+   * Phase 8 (PR 8.1) — fast-path verification using the latest anchor
+   * pin. The legacy /verify-chain walks from genesis; this one walks
+   * forward from the most recent anchor, so even at millions of audit
+   * rows the response stays bounded.
+   */
+  @Get('verify-chain-fast')
+  @Permissions('audit.read')
+  async verifyChainFast(@Query('limit') limit?: string) {
+    const take = Math.min(parseInt(limit || '10000', 10) || 10000, 50_000);
+    const data = await this.anchors.verifyFromLatestAnchor(take);
+    return {
+      success: true,
+      message: data.breaks.length === 0 ? 'Chain healthy' : 'Chain breaks detected',
+      data,
+    };
+  }
+
   @Get('verify-chain')
+  @Permissions('audit.read')
   async verifyChain(@Query('limit') limit?: string) {
     const take = Math.min(parseInt(limit || '1000', 10) || 1000, 10000);
     const rows = await this.prisma.auditLog.findMany({
@@ -117,6 +143,7 @@ export class AdminAuditController {
   }
 
   @Get('export.csv')
+  @Permissions('audit.read')
   @Header('Content-Type', 'text/csv')
   async exportCsv(
     @Query('fromDate') fromDate: string,

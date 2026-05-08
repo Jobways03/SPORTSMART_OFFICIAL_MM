@@ -25,6 +25,13 @@ enum FilePurpose {
   BANNER
   AVATAR
   TICKET_ATTACHMENT
+  /// Pre-ship "proof of dispatch" photos — uploaded by the seller /
+  /// franchise on the Pack/Ship step. Surfaced in the admin returns
+  /// flow as the as-shipped baseline so the customer's "damaged in
+  /// transit" claim can be compared against documented dispatch
+  /// condition. Auto-pruned 60d after delivery if no return is filed
+  /// (Phase 7 retention policy).
+  SHIPMENT_EVIDENCE
   OTHER
 }
 
@@ -53,6 +60,20 @@ model FileMetadata {
   expiresAt      DateTime?          @map("expires_at")
   deletedAt      DateTime?          @map("deleted_at")
 
+  // Phase 7 (PR 7.1) — content integrity hash. Computed on confirm /
+  // direct-upload from the byte stream the client uploaded; verified
+  // on every secure-URL issue. A divergent hash means the bytes in
+  // storage no longer match what we wrote — either tampering or a
+  // dropped / corrupted re-upload by another path. Either way, refuse
+  // to issue a URL until the case is reviewed.
+  contentSha256  String?            @map("content_sha256")
+  hashAlgorithm  String?            @default("sha256") @map("hash_algorithm")
+  hashedAt       DateTime?          @map("hashed_at")
+  /// Last time we re-hashed and verified against the stored hash.
+  /// Updated by the periodic integrity-verifier cron + on-demand
+  /// re-verifies. Null = never re-checked since upload.
+  lastVerifiedAt DateTime?          @map("last_verified_at")
+
   createdAt      DateTime           @default(now()) @map("created_at")
   updatedAt      DateTime           @updatedAt @map("updated_at")
 
@@ -63,6 +84,10 @@ model FileMetadata {
   @@index([status])
   @@index([purpose])
   @@index([deletedAt])
+  // Phase 7 — supports the integrity-verifier cron's "oldest unverified
+  // file first" scan. Two-column index because we filter on status=READY
+  // first (no point hashing PENDING/DELETED) and order by lastVerifiedAt.
+  @@index([status, lastVerifiedAt])
   @@map("file_metadata")
 }
 

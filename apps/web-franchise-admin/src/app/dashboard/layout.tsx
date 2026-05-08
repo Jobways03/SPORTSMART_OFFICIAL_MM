@@ -107,7 +107,13 @@ export default function DashboardLayout({
             &#9776;
           </button>
           <Link href="/dashboard" className="navbar-brand">
-            <span className="navbar-brand-name">SPORTSMART</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/SportsMart_Web_Banner.avif"
+              alt="SportsMart"
+              className="navbar-brand-name"
+              style={{ height: 36, width: 'auto', display: 'block' }}
+            />
             <span className="navbar-brand-tag">FRANCHISE ADMIN</span>
           </Link>
         </div>

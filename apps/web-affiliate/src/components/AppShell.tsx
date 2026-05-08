@@ -76,10 +76,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }}
       >
         <div style={{ padding: '0 20px 20px', borderBottom: '1px solid #1e293b' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            SportsMart
+          <div
+            style={{
+              display: 'inline-flex',
+              background: '#fff',
+              padding: '6px 10px',
+              borderRadius: 8,
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/SportsMart_Web_Banner.avif"
+              alt="SportsMart"
+              style={{ height: 36, width: 'auto', display: 'block' }}
+            />
           </div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#fff', marginTop: 2 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginTop: 10, textAlign: 'center' }}>
             Affiliate Portal
           </div>
         </div>

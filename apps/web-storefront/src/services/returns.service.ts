@@ -90,6 +90,30 @@ export interface ReturnDetail {
   masterOrder?: {
     orderNumber: string;
   };
+  // Phase 13 (P1.14) — replacement / exchange lifecycle. Drives the
+  // "Pay difference for exchange" CTA on this page when the customer
+  // picked an EXCHANGE remedy and the target SKU is pricier.
+  customerRemedy?:
+    | 'FULL_REFUND'
+    | 'PARTIAL_REFUND'
+    | 'NO_REFUND'
+    | 'GOODWILL_CREDIT'
+    | 'REPLACEMENT'
+    | 'EXCHANGE'
+    | null;
+  replacementStatus?:
+    | 'NONE'
+    | 'PENDING_STOCK_CHECK'
+    | 'AWAITING_PAYMENT'
+    | 'AWAITING_FULFILMENT'
+    | 'FULFILLED'
+    | 'CANCELLED'
+    | 'FALLBACK_TO_REFUND'
+    | null;
+  exchangePriceDiffPaise?: string | number | null;
+  exchangeRazorpayOrderId?: string | null;
+  exchangePaymentCompletedAt?: string | null;
+  replacementOrderId?: string | null;
 }
 
 export interface CreateReturnPayload {
@@ -138,6 +162,44 @@ export const returnsService = {
   },
   markHandedOver(returnId: string): Promise<ApiResponse<ReturnDetail>> {
     return apiClient<ReturnDetail>(`/customer/returns/${returnId}/handed-over`, { method: 'POST' });
+  },
+
+  /**
+   * Phase 13 (P1.14) — initiate Razorpay payment for the exchange
+   * price-up diff. Service requires `replacementStatus=AWAITING_PAYMENT`.
+   * Response carries the Razorpay order id and amount-in-paise; the
+   * caller hands these to Razorpay's web SDK for checkout.
+   */
+  initiateExchangePayment(
+    returnId: string,
+  ): Promise<
+    ApiResponse<{ razorpayOrderId: string; amountInPaise: number }>
+  > {
+    return apiClient(`/customer/returns/${returnId}/exchange-payment-init`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Phase 13 (P1.14) — verify the Razorpay signature after the SDK
+   * completes payment. Service flips status to PENDING_STOCK_CHECK
+   * and triggers replacement-order creation; on success the return
+   * lands on `AWAITING_FULFILMENT`.
+   */
+  verifyExchangePayment(
+    returnId: string,
+    payload: {
+      razorpayOrderId: string;
+      razorpayPaymentId: string;
+      razorpaySignature: string;
+    },
+  ): Promise<
+    ApiResponse<{ replacementOrderId: string | null; status: string }>
+  > {
+    return apiClient(`/customer/returns/${returnId}/exchange-payment-verify`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 };
 

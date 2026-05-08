@@ -69,6 +69,12 @@ export default function LoginPage() {
           boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
         }}
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/SportsMart_Web_Banner.avif"
+          alt="SportsMart"
+          style={{ height: 48, width: 'auto', display: 'block', marginBottom: 16 }}
+        />
         <h1 style={{ fontSize: 24, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.3px' }}>
           Affiliate sign in
         </h1>

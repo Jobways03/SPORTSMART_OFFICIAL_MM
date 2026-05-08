@@ -55,6 +55,8 @@ export class CustomerSupportController {
       categoryId: body.categoryId,
       relatedOrderId: body.relatedOrderId,
       relatedReturnId: body.relatedReturnId,
+      relatedOrderNumber: body.relatedOrderNumber,
+      relatedReturnNumber: body.relatedReturnNumber,
     });
     return { success: true, message: 'Ticket created', data: ticket };
   }

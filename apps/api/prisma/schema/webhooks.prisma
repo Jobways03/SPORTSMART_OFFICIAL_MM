@@ -1,0 +1,106 @@
+// ============================================
+// Webhook deliveries (Phase 10, PR 10.2)
+// ============================================
+// Two tables:
+//   webhook_endpoints   — partner-side subscriber config
+//   webhook_deliveries  — per-attempt log + retry queue
+//
+// HMAC signing: every delivery body is signed with the endpoint's
+// secret using SHA-256. Partners verify by recomputing — protects
+// against forged callbacks AND against in-flight tampering.
+
+enum WebhookEnvironment {
+  LIVE
+  TEST
+}
+
+enum WebhookEndpointStatus {
+  ACTIVE
+  PAUSED
+  REVOKED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING        // awaiting first attempt
+  IN_PROGRESS    // attempt running
+  SUCCEEDED
+  FAILED_RETRY   // failed, scheduled for retry
+  FAILED_DEAD    // exhausted all retries
+}
+
+model WebhookEndpoint {
+  id String @id @default(uuid())
+
+  /// Human label for the dashboard ("Acme Inc returns webhook").
+  name String
+
+  /// HTTPS URL we POST to.
+  url String
+
+  /// HMAC SHA-256 secret. Random per endpoint, returned to the
+  /// admin once at create time. Stored plaintext (it's a shared
+  /// secret with the partner; hash-only storage means we couldn't
+  /// re-sign on retry).
+  signingSecret String @map("signing_secret")
+
+  /// Event names this endpoint subscribes to. Wildcard supported:
+  /// "returns.*" matches every returns event. Empty array = subscribe
+  /// to every event (caller usually wants to be specific).
+  eventTypes String[] @default([]) @map("event_types")
+
+  environment WebhookEnvironment    @default(LIVE)
+  status      WebhookEndpointStatus @default(ACTIVE)
+
+  /// Optional partner ownership. Same shape as ApiKey.
+  sellerId    String? @map("seller_id")
+  affiliateId String? @map("affiliate_id")
+
+  /// Custom retry schedule in seconds. Null = system default
+  /// (`[30, 120, 600, 3600, 21600, 86400]`).
+  retrySchedule Int[] @default([]) @map("retry_schedule")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  deliveries WebhookDelivery[]
+
+  @@index([status, environment])
+  @@map("webhook_endpoints")
+}
+
+model WebhookDelivery {
+  id         String          @id @default(uuid())
+  endpointId String          @map("endpoint_id")
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  eventName    String  @map("event_name")
+  /// Idempotency key: same (endpointId, eventName, dedupeKey) collapses
+  /// to one delivery. Reasonable dedupeKeys are the originating event's
+  /// aggregate id + a stable hash of the payload.
+  dedupeKey    String  @map("dedupe_key")
+
+  payload      Json
+  /// Signature header sent with the POST. Recorded for partner support
+  /// ("we sent this exact signature; you can recompute and verify").
+  signature    String
+
+  status       WebhookDeliveryStatus @default(PENDING)
+  attempts     Int      @default(0)
+  /// When the next attempt should fire. Null when not retryable.
+  nextRetryAt  DateTime? @map("next_retry_at")
+  /// Last response code we received (or 0 on transport error).
+  lastStatusCode Int?    @map("last_status_code")
+  /// Truncated response body, capped at 4 KB.
+  lastResponse   String? @map("last_response")
+  /// Truncated error message when transport failed.
+  lastError      String? @map("last_error")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt      @map("updated_at")
+  finalizedAt DateTime? @map("finalized_at")
+
+  @@unique([endpointId, eventName, dedupeKey])
+  @@index([status, nextRetryAt])
+  @@index([endpointId, createdAt])
+  @@map("webhook_deliveries")
+}

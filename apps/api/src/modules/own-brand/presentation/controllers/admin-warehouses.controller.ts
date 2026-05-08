@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { OwnBrandService } from '../../application/services/own-brand.service';
 import {
   AdjustStockDto,
@@ -21,7 +21,7 @@ import {
 
 @ApiTags('NOVA — Warehouses & Stock')
 @Controller('admin/nova')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminNovaWarehousesController {
   constructor(private readonly service: OwnBrandService) {}
 

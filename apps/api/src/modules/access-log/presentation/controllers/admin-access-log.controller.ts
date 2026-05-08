@@ -1,12 +1,12 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { AccessActorType, AccessEventKind } from '@prisma/client';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { AccessLogService } from '../../application/services/access-log.service';
 
 @ApiTags('Admin Access Logs')
 @Controller('admin/access-logs')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAccessLogController {
   constructor(private readonly service: AccessLogService) {}
 

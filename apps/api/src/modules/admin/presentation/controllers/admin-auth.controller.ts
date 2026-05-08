@@ -19,7 +19,7 @@ import { ForgotAdminPasswordUseCase } from '../../application/use-cases/forgot-a
 import { VerifyAdminResetOtpUseCase } from '../../application/use-cases/verify-admin-reset-otp.use-case';
 import { ResendAdminResetOtpUseCase } from '../../application/use-cases/resend-admin-reset-otp.use-case';
 import { ResetAdminPasswordUseCase } from '../../application/use-cases/reset-admin-password.use-case';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { AccessLogService } from '../../../access-log/application/services/access-log.service';
 
 @ApiTags('Admin Auth')
@@ -86,7 +86,7 @@ export class AdminAuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
   async logout(@Req() req: Request) {
     const adminId = (req as any).adminId;
     await this.logoutUseCase.execute(adminId);
@@ -108,7 +108,7 @@ export class AdminAuthController {
   }
 
   @Get('me')
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, PermissionsGuard)
   async getMe(@Req() req: Request) {
     const adminId = (req as any).adminId;
     const data = await this.getMeUseCase.execute(adminId);

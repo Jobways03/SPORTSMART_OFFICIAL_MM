@@ -4,10 +4,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useModal } from '@sportsmart/ui';
+import { apiClient } from '@/lib/api-client';
 import {
   adminReturnsService,
   ReturnDetail,
   QcOutcome,
+  LiabilityParty,
+  CustomerRemedy,
 } from '@/services/admin-returns.service';
 
 type QcRow = { returnItemId: string; qcOutcome: QcOutcome; qcQuantityApproved: number; qcNotes: string };
@@ -72,10 +75,27 @@ export default function AdminReturnDetailPage() {
   const [qcOpen, setQcOpen] = useState(false);
   const [qcRows, setQcRows] = useState<QcRow[]>([]);
   const [qcOverallNotes, setQcOverallNotes] = useState('');
+  const [qcLiabilityParty, setQcLiabilityParty] = useState<LiabilityParty | ''>('');
+  const [qcCustomerRemedy, setQcCustomerRemedy] = useState<CustomerRemedy | ''>('');
 
-  // Initiate Refund modal
+  // Initiate Refund modal — returns always credit the wallet, so no
+  // method-picker state is needed; the modal just confirms the amount.
   const [initiateOpen, setInitiateOpen] = useState(false);
-  const [refundMethodSel, setRefundMethodSel] = useState<string>('ORIGINAL_PAYMENT');
+
+  // Shipment evidence (proof-of-dispatch photos uploaded by the seller
+  // at packing time). Surfaced here so the admin has the as-shipped
+  // baseline when comparing against the customer's claim photos at
+  // the REQUESTED stage. Loaded by sub-order ID once the return data
+  // is in hand.
+  const [shipmentEvidence, setShipmentEvidence] = useState<
+    Array<{
+      id: string;
+      // viewUrl is enriched server-side because SHIPMENT_EVIDENCE
+      // is PRIVATE and providerUrl is null in the DB.
+      viewUrl?: string;
+      file: { id: string; fileName: string; providerUrl?: string | null };
+    }>
+  >([]);
 
   // Confirm Refund modal
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -85,6 +105,22 @@ export default function AdminReturnDetailPage() {
   // Mark Refund Failed modal
   const [failOpen, setFailOpen] = useState(false);
   const [failReason, setFailReason] = useState('');
+
+  // Schedule Pickup modal — APPROVED → PICKUP_SCHEDULED. The "Approve &
+  // Schedule Pickup" button label on the REQUESTED step is misleading
+  // — backend's `approveReturn` only flips to APPROVED. Pickup scheduling
+  // is a separate call. Without this UI an APPROVED return has nowhere
+  // to go from the admin side and stalls the lifecycle.
+  const [pickupOpen, setPickupOpen] = useState(false);
+  const [pickupAt, setPickupAt] = useState('');
+  const [pickupCourier, setPickupCourier] = useState('');
+  const [pickupTracking, setPickupTracking] = useState('');
+
+  // Mark In Transit modal — PICKUP_SCHEDULED → IN_TRANSIT. Tracking
+  // number is optional (the courier integration may set it
+  // out-of-band).
+  const [inTransitOpen, setInTransitOpen] = useState(false);
+  const [inTransitTracking, setInTransitTracking] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -101,6 +137,22 @@ export default function AdminReturnDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Once we know the return's sub-order, pull the seller's pre-ship
+  // photos. Independent of the main return fetch so a missing/empty
+  // evidence list doesn't fail the page.
+  useEffect(() => {
+    if (!data?.subOrderId) return;
+    apiClient<typeof shipmentEvidence>(
+      `/admin/sub-orders/${data.subOrderId}/shipment-evidence`,
+    )
+      .then((res) => {
+        if (Array.isArray(res.data)) setShipmentEvidence(res.data);
+      })
+      .catch(() => {
+        setShipmentEvidence([]);
+      });
+  }, [data?.subOrderId]);
 
   const handleApprove = async () => {
     const ok = await confirmDialog({
@@ -120,6 +172,57 @@ export default function AdminReturnDetailPage() {
       }
     } catch (e: any) {
       void notify(e?.body?.message || e?.message || 'Failed to approve');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitPickup = async () => {
+    if (!pickupAt) {
+      void notify('Pickup date is required');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await adminReturnsService.schedulePickup(returnId, {
+        pickupScheduledAt: new Date(pickupAt).toISOString(),
+        pickupCourier: pickupCourier.trim() || undefined,
+        pickupTrackingNumber: pickupTracking.trim() || undefined,
+      });
+      if (res.success) {
+        void notify('Pickup scheduled');
+        setPickupOpen(false);
+        setPickupAt('');
+        setPickupCourier('');
+        setPickupTracking('');
+        load();
+      } else {
+        void notify(res.message || 'Failed to schedule pickup');
+      }
+    } catch (e: any) {
+      void notify(e?.body?.message || e?.message || 'Failed to schedule pickup');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitInTransit = async () => {
+    setBusy(true);
+    try {
+      const res = await adminReturnsService.markInTransit(
+        returnId,
+        inTransitTracking.trim() || undefined,
+      );
+      if (res.success) {
+        void notify('Return marked in transit');
+        setInTransitOpen(false);
+        setInTransitTracking('');
+        load();
+      } else {
+        void notify(res.message || 'Failed to mark in transit');
+      }
+    } catch (e: any) {
+      void notify(e?.body?.message || e?.message || 'Failed to mark in transit');
     } finally {
       setBusy(false);
     }
@@ -207,6 +310,16 @@ export default function AdminReturnDetailPage() {
       })),
     );
     setQcOverallNotes('');
+    // Suggest a liability default from the seller's own response so the
+    // common case ("seller accepted fault") is one click. Admin can
+    // always override before submitting.
+    setQcLiabilityParty(
+      data.sellerResponseStatus === 'ACCEPTED' ? 'SELLER' : '',
+    );
+    // Default remedy to FULL_REFUND since the per-item rows initialise
+    // every item to APPROVED. The submit-time validator will recompute
+    // a guard against mismatches (e.g. all rejected → NO_REFUND).
+    setQcCustomerRemedy('FULL_REFUND');
     setQcOpen(true);
   };
 
@@ -235,6 +348,30 @@ export default function AdminReturnDetailPage() {
         }
       }
     }
+    // Liability + remedy are required when at least one item is
+    // approved/partial — that's when money or goods leave the platform
+    // and the ledger needs an attribution. Pure-rejection paths can
+    // skip them since nothing is owed.
+    const anyApproved = qcRows.some(
+      (r) => r.qcOutcome === 'APPROVED' || r.qcOutcome === 'PARTIAL',
+    );
+    if (anyApproved) {
+      if (!qcLiabilityParty) {
+        void notify('Pick a liability party — who absorbs the cost of this refund/replacement.');
+        return;
+      }
+      if (!qcCustomerRemedy) {
+        void notify('Pick a customer remedy — how the customer is made whole.');
+        return;
+      }
+      if (qcCustomerRemedy === 'NO_REFUND') {
+        void notify('NO_REFUND only applies when all items are rejected. Pick another remedy.');
+        return;
+      }
+    } else if (qcCustomerRemedy && qcCustomerRemedy !== 'NO_REFUND') {
+      void notify('All items rejected — remedy must be NO_REFUND (or leave it blank).');
+      return;
+    }
     setBusy(true);
     try {
       const res = await adminReturnsService.submitQcDecision(returnId, {
@@ -246,6 +383,8 @@ export default function AdminReturnDetailPage() {
           qcNotes: r.qcNotes || undefined,
         })),
         overallNotes: qcOverallNotes || undefined,
+        liabilityParty: qcLiabilityParty || undefined,
+        customerRemedy: qcCustomerRemedy || undefined,
       });
       if (res.success) {
         void notify('QC decision submitted');
@@ -264,7 +403,10 @@ export default function AdminReturnDetailPage() {
   const submitInitiateRefund = async () => {
     setBusy(true);
     try {
-      const res = await adminReturnsService.initiateRefund(returnId, refundMethodSel);
+      // Returns always credit the wallet — see ReturnService.initiateRefund.
+      // The backend ignores any other value passed here, but we send WALLET
+      // explicitly so the request shape stays self-documenting.
+      const res = await adminReturnsService.initiateRefund(returnId, 'WALLET');
       if (res.success) {
         void notify('Refund initiated');
         setInitiateOpen(false);
@@ -383,11 +525,28 @@ export default function AdminReturnDetailPage() {
   };
 
   const isRequested = data.status === 'REQUESTED';
+  // Phase-after-Phase-9 fix — APPROVED has no path forward without
+  // scheduling a pickup; PICKUP_SCHEDULED has both "in transit" and
+  // "received" paths (the courier-skip shortcut keeps Mark Received
+  // available too). Adding these flags is what stopped APPROVED returns
+  // from appearing as "no actions available" in the admin UI.
+  const canSchedulePickup = data.status === 'APPROVED';
+  const canMarkInTransit = data.status === 'PICKUP_SCHEDULED';
   const canMarkReceived = ['IN_TRANSIT', 'PICKUP_SCHEDULED'].includes(data.status);
   const canRunQc = data.status === 'RECEIVED';
-  const canInitiateRefund = ['QC_APPROVED', 'PARTIALLY_APPROVED'].includes(data.status);
-  const canConfirmOrFail = data.status === 'REFUND_PROCESSING';
-  const canRetryRefund = data.status === 'REFUND_PROCESSING' && (data.refundAttempts ?? 0) > 0;
+  // Wallet-only policy: the entire payout pipeline is automated through
+  // Finance Approvals (RefundInstruction → approve → wallet credit), so
+  // the manual Initiate / Confirm / Mark-Failed / Retry buttons would
+  // race that flow. Hide them when the refund is going to the wallet
+  // (default when method is unset). Non-wallet methods still need the
+  // manual gateway-reference workflow, so keep the buttons for those.
+  const isWalletRefund = !data.refundMethod || data.refundMethod === 'WALLET';
+  const canInitiateRefund = !isWalletRefund && ['QC_APPROVED', 'PARTIALLY_APPROVED'].includes(data.status);
+  const canConfirmOrFail = !isWalletRefund && data.status === 'REFUND_PROCESSING';
+  const canRetryRefund = !isWalletRefund && data.status === 'REFUND_PROCESSING' && (data.refundAttempts ?? 0) > 0;
+  const inWalletRefundFlow =
+    isWalletRefund &&
+    ['QC_APPROVED', 'PARTIALLY_APPROVED', 'REFUND_PROCESSING'].includes(data.status);
   // Only return-terminal states awaiting admin closure — matches the
   // backend guard (`REFUNDED`, `QC_REJECTED`). Once closed the return
   // moves to `COMPLETED`, which should not show the button.
@@ -503,6 +662,16 @@ export default function AdminReturnDetailPage() {
             </button>
           </>
         )}
+        {canSchedulePickup && (
+          <button onClick={() => setPickupOpen(true)} disabled={busy} style={approveBtn}>
+            Schedule Pickup
+          </button>
+        )}
+        {canMarkInTransit && (
+          <button onClick={() => setInTransitOpen(true)} disabled={busy} style={approveBtn}>
+            Mark In Transit
+          </button>
+        )}
         {canMarkReceived && (
           <button onClick={handleMarkReceived} disabled={busy} style={approveBtn}>
             Mark Received
@@ -543,13 +712,37 @@ export default function AdminReturnDetailPage() {
             Close Return
           </button>
         )}
+        {inWalletRefundFlow && (
+          <div
+            style={{
+              padding: '10px 12px',
+              border: '1px solid #c7d2fe',
+              background: '#eef2ff',
+              borderRadius: 8,
+              color: '#3730a3',
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            Wallet refund — no manual action needed here. The refund
+            instruction is queued under{' '}
+            <Link href="/dashboard/finance" style={{ color: '#3730a3', fontWeight: 600 }}>
+              Finance Approvals
+            </Link>
+            ; once finance approves it the customer&rsquo;s wallet is
+            credited automatically and the return moves to Refunded.
+          </div>
+        )}
         {!isRequested &&
+          !canSchedulePickup &&
+          !canMarkInTransit &&
           !canMarkReceived &&
           !canRunQc &&
           !canInitiateRefund &&
           !canConfirmOrFail &&
           !canRetryRefund &&
-          !canClose && (
+          !canClose &&
+          !inWalletRefundFlow && (
             <div style={{ color: '#6b7280', fontSize: 13, fontStyle: 'italic' }}>
               No actions available for this state — waiting on customer or external event.
             </div>
@@ -619,31 +812,139 @@ export default function AdminReturnDetailPage() {
                 );
               })()}
 
-              {/* Thumbnails */}
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+              {/* Side-by-side comparison: the product as it was sold vs.
+                  what the customer is showing. At the REQUESTED stage
+                  there's no warehouse photo yet, so the admin has to
+                  decide off the customer claim alone — surfacing the
+                  expected product image next to the customer's photo
+                  catches the obvious "wrong product" / "wrong size"
+                  fraud cases in a single glance, before any pickup is
+                  paid for. */}
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+                {data.items.slice(0, 3).map((it) =>
+                  it.orderItem?.imageUrl ? (
+                    <div key={`expected-${it.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: '#065f46',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.04em',
+                        }}
+                      >
+                        📦 Product as sold
+                      </div>
+                      <div
+                        style={{
+                          width: 120,
+                          height: 120,
+                          borderRadius: 10,
+                          overflow: 'hidden',
+                          border: '2px solid #10b981',
+                          background: '#ecfdf5',
+                          position: 'relative',
+                        }}
+                        title={it.orderItem.productTitle ?? 'Product image'}
+                      >
+                        <img
+                          src={it.orderItem.imageUrl}
+                          alt={it.orderItem.productTitle ?? 'Product'}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                        />
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: '#065f46',
+                          maxWidth: 120,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {it.orderItem.productTitle ?? '—'}
+                      </div>
+                    </div>
+                  ) : null,
+                )}
                 {customerPhotos.map((ev, i) => (
-                  <button
-                    key={ev.id}
-                    onClick={() => { setGalleryIdx(i); setGalleryOpen(true); }}
-                    style={{
-                      width: 120,
-                      height: 120,
-                      borderRadius: 10,
-                      overflow: 'hidden',
-                      border: '1px solid #e5e7eb',
-                      padding: 0,
-                      cursor: 'pointer',
-                      background: '#fff',
-                    }}
-                    title={`Open photo ${i + 1} in full view`}
-                  >
-                    <img
-                      src={ev.fileUrl}
-                      alt={`Customer evidence ${i + 1}`}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                    />
-                  </button>
+                  <div key={ev.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: '#3730a3',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      📸 Customer claim
+                    </div>
+                    <button
+                      onClick={() => { setGalleryIdx(i); setGalleryOpen(true); }}
+                      style={{
+                        width: 120,
+                        height: 120,
+                        borderRadius: 10,
+                        overflow: 'hidden',
+                        border: '2px solid #6366f1',
+                        padding: 0,
+                        cursor: 'pointer',
+                        background: '#eef2ff',
+                      }}
+                      title={`Open photo ${i + 1} in full view`}
+                    >
+                      <img
+                        src={ev.fileUrl}
+                        alt={`Customer evidence ${i + 1}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    </button>
+                    <div style={{ fontSize: 10, color: '#3730a3' }}>
+                      Photo {i + 1} of {customerPhotos.length}
+                    </div>
+                  </div>
                 ))}
+              </div>
+
+              {/* Quick-scan checklist — turns "stare at the photos" into
+                  a structured comparison the admin can answer in 10s. */}
+              <div
+                style={{
+                  background: '#f9fafb',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: 12,
+                  color: '#374151',
+                  marginBottom: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4, color: '#111827' }}>
+                  Quick comparison checklist
+                </div>
+                <ol style={{ margin: 0, paddingLeft: 16 }}>
+                  {shipmentEvidence.length > 0 && (
+                    <li>
+                      Does the customer photo <strong>differ from the seller&apos;s
+                      pre-ship photos</strong> below? Look for new damage / different item.
+                    </li>
+                  )}
+                  <li>Does the customer photo show the <strong>same product</strong> we sold? (model, brand, colour)</li>
+                  <li>Is the reported issue (<em>{data.items[0]?.reasonCategory?.replace(/_/g, ' ').toLowerCase() ?? '—'}</em>) <strong>visible</strong> in the photo?</li>
+                  <li>Are there signs the damage happened <strong>after delivery</strong> (use marks, missing tags, dirt)?</li>
+                </ol>
+                <div style={{ marginTop: 6, fontSize: 11, color: '#6b7280' }}>
+                  Two or more "no"s → <strong>Reject Return</strong>. Any "unsure" → <strong>Approve &amp; Schedule Pickup</strong> for in-person QC at the warehouse — that&apos;s the safer call when the photo is ambiguous.
+                  {shipmentEvidence.length === 0 && (
+                    <>
+                      {' '}<em>(No pre-ship photos on file for this order — checklist
+                      starts at item 1.)</em>
+                    </>
+                  )}
+                </div>
               </div>
 
               {/* Decision guidance — reminds the admin when to use each
@@ -673,6 +974,320 @@ export default function AdminReturnDetailPage() {
           </div>
         );
       })()}
+
+      {/* Shipment Evidence card — pre-ship "proof of dispatch" photos
+          uploaded by the seller before the order shipped. These are the
+          as-shipped baseline; compare them against the Customer Evidence
+          card (the customer's claim photos) to spot fake "damaged in
+          transit" claims at the REQUESTED stage, before paying for a
+          courier pickup. The seller's web-seller portal collects them
+          on the order detail page. */}
+      {shipmentEvidence.length > 0 && (
+        <div style={{ ...cardStyleV2, marginBottom: 20, borderLeft: '4px solid #8b5cf6' }}>
+          <div style={cardHeaderV2}>
+            <span>Shipment Evidence (as shipped)</span>
+            <span
+              style={{
+                padding: '2px 10px',
+                borderRadius: 999,
+                background: '#ede9fe',
+                color: '#5b21b6',
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              {shipmentEvidence.length} photo
+              {shipmentEvidence.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div style={{ fontSize: 12, color: '#374151', marginBottom: 10, lineHeight: 1.5 }}>
+              Uploaded by the seller at packing time. Use these as the
+              as-shipped baseline when comparing against the customer's
+              claim photos above — anything visible here that isn't in
+              the customer's photo (or vice versa) is a strong signal.
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {shipmentEvidence.map((att, i) => {
+                // PRIVATE files have providerUrl=null in the DB; the
+                // admin shipment-evidence GET endpoint enriches each
+                // attachment with a derived `viewUrl` so we can render
+                // thumbnails. Falling back to providerUrl preserves
+                // compat with PUBLIC-classified files.
+                const url = att.viewUrl ?? att.file?.providerUrl ?? '';
+                return (
+                  <a
+                    key={att.id}
+                    href={url || '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`Pre-ship photo ${i + 1} • opens in new tab`}
+                    style={{
+                      position: 'relative',
+                      width: 120,
+                      height: 120,
+                      borderRadius: 10,
+                      overflow: 'hidden',
+                      border: '2px solid #8b5cf6',
+                      background: '#fff',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    {url ? (
+                      <img
+                        src={url}
+                        alt={`Pre-ship evidence ${i + 1}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#6b7280',
+                          fontSize: 11,
+                        }}
+                      >
+                        {att.file?.fileName ?? 'file'}
+                      </div>
+                    )}
+                    <span
+                      style={{
+                        position: 'absolute',
+                        left: 4,
+                        bottom: 4,
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        background: 'rgba(91, 33, 182, 0.85)',
+                        color: '#fff',
+                        fontSize: 10,
+                        fontWeight: 600,
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      Pre-ship
+                    </span>
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Warehouse Evidence card — photos uploaded by the seller /
+          franchise / admin after the package arrived. The seller can
+          contribute evidence but doesn't make the QC decision (admin
+          does). Showing these photos here is what lets the admin
+          inspect what arrived before clicking Submit QC Decision.
+          Click a thumb to open the original in a new tab. */}
+      {(() => {
+        const warehousePhotos = (data.evidence ?? []).filter(
+          (e) =>
+            e.uploadedBy === 'SELLER' ||
+            e.uploadedBy === 'FRANCHISE' ||
+            e.uploadedBy === 'ADMIN',
+        );
+        if (warehousePhotos.length === 0) return null;
+        return (
+          <div style={{ ...cardStyleV2, marginBottom: 20, borderLeft: '4px solid #10b981' }}>
+            <div style={cardHeaderV2}>
+              <span>Warehouse Evidence</span>
+              <span
+                style={{
+                  padding: '2px 10px',
+                  borderRadius: 999,
+                  background: '#d1fae5',
+                  color: '#065f46',
+                  fontSize: 11,
+                  fontWeight: 700,
+                }}
+              >
+                {warehousePhotos.length} photo
+                {warehousePhotos.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            <div style={{ padding: 16 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: '#374151',
+                  marginBottom: 10,
+                  lineHeight: 1.5,
+                }}
+              >
+                Photos contributed by the fulfillment node after the package
+                arrived. Use these alongside the customer's evidence to decide
+                the QC outcome.
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {warehousePhotos.map((ev, i) => {
+                  const sourceLabel =
+                    ev.uploadedBy === 'SELLER'
+                      ? 'Seller'
+                      : ev.uploadedBy === 'FRANCHISE'
+                      ? 'Franchise'
+                      : 'Admin';
+                  return (
+                    <a
+                      key={ev.id}
+                      href={ev.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`${sourceLabel} upload • photo ${i + 1} • opens in new tab`}
+                      style={{
+                        position: 'relative',
+                        width: 120,
+                        height: 120,
+                        borderRadius: 10,
+                        overflow: 'hidden',
+                        border: '1px solid #e5e7eb',
+                        background: '#fff',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      <img
+                        src={ev.fileUrl}
+                        alt={`${sourceLabel} evidence ${i + 1}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                      <span
+                        style={{
+                          position: 'absolute',
+                          left: 4,
+                          bottom: 4,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          background: 'rgba(15, 23, 42, 0.78)',
+                          color: '#fff',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          letterSpacing: '0.04em',
+                        }}
+                      >
+                        {sourceLabel}
+                      </span>
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Seller Response — surfaces the seller's accept/contest decision
+          and free-text note so admin can weigh the seller's side before
+          issuing a QC decision. Hidden until the seller has responded. */}
+      {data.sellerResponseStatus && (
+        <div
+          style={{
+            ...cardStyleV2,
+            marginBottom: 20,
+            borderLeft: `4px solid ${
+              data.sellerResponseStatus === 'CONTESTED' ? '#dc2626' : '#16a34a'
+            }`,
+          }}
+        >
+          <div style={cardHeaderV2}>
+            <span>Seller Response</span>
+            <span
+              style={{
+                padding: '2px 10px',
+                borderRadius: 999,
+                background:
+                  data.sellerResponseStatus === 'CONTESTED'
+                    ? '#fee2e2'
+                    : '#d1fae5',
+                color:
+                  data.sellerResponseStatus === 'CONTESTED'
+                    ? '#991b1b'
+                    : '#065f46',
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              {data.sellerResponseStatus === 'CONTESTED'
+                ? 'Contested'
+                : 'Accepted'}
+            </span>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: '#6b7280',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                marginBottom: 4,
+              }}
+            >
+              Responded At
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: '#111827',
+                marginBottom: 12,
+              }}
+            >
+              {data.sellerRespondedAt
+                ? new Date(data.sellerRespondedAt).toLocaleString()
+                : '—'}
+            </div>
+            {data.sellerResponseNotes && (
+              <>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#6b7280',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    marginBottom: 4,
+                  }}
+                >
+                  Seller Notes
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#111827',
+                    lineHeight: 1.5,
+                    background: '#fafbfc',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {data.sellerResponseNotes}
+                </div>
+              </>
+            )}
+            {data.sellerResponseStatus === 'CONTESTED' && (
+              <div
+                style={{
+                  marginTop: 12,
+                  fontSize: 12,
+                  color: '#6b7280',
+                  fontStyle: 'italic',
+                }}
+              >
+                Seller is contesting the customer&rsquo;s claim. Compare the
+                seller&rsquo;s notes and pre-ship photos against the
+                customer&rsquo;s evidence before issuing a QC decision.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20 }}>
         {/* Left: Items */}
@@ -1080,6 +1695,79 @@ export default function AdminReturnDetailPage() {
                   );
                 })}
               </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  background: '#fafbfc',
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#374151',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    marginBottom: 8,
+                  }}
+                >
+                  Liability &amp; Remedy
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
+                      Liability Party
+                    </label>
+                    <select
+                      value={qcLiabilityParty}
+                      onChange={(e) =>
+                        setQcLiabilityParty(e.target.value as LiabilityParty | '')
+                      }
+                      style={{ ...qcInputStyle, marginTop: 2 }}
+                    >
+                      <option value="">— Select —</option>
+                      <option value="SELLER">Seller</option>
+                      <option value="LOGISTICS">Logistics (courier)</option>
+                      <option value="PLATFORM">Platform</option>
+                      <option value="CUSTOMER">Customer</option>
+                      <option value="FRANCHISE">Franchise</option>
+                      <option value="BRAND">Brand</option>
+                      <option value="INCONCLUSIVE">Inconclusive</option>
+                      <option value="NONE">None</option>
+                    </select>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                      Who absorbs the cost. Drives the ledger entry and seller chargeback.
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
+                      Customer Remedy
+                    </label>
+                    <select
+                      value={qcCustomerRemedy}
+                      onChange={(e) =>
+                        setQcCustomerRemedy(e.target.value as CustomerRemedy | '')
+                      }
+                      style={{ ...qcInputStyle, marginTop: 2 }}
+                    >
+                      <option value="">— Select —</option>
+                      <option value="FULL_REFUND">Full refund</option>
+                      <option value="PARTIAL_REFUND">Partial refund</option>
+                      <option value="NO_REFUND">No refund</option>
+                      <option value="GOODWILL_CREDIT">Goodwill credit</option>
+                      {/* REPLACEMENT / EXCHANGE options hidden — feature disabled in UI for now. */}
+                      {/* <option value="REPLACEMENT">Replacement (same SKU)</option> */}
+                      {/* <option value="EXCHANGE">Exchange (different SKU)</option> */}
+                    </select>
+                    <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                      How the customer is made whole.
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div style={{ marginTop: 12 }}>
                 <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Overall notes (optional)</label>
                 <textarea
@@ -1098,27 +1786,111 @@ export default function AdminReturnDetailPage() {
             </ModalShell>
           )}
 
+          {pickupOpen && (
+            <ModalShell onClose={() => !busy && setPickupOpen(false)} width={440} title="Schedule Pickup">
+              <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                Set the pickup date the courier will collect the item from the customer.
+                Tracking and courier are optional and can be added later via the courier
+                integration.
+              </div>
+              <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
+                Pickup date &amp; time
+              </label>
+              <input
+                type="datetime-local"
+                autoFocus
+                value={pickupAt}
+                onChange={(e) => setPickupAt(e.target.value)}
+                style={{ ...qcInputStyle, marginTop: 4 }}
+              />
+              <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginTop: 10, display: 'block' }}>
+                Courier (optional)
+              </label>
+              <input
+                type="text"
+                value={pickupCourier}
+                onChange={(e) => setPickupCourier(e.target.value)}
+                placeholder="e.g. Delhivery"
+                style={{ ...qcInputStyle, marginTop: 4 }}
+              />
+              <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginTop: 10, display: 'block' }}>
+                Tracking number (optional)
+              </label>
+              <input
+                type="text"
+                value={pickupTracking}
+                onChange={(e) => setPickupTracking(e.target.value)}
+                placeholder="e.g. AWB1234567"
+                style={{ ...qcInputStyle, marginTop: 4 }}
+              />
+              <ModalFooter
+                onCancel={() => !busy && setPickupOpen(false)}
+                onSubmit={submitPickup}
+                busy={busy}
+                submitLabel="Schedule"
+                disabled={!pickupAt}
+              />
+            </ModalShell>
+          )}
+
+          {inTransitOpen && (
+            <ModalShell onClose={() => !busy && setInTransitOpen(false)} width={420} title="Mark In Transit">
+              <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                Confirm the courier has picked up the item. Tracking number is optional —
+                add it now if you have it, or skip and let the courier-integration update
+                it later.
+              </div>
+              <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
+                Tracking number (optional)
+              </label>
+              <input
+                type="text"
+                autoFocus
+                value={inTransitTracking}
+                onChange={(e) => setInTransitTracking(e.target.value)}
+                placeholder="e.g. AWB1234567"
+                style={{ ...qcInputStyle, marginTop: 4 }}
+              />
+              <ModalFooter
+                onCancel={() => !busy && setInTransitOpen(false)}
+                onSubmit={submitInTransit}
+                busy={busy}
+                submitLabel="Mark In Transit"
+              />
+            </ModalShell>
+          )}
+
           {initiateOpen && (
             <ModalShell onClose={() => !busy && setInitiateOpen(false)} width={440} title="Initiate Refund">
               <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-                Choose how the refund will be paid to the customer.
+                Returns are refunded directly to the customer's Sportsmart
+                wallet. The credit settles synchronously — no gateway round-trip,
+                no UTR to record. The customer can then spend the wallet balance
+                on their next purchase or request a wallet-to-bank transfer
+                from their account.
               </div>
-              <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Refund method</label>
-              <select
-                value={refundMethodSel}
-                onChange={(e) => setRefundMethodSel(e.target.value)}
-                style={{ ...qcInputStyle, marginTop: 4 }}
+              <div
+                style={{
+                  background: '#ecfdf5',
+                  border: '1px solid #10b981',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: 13,
+                  color: '#065f46',
+                  marginBottom: 4,
+                }}
               >
-                <option value="ORIGINAL_PAYMENT">Original Payment</option>
-                <option value="WALLET">Wallet</option>
-                <option value="BANK_TRANSFER">Bank Transfer</option>
-                <option value="CASH">Cash</option>
-              </select>
+                <strong>Method: Wallet credit</strong>
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  Amount {fmtCurrency(Number(data.refundAmount ?? 0))} will be credited
+                  to {customerName()}&apos;s wallet on confirm.
+                </div>
+              </div>
               <ModalFooter
                 onCancel={() => !busy && setInitiateOpen(false)}
                 onSubmit={submitInitiateRefund}
                 busy={busy}
-                submitLabel="Initiate"
+                submitLabel="Credit wallet"
               />
             </ModalShell>
           )}

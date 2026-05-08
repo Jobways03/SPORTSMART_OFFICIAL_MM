@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { AdminListFranchisesUseCase } from '../../application/use-cases/admin-list-franchises.use-case';
 import { AdminGetFranchiseUseCase } from '../../application/use-cases/admin-get-franchise.use-case';
@@ -35,7 +35,7 @@ import { AdminChangeFranchisePasswordDto } from '../dtos/admin-change-franchise-
 
 @ApiTags('Admin Franchise')
 @Controller('admin/franchises')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminFranchiseController {
   constructor(
     private readonly adminListFranchisesUseCase: AdminListFranchisesUseCase,

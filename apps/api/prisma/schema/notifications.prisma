@@ -56,6 +56,41 @@ model NotificationPreference {
   @@map("notification_preferences")
 }
 
+/// Phase 8 (PR 8.2) — hard-block list per (channel, destination).
+///
+/// A row here forces the gate to deny, regardless of user preferences.
+/// Used for:
+///   - Bounced email addresses (provider permanent-fail).
+///   - Spam-complaint reports (we MUST stop sending).
+///   - Court-ordered cease-and-desist.
+///
+/// Distinct from NotificationPreference because the suppression is
+/// keyed on the destination string (raw email / phone), not on the
+/// user — a user with multiple emails has independent suppression
+/// status per address.
+model NotificationSuppression {
+  id          String              @id @default(uuid())
+  channel     NotificationChannel
+  destination String
+  /// Free-form reason. Common values: "BOUNCED" | "SPAM_COMPLAINT" |
+  /// "COMPLIANCE_REQUEST" | "MANUAL_BLOCK".
+  reason      String
+  /// Optional. When set, the gate ignores the suppression after this
+  /// timestamp — used for time-bounded blocks (e.g. "back off 24h
+  /// after a transient bounce").
+  expiresAt   DateTime?           @map("expires_at")
+  /// Free-form actor identifier. Set when a human added the entry;
+  /// null for automated additions.
+  addedBy     String?             @map("added_by")
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  @@unique([channel, destination])
+  @@index([destination])
+  @@index([expiresAt])
+  @@map("notification_suppressions")
+}
+
 model NotificationLog {
   id      String              @id @default(uuid())
   channel NotificationChannel

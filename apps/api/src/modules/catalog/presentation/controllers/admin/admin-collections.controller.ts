@@ -16,14 +16,14 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
 import { BadRequestAppException, NotFoundAppException } from '../../../../../core/exceptions';
 import { COLLECTION_REPOSITORY, ICollectionRepository } from '../../../domain/repositories/collection.repository.interface';
 
 @ApiTags('Admin Collections')
 @Controller('admin/collections')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminCollectionsController {
   constructor(
     @Inject(COLLECTION_REPOSITORY) private readonly collectionRepo: ICollectionRepository,

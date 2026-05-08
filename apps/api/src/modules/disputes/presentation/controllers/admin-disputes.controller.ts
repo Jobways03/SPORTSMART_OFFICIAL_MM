@@ -11,7 +11,9 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { DisputeKind, DisputeStatus } from '@prisma/client';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
 import { DisputeService } from '../../application/services/dispute.service';
@@ -28,13 +30,26 @@ interface AssignDto {
 interface DecideDto {
   outcome: 'RESOLVED_BUYER' | 'RESOLVED_SELLER' | 'RESOLVED_SPLIT';
   rationale: string;
-  /** Required for RESOLVED_BUYER and RESOLVED_SPLIT (in paise). */
+  /** Required when customerRemedy is FULL_REFUND / PARTIAL_REFUND / GOODWILL_CREDIT (in paise). */
   amountInPaise?: number;
+  /** Phase 12 — see DecisionArgs in DisputeService for the matrix. */
+  liabilityParty: 'SELLER' | 'LOGISTICS' | 'PLATFORM' | 'CUSTOMER' | 'NONE';
+  customerRemedy:
+    | 'FULL_REFUND'
+    | 'PARTIAL_REFUND'
+    | 'NO_REFUND'
+    | 'GOODWILL_CREDIT';
+  logistics?: {
+    courierName?: string;
+    awbNumber?: string;
+    evidenceFileId?: string;
+    notes?: string;
+  };
 }
 
 @ApiTags('Disputes — Admin')
 @Controller('admin/disputes')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminDisputesController {
   constructor(
     private readonly service: DisputeService,
@@ -42,6 +57,7 @@ export class AdminDisputesController {
   ) {}
 
   @Get()
+  @Permissions('disputes.read')
   async list(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -66,6 +82,7 @@ export class AdminDisputesController {
   }
 
   @Get(':id')
+  @Permissions('disputes.read')
   async get(@Req() req: any, @Param('id') id: string) {
     const data = await this.service.getDisputeForActor(id, {
       type: 'ADMIN', id: req.adminId, isAdmin: true,
@@ -74,6 +91,7 @@ export class AdminDisputesController {
   }
 
   @Post(':id/messages')
+  @Permissions('disputes.read')
   async reply(@Req() req: any, @Param('id') id: string, @Body() body: ReplyDto) {
     const admin = await this.prisma.admin.findUnique({
       where: { id: req.adminId }, select: { name: true, email: true },
@@ -89,28 +107,63 @@ export class AdminDisputesController {
   }
 
   @Patch(':id/assign')
+  @Permissions('disputes.assign')
   async assign(@Param('id') id: string, @Body() body: AssignDto) {
     const data = await this.service.assign(id, body.adminId ?? null);
     return { success: true, message: 'Dispute assigned', data };
   }
 
   @Patch(':id/status')
-  async setStatus(@Param('id') id: string, @Body() body: { status: DisputeStatus }) {
+  @Permissions('disputes.statusUpdate')
+  async setStatus(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { status: DisputeStatus },
+  ) {
     if (!body?.status) throw new BadRequestAppException('status is required');
-    const data = await this.service.setStatus(id, body.status);
+    const data = await this.service.setStatus(id, body.status, req.adminId);
     return { success: true, message: 'Status updated', data };
   }
 
   @Patch(':id/severity')
+  @Permissions('disputes.assign')
   async setSeverity(@Param('id') id: string, @Body() body: { severity: number }) {
     const data = await this.service.setSeverity(id, Number(body.severity));
     return { success: true, message: 'Severity updated', data };
   }
 
+  @Patch(':id/attach-context')
+  @Permissions('disputes.statusUpdate')
+  async attachContext(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { orderNumber?: string; returnNumber?: string },
+  ) {
+    if (!body?.orderNumber && !body?.returnNumber) {
+      throw new BadRequestAppException(
+        'Provide at least one of orderNumber / returnNumber',
+      );
+    }
+    const data = await this.service.attachContext({
+      disputeId: id,
+      adminId: req.adminId,
+      orderNumber: body.orderNumber,
+      returnNumber: body.returnNumber,
+    });
+    return { success: true, message: 'Context attached', data };
+  }
+
   @Post(':id/decide')
+  @Idempotent()
+  @Permissions('disputes.decide')
   async decide(@Req() req: any, @Param('id') id: string, @Body() body: DecideDto) {
     if (!body?.outcome || !body?.rationale) {
       throw new BadRequestAppException('outcome and rationale are required');
+    }
+    if (!body?.liabilityParty || !body?.customerRemedy) {
+      throw new BadRequestAppException(
+        'liabilityParty and customerRemedy are required (Phase 12 ADR-016)',
+      );
     }
     const data = await this.service.decide({
       disputeId: id,
@@ -118,6 +171,9 @@ export class AdminDisputesController {
       outcome: body.outcome,
       rationale: body.rationale,
       amountInPaise: body.amountInPaise,
+      liabilityParty: body.liabilityParty,
+      customerRemedy: body.customerRemedy,
+      logistics: body.logistics,
     });
     return { success: true, message: 'Decision recorded', data };
   }

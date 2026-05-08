@@ -6,6 +6,7 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import {
   CommissionRepository,
   COMMISSION_REPOSITORY,
@@ -27,6 +28,7 @@ export class CommissionProcessorService implements OnModuleInit {
     private readonly redis: RedisService,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
+    private readonly ordersFacade: OrdersPublicFacade,
   ) {}
 
   onModuleInit() {
@@ -55,135 +57,194 @@ export class CommissionProcessorService implements OnModuleInit {
       const fallbackRatePercent = Number(settings?.commissionValue ?? 20);
 
       for (const so of subOrders) {
-        const sellerName = so.seller?.sellerShopName || 'Unknown';
-        const orderNumber = so.masterOrder.orderNumber;
-
-        const records: CreateCommissionRecordData[] = [];
-
-        for (const item of so.items) {
-          // Look up the SellerProductMapping for the settlement price
-          const mapping = await this.commissionRepo.getSellerProductMapping(
-            so.sellerId,
-            item.productId,
-            item.variantId,
-          );
-
-          // platformPrice = what the customer paid (stored as unitPrice in the OrderItem)
-          const platformPrice = Number(item.unitPrice);
-
-          // settlementPrice = what the seller gets per unit (from the mapping).
-          // Starts with whatever the mapping says (null → 80% fallback); if that
-          // leaves the platform with zero or negative margin, we re-derive it
-          // from the global commission percentage below so every order still
-          // earns a commission.
-          let settlementPrice = mapping?.settlementPrice
-            ? Number(mapping.settlementPrice)
-            : Math.round(platformPrice * 0.8 * 100) / 100;
-
-          const quantity = item.quantity;
-
-          // Per-unit margin
-          let unitMargin = Math.round((platformPrice - settlementPrice) * 100) / 100;
-          let usedFallbackRate = false;
-          if (unitMargin <= 0) {
-            // Platform keeps `fallbackRatePercent` of the platform price,
-            // seller keeps the remainder — applies when seller-admin forgot
-            // to set a margin on the mapping.
-            unitMargin = Math.round(platformPrice * (fallbackRatePercent / 100) * 100) / 100;
-            settlementPrice = Math.round((platformPrice - unitMargin) * 100) / 100;
-            usedFallbackRate = true;
-          }
-
-          // Totals
-          const totalPlatformAmount = Math.round(platformPrice * quantity * 100) / 100;
-          const totalSettlementAmount = Math.round(settlementPrice * quantity * 100) / 100;
-          const platformMargin = Math.round((totalPlatformAmount - totalSettlementAmount) * 100) / 100;
-
-          // Populate legacy fields for backward compatibility
-          const totalItemPrice = Number(item.totalPrice);
-          const ratePct = platformPrice > 0 ? (unitMargin / platformPrice) * 100 : 0;
-          const rateLabel = usedFallbackRate
-            ? `Platform fee: ${ratePct.toFixed(1)}% (fallback)`
-            : `Margin: ${ratePct.toFixed(1)}%`;
-
-          records.push({
-            orderItemId: item.id,
-            subOrderId: so.id,
-            masterOrderId: so.masterOrderId,
-            sellerId: so.sellerId,
-            productId: item.productId,
-            productTitle: item.productTitle,
-            variantTitle: item.variantTitle || null,
-            orderNumber,
-            sellerName,
-
-            // Model 1 fields
-            platformPrice,
-            settlementPrice,
-            quantity,
-            totalPlatformAmount,
-            totalSettlementAmount,
-            platformMargin,
-            status: 'PENDING',
-
-            // Legacy fields (mapped from new logic)
-            unitPrice: platformPrice,
-            totalPrice: totalItemPrice,
-            commissionType: 'MARGIN_BASED',
-            commissionRate: rateLabel,
-            unitCommission: unitMargin,
-            totalCommission: platformMargin,
-            adminEarning: platformMargin,
-            productEarning: totalSettlementAmount,
-          });
-        }
-
-        await this.commissionRepo.processSubOrderCommission(so.id, records);
-
-        this.logger.log(
-          `Commission processed for sub-order ${so.id} (order ${so.masterOrder.orderNumber})`,
-        );
-
-        // Notify the seller that commission is locked — their payout is now
-        // final (modulo explicit returns / manual adjustments). Fires once
-        // per sub-order, not per line item, so multi-item orders don't spam.
-        const totalAdminEarning = records.reduce(
-          (sum, r) => sum + r.adminEarning,
-          0,
-        );
-        const totalSellerEarning = records.reduce(
-          (sum, r) => sum + r.productEarning,
-          0,
-        );
-        this.eventBus
-          .publish({
-            eventName: 'commission.locked',
-            aggregate: 'SubOrder',
-            aggregateId: so.id,
-            occurredAt: new Date(),
-            payload: {
-              subOrderId: so.id,
-              masterOrderId: so.masterOrderId,
-              orderNumber,
-              sellerId: so.sellerId,
-              itemCount: records.length,
-              adminEarning:
-                Math.round(totalAdminEarning * 100) / 100,
-              sellerEarning:
-                Math.round(totalSellerEarning * 100) / 100,
-            },
-          })
-          .catch((err: unknown) =>
-            this.logger.warn(
-              `Failed to publish commission.locked: ${(err as Error)?.message}`,
-            ),
-          );
+        await this.lockSubOrderCommission(so, fallbackRatePercent, 'cron');
       }
     } catch (err) {
       this.logger.error('Commission processing error', err);
     } finally {
       await this.redis.releaseLock(LOCK_KEY);
     }
+  }
+
+  /**
+   * Builds + persists commission records for a single sub-order, then
+   * publishes commission.locked. Pulled out of processCommissions() so
+   * the same path is reused by the immediate-trigger entry point on
+   * return rejection / cancellation. The reason tag is only used in
+   * the log line — the persisted shape is identical regardless of
+   * whether the cron or a return-rejection fired this.
+   */
+  private async lockSubOrderCommission(
+    so: any,
+    fallbackRatePercent: number,
+    reason: string,
+  ): Promise<void> {
+    const sellerName = so.seller?.sellerShopName || 'Unknown';
+    const orderNumber = so.masterOrder.orderNumber;
+
+    const records: CreateCommissionRecordData[] = [];
+
+    for (const item of so.items) {
+      // Look up the SellerProductMapping for the settlement price
+      const mapping = await this.commissionRepo.getSellerProductMapping(
+        so.sellerId,
+        item.productId,
+        item.variantId,
+      );
+
+      // platformPrice = what the customer paid (stored as unitPrice in the OrderItem)
+      const platformPrice = Number(item.unitPrice);
+
+      // settlementPrice = what the seller gets per unit (from the mapping).
+      // Starts with whatever the mapping says (null → 80% fallback); if that
+      // leaves the platform with zero or negative margin, we re-derive it
+      // from the global commission percentage below so every order still
+      // earns a commission.
+      let settlementPrice = mapping?.settlementPrice
+        ? Number(mapping.settlementPrice)
+        : Math.round(platformPrice * 0.8 * 100) / 100;
+
+      const quantity = item.quantity;
+
+      // Per-unit margin
+      let unitMargin = Math.round((platformPrice - settlementPrice) * 100) / 100;
+      let usedFallbackRate = false;
+      if (unitMargin <= 0) {
+        // Platform keeps `fallbackRatePercent` of the platform price,
+        // seller keeps the remainder — applies when seller-admin forgot
+        // to set a margin on the mapping.
+        unitMargin = Math.round(platformPrice * (fallbackRatePercent / 100) * 100) / 100;
+        settlementPrice = Math.round((platformPrice - unitMargin) * 100) / 100;
+        usedFallbackRate = true;
+      }
+
+      // Totals
+      const totalPlatformAmount = Math.round(platformPrice * quantity * 100) / 100;
+      const totalSettlementAmount = Math.round(settlementPrice * quantity * 100) / 100;
+      const platformMargin = Math.round((totalPlatformAmount - totalSettlementAmount) * 100) / 100;
+
+      // Populate legacy fields for backward compatibility
+      const totalItemPrice = Number(item.totalPrice);
+      const ratePct = platformPrice > 0 ? (unitMargin / platformPrice) * 100 : 0;
+      const rateLabel = usedFallbackRate
+        ? `Platform fee: ${ratePct.toFixed(1)}% (fallback)`
+        : `Margin: ${ratePct.toFixed(1)}%`;
+
+      records.push({
+        orderItemId: item.id,
+        subOrderId: so.id,
+        masterOrderId: so.masterOrderId,
+        sellerId: so.sellerId,
+        productId: item.productId,
+        productTitle: item.productTitle,
+        variantTitle: item.variantTitle || null,
+        orderNumber,
+        sellerName,
+
+        // Model 1 fields
+        platformPrice,
+        settlementPrice,
+        quantity,
+        totalPlatformAmount,
+        totalSettlementAmount,
+        platformMargin,
+        status: 'PENDING',
+
+        // Legacy fields (mapped from new logic)
+        unitPrice: platformPrice,
+        totalPrice: totalItemPrice,
+        commissionType: 'MARGIN_BASED',
+        commissionRate: rateLabel,
+        unitCommission: unitMargin,
+        totalCommission: platformMargin,
+        adminEarning: platformMargin,
+        productEarning: totalSettlementAmount,
+      });
+    }
+
+    await this.commissionRepo.processSubOrderCommission(so.id, records);
+
+    this.logger.log(
+      `Commission processed for sub-order ${so.id} (order ${so.masterOrder.orderNumber}) [trigger=${reason}]`,
+    );
+
+    // Notify the seller that commission is locked — their payout is now
+    // final (modulo explicit returns / manual adjustments). Fires once
+    // per sub-order, not per line item, so multi-item orders don't spam.
+    const totalAdminEarning = records.reduce(
+      (sum, r) => sum + r.adminEarning,
+      0,
+    );
+    const totalSellerEarning = records.reduce(
+      (sum, r) => sum + r.productEarning,
+      0,
+    );
+    this.eventBus
+      .publish({
+        eventName: 'commission.locked',
+        aggregate: 'SubOrder',
+        aggregateId: so.id,
+        occurredAt: new Date(),
+        payload: {
+          subOrderId: so.id,
+          masterOrderId: so.masterOrderId,
+          orderNumber,
+          sellerId: so.sellerId,
+          itemCount: records.length,
+          adminEarning: Math.round(totalAdminEarning * 100) / 100,
+          sellerEarning: Math.round(totalSellerEarning * 100) / 100,
+          trigger: reason,
+        },
+      })
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `Failed to publish commission.locked: ${(err as Error)?.message}`,
+        ),
+      );
+  }
+
+  /**
+   * Lock commission for one sub-order right now, bypassing the
+   * deliveredAt-window gate. Called by the returns module when a return
+   * reaches a terminal-rejected state (REJECTED / QC_REJECTED /
+   * CANCELLED) — at that point the customer's claim is final, the cron
+   * would have processed this sub-order eventually, and there's no
+   * value to making the seller wait out the rest of the window.
+   *
+   * Idempotent — `processSubOrderCommission` uses an atomic-claim
+   * UPDATE on `commissionProcessed=false` so a race against the cron
+   * is safe (only one will win and write records). If the sub-order
+   * is no longer eligible (already processed, has a non-terminal
+   * return after all, or isn't a seller sub-order), this is a silent
+   * no-op rather than an error.
+   */
+  async lockCommissionForSubOrderImmediately(
+    subOrderId: string,
+    reason: string,
+  ): Promise<void> {
+    const so = await this.ordersFacade.findSubOrderForImmediateCommission(
+      subOrderId,
+    );
+    if (!so) {
+      this.logger.log(
+        `Skipping immediate commission for sub-order ${subOrderId} — not eligible (already processed, not delivered, or has a non-terminal return)`,
+      );
+      return;
+    }
+    // Franchise commissions go through a separate flow that doesn't
+    // exist yet on this processor. Skip cleanly so callers don't need
+    // to branch.
+    if ((so as any).fulfillmentNodeType !== 'SELLER' || !(so as any).sellerId) {
+      this.logger.log(
+        `Skipping immediate commission for sub-order ${subOrderId} — not a seller sub-order`,
+      );
+      return;
+    }
+
+    const settings = await this.commissionRepo.getCommissionSettings();
+    const fallbackRatePercent = Number(settings?.commissionValue ?? 20);
+
+    await this.lockSubOrderCommission(so, fallbackRatePercent, reason);
   }
 
   /* ── Admin: commission records ──────────────────────────────────── */
