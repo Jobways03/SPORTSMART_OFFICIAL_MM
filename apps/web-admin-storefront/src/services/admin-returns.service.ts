@@ -17,6 +17,24 @@ export type ReturnStatus =
 
 export type QcOutcome = 'APPROVED' | 'REJECTED' | 'PARTIAL' | 'DAMAGED';
 
+export type LiabilityParty =
+  | 'NONE'
+  | 'SELLER'
+  | 'LOGISTICS'
+  | 'PLATFORM'
+  | 'CUSTOMER'
+  | 'FRANCHISE'
+  | 'BRAND'
+  | 'INCONCLUSIVE';
+
+export type CustomerRemedy =
+  | 'FULL_REFUND'
+  | 'PARTIAL_REFUND'
+  | 'NO_REFUND'
+  | 'GOODWILL_CREDIT'
+  | 'REPLACEMENT'
+  | 'EXCHANGE';
+
 export interface ReturnItem {
   id: string;
   orderItemId: string;
@@ -73,6 +91,17 @@ export interface ReturnListItem {
     phone?: string | null;
   };
   masterOrder?: { id: string; orderNumber: string };
+  // Phase 13 — risk + replacement-flow surface for admin queue filters.
+  riskScore?: number | null;
+  riskFlags?: string[] | null;
+  liabilityParty?: string | null;
+  customerRemedy?: string | null;
+  replacementStatus?: string | null;
+  replacementOrderId?: string | null;
+  exchangePriceDiffPaise?: string | number | null;
+  sellerResponseStatus?: string | null;
+  sellerRespondedAt?: string | null;
+  sellerResponseNotes?: string | null;
 }
 
 export interface ReturnDetail extends ReturnListItem {
@@ -184,6 +213,8 @@ export const adminReturnsService = {
         qcNotes?: string;
       }>;
       overallNotes?: string;
+      liabilityParty?: LiabilityParty;
+      customerRemedy?: CustomerRemedy;
     },
   ): Promise<ApiResponse> {
     return apiClient(`/admin/returns/${returnId}/qc-decision`, {

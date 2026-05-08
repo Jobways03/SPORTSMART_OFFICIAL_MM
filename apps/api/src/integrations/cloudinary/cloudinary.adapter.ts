@@ -87,6 +87,29 @@ export class CloudinaryAdapter {
     });
   }
 
+  /**
+   * Build the canonical secure delivery URL for an asset already in
+   * Cloudinary. Used when we hold a publicId (in `storageKey` /
+   * `providerFileId`) but didn't store the URL upfront — i.e. for
+   * PRIVATE-classified files where we want the URL only handed out
+   * via an authenticated server endpoint.
+   *
+   * Note: our uploads are `type: 'upload'` (default), so the URL is
+   * publicly resolvable once known. Privacy here is "we don't surface
+   * the URL unless you authenticate against our API," not Cloudinary
+   * authenticated/private delivery.
+   */
+  urlFor(
+    publicId: string,
+    opts?: { resourceType?: 'image' | 'video' | 'raw' },
+  ): string {
+    if (!this.configured) return '';
+    return cloudinary.url(publicId, {
+      secure: true,
+      resource_type: opts?.resourceType ?? 'image',
+    });
+  }
+
   async delete(publicId: string): Promise<void> {
     if (!this.configured) {
       this.logger.warn('Cloudinary not configured — skipping delete');

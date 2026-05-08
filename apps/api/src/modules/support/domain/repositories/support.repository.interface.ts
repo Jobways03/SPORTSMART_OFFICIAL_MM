@@ -37,6 +37,10 @@ export interface CreateMessageInput {
   senderName: string;
   body: string;
   isInternalNote?: boolean;
+  // Phase 11 — set when this row is the back-mirror of an admin reply
+  // on the linked dispute. UNIQUE so a retried event handler can't
+  // double-post on the customer's ticket.
+  mirroredFromDisputeMessageId?: string;
 }
 
 export interface ListTicketsFilter {

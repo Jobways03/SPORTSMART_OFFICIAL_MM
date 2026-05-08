@@ -39,6 +39,20 @@ export interface SellerReturn {
   items: SellerReturnItem[];
   evidence?: SellerReturnEvidence[];
   masterOrder?: { orderNumber: string };
+  // Phase 13 (P1.8) — seller-response lifecycle. Drives the
+  // "respond" UI: PENDING + due-soon shows the button + countdown;
+  // ACCEPTED / CONTESTED / EXPIRED / NOT_REQUIRED hide it.
+  sellerResponseStatus?:
+    | 'NOT_REQUIRED'
+    | 'PENDING'
+    | 'ACCEPTED'
+    | 'CONTESTED'
+    | 'EXPIRED'
+    | null;
+  sellerNotifiedAt?: string | null;
+  sellerResponseDueAt?: string | null;
+  sellerRespondedAt?: string | null;
+  sellerResponseNotes?: string | null;
 }
 
 export const sellerReturnsService = {
@@ -88,6 +102,27 @@ export const sellerReturnsService = {
     return apiClient(`/seller/returns/${returnId}/qc-evidence`, {
       method: 'POST',
       body: formData,
+    });
+  },
+
+  /**
+   * Phase 13 (P1.8) — accept or contest a return that alleged seller
+   * fault. Service enforces:
+   *   - PENDING-only state
+   *   - response-window not >1h past due
+   *   - CONTESTED requires notes
+   */
+  respond(
+    returnId: string,
+    payload: {
+      decision: 'ACCEPTED' | 'CONTESTED';
+      notes?: string;
+      evidenceFileUrls?: string[];
+    },
+  ) {
+    return apiClient(`/seller/returns/${returnId}/respond`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     });
   },
 };

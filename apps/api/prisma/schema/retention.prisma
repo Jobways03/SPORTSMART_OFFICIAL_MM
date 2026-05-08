@@ -1,0 +1,75 @@
+// ============================================
+// Retention policies (Phase 7, PR 7.2)
+// ============================================
+// Per-(resource, purpose) retention rules. The enforcer cron picks up
+// files older than `retainDays` and applies the configured `action`,
+// honouring legal-hold overrides (open dispute / open settlement
+// pinned via the FileAttachment join).
+//
+// Storing policies in a table — rather than a config file — lets
+// compliance teams adjust retention without a deploy and gives us a
+// per-policy execution audit when the enforcer fires.
+
+enum RetentionAction {
+  /// Soft-delete the FileMetadata row + remove from object storage.
+  /// Default for non-evidence files.
+  DELETE
+  /// Tag in storage cold-tier; keep the metadata row + hash for
+  /// reconstruction. Use for invoices / KYC docs that have legal
+  /// retention requirements but don't need hot-path access.
+  ARCHIVE
+  /// Strip filename / mime type / size; keep only hash + ID for
+  /// "yes this evidence existed at this time" claims. Used for
+  /// long-term audit trails after PII expiry.
+  REDACT
+}
+
+model RetentionPolicy {
+  id           String          @id @default(uuid())
+  /// "file" today — the table is multi-resource so we can extend
+  /// retention to dispute messages, audit logs, etc. later.
+  resourceType String          @map("resource_type")
+  /// Free-form. For files this is the FilePurpose enum value.
+  /// "*" = applies to all purposes within this resourceType.
+  purpose      String          @default("*")
+  /// Days from createdAt before the policy fires. Compliance teams
+  /// edit this when audit requirements change.
+  retainDays   Int             @map("retain_days")
+  action       RetentionAction @default(DELETE)
+  enabled      Boolean         @default(true)
+
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@unique([resourceType, purpose])
+  @@index([enabled])
+  @@map("retention_policies")
+}
+
+/// Audit row written by the enforcer for each action it applies.
+/// Independent of FileMetadata.deletedAt because we want a complete
+/// "who deleted what when, under which policy" trail even after the
+/// file row itself is gone.
+model RetentionExecution {
+  id String @id @default(uuid())
+
+  policyId     String           @map("policy_id")
+  resourceType String           @map("resource_type")
+  resourceId   String           @map("resource_id")
+  /// Snapshot of the action at execution time (the policy might
+  /// change later — we want the historical truth).
+  action       RetentionAction
+  /// True when a legal hold prevented the action. Row is still
+  /// recorded so the next run sees that we considered + skipped.
+  legalHold    Boolean          @default(false) @map("legal_hold")
+  legalHoldReason String?       @map("legal_hold_reason")
+
+  executedAt DateTime @default(now()) @map("executed_at")
+
+  @@index([policyId])
+  @@index([resourceType, resourceId])
+  @@index([executedAt])
+  @@map("retention_executions")
+}

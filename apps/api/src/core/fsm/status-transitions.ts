@@ -104,7 +104,12 @@ export type ReturnStatus =
   | 'REFUND_PROCESSING'
   | 'REFUNDED'
   | 'COMPLETED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  // Phase 12 — dispute-driven overrides on the linked return.
+  | 'DISPUTE_OVERTURNED'
+  | 'DISPUTE_PARTIAL_OVERRIDE'
+  | 'DISPUTE_CONFIRMED'
+  | 'GOODWILL_CREDITED';
 
 const RETURN_STATUS_TRANSITIONS: Record<ReturnStatus, readonly ReturnStatus[]> = {
   REQUESTED: ['APPROVED', 'REJECTED', 'CANCELLED'],
@@ -113,21 +118,94 @@ const RETURN_STATUS_TRANSITIONS: Record<ReturnStatus, readonly ReturnStatus[]> =
   // is allowed for APPROVED / PICKUP_SCHEDULED because scheduling is a
   // soft intent — the courier hasn't been dispatched yet.
   APPROVED: ['PICKUP_SCHEDULED', 'REJECTED', 'CANCELLED'],
-  PICKUP_SCHEDULED: ['IN_TRANSIT', 'REJECTED', 'CANCELLED'],
+  // PICKUP_SCHEDULED → RECEIVED is the "courier never scanned" shortcut:
+  // the warehouse received the box but no IN_TRANSIT scan ever fired.
+  // Preferred path is via IN_TRANSIT; this is the fallback an admin
+  // takes when chasing the courier scan would block QC.
+  PICKUP_SCHEDULED: ['IN_TRANSIT', 'RECEIVED', 'REJECTED', 'CANCELLED'],
   IN_TRANSIT: ['RECEIVED'],
   RECEIVED: ['QC_APPROVED', 'QC_REJECTED', 'PARTIALLY_APPROVED'],
   // QC outcomes that proceed to refund
   QC_APPROVED: ['REFUND_PROCESSING', 'REFUNDED'],
-  PARTIALLY_APPROVED: ['REFUND_PROCESSING', 'REFUNDED'],
-  // QC outcomes that close the return
-  QC_REJECTED: ['COMPLETED'],
+  PARTIALLY_APPROVED: [
+    'REFUND_PROCESSING',
+    'REFUNDED',
+    // Phase 12 — admin's QC partial decision can later be overruled
+    // upward to a full refund via dispute (DISPUTE_OVERTURNED) or
+    // sideways to a different partial amount (DISPUTE_PARTIAL_OVERRIDE).
+    'DISPUTE_OVERTURNED',
+    'DISPUTE_PARTIAL_OVERRIDE',
+  ],
+  // Phase 12 — QC_REJECTED can be overturned upward by a customer
+  // dispute (DISPUTE_OVERTURNED / DISPUTE_PARTIAL_OVERRIDE) or
+  // upheld by the dispute (DISPUTE_CONFIRMED). GOODWILL_CREDITED
+  // is when admin pays out without assigning fault.
+  QC_REJECTED: [
+    'COMPLETED',
+    'DISPUTE_OVERTURNED',
+    'DISPUTE_PARTIAL_OVERRIDE',
+    'DISPUTE_CONFIRMED',
+    'GOODWILL_CREDITED',
+  ],
   // Refund processing terminal-ish
   REFUND_PROCESSING: ['REFUNDED'],
   REFUNDED: ['COMPLETED'],
+  // Phase 12 — even completed returns can later be touched by a
+  // dispute that surfaces evidence after the fact (e.g. customer
+  // contacts support post-refund about a partial-only resolution
+  // that should have been full). Rare but legal.
+  COMPLETED: ['DISPUTE_OVERTURNED', 'DISPUTE_PARTIAL_OVERRIDE'],
   // Terminal
   REJECTED: [],
-  COMPLETED: [],
   CANCELLED: [],
+  // Phase 12 — dispute-override terminal states. No further moves.
+  DISPUTE_OVERTURNED: [],
+  DISPUTE_PARTIAL_OVERRIDE: [],
+  DISPUTE_CONFIRMED: [],
+  GOODWILL_CREDITED: [],
+};
+
+// ── DisputeStatus ─────────────────────────────────────────────────────────
+
+export type DisputeStatus =
+  | 'OPEN'
+  | 'UNDER_REVIEW'
+  | 'AWAITING_INFO'
+  | 'RESOLVED_BUYER'
+  | 'RESOLVED_SELLER'
+  | 'RESOLVED_SPLIT'
+  | 'CLOSED';
+
+const DISPUTE_STATUS_TRANSITIONS: Record<DisputeStatus, readonly DisputeStatus[]> = {
+  // Initial filing — admin can accept it for review, send back for more
+  // info, or close as procedural (e.g. duplicate of another dispute).
+  OPEN: ['UNDER_REVIEW', 'AWAITING_INFO', 'CLOSED'],
+  // Active investigation. Decision can land in any of the three RESOLVED_*
+  // outcomes, or pause for buyer/seller info.
+  UNDER_REVIEW: [
+    'AWAITING_INFO',
+    'RESOLVED_BUYER',
+    'RESOLVED_SELLER',
+    'RESOLVED_SPLIT',
+    'CLOSED',
+  ],
+  // Buyer/seller asked to provide proof. Resumes UNDER_REVIEW once the
+  // info arrives (or admin gives up and decides without it).
+  AWAITING_INFO: [
+    'UNDER_REVIEW',
+    'RESOLVED_BUYER',
+    'RESOLVED_SELLER',
+    'RESOLVED_SPLIT',
+    'CLOSED',
+  ],
+  // RESOLVED_* statuses can be reopened (PR 5.2 keeps reopen via the
+  // disputes.reopen permission). A reopened dispute goes back to
+  // UNDER_REVIEW and the new decision overwrites the old one.
+  RESOLVED_BUYER: ['UNDER_REVIEW', 'CLOSED'],
+  RESOLVED_SELLER: ['UNDER_REVIEW', 'CLOSED'],
+  RESOLVED_SPLIT: ['UNDER_REVIEW', 'CLOSED'],
+  // Terminal. No re-open from CLOSED — file a new dispute instead.
+  CLOSED: [],
 };
 
 // ── OrderAcceptStatus (sub-order acceptance lifecycle) ─────────────────────
@@ -169,6 +247,10 @@ const TABLES = {
     name: 'ReturnStatus',
     transitions: RETURN_STATUS_TRANSITIONS,
   } as TransitionTable<ReturnStatus>,
+  DisputeStatus: {
+    name: 'DisputeStatus',
+    transitions: DISPUTE_STATUS_TRANSITIONS,
+  } as TransitionTable<DisputeStatus>,
   OrderAcceptStatus: {
     name: 'OrderAcceptStatus',
     transitions: ACCEPT_STATUS_TRANSITIONS,

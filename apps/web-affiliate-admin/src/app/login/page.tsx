@@ -72,6 +72,12 @@ export default function LoginPage() {
           boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
         }}
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/SportsMart_Web_Banner.avif"
+          alt="SportsMart"
+          style={{ height: 48, width: 'auto', display: 'block', marginBottom: 16 }}
+        />
         <span
           style={{
             display: 'inline-block',

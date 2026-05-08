@@ -190,6 +190,15 @@ enum ReturnStatus {
   REFUNDED
   COMPLETED
   CANCELLED
+  // Phase 12 (post-Phase-11) — dispute-driven return-status overrides.
+  // Set when a dispute decision overturns or confirms an earlier QC
+  // verdict; a return that was QC_REJECTED but is later refunded via
+  // a dispute moves to DISPUTE_OVERTURNED, etc. GOODWILL_CREDITED is
+  // for goodwill-paid returns where no liability was assigned.
+  DISPUTE_OVERTURNED
+  DISPUTE_PARTIAL_OVERRIDE
+  DISPUTE_CONFIRMED
+  GOODWILL_CREDITED
 }
 
 enum ReturnReasonCategory {
@@ -201,6 +210,31 @@ enum ReturnReasonCategory {
   SIZE_FIT_ISSUE
   QUALITY_ISSUE
   OTHER
+}
+
+// Phase 13 (P1.8) — seller-response lifecycle on returns. Drives the
+// "seller has X days to accept or contest" flow that lets sellers
+// defend themselves before the platform attributes liability.
+enum SellerResponseStatus {
+  NOT_REQUIRED
+  PENDING
+  ACCEPTED
+  CONTESTED
+  EXPIRED
+}
+
+// Phase 13 (P1.14) — replacement / exchange request lifecycle on
+// returns. A return whose QC outcome is REPLACEMENT or EXCHANGE
+// progresses through these states until the new order is shipped
+// (or the request flips back to a refund).
+enum ReplacementRequestStatus {
+  NONE
+  PENDING_STOCK_CHECK
+  AWAITING_PAYMENT
+  AWAITING_FULFILMENT
+  FULFILLED
+  CANCELLED
+  FALLBACK_TO_REFUND
 }
 
 enum QcOutcome {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
@@ -21,11 +21,33 @@ export default function DisputeDetailPage() {
   const [internal, setInternal] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // Decision form
+  // Decision form (Phase 12 — outcome alone no longer enough; admin
+  // must also pick liabilityParty + customerRemedy per ADR-016).
   const [showDecide, setShowDecide] = useState(false);
   const [outcome, setOutcome] = useState<'RESOLVED_BUYER' | 'RESOLVED_SELLER' | 'RESOLVED_SPLIT'>('RESOLVED_BUYER');
   const [rationale, setRationale] = useState('');
   const [amountRupees, setAmountRupees] = useState('');
+  const [liabilityParty, setLiabilityParty] = useState<
+    'SELLER' | 'LOGISTICS' | 'PLATFORM' | 'CUSTOMER' | 'NONE'
+  >('SELLER');
+  const [customerRemedy, setCustomerRemedy] = useState<
+    'FULL_REFUND' | 'PARTIAL_REFUND' | 'NO_REFUND' | 'GOODWILL_CREDIT'
+  >('FULL_REFUND');
+  // Optional courier metadata for LOGISTICS attribution.
+  const [courierName, setCourierName] = useState('');
+  const [awbNumber, setAwbNumber] = useState('');
+
+  // "Attach order/return" rescue path for orphan disputes (promoted
+  // from a generic ticket without relatedOrderId / relatedReturnId).
+  const [showAttach, setShowAttach] = useState(false);
+  const [attachOrderNumber, setAttachOrderNumber] = useState('');
+  const [attachReturnNumber, setAttachReturnNumber] = useState('');
+
+  // Skip the silent-refresh setDetail while a reply / decide / status
+  // mutation is in flight so a late-landing GET (issued before the
+  // POST) can't overwrite the detail we just got back from the POST.
+  // Same race rationale as the support detail page.
+  const busyRef = useRef(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -39,12 +61,63 @@ export default function DisputeDetailPage() {
     }
   }, [id]);
 
+  // Silent variant of refresh: no spinner toggle, swallows transient
+  // errors. Used by the background poll so the admin sees customer
+  // replies (mirrored from the linked support ticket) without having
+  // to reload.
+  const silentRefresh = useCallback(async () => {
+    if (busyRef.current) return;
+    try {
+      const res = await adminDisputesService.get(id);
+      if (res.data) setDetail(res.data);
+    } catch {
+      // Ignore — keep the last good payload visible. Next tick will retry.
+    }
+  }, [id]);
+
   useEffect(() => { refresh(); }, [refresh]);
+
+  // 5-second background poll. Catches customer replies that landed on
+  // the linked support ticket and were mirrored into the dispute
+  // thread by DisputeMirrorHandler / mirrorTicketMessageToDispute.
+  // Pauses while the tab is hidden; catches up immediately on
+  // visibility return.
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          void silentRefresh();
+        }
+      }, 5000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    start();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void silentRefresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
+  }, [silentRefresh]);
 
   const sendReply = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reply.trim() || busy) return;
-    setBusy(true);
+    setBusy(true); busyRef.current = true;
     try {
       await adminDisputesService.reply(id, reply.trim(), internal);
       setReply(''); setInternal(false);
@@ -52,53 +125,91 @@ export default function DisputeDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send');
     } finally {
-      setBusy(false);
+      setBusy(false); busyRef.current = false;
     }
   };
 
   const setStatus = async (s: DisputeStatus) => {
-    setBusy(true);
+    setBusy(true); busyRef.current = true;
     try { await adminDisputesService.setStatus(id, s); refresh(); }
-    finally { setBusy(false); }
+    finally { setBusy(false); busyRef.current = false; }
   };
 
   const setSev = async (n: number) => {
-    setBusy(true);
+    setBusy(true); busyRef.current = true;
     try { await adminDisputesService.setSeverity(id, n); refresh(); }
-    finally { setBusy(false); }
+    finally { setBusy(false); busyRef.current = false; }
+  };
+
+  const submitAttach = async () => {
+    const orderNumber = attachOrderNumber.trim();
+    const returnNumber = attachReturnNumber.trim();
+    if (!orderNumber && !returnNumber) {
+      return setError('Provide at least one of order number / return number');
+    }
+    setError('');
+    setBusy(true); busyRef.current = true;
+    try {
+      await adminDisputesService.attachContext(id, {
+        orderNumber: orderNumber || undefined,
+        returnNumber: returnNumber || undefined,
+      });
+      setShowAttach(false);
+      setAttachOrderNumber('');
+      setAttachReturnNumber('');
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not attach context');
+    } finally {
+      setBusy(false); busyRef.current = false;
+    }
   };
 
   const submitDecision = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Clear any stale error from a previous failed attempt — without
+    // this, a rejected submit followed by a successful one leaves the
+    // old red banner sitting on screen forever.
+    setError('');
     if (!rationale.trim()) return setError('Rationale is required');
 
-    // Amount validation matches the API: required for buyer/split,
-    // forbidden for seller. Convert rupees → paise here so the wire
-    // payload stays in the platform's canonical money units.
+    // Amount required when remedy is anything other than NO_REFUND.
     let amountInPaise: number | undefined;
-    if (outcome !== 'RESOLVED_SELLER') {
+    if (customerRemedy !== 'NO_REFUND') {
       const rupees = parseFloat(amountRupees);
       if (!Number.isFinite(rupees) || rupees <= 0) {
-        return setError('Refund amount (₹) is required for buyer/split outcomes');
+        return setError('Refund amount (₹) is required for refund / goodwill outcomes');
       }
       amountInPaise = Math.round(rupees * 100);
     }
 
-    setBusy(true);
+    setBusy(true); busyRef.current = true;
     try {
       await adminDisputesService.decide(id, {
         outcome,
         rationale: rationale.trim(),
         amountInPaise,
+        liabilityParty,
+        customerRemedy,
+        logistics:
+          liabilityParty === 'LOGISTICS'
+            ? {
+                courierName: courierName.trim() || undefined,
+                awbNumber: awbNumber.trim() || undefined,
+              }
+            : undefined,
       });
       setShowDecide(false);
       setRationale('');
       setAmountRupees('');
+      setCourierName('');
+      setAwbNumber('');
+      setError(''); // belt-and-braces: clear on confirmed success too
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not decide');
     } finally {
-      setBusy(false);
+      setBusy(false); busyRef.current = false;
     }
   };
 
@@ -139,6 +250,88 @@ export default function DisputeDetailPage() {
             {new Date(detail.createdAt).toLocaleString('en-IN')}
           </p>
         </div>
+
+        {/* Phase 11 — when this dispute was promoted from a support
+            ticket, surface the back-link prominently and remind the
+            admin that the customer is still on the ticket. Replies
+            posted here are mirrored back to the ticket as
+            "Support" — never name the agent in the customer thread. */}
+        {detail.sourceTicketId && (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '12px 14px',
+              background: '#eef2ff',
+              border: '1px solid #c7d2fe',
+              borderRadius: 12,
+              fontSize: 13,
+              color: '#3730a3',
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              Promoted from a support ticket
+            </div>
+            <div>
+              The customer is talking on their support ticket and does not see
+              this dispute. Replies you post here mirror back to the ticket
+              under the &ldquo;Support&rdquo; brand — keep tone neutral and
+              never reference the dispute number.
+            </div>
+            <Link
+              href={`/dashboard/support/${detail.sourceTicketId}`}
+              style={{
+                marginTop: 8,
+                display: 'inline-block',
+                color: '#3730a3',
+                fontWeight: 600,
+                textDecoration: 'underline',
+              }}
+            >
+              → Open source ticket
+            </Link>
+          </div>
+        )}
+
+        {/* Rescue path: orphan disputes (no master order, sub-order, or
+            return) can never have SELLER liability assigned because the
+            seller is unknown. Surface a button to attach order/return
+            context. Hidden once any linkage is set. */}
+        {!detail.masterOrderId && !detail.subOrderId && !detail.returnId && !isResolved && (
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '12px 14px',
+              background: '#fefce8',
+              border: '1px solid #fde047',
+              borderRadius: 12,
+              fontSize: 13,
+              color: '#713f12',
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              No order context attached
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              This dispute has no order, sub-order, or return linked.
+              SELLER liability cannot be assigned until you attach context
+              — or pick PLATFORM / LOGISTICS as &ldquo;Who pays&rdquo;.
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAttach(true)}
+              style={{
+                height: 30, padding: '0 14px', border: '1px solid #ca8a04',
+                background: '#fff', color: '#713f12',
+                borderRadius: 9999, fontSize: 12, fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Attach order / return
+            </button>
+          </div>
+        )}
 
         {error && <div style={{ marginBottom: 12, padding: 10, border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c', borderRadius: 12, fontSize: 13 }}>{error}</div>}
 
@@ -196,6 +389,32 @@ export default function DisputeDetailPage() {
         {detail.decisionRationale && (
           <Card title="Decision">
             <p style={{ margin: 0, fontSize: 13, color: '#0F1115', whiteSpace: 'pre-wrap' }}>{detail.decisionRationale}</p>
+            {/* Phase 12 — liability + remedy attribution. Shown only
+                after decision (these columns are null on un-decided
+                disputes). Helps the admin see at a glance who's on
+                the hook + what the customer received. */}
+            {(detail.liabilityParty || detail.customerRemedy) && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+                {detail.customerRemedy && (
+                  <span style={{
+                    fontSize: 11, padding: '3px 9px', borderRadius: 9999,
+                    background: '#ecfdf5', color: '#065f46', fontWeight: 600,
+                    textTransform: 'uppercase', letterSpacing: '0.05em',
+                  }}>
+                    {detail.customerRemedy.replace(/_/g, ' ').toLowerCase()}
+                  </span>
+                )}
+                {detail.liabilityParty && (
+                  <span style={{
+                    fontSize: 11, padding: '3px 9px', borderRadius: 9999,
+                    background: '#eef2ff', color: '#3730a3', fontWeight: 600,
+                    textTransform: 'uppercase', letterSpacing: '0.05em',
+                  }}>
+                    paid by {detail.liabilityParty.toLowerCase()}
+                  </span>
+                )}
+              </div>
+            )}
             <p style={{ marginTop: 8, fontSize: 11, color: '#7A828F' }}>
               {detail.decisionAt && new Date(detail.decisionAt).toLocaleString('en-IN')}
             </p>
@@ -212,13 +431,95 @@ export default function DisputeDetailPage() {
         {showDecide && !isResolved && (
           <form onSubmit={submitDecision} style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 16, padding: 16 }}>
             <h4 style={{ fontSize: 14, fontWeight: 600, margin: 0, marginBottom: 8, color: '#0F1115' }}>Resolve dispute</h4>
-            <select value={outcome} onChange={(e) => setOutcome(e.target.value as any)} disabled={busy}
-              style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13, marginBottom: 8 }}>
+            <select
+              value={outcome}
+              onChange={(e) => {
+                const v = e.target.value as typeof outcome;
+                setOutcome(v);
+                // Auto-suggest sensible defaults so the admin doesn't have
+                // to think through the matrix on every decision. They can
+                // override below; backend re-validates regardless.
+                if (v === 'RESOLVED_BUYER') {
+                  setCustomerRemedy('FULL_REFUND');
+                  setLiabilityParty('SELLER');
+                } else if (v === 'RESOLVED_SPLIT') {
+                  setCustomerRemedy('PARTIAL_REFUND');
+                  setLiabilityParty('SELLER');
+                } else {
+                  setCustomerRemedy('NO_REFUND');
+                  setLiabilityParty('CUSTOMER');
+                }
+              }}
+              disabled={busy}
+              style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13, marginBottom: 8 }}
+            >
               <option value="RESOLVED_BUYER">Resolved — buyer favoured</option>
               <option value="RESOLVED_SELLER">Resolved — seller favoured</option>
               <option value="RESOLVED_SPLIT">Resolved — split outcome</option>
             </select>
-            {outcome !== 'RESOLVED_SELLER' && (
+
+            {/* Phase 12 (ADR-016) — customer remedy. Drives whether a
+                RefundInstruction is created. The backend re-validates
+                this against the outcome — the helper line below shows
+                the rule. */}
+            <label style={{ fontSize: 11, fontWeight: 600, color: '#525A65', display: 'block', marginBottom: 4 }}>
+              Customer remedy
+            </label>
+            <select
+              value={customerRemedy}
+              onChange={(e) => setCustomerRemedy(e.target.value as any)}
+              disabled={busy}
+              style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13, marginBottom: 8 }}
+            >
+              <option value="FULL_REFUND">Full refund</option>
+              <option value="PARTIAL_REFUND">Partial refund</option>
+              <option value="GOODWILL_CREDIT">Goodwill credit (platform absorbs)</option>
+              <option value="NO_REFUND">No refund</option>
+            </select>
+
+            {/* Liability party — drives which ledger row (SellerDebit /
+                LogisticsClaim / PlatformExpense) gets written. */}
+            <label style={{ fontSize: 11, fontWeight: 600, color: '#525A65', display: 'block', marginBottom: 4 }}>
+              Who pays
+            </label>
+            <select
+              value={liabilityParty}
+              onChange={(e) => setLiabilityParty(e.target.value as any)}
+              disabled={busy}
+              style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13, marginBottom: 8 }}
+            >
+              <option value="SELLER">Seller — recover from settlement</option>
+              <option value="LOGISTICS">Logistics — recover from courier</option>
+              <option value="PLATFORM">Platform — Sportsmart absorbs</option>
+              <option value="CUSTOMER">Customer — no payout</option>
+              <option value="NONE">None — no money moves</option>
+            </select>
+
+            {/* Courier metadata: only shown when liability is LOGISTICS,
+                so the LogisticsClaim row carries enough context for ops
+                to actually file with the courier. */}
+            {liabilityParty === 'LOGISTICS' && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input
+                  type="text"
+                  value={courierName}
+                  onChange={(e) => setCourierName(e.target.value)}
+                  disabled={busy}
+                  placeholder="Courier (e.g. Delhivery)"
+                  style={{ flex: 1, height: 36, padding: '0 12px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13, boxSizing: 'border-box' }}
+                />
+                <input
+                  type="text"
+                  value={awbNumber}
+                  onChange={(e) => setAwbNumber(e.target.value)}
+                  disabled={busy}
+                  placeholder="AWB / tracking #"
+                  style={{ flex: 1, height: 36, padding: '0 12px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13, boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
+
+            {customerRemedy !== 'NO_REFUND' && (
               <input
                 type="number"
                 step="0.01"
@@ -231,22 +532,121 @@ export default function DisputeDetailPage() {
               />
             )}
             <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} disabled={busy}
-              placeholder="Decision rationale (visible to both sides)" rows={3}
-              style={{ width: '100%', padding: 10, border: '1px solid #D2D6DC', borderRadius: 12, fontSize: 13, resize: 'vertical', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', marginBottom: 8 }} />
+              placeholder="Decision rationale (admin-only — customer sees a templated message)" rows={3}
+              style={{ width: '100%', padding: 10, border: '1px solid #D2D6DC', borderRadius: 12, fontSize: 13, resize: 'vertical', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit', marginBottom: 4 }} />
+            <p style={{ margin: '0 0 8px 0', fontSize: 11, color: '#7A828F', lineHeight: 1.5 }}>
+              Required: rationale{customerRemedy !== 'NO_REFUND' ? ' + refund amount (₹)' : ''}.
+              {' '}Backend validates the (outcome × remedy × liability) combination per ADR-016 — invalid pairs are rejected with a clear error.
+            </p>
             <div style={{ display: 'flex', gap: 8 }}>
               <button type="button" onClick={() => setShowDecide(false)} disabled={busy} style={{
                 flex: 1, height: 36, border: '1px solid #D2D6DC', background: '#fff', color: '#0F1115',
                 borderRadius: 9999, fontSize: 13, fontWeight: 600, cursor: 'pointer',
               }}>Cancel</button>
-              <button type="submit" disabled={busy || !rationale.trim()} style={{
+              {/* Only `busy` disables submission. Empty-rationale and
+                  empty-amount used to be belt-and-braces here but that
+                  hid the actual error from the admin — now we let them
+                  click, and submitDecision() shows a one-line message. */}
+              <button type="submit" disabled={busy} style={{
                 flex: 1, height: 36, border: 'none', background: '#0F1115', color: '#fff',
                 borderRadius: 9999, fontSize: 13, fontWeight: 600,
-                cursor: busy || !rationale.trim() ? 'not-allowed' : 'pointer', opacity: busy || !rationale.trim() ? 0.5 : 1,
+                cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.6 : 1,
               }}>{busy ? 'Saving…' : 'Confirm decision'}</button>
             </div>
           </form>
         )}
       </aside>
+
+      {showAttach && (
+        <div
+          onClick={() => { if (!busy) setShowAttach(false); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(15,17,21,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 50, padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 12, padding: 24,
+              width: '100%', maxWidth: 480, boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+              display: 'flex', flexDirection: 'column', gap: 12,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
+              Attach order / return context
+            </h3>
+            <p style={{ margin: 0, fontSize: 12, color: '#525A65', lineHeight: 1.5 }}>
+              Just the number — no &ldquo;Order&rdquo; / &ldquo;Return&rdquo;
+              prefix or <code>#</code> needed (we strip them either way).
+              Backend verifies the order/return belongs to the dispute filer.
+            </p>
+            <div>
+              <label style={{ fontSize: 12, color: '#525A65', display: 'block', marginBottom: 4 }}>
+                Order number
+              </label>
+              <input
+                type="text"
+                value={attachOrderNumber}
+                onChange={(e) => setAttachOrderNumber(e.target.value)}
+                placeholder="SM20260062"
+                disabled={busy}
+                style={{
+                  width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                  borderRadius: 12, fontSize: 13, boxSizing: 'border-box',
+                  fontFamily: 'inherit',
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: '#525A65', display: 'block', marginBottom: 4 }}>
+                Return number
+              </label>
+              <input
+                type="text"
+                value={attachReturnNumber}
+                onChange={(e) => setAttachReturnNumber(e.target.value)}
+                placeholder="RET-2026-000017"
+                disabled={busy}
+                style={{
+                  width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                  borderRadius: 12, fontSize: 13, boxSizing: 'border-box',
+                  fontFamily: 'inherit',
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowAttach(false)}
+                disabled={busy}
+                style={{
+                  height: 36, padding: '0 16px', border: '1px solid #D2D6DC',
+                  background: '#fff', color: '#0F1115',
+                  borderRadius: 9999, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitAttach}
+                disabled={busy || (!attachOrderNumber.trim() && !attachReturnNumber.trim())}
+                style={{
+                  height: 36, padding: '0 16px', border: 'none',
+                  background: '#0F1115', color: '#fff',
+                  borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                  cursor: busy ? 'wait' : 'pointer',
+                  opacity: !attachOrderNumber.trim() && !attachReturnNumber.trim() ? 0.6 : 1,
+                }}
+              >
+                {busy ? 'Attaching…' : 'Attach'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

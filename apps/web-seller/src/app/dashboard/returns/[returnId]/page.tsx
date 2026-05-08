@@ -23,13 +23,6 @@ const STATUS_LABELS: Record<string, string> = {
   CANCELLED: 'Cancelled',
 };
 
-// Per-item QC outcomes the backend accepts.
-const QC_OUTCOMES = [
-  { value: 'APPROVED', label: 'Approve (full refund)' },
-  { value: 'PARTIAL', label: 'Partial approval' },
-  { value: 'REJECTED', label: 'Reject (no refund)' },
-];
-
 const fmtDate = (iso: string | null | undefined) => {
   if (!iso) return '\u2014';
   try {
@@ -46,12 +39,6 @@ const fmtDate = (iso: string | null | undefined) => {
 const fmtInr = (v: number | string | null | undefined) =>
   v == null ? '\u2014' : `\u20B9${Number(v).toLocaleString('en-IN')}`;
 
-interface PerItemDecision {
-  qcOutcome: string;
-  qcQuantityApproved: number;
-  qcNotes: string;
-}
-
 export default function SellerReturnDetailPage() {
   const params = useParams();
   const returnId = String(params?.returnId ?? '');
@@ -59,19 +46,21 @@ export default function SellerReturnDetailPage() {
   const [ret, setRet] = useState<SellerReturn | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState<null | 'receive' | 'qc' | 'upload'>(null);
+  const [busy, setBusy] = useState<null | 'receive' | 'upload' | 'respond'>(null);
   const [actionMsg, setActionMsg] = useState('');
 
   // Mark-received input
   const [receiveNotes, setReceiveNotes] = useState('');
 
-  // QC decision inputs — one per return item
-  const [decisions, setDecisions] = useState<Record<string, PerItemDecision>>({});
-  const [qcOverallNotes, setQcOverallNotes] = useState('');
-
   // Evidence upload inputs
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
   const [evidenceDesc, setEvidenceDesc] = useState('');
+
+  // Phase 13 (P1.8) — seller-respond inputs.
+  const [respondDecision, setRespondDecision] =
+    useState<'ACCEPTED' | 'CONTESTED'>('CONTESTED');
+  const [respondNotes, setRespondNotes] = useState('');
+  const [respondEvidenceUrl, setRespondEvidenceUrl] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,19 +68,6 @@ export default function SellerReturnDetailPage() {
     try {
       const res = await sellerReturnsService.get(returnId);
       setRet(res.data ?? null);
-      // Seed QC decisions with full-approve defaults — the seller can
-      // change outcome / qty before submitting.
-      if (res.data) {
-        const seeded: Record<string, PerItemDecision> = {};
-        for (const it of res.data.items ?? []) {
-          seeded[it.id] = {
-            qcOutcome: it.qcOutcome ?? 'APPROVED',
-            qcQuantityApproved: it.qcQuantityApproved ?? it.quantity,
-            qcNotes: it.qcNotes ?? '',
-          };
-        }
-        setDecisions(seeded);
-      }
     } catch (err) {
       setError(
         (err as any)?.body?.message ||
@@ -120,56 +96,6 @@ export default function SellerReturnDetailPage() {
         (err as any)?.body?.message ||
           (err as Error)?.message ||
           'Failed to mark received',
-      );
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleSubmitQc = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!ret) return;
-
-    // Validate each decision: qcOutcome set, qty in [0, returned qty],
-    // and PARTIAL requires qty > 0 (otherwise use REJECTED).
-    const payload: Array<{
-      returnItemId: string;
-      qcOutcome: string;
-      qcQuantityApproved: number;
-      qcNotes?: string;
-    }> = [];
-    for (const it of ret.items) {
-      const d = decisions[it.id];
-      if (!d) continue;
-      if (d.qcQuantityApproved < 0 || d.qcQuantityApproved > it.quantity) {
-        setActionMsg(
-          `Quantity for ${it.orderItem?.productTitle ?? 'item'} must be between 0 and ${it.quantity}`,
-        );
-        return;
-      }
-      if (d.qcOutcome === 'REJECTED' && d.qcQuantityApproved !== 0) {
-        setActionMsg('Rejected items must have approved quantity = 0');
-        return;
-      }
-      payload.push({
-        returnItemId: it.id,
-        qcOutcome: d.qcOutcome,
-        qcQuantityApproved: d.qcQuantityApproved,
-        qcNotes: d.qcNotes || undefined,
-      });
-    }
-
-    setBusy('qc');
-    setActionMsg('');
-    try {
-      await sellerReturnsService.submitQc(returnId, payload, qcOverallNotes || undefined);
-      setActionMsg('QC decision submitted');
-      await load();
-    } catch (err) {
-      setActionMsg(
-        (err as any)?.body?.message ||
-          (err as Error)?.message ||
-          'Failed to submit QC decision',
       );
     } finally {
       setBusy(null);
@@ -205,6 +131,37 @@ export default function SellerReturnDetailPage() {
     }
   };
 
+  const handleRespond = async () => {
+    if (respondDecision === 'CONTESTED' && !respondNotes.trim()) {
+      setActionMsg('Please add notes when contesting the claim');
+      return;
+    }
+    setBusy('respond');
+    setActionMsg('');
+    try {
+      const evidenceFileUrls = respondEvidenceUrl.trim()
+        ? [respondEvidenceUrl.trim()]
+        : undefined;
+      await sellerReturnsService.respond(returnId, {
+        decision: respondDecision,
+        notes: respondNotes.trim() || undefined,
+        evidenceFileUrls,
+      });
+      setActionMsg(`Response recorded: ${respondDecision.toLowerCase()}`);
+      setRespondNotes('');
+      setRespondEvidenceUrl('');
+      await load();
+    } catch (err) {
+      setActionMsg(
+        (err as any)?.body?.message ||
+          (err as Error)?.message ||
+          'Failed to submit response',
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (loading) {
     return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Loading...</div>;
   }
@@ -227,9 +184,12 @@ export default function SellerReturnDetailPage() {
   // allowed any time before QC is locked.
   const canMarkReceived = ret.status === 'SHIPPED';
   const canSubmitQc = ret.status === 'RECEIVED';
-  const canUploadEvidence = !['COMPLETED', 'CANCELLED', 'QC_APPROVED', 'QC_REJECTED', 'PARTIALLY_APPROVED'].includes(
-    ret.status,
-  );
+  // QC evidence is photos of the product as it arrived from the customer,
+  // so the form only makes sense once the seller is physically holding
+  // the package. Earlier states (pickup not scheduled, in transit) have
+  // no product to photograph; later states (admin has already issued a
+  // QC decision) have nothing left to add.
+  const canUploadEvidence = ret.status === 'RECEIVED';
 
   return (
     <div style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
@@ -308,6 +268,137 @@ export default function SellerReturnDetailPage() {
           <div style={{ fontWeight: 600 }}>{fmtInr(ret.refundAmount)}</div>
         </div>
       </div>
+
+      {/* Phase 13 (P1.8) — seller respond. Visible only when the
+          customer's claim alleged seller fault and we're inside the
+          response window. Once ACCEPTED / CONTESTED / EXPIRED, this
+          panel hides; the QC-side will see the seller's choice. */}
+      {ret.sellerResponseStatus === 'PENDING' && (
+        <div
+          style={{
+            background: '#fef3c7',
+            border: '1px solid #fcd34d',
+            borderRadius: 10,
+            padding: 16,
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+            <div>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: '#78350f', margin: 0 }}>
+                Customer claims this is your fault
+              </h2>
+              <p style={{ fontSize: 13, color: '#92400e', marginTop: 4, marginBottom: 0 }}>
+                Accept the claim (we'll refund the customer and debit your settlement) or
+                contest it with evidence. If you don't respond by{' '}
+                <strong>{fmtDate(ret.sellerResponseDueAt)}</strong>, the case
+                will default to seller fault.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+            {(['ACCEPTED', 'CONTESTED'] as const).map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setRespondDecision(d)}
+                disabled={busy !== null}
+                style={{
+                  padding: '6px 14px',
+                  background: respondDecision === d ? '#78350f' : '#fff',
+                  color: respondDecision === d ? '#fff' : '#78350f',
+                  border: '1px solid #b45309',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                }}
+              >
+                {d === 'ACCEPTED' ? 'Accept claim' : 'Contest with evidence'}
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            value={respondNotes}
+            onChange={(e) => setRespondNotes(e.target.value)}
+            placeholder={
+              respondDecision === 'CONTESTED'
+                ? 'Required — explain why this claim is incorrect (e.g. shipped intact, packing photo proves no defect)'
+                : 'Optional notes for the admin reviewing'
+            }
+            rows={3}
+            disabled={busy !== null}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              border: '1px solid #b45309',
+              borderRadius: 6,
+              fontSize: 13,
+              marginBottom: 10,
+              boxSizing: 'border-box',
+              fontFamily: 'inherit',
+            }}
+          />
+
+          <input
+            type="url"
+            value={respondEvidenceUrl}
+            onChange={(e) => setRespondEvidenceUrl(e.target.value)}
+            placeholder="Evidence URL (optional — packing-line photo, shipment scan, etc.)"
+            disabled={busy !== null}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              border: '1px solid #b45309',
+              borderRadius: 6,
+              fontSize: 13,
+              marginBottom: 10,
+              boxSizing: 'border-box',
+            }}
+          />
+
+          <button
+            type="button"
+            onClick={handleRespond}
+            disabled={busy !== null}
+            style={{
+              padding: '8px 18px',
+              background: busy === 'respond' ? '#fbbf24' : '#78350f',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: busy ? 'default' : 'pointer',
+            }}
+          >
+            {busy === 'respond'
+              ? 'Submitting...'
+              : `Submit ${respondDecision.toLowerCase()}`}
+          </button>
+        </div>
+      )}
+
+      {/* Read-only banner once a response has been recorded. */}
+      {ret.sellerResponseStatus === 'ACCEPTED' && (
+        <div style={{ background: '#dcfce7', border: '1px solid #86efac', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#166534', marginBottom: 20 }}>
+          You accepted this claim on {fmtDate(ret.sellerRespondedAt)}.
+          {ret.sellerResponseNotes ? <div style={{ marginTop: 4, color: '#365314' }}>{ret.sellerResponseNotes}</div> : null}
+        </div>
+      )}
+      {ret.sellerResponseStatus === 'CONTESTED' && (
+        <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#1e3a8a', marginBottom: 20 }}>
+          You contested this claim on {fmtDate(ret.sellerRespondedAt)}; admin is reviewing.
+          {ret.sellerResponseNotes ? <div style={{ marginTop: 4, color: '#1e40af' }}>{ret.sellerResponseNotes}</div> : null}
+        </div>
+      )}
+      {ret.sellerResponseStatus === 'EXPIRED' && (
+        <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#991b1b', marginBottom: 20 }}>
+          The response window closed without a reply. The case has defaulted to seller fault.
+        </div>
+      )}
 
       {/* Items */}
       <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}>Items</h2>
@@ -493,151 +584,21 @@ export default function SellerReturnDetailPage() {
         </Section>
       )}
 
-      {/* QC decision */}
+      {/* QC decision is admin-only — surface a clear "what to do next"
+          card to the seller so they understand the handoff. The admin
+          will issue the binding QC outcome from the marketplace
+          dashboard once the seller has uploaded enough evidence. */}
       {canSubmitQc && (
-        <Section title="Submit QC decision">
-          <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-            For each returned item, record the outcome and how many units you are
-            approving for refund. The approved quantity must be 0 for a full Reject
-            and between 1 and the returned quantity otherwise.
+        <Section title="QC decision">
+          <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 6 }}>
+            QC outcomes (approve / partial / reject) are issued by the marketplace
+            admin from the central dashboard. Your role here is to upload clear
+            evidence photos using the form above so the admin can see what arrived.
           </p>
-          <form onSubmit={handleSubmitQc}>
-            {ret.items.map((it) => {
-              const d = decisions[it.id] ?? {
-                qcOutcome: 'APPROVED',
-                qcQuantityApproved: it.quantity,
-                qcNotes: '',
-              };
-              return (
-                <div
-                  key={it.id}
-                  style={{
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 8,
-                    padding: 12,
-                    marginBottom: 10,
-                  }}
-                >
-                  <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 13 }}>
-                    {it.orderItem?.productTitle ?? it.id.slice(0, 8)}
-                    {it.orderItem?.variantTitle ? (
-                      <span style={{ color: '#6b7280', fontWeight: 400 }}>
-                        {' '}&middot; {it.orderItem.variantTitle}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px', gap: 10 }}>
-                    <select
-                      value={d.qcOutcome}
-                      onChange={(e) => {
-                        const outcome = e.target.value;
-                        setDecisions((prev) => ({
-                          ...prev,
-                          [it.id]: {
-                            ...d,
-                            qcOutcome: outcome,
-                            // Convenience: snap qty to 0 when rejecting.
-                            qcQuantityApproved:
-                              outcome === 'REJECTED'
-                                ? 0
-                                : d.qcQuantityApproved || it.quantity,
-                          },
-                        }));
-                      }}
-                      disabled={busy !== null}
-                      style={{
-                        padding: '6px 10px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: 6,
-                        fontSize: 13,
-                      }}
-                    >
-                      {QC_OUTCOMES.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      min={0}
-                      max={it.quantity}
-                      value={d.qcQuantityApproved}
-                      onChange={(e) =>
-                        setDecisions((prev) => ({
-                          ...prev,
-                          [it.id]: {
-                            ...d,
-                            qcQuantityApproved: Number(e.target.value) || 0,
-                          },
-                        }))
-                      }
-                      disabled={busy !== null || d.qcOutcome === 'REJECTED'}
-                      style={{
-                        padding: '6px 10px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: 6,
-                        fontSize: 13,
-                        fontFamily: 'monospace',
-                      }}
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    value={d.qcNotes}
-                    onChange={(e) =>
-                      setDecisions((prev) => ({
-                        ...prev,
-                        [it.id]: { ...d, qcNotes: e.target.value },
-                      }))
-                    }
-                    placeholder="Item-level notes (optional)"
-                    disabled={busy !== null}
-                    style={{
-                      width: '100%',
-                      marginTop: 8,
-                      padding: '6px 10px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: 6,
-                      fontSize: 12,
-                    }}
-                  />
-                </div>
-              );
-            })}
-
-            <textarea
-              value={qcOverallNotes}
-              onChange={(e) => setQcOverallNotes(e.target.value)}
-              placeholder="Overall QC notes (optional)"
-              rows={2}
-              disabled={busy !== null}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 6,
-                fontSize: 13,
-                marginBottom: 12,
-              }}
-            />
-            <button
-              type="submit"
-              disabled={busy !== null}
-              style={{
-                padding: '8px 18px',
-                background: busy === 'qc' ? '#93c5fd' : '#2563eb',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: busy ? 'default' : 'pointer',
-              }}
-            >
-              {busy === 'qc' ? 'Submitting...' : 'Submit QC decision'}
-            </button>
-          </form>
+          <p style={{ fontSize: 12, color: '#9ca3af', margin: 0 }}>
+            Once admin issues the decision, this return moves to refund processing
+            and the page below will refresh to reflect the next step.
+          </p>
         </Section>
       )}
     </div>

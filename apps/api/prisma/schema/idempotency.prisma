@@ -1,0 +1,47 @@
+// Idempotency keys — phase-1 foundation.
+//
+// Endpoints decorated with @Idempotent() require a client-supplied
+// `X-Idempotency-Key` header. The interceptor first inserts a PENDING
+// placeholder claiming the key (uniqueness enforced at DB level), runs
+// the handler, then UPDATEs the row with the captured response. On a
+// replay the row is found and the cached body returned.
+//
+// Race semantics:
+//   1. Two requests arrive with the same key concurrently.
+//   2. One wins the INSERT; the other gets P2002 (unique violation).
+//   3. The losing request looks the row up. If state is PENDING it
+//      returns 409 "concurrent request in flight"; if COMPLETED and
+//      the request hash matches, it returns the cached response.
+//
+// The `requestHash` is sha256(method + path + serialized body) so a
+// retry that mutated its payload but reused the same key gets a 409
+// rather than silently overwriting / replaying.
+//
+// Rows expire 24h after completion (sweeper cron deletes them). A
+// PENDING row left behind by a crashed handler is swept after 60s
+// so the same key can be retried.
+
+enum IdempotencyKeyState {
+  PENDING    // claimed, handler still running
+  COMPLETED  // response cached
+}
+
+model IdempotencyKey {
+  id             String              @id @default(uuid())
+  key            String              @unique
+  actorType      String              @map("actor_type")    // CUSTOMER | ADMIN | SELLER | FRANCHISE | AFFILIATE | ANONYMOUS
+  actorId        String              @map("actor_id")
+  endpoint       String                                     // e.g. "POST /api/v1/customer/returns"
+  requestHash    String              @map("request_hash")
+  state          IdempotencyKeyState @default(PENDING)
+  responseStatus Int?                @map("response_status")
+  responseBody   Json?               @map("response_body")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  completedAt    DateTime?           @map("completed_at")
+  expiresAt      DateTime            @map("expires_at")
+
+  @@index([expiresAt])
+  @@index([state, createdAt])
+  @@index([actorType, actorId])
+  @@map("idempotency_keys")
+}

@@ -185,19 +185,14 @@ export function Navbar() {
         onMouseLeave={handleLeave}
       >
         <div className="w-full px-4 sm:px-6 lg:px-10 flex items-center gap-8 h-20">
-          {/* Logo + tagline */}
-          <Link
-            href="/"
-            aria-label="Sportsmart home"
-            className="shrink-0 flex flex-col items-start leading-none"
-          >
-            <span className="font-display text-3xl tracking-wide leading-none italic">
-              <span className="text-sale">SPORTSMART</span>
-              <span className="text-ink-900">.com</span>
-            </span>
-            <span className="font-brush text-[11px] tracking-wide text-accent-dark mt-1 lowercase italic">
-              play happy &middot; stay healthy
-            </span>
+          {/* Logo */}
+          <Link href="/" aria-label="Sportsmart home" className="shrink-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/SportsMart_Web_Banner.avif"
+              alt="SportsMart"
+              className="h-12 w-auto"
+            />
           </Link>
 
           {/* Top-level nav — rendered from the dynamic menu tree */}

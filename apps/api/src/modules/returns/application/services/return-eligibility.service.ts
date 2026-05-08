@@ -5,6 +5,7 @@ import {
   ForbiddenAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { CaseDuplicateService } from '../../../../core/case-duplicate/case-duplicate.service';
 import {
   RETURN_REPOSITORY,
   ReturnRepository,
@@ -58,6 +59,7 @@ export class ReturnEligibilityService {
     private readonly prisma: PrismaService,
     @Inject(RETURN_REPOSITORY)
     private readonly returnRepo: ReturnRepository,
+    private readonly caseDuplicates: CaseDuplicateService,
   ) {}
 
   async checkOrderEligibility(
@@ -245,6 +247,18 @@ export class ReturnEligibilityService {
         orderItemId: requestedItem.orderItemId,
         quantity: requestedItem.quantity,
         orderItem,
+      });
+    }
+
+    // Phase 1.5 — duplicate prevention. Runs AFTER item validation so
+    // ineligibility errors take precedence over duplicate errors (a
+    // customer trying to return an out-of-window item shouldn't get
+    // "you already opened a return" first). No-op when the
+    // CASE_DUPLICATE_PREVENTION_ENABLED flag is off.
+    for (const v of validatedItems) {
+      await this.caseDuplicates.assertNoActiveReturnForOrderItem({
+        orderItemId: v.orderItemId,
+        actor: { type: 'CUSTOMER', id: input.customerId },
       });
     }
 

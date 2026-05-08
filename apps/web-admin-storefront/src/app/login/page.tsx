@@ -42,7 +42,13 @@ export default function LoginPage() {
             <span className="login-role-dot" aria-hidden="true" />
             Super Admin
           </span>
-          <h1 className="login-brand">SPORTSMART</h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/SportsMart_Web_Banner.avif"
+            alt="SportsMart"
+            className="login-brand"
+            style={{ height: 56, width: 'auto', display: 'block' }}
+          />
           <p className="login-subtitle" id="login-title">
             Sign in to the marketplace control center.
           </p>

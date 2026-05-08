@@ -86,6 +86,9 @@ model MasterOrder {
   customerId              String             @map("customer_id")
   shippingAddressSnapshot Json               @map("shipping_address_snapshot")
   totalAmount             Decimal            @map("total_amount") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007). BigInt — master order totals can exceed
+  // INTEGER's ~₹21M cap on bulk B2B orders.
+  totalAmountInPaise      BigInt             @default(0) @map("total_amount_in_paise")
   paymentMethod           OrderPaymentMethod @default(COD) @map("payment_method")
   paymentStatus           OrderPaymentStatus @default(PENDING) @map("payment_status")
   verified                Boolean            @default(false)
@@ -98,8 +101,10 @@ model MasterOrder {
   // Discount / coupon (AMOUNT_OFF_ORDER applied at checkout). totalAmount
   // above is the post-discount charged amount; subtract discountAmount to
   // reconstruct the pre-discount subtotal.
-  discountCode   String? @map("discount_code")
-  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  discountCode          String? @map("discount_code")
+  discountAmount        Decimal @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007).
+  discountAmountInPaise BigInt  @default(0) @map("discount_amount_in_paise")
 
   // Online payment tracking (Razorpay)
   razorpayOrderId   String?   @map("razorpay_order_id")
@@ -127,6 +132,8 @@ model SubOrder {
   fulfillmentNodeType    String                 @default("SELLER") @map("fulfillment_node_type")
   franchiseId            String?                @map("franchise_id")
   subTotal               Decimal                @map("sub_total") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007).
+  subTotalInPaise        BigInt                 @default(0) @map("sub_total_in_paise")
   paymentStatus          OrderPaymentStatus     @default(PENDING) @map("payment_status")
   fulfillmentStatus      OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
   acceptStatus           OrderAcceptStatus      @default(OPEN) @map("accept_status")
@@ -168,9 +175,12 @@ model OrderItem {
   sku          String?
   masterSku    String?  @map("master_sku")
   imageUrl     String?  @map("image_url")
-  unitPrice    Decimal  @map("unit_price") @db.Decimal(10, 2)
-  quantity     Int
-  totalPrice   Decimal  @map("total_price") @db.Decimal(10, 2)
+  unitPrice         Decimal  @map("unit_price") @db.Decimal(10, 2)
+  // Phase 1.4 paise sibling (ADR-007).
+  unitPriceInPaise  BigInt   @default(0) @map("unit_price_in_paise")
+  quantity          Int
+  totalPrice        Decimal  @map("total_price") @db.Decimal(10, 2)
+  totalPriceInPaise BigInt   @default(0) @map("total_price_in_paise")
   createdAt    DateTime @default(now()) @map("created_at")
 
   subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)

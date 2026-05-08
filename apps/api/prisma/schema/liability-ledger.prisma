@@ -1,0 +1,160 @@
+// Phase 12 (post-Phase-11) — Liability ledger.
+//
+// Three append-only ledgers recording who bears the cost of a
+// customer-favoured dispute outcome. The dispute decides *what* the
+// customer receives (CustomerRemedy + RefundInstruction); these
+// rows record *who pays* (SellerDebit / LogisticsClaim /
+// PlatformExpense) so finance + ops can recover or absorb the cost.
+//
+// Wallet credit itself happens only via the RefundProcessor saga —
+// these rows do NOT trigger payments; they're cost-attribution only.
+//
+// AdminTask is the generic ops queue used when the saga can't auto-
+// resolve (failed refund, disputed seller debit, etc.).
+//
+// See docs/decisions/016-dispute-liability-ledger.md for the matrix.
+
+enum SellerDebitStatus {
+  PENDING
+  APPLIED      // settlement run picked it up + offset the seller's payout
+  CANCELLED    // disputed and reversed by ops
+}
+
+enum LogisticsClaimStatus {
+  PENDING
+  SUBMITTED    // forwarded to courier ops via API/email
+  ACCEPTED     // courier acknowledged liability
+  RECOVERED    // money received from courier
+  REJECTED     // courier denied — finance reclassifies to PlatformExpense
+  CANCELLED
+}
+
+enum PlatformExpenseType {
+  GOODWILL
+  PLATFORM_FAULT
+  EXCEPTION
+  ROUNDING_ADJUSTMENT
+}
+
+enum LedgerSourceType {
+  RETURN
+  DISPUTE
+  GOODWILL
+  MANUAL
+}
+
+enum AdminTaskKind {
+  REFUND_INSTRUCTION_FAILED
+  LOGISTICS_CLAIM_REVIEW
+  SELLER_DEBIT_DISPUTED
+  // Phase 13 — dedicated return-side kinds so finance/ops queue
+  // filtering doesn't have to scrape the `reason` text.
+  RETURN_REFUND_FAILED
+  RETURN_LIABILITY_LEDGER_BACKFILL
+  OTHER
+}
+
+enum AdminTaskStatus {
+  OPEN
+  CLAIMED
+  RESOLVED
+  CANCELLED
+}
+
+model SellerDebit {
+  id                    String            @id @default(uuid())
+  sellerId              String            @map("seller_id")
+  sourceType            LedgerSourceType  @map("source_type")
+  sourceId              String            @map("source_id")
+  orderId               String?           @map("order_id")
+  subOrderId            String?           @map("sub_order_id")
+  amountInPaise         BigInt            @map("amount_in_paise")
+  reason                String
+  status                SellerDebitStatus @default(PENDING)
+  settlementAdjustedAt  DateTime?         @map("settlement_adjusted_at")
+  // Set by the settlement run when this debit is applied. Lets
+  // finance trace which payout cycle absorbed the recovery.
+  settlementId          String?           @map("settlement_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  // (sourceType, sourceId) — guarantees one debit per dispute / return /
+  // manual entry; saga retries / event replays can't double-charge.
+  @@unique([sourceType, sourceId])
+  @@index([sellerId, status])
+  @@index([settlementId])
+  @@map("seller_debits")
+}
+
+model LogisticsClaim {
+  id                String                @id @default(uuid())
+  sourceType        LedgerSourceType      @map("source_type")
+  sourceId          String                @map("source_id")
+  // Free-text courier identifier — kept loose because we don't have a
+  // first-class courier model yet. Examples: "Delhivery", "BlueDart",
+  // "Ekart". When/if a couriers table lands, normalise.
+  courierName       String?               @map("courier_name")
+  awbNumber         String?               @map("awb_number")
+  amountInPaise     BigInt                @map("amount_in_paise")
+  reason            String
+  status            LogisticsClaimStatus  @default(PENDING)
+  submittedAt       DateTime?             @map("submitted_at")
+  recoveredAt       DateTime?             @map("recovered_at")
+  // Optional FileMetadata pointer for evidence (POD photo, transit
+  // tracking screenshot, etc.). Kept nullable + non-FK to avoid
+  // tight coupling to the files module.
+  evidenceFileId    String?               @map("evidence_file_id")
+  notes             String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@unique([sourceType, sourceId])
+  @@index([status])
+  @@index([awbNumber])
+  @@map("logistics_claims")
+}
+
+model PlatformExpense {
+  id             String                @id @default(uuid())
+  sourceType     LedgerSourceType      @map("source_type")
+  sourceId       String                @map("source_id")
+  expenseType    PlatformExpenseType   @map("expense_type")
+  amountInPaise  BigInt                @map("amount_in_paise")
+  reason         String
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  @@unique([sourceType, sourceId])
+  @@index([expenseType])
+  @@map("platform_expenses")
+}
+
+model AdminTask {
+  id              String           @id @default(uuid())
+  kind            AdminTaskKind
+  sourceType      LedgerSourceType @map("source_type")
+  sourceId        String           @map("source_id")
+  status          AdminTaskStatus  @default(OPEN)
+  reason          String
+  // Optional pre-assignment to a specific admin / team. When null,
+  // the task lives in the global queue.
+  assignedTo      String?          @map("assigned_to")
+  claimedAt       DateTime?        @map("claimed_at")
+  resolvedAt      DateTime?        @map("resolved_at")
+  resolvedBy      String?          @map("resolved_by")
+  resolutionNote  String?          @map("resolution_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  // (kind, sourceType, sourceId) — saga retries that try to enqueue
+  // the same failure twice should hit the existing row, not duplicate
+  // it. Ops sees one row per actual problem.
+  @@unique([kind, sourceType, sourceId])
+  @@index([status])
+  @@index([assignedTo])
+  @@map("admin_tasks")
+}

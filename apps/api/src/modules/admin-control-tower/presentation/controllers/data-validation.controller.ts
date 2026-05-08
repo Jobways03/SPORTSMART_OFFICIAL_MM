@@ -6,7 +6,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { DataValidationService } from '../../application/services/data-validation.service';
 
 /**
@@ -23,7 +23,7 @@ import { DataValidationService } from '../../application/services/data-validatio
  */
 @ApiTags('Admin System')
 @Controller('admin/system')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class DataValidationController {
   constructor(private readonly dataValidationService: DataValidationService) {}
 

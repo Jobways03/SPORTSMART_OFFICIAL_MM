@@ -12,20 +12,22 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { CommissionProcessorService } from '../../application/services/commission-processor.service';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
 @ApiTags('Admin Commission')
 @Controller('admin/commission')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminCommissionController {
   constructor(private readonly commissionService: CommissionProcessorService) {}
 
   /* ── Global Commission Settings ── */
 
   @Get('settings')
+  @Permissions('settlements.read')
   async getSettings() {
     const settings = await this.commissionService.getCommissionSettings();
     return { success: true, message: 'Commission settings retrieved', data: settings };
@@ -39,6 +41,7 @@ export class AdminCommissionController {
   // settlement mark-paid and commission-record adjustment.
   @Put('settings')
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.approve')
   async updateSettings(
     @Body()
     body: {
@@ -57,6 +60,7 @@ export class AdminCommissionController {
   /* ── Commission Records List ── */
 
   @Get()
+  @Permissions('settlements.read')
   async listCommissions(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -100,6 +104,7 @@ export class AdminCommissionController {
    * the date range.
    */
   @Get('export')
+  @Permissions('settlements.read')
   async exportCommissions(
     @Res() res: Response,
     @Query('sellerId') sellerId?: string,
@@ -196,6 +201,7 @@ export class AdminCommissionController {
   /* ── Summary (aggregate margin data) ── */
 
   @Get('summary')
+  @Permissions('settlements.read')
   async getSummary() {
     const summary = await this.commissionService.getAdminCommissionSummary();
     return {
@@ -213,6 +219,7 @@ export class AdminCommissionController {
    * adjustment — sorted oldest-first so the UI can render a history list.
    */
   @Get(':id/history')
+  @Permissions('settlements.read')
   async getHistory(@Param('id') id: string) {
     const data = await this.commissionService.getCommissionHistory(id);
     return {
@@ -231,6 +238,7 @@ export class AdminCommissionController {
    */
   @Patch(':id/adjust')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('settlements.approve')
   async adjustCommission(
     @Req() req: Request,
     @Param('id') id: string,

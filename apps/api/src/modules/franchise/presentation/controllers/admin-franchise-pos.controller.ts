@@ -6,12 +6,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { FranchisePosService } from '../../application/services/franchise-pos.service';
 
 @ApiTags('Admin Franchise POS')
 @Controller('admin/franchises')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminFranchisePosController {
   constructor(private readonly posService: FranchisePosService) {}
 

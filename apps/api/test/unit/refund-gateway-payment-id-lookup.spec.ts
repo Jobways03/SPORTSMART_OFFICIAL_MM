@@ -41,7 +41,22 @@ describe('RefundGatewayService — payment id lookup', () => {
       warn: jest.fn(),
       error: jest.fn(),
     };
-    const svc = new RefundGatewayService(logger, razorpayAdapter, prisma);
+    // RefundGatewayService takes 5 deps (logger, razorpay, prisma,
+    // walletFacade, paymentOps). The wallet + paymentOps paths aren't
+    // exercised by the payment-id-lookup tests, so stub them.
+    const walletFacade: any = {
+      creditFromRefund: jest.fn(),
+    };
+    const paymentOps: any = {
+      recordAttempt: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new RefundGatewayService(
+      logger,
+      razorpayAdapter,
+      prisma,
+      walletFacade,
+      paymentOps,
+    );
     return { svc, razorpayAdapter, prisma };
   };
 

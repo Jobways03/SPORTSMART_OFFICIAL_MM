@@ -123,6 +123,68 @@ describe('Status FSM — ReturnStatus', () => {
   it('blocks skip from REQUESTED to RECEIVED', () => {
     expect(isTransitionAllowed('ReturnStatus', 'REQUESTED', 'RECEIVED')).toBe(false);
   });
+
+  it('allows PICKUP_SCHEDULED → RECEIVED (courier-skip shortcut)', () => {
+    expect(
+      isTransitionAllowed('ReturnStatus', 'PICKUP_SCHEDULED', 'RECEIVED'),
+    ).toBe(true);
+  });
+});
+
+describe('Status FSM — DisputeStatus', () => {
+  it('allows OPEN to be picked up for review', () => {
+    expect(isTransitionAllowed('DisputeStatus', 'OPEN', 'UNDER_REVIEW')).toBe(true);
+    expect(isTransitionAllowed('DisputeStatus', 'OPEN', 'AWAITING_INFO')).toBe(true);
+    expect(isTransitionAllowed('DisputeStatus', 'OPEN', 'CLOSED')).toBe(true);
+  });
+
+  it('allows admin to decide from UNDER_REVIEW', () => {
+    expect(
+      isTransitionAllowed('DisputeStatus', 'UNDER_REVIEW', 'RESOLVED_BUYER'),
+    ).toBe(true);
+    expect(
+      isTransitionAllowed('DisputeStatus', 'UNDER_REVIEW', 'RESOLVED_SELLER'),
+    ).toBe(true);
+    expect(
+      isTransitionAllowed('DisputeStatus', 'UNDER_REVIEW', 'RESOLVED_SPLIT'),
+    ).toBe(true);
+  });
+
+  it('allows AWAITING_INFO to resolve directly', () => {
+    expect(
+      isTransitionAllowed('DisputeStatus', 'AWAITING_INFO', 'RESOLVED_BUYER'),
+    ).toBe(true);
+  });
+
+  it('allows reopening a RESOLVED_* back to UNDER_REVIEW', () => {
+    expect(
+      isTransitionAllowed('DisputeStatus', 'RESOLVED_BUYER', 'UNDER_REVIEW'),
+    ).toBe(true);
+    expect(
+      isTransitionAllowed('DisputeStatus', 'RESOLVED_SELLER', 'UNDER_REVIEW'),
+    ).toBe(true);
+  });
+
+  it('blocks reopening a CLOSED dispute', () => {
+    expect(
+      isTransitionAllowed('DisputeStatus', 'CLOSED', 'UNDER_REVIEW'),
+    ).toBe(false);
+    expect(
+      isTransitionAllowed('DisputeStatus', 'CLOSED', 'OPEN'),
+    ).toBe(false);
+  });
+
+  it('blocks skipping from OPEN to RESOLVED_BUYER', () => {
+    expect(
+      isTransitionAllowed('DisputeStatus', 'OPEN', 'RESOLVED_BUYER'),
+    ).toBe(false);
+  });
+
+  it('blocks RESOLVED → RESOLVED transitions (must reopen first)', () => {
+    expect(
+      isTransitionAllowed('DisputeStatus', 'RESOLVED_BUYER', 'RESOLVED_SELLER'),
+    ).toBe(false);
+  });
 });
 
 describe('Status FSM — assertTransition()', () => {

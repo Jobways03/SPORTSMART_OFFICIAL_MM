@@ -14,8 +14,9 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AdminListSellersUseCase } from '../../application/use-cases/admin-list-sellers.use-case';
 import { AdminGetSellerUseCase } from '../../application/use-cases/admin-get-seller.use-case';
 import { AdminEditSellerUseCase } from '../../application/use-cases/admin-edit-seller.use-case';
@@ -34,7 +35,7 @@ import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile
 
 @ApiTags('Admin Sellers')
 @Controller('admin/sellers')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminSellersController {
   constructor(
     private readonly listSellersUseCase: AdminListSellersUseCase,
@@ -49,6 +50,7 @@ export class AdminSellersController {
   ) {}
 
   @Get()
+  @Permissions('sellers.read')
   async listSellers(@Query() query: AdminListSellersDto) {
     const data = await this.listSellersUseCase.execute({
       page: query.page || 1,
@@ -70,6 +72,7 @@ export class AdminSellersController {
   }
 
   @Get(':sellerId')
+  @Permissions('sellers.read')
   async getSeller(@Param('sellerId') sellerId: string) {
     const data = await this.getSellerUseCase.execute(sellerId);
 
@@ -82,6 +85,7 @@ export class AdminSellersController {
 
   @Patch(':sellerId')
   @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.approve')
   async editSeller(
     @Param('sellerId') sellerId: string,
     @Body() dto: AdminUpdateSellerProfileDto,
@@ -105,6 +109,7 @@ export class AdminSellersController {
 
   @Patch(':sellerId/status')
   @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.suspend')
   async updateStatus(
     @Param('sellerId') sellerId: string,
     @Body() dto: AdminUpdateSellerStatusDto,
@@ -129,6 +134,7 @@ export class AdminSellersController {
 
   @Patch(':sellerId/verification')
   @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.approve')
   async updateVerification(
     @Param('sellerId') sellerId: string,
     @Body() dto: AdminUpdateSellerVerificationDto,
@@ -154,6 +160,7 @@ export class AdminSellersController {
   @Post(':sellerId/impersonate')
   @HttpCode(HttpStatus.OK)
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('sellers.approve')
   async impersonate(
     @Param('sellerId') sellerId: string,
     @Req() req: Request,
@@ -177,6 +184,7 @@ export class AdminSellersController {
 
   @Post(':sellerId/message')
   @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.read')
   async sendMessage(
     @Param('sellerId') sellerId: string,
     @Body() dto: AdminSendMessageDto,
@@ -202,6 +210,7 @@ export class AdminSellersController {
 
   @Patch(':sellerId/change-password')
   @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.approve')
   async changePassword(
     @Param('sellerId') sellerId: string,
     @Body() dto: AdminChangePasswordDto,
@@ -226,6 +235,7 @@ export class AdminSellersController {
   @Delete(':sellerId')
   @HttpCode(HttpStatus.OK)
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('sellers.suspend')
   async deleteSeller(
     @Param('sellerId') sellerId: string,
     @Body() body: { reason?: string },

@@ -353,6 +353,22 @@ export class PrismaReturnRepository implements ReturnRepository {
     });
   }
 
+  async updateWithVersion(
+    id: string,
+    expectedVersion: number,
+    data: Record<string, unknown>,
+  ): Promise<any> {
+    return this.prisma.return.update({
+      // Prisma's `where` is typed against the unique-constraint shape,
+      // but it accepts compound matchers in practice. The {id, version}
+      // tuple is what makes the optimistic-lock CAS work — a stale
+      // expectedVersion produces a 0-row update, which Prisma surfaces
+      // as P2025 ("record not found").
+      where: { id, version: expectedVersion } as any,
+      data: { ...(data as any), version: { increment: 1 } },
+    });
+  }
+
   // ── Status history ──────────────────────────────────────────────────────
 
   async recordStatusChange(

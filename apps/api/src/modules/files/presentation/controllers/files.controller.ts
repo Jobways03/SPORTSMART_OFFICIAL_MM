@@ -21,6 +21,7 @@ import { Request } from 'express';
 import {
   AdminAuthGuard,
   AnyAuthGuard,
+  PermissionsGuard,
   UserAuthGuard,
 } from '../../../../core/guards';
 import {
@@ -164,7 +165,7 @@ export class FilesController {
  */
 @ApiTags('Files — Admin')
 @Controller('admin/files')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminFilesController {
   constructor(private readonly service: FileService) {}
 

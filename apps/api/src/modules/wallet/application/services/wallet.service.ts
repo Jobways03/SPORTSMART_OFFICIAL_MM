@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import type { Wallet, WalletTransaction } from '@prisma/client';
 import {
   BadRequestAppException,
@@ -94,27 +95,72 @@ export class WalletService {
 
   async credit(args: CreditArgs): Promise<ApplyMutationResult> {
     this.assertPositive(args.amountInPaise, 'amountInPaise');
-    const result = await this.applyWithRetry(args.userId, async (wallet) => {
-      this.assertNotBlocked(wallet, args.bypassBlock);
-      const newBalance = wallet.balanceInPaise + args.amountInPaise;
-      return this.repo.applyMutation({
-        walletId: wallet.id,
-        expectedVersion: wallet.version,
-        newBalanceInPaise: newBalance,
-        transaction: {
-          walletId: wallet.id,
-          userId: args.userId,
-          type: args.type ?? 'CREDIT_ADJUSTMENT',
-          amountInPaise: args.amountInPaise,
-          balanceAfterInPaise: newBalance,
-          referenceType: args.referenceType ?? null,
-          referenceId: args.referenceId ?? null,
-          description: args.description,
-          internalNotes: args.internalNotes ?? null,
-          createdByAdminId: args.createdByAdminId ?? null,
-        },
+
+    // Phase 3 (PR 3.2) — fast-path idempotency. If this exact
+    // (referenceType, referenceId, type) was already credited, return
+    // that row instead of attempting (and failing on the unique index).
+    // The unique index is the source of truth; this check is just a
+    // performance + clarity improvement that avoids a P2002 round-trip.
+    const txType = args.type ?? 'CREDIT_ADJUSTMENT';
+    if (args.referenceType && args.referenceId) {
+      const existing = await this.repo.findTransactionByReference({
+        referenceType: args.referenceType,
+        referenceId: args.referenceId,
+        type: txType,
       });
-    });
+      if (existing) {
+        const wallet = await this.repo.getOrCreate(args.userId);
+        return { wallet, transaction: existing };
+      }
+    }
+
+    let result: ApplyMutationResult;
+    try {
+      result = await this.applyWithRetry(args.userId, async (wallet) => {
+        this.assertNotBlocked(wallet, args.bypassBlock);
+        const newBalance = wallet.balanceInPaise + args.amountInPaise;
+        return this.repo.applyMutation({
+          walletId: wallet.id,
+          expectedVersion: wallet.version,
+          newBalanceInPaise: newBalance,
+          transaction: {
+            walletId: wallet.id,
+            userId: args.userId,
+            type: txType,
+            amountInPaise: args.amountInPaise,
+            balanceAfterInPaise: newBalance,
+            referenceType: args.referenceType ?? null,
+            referenceId: args.referenceId ?? null,
+            description: args.description,
+            internalNotes: args.internalNotes ?? null,
+            createdByAdminId: args.createdByAdminId ?? null,
+          },
+        });
+      });
+    } catch (err) {
+      // Race: a parallel write for the same reference won the unique
+      // index. Re-fetch and return the winning row, preserving idempotency.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002' &&
+        args.referenceType &&
+        args.referenceId
+      ) {
+        const winner = await this.repo.findTransactionByReference({
+          referenceType: args.referenceType,
+          referenceId: args.referenceId,
+          type: txType,
+        });
+        if (winner) {
+          const wallet = await this.repo.getOrCreate(args.userId);
+          this.logger.warn(
+            `Wallet credit idempotency race: returning existing tx ${winner.id} for ref ${args.referenceType}:${args.referenceId}`,
+          );
+          return { wallet, transaction: winner };
+        }
+      }
+      throw err;
+    }
 
     // Best-effort event publish (handlers run async via EventBus's
     // microtask; failures are logged in the bus, not propagated).

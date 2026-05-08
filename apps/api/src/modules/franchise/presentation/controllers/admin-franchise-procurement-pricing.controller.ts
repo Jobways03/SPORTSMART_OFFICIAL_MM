@@ -17,7 +17,7 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { FranchiseProcurementPriceUpsertDto } from '../dtos/franchise-procurement-price-upsert.dto';
 
 /**
@@ -33,7 +33,7 @@ import { FranchiseProcurementPriceUpsertDto } from '../dtos/franchise-procuremen
  */
 @ApiTags('Admin Franchise Procurement Pricing')
 @Controller('admin/franchises/:franchiseId/procurement-prices')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminFranchiseProcurementPricingController {
   constructor(private readonly prisma: PrismaService) {}
 

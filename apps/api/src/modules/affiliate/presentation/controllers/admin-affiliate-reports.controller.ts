@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AffiliateSettingsService } from '../../application/services/affiliate-settings.service';
 import { UpdateAffiliateSettingsDto } from '../dtos/affiliate-settings.dto';
@@ -14,7 +14,7 @@ import { UpdateAffiliateSettingsDto } from '../dtos/affiliate-settings.dto';
  */
 @ApiTags('Admin Affiliate Reports')
 @Controller('admin/affiliates/reports')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAffiliateReportsController {
   constructor(
     private readonly prisma: PrismaService,

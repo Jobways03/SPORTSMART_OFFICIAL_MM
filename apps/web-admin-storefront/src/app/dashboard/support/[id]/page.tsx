@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -38,6 +38,29 @@ export default function TicketDetailPage() {
 
   const [adminId, setAdminId] = useState('');
 
+  // Promote-to-dispute modal. The customer never sees that this
+  // happens — internally a Dispute is created, conversation is
+  // mirrored, and admin works the dispute UI from then on.
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteKind, setPromoteKind] = useState<
+    | 'RETURN_REJECTED'
+    | 'WRONG_ITEM_RECEIVED'
+    | 'DAMAGED_IN_TRANSIT'
+    | 'MISSING_FROM_PARCEL'
+    | 'OTHER'
+  >('OTHER');
+  const [promoteSeverity, setPromoteSeverity] = useState<number>(50);
+  const [promoteSummary, setPromoteSummary] = useState('');
+  const [promoteInternalNote, setPromoteInternalNote] = useState('');
+  const [promoting, setPromoting] = useState(false);
+
+  // Skip the silent-refresh swap while a reply is mid-flight so a
+  // late-landing GET (issued before the POST) can't overwrite the
+  // detail we just got back from the POST and re-hide the new
+  // message. Ref (not state) so flipping it doesn't restart the
+  // poll interval.
+  const sendingRef = useRef(false);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -55,9 +78,61 @@ export default function TicketDetailPage() {
     }
   }, [id, router]);
 
+  // Same fetch as `refresh` but without the loading-spinner flip and
+  // without clobbering the error banner — used by the background poll
+  // so the admin sees new customer messages without having to reload
+  // the page. Skips the swap when the body of the reply textarea is
+  // dirty so a poll landing mid-keystroke doesn't blank the input.
+  const silentRefresh = useCallback(async () => {
+    if (sendingRef.current) return;
+    try {
+      const res = await adminSupportService.getTicket(id);
+      if (res.data) setDetail(res.data);
+    } catch {
+      // Silent — keep showing whatever data we have. The next poll
+      // (or a manual refresh) will recover.
+    }
+  }, [id]);
+
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Background poll. 5s feels live without hammering the API; pauses
+  // when the tab is hidden so a backgrounded tab doesn't keep churning.
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          void silentRefresh();
+        }
+      }, 5000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    start();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // Catch up immediately when the tab regains focus, then resume
+        // the regular cadence.
+        void silentRefresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
+  }, [silentRefresh]);
 
   useEffect(() => {
     try {
@@ -70,6 +145,7 @@ export default function TicketDetailPage() {
     e.preventDefault();
     if (!reply.trim() || sending) return;
     setSending(true);
+    sendingRef.current = true;
     try {
       const res = await adminSupportService.reply(id, reply.trim(), isInternal);
       if (res.data) {
@@ -81,6 +157,7 @@ export default function TicketDetailPage() {
       setError(err instanceof Error ? err.message : 'Could not send reply');
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
   };
 
@@ -111,6 +188,33 @@ export default function TicketDetailPage() {
       if (res.data) setDetail({ ...detail, ticket: res.data });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not assign');
+    }
+  };
+
+  const submitPromote = async () => {
+    if (promoting) return;
+    setPromoting(true);
+    try {
+      const res = await adminSupportService.promoteToDispute(id, {
+        kind: promoteKind,
+        severity: promoteSeverity,
+        summary: promoteSummary.trim() || undefined,
+        internalNote: promoteInternalNote.trim() || undefined,
+      });
+      if (res.data?.disputeId) {
+        // Navigate to the new dispute so the admin works the formal
+        // track from now on. Customer is never aware — they keep
+        // talking on the ticket; mirroring keeps both sides synced.
+        router.push(`/dashboard/disputes/${res.data.disputeId}`);
+      } else {
+        setError(res.message || 'Could not promote ticket');
+        setPromoteOpen(false);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not promote ticket');
+      setPromoteOpen(false);
+    } finally {
+      setPromoting(false);
     }
   };
 
@@ -365,7 +469,295 @@ export default function TicketDetailPage() {
             )}
           </Card>
         )}
+
+        {/* Promote-to-dispute card. Once promoted, the card collapses
+            to a deep-link banner so the admin can jump back into the
+            dispute view. Customer never sees this exists. */}
+        <Card title="Internal escalation">
+          {ticket.promotedToDisputeId ? (
+            <>
+              <p style={{ margin: 0, fontSize: 12, color: '#525A65', lineHeight: 1.5 }}>
+                Linked dispute — admin actions happen on the dispute thread.
+                Customer continues to see this ticket as their support window.
+              </p>
+              <Link
+                href={`/dashboard/disputes/${ticket.promotedToDisputeId}`}
+                style={{
+                  ...cardLink,
+                  marginTop: 8,
+                  display: 'inline-block',
+                  fontWeight: 600,
+                  color: '#2A8595',
+                }}
+              >
+                → Open linked dispute
+              </Link>
+            </>
+          ) : (
+            <>
+              <p style={{ margin: 0, fontSize: 12, color: '#525A65', lineHeight: 1.5 }}>
+                Promote this ticket onto the formal dispute track when it needs
+                a refund decision, audit trail, or SLA escalation. The customer
+                stays on this ticket — they will never see the word
+                &ldquo;dispute&rdquo;. One-way; cannot be undone.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPromoteSummary(ticket.subject || '');
+                  setPromoteOpen(true);
+                }}
+                style={{
+                  marginTop: 10,
+                  width: '100%',
+                  height: 36,
+                  border: '1px solid #2A8595',
+                  background: '#fff',
+                  color: '#2A8595',
+                  borderRadius: 9999,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Promote to dispute
+              </button>
+            </>
+          )}
+        </Card>
       </aside>
+
+      {promoteOpen && (
+        <PromoteModal
+          ticketNumber={ticket.ticketNumber}
+          kind={promoteKind}
+          severity={promoteSeverity}
+          summary={promoteSummary}
+          internalNote={promoteInternalNote}
+          submitting={promoting}
+          onKind={setPromoteKind}
+          onSeverity={setPromoteSeverity}
+          onSummary={setPromoteSummary}
+          onInternalNote={setPromoteInternalNote}
+          onCancel={() => setPromoteOpen(false)}
+          onSubmit={submitPromote}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Modal for the promote-to-dispute flow. Kept as an in-file component
+ * since it's only used here and pulls a lot of local state. Reminds
+ * the admin (in copy) that the customer's view doesn't change — both
+ * to set expectations and to avoid the operational mistake of
+ * promoting "to escalate" but then telling the customer about the
+ * dispute number, which would defeat the rebrand.
+ */
+function PromoteModal(props: {
+  ticketNumber: string;
+  kind:
+    | 'RETURN_REJECTED'
+    | 'WRONG_ITEM_RECEIVED'
+    | 'DAMAGED_IN_TRANSIT'
+    | 'MISSING_FROM_PARCEL'
+    | 'OTHER';
+  severity: number;
+  summary: string;
+  internalNote: string;
+  submitting: boolean;
+  onKind: (
+    k:
+      | 'RETURN_REJECTED'
+      | 'WRONG_ITEM_RECEIVED'
+      | 'DAMAGED_IN_TRANSIT'
+      | 'MISSING_FROM_PARCEL'
+      | 'OTHER',
+  ) => void;
+  onSeverity: (s: number) => void;
+  onSummary: (s: string) => void;
+  onInternalNote: (s: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(15,17,21,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 50,
+        padding: 16,
+      }}
+      onClick={props.onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          padding: 24,
+          width: '100%',
+          maxWidth: 520,
+          boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>
+            Promote {props.ticketNumber} to a dispute
+          </h3>
+          <p
+            style={{
+              margin: '6px 0 0 0',
+              fontSize: 12,
+              color: '#525A65',
+              lineHeight: 1.5,
+            }}
+          >
+            The customer keeps seeing the ticket as-is. Your replies on the
+            dispute will be mirrored back here under the &ldquo;Support&rdquo;
+            brand. <strong>Don&apos;t share the dispute number with the
+            customer.</strong>
+          </p>
+        </div>
+
+        <label style={{ fontSize: 12, fontWeight: 600 }}>
+          Kind
+          <select
+            value={props.kind}
+            onChange={(e) => props.onKind(e.target.value as any)}
+            disabled={props.submitting}
+            style={{
+              display: 'block',
+              marginTop: 4,
+              width: '100%',
+              height: 36,
+              padding: '0 8px',
+              border: '1px solid #D2D6DC',
+              borderRadius: 8,
+              background: '#fff',
+              fontSize: 13,
+            }}
+          >
+            <option value="OTHER">Other</option>
+            <option value="RETURN_REJECTED">Return rejected</option>
+            <option value="WRONG_ITEM_RECEIVED">Wrong item received</option>
+            <option value="DAMAGED_IN_TRANSIT">Damaged in transit</option>
+            <option value="MISSING_FROM_PARCEL">Missing from parcel</option>
+          </select>
+        </label>
+
+        <label style={{ fontSize: 12, fontWeight: 600 }}>
+          Severity (1-100)
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={props.severity}
+            onChange={(e) => props.onSeverity(Number(e.target.value))}
+            disabled={props.submitting}
+            style={{
+              display: 'block',
+              marginTop: 4,
+              width: '100%',
+              height: 36,
+              padding: '0 8px',
+              border: '1px solid #D2D6DC',
+              borderRadius: 8,
+              fontSize: 13,
+            }}
+          />
+        </label>
+
+        <label style={{ fontSize: 12, fontWeight: 600 }}>
+          Summary
+          <textarea
+            rows={3}
+            value={props.summary}
+            onChange={(e) => props.onSummary(e.target.value)}
+            disabled={props.submitting}
+            placeholder="Defaults to ticket subject + first message"
+            style={{
+              display: 'block',
+              marginTop: 4,
+              width: '100%',
+              padding: 8,
+              border: '1px solid #D2D6DC',
+              borderRadius: 8,
+              fontSize: 13,
+              fontFamily: 'inherit',
+              resize: 'vertical',
+            }}
+          />
+        </label>
+
+        <label style={{ fontSize: 12, fontWeight: 600 }}>
+          Internal note (admin-only, won&apos;t be mirrored back to ticket)
+          <textarea
+            rows={2}
+            value={props.internalNote}
+            onChange={(e) => props.onInternalNote(e.target.value)}
+            disabled={props.submitting}
+            placeholder="Why are you escalating? Stays on the dispute side."
+            style={{
+              display: 'block',
+              marginTop: 4,
+              width: '100%',
+              padding: 8,
+              border: '1px solid #D2D6DC',
+              borderRadius: 8,
+              fontSize: 13,
+              fontFamily: 'inherit',
+              resize: 'vertical',
+            }}
+          />
+        </label>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={props.onCancel}
+            disabled={props.submitting}
+            style={{
+              height: 36,
+              padding: '0 16px',
+              border: '1px solid #D2D6DC',
+              background: '#fff',
+              borderRadius: 9999,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={props.onSubmit}
+            disabled={props.submitting}
+            style={{
+              height: 36,
+              padding: '0 16px',
+              border: '1px solid #2A8595',
+              background: '#2A8595',
+              color: '#fff',
+              borderRadius: 9999,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: props.submitting ? 'wait' : 'pointer',
+            }}
+          >
+            {props.submitting ? 'Promoting…' : 'Promote'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

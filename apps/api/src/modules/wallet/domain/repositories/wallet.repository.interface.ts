@@ -102,6 +102,18 @@ export interface WalletRepository {
 
   findTransactionById(id: string): Promise<WalletTransaction | null>;
 
+  /**
+   * Phase 3 (PR 3.2) — idempotency lookup. Returns the transaction
+   * already recorded for a (referenceType, referenceId, type) tuple,
+   * if any. Used by `WalletService.credit` to short-circuit duplicate
+   * credit calls before they hit the unique index.
+   */
+  findTransactionByReference(args: {
+    referenceType: string;
+    referenceId: string;
+    type: WalletTransactionType;
+  }): Promise<WalletTransaction | null>;
+
   listTransactions(args: {
     userId: string;
     page: number;

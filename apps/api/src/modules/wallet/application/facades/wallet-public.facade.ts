@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { WalletService } from '../services/wallet.service';
 
 /**
@@ -8,7 +9,10 @@ import { WalletService } from '../services/wallet.service';
  */
 @Injectable()
 export class WalletPublicFacade {
-  constructor(private readonly wallet: WalletService) {}
+  constructor(
+    private readonly wallet: WalletService,
+    private readonly audit: AuditPublicFacade,
+  ) {}
 
   getBalance(userId: string) {
     return this.wallet.getBalance(userId);
@@ -17,14 +21,20 @@ export class WalletPublicFacade {
   /**
    * Credit a refund payout into the user's wallet. Wired from the
    * returns/refunds module when refundMethod === 'WALLET'.
+   *
+   * Phase 13 — also writes a `wallet.refund_credit_created` audit
+   * row for compliance reporting. Idempotent: repeated calls with the
+   * same refundId reuse the same WalletTransaction (UNIQUE on
+   * referenceType+referenceId+type) AND skip the audit write so the
+   * audit ledger doesn't double-count the same logical event.
    */
-  creditFromRefund(args: {
+  async creditFromRefund(args: {
     userId: string;
     amountInPaise: number;
     refundId: string;
     description?: string;
   }) {
-    return this.wallet.credit({
+    const result = await this.wallet.credit({
       userId: args.userId,
       amountInPaise: args.amountInPaise,
       type: 'REFUND',
@@ -38,6 +48,33 @@ export class WalletPublicFacade {
       // ends up reversing this credit.
       bypassBlock: true,
     });
+
+    // Audit only when this call actually moved money. WalletService
+    // returns the existing transaction for an idempotent retry; the
+    // CREATE timestamp gives us a >1-second-old check that's far
+    // cheaper than introducing a `wasCreated` boolean to the contract.
+    const justCreated =
+      Date.now() - result.transaction.createdAt.getTime() < 5_000;
+    if (justCreated) {
+      this.audit
+        .writeAuditLog({
+          actorRole: 'SYSTEM',
+          action: 'wallet.refund_credit_created',
+          module: 'wallet',
+          resource: 'wallet_transaction',
+          resourceId: result.transaction.id,
+          newValue: {
+            userId: args.userId,
+            amountInPaise: args.amountInPaise,
+            refundId: args.refundId,
+            walletId: result.transaction.walletId,
+            balanceAfterInPaise: result.transaction.balanceAfterInPaise,
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    return result;
   }
 
   /**

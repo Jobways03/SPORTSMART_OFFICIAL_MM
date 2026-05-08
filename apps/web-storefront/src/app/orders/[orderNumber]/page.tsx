@@ -14,6 +14,42 @@ import type {
   ReturnEligibilityItem,
 } from '@/types/order';
 
+/** Subset of the `Return` row shape the listing endpoint returns. */
+interface ActiveReturn {
+  id: string;
+  returnNumber: string;
+  status: string;
+  masterOrderId: string;
+  createdAt: string;
+}
+
+/** Statuses that mean "still in flight" — terminal states are excluded. */
+const ACTIVE_RETURN_STATUSES = new Set([
+  'REQUESTED',
+  'APPROVED',
+  'PICKUP_SCHEDULED',
+  'IN_TRANSIT',
+  'RECEIVED',
+  'PARTIALLY_APPROVED',
+  'QC_APPROVED',
+  'REFUND_PROCESSING',
+  'REFUNDED', // refund money in flight; not yet COMPLETED
+]);
+
+/** Customer-friendly status label. Mirrors the admin labels but in
+ *  storefront tone. */
+const RETURN_STATUS_LABEL: Record<string, string> = {
+  REQUESTED: 'Pending review',
+  APPROVED: 'Approved — awaiting pickup',
+  PICKUP_SCHEDULED: 'Pickup scheduled',
+  IN_TRANSIT: 'In transit to warehouse',
+  RECEIVED: 'Received — under inspection',
+  PARTIALLY_APPROVED: 'Inspection complete (partial)',
+  QC_APPROVED: 'Inspection passed — refund queued',
+  REFUND_PROCESSING: 'Refund being processed',
+  REFUNDED: 'Refunded',
+};
+
 /**
  * Build a best-effort direct-tracking URL for common Indian carriers plus
  * Shiprocket's universal tracker. Falls back to the Shiprocket URL which
@@ -221,6 +257,15 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     enabled: boolean;
     reason: string;
   } | null>(null);
+  // In-flight returns for this order. Populated alongside the order
+  // fetch so the page can show "View Return RET-…" cards regardless of
+  // whether the return-creation window is still open. Without this, a
+  // customer who opens the order page after the return window expired
+  // sees only the greyed-out "Return Items — Return window has expired"
+  // button and has no way to find the return they already filed.
+  const [activeReturns, setActiveReturns] = useState<ActiveReturn[] | null>(
+    null,
+  );
 
   const fetchOrder = useCallback(() => {
     apiClient<OrderDetail>(`/customer/orders/${orderNumber}`)
@@ -235,6 +280,29 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     if (authStatus !== 'authed') return;
     fetchOrder();
   }, [authStatus, fetchOrder]);
+
+  // Pull existing returns for this order. Independent of the eligibility
+  // check — returns live forever after creation, even after the return
+  // window closes, so this fetch must succeed regardless of window state.
+  useEffect(() => {
+    if (!order) return;
+    apiClient<{ returns: ActiveReturn[] }>(`/customer/returns?limit=50`)
+      .then((res) => {
+        const all = res.data?.returns ?? [];
+        const mine = all.filter(
+          (r) =>
+            r.masterOrderId === order.id &&
+            ACTIVE_RETURN_STATUSES.has(r.status),
+        );
+        setActiveReturns(mine);
+      })
+      .catch(() => {
+        // Failure is non-fatal — the page still renders the order, just
+        // without the in-flight return banner. The user can navigate to
+        // /returns from the account menu as a fallback.
+        setActiveReturns([]);
+      });
+  }, [order]);
 
   // Once we have the order + it's delivered, check return eligibility so
   // the Return Items button accurately reflects whether any items can
@@ -480,13 +548,55 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
         ))}
 
+        {/* In-flight returns — wins over the "file a new return" button when
+            present, so the customer always has a path to track an existing
+            return even after the return window closes. */}
+        {activeReturns && activeReturns.length > 0 && (
+          <div style={{ marginTop: 16, padding: 16, border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1e3a8a', marginBottom: 8 }}>
+              {activeReturns.length === 1 ? 'Return in progress' : 'Returns in progress'}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {activeReturns.map((r) => (
+                <Link
+                  key={r.id}
+                  href={`/returns/${r.id}`}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '10px 12px',
+                    background: '#fff',
+                    border: '1px solid #dbeafe',
+                    borderRadius: 8,
+                    textDecoration: 'none',
+                    color: '#1e3a8a',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{r.returnNumber}</div>
+                    <div style={{ fontSize: 12, color: '#1d4ed8', marginTop: 2 }}>
+                      {RETURN_STATUS_LABEL[r.status] ?? r.status}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#1d4ed8' }}>View →</div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, padding: '12px 0', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: '#6b7280' }}>
             Payment Method: <strong>{order.paymentMethod === 'COD' ? 'Cash on Delivery' : order.paymentMethod}</strong>
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED') && (
+            {/* Suppress the "Return Items" CTA when there's already an
+                in-flight return for this order — the in-progress card above
+                is the right call-to-action in that case. */}
+            {(activeReturns?.length ?? 0) === 0 &&
+            displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED') && (
               returnEligibility?.enabled ? (
                 <Link
                   href={`/orders/${order.orderNumber}/return`}

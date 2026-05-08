@@ -76,6 +76,101 @@ const { returnId } = useParams<{ returnId: string }>();
     }
   };
 
+  /**
+   * Phase 13 (P1.14) — exchange payment flow.
+   *
+   *   1. POST /:id/exchange-payment-init → razorpayOrderId + amount
+   *   2. Inject Razorpay's checkout.js (idempotent — only loaded
+   *      once per session) and open the modal with the orderId.
+   *   3. On success, Razorpay returns { razorpay_order_id,
+   *      razorpay_payment_id, razorpay_signature } — POST those to
+   *      /:id/exchange-payment-verify.
+   *   4. On verify success the API flips status to AWAITING_FULFILMENT
+   *      and ships the replacement order. Refresh the page to show it.
+   */
+  const handleExchangePayment = async () => {
+    if (!ret) return;
+    setActionLoading(true);
+    try {
+      const initRes = await returnsService.initiateExchangePayment(returnId);
+      if (!initRes.success || !initRes.data) {
+        void notify(initRes.message || 'Failed to start payment');
+        return;
+      }
+      const { razorpayOrderId, amountInPaise } = initRes.data;
+
+      // Lazy-load Razorpay's checkout SDK.
+      await new Promise<void>((resolve, reject) => {
+        if ((window as any).Razorpay) return resolve();
+        const script = document.createElement('script');
+        script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Razorpay SDK load failed'));
+        document.body.appendChild(script);
+      });
+
+      const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+      if (!keyId) {
+        void notify('Razorpay is not configured (NEXT_PUBLIC_RAZORPAY_KEY_ID)');
+        return;
+      }
+
+      const RazorpayCtor = (window as any).Razorpay;
+      const rzp = new RazorpayCtor({
+        key: keyId,
+        order_id: razorpayOrderId,
+        amount: amountInPaise,
+        currency: 'INR',
+        name: 'Sportsmart',
+        description: `Exchange payment for return ${ret.returnNumber}`,
+        handler: async (response: {
+          razorpay_order_id: string;
+          razorpay_payment_id: string;
+          razorpay_signature: string;
+        }) => {
+          setActionLoading(true);
+          try {
+            const verifyRes = await returnsService.verifyExchangePayment(
+              returnId,
+              {
+                razorpayOrderId: response.razorpay_order_id,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpaySignature: response.razorpay_signature,
+              },
+            );
+            if (verifyRes.success) {
+              await notify(
+                'Payment confirmed — your replacement order is on its way!',
+              );
+              fetchReturn();
+            } else {
+              void notify(
+                verifyRes.message || 'Payment verification failed',
+              );
+            }
+          } catch (err) {
+            void notify(
+              err instanceof Error
+                ? err.message
+                : 'Payment verification failed',
+            );
+          } finally {
+            setActionLoading(false);
+          }
+        },
+        modal: {
+          ondismiss: () => setActionLoading(false),
+        },
+      });
+      rzp.open();
+    } catch (err) {
+      void notify(
+        err instanceof Error ? err.message : 'Failed to start payment',
+      );
+      setActionLoading(false);
+    }
+  };
+
   const formatPrice = (price: number | null) =>
     price == null ? '-' : `\u20B9${Number(price).toLocaleString('en-IN')}`;
   const formatDate = (d: string) =>
@@ -118,7 +213,13 @@ const { returnId } = useParams<{ returnId: string }>();
   const statusLabel = getReturnStatusLabel(ret.status);
   const statusColor = getReturnStatusColor(ret.status);
 
-  const canCancel = ret.status === 'REQUESTED';
+  // Customer can cancel any time before the courier has the item.
+  // Mirrors the backend's pre-movement window — auto-approval flips
+  // REQUESTED → APPROVED almost instantly, so without APPROVED in this
+  // set the cancel button effectively never shows up.
+  const canCancel = ['REQUESTED', 'APPROVED', 'PICKUP_SCHEDULED'].includes(
+    ret.status,
+  );
   // Only show the "Package handed over" button once admin has actually
   // scheduled a pickup. Before that, the customer shouldn't be able to
   // mark it handed over — there's no courier to hand it to yet.
@@ -173,6 +274,128 @@ const { returnId } = useParams<{ returnId: string }>();
             {statusLabel}
           </span>
         </div>
+
+        {/* Replacement / Exchange UI hidden — feature disabled in UI for now.
+            Backend endpoints still exist; they just aren't surfaced here. */}
+        {/*
+        {ret.replacementStatus === 'AWAITING_PAYMENT' &&
+          ret.exchangePriceDiffPaise && (
+            <div
+              style={{
+                background: '#fff7ed',
+                border: '1px solid #fdba74',
+                borderRadius: 10,
+                padding: 16,
+                marginBottom: 20,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 16,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#9a3412' }}>
+                  Pay the difference to ship your exchange
+                </div>
+                <div style={{ fontSize: 13, color: '#7c2d12', marginTop: 4 }}>
+                  Your chosen replacement is priced higher than the original.
+                  Pay <strong>
+                    {' '}₹{(Number(ret.exchangePriceDiffPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </strong>{' '}
+                  to complete the exchange — the new item ships once payment is confirmed.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleExchangePayment}
+                disabled={actionLoading}
+                style={{
+                  padding: '10px 20px',
+                  background: actionLoading ? '#fdba74' : '#c2410c',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: actionLoading ? 'default' : 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {actionLoading
+                  ? 'Processing…'
+                  : `Pay ₹${(Number(ret.exchangePriceDiffPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              </button>
+            </div>
+          )}
+
+        {ret.replacementStatus === 'AWAITING_FULFILMENT' && ret.replacementOrderId && (
+          <div
+            style={{
+              background: '#dcfce7',
+              border: '1px solid #86efac',
+              borderRadius: 10,
+              padding: '12px 16px',
+              fontSize: 13,
+              color: '#166534',
+              marginBottom: 20,
+            }}
+          >
+            ✓ Your replacement order is being prepared and will ship shortly.
+          </div>
+        )}
+        */}
+
+        {/* Phase 13 (P1.14, ADR-017) — when a return refund is sitting
+            in finance approval, the customer's status reads "QC
+            APPROVED" but no money has moved yet. Add a clarifying
+            line so they don't refresh wondering where the wallet
+            credit went. The signal we lean on: status is
+            QC_APPROVED / PARTIALLY_APPROVED but no refund has been
+            processed yet (refundProcessedAt is null) and we're not
+            on the replacement path. */}
+        {(ret.status === 'QC_APPROVED' ||
+          ret.status === 'PARTIALLY_APPROVED' ||
+          ret.status === 'REFUND_PROCESSING') &&
+          !ret.refundProcessedAt &&
+          ret.replacementStatus !== 'AWAITING_PAYMENT' &&
+          ret.replacementStatus !== 'AWAITING_FULFILMENT' &&
+          ret.customerRemedy !== 'REPLACEMENT' &&
+          ret.customerRemedy !== 'EXCHANGE' && (
+            <div
+              style={{
+                background: '#eff6ff',
+                border: '1px solid #93c5fd',
+                borderRadius: 10,
+                padding: '12px 16px',
+                fontSize: 13,
+                color: '#1e3a8a',
+                marginBottom: 20,
+              }}
+            >
+              Your case has been resolved. The refund will be processed
+              shortly — you&apos;ll see it in your wallet within 24 hours.
+            </div>
+          )}
+        {/* Replacement fallback banner hidden — feature disabled in UI for now. */}
+        {/*
+        {ret.replacementStatus === 'FALLBACK_TO_REFUND' && (
+          <div
+            style={{
+              background: '#fee2e2',
+              border: '1px solid #fca5a5',
+              borderRadius: 10,
+              padding: '12px 16px',
+              fontSize: 13,
+              color: '#991b1b',
+              marginBottom: 20,
+            }}
+          >
+            We couldn&apos;t fulfil the replacement (out of stock). Our team will
+            arrange a refund instead — you&apos;ll hear from us shortly.
+          </div>
+        )}
+        */}
 
         {/* Rejection reason */}
         {ret.rejectionReason && (

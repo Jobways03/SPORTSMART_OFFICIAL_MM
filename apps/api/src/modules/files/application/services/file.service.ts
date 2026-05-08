@@ -13,6 +13,11 @@ import {
 } from '../../../../core/exceptions';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
 import { S3Adapter } from '../../../../integrations/s3/adapters/s3.adapter';
+import {
+  hashBuffer,
+  hashesEqual,
+  HASH_ALGORITHM,
+} from '../../../../core/file-integrity/file-hash.util';
 
 /**
  * Per-purpose validation rules.
@@ -102,6 +107,19 @@ const PURPOSE_RULES: Record<FilePurpose, PurposeRule> = {
     visibility: 'PRIVATE',
     classification: 'PRODUCT_DOCUMENT',
   },
+  SHIPMENT_EVIDENCE: {
+    // Proof-of-dispatch photos. Image-only — admin needs to eyeball
+    // the as-shipped condition; PDFs add no value. Cap is smaller
+    // than QC evidence because pre-ship photos are contributed at
+    // scale (one per shipment) so we keep them small to avoid blowing
+    // out storage. Retention policy in PR 7.2 prunes them 60d after
+    // delivery if no return is filed.
+    maxBytes: 8 * 1024 * 1024,
+    allowedMime: /^image\/(jpeg|png|webp)$/,
+    folder: 'shipments',
+    visibility: 'PRIVATE',
+    classification: 'QC_EVIDENCE',
+  },
   OTHER: {
     maxBytes: 10 * 1024 * 1024,
     allowedMime: /.*/,
@@ -134,6 +152,12 @@ export class FileService {
     const rule = PURPOSE_RULES[args.purpose];
     this.validate(rule, args.file);
 
+    // Phase 7 (PR 7.1) — hash the bytes BEFORE handing them to the
+    // storage provider. The buffer is in memory anyway; the hash adds
+    // ~10ms per MB to the upload latency, well below the network cost.
+    const contentSha256 = hashBuffer(args.file.buffer);
+    const hashedAt = new Date();
+
     const result = await this.cloudinary.upload(args.file.buffer, {
       folder: `sportsmart/${rule.folder}`,
       // Default to 'auto' so PDFs/videos work, not just images.
@@ -155,6 +179,10 @@ export class FileService {
         // a per-request signing call. PRIVATE files force getSecureUrl().
         providerUrl: rule.visibility === 'PUBLIC' ? result.secureUrl : null,
         uploadedBy: args.uploadedBy,
+        contentSha256,
+        hashAlgorithm: HASH_ALGORITHM,
+        hashedAt,
+        lastVerifiedAt: hashedAt,
       },
     });
   }
@@ -230,6 +258,12 @@ export class FileService {
     if (file.expiresAt && file.expiresAt < new Date()) {
       throw new BadRequestAppException('Upload window expired — request a new intent');
     }
+    // Phase 7 (PR 7.1) — S3 confirm path doesn't hash inline. The
+    // bytes already left our process via the pre-signed URL; re-fetching
+    // them just to hash would double the upload latency. The integrity
+    // verifier cron (PR 7.5) picks up READY files with hashedAt=NULL and
+    // backfills the hash on its next pass. The gap is bounded by the
+    // cron's cadence (1h default).
     return this.prisma.fileMetadata.update({
       where: { id: file.id },
       data: { status: 'READY' },
@@ -261,11 +295,21 @@ export class FileService {
       return this.s3.createAccessUrl({ key: file.storageKey, expiresInSeconds: 300 });
     }
     if (file.provider === 'cloudinary') {
-      // Cloudinary's secure_url is the canonical URL. Private flow would
-      // use signed URLs (cloudinary.utils.private_download_url) — not
-      // wired today; return the public URL as a placeholder so callers
-      // function and we can audit-log the access.
-      return file.providerUrl ?? '';
+      // PRIVATE Cloudinary files have providerUrl=null by design (we
+      // don't surface the URL except via this authed endpoint). Derive
+      // the canonical delivery URL from the stored publicId so the
+      // caller — admin returns page, seller orders page — can render
+      // thumbnails. Cloudinary `type: 'upload'` URLs are publicly
+      // resolvable once known; the privacy contract is "you must
+      // authenticate to learn the URL," not authenticated delivery.
+      const publicId = file.providerFileId ?? file.storageKey;
+      if (!publicId) return '';
+      const resourceType = file.mimeType.startsWith('video/')
+        ? 'video'
+        : file.mimeType.startsWith('image/')
+          ? 'image'
+          : 'raw';
+      return this.cloudinary.urlFor(publicId, { resourceType });
     }
     throw new BadRequestAppException(`Unsupported provider: ${file.provider}`);
   }
@@ -300,6 +344,35 @@ export class FileService {
       include: { file: true },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  /**
+   * Sync helper to derive a viewable URL for an attached file. Mirrors
+   * the cloudinary branch of getSecureUrl() but is sync (no DB lookup —
+   * caller already has the file row) and so safe to call inside a list
+   * enrichment loop. Used by controllers that surface file galleries
+   * (shipment evidence, return evidence, ticket attachments) where the
+   * frontend needs an `<img src>` URL for thumbnails.
+   */
+  viewUrlFor(file: {
+    providerUrl: string | null;
+    provider: string;
+    providerFileId: string | null;
+    storageKey: string;
+    mimeType: string;
+  }): string {
+    if (file.providerUrl) return file.providerUrl;
+    if (file.provider === 'cloudinary') {
+      const publicId = file.providerFileId ?? file.storageKey;
+      if (!publicId) return '';
+      const resourceType = file.mimeType.startsWith('video/')
+        ? 'video'
+        : file.mimeType.startsWith('image/')
+          ? 'image'
+          : 'raw';
+      return this.cloudinary.urlFor(publicId, { resourceType });
+    }
+    return '';
   }
 
   // ── Soft delete ──────────────────────────────────────────────────

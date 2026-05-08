@@ -24,7 +24,13 @@ describe('EventBusService — async listener error capture', () => {
       log: jest.fn(),
       error: jest.fn(),
     };
-    const bus = new EventBusService(emitter, logger);
+    // Phase 2 (PR 2.4) — EventBusService now takes (emitter, logger,
+    // prisma, env). For these legacy direct-emit tests the outbox path
+    // is irrelevant; supply minimal stubs that look "off" so the bus
+    // takes the legacy code path under test.
+    const prisma: any = {};
+    const env: any = { getBoolean: () => false };
+    const bus = new EventBusService(emitter, logger, prisma, env);
     return { bus, emitter, logger };
   };
 
@@ -58,6 +64,11 @@ describe('EventBusService — async listener error capture', () => {
 
     // The publisher MUST NOT reject — this is the regression.
     await expect(bus.publish(baseEvent)).resolves.toBeUndefined();
+
+    // The publish path schedules emitAsync via queueMicrotask, so its
+    // .catch() runs AFTER publish resolves. Drain pending microtasks
+    // + the macrotask queue before asserting on the logger.
+    await new Promise((r) => setImmediate(r));
 
     // The error should have been logged with enough context to trace.
     expect(logger.error).toHaveBeenCalled();

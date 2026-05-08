@@ -29,6 +29,42 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// Phase 8 (PR 8.1) — periodic anchor of the AuditLog hash chain.
+///
+/// The chain itself (audit_logs.prev_hash + audit_logs.hash) lets us
+/// detect tampering, but only by walking from the genesis row. Anchors
+/// pin the chain hash at known points (every 1000 rows or every hour,
+/// whichever comes first), so a verifier finds the most recent
+/// untampered anchor in O(1) and only walks forward from there.
+///
+/// Anchors are append-only — once written, the (sequence, expectedHash)
+/// tuple is never updated. A chain break shows up as "next anchor's
+/// expectedHash doesn't match the recomputed one"; ops bisects by
+/// re-running the verifier with a tighter window.
+model AuditChainAnchor {
+  /// Monotonic sequence number. The first anchor is sequence=1; each
+  /// run picks `lastSequence + 1`. Used as the BTree primary key so
+  /// "find latest anchor" is a single index seek.
+  sequence Int @id
+
+  /// id of the most recent AuditLog row covered by this anchor.
+  upToAuditLogId String @map("up_to_audit_log_id")
+  /// Expected `audit_logs.hash` of the row above. Verifier compares
+  /// against the row's stored hash — mismatch ⇒ tamper.
+  expectedHash   String @map("expected_hash")
+
+  /// Number of audit rows covered between the previous anchor (or the
+  /// genesis row, for sequence=1) and this anchor's upToAuditLogId.
+  rowsCovered Int @map("rows_covered")
+
+  /// When the anchor was written. Independent of when the underlying
+  /// rows were created — a single anchor run can cover a long backlog.
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("audit_chain_anchors")
+}
+
 model EventLog {
   id          String   @id @default(uuid())
   eventName   String   @map("event_name")

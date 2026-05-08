@@ -116,6 +116,16 @@ model Ticket {
   escalationLevel Int       @default(0) @map("escalation_level")
   escalatedAt     DateTime? @map("escalated_at")
 
+  // Phase 11 (post-Phase-10) — when admin promotes this ticket onto
+  // the formal resolution track, the dispute id is stored here so we
+  // can mirror messages and surface a back-link in the admin UI. The
+  // customer never sees this column. Unique because a ticket can
+  // only ever spawn one dispute (the promotion is one-way + final).
+  // No Prisma relation: the dispute side's `sourceTicketId` isn't
+  // unique in the DB (only indexed), so we'd need a 1:many declaration
+  // which doesn't fit. Service code does explicit lookups.
+  promotedToDisputeId String? @unique @map("promoted_to_dispute_id")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -148,6 +158,13 @@ model TicketMessage {
   // for assignee notes, escalation context, etc. Surfaced in admin UI
   // with a distinct visual treatment.
   isInternalNote Boolean @default(false) @map("is_internal_note")
+
+  // Phase 11 (post-Phase-10) — mirror provenance. Set when this row
+  // was auto-created from an admin reply on the linked dispute.
+  // UNIQUE so a retried event handler cannot double-post on the
+  // customer's ticket. Null for native ticket messages (the
+  // customer's own posts, admin direct replies on the ticket).
+  mirroredFromDisputeMessageId String? @unique @map("mirrored_from_dispute_message_id")
 
   createdAt DateTime @default(now()) @map("created_at")
 

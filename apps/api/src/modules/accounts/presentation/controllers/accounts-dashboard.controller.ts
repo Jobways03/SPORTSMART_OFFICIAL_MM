@@ -5,12 +5,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { AccountsDashboardService } from '../../application/services/accounts-dashboard.service';
 
 @ApiTags('Admin Accounts - Dashboard')
 @Controller('admin/accounts/dashboard')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AccountsDashboardController {
   constructor(
     private readonly dashboardService: AccountsDashboardService,

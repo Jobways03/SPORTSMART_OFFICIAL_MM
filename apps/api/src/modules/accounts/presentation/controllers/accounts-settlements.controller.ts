@@ -14,14 +14,14 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { AccountsSettlementService } from '../../application/services/accounts-settlement.service';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
 @ApiTags('Admin Accounts - Settlements')
 @Controller('admin/accounts/settlements')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AccountsSettlementsController {
   constructor(
     private readonly settlementService: AccountsSettlementService,

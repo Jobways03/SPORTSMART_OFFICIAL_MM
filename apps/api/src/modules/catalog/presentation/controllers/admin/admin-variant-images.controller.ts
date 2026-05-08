@@ -19,7 +19,7 @@ import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
 import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
 
@@ -29,7 +29,7 @@ const MULTER_OPTIONS = { limits: { fileSize: MAX_FILE_SIZE } };
 
 @ApiTags('Admin Products')
 @Controller('admin/products/:productId/variants/:variantId/images')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminVariantImagesController {
   constructor(
     @Inject(PRODUCT_IMAGE_REPOSITORY) private readonly imageRepo: IProductImageRepository,

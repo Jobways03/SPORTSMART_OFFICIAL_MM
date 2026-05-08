@@ -12,7 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AffiliatePayoutService } from '../../application/services/affiliate-payout.service';
 import {
   MarkPayoutPaidDto,
@@ -27,11 +28,12 @@ import {
  */
 @ApiTags('Admin Affiliate Payouts')
 @Controller('admin/affiliates/payouts')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAffiliatePayoutController {
   constructor(private readonly payoutService: AffiliatePayoutService) {}
 
   @Get()
+  @Permissions('affiliates.read')
   async list(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -49,6 +51,7 @@ export class AdminAffiliatePayoutController {
 
   @Patch(':payoutRequestId/approve')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.payouts')
   async approve(
     @Req() req: Request,
     @Param('payoutRequestId') payoutRequestId: string,
@@ -60,6 +63,7 @@ export class AdminAffiliatePayoutController {
 
   @Patch(':payoutRequestId/reject')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.payouts')
   async reject(
     @Req() req: Request,
     @Param('payoutRequestId') payoutRequestId: string,
@@ -81,6 +85,7 @@ export class AdminAffiliatePayoutController {
 
   @Patch(':payoutRequestId/mark-paid')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.payouts')
   async markPaid(
     @Req() req: Request,
     @Param('payoutRequestId') payoutRequestId: string,
@@ -101,6 +106,7 @@ export class AdminAffiliatePayoutController {
 
   @Patch(':payoutRequestId/mark-failed')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.payouts')
   async markFailed(
     @Req() req: Request,
     @Param('payoutRequestId') payoutRequestId: string,

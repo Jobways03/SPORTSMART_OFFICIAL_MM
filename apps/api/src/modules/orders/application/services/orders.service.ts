@@ -23,6 +23,14 @@ export type ReassignTarget =
 const RETURN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes (dev/demo — commission fires shortly after delivery)
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+/**
+ * How many pre-ship "proof of dispatch" photos a seller must upload
+ * before they can mark an order SHIPPED. Hard-block in the API +
+ * matched UI guard in the seller portal. Tuned with ops if the rate
+ * of false damage claims justifies more / fewer angles per shipment.
+ */
+const SHIPMENT_EVIDENCE_REQUIRED = 4;
+
 // Customer-friendly status label mapping
 const ORDER_STATUS_LABELS: Record<string, string> = {
   PLACED: 'Order Placed',
@@ -1665,6 +1673,28 @@ export class OrdersService {
       if (!trackingNumber || !courierName) {
         throw new BadRequestAppException(
           'trackingNumber and courierName are required when marking an order as SHIPPED',
+        );
+      }
+
+      // Phase 11 — pre-ship "proof of dispatch" photos are mandatory.
+      // The seller portal hard-blocks the button at <4 uploads, but
+      // we double-check here so a malicious / scripted seller can't
+      // bypass via a direct API call. Count is sourced from the
+      // FileAttachment join keyed on the sub-order, same store the
+      // admin returns flow reads from.
+      const evidenceCount = await this.prisma.fileAttachment.count({
+        where: {
+          resource: 'sub_order',
+          resourceId: id,
+          file: {
+            purpose: 'SHIPMENT_EVIDENCE' as any,
+            deletedAt: null,
+          },
+        },
+      });
+      if (evidenceCount < SHIPMENT_EVIDENCE_REQUIRED) {
+        throw new BadRequestAppException(
+          `At least ${SHIPMENT_EVIDENCE_REQUIRED} shipment evidence photos must be uploaded before marking as SHIPPED. Current: ${evidenceCount}.`,
         );
       }
     }

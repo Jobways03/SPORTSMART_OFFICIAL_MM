@@ -9,14 +9,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { AdminDashboardService } from '../../application/services/admin-dashboard.service';
 import { AdminOperationsService, BulkPricingUpdate } from '../../application/services/admin-operations.service';
 
 @ApiTags('Admin Control Tower')
 @Controller('admin')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminDashboardController {
   constructor(
     private readonly dashboardService: AdminDashboardService,

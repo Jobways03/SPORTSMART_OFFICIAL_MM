@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
@@ -39,6 +39,11 @@ export default function TicketDetailPage() {
   const [sending, setSending] = useState(false);
   const [closing, setClosing] = useState(false);
 
+  // See admin support page for the same race rationale: while a POST
+  // (reply / close) is in flight, skip the background poll's setDetail
+  // so a late GET can't overwrite the post-mutation detail.
+  const sendingRef = useRef(false);
+
   const refresh = useCallback(() => {
     setLoading(true);
     supportService
@@ -50,10 +55,58 @@ export default function TicketDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // Silent variant of `refresh` — no spinner toggle, swallows transient
+  // errors. Used by the background poll so the customer sees admin
+  // replies without having to reload the page.
+  const silentRefresh = useCallback(async () => {
+    if (sendingRef.current) return;
+    try {
+      const res = await supportService.getTicket(id);
+      if (res.data) setDetail(res.data);
+    } catch {
+      // Ignore — keep the last good payload visible. Next tick will retry.
+    }
+  }, [id]);
+
   useEffect(() => {
     if (authStatus !== 'authed') return;
     refresh();
   }, [authStatus, refresh]);
+
+  // 5s background poll — feels live without hammering the API. Pauses
+  // when the tab is hidden; catches up immediately on visibility return.
+  useEffect(() => {
+    if (authStatus !== 'authed') return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          void silentRefresh();
+        }
+      }, 5000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    start();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void silentRefresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
+  }, [authStatus, silentRefresh]);
 
   if (authStatus === 'checking') {
     return (
@@ -93,6 +146,7 @@ export default function TicketDetailPage() {
   async function send() {
     if (!reply.trim()) return;
     setSending(true);
+    sendingRef.current = true;
     try {
       await supportService.reply(id, reply.trim());
       setReply('');
@@ -101,12 +155,14 @@ export default function TicketDetailPage() {
       setError(e instanceof Error ? e.message : 'Failed to send reply');
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
   }
 
   async function close() {
     if (!confirm('Close this ticket? You can re-open it by replying again.')) return;
     setClosing(true);
+    sendingRef.current = true;
     try {
       await supportService.closeTicket(id);
       refresh();
@@ -114,6 +170,7 @@ export default function TicketDetailPage() {
       setError(e instanceof Error ? e.message : 'Failed to close ticket');
     } finally {
       setClosing(false);
+      sendingRef.current = false;
     }
   }
 

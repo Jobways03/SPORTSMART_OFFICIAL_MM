@@ -11,6 +11,11 @@ const navItems = [
   { label: 'Orders', href: '/dashboard/orders', icon: '📋', hasPendingBadge: true },
   { label: 'Returns', href: '/dashboard/returns', icon: '↩️' },
   { label: 'Disputes', href: '/dashboard/disputes', icon: '⚖️' },
+  { label: 'Finance Approvals', href: '/dashboard/finance/refund-approvals', icon: '💸' },
+  // Hidden — replacement/exchange flow disabled in UI for now.
+  // { label: 'Replacements', href: '/dashboard/replacements', icon: '🔁' },
+  { label: 'Risk Review', href: '/dashboard/risk-review', icon: '⚠️' },
+  { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: '📒' },
   { label: 'Products', href: '/dashboard/products', icon: '📦' },
   { label: 'Inventory', href: '/dashboard/inventory', icon: '📊' },
   { label: 'NOVA Brand', href: '/dashboard/nova/warehouses', icon: '🚀' },
@@ -88,8 +93,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="admin-shell">
       <aside className="admin-sidebar">
         <Link href="/dashboard" className="sidebar-brand">
-          <div className="sidebar-brand-icon">S</div>
-          <span className="sidebar-brand-name">SPORTSMART</span>
+          <span
+            style={{
+              display: 'inline-flex',
+              background: '#fff',
+              padding: '8px 12px',
+              borderRadius: 8,
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/SportsMart_Web_Banner.avif"
+              alt="SportsMart"
+              className="sidebar-brand-name"
+              style={{ height: 36, width: 'auto', display: 'block' }}
+            />
+          </span>
         </Link>
 
         <nav className="sidebar-nav">

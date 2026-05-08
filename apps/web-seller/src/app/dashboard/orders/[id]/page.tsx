@@ -243,6 +243,39 @@ const { id } = useParams<{ id: string }>();
   const [shipCourierOther, setShipCourierOther] = useState('');
   const [shipError, setShipError] = useState('');
 
+  // Shipment-evidence state — pre-ship "proof of dispatch" photos
+  // surfaced to the admin when the customer files a return so they
+  // have an as-shipped baseline to compare against. Stored as
+  // FileAttachment rows on resource='sub_order'.
+  const [shipmentEvidence, setShipmentEvidence] = useState<
+    Array<{
+      id: string;
+      fileId: string;
+      // viewUrl is server-derived for PRIVATE files (SHIPMENT_EVIDENCE)
+      // since providerUrl is null in the DB. See seller-shipment-evidence
+      // controller — the GET endpoint enriches each row.
+      viewUrl?: string;
+      file: {
+        id: string;
+        fileName: string;
+        providerUrl?: string | null;
+        storageKey: string;
+      };
+    }>
+  >([]);
+  // Batch-upload: seller can pick all required photos in one go and
+  // we POST them to the (single-file) endpoint sequentially. Sequential
+  // not parallel because each request goes through Cloudinary, so a
+  // burst of 4 parallel uploads would just queue at the gateway anyway
+  // and a sequential loop gives clearer per-file progress.
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
+  const [evidenceProgress, setEvidenceProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [evidenceUploading, setEvidenceUploading] = useState(false);
+  const [evidenceMsg, setEvidenceMsg] = useState('');
+
   const fetchOrder = useCallback(() => {
     apiClient<any>(`/seller/orders/${id}`)
       .then((res) => {
@@ -252,9 +285,78 @@ const { id } = useParams<{ id: string }>();
       .finally(() => setLoading(false));
   }, [id]);
 
+  const fetchShipmentEvidence = useCallback(() => {
+    apiClient<any>(`/seller/sub-orders/${id}/shipment-evidence`)
+      .then((res) => {
+        // The endpoint returns a FileAttachment[] include shape with
+        // each row carrying the linked FileMetadata under `.file`.
+        if (Array.isArray(res.data)) setShipmentEvidence(res.data);
+      })
+      .catch(() => {
+        // 404/403 just means no photos yet (or order isn't ours);
+        // failing closed is fine — the page still works.
+      });
+  }, [id]);
+
   useEffect(() => {
     fetchOrder();
-  }, [fetchOrder]);
+    fetchShipmentEvidence();
+  }, [fetchOrder, fetchShipmentEvidence]);
+
+  const handleEvidenceUpload = async () => {
+    if (evidenceFiles.length === 0) {
+      setEvidenceMsg('Pick at least one image first');
+      return;
+    }
+    setEvidenceUploading(true);
+    setEvidenceMsg('');
+    setEvidenceProgress({ done: 0, total: evidenceFiles.length });
+
+    let successCount = 0;
+    const failures: string[] = [];
+
+    for (let i = 0; i < evidenceFiles.length; i++) {
+      const file = evidenceFiles[i];
+      const fd = new FormData();
+      fd.append('image', file);
+      try {
+        const res = await apiClient<any>(
+          `/seller/sub-orders/${id}/shipment-evidence`,
+          // shared-utils' apiClient auto-detects FormData and skips the
+          // application/json content-type so the browser sets the
+          // multipart boundary itself.
+          { method: 'POST', body: fd as unknown as BodyInit },
+        );
+        if (res.success) {
+          successCount += 1;
+        } else {
+          failures.push(`${file.name}: ${res.message ?? 'failed'}`);
+        }
+      } catch (e) {
+        failures.push(
+          `${file.name}: ${(e as ApiError)?.body?.message ?? (e as Error)?.message ?? 'failed'}`,
+        );
+      }
+      setEvidenceProgress({ done: i + 1, total: evidenceFiles.length });
+    }
+
+    setEvidenceUploading(false);
+    setEvidenceProgress(null);
+    setEvidenceFiles([]);
+
+    if (failures.length === 0) {
+      setEvidenceMsg(
+        `Uploaded ${successCount} photo${successCount === 1 ? '' : 's'}`,
+      );
+    } else if (successCount === 0) {
+      setEvidenceMsg(`All uploads failed — ${failures[0]}`);
+    } else {
+      setEvidenceMsg(
+        `Uploaded ${successCount} of ${evidenceFiles.length}. Failed: ${failures.length} (${failures[0]})`,
+      );
+    }
+    fetchShipmentEvidence();
+  };
 
   const handleRejectConfirm = async () => {
     setActionLoading('reject');
@@ -386,9 +488,20 @@ const { id } = useParams<{ id: string }>();
   const canMarkPacked =
     order.acceptStatus === 'ACCEPTED' &&
     order.fulfillmentStatus === 'UNFULFILLED';
+  // Mark-Shipped is gated on the shipment-evidence count. Same constant
+  // as the API's SHIPMENT_EVIDENCE_REQUIRED — keep in sync.
+  const SHIPMENT_EVIDENCE_REQUIRED = 4;
   const canMarkShipped =
     order.acceptStatus === 'ACCEPTED' &&
+    order.fulfillmentStatus === 'PACKED' &&
+    shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED;
+  const showsShipmentEvidenceBlock =
+    order.acceptStatus === 'ACCEPTED' &&
     order.fulfillmentStatus === 'PACKED';
+  const evidenceShortBy = Math.max(
+    0,
+    SHIPMENT_EVIDENCE_REQUIRED - shipmentEvidence.length,
+  );
 
   return (
     <div>
@@ -530,14 +643,31 @@ const { id } = useParams<{ id: string }>();
                 </button>
               )}
 
-              {/* Fulfillment status progression - SHIP */}
-              {canMarkShipped && (
+              {/* Fulfillment status progression - SHIP. Hard-blocked
+                  until SHIPMENT_EVIDENCE_REQUIRED photos are uploaded.
+                  Disabled-but-visible when the seller is still short
+                  so they see the path forward, with the count surfaced
+                  inline. */}
+              {showsShipmentEvidenceBlock && (
                 <button
-                  onClick={() => setShowShipModal(true)}
-                  disabled={!!actionLoading}
-                  style={{ ...btnBlue, background: '#2563eb' }}
+                  onClick={() => canMarkShipped && setShowShipModal(true)}
+                  disabled={!!actionLoading || !canMarkShipped}
+                  title={
+                    canMarkShipped
+                      ? 'Open the shipping form'
+                      : `Upload ${evidenceShortBy} more shipment photo${evidenceShortBy === 1 ? '' : 's'} first (need ${SHIPMENT_EVIDENCE_REQUIRED} total)`
+                  }
+                  style={{
+                    ...btnBlue,
+                    background: canMarkShipped ? '#2563eb' : '#9ca3af',
+                    cursor: canMarkShipped ? 'pointer' : 'not-allowed',
+                  }}
                 >
-                  {actionLoading === 'ship' ? 'Updating...' : 'MARK AS SHIPPED'}
+                  {actionLoading === 'ship'
+                    ? 'Updating...'
+                    : canMarkShipped
+                    ? 'MARK AS SHIPPED'
+                    : `MARK AS SHIPPED (${shipmentEvidence.length}/${SHIPMENT_EVIDENCE_REQUIRED} photos)`}
                 </button>
               )}
 
@@ -565,6 +695,324 @@ const { id } = useParams<{ id: string }>();
               )}
             </div>
           </div>
+
+          {/* Shipment Evidence — pre-ship "proof of dispatch" photos.
+              Surface is hidden once the order is delivered (no point
+              uploading after the fact) but stays visible in the cancelled
+              / rejected states for completeness. The admin returns flow
+              consults these photos as the as-shipped baseline when a
+              customer files a "damaged in transit" claim. */}
+          {order.acceptStatus === 'ACCEPTED' &&
+            !['CANCELLED'].includes(order.fulfillmentStatus) && (
+              <div
+                style={{
+                  border: '1px solid #d1fae5',
+                  background: '#ecfdf5',
+                  borderRadius: 8,
+                  padding: 16,
+                  marginTop: 16,
+                }}
+              >
+                <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 6, color: '#065f46' }}>
+                  Shipment Evidence
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      padding: '2px 8px',
+                      borderRadius: 999,
+                      background:
+                        shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED
+                          ? '#a7f3d0'
+                          : '#fde68a',
+                      color:
+                        shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED
+                          ? '#065f46'
+                          : '#92400e',
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {shipmentEvidence.length} / {SHIPMENT_EVIDENCE_REQUIRED}
+                  </span>
+                </h3>
+                <p style={{ fontSize: 12, color: '#047857', marginBottom: 12, lineHeight: 1.5 }}>
+                  Upload <strong>{SHIPMENT_EVIDENCE_REQUIRED} photos</strong> of the
+                  packaged item before you can mark the order shipped. Recommended
+                  angles: front, back, label / serial close-up, and packed-in-box.
+                  These give the marketplace admin an &quot;as-shipped&quot; baseline
+                  if the customer files a return — your photos protect you against
+                  false damage claims. Don&apos;t include the customer&apos;s
+                  shipping label in any frame.
+                </p>
+
+                {/* Existing photos */}
+                {shipmentEvidence.length > 0 && (
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                    {shipmentEvidence.map((att) => {
+                      // SHIPMENT_EVIDENCE files are PRIVATE so file.providerUrl
+                      // is null in the DB. The API enriches each attachment
+                      // with `viewUrl` derived from the Cloudinary publicId
+                      // — that's what we render. Falling back to providerUrl
+                      // preserves compatibility with PUBLIC files.
+                      const url = att.viewUrl ?? att.file?.providerUrl ?? '';
+                      return (
+                        <a
+                          key={att.id}
+                          href={url || '#'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={att.file?.fileName ?? 'Shipment evidence'}
+                          style={{
+                            width: 96,
+                            height: 96,
+                            borderRadius: 8,
+                            overflow: 'hidden',
+                            border: '1px solid #10b981',
+                            background: '#fff',
+                            display: 'block',
+                          }}
+                        >
+                          {url ? (
+                            <img
+                              src={url}
+                              alt="Shipment evidence"
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#6b7280',
+                                fontSize: 11,
+                              }}
+                            >
+                              {att.file?.fileName ?? 'file'}
+                            </div>
+                          )}
+                        </a>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Upload form — hidden once delivered (no value adding
+                    more) AND hidden once the required count is reached.
+                    Multi-select: seller can pick all required photos at
+                    once; the handler POSTs them sequentially with a
+                    "Uploading 2 of 4..." progress label. */}
+                {!['DELIVERED', 'FULFILLED'].includes(order.fulfillmentStatus) &&
+                  shipmentEvidence.length < SHIPMENT_EVIDENCE_REQUIRED && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          multiple
+                          // Accumulate across multiple "Choose files" opens
+                          // — most users don't know they can Cmd/Ctrl-click
+                          // in the native picker, so picking one then opening
+                          // again should add to the queue, not replace it.
+                          // De-dupe by name+size so re-picking the same file
+                          // doesn't double-queue. Reset the input value after
+                          // each open so picking the same file twice in a row
+                          // re-fires onChange (browsers suppress same-value).
+                          onChange={(e) => {
+                            const incoming = Array.from(e.target.files ?? []);
+                            if (incoming.length === 0) return;
+                            setEvidenceFiles((prev) => {
+                              const seen = new Set(prev.map((f) => `${f.name}:${f.size}`));
+                              const merged = [...prev];
+                              for (const f of incoming) {
+                                const key = `${f.name}:${f.size}`;
+                                if (!seen.has(key)) {
+                                  merged.push(f);
+                                  seen.add(key);
+                                }
+                              }
+                              return merged;
+                            });
+                            setEvidenceMsg('');
+                            e.target.value = '';
+                          }}
+                          disabled={evidenceUploading}
+                          style={{ fontSize: 13 }}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleEvidenceUpload}
+                          disabled={evidenceFiles.length === 0 || evidenceUploading}
+                          style={{
+                            padding: '6px 16px',
+                            fontSize: 13,
+                            fontWeight: 600,
+                            border: 'none',
+                            borderRadius: 6,
+                            background:
+                              evidenceUploading || evidenceFiles.length === 0
+                                ? '#9ca3af'
+                                : '#10b981',
+                            color: '#fff',
+                            cursor:
+                              evidenceUploading || evidenceFiles.length === 0
+                                ? 'default'
+                                : 'pointer',
+                          }}
+                        >
+                          {evidenceUploading
+                            ? evidenceProgress
+                              ? `Uploading ${evidenceProgress.done + 1} of ${evidenceProgress.total}…`
+                              : 'Uploading…'
+                            : evidenceFiles.length > 1
+                            ? `Upload ${evidenceFiles.length} photos`
+                            : evidenceFiles.length === 1
+                            ? 'Upload photo'
+                            : 'Upload photos'}
+                        </button>
+                        {evidenceFiles.length > 0 && !evidenceUploading && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEvidenceFiles([]);
+                              setEvidenceMsg('');
+                            }}
+                            style={{
+                              padding: '6px 10px',
+                              fontSize: 12,
+                              fontWeight: 500,
+                              border: '1px solid #d1d5db',
+                              borderRadius: 6,
+                              background: '#fff',
+                              color: '#374151',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Clear
+                          </button>
+                        )}
+                        {evidenceMsg && (
+                          <span style={{ fontSize: 12, color: '#065f46' }}>{evidenceMsg}</span>
+                        )}
+                      </div>
+
+                      {/* Discoverability hint. Most users don't know the OS
+                          picker supports Cmd/Ctrl-click; spell it out so
+                          they can pick all 4 in one open. The accumulation
+                          fallback (above) covers users who pick one at a
+                          time. */}
+                      <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.5 }}>
+                        Tip: hold <strong>⌘</strong> (Mac) or <strong>Ctrl</strong> (Windows) in
+                        the file picker to select all 4 photos at once. Or pick them one by one
+                        — selections add to the queue.
+                      </div>
+
+                      {/* Queued-files preview with per-row remove. Only
+                          shown when there are queued files; uploaded ones
+                          are already in the gallery above. */}
+                      {evidenceFiles.length > 0 && !evidenceUploading && (
+                        <div
+                          style={{
+                            marginTop: 4,
+                            padding: 8,
+                            background: '#f9fafb',
+                            border: '1px dashed #d1d5db',
+                            borderRadius: 6,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 4,
+                          }}
+                        >
+                          <div style={{ fontSize: 11, fontWeight: 600, color: '#065f46' }}>
+                            {evidenceFiles.length} file
+                            {evidenceFiles.length === 1 ? '' : 's'} ready to upload
+                          </div>
+                          {evidenceFiles.map((f, idx) => (
+                            <div
+                              key={`${f.name}:${f.size}:${idx}`}
+                              style={{
+                                display: 'flex',
+                                gap: 8,
+                                alignItems: 'center',
+                                fontSize: 12,
+                                color: '#374151',
+                              }}
+                            >
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {idx + 1}. {f.name}{' '}
+                                <span style={{ color: '#9ca3af' }}>
+                                  ({(f.size / 1024).toFixed(0)} KB)
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEvidenceFiles((prev) => prev.filter((_, i) => i !== idx))
+                                }
+                                style={{
+                                  padding: '2px 8px',
+                                  fontSize: 11,
+                                  border: '1px solid #fca5a5',
+                                  borderRadius: 4,
+                                  background: '#fff',
+                                  color: '#b91c1c',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                {/* Hard-block status banner. Always shows in the PACKED
+                    state so the seller sees why "Mark as Shipped" is
+                    disabled and how many more photos to upload. */}
+                {order.fulfillmentStatus === 'PACKED' &&
+                  (evidenceShortBy > 0 ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: '8px 10px',
+                        background: '#fef3c7',
+                        border: '1px solid #fcd34d',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: '#92400e',
+                      }}
+                    >
+                      ⚠ <strong>Mark as Shipped is locked.</strong> Upload{' '}
+                      <strong>
+                        {evidenceShortBy} more photo
+                        {evidenceShortBy === 1 ? '' : 's'}
+                      </strong>{' '}
+                      ({shipmentEvidence.length} / {SHIPMENT_EVIDENCE_REQUIRED})
+                      before you can ship this order.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: '8px 10px',
+                        background: '#dcfce7',
+                        border: '1px solid #86efac',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: '#065f46',
+                      }}
+                    >
+                      ✓ Shipment evidence complete (
+                      {SHIPMENT_EVIDENCE_REQUIRED} photos uploaded). You may
+                      now mark this order as shipped.
+                    </div>
+                  ))}
+              </div>
+            )}
         </div>
 
         {/* -- RIGHT SIDEBAR -- */}

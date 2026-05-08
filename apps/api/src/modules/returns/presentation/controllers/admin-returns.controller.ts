@@ -15,8 +15,10 @@ import {
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { ReturnService } from '../../application/services/return.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
@@ -37,7 +39,7 @@ const QC_EVIDENCE_UPLOAD_OPTIONS = {
 
 @ApiTags('Admin Returns')
 @Controller('admin/returns')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminReturnsController {
   constructor(
     private readonly returnService: ReturnService,
@@ -46,6 +48,7 @@ export class AdminReturnsController {
 
   // GET /admin/returns — list all returns
   @Get()
+  @Permissions('returns.read')
   async listReturns(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -77,6 +80,7 @@ export class AdminReturnsController {
 
   // GET /admin/returns/analytics/summary — returns analytics summary
   @Get('analytics/summary')
+  @Permissions('returns.read')
   async getAnalyticsSummary(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
@@ -90,6 +94,7 @@ export class AdminReturnsController {
 
   // GET /admin/returns/analytics/trend — returns trend grouped by day/week/month
   @Get('analytics/trend')
+  @Permissions('returns.read')
   async getReturnsTrend(
     @Query('fromDate') fromDate: string,
     @Query('toDate') toDate: string,
@@ -108,6 +113,7 @@ export class AdminReturnsController {
 
   // GET /admin/returns/analytics/top-reasons — top return reasons
   @Get('analytics/top-reasons')
+  @Permissions('returns.read')
   async getTopReasons(
     @Query('limit') limit?: string,
     @Query('fromDate') fromDate?: string,
@@ -123,6 +129,7 @@ export class AdminReturnsController {
 
   // GET /admin/returns/customers/:customerId/history — customer return history
   @Get('customers/:customerId/history')
+  @Permissions('returns.read')
   async getCustomerHistory(@Param('customerId') customerId: string) {
     const data = await this.returnService.getCustomerReturnHistory(customerId);
     return {
@@ -134,6 +141,7 @@ export class AdminReturnsController {
 
   // GET /admin/returns/:returnId — return detail
   @Get(':returnId')
+  @Permissions('returns.read')
   async getReturn(@Param('returnId') returnId: string) {
     const data = await this.returnService.getReturnByIdAdmin(returnId);
     return { success: true, message: 'Return retrieved', data };
@@ -141,6 +149,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/approve — approve return
   @Patch(':returnId/approve')
+  @Permissions('returns.approve')
   async approveReturn(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -156,6 +165,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/reject — reject return
   @Patch(':returnId/reject')
+  @Permissions('returns.reject')
   async rejectReturn(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -171,6 +181,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/schedule-pickup — schedule pickup
   @Patch(':returnId/schedule-pickup')
+  @Permissions('returns.schedulePickup')
   async schedulePickup(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -191,6 +202,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/mark-in-transit — mark in transit
   @Patch(':returnId/mark-in-transit')
+  @Permissions('returns.schedulePickup')
   async markInTransit(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -207,6 +219,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/mark-received — admin marks received
   @Patch(':returnId/mark-received')
+  @Permissions('returns.receive')
   async markReceived(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -223,6 +236,7 @@ export class AdminReturnsController {
 
   // POST /admin/returns/:returnId/qc-evidence — upload QC evidence (admin)
   @Post(':returnId/qc-evidence')
+  @Permissions('returns.uploadQcEvidence')
   @UseInterceptors(FileInterceptor('image', QC_EVIDENCE_UPLOAD_OPTIONS))
   async uploadQcEvidence(
     @Req() req: any,
@@ -246,6 +260,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/qc-decision — submit QC decision
   @Patch(':returnId/qc-decision')
+  @Permissions('returns.qcDecide')
   async submitQc(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -270,6 +285,8 @@ export class AdminReturnsController {
   // money at the gateway.
   @Patch(':returnId/initiate-refund')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('refunds.initiate')
+  @Idempotent()
   async initiateRefund(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -287,6 +304,8 @@ export class AdminReturnsController {
   // PATCH /admin/returns/:returnId/confirm-refund — confirm refund completed
   @Patch(':returnId/confirm-refund')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('refunds.confirm')
+  @Idempotent()
   async confirmRefund(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -304,6 +323,7 @@ export class AdminReturnsController {
   // PATCH /admin/returns/:returnId/mark-refund-failed — mark refund failed
   @Patch(':returnId/mark-refund-failed')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('refunds.retry')
   async markRefundFailed(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -321,6 +341,8 @@ export class AdminReturnsController {
   // PATCH /admin/returns/:returnId/retry-refund — retry refund via gateway
   @Patch(':returnId/retry-refund')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('refunds.retry')
+  @Idempotent()
   async retryRefund(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -335,6 +357,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/close — close return
   @Patch(':returnId/close')
+  @Permissions('returns.close')
   async closeReturn(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -354,6 +377,7 @@ export class AdminReturnsController {
   // SUPER_ADMIN-only to limit blast radius on mass-mutations.
   @Post('bulk-approve')
   @Roles('SUPER_ADMIN')
+  @Permissions('returns.approve')
   async bulkApprove(
     @Req() req: any,
     @Body() body: { returnIds: string[] },
@@ -385,6 +409,7 @@ export class AdminReturnsController {
 
   @Post('bulk-close')
   @Roles('SUPER_ADMIN')
+  @Permissions('returns.close')
   async bulkClose(
     @Req() req: any,
     @Body() body: { returnIds: string[] },
@@ -417,6 +442,7 @@ export class AdminReturnsController {
   // ── CSV export ─────────────────────────────────────────────────
 
   @Get('export')
+  @Permissions('returns.read')
   async exportReturns(
     @Res() res: Response,
     @Query('status') status?: string,

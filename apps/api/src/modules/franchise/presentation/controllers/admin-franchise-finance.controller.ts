@@ -12,14 +12,16 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard, PolicyGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Policy } from '../../../../core/decorators/policy.decorator';
 import { FranchiseCommissionService } from '../../application/services/franchise-commission.service';
 import { FranchiseLedgerAdjustmentDto } from '../dtos/franchise-ledger-adjustment.dto';
 import { FranchiseLedgerPenaltyDto } from '../dtos/franchise-ledger-penalty.dto';
 
 @ApiTags('Admin Franchise Finance')
 @Controller('admin/franchise-finance')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, PolicyGuard)
 export class AdminFranchiseFinanceController {
   constructor(
     private readonly commissionService: FranchiseCommissionService,
@@ -27,6 +29,12 @@ export class AdminFranchiseFinanceController {
 
   @Post(':franchiseId/adjustment')
   @HttpCode(HttpStatus.CREATED)
+  @Permissions('franchise.finance')
+  @Policy({
+    resourceType: 'franchise-ledger',
+    action: 'adjust',
+    context: { amount: 'body.amount' },
+  })
   async createAdjustment(
     @Req() req: Request,
     @Param('franchiseId') franchiseId: string,
@@ -49,6 +57,12 @@ export class AdminFranchiseFinanceController {
 
   @Post(':franchiseId/penalty')
   @HttpCode(HttpStatus.CREATED)
+  @Permissions('franchise.finance')
+  @Policy({
+    resourceType: 'franchise-ledger',
+    action: 'penalize',
+    context: { amount: 'body.amount' },
+  })
   async createPenalty(
     @Req() req: Request,
     @Param('franchiseId') franchiseId: string,
@@ -70,6 +84,7 @@ export class AdminFranchiseFinanceController {
   }
 
   @Get(':franchiseId/ledger')
+  @Permissions('franchise.finance')
   async getFranchiseLedger(
     @Param('franchiseId') franchiseId: string,
     @Query('page') page?: string,

@@ -1,0 +1,48 @@
+// ============================================
+// Risk scoring (Phase 6, PR 6.3)
+// ============================================
+// Per-resource (resourceType, resourceId) score on 0-100 capturing
+// the combined "this case looks risky" signal. Computed when a case
+// is created (dispute or return) and re-computed on key events:
+// new evidence, status change, customer complaint count change.
+//
+// We persist the score (rather than computing on read) because the
+// queue API needs to sort by risk-score-desc. Sorting on a derived
+// expression each request is fine for hundreds of rows but not
+// thousands; the materialised column makes the index trivial.
+//
+// `signals` carries the inputs that produced the score so a reviewer
+// can see WHY the case scored 73, not just THAT it did. The exact
+// keys are documented in RiskScoreCalculator.
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model RiskScore {
+  id           String   @id @default(uuid())
+  resourceType String   @map("resource_type")
+  resourceId   String   @map("resource_id")
+
+  /// Integer 0-100. Higher = riskier. Tiers split at 40 / 70.
+  score Int
+  tier  RiskTier
+
+  /// Snapshot of every signal that fed the calculator. Schema is
+  /// intentionally loose — the calculator is the source of truth for
+  /// what's in here. Stored for explainability when ops reviews.
+  signals Json
+
+  /// Optimistic-lock version for concurrent re-scoring.
+  version Int @default(0)
+
+  computedAt DateTime @default(now()) @map("computed_at")
+  updatedAt  DateTime @updatedAt      @map("updated_at")
+
+  @@unique([resourceType, resourceId])
+  @@index([resourceType, score])
+  @@index([tier])
+  @@map("risk_scores")
+}

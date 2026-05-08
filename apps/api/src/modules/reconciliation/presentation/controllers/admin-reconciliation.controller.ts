@@ -18,7 +18,8 @@ import type {
   ReconciliationKind,
   ReconciliationStatus,
 } from '@prisma/client';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { ReconciliationService } from '../../application/services/reconciliation.service';
 
@@ -35,11 +36,12 @@ interface TransitionDto {
 
 @ApiTags('Admin Reconciliation')
 @Controller('admin/reconciliation')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminReconciliationController {
   constructor(private readonly service: ReconciliationService) {}
 
   @Get('runs')
+  @Permissions('recon.read')
   async listRuns(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -56,6 +58,7 @@ export class AdminReconciliationController {
   }
 
   @Post('runs')
+  @Permissions('recon.run')
   async startRun(@Req() req: any, @Body() body: StartRunDto) {
     if (!body?.kind || !body?.periodStart || !body?.periodEnd) {
       throw new BadRequestAppException('kind, periodStart, periodEnd required');
@@ -70,12 +73,14 @@ export class AdminReconciliationController {
   }
 
   @Get('runs/:id')
+  @Permissions('recon.read')
   async getRun(@Param('id') id: string) {
     const data = await this.service.getRun(id);
     return { success: true, message: 'Run retrieved', data };
   }
 
   @Get('runs/:id/discrepancies.csv')
+  @Permissions('recon.read')
   @Header('Content-Type', 'text/csv')
   async exportCsv(@Param('id') id: string, @Res() res: Response) {
     const csv = await this.service.exportDiscrepanciesCsv(id);
@@ -84,6 +89,7 @@ export class AdminReconciliationController {
   }
 
   @Patch('discrepancies/:id/status')
+  @Permissions('recon.transition')
   async transition(
     @Req() req: any,
     @Param('id') id: string,

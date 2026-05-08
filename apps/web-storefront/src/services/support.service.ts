@@ -78,6 +78,9 @@ export interface CreateTicketPayload {
   categoryId?: string;
   relatedOrderId?: string;
   relatedReturnId?: string;
+  /** Customer-friendly numbers (e.g. SM20260062, RET-2026-000017). */
+  relatedOrderNumber?: string;
+  relatedReturnNumber?: string;
 }
 
 export const supportService = {

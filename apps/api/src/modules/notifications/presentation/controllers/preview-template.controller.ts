@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { NotificationChannel } from '@prisma/client';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -30,7 +30,7 @@ interface UpsertTemplateDto {
 
 @ApiTags('Admin Notifications')
 @Controller('admin/notifications/templates')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminNotificationTemplatesController {
   constructor(
     private readonly prisma: PrismaService,

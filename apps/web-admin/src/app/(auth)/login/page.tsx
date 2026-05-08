@@ -100,7 +100,13 @@ export default function AdminLoginPage() {
             <span className="auth-badge-dot" aria-hidden="true" />
             Seller Admin
           </span>
-          <h1 className="auth-logo">SPORTSMART</h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/SportsMart_Web_Banner.avif"
+            alt="SportsMart"
+            className="auth-logo"
+            style={{ height: 56, width: 'auto', display: 'block' }}
+          />
           <h2 className="auth-title">Sign in to manage your storefront.</h2>
         </header>
 

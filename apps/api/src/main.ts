@@ -9,6 +9,17 @@ import { AppLoggerService } from './bootstrap/logging/app-logger.service';
 import { GlobalExceptionFilter } from './core/filters/global-exception.filter';
 import { setupSwagger } from './bootstrap/docs/swagger.module';
 
+// Phase 1.4 (ADR-007) — BigInt JSON serialisation. The new *_in_paise
+// columns are BigInt in Prisma; JSON.stringify on a BigInt throws
+// (`Do not know how to serialize a BigInt`) by default. Serialising as
+// a string keeps full precision — paise totals can exceed
+// Number.MAX_SAFE_INTEGER for platform-level rollups — and matches the
+// wire format every paise API in the wild uses (Stripe, Razorpay).
+// Clients that need numeric arithmetic should `BigInt(value)` on read.
+(BigInt.prototype as unknown as { toJSON: () => string }).toJSON = function () {
+  return this.toString();
+};
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
@@ -100,7 +111,10 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalFilters(new GlobalExceptionFilter(logger));
+  // Pass EnvService so the filter can flip between legacy and RFC 7807
+  // (PROBLEM_DETAILS_ENABLED). Filter degrades gracefully if envService
+  // is undefined (e.g. in tests that instantiate it directly).
+  app.useGlobalFilters(new GlobalExceptionFilter(logger, envService));
 
   if (!envService.isProduction()) {
     setupSwagger(app);

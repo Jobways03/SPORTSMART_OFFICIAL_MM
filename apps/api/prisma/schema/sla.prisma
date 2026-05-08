@@ -1,0 +1,110 @@
+// ============================================
+// SLA + Breach tracking (Phase 6, PR 6.1)
+// ============================================
+// Per-(resourceType, status) deadlines for the queueing layer. The
+// tracker service reads these to compute "is this case breaching?",
+// and the breach detector cron writes SlaBreach rows so we can prove
+// to ops "yes, dispute D-2026-001234 sat in UNDER_REVIEW for 11d when
+// the policy says 7d, here's the trail."
+//
+// Why a table and not config:
+//   - Different teams own different buckets ({returns / disputes /
+//     tickets} × {tier-1 / tier-2 / finance}). A row per bucket lets
+//     each team adjust its own deadline without code changes.
+//   - Breach metrics (% of cases past deadline, avg over-due time)
+//     are joined queries — they need stable IDs for the policies and
+//     a per-event audit trail.
+
+model SlaPolicy {
+  id          String  @id @default(uuid())
+  /// Human-readable name surfaced in the admin UI ("Dispute first-touch",
+  /// "Return approval", "Tier-1 ticket reply"). Free text; uniqueness
+  /// enforced by the (resourceType, status, name) tuple below.
+  name        String
+  description String?
+
+  /// Resource the policy gates: "dispute" | "return" | "ticket".
+  /// Free-form so we can add new domains without a migration; the
+  /// tracker pre-validates against this list.
+  resourceType String @map("resource_type")
+  /// The status the policy fires on. e.g. for resourceType="dispute",
+  /// status="UNDER_REVIEW" means "from the moment the dispute lands in
+  /// UNDER_REVIEW, the case must transition to a RESOLVED_* outcome
+  /// within `deadlineMinutes`."
+  status       String
+
+  /// Hard deadline (minutes after the case enters `status`). After this,
+  /// the case shows as breached on the queue dashboard and the breach
+  /// detector cron writes an SlaBreach row.
+  deadlineMinutes Int @map("deadline_minutes")
+
+  /// Optional intermediate "warning" line at this many minutes before
+  /// the hard deadline. Surfaced in the queue UI as yellow; null = off.
+  warningMinutesBeforeDeadline Int? @map("warning_minutes_before_deadline")
+
+  /// Optional escalation: re-assign / boost severity after the deadline
+  /// elapses by this many minutes. Null = no auto-escalation.
+  escalateAfterMinutes Int? @map("escalate_after_minutes")
+  /// What "escalate" means in this context: "REASSIGN_SENIOR" |
+  /// "BOOST_SEVERITY" | "NOTIFY_MANAGER". The escalation service
+  /// branches on this — kept as text so we can add tactics without
+  /// a schema change.
+  escalateAction String? @map("escalate_action")
+
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  breaches SlaBreach[]
+
+  @@unique([resourceType, status, name])
+  @@index([resourceType, status, enabled])
+  @@map("sla_policies")
+}
+
+model SlaBreach {
+  id String @id @default(uuid())
+
+  /// Joins back to the policy that fired. Useful for "which policy
+  /// breaches the most?" rollups in the SLA dashboard.
+  policyId String    @map("policy_id")
+  policy   SlaPolicy @relation(fields: [policyId], references: [id], onDelete: Restrict)
+
+  resourceType String @map("resource_type")
+  resourceId   String @map("resource_id")
+  /// Status the resource was in when it breached. Captured because the
+  /// resource can transition out by the time we resolve the breach,
+  /// and the report needs the original.
+  status       String
+
+  /// When the resource entered the status. Computed from the resource's
+  /// status-history table (returns / disputes / tickets each have one).
+  enteredStatusAt DateTime  @map("entered_status_at")
+  deadlineAt      DateTime  @map("deadline_at")
+  /// First time the cron noticed the breach. Idempotent — re-runs of
+  /// the cron find an existing open breach for the same (resource,
+  /// policy) tuple and skip.
+  breachedAt      DateTime  @map("breached_at")
+  escalatedAt     DateTime? @map("escalated_at")
+  /// Set when the resource transitions out of the SLA-tracked status
+  /// (or the case closes). Resolved breaches stay in the table for
+  /// after-the-fact analysis; the detector skips already-resolved rows.
+  resolvedAt      DateTime? @map("resolved_at")
+
+  /// How far over the deadline the case ran (computed at resolve time).
+  /// Null while still open. Useful for the "avg time-over" metric.
+  overdueMinutes Int? @map("overdue_minutes")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  /// One open breach per (resource, policy). Re-runs of the detector
+  /// cron upsert against this — they don't write a fresh row every
+  /// 5 minutes for the same case.
+  @@unique([policyId, resourceType, resourceId])
+  @@index([resourceType, resourceId])
+  @@index([resolvedAt])
+  @@index([breachedAt])
+  @@map("sla_breaches")
+}

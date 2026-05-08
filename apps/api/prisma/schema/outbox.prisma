@@ -1,0 +1,90 @@
+// Phase 2 — Transactional Outbox (ADR-008).
+//
+// The Outbox pattern (Microservices.io / Chris Richardson) makes
+// domain-event delivery durable: the event row is written in the SAME
+// DB transaction that mutates the aggregate, then a separate publisher
+// worker picks it up and emits to listeners with at-least-once
+// semantics + retry + DLQ.
+//
+// This solves the fragility documented in EventBusService:
+// today's queueMicrotask fan-out can lose events on process crash
+// between the DB commit and the listener invocation. With the outbox
+// the row is committed atomically with the aggregate change, so
+// recovery only depends on the publisher worker eventually picking it up.
+//
+// Three tables here:
+//   - outbox_events:        pending + recently-published rows
+//   - outbox_dead_letters:  rows that exhausted MAX_ATTEMPTS
+//   - event_deduplication:  per-(eventId, handler) consumed marker so
+//                           at-least-once delivery becomes effectively
+//                           exactly-once at the handler level
+
+enum OutboxEventState {
+  PENDING
+  PUBLISHED
+}
+
+model OutboxEvent {
+  id             String           @id @default(uuid())
+  // Mirror DomainEvent shape so writers don't reshape their payloads.
+  eventName      String           @map("event_name")
+  aggregate      String
+  aggregateId    String           @map("aggregate_id")
+  payload        Json
+  occurredAt     DateTime         @map("occurred_at")
+  // Lifecycle.
+  state          OutboxEventState @default(PENDING)
+  publishedAt    DateTime?        @map("published_at")
+  // Retry bookkeeping. `nextAttemptAt` lets the publisher do
+  // "WHERE state = PENDING AND nextAttemptAt <= now()" with a single
+  // index — backoff times are persisted, not in-memory.
+  attempts       Int              @default(0)
+  lastError      String?          @map("last_error")
+  nextAttemptAt  DateTime         @default(now()) @map("next_attempt_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  // Hot index for the publisher's "what's pending" query.
+  @@index([state, nextAttemptAt])
+  // Aggregate lookup index — useful for ops asking "did event X for
+  // dispute Y publish?". Cheap; aggregate cardinality is bounded.
+  @@index([aggregate, aggregateId])
+  // Time-ordered index for retention sweepers and recent-publish dashboards.
+  @@index([createdAt])
+  @@map("outbox_events")
+}
+
+// Events that exceeded MAX_ATTEMPTS. Surfaced to admin task list +
+// Phase 8's notifications. Kept indefinitely until manually replayed
+// or archived — they're rare and ops needs the audit trail.
+model OutboxDeadLetter {
+  id             String   @id @default(uuid())
+  outboxEventId  String   @map("outbox_event_id")
+  eventName      String   @map("event_name")
+  aggregate      String
+  aggregateId    String   @map("aggregate_id")
+  payload        Json
+  failureReason  String   @map("failure_reason")
+  attempts       Int
+  // When the publisher gave up.
+  deadAt         DateTime @default(now()) @map("dead_at")
+
+  @@index([eventName, deadAt])
+  @@index([aggregate, aggregateId])
+  @@map("outbox_dead_letters")
+}
+
+// At-least-once → exactly-once at the handler boundary. A handler that
+// already consumed the event sees a P2002 unique violation on insert
+// here and skips. Composite primary key — natural for the lookup.
+model EventDeduplication {
+  // OutboxEvent.id (or any stable event-id when published from non-outbox sources).
+  eventId    String   @map("event_id")
+  // Handler identifier — class.method in canonical form. Persisted so
+  // future handler-name renames are explicit migrations, not silent dedup-loss.
+  handler    String
+  consumedAt DateTime @default(now()) @map("consumed_at")
+
+  @@id([eventId, handler])
+  @@index([handler, consumedAt])
+  @@map("event_deduplication")
+}

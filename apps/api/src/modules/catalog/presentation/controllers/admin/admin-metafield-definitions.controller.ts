@@ -17,7 +17,7 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Prisma } from '@prisma/client';
 import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
 import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/repositories/category.repository.interface';
@@ -30,7 +30,7 @@ const VALID_TYPES = [
 
 @ApiTags('Admin - Metafield Definitions')
 @Controller({ path: 'admin', version: '1' })
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminMetafieldDefinitionsController {
   constructor(
     @Inject(METAFIELD_REPOSITORY) private readonly metafieldRepo: IMetafieldRepository,

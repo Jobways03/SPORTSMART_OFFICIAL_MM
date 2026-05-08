@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { ProcurementService } from '../../application/services/procurement.service';
 import { ProcurementApproveDto } from '../dtos/procurement-approve.dto';
 import { ProcurementRejectDto } from '../dtos/procurement-reject.dto';
@@ -20,7 +20,7 @@ import { ProcurementDispatchDto } from '../dtos/procurement-dispatch.dto';
 
 @ApiTags('Admin Procurement')
 @Controller('admin/procurement')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminProcurementController {
   constructor(private readonly procurementService: ProcurementService) {}
 

@@ -10,7 +10,8 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { PaymentsPublicFacade } from '../../application/facades/payments-public.facade';
 
 class MarkOrderPaidDto {
@@ -27,11 +28,12 @@ class MarkOrderPaidDto {
 
 @ApiTags('Admin Payments')
 @Controller('admin/payments')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminPaymentsController {
   constructor(private readonly paymentsFacade: PaymentsPublicFacade) {}
 
   @Patch('orders/:masterOrderId/mark-paid')
+  @Permissions('paymentOps.transition')
   async markPaid(
     @Req() req: Request,
     @Param('masterOrderId') masterOrderId: string,
@@ -53,6 +55,7 @@ export class AdminPaymentsController {
   }
 
   @Get('orders/:masterOrderId/status')
+  @Permissions('paymentOps.read')
   async getStatus(@Param('masterOrderId') masterOrderId: string) {
     const data = await this.paymentsFacade.getOrderPaymentStatus(masterOrderId);
     return {

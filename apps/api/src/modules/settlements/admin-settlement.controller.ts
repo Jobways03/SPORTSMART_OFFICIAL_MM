@@ -13,18 +13,20 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard } from '../../core/guards';
+import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../core/guards';
 import { Roles } from '../../core/decorators/roles.decorator';
+import { Permissions } from '../../core/decorators/permissions.decorator';
 import { SettlementService } from './settlement.service';
 
 @ApiTags('Admin Settlements')
 @Controller('admin/settlements')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminSettlementController {
   constructor(private readonly settlementService: SettlementService) {}
 
   /* ── POST /admin/settlements/create-cycle ── */
   @Post('create-cycle')
+  @Permissions('settlements.approve')
   async createCycle(
     @Body() body: { periodStart: string; periodEnd: string },
   ) {
@@ -57,6 +59,7 @@ export class AdminSettlementController {
 
   /* ── GET /admin/settlements/cycles ── */
   @Get('cycles')
+  @Permissions('settlements.read')
   async listCycles(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -75,6 +78,7 @@ export class AdminSettlementController {
 
   /* ── GET /admin/settlements/cycles/:cycleId ── */
   @Get('cycles/:cycleId')
+  @Permissions('settlements.read')
   async getCycleDetail(@Param('cycleId') cycleId: string) {
     const cycle = await this.settlementService.getCycleDetail(cycleId);
 
@@ -92,6 +96,7 @@ export class AdminSettlementController {
   /* ── PATCH /admin/settlements/cycles/:cycleId/approve ── */
   @Patch('cycles/:cycleId/approve')
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.approve')
   async approveCycle(@Param('cycleId') cycleId: string) {
     const result = await this.settlementService.approveCycle(cycleId);
 
@@ -108,6 +113,7 @@ export class AdminSettlementController {
   /* ── PATCH /admin/settlements/:settlementId/mark-paid ── */
   @Patch(':settlementId/mark-paid')
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.markPaid')
   async markPaid(
     @Req() req: Request,
     @Param('settlementId') settlementId: string,
@@ -139,6 +145,7 @@ export class AdminSettlementController {
 
   /* ── GET /admin/settlements/margin-summary ── */
   @Get('margin-summary')
+  @Permissions('settlements.read')
   async getMarginSummary() {
     const data = await this.settlementService.getAdminMarginSummary();
 
@@ -151,6 +158,7 @@ export class AdminSettlementController {
 
   /* ── GET /admin/settlements/seller-breakdown ── */
   @Get('seller-breakdown')
+  @Permissions('settlements.read')
   async getSellerBreakdown(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -169,6 +177,7 @@ export class AdminSettlementController {
 
   /* ── T6: GET /admin/settlements/reconciliation ── */
   @Get('reconciliation')
+  @Permissions('recon.read')
   async getReconciliation() {
     const data = await this.settlementService.getReconciliation();
 
@@ -181,6 +190,7 @@ export class AdminSettlementController {
 
   /* ── Manual adjustments on a settlement ── */
   @Post(':settlementId/adjustments')
+  @Permissions('settlements.approve')
   async recordAdjustment(
     @Req() req: Request,
     @Param('settlementId') settlementId: string,
@@ -203,6 +213,7 @@ export class AdminSettlementController {
   }
 
   @Get(':settlementId/adjustments')
+  @Permissions('settlements.read')
   async listAdjustments(@Param('settlementId') settlementId: string) {
     const data = await this.settlementService.listAdjustments(settlementId);
     return { success: true, message: 'Adjustments retrieved', data };

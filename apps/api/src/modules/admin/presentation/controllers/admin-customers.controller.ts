@@ -8,17 +8,19 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AdminCustomerService } from '../../application/services/admin-customer.service';
 
 @ApiTags('Admin Customers')
 @Controller('admin/customers')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminCustomersController {
   constructor(private readonly customerService: AdminCustomerService) {}
 
   @Get()
   @HttpCode(HttpStatus.OK)
+  @Permissions('customers.read')
   async listCustomers(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -39,6 +41,7 @@ export class AdminCustomersController {
 
   @Get(':id')
   @HttpCode(HttpStatus.OK)
+  @Permissions('customers.read')
   async getCustomer(@Param('id') id: string) {
     const data = await this.customerService.getCustomer(id);
 

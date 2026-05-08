@@ -23,6 +23,7 @@ import { SupportModule } from './modules/support/module';
 import { OwnBrandModule } from './modules/own-brand/module';
 import { PaymentOpsModule } from './modules/payments-ops/module';
 import { DisputesModule } from './modules/disputes/module';
+import { LiabilityLedgerModule } from './modules/liability-ledger/module';
 import { ReconciliationModule } from './modules/reconciliation/module';
 import { AnalyticsModule } from './modules/analytics/module';
 import { CheckoutModule } from './modules/checkout/module';
@@ -48,6 +49,26 @@ import { AccessLogModule } from './modules/access-log/module';
 import { PayoutsModule } from './modules/payouts/module';
 import { ContentModule } from './modules/content/module';
 import { SchedulerModule } from './bootstrap/scheduler/scheduler.module';
+import { IdempotencyModule } from './core/idempotency/idempotency.module';
+import { GuardsModule } from './core/guards/guards.module';
+import { CaseDuplicateModule } from './core/case-duplicate/case-duplicate.module';
+import { SlaModule } from './core/sla/sla.module';
+import { RiskModule } from './core/risk/risk.module';
+import { QueuesModule } from './core/queues/queues.module';
+import { RetentionModule } from './core/retention/retention.module';
+import { FileIntegrityModule } from './core/file-integrity/file-integrity.module';
+import { ErasureModule } from './core/erasure/erasure.module';
+import { CronObservabilityModule } from './core/cron-observability/cron-observability.module';
+import { MetricsModule } from './core/metrics/metrics.module';
+import { RealtimeModule } from './core/realtime/realtime.module';
+import { I18nModule } from './core/i18n/i18n.module';
+import { CaseTimelineModule } from './core/case-timeline/case-timeline.module';
+import { ApiKeysModule } from './core/api-keys/api-keys.module';
+import { WebhooksModule } from './core/webhooks/webhooks.module';
+import { SandboxModule } from './core/sandbox/sandbox.module';
+import { MoneyModule } from './core/money/money.module';
+import { PaymentsSagaModule } from './modules/payments-saga/module';
+import { RefundInstructionsModule } from './modules/refund-instructions/module';
 
 @Module({
   imports: [
@@ -59,6 +80,26 @@ import { SchedulerModule } from './bootstrap/scheduler/scheduler.module';
     RedisModule,
     EventsModule,
     EmailModule,
+    IdempotencyModule,
+    GuardsModule,
+    CaseDuplicateModule,
+    SlaModule,
+    RiskModule,
+    QueuesModule,
+    RetentionModule,
+    FileIntegrityModule,
+    ErasureModule,
+    CronObservabilityModule,
+    MetricsModule,
+    RealtimeModule,
+    I18nModule,
+    CaseTimelineModule,
+    ApiKeysModule,
+    WebhooksModule,
+    SandboxModule,
+    MoneyModule,
+    PaymentsSagaModule,
+    RefundInstructionsModule,
 
     // business
     IdentityModule,
@@ -72,6 +113,7 @@ import { SchedulerModule } from './bootstrap/scheduler/scheduler.module';
     OwnBrandModule,
     PaymentOpsModule,
     DisputesModule,
+    LiabilityLedgerModule,
     ReconciliationModule,
     AnalyticsModule,
     CheckoutModule,

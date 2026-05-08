@@ -11,6 +11,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import type { DisputeKind, DisputeStatus } from '@prisma/client';
 import { UserAuthGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
 import { DisputeService } from '../../application/services/dispute.service';
@@ -37,6 +38,7 @@ export class CustomerDisputesController {
   ) {}
 
   @Post()
+  @Idempotent()
   async file(@Req() req: any, @Body() body: FileDisputeDto) {
     const user = await this.prisma.user.findUnique({
       where: { id: req.userId },

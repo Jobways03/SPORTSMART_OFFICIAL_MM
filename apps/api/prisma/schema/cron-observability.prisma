@@ -1,0 +1,73 @@
+// ============================================
+// Cron observability (Phase 8, PR 8.3)
+// ============================================
+// Two tables:
+//   - cron_runs: one row per execution attempt. Audit trail.
+//   - cron_heartbeat_targets: declarative "I expect job X every Ys".
+//     The heartbeat cron walks this table, checks the latest cron_runs
+//     row per job, alerts when the gap exceeds the configured window.
+//
+// Why a registry instead of relying on @nestjs/schedule logs:
+//   - Logs are stdout. A 5-minute outage in log shipping silently
+//     erases evidence that the cron stopped.
+//   - We want SQL-queryable history for SLOs ("99% of cron runs
+//     completed in <30s").
+//   - A heartbeat alert needs structured "last successful run" data,
+//     which is exactly what cron_runs gives us.
+
+enum CronRunStatus {
+  RUNNING    // started, not yet finished
+  SUCCEEDED  // exited normally
+  FAILED     // threw / returned an error
+  TIMEOUT    // wall-clock exceeded a soft cap (set by instrumentation)
+}
+
+model CronRun {
+  id String @id @default(uuid())
+
+  /// Short stable name. Convention: <module>.<purpose>, e.g.
+  /// "sla.breach-detector", "retention.enforcer", "audit.chain-anchor".
+  jobName String @map("job_name")
+
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  status     CronRunStatus @default(RUNNING)
+
+  /// Wall-clock duration when finished. Null while still RUNNING.
+  durationMs Int? @map("duration_ms")
+
+  /// Error message when status=FAILED. Truncated by the instrumentation
+  /// at 4 KB so a runaway stack trace can't blow up the row size.
+  error      String?
+
+  /// Free-form per-job metrics. Cron handlers set this via the
+  /// instrumentation helper:
+  ///    `await instr.run('foo', async () => { return { processed: 7 }; })`
+  /// The return value lands here so dashboards can chart "rows processed
+  /// per cron" without parsing logs.
+  result     Json?
+
+  @@index([jobName, startedAt])
+  @@index([status, startedAt])
+  @@map("cron_runs")
+}
+
+model CronHeartbeatTarget {
+  /// The exact `jobName` written into cron_runs.
+  jobName String @id @map("job_name")
+
+  /// Expected interval between two successful runs, in seconds. The
+  /// heartbeat cron alerts when (now - lastSuccessAt) > toleranceSeconds.
+  expectedIntervalSeconds Int @map("expected_interval_seconds")
+  /// Multiplier on the expected interval before we alert. Default 3:
+  /// give a job 3x its cadence to catch up before paging.
+  toleranceMultiplier     Int @default(3) @map("tolerance_multiplier")
+
+  enabled     Boolean @default(true)
+  description String?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@map("cron_heartbeat_targets")
+}

@@ -15,7 +15,7 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
 
@@ -41,7 +41,7 @@ const TYPE_COLUMN_MAP: Record<string, string> = {
 
 @ApiTags('Admin - Product Metafields')
 @Controller({ path: 'admin/products', version: '1' })
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminProductMetafieldsController {
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,

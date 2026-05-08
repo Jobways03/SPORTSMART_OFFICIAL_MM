@@ -1,0 +1,45 @@
+// ============================================
+// i18n message catalogue (Phase 9, PR 9.2)
+// ============================================
+// Per-(locale, key) message bodies. Used by:
+//   - notifications: rendered into the email/SMS/WhatsApp body.
+//   - case timeline: human-readable status descriptions.
+//   - product/dispute UI: subject lines, button labels, error blurbs.
+//
+// Variables interpolated via `{{name}}` placeholders. The renderer is
+// deliberately simple — no Handlebars helpers, no conditionals. Any
+// branching logic stays in code.
+
+model I18nMessage {
+  /// Locale tag (BCP-47). Examples: "en", "en-IN", "hi-IN", "ta-IN".
+  /// The renderer resolves "en-IN" → "en" if no exact match found.
+  locale String
+
+  /// Stable identifier used by code. Convention:
+  /// `<module>.<context>.<purpose>`, e.g. `disputes.notification.opened`,
+  /// `returns.timeline.approved`.
+  key String
+
+  /// Free-text body with `{{var}}` placeholders. SMS/short messages
+  /// fit in this column; long emails use the larger templates table
+  /// in the notifications module — the catalogue is for the bits
+  /// that vary by language, not the entire HTML shell.
+  body String @db.Text
+
+  /// Optional shorter form for SMS/WhatsApp where space is tight.
+  /// Renderer falls back to body when null.
+  shortBody String? @map("short_body") @db.Text
+
+  /// Free-text explanation for translators.
+  description String?
+
+  updatedByActorType String? @map("updated_by_actor_type")
+  updatedByActorId   String? @map("updated_by_actor_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@id([locale, key])
+  @@index([key])
+  @@map("i18n_messages")
+}

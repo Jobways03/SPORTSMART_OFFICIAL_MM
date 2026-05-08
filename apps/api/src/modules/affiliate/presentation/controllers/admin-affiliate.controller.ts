@@ -12,7 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AffiliateRegistrationService } from '../../application/services/affiliate-registration.service';
 import { AffiliateKycService } from '../../application/services/affiliate-kyc.service';
 import {
@@ -29,7 +30,7 @@ import { RejectAffiliateKycDto } from '../dtos/affiliate-kyc.dto';
  */
 @ApiTags('Admin Affiliates')
 @Controller('admin/affiliates')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminAffiliateController {
   constructor(
     private readonly registrationService: AffiliateRegistrationService,
@@ -37,6 +38,7 @@ export class AdminAffiliateController {
   ) {}
 
   @Get()
+  @Permissions('affiliates.read')
   async list(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -59,6 +61,7 @@ export class AdminAffiliateController {
   }
 
   @Get(':affiliateId')
+  @Permissions('affiliates.read')
   async get(@Param('affiliateId') affiliateId: string) {
     const data = await this.registrationService.getForAdmin(affiliateId);
     return {
@@ -70,6 +73,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/approve')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.approve')
   async approve(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -85,6 +89,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/reject')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.approve')
   async reject(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -105,6 +110,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/suspend')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.suspend')
   async suspend(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -125,6 +131,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/deactivate')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.suspend')
   async deactivate(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -143,6 +150,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/reactivate')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.suspend')
   async reactivate(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -162,6 +170,7 @@ export class AdminAffiliateController {
   // ── KYC ─────────────────────────────────────────────────────
 
   @Get(':affiliateId/kyc')
+  @Permissions('affiliates.read')
   async getKyc(@Param('affiliateId') affiliateId: string) {
     const data = await this.kycService.getForAdmin(affiliateId);
     return {
@@ -173,6 +182,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/kyc/verify')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.approve')
   async verifyKyc(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -188,6 +198,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/kyc/reject')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.approve')
   async rejectKyc(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -210,6 +221,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/commission')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.commission')
   async updateCommissionRate(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -235,6 +247,7 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/coupons/:couponId')
   @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.commission')
   async updateCouponConfig(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,

@@ -65,6 +65,19 @@ export interface ReturnRepository {
 
   update(id: string, data: Record<string, unknown>): Promise<any>;
 
+  /**
+   * Compare-and-set update used by the FSM transition helper. Adds the
+   * `version` field to the WHERE clause; a 0-row update raises P2025
+   * which the helper translates into ConflictAppException. Caller's
+   * `data` should NOT include `version` — the repo bumps it via Prisma's
+   * `{ increment: 1 }`.
+   */
+  updateWithVersion(
+    id: string,
+    expectedVersion: number,
+    data: Record<string, unknown>,
+  ): Promise<any>;
+
   // Status history
   recordStatusChange(
     returnId: string,

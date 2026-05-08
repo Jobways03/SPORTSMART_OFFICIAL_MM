@@ -1,0 +1,91 @@
+// ============================================
+// Public API keys (Phase 10, PR 10.1)
+// ============================================
+// Long-lived bearer credentials for partner integrations. Distinct
+// from per-actor JWTs (those are short-lived and per-session); API
+// keys identify a partner integration and survive sessions.
+//
+// Storage rule: only the SHA-256 hash of the key is persisted. The
+// plaintext is shown to the admin once at creation time; lost keys
+// must be re-issued, never recovered.
+
+enum ApiKeyEnvironment {
+  LIVE
+  TEST
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+model ApiKey {
+  id String @id @default(uuid())
+
+  /// Free-form. The admin sets this when minting; surfaced in audit
+  /// logs and the dashboard so humans can identify "which integration
+  /// is calling".
+  name        String
+  description String?
+
+  /// First 8 chars of the plaintext key, persisted to let admins
+  /// confirm "yes that's the one I'm looking at" without revealing
+  /// the secret. Format: e.g. "sk_live_abcd1234...".
+  keyPrefix   String @map("key_prefix")
+  /// SHA-256 hex of the full plaintext. The auth path hashes the
+  /// presented bearer + matches against this. Constant-time compare.
+  keyHash     String @unique @map("key_hash")
+
+  /// Permissions this key carries. Free-form scope strings like
+  /// "orders:read", "refunds:write". The auth path checks the route's
+  /// declared scope against this array.
+  scopes      String[] @default([])
+
+  /// LIVE keys hit production data; TEST keys see sandbox-mode
+  /// outputs (Phase 10 PR 10.3). Webhooks honour this too — TEST
+  /// keys deliver only to TEST webhook endpoints.
+  environment ApiKeyEnvironment @default(LIVE)
+  status      ApiKeyStatus      @default(ACTIVE)
+
+  /// Optional ownership. Internal partners get sellerId / affiliateId
+  /// set so usage shows up under their account. Marketplace-level
+  /// integration keys leave both null.
+  sellerId    String? @map("seller_id")
+  affiliateId String? @map("affiliate_id")
+
+  /// Per-key rate limit. Null = use the global default.
+  rateLimitPerMinute Int? @map("rate_limit_per_minute")
+
+  /// Bookkeeping for ops queries.
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
+  revokedBy  String?   @map("revoked_by")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@index([status])
+  @@index([sellerId])
+  @@index([affiliateId])
+  @@map("api_keys")
+}
+
+/// Request-level audit. One row per accepted call. Used for usage
+/// rollups + investigation when a partner reports unexpected behaviour.
+model ApiKeyUsage {
+  id        String   @id @default(uuid())
+  keyId     String   @map("key_id")
+  /// HTTP method + path. Do NOT log query strings or bodies — those
+  /// can carry PII.
+  method    String
+  path      String
+  status    Int
+  durationMs Int     @map("duration_ms")
+  /// Truncated IP (last octet zeroed for v4) — privacy-preserving.
+  ipPrefix  String?  @map("ip_prefix")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([keyId, createdAt])
+  @@index([status, createdAt])
+  @@map("api_key_usages")
+}

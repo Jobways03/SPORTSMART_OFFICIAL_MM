@@ -1,11 +1,11 @@
 import { Controller, Get, Param, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { NotificationsPublicFacade } from '../../application/facades/notifications-public.facade';
 
 @ApiTags('Admin Notifications')
 @Controller('admin/notifications/preferences')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminNotificationPreferencesController {
   constructor(private readonly facade: NotificationsPublicFacade) {}
 

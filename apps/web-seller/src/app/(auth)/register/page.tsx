@@ -131,7 +131,13 @@ export default function SellerRegisterPage() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-header">
-          <h1 className="auth-logo">SPORTSMART</h1>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/SportsMart_Web_Banner.avif"
+            alt="SportsMart"
+            className="auth-logo"
+            style={{ height: 56, width: 'auto', display: 'block' }}
+          />
           <p className="auth-badge">Seller Portal</p>
           <h2 className="auth-title">Create your seller account</h2>
           <p className="auth-subtitle">
