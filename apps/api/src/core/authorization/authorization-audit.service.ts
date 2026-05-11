@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
@@ -10,6 +11,10 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
+import {
+  MetricsRegistry,
+  CounterHandle,
+} from '../metrics/metrics.registry';
 
 export interface AuthorizationAuditEntry {
   layer: AuthorizationLayer;
@@ -58,11 +63,22 @@ export interface AuthorizationAuditEntry {
  *     than to wedge every guard on a slow DB.
  */
 @Injectable()
-export class AuthorizationAuditService implements OnModuleDestroy {
+export class AuthorizationAuditService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AuthorizationAuditService.name);
   private buffer: Prisma.AuthorizationAuditCreateManyInput[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private flushing = false;
+
+  // PR 4.6 — observability for the previously-silent failure path.
+  // Flush failures used to log once and discard; in incident-review
+  // we want to see the trend on the metrics endpoint, not chase a
+  // grep of intermittent log lines. Lazy-initialised in onModuleInit
+  // so the registry can register them at boot.
+  private droppedCounter!: CounterHandle;
+  private flushCounter!: CounterHandle;
+  private flushFailureCounter!: CounterHandle;
+  /** Running total of audit rows that have been dropped on flush failure. */
+  private droppedTotal = 0;
 
   /** Flush every second when there are pending rows. */
   private static readonly FLUSH_INTERVAL_MS = 1_000;
@@ -72,7 +88,31 @@ export class AuthorizationAuditService implements OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    private readonly metrics: MetricsRegistry,
   ) {}
+
+  onModuleInit(): void {
+    this.flushCounter = this.metrics.counter(
+      'authz_audit_flush_total',
+      'Number of authorization-audit flush attempts (successful + failed).',
+    );
+    this.flushFailureCounter = this.metrics.counter(
+      'authz_audit_flush_failure_total',
+      'Number of authorization-audit flush attempts that threw — rows in ' +
+        'that batch were dropped (see authz_audit_dropped_rows_total).',
+    );
+    this.droppedCounter = this.metrics.counter(
+      'authz_audit_dropped_rows_total',
+      'Cumulative count of authorization-audit rows dropped because the ' +
+        'flush errored. Non-zero means compliance is losing decisions; ' +
+        'investigate DB health or the authorization_audits table.',
+    );
+  }
+
+  /** Test/inspection: how many rows have been dropped so far. */
+  getDroppedRowCount(): number {
+    return this.droppedTotal;
+  }
 
   record(entry: AuthorizationAuditEntry): void {
     if (!this.env.getBoolean('AUTHZ_AUDIT_ENABLED', true)) return;
@@ -121,6 +161,8 @@ export class AuthorizationAuditService implements OnModuleDestroy {
     this.buffer = [];
     this.cancelTimer();
 
+    this.flushCounter?.inc();
+
     try {
       // skipDuplicates is a defensive no-op here (no UNIQUE constraint),
       // but it ensures bulk insert doesn't blow up on weird race edges.
@@ -130,10 +172,20 @@ export class AuthorizationAuditService implements OnModuleDestroy {
       });
     } catch (err) {
       // Don't let an audit-table outage take down the app. Log and drop.
+      // But surface the drop loudly: structured JSON line + a metrics
+      // counter the /metrics endpoint exposes. Compliance and incident
+      // response will notice the counter ticking up where they used to
+      // see only the original warning text.
+      this.flushFailureCounter?.inc();
+      this.droppedTotal += batch.length;
+      this.droppedCounter?.inc({}, batch.length);
       this.logger.error(
-        `Failed to flush ${batch.length} authorization-audit rows: ${
-          (err as Error).message
-        }`,
+        JSON.stringify({
+          event: 'authz.audit.flush_failed',
+          droppedRows: batch.length,
+          droppedTotal: this.droppedTotal,
+          error: (err as Error).message,
+        }),
       );
     } finally {
       this.flushing = false;

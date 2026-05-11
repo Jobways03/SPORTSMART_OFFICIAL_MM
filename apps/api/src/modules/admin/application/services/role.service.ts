@@ -9,12 +9,15 @@ import {
   ALL_PERMISSION_KEYS,
   PermissionKey,
   PERMISSIONS,
-  SYSTEM_ROLE_PERMISSIONS,
-} from './permission-registry';
+} from '../../../../core/authorization/permission-registry';
+import { AdminPermissionResolver } from '../../../../core/authorization/admin-permission-resolver.service';
 
 @Injectable()
 export class RoleService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissionResolver: AdminPermissionResolver,
+  ) {}
 
   /** All registered permission keys with descriptions, for the admin UI. */
   listPermissionCatalog() {
@@ -104,7 +107,11 @@ export class RoleService {
    * Returns the union of permissions an admin has, derived from:
    *   1. their default `Admin.role` enum (mapped via SYSTEM_ROLE_PERMISSIONS)
    *   2. any explicit `AdminRoleAssignment` rows
-   * Used by RequiresPermissionGuard at every request.
+   *
+   * Delegates to AdminPermissionResolver (PR 4.6) so this method and
+   * AdminAuthGuard share the same code path — eliminates the risk of
+   * the two paths drifting and the request-time view diverging from
+   * what the admin role UI shows.
    */
   async resolvePermissionsForAdmin(adminId: string): Promise<Set<string>> {
     const admin = await this.prisma.admin.findUnique({
@@ -113,17 +120,8 @@ export class RoleService {
     });
     if (!admin) return new Set();
 
-    const fromEnum = SYSTEM_ROLE_PERMISSIONS[admin.role] ?? [];
-
-    const assignments = await this.prisma.adminRoleAssignment.findMany({
-      where: { adminId },
-      include: { role: { include: { permissions: true } } },
-    });
-    const fromCustom = assignments.flatMap((a) =>
-      a.role.permissions.map((p) => p.permissionKey),
-    );
-
-    return new Set<string>([...fromEnum, ...fromCustom]);
+    const resolved = await this.permissionResolver.resolve(adminId, admin.role);
+    return new Set(resolved.permissions);
   }
 
   private validatePermissions(perms: PermissionKey[]) {

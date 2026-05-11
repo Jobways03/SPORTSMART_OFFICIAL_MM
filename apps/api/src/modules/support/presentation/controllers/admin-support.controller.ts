@@ -180,7 +180,7 @@ export class AdminSupportController {
   // mirroring keeps both sides synced. See docs in DisputeService.
 
   @Post('tickets/:id/promote-to-dispute')
-  @Permissions('disputes.write')
+  @Permissions('support.promoteToDispute')
   async promoteToDispute(
     @Req() req: any,
     @Param('id') id: string,

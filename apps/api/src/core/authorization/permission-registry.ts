@@ -20,6 +20,10 @@
  *   - Catalog / customers / content / discounts / nova / storefront /
  *     analytics / affiliates / franchise added for the full admin
  *     surface (read-only and write-tier roles).
+ *
+ * Phase 4 (PR 4.6) — relocated from modules/admin to core/authorization
+ * so AdminAuthGuard (which lives in /core/guards) can resolve permissions
+ * without a /core → /modules import that would violate ADR-001.
  */
 export const PERMISSIONS = {
   // Wallets
@@ -182,6 +186,56 @@ export const PERMISSIONS = {
 export type PermissionKey = keyof typeof PERMISSIONS;
 
 export const ALL_PERMISSION_KEYS = Object.keys(PERMISSIONS) as PermissionKey[];
+
+/**
+ * Risk classification per permission. Used by the readiness endpoint
+ * to surface high-risk permissions that should be flagged for ABAC
+ * or MFA gating. Defaults to LOW where not declared.
+ *
+ * CRITICAL — moves money or grants persistent access to money flows.
+ * HIGH     — non-money but high-blast-radius (suspend, approve, override).
+ * MEDIUM   — write actions on operational data.
+ * LOW      — read-only access.
+ */
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
+  'wallets.adjust':         'CRITICAL',
+  'wallets.block':          'HIGH',
+  'refunds.initiate':       'CRITICAL',
+  'refunds.approve':        'CRITICAL',
+  'refunds.confirm':        'CRITICAL',
+  'refunds.manualConfirm':  'CRITICAL',
+  'refunds.retry':          'HIGH',
+  'disputes.decide':        'CRITICAL',
+  'disputes.override':      'CRITICAL',
+  'disputes.reopen':        'HIGH',
+  'returns.overrideQc':     'HIGH',
+  'returns.qcDecide':       'HIGH',
+  'returns.approve':        'MEDIUM',
+  'returns.reject':         'MEDIUM',
+  'settlements.approve':    'CRITICAL',
+  'settlements.markPaid':   'CRITICAL',
+  'sellers.suspend':        'HIGH',
+  'sellers.penalize':       'HIGH',
+  'sellers.approve':        'HIGH',
+  'customers.suspend':      'HIGH',
+  'customers.impersonate':  'CRITICAL',
+  'franchise.suspend':      'HIGH',
+  'franchise.finance':      'CRITICAL',
+  'affiliates.commission':  'HIGH',
+  'affiliates.payouts':     'CRITICAL',
+  'discounts.write':        'MEDIUM',
+  'roles.write':            'CRITICAL',
+  'files.delete':           'MEDIUM',
+  'content.publish':        'MEDIUM',
+  'support.promoteToDispute': 'HIGH',
+  'nova.stock':             'MEDIUM',
+  'cod.write':              'MEDIUM',
+  'payouts.export':         'HIGH',
+  'payouts.ingestResponse': 'HIGH',
+  'recon.transition':       'MEDIUM',
+};
 
 /**
  * Default permission grant per system role. Used by the seeder + by
