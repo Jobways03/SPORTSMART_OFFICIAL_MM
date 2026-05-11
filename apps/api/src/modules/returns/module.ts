@@ -11,6 +11,7 @@ import { CommissionModule } from '../commission/module';
 import { FranchiseModule } from '../franchise/module';
 import { WalletModule } from '../wallet/module';
 import { LiabilityLedgerModule } from '../liability-ledger/module';
+import { DiscountsModule } from '../discounts/discounts.module';
 import { RETURN_REPOSITORY } from './domain/repositories/return.repository.interface';
 import { PrismaReturnRepository } from './infrastructure/repositories/prisma-return.repository';
 import { ReturnService } from './application/services/return.service';
@@ -40,6 +41,7 @@ import { FranchiseReturnsController } from './presentation/controllers/franchise
     RazorpayModule,
     WalletModule,
     LiabilityLedgerModule,
+    DiscountsModule,
   ],
   controllers: [
     CustomerReturnsController,

@@ -9,6 +9,9 @@ import {
   DISCOUNT_REPOSITORY,
 } from '../../domain/repositories/discount.repository.interface';
 import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
+import { DiscountEventsService } from './discount-events.service';
+import { DiscountEligibilityService } from './discount-eligibility.service';
+import type { EligibilityRule } from '../../domain/eligibility/types';
 
 @Injectable()
 export class DiscountsService {
@@ -16,6 +19,12 @@ export class DiscountsService {
     @Inject(DISCOUNT_REPOSITORY)
     private readonly discountRepo: DiscountRepository,
     private readonly affiliatePublicFacade: AffiliatePublicFacade,
+    // Phase E (P1.1) — audit + outbox emission. Best-effort calls;
+    // service operations don't fail if the audit sink is down.
+    private readonly events: DiscountEventsService,
+    // Phase E (P1.3) — eligibility evaluator. Loads rules + checks
+    // against customer + cart at validate time.
+    private readonly eligibility: DiscountEligibilityService,
   ) {}
 
   async list(filters: {
@@ -93,6 +102,7 @@ export class DiscountsService {
       getProductIds,
       startsAt,
       endsAt,
+      eligibilityRules,
       ...rest
     } = data;
 
@@ -132,6 +142,21 @@ export class DiscountsService {
     if (start > now) status = 'SCHEDULED';
     if (end && end < now) status = 'EXPIRED';
 
+    // Phase B (P0.5) — funding fields with safe defaults. Validate
+    // SHARED percentages sum to 100 server-side regardless of UI.
+    const fundingType = (rest.fundingType as string) || 'PLATFORM';
+    const platformFundingPercent = Number(rest.platformFundingPercent ?? 100);
+    const sellerFundingPercent = Number(rest.sellerFundingPercent ?? 0);
+    const brandFundingPercent = Number(rest.brandFundingPercent ?? 0);
+    if (fundingType === 'SHARED') {
+      const sum = platformFundingPercent + sellerFundingPercent + brandFundingPercent;
+      if (Math.abs(sum - 100) > 0.01) {
+        throw new BadRequestAppException(
+          `SHARED funding percentages must sum to 100% (got ${sum})`,
+        );
+      }
+    }
+
     const discount = await this.discountRepo.create({
       code: code ? code.trim().toUpperCase() : null,
       title: title?.trim() || null,
@@ -158,7 +183,24 @@ export class DiscountsService {
       getDiscountType: rest.getDiscountType || null,
       getDiscountValue: rest.getDiscountValue || null,
       maxUsesPerOrder: rest.maxUsesPerOrder || null,
-    });
+      // Phase B (P0.5)
+      fundingType: fundingType as any,
+      platformFundingPercent,
+      sellerFundingPercent,
+      brandFundingPercent,
+      commissionBasis: (rest.commissionBasis as any) || 'GROSS',
+      fundingNotes: rest.fundingNotes || null,
+      discountNature: (rest.discountNature as any) || 'TRANSACTIONAL',
+      // Phase F (P2.3) — affiliate attribution. When set, redemption
+      // writes a ReferralAttribution + sync's the affiliate side counter.
+      affiliateId: rest.affiliateId || null,
+      affiliateCommissionPercent:
+        rest.affiliateCommissionPercent !== undefined &&
+        rest.affiliateCommissionPercent !== null &&
+        rest.affiliateCommissionPercent !== ''
+          ? Number(rest.affiliateCommissionPercent)
+          : null,
+    } as any);
 
     if (productIds?.length) {
       await this.discountRepo.createProductLinks(
@@ -189,6 +231,19 @@ export class DiscountsService {
       );
     }
 
+    // Phase E (P1.3) — eligibility rules. Replace the rule set in
+    // one shot; omitted/empty array means "no eligibility gating".
+    if (Array.isArray(eligibilityRules) && eligibilityRules.length > 0) {
+      await this.eligibility.setRules(discount.id, eligibilityRules);
+    }
+
+    // Phase E (P1.1) — audit + outbox.
+    void this.events.emitDiscountCrud({
+      action: 'created',
+      discountId: discount.id,
+      newValue: discount as Record<string, unknown>,
+    });
+
     return discount;
   }
 
@@ -196,7 +251,7 @@ export class DiscountsService {
     const discount = await this.discountRepo.findById(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
 
-    const { productIds, collectionIds, buyProductIds, getProductIds, startsAt, endsAt, ...fields } = body;
+    const { productIds, collectionIds, buyProductIds, getProductIds, startsAt, endsAt, eligibilityRules, ...fields } = body;
     const data: any = {};
 
     // Same bounds guard as create — if the caller is changing the value
@@ -247,6 +302,19 @@ export class DiscountsService {
     if (startsAt !== undefined) data.startsAt = new Date(startsAt);
     if (endsAt !== undefined) data.endsAt = endsAt ? new Date(endsAt) : null;
 
+    // Phase F (P2.3) — affiliate link can be added, swapped, or cleared
+    // on an existing discount. Commission percent override is independent
+    // and clears with explicit null.
+    if (fields.affiliateId !== undefined) {
+      data.affiliateId = fields.affiliateId || null;
+    }
+    if (fields.affiliateCommissionPercent !== undefined) {
+      data.affiliateCommissionPercent =
+        fields.affiliateCommissionPercent === null || fields.affiliateCommissionPercent === ''
+          ? null
+          : Number(fields.affiliateCommissionPercent);
+    }
+
     const updated = await this.discountRepo.update(id, data);
 
     if (productIds !== undefined) {
@@ -277,6 +345,23 @@ export class DiscountsService {
         await this.discountRepo.createProductLinks(id, getProductIds, 'GET');
       }
     }
+
+    // Phase E (P1.3) — eligibility rules. `undefined` = leave alone,
+    // explicit array (incl. []) = replace the rule set.
+    if (eligibilityRules !== undefined) {
+      await this.eligibility.setRules(id, Array.isArray(eligibilityRules) ? eligibilityRules : []);
+    }
+
+    // Phase E (P1.1) — audit + outbox with old/new diff so admins
+    // can see exactly what changed (especially for risky edits like
+    // bumping value 10% → 90% or flipping fundingType).
+    void this.events.emitDiscountCrud({
+      action: 'updated',
+      discountId: id,
+      oldValue: discount as Record<string, unknown>,
+      newValue: updated as Record<string, unknown>,
+    });
+
     return updated;
   }
 
@@ -284,6 +369,13 @@ export class DiscountsService {
     const discount = await this.discountRepo.findById(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
     await this.discountRepo.delete(id);
+    // Phase E (P1.1) — audit-log the deletion. Outbox consumers can
+    // react (e.g. cancel pending notification campaigns).
+    void this.events.emitDiscountCrud({
+      action: 'deleted',
+      discountId: id,
+      oldValue: discount as Record<string, unknown>,
+    });
   }
 
   /**
@@ -296,10 +388,24 @@ export class DiscountsService {
     code: string,
     subtotal: number,
     items: Array<{ productId: string; quantity: number; unitPrice: number }> = [],
+    /**
+     * Phase E (P1.3) — optional customer + cart context for the
+     * eligibility evaluator. Caller (the customer-discounts
+     * controller / checkout service) supplies what it knows;
+     * unknown fields cause matching rules to SKIP rather than
+     * reject, so older callers that don't yet pass these fields
+     * stay backward-compatible.
+     */
+    eligibilityArgs?: {
+      customerId?: string | null;
+      paymentMethod?: 'COD' | 'ONLINE' | 'WALLET' | 'UPI' | string;
+      address?: { city?: string | null; pincode?: string | null; state?: string | null };
+    },
   ): Promise<{
     discountId: string;
     code: string;
     title: string | null;
+    type: string;
     valueType: string;
     value: number;
     discountAmount: number;
@@ -319,7 +425,11 @@ export class DiscountsService {
           code: trimmed,
           subtotal,
         });
-        if (aff) return aff;
+        if (aff) {
+          // Affiliate fallback predates the `type` field — affiliate
+          // coupons are always treated as ordinary product discounts.
+          return { ...aff, type: 'AMOUNT_OFF_ORDER' };
+        }
       } catch (err: any) {
         // Facade throws a plain Error with a customer-safe message
         // when the code is ours but a constraint failed (expired,
@@ -338,11 +448,11 @@ export class DiscountsService {
     if (discount.status === 'DRAFT') {
       throw new BadRequestAppException('This coupon is no longer available');
     }
-    if (discount.type === 'FREE_SHIPPING') {
-      throw new BadRequestAppException(
-        'Free-shipping coupons are not available — delivery is already free on this order.',
-      );
-    }
+    // FREE_SHIPPING is a separate code path — the discount itself reduces
+    // the shipping fee at place-order time (handled in checkout.service.ts),
+    // not the product subtotal. We resolve it here with discountAmount=0
+    // so the cart-total math is unaffected; checkout zeros the shipping
+    // fee when the redeemed discount has type=FREE_SHIPPING.
     const now = new Date();
     if (discount.startsAt && new Date(discount.startsAt) > now) {
       throw new BadRequestAppException('This coupon is not active yet');
@@ -369,6 +479,36 @@ export class DiscountsService {
       );
     }
 
+    // Phase E (P1.3) — eligibility rules. Run only when we have a
+    // customerId; without one we can't run customer-scoped rules
+    // (FIRST_ORDER_ONLY, NEW_CUSTOMER_ONLY, velocity, etc.) and
+    // would always pass them. The rule evaluator already SKIPs
+    // missing fields, but skipping the check entirely when there's
+    // no customer avoids the DB roundtrip in that case.
+    if (eligibilityArgs?.customerId) {
+      const verdict = await this.eligibility.check({
+        discountId: discount.id,
+        customerId: eligibilityArgs.customerId,
+        cart: {
+          // Items as best-effort — caller passes the limited shape
+          // it has today. Rules that need richer data (categoryId,
+          // sellerId, collectionIds) will SKIP if they're missing.
+          items: items.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            unitPriceInPaise: BigInt(Math.round(Number(i.unitPrice) * 100)),
+          })),
+          paymentMethod: eligibilityArgs.paymentMethod,
+          address: eligibilityArgs.address ?? undefined,
+        },
+      });
+      if (!verdict.allowed) {
+        throw new BadRequestAppException(
+          verdict.reason ?? 'This coupon is not valid for your order.',
+        );
+      }
+    }
+
     // ── Flat cart discounts (AMOUNT_OFF_ORDER / AMOUNT_OFF_PRODUCTS) ─────
     // Both apply against the subtotal today. (AMOUNT_OFF_PRODUCTS would
     // ideally be narrowed to matching line items, but we fall back to the
@@ -388,6 +528,7 @@ export class DiscountsService {
         discountId: discount.id,
         code: discount.code!,
         title: discount.title ?? null,
+        type: discount.type,
         valueType,
         value,
         discountAmount: amount,
@@ -493,6 +634,7 @@ export class DiscountsService {
       discountId: discount.id,
       code: discount.code!,
       title: discount.title ?? null,
+      type: discount.type,
       valueType: displayValueType,
       value: displayValue,
       discountAmount: amount,

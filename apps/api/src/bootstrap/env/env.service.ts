@@ -56,4 +56,42 @@ export class EnvService {
   isProduction(): boolean {
     return this.get('NODE_ENV') === 'production';
   }
+
+  /**
+   * Phase 4 (PR 4.6) — refuse to start in production with placeholder
+   * JWT secrets from .env.example. Catches the foot-gun where an
+   * operator copies the example to .env, fills in DB / Redis, and
+   * forgets to rotate the JWT keys. A leaked placeholder lets anyone
+   * forge any token (worse than a leaked real secret because the
+   * "secret" is in source control).
+   *
+   * Throws — call before app.listen() so the process exits fast.
+   */
+  assertProductionSecretsSafe(): void {
+    if (!this.isProduction()) return;
+
+    const PLACEHOLDER_PREFIX = 'replace-me-';
+    const REQUIRED_SECRETS: Array<keyof Env> = [
+      'JWT_CUSTOMER_SECRET',
+      'JWT_SELLER_SECRET',
+      'JWT_FRANCHISE_SECRET',
+      'JWT_ADMIN_SECRET',
+      'JWT_AFFILIATE_SECRET',
+      'JWT_REFRESH_SECRET',
+    ];
+
+    const offenders = REQUIRED_SECRETS.filter((k) => {
+      const v = this.env[k];
+      return typeof v === 'string' && v.startsWith(PLACEHOLDER_PREFIX);
+    });
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `[BOOT] Refusing to start in production: the following secrets ` +
+          `still hold the .env.example placeholder value: ${offenders.join(', ')}. ` +
+          `Generate fresh values with \`openssl rand -base64 32\` and set them ` +
+          `in the production environment.`,
+      );
+    }
+  }
 }

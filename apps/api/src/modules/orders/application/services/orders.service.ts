@@ -181,7 +181,45 @@ export class OrdersService {
       });
     }
 
-    return { ...order, reassignmentLogs: enrichedLogs, discount };
+    // Phase B (P0.1, P0.5) — Discount & GST Breakdown.
+    // Attach the per-order discount allocation, item-level allocation,
+    // tax snapshots, and liability-ledger rows so the admin order
+    // detail UI can render the breakdown card.
+    //
+    // For legacy orders (placed before Phase B / no allocation) all
+    // four arrays come back empty, and the UI falls back to showing
+    // just the legacy `discountAmount` field on MasterOrder.
+    const [orderDiscounts, orderItemDiscounts, taxSnapshots, liabilityLedger] =
+      await Promise.all([
+        this.prisma.orderDiscount.findMany({
+          where: { masterOrderId: id },
+          orderBy: { createdAt: 'asc' },
+        }),
+        this.prisma.orderItemDiscount.findMany({
+          where: { masterOrderId: id },
+          orderBy: { createdAt: 'asc' },
+        }),
+        this.prisma.orderItemTaxSnapshot.findMany({
+          where: { masterOrderId: id },
+        }),
+        this.prisma.discountLiabilityLedger.findMany({
+          where: { masterOrderId: id },
+          orderBy: { createdAt: 'asc' },
+        }),
+      ]);
+
+    return {
+      ...order,
+      reassignmentLogs: enrichedLogs,
+      discount,
+      // Phase B / Phase C — discount-aware financial breakdown
+      discountBreakdown: {
+        orderDiscounts,
+        orderItemDiscounts,
+        taxSnapshots,
+        liabilityLedger,
+      },
+    };
   }
 
   /**
@@ -1803,6 +1841,59 @@ export class OrdersService {
 
     if (!order) throw new NotFoundAppException('Order not found');
 
+    // Phase D — surface the applied coupon to the customer detail page
+    // (code + savings). Pull the REDEEMED redemption row for this order;
+    // legacy orders without a redemption fall through with a null
+    // appliedDiscount.
+    let appliedDiscount: {
+      code: string | null;
+      title: string | null;
+      discountAmount: string;
+    } | null = null;
+    try {
+      const redemption = await this.prisma.discountRedemption.findFirst({
+        where: {
+          masterOrderId: order.id,
+          status: 'REDEEMED' as any,
+        },
+        select: {
+          discountAmountInPaise: true,
+          discount: { select: { code: true, title: true } },
+        },
+      });
+      if (redemption?.discount) {
+        appliedDiscount = {
+          code: redemption.discount.code,
+          title: redemption.discount.title,
+          discountAmount: (Number(redemption.discountAmountInPaise) / 100).toFixed(2),
+        };
+      } else if (
+        order.discountAmountInPaise &&
+        BigInt(order.discountAmountInPaise) > 0n
+      ) {
+        // Legacy fallback — the order has a discount but no redemption
+        // row (pre-Phase-B). Surface the amount with no code.
+        appliedDiscount = {
+          code: null,
+          title: null,
+          discountAmount: (Number(order.discountAmountInPaise) / 100).toFixed(2),
+        };
+      }
+    } catch {
+      // Best-effort — never block the order page on the redemption lookup.
+    }
+
+    // Shipping snapshot (v1) — surfaces the fee on customer order detail.
+    // Returns null when no shipping option was attached (legacy / free orders).
+    const shipping =
+      order.shippingFeeInPaise && BigInt(order.shippingFeeInPaise) > 0n
+        ? {
+            optionName: order.shippingOptionName,
+            feeInPaise: order.shippingFeeInPaise.toString(),
+            feeInRupees: (Number(order.shippingFeeInPaise) / 100).toFixed(2),
+          }
+        : null;
+
     // Strip seller information — show "Fulfilled by SPORTSMART" label
     // Add customer-friendly status label. Tracking + delivery method
     // are surfaced so the customer detail screen can render a
@@ -1810,6 +1901,8 @@ export class OrdersService {
     return {
       ...order,
       orderStatusLabel: this.mapOrderStatusLabel(order.orderStatus),
+      appliedDiscount,
+      shipping,
       subOrders: order.subOrders.map((so: any) => ({
         id: so.id,
         subTotal: so.subTotal,

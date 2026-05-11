@@ -32,6 +32,7 @@ import { OrdersModule } from './modules/orders/module';
 import { PaymentsModule } from './modules/payments/module';
 import { CodModule } from './modules/cod/module';
 import { ShippingModule } from './modules/shipping/module';
+import { ShippingOptionsModule } from './modules/shipping-options/shipping-options.module';
 import { ReturnsModule } from './modules/returns/module';
 import { SettlementsModule } from './modules/settlements/module';
 import { AffiliateModule } from './modules/affiliate/module';
@@ -123,6 +124,7 @@ import { RefundInstructionsModule } from './modules/refund-instructions/module';
     PaymentsModule,
     CodModule,
     ShippingModule,
+    ShippingOptionsModule,
     ReturnsModule,
     SettlementsModule,
     AffiliateModule,

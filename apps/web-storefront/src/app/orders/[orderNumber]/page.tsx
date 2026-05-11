@@ -421,6 +421,18 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{formatPrice(Number(order.totalAmount))}</div>
+            {order.appliedDiscount && Number(order.appliedDiscount.discountAmount) > 0 && (
+              <div style={{ marginTop: 4, fontSize: 12, color: '#16a34a', fontWeight: 600 }}>
+                You saved {formatPrice(Number(order.appliedDiscount.discountAmount))}
+                {order.appliedDiscount.code ? ` with ${order.appliedDiscount.code}` : ''}
+              </div>
+            )}
+            {order.shipping && (
+              <div style={{ marginTop: 4, fontSize: 12, color: '#6b7280' }}>
+                Includes {formatPrice(Number(order.shipping.feeInRupees))} shipping
+                {order.shipping.optionName ? ` (${order.shipping.optionName})` : ''}
+              </div>
+            )}
             <div style={{ marginTop: 4, display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               {statusBadge(
                 order.paymentStatus === 'CANCELLED' ? 'Cancelled' : order.paymentStatus === 'PAID' ? 'Paid' : 'Payment Pending',

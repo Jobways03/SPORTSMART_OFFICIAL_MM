@@ -25,6 +25,7 @@ import { UserAuthGuard } from '../../core/guards';
 import { CatalogModule } from '../catalog/module';
 import { FranchiseModule } from '../franchise/module';
 import { DiscountsModule } from '../discounts/discounts.module';
+import { ShippingOptionsModule } from '../shipping-options/shipping-options.module';
 import { AffiliateModule } from '../affiliate/module';
 import { WalletModule } from '../wallet/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
@@ -34,6 +35,7 @@ import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
     CatalogModule,
     FranchiseModule,
     DiscountsModule,
+    ShippingOptionsModule,
     AffiliateModule,
     WalletModule,
     RazorpayModule,

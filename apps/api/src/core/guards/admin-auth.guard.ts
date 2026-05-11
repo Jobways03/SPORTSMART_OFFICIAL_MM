@@ -1,7 +1,8 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable, Logger } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
+import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
 import { UnauthorizedAppException } from '../exceptions';
 
 export interface AdminTokenPayload {
@@ -21,9 +22,17 @@ const ADMIN_ROLES = [
 
 @Injectable()
 export class AdminAuthGuard implements CanActivate {
+  private readonly logger = new Logger(AdminAuthGuard.name);
+
   constructor(
     private readonly envService: EnvService,
     private readonly prisma: PrismaService,
+    // PR 4.6 — resolves effective permissions per request so the
+    // PermissionsGuard / PolicyGuard layered after us can evaluate
+    // @Permissions(...) and @Policy(...). Lives in /core/authorization
+    // and is provided by the global GuardsModule, so every domain
+    // module that already imports AdminAuthGuard picks it up for free.
+    private readonly permissionResolver: AdminPermissionResolver,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -91,15 +100,38 @@ export class AdminAuthGuard implements CanActivate {
       throw new UnauthorizedAppException('Admin role has changed — please log in again');
     }
 
+    // PR 4.6 — resolve effective permissions BEFORE attaching req.user
+    // so PermissionsGuard / PolicyGuard see the populated set. The
+    // resolver fails open (returns role-default permissions) rather
+    // than throwing if the custom-role join errors; a hard failure
+    // there would 403 SUPER_ADMIN, which is worse than degraded perms.
+    const resolved = await this.permissionResolver.resolve(payload.sub, admin.role);
+    if (!resolved.fullyResolved) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'authz.resolver.degraded',
+          adminId: payload.sub,
+          role: admin.role,
+          note: 'custom-role resolution failed; using role-default permissions only',
+        }),
+      );
+    }
+
     request.adminId = payload.sub;
     request.adminEmail = admin.email;
     request.adminRole = admin.role;
     request.sessionId = session.id;
-    // Populate the standard shape that RolesGuard expects so @Roles()
-    // works on admin routes without each controller re-reading adminRole.
+    // Populate the standard shape downstream guards expect:
+    //   - PermissionsGuard reads req.user.permissions
+    //   - PolicyGuard reads req.user.permissions + req.user.customRoles
+    //   - RolesGuard reads req.user.roles
+    //   - Audit + downstream services use req.user.type to disambiguate.
     request.user = {
       id: payload.sub,
+      type: 'ADMIN' as const,
       roles: [admin.role],
+      permissions: resolved.permissions,
+      customRoles: resolved.customRoles,
     };
     return true;
   }

@@ -48,6 +48,9 @@ export class PrismaDiscountRepository implements DiscountRepository {
             collection: { select: { id: true, name: true } },
           },
         },
+        eligibilityRules: {
+          select: { id: true, ruleType: true, valueJson: true },
+        },
       },
     });
   }

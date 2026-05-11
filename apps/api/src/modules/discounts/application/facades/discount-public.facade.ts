@@ -22,8 +22,20 @@ export class DiscountPublicFacade {
     code: string,
     subtotal: number,
     items: Array<{ productId: string; quantity: number; unitPrice: number }> = [],
+    // Phase E (P1.3) — optional eligibility context. Pass through
+    // verbatim to the service.
+    eligibilityArgs?: {
+      customerId?: string | null;
+      paymentMethod?: 'COD' | 'ONLINE' | 'WALLET' | 'UPI' | string;
+      address?: { city?: string | null; pincode?: string | null; state?: string | null };
+    },
   ) {
-    return this.discountsService.validateCouponForCheckout(code, subtotal, items);
+    return this.discountsService.validateCouponForCheckout(
+      code,
+      subtotal,
+      items,
+      eligibilityArgs,
+    );
   }
 
   async incrementUsedCount(id: string) {

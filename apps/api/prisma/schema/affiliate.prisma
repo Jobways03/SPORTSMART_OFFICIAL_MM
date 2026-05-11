@@ -219,6 +219,13 @@ model AffiliateCouponCode {
   customerDiscountType  String?  @map("customer_discount_type") // PERCENT | FIXED
   customerDiscountValue Decimal? @map("customer_discount_value") @db.Decimal(10, 2)
 
+  // Phase F (P2.3) — discount-unification bridge. When NULL, this
+  // affiliate coupon still flows through the legacy facade path;
+  // when set, the row mirrors a Discount that owns the validation,
+  // reservation, allocation, and audit pipeline. Backfill via the
+  // admin "Unify" endpoint creates the mirror Discount + sets this.
+  discountId String? @map("discount_id")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

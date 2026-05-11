@@ -36,6 +36,9 @@ export interface CheckoutSession {
   unserviceableCount: number;
   createdAt: string;
   expiresAt: string;
+  // Shipping (v1) — customer picks an option; server recomputes the fee at
+  // place-order. Null until the customer applies one OR no options exist.
+  shippingOptionId?: string | null;
 }
 
 // ── Service: owns session storage concerns ───────────────────────────────

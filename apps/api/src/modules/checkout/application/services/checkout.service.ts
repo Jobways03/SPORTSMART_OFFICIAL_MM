@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import {
   CHECKOUT_REPOSITORY,
   ICheckoutRepository,
@@ -15,6 +15,10 @@ import {
 } from '../../../catalog/application/facades/catalog-public.facade';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { DiscountPublicFacade } from '../../../discounts/application/facades/discount-public.facade';
+import { ShippingOptionsPublicFacade } from '../../../shipping-options/application/facades/shipping-options-public.facade';
+import { DiscountReservationService } from '../../../discounts/application/services/discount-reservation.service';
+import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
@@ -34,6 +38,8 @@ const PLACE_ORDER_LOCK_TTL_SECONDS = 30;
 
 @Injectable()
 export class CheckoutService {
+  private readonly logger = new Logger(CheckoutService.name);
+
   constructor(
     @Inject(CHECKOUT_REPOSITORY)
     private readonly repo: ICheckoutRepository,
@@ -41,6 +47,9 @@ export class CheckoutService {
     private readonly catalogFacade: CatalogPublicFacade,
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly discountFacade: DiscountPublicFacade,
+    private readonly shippingOptionsFacade: ShippingOptionsPublicFacade,
+    private readonly discountReservation: DiscountReservationService,
+    private readonly discountAllocation: DiscountAllocationService,
     private readonly affiliateFacade: AffiliatePublicFacade,
     private readonly walletFacade: WalletPublicFacade,
     private readonly paymentOpsFacade: PaymentOpsFacade,
@@ -48,6 +57,7 @@ export class CheckoutService {
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly redis: RedisService,
+    private readonly env: EnvService,
   ) {}
 
   // ── Initiate Checkout ──────────────────────────────────────────────────
@@ -391,6 +401,7 @@ export class CheckoutService {
     couponCode?: string,
     referralCode?: string,
     walletApplyAmountInPaise?: number,
+    shippingOptionId?: string | null,
   ) {
     // Per-user lock: prevents double-submit (UI double-click or client
     // retry) from committing two MasterOrders against the same checkout
@@ -415,6 +426,7 @@ export class CheckoutService {
         couponCode,
         referralCode,
         walletApplyAmountInPaise,
+        shippingOptionId,
       );
     } finally {
       await this.redis.releaseLock(lockKey);
@@ -427,6 +439,7 @@ export class CheckoutService {
     couponCode?: string,
     referralCode?: string,
     walletApplyAmountInPaise?: number,
+    shippingOptionId?: string | null,
   ) {
     const method: 'COD' | 'ONLINE' =
       paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
@@ -443,6 +456,13 @@ export class CheckoutService {
       throw new BadRequestAppException(
         'Checkout session has expired — please initiate checkout again',
       );
+    }
+
+    // Stamp the customer's chosen shipping option onto the session so
+    // the downstream recompute (after discount resolves) sees it. The
+    // caller may also pass null to clear it (e.g. picking "free").
+    if (shippingOptionId !== undefined) {
+      session.shippingOptionId = shippingOptionId;
     }
 
     // Block if any item is unserviceable
@@ -498,6 +518,17 @@ export class CheckoutService {
     let discountCode: string | null = null;
     let discountAmount = 0;
     let discountId: string | null = null;
+    // Set when the customer applies a FREE_SHIPPING coupon. Zeros the
+    // recomputed shipping fee further down (separate code path from
+    // product-discount allocation).
+    let freeShippingCouponApplied = false;
+    // Phase B (P0.3) — reservation lifecycle handle. Set when the
+    // allocation feature flag is on; null otherwise (legacy path).
+    let discountReservationId: string | null = null;
+    const allocationEnabled = this.env.getBoolean(
+      'DISCOUNT_ALLOCATION_ENABLED',
+      false,
+    );
     const trimmedCouponCode = (couponCode || '').trim();
     if (trimmedCouponCode) {
       const sessionItems = session.items.map((i) => ({
@@ -509,12 +540,128 @@ export class CheckoutService {
         trimmedCouponCode,
         session.totalAmount,
         sessionItems,
+        // Phase E (P1.3) — eligibility context. Pass userId so
+        // customer-scoped rules (FIRST_ORDER_ONLY, NEW_CUSTOMER,
+        // velocity) can run; payment method + address (if shipping
+        // city/pincode are surfaced from the session) light up
+        // CITY_IN / PINCODE_IN / PAYMENT_METHOD_IN rules.
+        {
+          customerId: userId,
+          paymentMethod: method,
+          address: session.addressSnapshot
+            ? {
+                city: (session.addressSnapshot as any)?.city ?? null,
+                pincode: (session.addressSnapshot as any)?.postalCode ?? null,
+                state: (session.addressSnapshot as any)?.state ?? null,
+              }
+            : undefined,
+        },
       );
       discountCode = resolved.code;
       discountAmount = resolved.discountAmount;
       discountId = resolved.discountId;
+      // Track whether this coupon is a free-shipping coupon — used
+      // below to zero the shipping fee after the regular recompute.
+      if ((resolved as any).type === 'FREE_SHIPPING') {
+        freeShippingCouponApplied = true;
+      }
+
+      // Phase B (P0.3, P0.4) — reserve a redemption slot before
+      // committing the order. The reservation is concurrency-safe
+      // (DB row lock + partial unique indexes) so this is the call
+      // that enforces maxUses + onePerCustomer under load.
+      if (allocationEnabled && discountId) {
+        // Idempotency key must be UNIQUE PER CHECKOUT SESSION, not just
+        // per customer-coupon pair. Otherwise the second order this
+        // customer places with the same coupon returns the existing
+        // REDEEMED redemption from their first order — allocation rows
+        // then attach to a different masterOrder than the redemption.
+        // session.createdAt is set once per /checkout/initiate call, so
+        // it's stable across retries within the same checkout flow but
+        // changes when the customer starts a fresh checkout.
+        const idemKey = `checkout:${userId}:${discountId}:${trimmedCouponCode}:${session.createdAt}`;
+        try {
+          const reservation = await this.discountReservation.reserve({
+            discountId,
+            discountCode: trimmedCouponCode,
+            customerId: userId,
+            discountAmountInPaise: BigInt(Math.round(discountAmount * 100)),
+            source: 'CODE',
+            idempotencyKey: idemKey,
+          });
+          discountReservationId = reservation.redemptionId;
+        } catch (err) {
+          // Map service-layer errors to user-friendly messages.
+          const reason = (err as any)?.reason;
+          if (reason === 'MAX_USES_REACHED') {
+            throw new BadRequestAppException(
+              'This coupon has reached its usage limit.',
+            );
+          }
+          if (reason === 'ALREADY_REDEEMED_BY_CUSTOMER') {
+            throw new BadRequestAppException(
+              'You have already used this coupon.',
+            );
+          }
+          if (reason === 'EXPIRED') {
+            throw new BadRequestAppException('This coupon has expired.');
+          }
+          if (reason === 'NOT_STARTED') {
+            throw new BadRequestAppException(
+              'This coupon is not active yet.',
+            );
+          }
+          if (reason === 'INACTIVE' || reason === 'NOT_FOUND') {
+            throw new BadRequestAppException(
+              'This coupon is no longer available.',
+            );
+          }
+          throw err;
+        }
+      }
     }
-    const chargedTotal = Math.max(0, session.totalAmount - discountAmount);
+    // Shipping fee (v1) — server-side recompute. Frontend may suggest an
+    // option via session.shippingOptionId, but the fee is recalculated
+    // here using the current cart subtotal AFTER discount (so free-
+    // shipping thresholds use the net amount). When no option is
+    // selected (or none are configured), shipping is free — preserves
+    // the legacy zero-fee behavior.
+    let resolvedShippingOptionId: string | null = null;
+    let resolvedShippingOptionName: string | null = null;
+    let resolvedShippingFeeInPaise = 0n;
+    const netCartPaise = BigInt(
+      Math.max(0, Math.round((session.totalAmount - discountAmount) * 100)),
+    );
+    if (session.shippingOptionId) {
+      try {
+        const quote = await this.shippingOptionsFacade.quoteOption({
+          optionId: session.shippingOptionId,
+          netCartValueInPaise: netCartPaise,
+        });
+        resolvedShippingOptionId = quote.optionId;
+        resolvedShippingOptionName = quote.name;
+        resolvedShippingFeeInPaise = quote.feeInPaise;
+      } catch (err) {
+        // Disabled or deleted between preview and place-order. Surface
+        // the service error verbatim — it carries the customer-friendly
+        // message ("Please pick another option").
+        throw new BadRequestAppException(
+          (err as Error)?.message ??
+            'Selected shipping option is unavailable.',
+        );
+      }
+    }
+    // FREE_SHIPPING coupon: wipe the shipping fee but keep the snapshot
+    // (name + option id) so the order detail still shows which option
+    // would have been charged.
+    if (freeShippingCouponApplied) {
+      resolvedShippingFeeInPaise = 0n;
+    }
+    const shippingFeeInRupees = Number(resolvedShippingFeeInPaise) / 100;
+    const chargedTotal = Math.max(
+      0,
+      session.totalAmount - discountAmount + shippingFeeInRupees,
+    );
 
     // Wallet preflight — clamp to chargedTotal (can't pay more than the
     // order is for) and verify the user has the balance. Done BEFORE the
@@ -562,6 +709,9 @@ export class CheckoutService {
         discountCode,
         discountAmount,
         affiliateAttribution: attribution,
+        shippingOptionId: resolvedShippingOptionId,
+        shippingOptionName: resolvedShippingOptionName,
+        shippingFeeInPaise: resolvedShippingFeeInPaise,
       });
     } catch (err) {
       // Compensating action: release franchise reservations on failure
@@ -578,6 +728,19 @@ export class CheckoutService {
           } catch {
             // Best-effort release; FranchiseReservationCleanupService will catch stragglers
           }
+        }
+      }
+      // Phase B (P0.3) — release the discount reservation so other
+      // customers can use the coupon. Best-effort; the cron will
+      // also pick up the row on its next sweep via TTL expiry.
+      if (discountReservationId) {
+        try {
+          await this.discountReservation.release({
+            redemptionId: discountReservationId,
+            reason: 'CHECKOUT_FAILED',
+          });
+        } catch {
+          // ignore — cron will catch via TTL
         }
       }
       throw err;
@@ -622,9 +785,68 @@ export class CheckoutService {
     // Remove checkout session
     await this.sessionService.delete(userId);
 
-    // Bump usedCount on the applied coupon. Best-effort; the order is
-    // already committed so we don't fail placement if the increment fails.
-    if (discountId) {
+    // Phase B (P0.1, P0.5) — allocation + ledger + redemption.
+    //
+    // When the allocation feature flag is ON: write the full per-item
+    // discount allocation, GST snapshots, and liability ledger rows,
+    // then mark the redemption REDEEMED. All in one transaction; on
+    // failure the order is still committed (customer charged correctly,
+    // MasterOrder.discountAmount preserved) but the per-item ledger
+    // is missing — a recovery cron will retry.
+    //
+    // When the flag is OFF: legacy path — bump usedCount directly.
+    if (discountId && allocationEnabled && discountReservationId) {
+      try {
+        await this.discountAllocation.allocateAndPersist({
+          masterOrderId: result.masterOrderId,
+          discountId,
+          discountCode,
+          redemptionId: discountReservationId,
+          discountAmountInPaise: BigInt(Math.round(discountAmount * 100)),
+          // For now we only support order-level percent/fixed via
+          // checkout. BXGY allocation needs the resolved get-eligible
+          // set passed in via DiscountPublicFacade.validateCouponForCheckout
+          // — extending that response shape is a follow-up.
+          discountType: 'AMOUNT_OFF_ORDER',
+          discountMethod: 'CODE',
+          source: 'CODE',
+          // Default to PLATFORM funding for any existing discounts;
+          // admin-discount form changes (Phase D) will let admins set
+          // SELLER / SHARED before this is reached for new campaigns.
+          funding: { fundingType: 'PLATFORM' },
+        });
+      } catch (err) {
+        // Order is committed and customer was charged correctly.
+        // Allocation rows are missing — log + emit an outbox event
+        // for the recovery worker. Don't fail the response.
+        // (See Phase E P1.1 for the recovery handler.)
+        this.logger.error(
+          `Discount allocation failed for order ${result.masterOrderId} ` +
+          `(discountId=${discountId}, redemptionId=${discountReservationId}): ` +
+          `${(err as Error)?.message}`,
+          (err as Error)?.stack,
+        );
+        try {
+          await this.eventBus.publish({
+            eventName: 'discount.allocation.failed',
+            aggregate: 'MasterOrder',
+            aggregateId: result.masterOrderId,
+            occurredAt: new Date(),
+            payload: {
+              masterOrderId: result.masterOrderId,
+              discountId,
+              redemptionId: discountReservationId,
+              discountAmount,
+              error: (err as Error)?.message,
+            },
+          });
+        } catch {
+          // best-effort — if outbox is also down, the operator will
+          // see the order without allocation rows during reconciliation.
+        }
+      }
+    } else if (discountId) {
+      // Legacy path: just bump usedCount. Best-effort.
       try {
         await this.discountFacade.incrementUsedCount(discountId);
       } catch {

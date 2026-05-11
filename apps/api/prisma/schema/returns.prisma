@@ -124,6 +124,10 @@ model Return {
   statusHistory      ReturnStatusHistory[]
   refundTransactions RefundTransaction[]
 
+  // Phase B (P0.2) — credit-note / GST reversal snapshot rows
+  // (one per returned item) for QC-approved discounted returns.
+  taxReversalLines ReturnTaxReversalLine[]
+
   @@index([customerId])
   @@index([subOrderId])
   @@index([masterOrderId])
@@ -158,6 +162,9 @@ model ReturnItem {
 
   return    Return    @relation(fields: [returnId], references: [id], onDelete: Cascade)
   orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  // Phase B (P0.2) — per-return-item tax reversal lines.
+  taxReversalLines ReturnTaxReversalLine[]
 
   @@index([returnId])
   @@index([orderItemId])
@@ -237,4 +244,47 @@ model ReturnSequence {
   lastNumber Int @default(0) @map("last_number")
 
   @@map("return_sequences")
+}
+
+// ============================================
+// Phase B (P0.2) — Credit-note / GST reversal snapshot.
+// One row per QC-approved (return × item) for discounted orders.
+// Captures the proportional reversal of taxable value + GST so a
+// credit note can be issued with correct CGST/SGST/IGST splits.
+// Drives the customer refund total; sum of reversals across rows
+// for a return cannot exceed the GST originally collected.
+// ============================================
+model ReturnTaxReversalLine {
+  id                          String   @id @default(uuid())
+  returnId                    String   @map("return_id")
+  returnItemId                String   @map("return_item_id")
+  orderItemId                 String   @map("order_item_id")
+  // Pre-discount value of the returned quantity (gross unit × qty
+  // approved).
+  grossReturnedAmountInPaise  BigInt   @default(0) @map("gross_returned_amount_in_paise")
+  // Proportional discount reversal (`unitDiscount × approvedQty`).
+  discountReversalInPaise     BigInt   @default(0) @map("discount_reversal_in_paise")
+  // Net taxable value being reversed (gross - discount). The base
+  // for the GST reversal calculation.
+  taxableReversalInPaise      BigInt   @default(0) @map("taxable_reversal_in_paise")
+  // CGST + SGST + IGST reversal — mirror of the original snapshot
+  // proportions for the returned quantity.
+  cgstReversalInPaise         BigInt   @default(0) @map("cgst_reversal_in_paise")
+  sgstReversalInPaise         BigInt   @default(0) @map("sgst_reversal_in_paise")
+  igstReversalInPaise         BigInt   @default(0) @map("igst_reversal_in_paise")
+  totalTaxReversalInPaise     BigInt   @default(0) @map("total_tax_reversal_in_paise")
+  // Final credit-note line total = taxable + total tax reversal.
+  totalCreditNoteAmountInPaise BigInt  @default(0) @map("total_credit_note_amount_in_paise")
+  gstRateBps                  Int      @default(0) @map("gst_rate_bps")
+  hsnCode                     String?  @map("hsn_code")
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  return     Return     @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  returnItem ReturnItem @relation(fields: [returnItemId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@index([returnItemId])
+  @@index([orderItemId])
+  @@map("return_tax_reversal_lines")
 }

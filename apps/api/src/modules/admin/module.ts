@@ -12,6 +12,8 @@ import { PrismaAdminRepository } from './infrastructure/repositories/prisma-admi
 // Services
 import { AdminAuditService } from './application/services/admin-audit.service';
 import { AdminCustomerService } from './application/services/admin-customer.service';
+import { AdminUserService } from './application/services/admin-user.service';
+import { AdminDeliveryMethodsService } from './application/services/admin-delivery-methods.service';
 
 // Use Cases
 import { AdminLoginUseCase } from './application/use-cases/admin-login.use-case';
@@ -39,11 +41,12 @@ import { AdminAuthController } from './presentation/controllers/admin-auth.contr
 import { AdminSellersController } from './presentation/controllers/admin-sellers.controller';
 import { AdminCustomersController } from './presentation/controllers/admin-customers.controller';
 import { AdminRolesController } from './presentation/controllers/admin-roles.controller';
+import { AdminAuthzReadinessController } from './presentation/controllers/admin-authz-readiness.controller';
+import { AdminUsersController } from './presentation/controllers/admin-users.controller';
 import {
   AdminFranchiseDeliveryMethodsController,
   AdminSellerDeliveryMethodsController,
 } from './presentation/controllers/admin-delivery-methods.controller';
-import { AdminDeliveryMethodsService } from './application/services/admin-delivery-methods.service';
 import { RoleService } from './application/services/role.service';
 
 // Policies
@@ -56,12 +59,15 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     AdminSellersController,
     AdminCustomersController,
     AdminRolesController,
+    AdminAuthzReadinessController,
+    AdminUsersController,
     AdminSellerDeliveryMethodsController,
     AdminFranchiseDeliveryMethodsController,
   ],
   providers: [
     AdminAuthGuard,
     RoleService,
+    AdminUserService,
     AdminDeliveryMethodsService,
     {
       provide: ADMIN_REPOSITORY,

@@ -59,6 +59,20 @@ export interface OrderDetail {
   createdAt: string;
   shippingAddressSnapshot: ShippingAddressSnapshot;
   subOrders: SubOrder[];
+  // Phase D — discount the customer applied to this order (if any).
+  // Legacy orders return null; even pre-Phase-B orders with a non-zero
+  // discountAmount land here with code=null.
+  appliedDiscount?: {
+    code: string | null;
+    title: string | null;
+    discountAmount: string;
+  } | null;
+  // Shipping snapshot (v1). Null when shipping was free.
+  shipping?: {
+    optionName: string | null;
+    feeInPaise: string;
+    feeInRupees: string;
+  } | null;
 }
 
 export interface ReturnEligibilityItem {

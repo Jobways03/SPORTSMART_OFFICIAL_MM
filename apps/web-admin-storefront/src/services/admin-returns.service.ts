@@ -126,6 +126,30 @@ export interface ReturnDetail extends ReturnListItem {
   refundMethod?: string | null;
   refundReference?: string | null;
   qcNotes?: string | null;
+  // Phase C (P0.2) — discount-aware refund preview data attached by
+  // the admin getReturnByIdAdmin endpoint. Empty arrays for legacy
+  // orders without per-item tax snapshots — UI falls back to the
+  // gross-price refund display in that case.
+  refundPreview?: {
+    taxSnapshots: Array<{
+      orderItemId: string;
+      grossLineAmountInPaise: string;
+      discountAmountInPaise: string;
+      taxableAmountInPaise: string;
+      gstRateBps: number;
+      cgstAmountInPaise: string;
+      sgstAmountInPaise: string;
+      igstAmountInPaise: string;
+      totalTaxAmountInPaise: string;
+    }>;
+    priorReversals: Array<{
+      id: string;
+      orderItemId: string;
+      taxableReversalInPaise: string;
+      totalTaxReversalInPaise: string;
+      totalCreditNoteAmountInPaise: string;
+    }>;
+  };
 }
 
 export interface ReturnListResponse {

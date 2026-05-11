@@ -1,0 +1,224 @@
+// Phase B (P0.5) — Funding-split tests.
+
+import {
+  splitFundingShares,
+  validateFundingConfig,
+  type FundingConfig,
+} from './funding';
+
+const config = (over: Partial<FundingConfig>): FundingConfig => ({
+  fundingType: over.fundingType ?? 'PLATFORM',
+  platformFundingPercent: over.platformFundingPercent,
+  sellerFundingPercent: over.sellerFundingPercent,
+  brandFundingPercent: over.brandFundingPercent,
+});
+
+describe('splitFundingShares', () => {
+  it('PLATFORM: full amount to platform', () => {
+    const shares = splitFundingShares(20_000n, config({ fundingType: 'PLATFORM' }));
+    expect(shares).toEqual([
+      { liabilityParty: 'PLATFORM', amountInPaise: 20_000n },
+    ]);
+  });
+
+  it('SELLER: full amount to seller', () => {
+    const shares = splitFundingShares(20_000n, config({ fundingType: 'SELLER' }));
+    expect(shares).toEqual([
+      { liabilityParty: 'SELLER', amountInPaise: 20_000n },
+    ]);
+  });
+
+  it('BRAND: full amount to brand', () => {
+    const shares = splitFundingShares(20_000n, config({ fundingType: 'BRAND' }));
+    expect(shares).toEqual([
+      { liabilityParty: 'BRAND', amountInPaise: 20_000n },
+    ]);
+  });
+
+  it('SHARED 50/50 platform/seller: splits exactly', () => {
+    const shares = splitFundingShares(
+      20_000n,
+      config({
+        fundingType: 'SHARED',
+        platformFundingPercent: 50,
+        sellerFundingPercent: 50,
+      }),
+    );
+    expect(shares).toContainEqual({
+      liabilityParty: 'PLATFORM',
+      amountInPaise: 10_000n,
+    });
+    expect(shares).toContainEqual({
+      liabilityParty: 'SELLER',
+      amountInPaise: 10_000n,
+    });
+  });
+
+  it('SHARED 70/30 platform/seller', () => {
+    const shares = splitFundingShares(
+      10_000n,
+      config({
+        fundingType: 'SHARED',
+        platformFundingPercent: 70,
+        sellerFundingPercent: 30,
+      }),
+    );
+    expect(shares).toContainEqual({
+      liabilityParty: 'PLATFORM',
+      amountInPaise: 7_000n,
+    });
+    expect(shares).toContainEqual({
+      liabilityParty: 'SELLER',
+      amountInPaise: 3_000n,
+    });
+  });
+
+  it('SHARED with rounding remainder → goes to PLATFORM', () => {
+    // 100 paise / 33% / 33% / 34% — let's pick numbers where floor
+    // produces a remainder.
+    const shares = splitFundingShares(
+      100n,
+      config({
+        fundingType: 'SHARED',
+        platformFundingPercent: 33,
+        sellerFundingPercent: 33,
+        brandFundingPercent: 34,
+      }),
+    );
+    const total = shares.reduce((acc, s) => acc + s.amountInPaise, 0n);
+    expect(total).toBe(100n); // conservation
+    const platformShare = shares.find((s) => s.liabilityParty === 'PLATFORM');
+    expect(platformShare).toBeDefined();
+    // Platform gets 33 paise + remainder.
+    expect(platformShare!.amountInPaise).toBeGreaterThanOrEqual(33n);
+  });
+
+  it('SHARED 100% platform/0% others: only platform row returned', () => {
+    const shares = splitFundingShares(
+      10_000n,
+      config({
+        fundingType: 'SHARED',
+        platformFundingPercent: 100,
+        sellerFundingPercent: 0,
+        brandFundingPercent: 0,
+      }),
+    );
+    expect(shares).toHaveLength(1);
+    expect(shares[0]).toEqual({
+      liabilityParty: 'PLATFORM',
+      amountInPaise: 10_000n,
+    });
+  });
+
+  it('NONE: returns empty (legacy/unattributed)', () => {
+    const shares = splitFundingShares(10_000n, config({ fundingType: 'NONE' }));
+    expect(shares).toEqual([]);
+  });
+
+  it('zero allocation returns empty regardless of fundingType', () => {
+    expect(splitFundingShares(0n, config({ fundingType: 'PLATFORM' }))).toEqual(
+      [],
+    );
+    expect(
+      splitFundingShares(
+        0n,
+        config({
+          fundingType: 'SHARED',
+          platformFundingPercent: 50,
+          sellerFundingPercent: 50,
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('rejects negative allocation', () => {
+    expect(() =>
+      splitFundingShares(-1n, config({ fundingType: 'PLATFORM' })),
+    ).toThrow(/negative/);
+  });
+
+  it('rejects SHARED config that does not sum to 100', () => {
+    expect(() =>
+      splitFundingShares(
+        10_000n,
+        config({
+          fundingType: 'SHARED',
+          platformFundingPercent: 50,
+          sellerFundingPercent: 30,
+        }),
+      ),
+    ).toThrow(/sum to 100/);
+  });
+
+  it('preserves conservation across all share types (property check)', () => {
+    const cases: FundingConfig[] = [
+      { fundingType: 'PLATFORM' },
+      { fundingType: 'SELLER' },
+      { fundingType: 'BRAND' },
+      {
+        fundingType: 'SHARED',
+        platformFundingPercent: 33,
+        sellerFundingPercent: 67,
+      },
+      {
+        fundingType: 'SHARED',
+        platformFundingPercent: 25,
+        sellerFundingPercent: 25,
+        brandFundingPercent: 50,
+      },
+    ];
+    const amounts = [1n, 100n, 9_999n, 100_000n, 999_999_999n];
+    for (const cfg of cases) {
+      for (const amt of amounts) {
+        const shares = splitFundingShares(amt, cfg);
+        const sum = shares.reduce((a, s) => a + s.amountInPaise, 0n);
+        expect(sum).toBe(amt);
+      }
+    }
+  });
+});
+
+describe('validateFundingConfig', () => {
+  it('PLATFORM with 100% platform passes', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'PLATFORM',
+        platformFundingPercent: 100,
+      }),
+    ).not.toThrow();
+  });
+  it('PLATFORM with non-100% platform throws', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'PLATFORM',
+        platformFundingPercent: 50,
+      }),
+    ).toThrow();
+  });
+  it('SELLER with 100% seller passes', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'SELLER',
+        sellerFundingPercent: 100,
+      }),
+    ).not.toThrow();
+  });
+  it('SHARED summing to 100 passes', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'SHARED',
+        platformFundingPercent: 60,
+        sellerFundingPercent: 40,
+      }),
+    ).not.toThrow();
+  });
+  it('SHARED summing to !=100 throws', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'SHARED',
+        platformFundingPercent: 60,
+        sellerFundingPercent: 30,
+      }),
+    ).toThrow(/sum to 100/);
+  });
+});

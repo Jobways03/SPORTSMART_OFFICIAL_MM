@@ -78,6 +78,39 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   const [browseSelected, setBrowseSelected] = useState<Set<string>>(new Set());
   const [browseLoading, setBrowseLoading] = useState(false);
 
+  // Phase E (P1.3) — Eligibility rules state. Each toggle either
+  // adds or removes a row in discount_eligibility_rules. The form
+  // doesn't expose every rule type — only the most common ones.
+  // Power-user rules (CITY_IN, PINCODE_IN, segments) can be set
+  // via direct API for now.
+  const [firstOrderOnly, setFirstOrderOnly] = useState(false);
+  const [newCustomerOnly, setNewCustomerOnly] = useState(false);
+  const [newCustomerMaxAgeDays, setNewCustomerMaxAgeDays] = useState('30');
+  const [maxRedemptionsPerCustomer, setMaxRedemptionsPerCustomer] = useState('');
+  const [minDaysBetweenRedemptions, setMinDaysBetweenRedemptions] = useState('');
+  const [paymentMethodIn, setPaymentMethodIn] = useState<string[]>([]);
+
+  // Phase B (P0.5) — Funding & Settlement state. Defaults preserve
+  // current behavior (PLATFORM-funded / GROSS commission) for any
+  // discount created without explicitly choosing.
+  const [fundingType, setFundingType] = useState<
+    'PLATFORM' | 'SELLER' | 'BRAND' | 'SHARED'
+  >('PLATFORM');
+  const [platformFundingPercent, setPlatformFundingPercent] = useState('100');
+  const [sellerFundingPercent, setSellerFundingPercent] = useState('0');
+  const [brandFundingPercent, setBrandFundingPercent] = useState('0');
+  const [commissionBasis, setCommissionBasis] = useState<
+    'GROSS' | 'NET_AFTER_DISCOUNT' | 'SELLER_FUNDED_NET'
+  >('GROSS');
+  const [fundingNotes, setFundingNotes] = useState('');
+
+  // Phase F (P2.3) — affiliate attribution. When affiliateId is set,
+  // every redemption of this discount also records a ReferralAttribution
+  // + the affiliate-side commission. Optional commission override.
+  const [affiliateId, setAffiliateId] = useState('');
+  const [affiliateCommissionPercent, setAffiliateCommissionPercent] = useState('');
+  const [affiliates, setAffiliates] = useState<Array<{ id: string; firstName?: string; lastName?: string; email?: string }>>([]);
+
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(isEdit);
   const [status, setStatus] = useState('ACTIVE');
@@ -105,6 +138,25 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         setCombOrder(d.combineOrder);
         setCombShip(d.combineShipping);
         setStatus(d.status);
+        // Phase B (P0.5) — funding fields. Default to PLATFORM if
+        // unset (legacy rows that haven't been edited since the
+        // schema migration land here).
+        if (d.fundingType) setFundingType(d.fundingType);
+        if (d.platformFundingPercent !== undefined && d.platformFundingPercent !== null)
+          setPlatformFundingPercent(String(Number(d.platformFundingPercent)));
+        if (d.sellerFundingPercent !== undefined && d.sellerFundingPercent !== null)
+          setSellerFundingPercent(String(Number(d.sellerFundingPercent)));
+        if (d.brandFundingPercent !== undefined && d.brandFundingPercent !== null)
+          setBrandFundingPercent(String(Number(d.brandFundingPercent)));
+        if (d.commissionBasis) setCommissionBasis(d.commissionBasis);
+        if (d.fundingNotes) setFundingNotes(d.fundingNotes);
+        if (d.affiliateId) setAffiliateId(d.affiliateId);
+        if (
+          d.affiliateCommissionPercent !== undefined &&
+          d.affiliateCommissionPercent !== null
+        ) {
+          setAffiliateCommissionPercent(String(Number(d.affiliateCommissionPercent)));
+        }
         const sd = new Date(d.startsAt);
         setStartDate(sd.toISOString().slice(0, 10));
         setStartTime(sd.toTimeString().slice(0, 5));
@@ -128,10 +180,62 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
           setSelectedBuyProducts(d.products.filter((r: any) => r.scope === 'BUY').map(toSel));
           setSelectedGetProducts(d.products.filter((r: any) => r.scope === 'GET').map(toSel));
         }
+        // Phase E (P1.3) — hydrate eligibility-rule UI state from
+        // the persisted rule set. Unknown rule types are ignored so
+        // the form stays forward-compatible with rules added via API.
+        if (Array.isArray(d.eligibilityRules)) {
+          for (const r of d.eligibilityRules) {
+            const v = (r.valueJson ?? {}) as any;
+            switch (r.ruleType) {
+              case 'FIRST_ORDER_ONLY':
+                setFirstOrderOnly(true);
+                break;
+              case 'NEW_CUSTOMER_ONLY':
+                setNewCustomerOnly(true);
+                if (v.maxAccountAgeDays !== undefined && v.maxAccountAgeDays !== null) {
+                  setNewCustomerMaxAgeDays(String(v.maxAccountAgeDays));
+                }
+                break;
+              case 'MAX_REDEMPTIONS_PER_CUSTOMER':
+                if (v.max !== undefined && v.max !== null) {
+                  setMaxRedemptionsPerCustomer(String(v.max));
+                }
+                break;
+              case 'MIN_DAYS_BETWEEN_REDEMPTIONS':
+                if (v.minDays !== undefined && v.minDays !== null) {
+                  setMinDaysBetweenRedemptions(String(v.minDays));
+                }
+                break;
+              case 'PAYMENT_METHOD_IN':
+                if (Array.isArray(v.methods)) setPaymentMethodIn(v.methods);
+                break;
+            }
+          }
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [discountId]);
+
+  // Phase F (P2.3) — load affiliate list once for the selector dropdown.
+  // Best-effort: if the endpoint is unavailable the field stays empty
+  // and the admin can still paste an affiliateId manually.
+  useEffect(() => {
+    apiClient<{ affiliates: any[] }>('/admin/affiliates?limit=200')
+      .then((r) => {
+        if (Array.isArray(r.data?.affiliates)) {
+          setAffiliates(
+            r.data.affiliates.map((a: any) => ({
+              id: a.id,
+              firstName: a.firstName,
+              lastName: a.lastName,
+              email: a.email,
+            })),
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Browse products/collections
   const fetchBrowseItems = useCallback(() => {
@@ -219,6 +323,59 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
       const startsAt = new Date(`${startDate}T${startTime || '00:00'}`).toISOString();
       const endsAt = hasEnd && endDate ? new Date(`${endDate}T${endTime || '23:59'}`).toISOString() : null;
 
+      // Phase B (P0.5) — funding fields. UI validates that the
+      // selected fundingType lines up with the percent inputs
+      // (PLATFORM = 100/0/0, SELLER = 0/100/0, etc.).
+      // Phase E (P1.3) — flatten the eligibility UI state into the
+      // domain rule shape. Empty values produce no rule (i.e. "no
+      // restriction") so the form behaves backwards-compatibly when
+      // every toggle is off.
+      const eligibilityRules: Array<{ ruleType: string; valueJson: Record<string, unknown> }> = [];
+      if (firstOrderOnly) {
+        eligibilityRules.push({ ruleType: 'FIRST_ORDER_ONLY', valueJson: {} });
+      }
+      if (newCustomerOnly) {
+        const days = parseInt(newCustomerMaxAgeDays, 10);
+        eligibilityRules.push({
+          ruleType: 'NEW_CUSTOMER_ONLY',
+          valueJson: Number.isFinite(days) && days > 0 ? { maxAccountAgeDays: days } : {},
+        });
+      }
+      if (maxRedemptionsPerCustomer.trim()) {
+        const max = parseInt(maxRedemptionsPerCustomer, 10);
+        if (Number.isFinite(max) && max > 0) {
+          eligibilityRules.push({
+            ruleType: 'MAX_REDEMPTIONS_PER_CUSTOMER',
+            valueJson: { max },
+          });
+        }
+      }
+      if (minDaysBetweenRedemptions.trim()) {
+        const minDays = parseInt(minDaysBetweenRedemptions, 10);
+        if (Number.isFinite(minDays) && minDays > 0) {
+          eligibilityRules.push({
+            ruleType: 'MIN_DAYS_BETWEEN_REDEMPTIONS',
+            valueJson: { minDays },
+          });
+        }
+      }
+      if (paymentMethodIn.length > 0) {
+        eligibilityRules.push({
+          ruleType: 'PAYMENT_METHOD_IN',
+          valueJson: { methods: paymentMethodIn },
+        });
+      }
+
+      const platformPct = parseFloat(platformFundingPercent) || 0;
+      const sellerPct = parseFloat(sellerFundingPercent) || 0;
+      const brandPct = parseFloat(brandFundingPercent) || 0;
+      const fundingSum = platformPct + sellerPct + brandPct;
+      if (fundingType === 'SHARED' && Math.abs(fundingSum - 100) > 0.01) {
+        throw new Error(
+          `Funding percentages must sum to 100% for SHARED funding (currently ${fundingSum}%)`,
+        );
+      }
+
       const payload: any = {
         type, method, valueType,
         value: parseFloat(value) || 0,
@@ -235,6 +392,21 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         customerIds: eligibility === 'SPECIFIC_CUSTOMERS' ? selectedCustomers.map((c) => c.id) : [],
         productIds: appliesTo === 'SPECIFIC_PRODUCTS' ? selectedProducts.map((p) => p.id) : [],
         collectionIds: appliesTo === 'SPECIFIC_COLLECTIONS' ? selectedCollections.map((c) => c.id) : [],
+        // Phase B (P0.5) funding & settlement
+        fundingType,
+        platformFundingPercent: platformPct,
+        sellerFundingPercent: sellerPct,
+        brandFundingPercent: brandPct,
+        commissionBasis,
+        fundingNotes: fundingNotes.trim() || null,
+        // Phase E (P1.3) — always send the array (incl. []) so update
+        // semantics are explicit: no field = no change, [] = clear all.
+        eligibilityRules,
+        // Phase F (P2.3) — affiliate attribution. Empty = clear link.
+        affiliateId: affiliateId || null,
+        affiliateCommissionPercent: affiliateCommissionPercent.trim()
+          ? parseFloat(affiliateCommissionPercent)
+          : null,
       };
 
       if (method === 'CODE') { payload.code = code; payload.title = null; }
@@ -505,6 +677,104 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             )}
           </section>
 
+          {/* Eligibility rules (Phase E P1.3) — fraud / velocity / payment / customer */}
+          <section style={card}>
+            <h3 style={cardTitle}>Eligibility rules</h3>
+            <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 12px' }}>
+              Restrict who can redeem this discount. Rules are evaluated at
+              checkout — a customer who fails any rule sees a friendly error.
+            </p>
+
+            <CheckboxOption
+              checked={firstOrderOnly}
+              onChange={setFirstOrderOnly}
+              label="First-order customers only"
+            />
+            <CheckboxOption
+              checked={newCustomerOnly}
+              onChange={setNewCustomerOnly}
+              label="New customers only (account age limit)"
+            />
+            {newCustomerOnly && (
+              <div style={{ marginLeft: 26, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, color: '#374151' }}>Account younger than</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={newCustomerMaxAgeDays}
+                  onChange={(e) => setNewCustomerMaxAgeDays(e.target.value)}
+                  style={{ ...input, width: 90 }}
+                />
+                <span style={{ fontSize: 13, color: '#374151' }}>days</span>
+              </div>
+            )}
+
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Max redemptions per customer</label>
+              <input
+                type="number"
+                min={0}
+                placeholder="No limit"
+                value={maxRedemptionsPerCustomer}
+                onChange={(e) => setMaxRedemptionsPerCustomer(e.target.value)}
+                style={{ ...input, width: 200 }}
+              />
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                Caps total redemptions per customer over the life of this discount.
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Minimum days between redemptions</label>
+              <input
+                type="number"
+                min={0}
+                placeholder="No cooldown"
+                value={minDaysBetweenRedemptions}
+                onChange={(e) => setMinDaysBetweenRedemptions(e.target.value)}
+                style={{ ...input, width: 200 }}
+              />
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                Prevents same-day repeat redemptions for serial coupon abuse.
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Allowed payment methods</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {(['COD', 'ONLINE', 'WALLET', 'UPI'] as const).map((pm) => {
+                  const on = paymentMethodIn.includes(pm);
+                  return (
+                    <button
+                      key={pm}
+                      type="button"
+                      onClick={() =>
+                        setPaymentMethodIn((prev) =>
+                          prev.includes(pm) ? prev.filter((x) => x !== pm) : [...prev, pm],
+                        )
+                      }
+                      style={{
+                        padding: '6px 14px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        border: `1px solid ${on ? '#303030' : '#c9cccf'}`,
+                        background: on ? '#303030' : '#fff',
+                        color: on ? '#fff' : '#303030',
+                        borderRadius: 999,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {pm}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+                Leave empty to allow all payment methods. Common pattern: exclude COD on prepaid-only promos.
+              </div>
+            </div>
+          </section>
+
           {/* Min purchase */}
           {!isBXGY && (
             <section style={card}>
@@ -537,6 +807,184 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             <CheckboxOption checked={combProd} onChange={setCombProd} label="Product discounts" />
             <CheckboxOption checked={combOrder} onChange={setCombOrder} label="Order discounts" />
             <CheckboxOption checked={combShip} onChange={setCombShip} label="Shipping discounts" />
+          </section>
+
+          {/* Funding & Settlement (Phase B P0.5) */}
+          <section style={card}>
+            <h3 style={cardTitle}>Funding &amp; Settlement</h3>
+            <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 12px' }}>
+              Determines who absorbs the cost of this discount and how seller
+              commission is computed. Transactional discounts reduce taxable
+              value before GST is calculated.
+            </p>
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
+              Funding type
+            </label>
+            <select
+              value={fundingType}
+              onChange={(e) => {
+                const v = e.target.value as 'PLATFORM' | 'SELLER' | 'BRAND' | 'SHARED';
+                setFundingType(v);
+                // Auto-fill the percent fields to match the chosen type.
+                if (v === 'PLATFORM') {
+                  setPlatformFundingPercent('100');
+                  setSellerFundingPercent('0');
+                  setBrandFundingPercent('0');
+                  setCommissionBasis('GROSS');
+                } else if (v === 'SELLER') {
+                  setPlatformFundingPercent('0');
+                  setSellerFundingPercent('100');
+                  setBrandFundingPercent('0');
+                  setCommissionBasis('NET_AFTER_DISCOUNT');
+                } else if (v === 'BRAND') {
+                  setPlatformFundingPercent('0');
+                  setSellerFundingPercent('0');
+                  setBrandFundingPercent('100');
+                  setCommissionBasis('GROSS');
+                } else {
+                  // SHARED — leave as user-entered; default to 50/50 if empty
+                  if (
+                    parseFloat(platformFundingPercent) +
+                      parseFloat(sellerFundingPercent) +
+                      parseFloat(brandFundingPercent) ===
+                    0
+                  ) {
+                    setPlatformFundingPercent('50');
+                    setSellerFundingPercent('50');
+                  }
+                  setCommissionBasis('SELLER_FUNDED_NET');
+                }
+              }}
+              style={{ ...input, marginBottom: 12 }}
+            >
+              <option value="PLATFORM">Platform funded (marketing expense)</option>
+              <option value="SELLER">Seller funded</option>
+              <option value="BRAND">Brand funded</option>
+              <option value="SHARED">Shared (split percentages)</option>
+            </select>
+
+            {fundingType === 'SHARED' && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
+                <div>
+                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Platform %</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={platformFundingPercent}
+                    onChange={(e) => setPlatformFundingPercent(e.target.value)}
+                    style={input}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Seller %</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={sellerFundingPercent}
+                    onChange={(e) => setSellerFundingPercent(e.target.value)}
+                    style={input}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Brand %</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={brandFundingPercent}
+                    onChange={(e) => setBrandFundingPercent(e.target.value)}
+                    style={input}
+                  />
+                </div>
+              </div>
+            )}
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
+              Commission basis
+            </label>
+            <select
+              value={commissionBasis}
+              onChange={(e) =>
+                setCommissionBasis(
+                  e.target.value as 'GROSS' | 'NET_AFTER_DISCOUNT' | 'SELLER_FUNDED_NET',
+                )
+              }
+              style={{ ...input, marginBottom: 12 }}
+            >
+              <option value="GROSS">Gross — commission on pre-discount price</option>
+              <option value="NET_AFTER_DISCOUNT">Net after discount</option>
+              <option value="SELLER_FUNDED_NET">Net of seller-funded share only</option>
+            </select>
+
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
+              Internal notes (not shown to customer)
+            </label>
+            <textarea
+              value={fundingNotes}
+              onChange={(e) => setFundingNotes(e.target.value)}
+              rows={2}
+              placeholder="e.g. Q1 marketing spend, co-funded with Adidas brand, etc."
+              style={{ ...input, fontFamily: 'inherit', resize: 'vertical' }}
+            />
+
+            <div style={{ marginTop: 8, fontSize: 11, color: '#6b7280', lineHeight: 1.5 }}>
+              <div>
+                <strong>Platform-funded:</strong> seller is paid as if customer paid full price; platform absorbs the discount.
+              </div>
+              <div>
+                <strong>Seller-funded:</strong> seller settlement reduced by the discount amount.
+              </div>
+            </div>
+          </section>
+
+          {/* Affiliate attribution (Phase F P2.3) */}
+          <section style={card}>
+            <h3 style={cardTitle}>Affiliate attribution</h3>
+            <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 12px' }}>
+              Optionally tie this discount to an affiliate. Every redemption
+              writes a ReferralAttribution + an AffiliateCommission, so a
+              single discount drives both the customer-facing reduction and
+              the affiliate payout flow.
+            </p>
+
+            <label style={label}>Attribute redemptions to</label>
+            <select
+              value={affiliateId}
+              onChange={(e) => setAffiliateId(e.target.value)}
+              style={{ ...input, marginBottom: 12 }}
+            >
+              <option value="">None — regular discount</option>
+              {affiliates.map((a) => {
+                const name = [a.firstName, a.lastName].filter(Boolean).join(' ');
+                return (
+                  <option key={a.id} value={a.id}>
+                    {name || a.email || a.id}
+                  </option>
+                );
+              })}
+            </select>
+
+            {affiliateId && (
+              <>
+                <label style={label}>Commission % override (optional)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.01}
+                  placeholder="Leave empty to use affiliate's default rate"
+                  value={affiliateCommissionPercent}
+                  onChange={(e) => setAffiliateCommissionPercent(e.target.value)}
+                  style={{ ...input, width: 280 }}
+                />
+                <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                  When empty, the affiliate's account-level commission rate is used.
+                </div>
+              </>
+            )}
           </section>
 
           {/* Active dates */}

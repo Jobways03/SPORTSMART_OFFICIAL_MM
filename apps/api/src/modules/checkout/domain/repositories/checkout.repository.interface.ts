@@ -167,6 +167,11 @@ export interface PlaceOrderTransactionInput {
     source: 'LINK' | 'COUPON';
     code: string;
   } | null;
+  // Shipping (v1) — server-computed snapshot. All three are optional;
+  // null/0 preserves the legacy free-shipping behavior.
+  shippingOptionId?: string | null;
+  shippingOptionName?: string | null;
+  shippingFeeInPaise?: bigint;
 }
 
 export interface PlaceOrderTransactionResult {

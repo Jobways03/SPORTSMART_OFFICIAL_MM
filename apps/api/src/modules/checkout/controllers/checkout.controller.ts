@@ -66,6 +66,10 @@ export class CheckoutController {
       // Optional wallet portion to apply to this order. Server clamps
       // to chargedTotal and validates available balance before debit.
       walletApplyAmountInPaise?: number;
+      // Shipping option (v1). The customer picks one at checkout; the
+      // server re-quotes it against the current cart subtotal before
+      // committing the order so the fee can't be tampered with.
+      shippingOptionId?: string | null;
     },
   ) {
     const walletApply = Number(body.walletApplyAmountInPaise);
@@ -75,6 +79,7 @@ export class CheckoutController {
       body.couponCode,
       body.referralCode,
       Number.isFinite(walletApply) && walletApply > 0 ? walletApply : undefined,
+      body.shippingOptionId ?? null,
     );
     const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {

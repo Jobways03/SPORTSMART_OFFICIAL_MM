@@ -78,6 +78,71 @@ export default function DiscountsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>Discounts</h1>
         <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={async () => {
+              if (!window.confirm('Migrate every legacy affiliate coupon into the unified pipeline?')) return;
+              try {
+                const res = await apiClient<{ total: number; unified: number; skipped: number; errors: Array<{ id: string; message: string }> }>(
+                  '/admin/discounts/affiliate/unify',
+                  { method: 'POST' },
+                );
+                const d = res.data;
+                if (!d) {
+                  window.alert('Unify request completed.');
+                  return;
+                }
+                window.alert(
+                  `Unified ${d.unified} of ${d.total}.\nSkipped: ${d.skipped}.\nErrors: ${d.errors.length}.`,
+                );
+              } catch (e: any) {
+                window.alert(`Failed: ${e?.message ?? 'unknown error'}`);
+              }
+            }}
+            style={{
+              padding: '9px 20px',
+              fontSize: 13,
+              fontWeight: 600,
+              background: '#fff',
+              color: '#303030',
+              border: '1px solid #d1d5db',
+              borderRadius: 8,
+              cursor: 'pointer',
+            }}
+          >
+            Unify affiliate coupons
+          </button>
+          <a
+            href="/dashboard/discounts/abuse"
+            style={{
+              padding: '9px 20px',
+              fontSize: 13,
+              fontWeight: 600,
+              background: '#fff',
+              color: '#303030',
+              border: '1px solid #d1d5db',
+              borderRadius: 8,
+              cursor: 'pointer',
+              textDecoration: 'none',
+            }}
+          >
+            Abuse panel
+          </a>
+          <a
+            href="/dashboard/discounts/analytics"
+            style={{
+              padding: '9px 20px',
+              fontSize: 13,
+              fontWeight: 600,
+              background: '#fff',
+              color: '#303030',
+              border: '1px solid #d1d5db',
+              borderRadius: 8,
+              cursor: 'pointer',
+              textDecoration: 'none',
+            }}
+          >
+            View analytics
+          </a>
           <button onClick={() => setShowModal(true)} style={{
             padding: '9px 20px', fontSize: 13, fontWeight: 600,
             background: '#303030', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer',

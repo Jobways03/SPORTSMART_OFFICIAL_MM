@@ -106,6 +106,14 @@ model MasterOrder {
   // Phase 1.4 paise sibling (ADR-007).
   discountAmountInPaise BigInt  @default(0) @map("discount_amount_in_paise")
 
+  // Shipping (v1) — flat fee + snapshot of the applied option. shippingFeeInPaise
+  // is server-computed at place-order and stored as the source of truth; the
+  // name is snapshotted so historical orders render correctly even if the
+  // option is later renamed or deleted.
+  shippingOptionId    String? @map("shipping_option_id")
+  shippingOptionName  String? @map("shipping_option_name")
+  shippingFeeInPaise  BigInt  @default(0) @map("shipping_fee_in_paise")
+
   // Online payment tracking (Razorpay)
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
@@ -118,6 +126,13 @@ model MasterOrder {
   subOrders         SubOrder[]
   commissionRecords CommissionRecord[]
   returns           Return[]
+  shippingOption    ShippingOption?    @relation(fields: [shippingOptionId], references: [id], onDelete: SetNull)
+
+  // Phase B (P0) — discount allocation ledger relations.
+  orderDiscounts          OrderDiscount[]
+  orderItemDiscounts      OrderItemDiscount[]
+  discountRedemptions     DiscountRedemption[]
+  discountLiabilityLedger DiscountLiabilityLedger[]
 
   @@index([customerId])
   @@index([orderNumber])
@@ -186,6 +201,10 @@ model SubOrder {
   commissionRecords CommissionRecord[]
   returns           Return[]
 
+  // Phase B (P0) — per-sub-order item allocations (drives seller-
+  // level settlement deduction for seller-funded discounts).
+  orderItemDiscounts OrderItemDiscount[]
+
   @@index([masterOrderId])
   @@index([sellerId])
   @@index([franchiseId])
@@ -217,6 +236,13 @@ model OrderItem {
   subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
   commissionRecord CommissionRecord?
   returnItems      ReturnItem[]
+
+  // Phase B (P0) — per-item discount allocations + post-discount
+  // GST snapshot. taxSnapshot is one-to-one (a row exists for any
+  // OrderItem written after the new flow is live; absent for
+  // legacy orders, which fall back to gross refund logic).
+  orderItemDiscounts OrderItemDiscount[]
+  taxSnapshot        OrderItemTaxSnapshot?
 
   @@index([subOrderId])
   @@map("order_items")
@@ -260,4 +286,52 @@ model LowStockAlert {
   @@unique([sellerProductMappingId])
   @@index([resolvedAt])
   @@map("low_stock_alerts")
+}
+
+// ============================================
+// Phase B (P0) — Per-line GST snapshot.
+// Written at order creation AFTER discount allocation, so GST is
+// always computed on the post-discount taxable value (Indian GST
+// rule). Supports both intra-state (cgst+sgst) and inter-state
+// (igst) supply. One row per OrderItem; absent for legacy orders
+// (refund flow falls back to gross logic in that case).
+// ============================================
+model OrderItemTaxSnapshot {
+  id                                  String   @id @default(uuid())
+  masterOrderId                       String   @map("master_order_id")
+  subOrderId                          String   @map("sub_order_id")
+  orderItemId                         String   @unique @map("order_item_id")
+  // Pre-discount line gross (unitPrice × qty in paise).
+  grossLineAmountInPaise              BigInt   @default(0) @map("gross_line_amount_in_paise")
+  // Sum of all OrderItemDiscount rows for this item.
+  discountAmountInPaise               BigInt   @default(0) @map("discount_amount_in_paise")
+  // The GST taxable base = gross - discount. GST is calculated on
+  // this. Sum across items must equal the order's taxable base.
+  taxableAmountInPaise                BigInt   @default(0) @map("taxable_amount_in_paise")
+  // Rate in basis points (e.g., 1800 = 18%). Sourced from the
+  // product/category at order time and snapshotted so later rate
+  // changes don't rewrite history.
+  gstRateBps                          Int      @default(0) @map("gst_rate_bps")
+  // CGST + SGST for intra-state supply (each half the total).
+  cgstAmountInPaise                   BigInt   @default(0) @map("cgst_amount_in_paise")
+  sgstAmountInPaise                   BigInt   @default(0) @map("sgst_amount_in_paise")
+  // IGST for inter-state supply (full rate; cgst/sgst are 0).
+  igstAmountInPaise                   BigInt   @default(0) @map("igst_amount_in_paise")
+  totalTaxAmountInPaise               BigInt   @default(0) @map("total_tax_amount_in_paise")
+  // Final line total = taxable + total tax. Sum across items =
+  // total customer charge for line items (excl. shipping).
+  lineTotalAfterDiscountAndTaxInPaise BigInt   @default(0) @map("line_total_after_discount_and_tax_in_paise")
+  hsnCode                             String?  @map("hsn_code")
+  // State code (ISO 3166-2:IN format like "IN-KA") at the time of
+  // sale. Used to determine intra-state vs inter-state classification
+  // alongside the seller/platform GSTIN state.
+  placeOfSupply                       String?  @map("place_of_supply")
+  createdAt                           DateTime @default(now()) @map("created_at")
+  updatedAt                           DateTime @updatedAt @map("updated_at")
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@index([masterOrderId])
+  @@index([subOrderId])
+  @@map("order_item_tax_snapshots")
 }

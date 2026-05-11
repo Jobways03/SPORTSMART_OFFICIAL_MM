@@ -15,6 +15,10 @@ import type {
   IThinkForwardLogistics,
   IThinkReverseLogistics,
 } from '../../../../integrations/ithink/ithink.constants';
+import type {
+  IThinkAddOrderResultRow,
+  IThinkCancelOrderResultRow,
+} from '../../../../integrations/ithink/dtos';
 import {
   CarrierCapabilityError,
   type CancelShipmentResult,
@@ -140,7 +144,11 @@ export class IThinkCourierAdapter implements CourierGatewayPort {
 
       // Response is keyed by shipment index '1', '2', ... iThink always
       // returns at least one row, even on failure — so we read row '1'.
-      const row = Object.values(result)[0];
+      // Cast on the way out: TypeScript widens `Object.values()` of a
+      // record-with-index-signature to a loose type in some configs;
+      // the cast restores the DTO shape we already typed at the source.
+      const row: IThinkAddOrderResultRow | undefined =
+        Object.values(result)[0] as IThinkAddOrderResultRow | undefined;
       if (!row) {
         return {
           subOrderId: req.subOrderId,
@@ -212,7 +220,8 @@ export class IThinkCourierAdapter implements CourierGatewayPort {
   async cancelShipment(awb: string): Promise<CancelShipmentResult> {
     try {
       const res = await this.orderSvc.cancelOrder([awb]);
-      const row = Object.values(res)[0];
+      const row: IThinkCancelOrderResultRow | undefined =
+        Object.values(res)[0] as IThinkCancelOrderResultRow | undefined;
       if (!row) return { awb, success: false, errorMessage: 'no response row' };
       return {
         awb,

@@ -31,6 +31,10 @@ async function bootstrap() {
 
   app.useLogger(logger);
 
+  // Phase 4 (PR 4.6) — refuse to boot in production with placeholder
+  // JWT secrets from .env.example. Cheap, surface-level safety net.
+  envService.assertProductionSecretsSafe();
+
   // Trust N reverse-proxy hops so req.ip reflects the real client (used by
   // the rate-limiter to key per client IP, not the LB's IP). 0 disables.
   const trustProxyHops = envService.getNumber('TRUST_PROXY_HOPS', 0);
@@ -127,6 +131,25 @@ async function bootstrap() {
   logger.log(`API server running on port ${port}`, 'Bootstrap');
   if (!envService.isProduction()) {
     logger.log(`Swagger docs at http://localhost:${port}/api/docs`, 'Bootstrap');
+  }
+
+  // Phase 4 (PR 4.6) — authz mode banner. Operators reading the boot
+  // log need to know which mode strict/soak/audit flags are in WITHOUT
+  // having to read .env. Single grep-friendly line per flag.
+  const strict = envService.getBoolean('PERMISSIONS_GUARD_STRICT', false);
+  const abac = envService.getBoolean('ABAC_ENABLED', false);
+  const audit = envService.getBoolean('AUTHZ_AUDIT_ENABLED', true);
+  logger.log(
+    `Authorization | PERMISSIONS_GUARD_STRICT=${strict} ABAC_ENABLED=${abac} AUTHZ_AUDIT_ENABLED=${audit}`,
+    'Bootstrap',
+  );
+  if (!strict) {
+    logger.warn(
+      'PERMISSIONS_GUARD_STRICT=false — running in SOAK mode. ' +
+        'Failed permission checks are logged (event=authz.deny) but allowed through. ' +
+        'Flip to true once /admin/authz/readiness reports zero false-positive denies.',
+      'Bootstrap',
+    );
   }
 }
 

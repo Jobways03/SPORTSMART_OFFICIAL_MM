@@ -295,6 +295,12 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           itemCount: input.itemCount,
           discountCode: input.discountCode ?? null,
           discountAmount: input.discountAmount ?? 0,
+          // Shipping snapshot (v1). Stored both as FK + name so the
+          // order detail still renders correctly if the option is
+          // renamed or soft-deleted later.
+          shippingOptionId: input.shippingOptionId ?? null,
+          shippingOptionName: input.shippingOptionName ?? null,
+          shippingFeeInPaise: input.shippingFeeInPaise ?? 0n,
         },
       });
 
@@ -342,6 +348,13 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             unitPrice: item.unitPrice,
             quantity: item.quantity,
             totalPrice: item.totalPrice,
+            // Phase B (P0.1) — paise mirrors of the decimal fields.
+            // The allocation engine reads these BigInt columns and
+            // skips items where the paise value is 0, so writing
+            // them is mandatory whenever DISCOUNT_ALLOCATION_ENABLED
+            // is on. Convert via Math.round to avoid float drift.
+            unitPriceInPaise: BigInt(Math.round(Number(item.unitPrice) * 100)),
+            totalPriceInPaise: BigInt(Math.round(Number(item.totalPrice) * 100)),
           };
         });
 
@@ -488,6 +501,10 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             unitPrice: price,
             quantity: item.quantity,
             totalPrice: lineTotal,
+            // Phase B (P0.1) — paise mirrors. See companion site above
+            // for context; the allocation engine reads these BigInts.
+            unitPriceInPaise: BigInt(Math.round(Number(price) * 100)),
+            totalPriceInPaise: BigInt(Math.round(Number(lineTotal) * 100)),
           };
         });
 

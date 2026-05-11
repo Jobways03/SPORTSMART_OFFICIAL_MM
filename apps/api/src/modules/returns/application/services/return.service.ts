@@ -42,6 +42,7 @@ import type { RiskAssessment } from './return-risk-scorer';
 import { ReplacementOrderService } from './replacement-order.service';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { verifyRazorpaySignature } from './razorpay-signature';
+import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
 
 export interface CreateReturnInput {
   subOrderId: string;
@@ -196,6 +197,10 @@ export class ReturnService {
     // best-effort after a QC decision picks REPLACEMENT or EXCHANGE.
     private readonly replacementOrders: ReplacementOrderService,
     private readonly razorpayAdapter: RazorpayAdapter,
+    // Phase C (P0.2) — discount-aware refund proration. Returns null
+    // for legacy orders without per-item tax snapshots; caller falls
+    // back to the existing gross-price refund logic in that case.
+    private readonly discountAllocation: DiscountAllocationService,
   ) {
     this.logger.setContext('ReturnService');
   }
@@ -690,7 +695,38 @@ export class ReturnService {
   async getReturnByIdAdmin(returnId: string) {
     const ret = await this.returnRepo.findByIdWithItems(returnId);
     if (!ret) throw new NotFoundAppException('Return not found');
-    return ret;
+
+    // Phase C (P0.2) — attach per-item tax snapshots so the admin QC
+    // modal can show the discount-aware refund preview without an
+    // extra round-trip. Empty array for legacy orders without
+    // allocation; the UI falls back to the gross-price refund display.
+    const orderItemIds = (ret.items ?? [])
+      .map((it: any) => it.orderItemId)
+      .filter(Boolean);
+    let taxSnapshots: any[] = [];
+    let alreadyReversed: any[] = [];
+    if (orderItemIds.length > 0) {
+      [taxSnapshots, alreadyReversed] = await Promise.all([
+        this.prisma.orderItemTaxSnapshot.findMany({
+          where: { orderItemId: { in: orderItemIds } },
+        }),
+        // Existing reversals for this return (idempotent retries +
+        // partial-return history). UI uses these to show the
+        // remaining refundable amount per item.
+        this.prisma.returnTaxReversalLine.findMany({
+          where: { returnId },
+        }),
+      ]);
+    }
+
+    return {
+      ...ret,
+      // Phase C — discount-aware refund preview data.
+      refundPreview: {
+        taxSnapshots,
+        priorReversals: alreadyReversed,
+      },
+    };
   }
 
   // ── Admin: approve ─────────────────────────────────────────────────────
@@ -1221,19 +1257,82 @@ export class ReturnService {
       }
     }
 
-    // Pre-compute per-item refund amounts (no DB writes yet — just math).
-    const perItemRefunds = input.decisions.map((decision) => {
-      const item = ret.items.find((i: any) => i.id === decision.returnItemId);
-      const unitPrice = Number(item.orderItem?.unitPrice ?? 0);
-      return {
-        returnItemId: decision.returnItemId,
-        qcOutcome: decision.qcOutcome,
-        qcQuantityApproved: decision.qcQuantityApproved,
-        qcNotes: decision.qcNotes,
-        refundAmount:
-          Math.round(decision.qcQuantityApproved * unitPrice * 100) / 100,
-      };
-    });
+    // Phase C (P0.2) — Pre-compute per-item refund amounts using
+    // the discount allocation snapshot. For each return item we ask
+    // the allocation service whether a per-line tax snapshot exists:
+    //
+    //   - Snapshot exists → net refund = (gross − allocated discount)
+    //                                    × approvedQty / purchasedQty
+    //                                    + proportional GST reversal
+    //   - Snapshot absent → legacy gross-price refund (preserves
+    //                       existing behavior for orders placed
+    //                       before allocation went live)
+    //
+    // The reversalSnapshot (when present) is held alongside each
+    // refund so the QC commit transaction can write a
+    // `return_tax_reversal_lines` row for the credit note.
+    const perItemRefunds = await Promise.all(
+      input.decisions.map(async (decision) => {
+        const item = ret.items.find((i: any) => i.id === decision.returnItemId);
+        const unitPrice = Number(item.orderItem?.unitPrice ?? 0);
+        const purchasedQuantity = Number(item.orderItem?.quantity ?? 0);
+        const orderItemId = item?.orderItem?.id ?? item?.orderItemId;
+
+        // Legacy/safe default: gross calculation.
+        const grossRefund =
+          Math.round(decision.qcQuantityApproved * unitPrice * 100) / 100;
+
+        // Try discount-aware proration. Only for QC outcomes that
+        // refund (APPROVED / PARTIAL); REJECTED and DAMAGED stay 0.
+        const wantsRefund =
+          (decision.qcOutcome === 'APPROVED' ||
+            decision.qcOutcome === 'PARTIAL') &&
+          decision.qcQuantityApproved > 0 &&
+          purchasedQuantity > 0 &&
+          orderItemId;
+
+        let prorated: Awaited<
+          ReturnType<DiscountAllocationService['computeRefundForReturnedItem']>
+        > = null;
+        if (wantsRefund) {
+          try {
+            prorated = await this.discountAllocation.computeRefundForReturnedItem({
+              orderItemId,
+              purchasedQuantity,
+              approvedQuantity: decision.qcQuantityApproved,
+            });
+          } catch (e) {
+            // Don't fail the QC submission on proration errors;
+            // fall back to gross. Audit logs / outbox events will
+            // surface this for ops.
+            this.logger.warn(
+              `Discount proration failed for return item ${decision.returnItemId}; falling back to gross. ${(e as Error).message}`,
+            );
+            prorated = null;
+          }
+        }
+
+        const refundAmount =
+          prorated !== null
+            ? Number(prorated.totalRefundInPaise) / 100
+            : decision.qcOutcome === 'REJECTED' ||
+                decision.qcOutcome === 'DAMAGED'
+              ? 0
+              : grossRefund;
+
+        return {
+          returnItemId: decision.returnItemId,
+          qcOutcome: decision.qcOutcome,
+          qcQuantityApproved: decision.qcQuantityApproved,
+          qcNotes: decision.qcNotes,
+          refundAmount,
+          // Carries through to the QC tx so we can write the
+          // ReturnTaxReversalLine row + reverse liability ledger.
+          reversalSnapshot: prorated?.reversalSnapshot ?? null,
+          orderItemId: orderItemId ?? null,
+        };
+      }),
+    );
 
     // Determine overall outcome
     const allApproved = input.decisions.every(
@@ -1383,6 +1482,77 @@ export class ReturnService {
             refundAmount: decision.refundAmount,
           },
         });
+
+        // Phase C (P0.2) — write tax reversal line + liability
+        // ledger reversal whenever discount allocation existed.
+        // For legacy orders (no snapshot) reversalSnapshot is null
+        // and we skip the writes.
+        if (
+          decision.reversalSnapshot &&
+          decision.orderItemId &&
+          decision.qcQuantityApproved > 0
+        ) {
+          await tx.returnTaxReversalLine.create({
+            data: {
+              returnId: ret.id,
+              returnItemId: decision.returnItemId,
+              orderItemId: decision.orderItemId,
+              grossReturnedAmountInPaise:
+                decision.reversalSnapshot.grossReturnedInPaise,
+              discountReversalInPaise:
+                decision.reversalSnapshot.discountReversalInPaise,
+              taxableReversalInPaise:
+                decision.reversalSnapshot.taxableReversalInPaise,
+              cgstReversalInPaise:
+                decision.reversalSnapshot.cgstReversalInPaise,
+              sgstReversalInPaise:
+                decision.reversalSnapshot.sgstReversalInPaise,
+              igstReversalInPaise:
+                decision.reversalSnapshot.igstReversalInPaise,
+              totalTaxReversalInPaise:
+                decision.reversalSnapshot.totalTaxReversalInPaise,
+              totalCreditNoteAmountInPaise:
+                decision.reversalSnapshot.totalCreditNoteInPaise,
+              gstRateBps: decision.reversalSnapshot.gstRateBps,
+            },
+          });
+        }
+      }
+
+      // Phase C (P0.2) — reverse the discount liability ledger
+      // entries for each returned item. Runs outside the per-item
+      // loop so the ledger calls aren't nested inside the
+      // returnItem.update writes — keeps the tx focused.
+      for (const decision of perItemRefunds) {
+        if (
+          decision.reversalSnapshot &&
+          decision.orderItemId &&
+          decision.qcQuantityApproved > 0
+        ) {
+          // We can't pass `tx` to the allocation service's reversal
+          // helper without a refactor; that service writes through
+          // its own client. The reversal is idempotent so a partial
+          // tx rollback retries cleanly on the next attempt.
+          // (Acceptable trade-off: liability reversal lives outside
+          // the QC transaction; QC commit is the source of truth.)
+          this.discountAllocation
+            .reverseLiabilityForReturnedItem({
+              orderItemId: decision.orderItemId,
+              proportion: {
+                returned: decision.qcQuantityApproved,
+                purchased: Number(
+                  ret.items.find((i: any) => i.id === decision.returnItemId)
+                    ?.orderItem?.quantity ?? 0,
+                ),
+              },
+              reason: 'QC_APPROVED_RETURN',
+            })
+            .catch((e) =>
+              this.logger.warn(
+                `Liability ledger reversal failed for orderItem ${decision.orderItemId}: ${(e as Error).message}`,
+              ),
+            );
+        }
       }
 
       // 2. For seller path: restore stock + reverse commission inside tx.

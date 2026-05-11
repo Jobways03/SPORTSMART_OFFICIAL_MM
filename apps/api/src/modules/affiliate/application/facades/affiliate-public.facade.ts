@@ -60,6 +60,11 @@ export class AffiliatePublicFacade {
       if (code.expiresAt && code.expiresAt < new Date()) continue;
       // SRS §6.2 — only ACTIVE affiliates earn new commissions.
       if (code.affiliate.status !== 'ACTIVE') continue;
+      // Phase F (P2.3) — unified coupons attribute via the discount
+      // redemption hook instead of here. Skip COUPON-source rows that
+      // have a mirror Discount so attribution isn't double-written.
+      // LINK-source rows still use this path (no Discount equivalent).
+      if (source === 'COUPON' && code.discountId) continue;
 
       return {
         affiliateId: code.affiliate.id,
@@ -108,6 +113,12 @@ export class AffiliatePublicFacade {
       include: { affiliate: { select: { id: true, status: true } } },
     });
     if (!couponCode) return null;
+
+    // Phase F (P2.3) — if this coupon has already been unified into
+    // the Discount table, return null so the upstream caller (DiscountsService.
+    // validateCouponForCheckout) doesn't apply the affiliate-side fallback
+    // on top of the regular Discount lookup it already did.
+    if (couponCode.discountId) return null;
 
     if (!couponCode.isActive) {
       throw new Error('This affiliate code is currently inactive.');
