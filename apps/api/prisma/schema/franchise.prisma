@@ -42,6 +42,21 @@ model FranchisePartner {
   warehouseAddress String? @map("warehouse_address")
   warehousePincode String? @map("warehouse_pincode")
 
+  // ─── Logistics entitlements (franchise-admin controlled) ──────
+  // Toggled by franchise admin in web-franchise-admin. The franchise
+  // picks the actual delivery method per shipment from whatever is
+  // enabled here.
+  ithinkEnabled         Boolean                       @default(false) @map("ithink_enabled")
+  ithinkPickupAddressId String?                       @map("ithink_pickup_address_id")
+  ithinkWarehouseStatus IThinkWarehouseApprovalStatus @default(NOT_REGISTERED) @map("ithink_warehouse_status")
+  ithinkRegisteredAt    DateTime?                     @map("ithink_registered_at")
+  // SHA-256 of (warehouseAddress + city + state + warehousePincode +
+  // phoneNumber) captured at registration. Drift detection compares
+  // current vs registered hash on every profile save.
+  ithinkRegisteredAddressHash String?                 @map("ithink_registered_address_hash")
+  selfDeliveryEnabled   Boolean                       @default(false) @map("self_delivery_enabled")
+  selfDeliveryPincodes  Json?                         @map("self_delivery_pincodes")
+
   // Profile & branding
   profileImageUrl             String? @map("profile_image_url")
   profileImagePublicId        String? @map("profile_image_public_id")

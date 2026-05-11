@@ -269,3 +269,41 @@ enum MetafieldType {
   MULTI_SELECT
   FILE_REFERENCE
 }
+
+// ─── Logistics ───────────────────────────────────────────────────
+// How a SubOrder is delivered to the customer. Each seller and
+// franchise can have either or both methods enabled by their
+// respective admin. The seller/franchise picks per-shipment at
+// fulfilment time from the methods their admin allows.
+enum DeliveryMethod {
+  ITHINK_LOGISTICS // Booked with iThink; their carriers handle pickup + delivery.
+  SELF_DELIVERY    // Seller / franchise delivers themselves; no courier.
+}
+
+// Status lifecycle for SELF_DELIVERY shipments. ITHINK_LOGISTICS
+// shipments don't use this — their progress comes from the iThink
+// scan history (mapped to ShipmentStatusInternal in code).
+enum SelfDeliveryStatus {
+  PENDING
+  READY_FOR_PICKUP
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+// Approval state for a seller / franchise warehouse registered with
+// iThink. Set to PENDING when Add Warehouse returns; flips to
+// APPROVED via the daily Get Warehouse reconciliation cron.
+//
+// STALE means the seller / franchise updated their profile address
+// after the iThink warehouse was registered, so iThink still holds the
+// previous pickup address. Admin must re-register (creates a fresh
+// warehouse_id on iThink, deactivates the old one via their panel).
+enum IThinkWarehouseApprovalStatus {
+  NOT_REGISTERED
+  PENDING
+  APPROVED
+  REJECTED
+  STALE
+}

@@ -7,6 +7,7 @@ import { LoggingModule } from './bootstrap/logging/logging.module';
 import { EventsModule } from './bootstrap/events/events.module';
 import { SecurityModule } from './bootstrap/security/security.module';
 import { EmailModule } from './integrations/email/email.module';
+import { IThinkModule } from './integrations/ithink/ithink.module';
 
 // core
 import { HealthController } from './core/health/health.controller';
@@ -81,6 +82,7 @@ import { RefundInstructionsModule } from './modules/refund-instructions/module';
     RedisModule,
     EventsModule,
     EmailModule,
+    IThinkModule,
     IdempotencyModule,
     GuardsModule,
     CaseDuplicateModule,

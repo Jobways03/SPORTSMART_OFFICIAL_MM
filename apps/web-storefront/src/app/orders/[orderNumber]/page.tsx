@@ -7,6 +7,7 @@ import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import { useModal } from '@sportsmart/ui';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 import type {
   OrderDetail,
   SubOrder,
@@ -477,10 +478,20 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
         {order.subOrders.filter((so) => so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED').map((so) => (
           <div key={so.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 16, marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
                   Fulfilled by SPORTSMART
                 </span>
+                {/* Delivery method indicator — clickable tracking link when iThink. */}
+                {so.deliveryMethod && (
+                  <DeliveryMethodBadge
+                    method={so.deliveryMethod}
+                    awb={so.ithinkAwb}
+                    courier={so.ithinkLogistic}
+                    trackingUrl={so.ithinkTrackingUrl}
+                    asTrackingLink
+                  />
+                )}
                 {so.acceptStatus === 'CANCELLED' && (
                   <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: '#dc262620', color: '#dc2626' }}>Cancelled</span>
                 )}

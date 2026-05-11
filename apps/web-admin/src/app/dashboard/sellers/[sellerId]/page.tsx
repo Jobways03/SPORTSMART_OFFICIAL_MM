@@ -540,6 +540,15 @@ export default function AdminSellerDetailPage() {
         <ActionBtn label="Change Status" onClick={() => setActiveModal('status')} />
         <ActionBtn label="Send Message" onClick={() => setActiveModal('message')} />
         <ActionBtn label="Change Password" onClick={() => setActiveModal('password')} />
+        {/* Delivery method entitlements (iThink / Self Delivery). Opens a
+            dedicated screen because the toggles cascade into iThink
+            warehouse registration and merit their own surface. */}
+        <ActionBtn
+          label="🚚 Delivery Methods"
+          onClick={() =>
+            router.push(`/dashboard/sellers/${seller.sellerId}/delivery-methods`)
+          }
+        />
         {canImpersonate && <ActionBtn label="Impersonate" onClick={() => setActiveModal('impersonate')} />}
         {canDelete && <ActionBtn label="Delete" onClick={() => setActiveModal('delete')} danger />}
       </div>

@@ -8,6 +8,9 @@ import {
   FranchiseOrder,
 } from '@/services/orders.service';
 import { useModal } from '@sportsmart/ui';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
+import { DeliveryMethodPicker } from '@/components/DeliveryMethodPicker';
+import { SelfDeliveryStatusButtons } from '@/components/SelfDeliveryStatusButtons';
 import { ApiError } from '@/lib/api-client';
 
 /* -- helpers -- */
@@ -331,6 +334,11 @@ const { id } = useParams<{ id: string }>();
           </div>
         </div>
       </div>
+
+      {/* Delivery method panel — picker before choice, status after.
+          Surfaced above the timeline so the franchise's first action
+          after accept is choosing a method. */}
+      <FranchiseDeliverySection order={order} onChanged={() => fetchOrder()} />
 
       {/* Status timeline */}
       <StatusTimeline
@@ -1184,3 +1192,93 @@ const btnConfirm: React.CSSProperties = {
   borderRadius: 6,
   cursor: 'pointer',
 };
+
+/**
+ * Franchise version of the delivery-method panel. Same UX as the
+ * seller side; routes to /franchise/* under the hood via the
+ * picker / status-buttons components.
+ */
+function FranchiseDeliverySection({
+  order,
+  onChanged,
+}: {
+  order: FranchiseOrder;
+  onChanged: () => void;
+}) {
+  const cancelled =
+    order.acceptStatus === 'REJECTED' || order.fulfillmentStatus === 'CANCELLED';
+  if (cancelled) return null;
+
+  const accepted = order.acceptStatus === 'ACCEPTED';
+  const method = (order as any).deliveryMethod as
+    | 'ITHINK_LOGISTICS'
+    | 'SELF_DELIVERY'
+    | null
+    | undefined;
+  const isSelf = method === 'SELF_DELIVERY';
+  const isIThink = method === 'ITHINK_LOGISTICS';
+  const noMethodYet = !method;
+  const ithinkAwb = (order as any).ithinkAwb as string | null | undefined;
+  const ithinkLogistic = (order as any).ithinkLogistic as string | null | undefined;
+  const ithinkTrackingUrl = (order as any).ithinkTrackingUrl as string | null | undefined;
+  const selfDeliveryStatus = (order as any).selfDeliveryStatus as
+    | 'PENDING'
+    | 'READY_FOR_PICKUP'
+    | 'OUT_FOR_DELIVERY'
+    | 'DELIVERED'
+    | 'FAILED'
+    | 'CANCELLED'
+    | null
+    | undefined;
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
+          Delivery method:
+        </span>
+        <DeliveryMethodBadge
+          method={method ?? null}
+          awb={ithinkAwb}
+          courier={ithinkLogistic}
+          size="md"
+          showAwb={isIThink}
+        />
+        {isIThink && ithinkTrackingUrl && (
+          <a
+            href={ithinkTrackingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}
+          >
+            Track on iThink ↗
+          </a>
+        )}
+      </div>
+
+      {accepted && noMethodYet && (
+        <div
+          style={{
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: 12,
+            padding: 16,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: '#374151' }}>
+            Choose how you want to fulfil this order
+          </div>
+          <DeliveryMethodPicker subOrderId={order.id} onChosen={onChanged} />
+        </div>
+      )}
+
+      {isSelf && (
+        <SelfDeliveryStatusButtons
+          subOrderId={order.id}
+          currentStatus={selfDeliveryStatus ?? 'PENDING'}
+          onChanged={onChanged}
+        />
+      )}
+    </div>
+  );
+}

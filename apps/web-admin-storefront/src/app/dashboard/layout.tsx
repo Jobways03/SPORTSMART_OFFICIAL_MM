@@ -41,7 +41,8 @@ const navItems: NavItem[] = [
   { label: 'Products', href: '/dashboard/products', icon: '📦', anyOf: ['products.read', 'catalog.read'] },
   // Inventory has no dedicated permission key today — falls under products.
   { label: 'Inventory', href: '/dashboard/inventory', icon: '📊', anyOf: ['products.read'] },
-  { label: 'NOVA Brand', href: '/dashboard/nova/warehouses', icon: '🚀', anyOf: ['nova.read'] },
+  // NOVA Brand entry removed per product request — route still exists at
+  // /dashboard/nova/* if needed directly.
   { label: 'Commission', href: '/dashboard/commission', icon: '💰', anyOf: ['settlements.read'] },
   { label: 'Customers', href: '/dashboard/customers', icon: '👥', anyOf: ['customers.read'] },
   { label: 'Wallets', href: '/dashboard/wallets', icon: '💳', anyOf: ['wallets.read'] },
@@ -56,11 +57,6 @@ const navItems: NavItem[] = [
   { label: 'Content', href: '/dashboard/content', icon: '📝', anyOf: ['content.read'] },
   { label: 'Navigation', href: '/dashboard/menus', icon: '🧭', anyOf: ['storefront.read'] },
   { label: 'Analytics', href: '/dashboard/analytics', icon: '📈', anyOf: ['analytics.read'] },
-];
-
-const salesChannels = [
-  { label: 'Online Store', href: '#', icon: '🏪' },
-  { label: 'Point of Sale', href: '#', icon: '💳' },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -225,23 +221,6 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
             </div>
           ))}
 
-          <div className="sidebar-section-label">
-            Sales channels <span className="chevron">›</span>
-          </div>
-          {salesChannels.map((item) => (
-            <Link key={item.label} href={item.href} className="sidebar-item">
-              <span className="sidebar-item-icon">{item.icon}</span>
-              {item.label}
-            </Link>
-          ))}
-
-          <div className="sidebar-section-label">
-            Apps <span className="chevron">›</span>
-          </div>
-          <Link href="#" className="sidebar-item">
-            <span className="sidebar-item-icon">🔍</span>
-            Search & Discovery
-          </Link>
         </nav>
 
         <div className="sidebar-bottom">
