@@ -426,6 +426,12 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 {order.appliedDiscount.code ? ` with ${order.appliedDiscount.code}` : ''}
               </div>
             )}
+            {order.shipping && (
+              <div style={{ marginTop: 4, fontSize: 12, color: '#6b7280' }}>
+                Includes {formatPrice(Number(order.shipping.feeInRupees))} shipping
+                {order.shipping.optionName ? ` (${order.shipping.optionName})` : ''}
+              </div>
+            )}
             <div style={{ marginTop: 4, display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               {statusBadge(
                 order.paymentStatus === 'CANCELLED' ? 'Cancelled' : order.paymentStatus === 'PAID' ? 'Paid' : 'Payment Pending',

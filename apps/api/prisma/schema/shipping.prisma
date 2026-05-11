@@ -1,0 +1,31 @@
+// Shipping options — v1 single-table design.
+// Zones, weight/price-based rates, and refund policy live in a follow-up.
+
+enum ShippingRateType {
+  FLAT
+  FREE
+}
+
+model ShippingOption {
+  id                       String           @id @default(uuid())
+  name                     String
+  deliveryDetails          String?          @map("delivery_details")
+  rateType                 ShippingRateType @default(FLAT) @map("rate_type")
+  priceInPaise             BigInt           @default(0) @map("price_in_paise")
+  transitMinDays           Int?             @map("transit_min_days")
+  transitMaxDays           Int?             @map("transit_max_days")
+  // When set, cart subtotals at or above this value waive the price.
+  // Null = no free-shipping threshold (always charge priceInPaise).
+  freeShippingMinCartPaise BigInt?          @map("free_shipping_min_cart_paise")
+  isActive                 Boolean          @default(true) @map("is_active")
+  sortOrder                Int              @default(0) @map("sort_order")
+  createdAt                DateTime         @default(now()) @map("created_at")
+  updatedAt                DateTime         @updatedAt @map("updated_at")
+
+  // Inverse relation so the FK on MasterOrder can resolve back.
+  orders MasterOrder[]
+
+  @@index([isActive])
+  @@index([sortOrder])
+  @@map("shipping_options")
+}

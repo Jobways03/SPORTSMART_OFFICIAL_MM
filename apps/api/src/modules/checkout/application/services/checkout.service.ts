@@ -15,6 +15,7 @@ import {
 } from '../../../catalog/application/facades/catalog-public.facade';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { DiscountPublicFacade } from '../../../discounts/application/facades/discount-public.facade';
+import { ShippingOptionsPublicFacade } from '../../../shipping-options/application/facades/shipping-options-public.facade';
 import { DiscountReservationService } from '../../../discounts/application/services/discount-reservation.service';
 import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -46,6 +47,7 @@ export class CheckoutService {
     private readonly catalogFacade: CatalogPublicFacade,
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly discountFacade: DiscountPublicFacade,
+    private readonly shippingOptionsFacade: ShippingOptionsPublicFacade,
     private readonly discountReservation: DiscountReservationService,
     private readonly discountAllocation: DiscountAllocationService,
     private readonly affiliateFacade: AffiliatePublicFacade,
@@ -399,6 +401,7 @@ export class CheckoutService {
     couponCode?: string,
     referralCode?: string,
     walletApplyAmountInPaise?: number,
+    shippingOptionId?: string | null,
   ) {
     // Per-user lock: prevents double-submit (UI double-click or client
     // retry) from committing two MasterOrders against the same checkout
@@ -423,6 +426,7 @@ export class CheckoutService {
         couponCode,
         referralCode,
         walletApplyAmountInPaise,
+        shippingOptionId,
       );
     } finally {
       await this.redis.releaseLock(lockKey);
@@ -435,6 +439,7 @@ export class CheckoutService {
     couponCode?: string,
     referralCode?: string,
     walletApplyAmountInPaise?: number,
+    shippingOptionId?: string | null,
   ) {
     const method: 'COD' | 'ONLINE' =
       paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
@@ -451,6 +456,13 @@ export class CheckoutService {
       throw new BadRequestAppException(
         'Checkout session has expired — please initiate checkout again',
       );
+    }
+
+    // Stamp the customer's chosen shipping option onto the session so
+    // the downstream recompute (after discount resolves) sees it. The
+    // caller may also pass null to clear it (e.g. picking "free").
+    if (shippingOptionId !== undefined) {
+      session.shippingOptionId = shippingOptionId;
     }
 
     // Block if any item is unserviceable
@@ -506,6 +518,10 @@ export class CheckoutService {
     let discountCode: string | null = null;
     let discountAmount = 0;
     let discountId: string | null = null;
+    // Set when the customer applies a FREE_SHIPPING coupon. Zeros the
+    // recomputed shipping fee further down (separate code path from
+    // product-discount allocation).
+    let freeShippingCouponApplied = false;
     // Phase B (P0.3) — reservation lifecycle handle. Set when the
     // allocation feature flag is on; null otherwise (legacy path).
     let discountReservationId: string | null = null;
@@ -544,13 +560,26 @@ export class CheckoutService {
       discountCode = resolved.code;
       discountAmount = resolved.discountAmount;
       discountId = resolved.discountId;
+      // Track whether this coupon is a free-shipping coupon — used
+      // below to zero the shipping fee after the regular recompute.
+      if ((resolved as any).type === 'FREE_SHIPPING') {
+        freeShippingCouponApplied = true;
+      }
 
       // Phase B (P0.3, P0.4) — reserve a redemption slot before
       // committing the order. The reservation is concurrency-safe
       // (DB row lock + partial unique indexes) so this is the call
       // that enforces maxUses + onePerCustomer under load.
       if (allocationEnabled && discountId) {
-        const idemKey = `checkout:${userId}:${discountId}:${trimmedCouponCode}`;
+        // Idempotency key must be UNIQUE PER CHECKOUT SESSION, not just
+        // per customer-coupon pair. Otherwise the second order this
+        // customer places with the same coupon returns the existing
+        // REDEEMED redemption from their first order — allocation rows
+        // then attach to a different masterOrder than the redemption.
+        // session.createdAt is set once per /checkout/initiate call, so
+        // it's stable across retries within the same checkout flow but
+        // changes when the customer starts a fresh checkout.
+        const idemKey = `checkout:${userId}:${discountId}:${trimmedCouponCode}:${session.createdAt}`;
         try {
           const reservation = await this.discountReservation.reserve({
             discountId,
@@ -591,7 +620,48 @@ export class CheckoutService {
         }
       }
     }
-    const chargedTotal = Math.max(0, session.totalAmount - discountAmount);
+    // Shipping fee (v1) — server-side recompute. Frontend may suggest an
+    // option via session.shippingOptionId, but the fee is recalculated
+    // here using the current cart subtotal AFTER discount (so free-
+    // shipping thresholds use the net amount). When no option is
+    // selected (or none are configured), shipping is free — preserves
+    // the legacy zero-fee behavior.
+    let resolvedShippingOptionId: string | null = null;
+    let resolvedShippingOptionName: string | null = null;
+    let resolvedShippingFeeInPaise = 0n;
+    const netCartPaise = BigInt(
+      Math.max(0, Math.round((session.totalAmount - discountAmount) * 100)),
+    );
+    if (session.shippingOptionId) {
+      try {
+        const quote = await this.shippingOptionsFacade.quoteOption({
+          optionId: session.shippingOptionId,
+          netCartValueInPaise: netCartPaise,
+        });
+        resolvedShippingOptionId = quote.optionId;
+        resolvedShippingOptionName = quote.name;
+        resolvedShippingFeeInPaise = quote.feeInPaise;
+      } catch (err) {
+        // Disabled or deleted between preview and place-order. Surface
+        // the service error verbatim — it carries the customer-friendly
+        // message ("Please pick another option").
+        throw new BadRequestAppException(
+          (err as Error)?.message ??
+            'Selected shipping option is unavailable.',
+        );
+      }
+    }
+    // FREE_SHIPPING coupon: wipe the shipping fee but keep the snapshot
+    // (name + option id) so the order detail still shows which option
+    // would have been charged.
+    if (freeShippingCouponApplied) {
+      resolvedShippingFeeInPaise = 0n;
+    }
+    const shippingFeeInRupees = Number(resolvedShippingFeeInPaise) / 100;
+    const chargedTotal = Math.max(
+      0,
+      session.totalAmount - discountAmount + shippingFeeInRupees,
+    );
 
     // Wallet preflight — clamp to chargedTotal (can't pay more than the
     // order is for) and verify the user has the balance. Done BEFORE the
@@ -639,6 +709,9 @@ export class CheckoutService {
         discountCode,
         discountAmount,
         affiliateAttribution: attribution,
+        shippingOptionId: resolvedShippingOptionId,
+        shippingOptionName: resolvedShippingOptionName,
+        shippingFeeInPaise: resolvedShippingFeeInPaise,
       });
     } catch (err) {
       // Compensating action: release franchise reservations on failure

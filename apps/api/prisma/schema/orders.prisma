@@ -106,6 +106,14 @@ model MasterOrder {
   // Phase 1.4 paise sibling (ADR-007).
   discountAmountInPaise BigInt  @default(0) @map("discount_amount_in_paise")
 
+  // Shipping (v1) — flat fee + snapshot of the applied option. shippingFeeInPaise
+  // is server-computed at place-order and stored as the source of truth; the
+  // name is snapshotted so historical orders render correctly even if the
+  // option is later renamed or deleted.
+  shippingOptionId    String? @map("shipping_option_id")
+  shippingOptionName  String? @map("shipping_option_name")
+  shippingFeeInPaise  BigInt  @default(0) @map("shipping_fee_in_paise")
+
   // Online payment tracking (Razorpay)
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
@@ -118,6 +126,7 @@ model MasterOrder {
   subOrders         SubOrder[]
   commissionRecords CommissionRecord[]
   returns           Return[]
+  shippingOption    ShippingOption?    @relation(fields: [shippingOptionId], references: [id], onDelete: SetNull)
 
   // Phase B (P0) — discount allocation ledger relations.
   orderDiscounts          OrderDiscount[]

@@ -1875,12 +1875,24 @@ export class OrdersService {
       // Best-effort — never block the order page on the redemption lookup.
     }
 
+    // Shipping snapshot (v1) — surfaces the fee on customer order detail.
+    // Returns null when no shipping option was attached (legacy / free orders).
+    const shipping =
+      order.shippingFeeInPaise && BigInt(order.shippingFeeInPaise) > 0n
+        ? {
+            optionName: order.shippingOptionName,
+            feeInPaise: order.shippingFeeInPaise.toString(),
+            feeInRupees: (Number(order.shippingFeeInPaise) / 100).toFixed(2),
+          }
+        : null;
+
     // Strip seller information — show "Fulfilled by SPORTSMART" label
     // Add customer-friendly status label
     return {
       ...order,
       orderStatusLabel: this.mapOrderStatusLabel(order.orderStatus),
       appliedDiscount,
+      shipping,
       subOrders: order.subOrders.map((so: any) => ({
         id: so.id,
         subTotal: so.subTotal,

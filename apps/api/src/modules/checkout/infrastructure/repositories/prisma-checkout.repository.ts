@@ -295,6 +295,12 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           itemCount: input.itemCount,
           discountCode: input.discountCode ?? null,
           discountAmount: input.discountAmount ?? 0,
+          // Shipping snapshot (v1). Stored both as FK + name so the
+          // order detail still renders correctly if the option is
+          // renamed or soft-deleted later.
+          shippingOptionId: input.shippingOptionId ?? null,
+          shippingOptionName: input.shippingOptionName ?? null,
+          shippingFeeInPaise: input.shippingFeeInPaise ?? 0n,
         },
       });
 

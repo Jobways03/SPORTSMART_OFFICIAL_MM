@@ -82,6 +82,10 @@ interface OrderDetail {
   totalAmount: number;
   discountCode?: string | null;
   discountAmount?: number;
+  // Shipping (v1)
+  shippingOptionId?: string | null;
+  shippingOptionName?: string | null;
+  shippingFeeInPaise?: string | null;
   paymentStatus: string;
   paymentMethod: string;
   verified: boolean;
@@ -963,8 +967,14 @@ export default function OrderDetailPage() {
                 </tr>
                 <tr>
                   <td style={payTd}>Shipping</td>
-                  <td style={payTdRight}>Free Shipping</td>
-                  <td style={{ ...payTdRight, fontWeight: 600 }}>{fmt(0)}</td>
+                  <td style={payTdRight}>
+                    {order.shippingFeeInPaise && Number(order.shippingFeeInPaise) > 0
+                      ? order.shippingOptionName ?? 'Charged'
+                      : 'Free Shipping'}
+                  </td>
+                  <td style={{ ...payTdRight, fontWeight: 600 }}>
+                    {fmt(Number(order.shippingFeeInPaise ?? 0) / 100)}
+                  </td>
                 </tr>
                 {hasDiscount && (
                   <tr>

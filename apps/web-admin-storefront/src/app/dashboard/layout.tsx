@@ -29,6 +29,7 @@ const navItems = [
   { label: 'Access Logs', href: '/dashboard/access-logs', icon: '🔐' },
   { label: 'Marketing', href: '/dashboard/marketing', icon: '📣' },
   { label: 'Discounts', href: '/dashboard/discounts', icon: '🏷️' },
+  { label: 'Shipping', href: '/dashboard/settings/shipping', icon: '🚚' },
   { label: 'Content', href: '/dashboard/content', icon: '📝' },
   { label: 'Navigation', href: '/dashboard/menus', icon: '🧭' },
   { label: 'Analytics', href: '/dashboard/analytics', icon: '📈' },

@@ -150,6 +150,10 @@ export const PERMISSIONS = {
   'discounts.read':         'View discounts + coupons',
   'discounts.write':        'Create / edit discounts + coupons',
 
+  // Shipping options (v1)
+  'shipping.read':          'View shipping options',
+  'shipping.write':         'Create / edit shipping options',
+
   // Nova / own-brand warehouse
   'nova.read':              'View Nova warehouses, products, stock',
   'nova.write':             'Edit Nova warehouses + products',

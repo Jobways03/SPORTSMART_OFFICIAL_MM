@@ -53,6 +53,12 @@ export interface OrderDetail {
     title: string | null;
     discountAmount: string;
   } | null;
+  // Shipping snapshot (v1). Null when shipping was free.
+  shipping?: {
+    optionName: string | null;
+    feeInPaise: string;
+    feeInRupees: string;
+  } | null;
 }
 
 export interface ReturnEligibilityItem {

@@ -129,6 +129,23 @@ export default function CheckoutPage() {
     discountAmount: number;
   } | null>(null);
 
+  // Shipping (v1) — fetched after subtotal is known. The customer picks
+  // an option; the server recomputes the fee at place-order so a
+  // tampered-with value gets discarded.
+  const [shippingOptions, setShippingOptions] = useState<Array<{
+    optionId: string;
+    name: string;
+    deliveryDetails: string | null;
+    rateType: 'FLAT' | 'FREE';
+    priceInPaise: string;
+    feeInPaise: string;
+    isFree: boolean;
+    transitMinDays: number | null;
+    transitMaxDays: number | null;
+    amountMoreForFreeShippingInPaise: string | null;
+  }>>([]);
+  const [selectedShippingOptionId, setSelectedShippingOptionId] = useState<string | null>(null);
+
   // Wallet — UI scaffolding only this phase. The actual debit on order
   // placement is wired up in Phase 7 (checkout integration).
   const [walletBalanceInPaise, setWalletBalanceInPaise] = useState(0);
@@ -484,6 +501,7 @@ export default function CheckoutPage() {
         body: JSON.stringify({
           paymentMethod: 'COD',
           ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
+          ...(selectedShippingOptionId ? { shippingOptionId: selectedShippingOptionId } : {}),
           ...(referralCode ? { referralCode } : {}),
           ...(walletApplyAmountInPaise > 0 ? { walletApplyAmountInPaise } : {}),
         }),
@@ -528,6 +546,42 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!loading && (!cart || cart.items.length === 0)) router.push('/cart');
   }, [loading, cart, router]);
+
+  // Fetch shipping options whenever the cart subtotal (after discount)
+  // changes. Server-side recompute happens at place-order, so the values
+  // shown here are advisory — but the option chosen here IS sent to the
+  // server and is what gets locked in.
+  useEffect(() => {
+    const subtotal = checkoutData
+      ? checkoutData.serviceableAmount
+      : cart?.totalAmount ?? 0;
+    const netCartPaise = Math.max(
+      0,
+      Math.round((Number(subtotal) - (appliedCoupon?.discountAmount ?? 0)) * 100),
+    );
+    apiClient<typeof shippingOptions>('/customer/shipping-options/quote', {
+      method: 'POST',
+      body: JSON.stringify({ netCartValueInPaise: netCartPaise }),
+    })
+      .then((r) => {
+        const opts = r.data ?? [];
+        setShippingOptions(opts);
+        // Auto-select cheapest if none selected yet, or if the previously
+        // selected option is gone.
+        const stillValid = opts.some((o) => o.optionId === selectedShippingOptionId);
+        if (!stillValid) {
+          const cheapest = [...opts].sort(
+            (a, b) => Number(a.feeInPaise) - Number(b.feeInPaise),
+          )[0];
+          setSelectedShippingOptionId(cheapest?.optionId ?? null);
+        }
+      })
+      .catch(() => {
+        setShippingOptions([]);
+        setSelectedShippingOptionId(null);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutData, cart?.totalAmount, appliedCoupon]);
 
   if (loading) {
     return (
@@ -581,7 +635,15 @@ export default function CheckoutPage() {
 
   const currentSubtotal = checkoutData ? checkoutData.serviceableAmount : cart.totalAmount;
   const currentItemCount = checkoutData ? checkoutData.itemCount : cart.itemCount;
-  const total = Math.max(0, currentSubtotal - (appliedCoupon?.discountAmount ?? 0));
+  // Shipping fee for the selected option — advisory; server recomputes.
+  const selectedShippingOption = shippingOptions.find((o) => o.optionId === selectedShippingOptionId);
+  const shippingFeeRupees = selectedShippingOption
+    ? Number(selectedShippingOption.feeInPaise) / 100
+    : 0;
+  const total = Math.max(
+    0,
+    currentSubtotal - (appliedCoupon?.discountAmount ?? 0) + shippingFeeRupees,
+  );
   // Wallet apply amount (rupees) capped at order total. Server-side enforces
   // the same cap on order placement (Phase 7).
   const walletBalanceInRupees = walletBalanceInPaise / 100;
@@ -1023,6 +1085,72 @@ export default function CheckoutPage() {
               </div>
             </div>
 
+            {/* Shipping options (v1) */}
+            {shippingOptions.length > 0 && (
+              <div className="mb-5">
+                <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
+                  Shipping method
+                </div>
+                <div className="space-y-2">
+                  {shippingOptions.map((opt) => {
+                    const isSelected = opt.optionId === selectedShippingOptionId;
+                    const fee = Number(opt.feeInPaise) / 100;
+                    const fullPrice = Number(opt.priceInPaise) / 100;
+                    const transit =
+                      opt.transitMinDays && opt.transitMaxDays
+                        ? `${opt.transitMinDays}–${opt.transitMaxDays} business days`
+                        : opt.deliveryDetails || null;
+                    const amountMore = opt.amountMoreForFreeShippingInPaise
+                      ? Number(opt.amountMoreForFreeShippingInPaise) / 100
+                      : null;
+                    return (
+                      <label
+                        key={opt.optionId}
+                        className={`flex items-center justify-between gap-3 p-3 rounded-lg border cursor-pointer ${
+                          isSelected ? 'border-ink-900 bg-bg-50' : 'border-ink-200 hover:border-ink-400'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="radio"
+                            name="shippingOption"
+                            checked={isSelected}
+                            onChange={() => setSelectedShippingOptionId(opt.optionId)}
+                            className="size-4 accent-ink-900"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-body-sm font-semibold text-ink-900">{opt.name}</div>
+                            {transit && (
+                              <div className="text-caption text-ink-500 mt-0.5">{transit}</div>
+                            )}
+                            {amountMore && amountMore > 0 && (
+                              <div className="text-caption text-success-600 mt-0.5">
+                                Add ₹{amountMore.toFixed(0)} more for free shipping
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-body-sm font-bold text-ink-900 shrink-0">
+                          {opt.isFree ? (
+                            <span className="text-success-600">
+                              FREE
+                              {fullPrice > 0 && (
+                                <span className="ml-1 text-ink-400 line-through font-normal">
+                                  ₹{fullPrice.toFixed(2)}
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            `₹${fee.toFixed(2)}`
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Coupon */}
             <div className="mb-5">
               <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2 flex items-center gap-1.5">
@@ -1135,10 +1263,18 @@ export default function CheckoutPage() {
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-ink-700">Delivery</span>
-                <span className="text-success font-semibold uppercase tracking-wider text-caption">
-                  Free
+                <span className="text-ink-700">
+                  {selectedShippingOption?.name ?? 'Delivery'}
                 </span>
+                {selectedShippingOption?.isFree || !selectedShippingOption ? (
+                  <span className="text-success font-semibold uppercase tracking-wider text-caption">
+                    Free
+                  </span>
+                ) : (
+                  <span className="text-ink-900 tabular">
+                    {formatPrice(shippingFeeRupees)}
+                  </span>
+                )}
               </div>
               {appliedCoupon && appliedCoupon.discountAmount > 0 && (
                 <div className="flex justify-between text-success">

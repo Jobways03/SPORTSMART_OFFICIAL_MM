@@ -405,6 +405,7 @@ export class DiscountsService {
     discountId: string;
     code: string;
     title: string | null;
+    type: string;
     valueType: string;
     value: number;
     discountAmount: number;
@@ -424,7 +425,11 @@ export class DiscountsService {
           code: trimmed,
           subtotal,
         });
-        if (aff) return aff;
+        if (aff) {
+          // Affiliate fallback predates the `type` field — affiliate
+          // coupons are always treated as ordinary product discounts.
+          return { ...aff, type: 'AMOUNT_OFF_ORDER' };
+        }
       } catch (err: any) {
         // Facade throws a plain Error with a customer-safe message
         // when the code is ours but a constraint failed (expired,
@@ -443,11 +448,11 @@ export class DiscountsService {
     if (discount.status === 'DRAFT') {
       throw new BadRequestAppException('This coupon is no longer available');
     }
-    if (discount.type === 'FREE_SHIPPING') {
-      throw new BadRequestAppException(
-        'Free-shipping coupons are not available — delivery is already free on this order.',
-      );
-    }
+    // FREE_SHIPPING is a separate code path — the discount itself reduces
+    // the shipping fee at place-order time (handled in checkout.service.ts),
+    // not the product subtotal. We resolve it here with discountAmount=0
+    // so the cart-total math is unaffected; checkout zeros the shipping
+    // fee when the redeemed discount has type=FREE_SHIPPING.
     const now = new Date();
     if (discount.startsAt && new Date(discount.startsAt) > now) {
       throw new BadRequestAppException('This coupon is not active yet');
@@ -523,6 +528,7 @@ export class DiscountsService {
         discountId: discount.id,
         code: discount.code!,
         title: discount.title ?? null,
+        type: discount.type,
         valueType,
         value,
         discountAmount: amount,
@@ -628,6 +634,7 @@ export class DiscountsService {
       discountId: discount.id,
       code: discount.code!,
       title: discount.title ?? null,
+      type: discount.type,
       valueType: displayValueType,
       value: displayValue,
       discountAmount: amount,
