@@ -76,4 +76,31 @@ export class SellerEarningsController {
       data,
     };
   }
+
+  /* ── Phase B (P0.5) — GET /seller/earnings/discount-deductions ──
+   *
+   * Paginated list of seller-funded discount deductions for the
+   * authenticated seller. Each row records an amount the seller
+   * has agreed to absorb (one liability ledger entry per
+   * (order × discount) pair). Platform-funded discounts do NOT
+   * appear here. */
+  @Get('discount-deductions')
+  async getDiscountDeductions(
+    @Req() req: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
+    const data = await this.settlementService.getSellerDiscountDeductions(
+      req.sellerId,
+      pageNum,
+      limitNum,
+    );
+    return {
+      success: true,
+      message: 'Discount deductions retrieved',
+      data,
+    };
+  }
 }

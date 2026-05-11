@@ -220,6 +220,28 @@ export const envSchema = z.object({
   COD_REFUND_PENDING_INTERVAL_MINUTES: z.coerce.number().default(4 * 60),
   COD_REFUND_PENDING_STUCK_HOURS: z.coerce.number().default(48),
 
+  // Phase B (P0.3) — discount-redemption expiry cron. Lazy expiry
+  // is the primary correctness mechanism; this cron keeps the
+  // active-reservation count fresh for the admin UI and metrics.
+  DISCOUNT_RESERVATION_CRON_ENABLED: z.string().default('true'),
+
+  // Phase B (P0.1, P0.5) — feature flag for the new allocation/
+  // reservation pipeline at checkout. When OFF, the legacy
+  // incrementUsedCount path runs (existing behavior). When ON,
+  // checkout reserves before order creation, allocates after,
+  // and writes the discount/tax/liability ledger atomically.
+  // Default OFF so the existing checkout flow is preserved until
+  // we explicitly enable in staging → prod.
+  DISCOUNT_ALLOCATION_ENABLED: z.string().default('false'),
+
+  // Phase E (P1.4) — coupon fraud / rate-limit. When ON, every
+  // call to /customer/coupons/validate writes a row to
+  // coupon_attempts and a sliding-window threshold blocks
+  // repeated invalid attempts.
+  DISCOUNT_FRAUD_TRACKING_ENABLED: z.string().default('true'),
+  DISCOUNT_FRAUD_WINDOW_MINUTES: z.coerce.number().default(15),
+  DISCOUNT_FRAUD_INVALID_THRESHOLD: z.coerce.number().default(10),
+
   // ── Phase 4 — Authorization (ADR-010) ──────────────────────────────
   // PermissionsGuard mode.
   //   false: log-only soak (logs a WARN with event=authz.deny when an

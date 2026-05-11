@@ -168,39 +168,82 @@ export default function SettlementCycleDetailPage() {
                     <th>Name</th>
                     <th className="numeric">Total Amount</th>
                     <th className="numeric">Platform Earning</th>
+                    {/* Phase B (P0.5) — seller-funded discount column.
+                        Only meaningful for sellers; the Franchise tab
+                        skips it. Empty cells render as a dash. */}
+                    {activeTab === 'sellers' && (
+                      <th className="numeric" title="Seller-funded discount deductions for this cycle">
+                        Discount Deductions
+                      </th>
+                    )}
                     <th className="numeric">Payable Amount</th>
                     <th>Status</th>
                     <th>Settled At</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.map((entry) => (
-                    <tr
-                      key={entry.id}
-                      onClick={() => {
-                        if (activeTab === 'sellers') {
-                          router.push(`/dashboard/sellers/${entry.nodeId}`);
-                        } else {
-                          router.push(`/dashboard/franchises/${entry.nodeId}`);
-                        }
-                      }}
-                    >
-                      <td style={{ fontWeight: 600, color: '#111827' }}>{entry.nodeName}</td>
-                      <td className="numeric">{formatCurrency(entry.totalAmount)}</td>
-                      <td className="numeric">{formatCurrency(entry.platformEarning)}</td>
-                      <td className="numeric amount-positive">
-                        {formatCurrency(entry.payableAmount)}
-                      </td>
-                      <td>
-                        <span className={getStatusClass(entry.status)}>
-                          {entry.status.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: 13, color: '#6b7280' }}>
-                        {formatDate(entry.settledAt)}
-                      </td>
-                    </tr>
-                  ))}
+                  {entries.map((entry) => {
+                    const deductionBucket =
+                      activeTab === 'sellers'
+                        ? cycle.discountDeductionsBySeller?.[entry.nodeId]
+                        : undefined;
+                    const deductionAmount = deductionBucket
+                      ? Number(deductionBucket.totalAmountInPaise) / 100
+                      : 0;
+                    return (
+                      <tr
+                        key={entry.id}
+                        onClick={() => {
+                          if (activeTab === 'sellers') {
+                            router.push(`/dashboard/sellers/${entry.nodeId}`);
+                          } else {
+                            router.push(`/dashboard/franchises/${entry.nodeId}`);
+                          }
+                        }}
+                      >
+                        <td style={{ fontWeight: 600, color: '#111827' }}>{entry.nodeName}</td>
+                        <td className="numeric">{formatCurrency(entry.totalAmount)}</td>
+                        <td className="numeric">{formatCurrency(entry.platformEarning)}</td>
+                        {activeTab === 'sellers' && (
+                          <td
+                            className="numeric"
+                            style={{
+                              color: deductionAmount > 0 ? '#dc2626' : '#9ca3af',
+                              fontWeight: deductionAmount > 0 ? 600 : 400,
+                            }}
+                          >
+                            {deductionAmount > 0
+                              ? `−${formatCurrency(deductionAmount)}`
+                              : '—'}
+                            {deductionBucket && deductionBucket.entries.length > 0 && (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: '#6b7280',
+                                  fontWeight: 400,
+                                  marginTop: 2,
+                                }}
+                              >
+                                {deductionBucket.entries.length} discount
+                                {deductionBucket.entries.length === 1 ? '' : 's'}
+                              </div>
+                            )}
+                          </td>
+                        )}
+                        <td className="numeric amount-positive">
+                          {formatCurrency(entry.payableAmount)}
+                        </td>
+                        <td>
+                          <span className={getStatusClass(entry.status)}>
+                            {entry.status.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 13, color: '#6b7280' }}>
+                          {formatDate(entry.settledAt)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}

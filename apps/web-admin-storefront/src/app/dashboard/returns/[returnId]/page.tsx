@@ -1612,6 +1612,33 @@ export default function AdminReturnDetailPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 340, overflowY: 'auto' }}>
                 {qcRows.map((row, idx) => {
                   const item = data.items.find((it) => it.id === row.returnItemId);
+                  // Phase C (P0.2) — refund preview math. Look up the
+                  // tax snapshot for this item; if none exists, the
+                  // order is legacy and the preview shows the gross
+                  // calculation only.
+                  const orderItemId = (item as any)?.orderItemId ?? item?.orderItem?.id;
+                  const snapshot = data.refundPreview?.taxSnapshots.find(
+                    (s) => s.orderItemId === orderItemId,
+                  );
+                  const purchasedQty = item?.orderItem?.quantity ?? 0;
+                  const approvedQty = row.qcQuantityApproved ?? 0;
+                  const willRefund =
+                    (row.qcOutcome === 'APPROVED' || row.qcOutcome === 'PARTIAL') &&
+                    approvedQty > 0;
+                  const preview = (() => {
+                    if (!willRefund) return null;
+                    if (!snapshot || purchasedQty === 0) return null;
+                    const ratio = approvedQty / purchasedQty;
+                    const gross = Number(snapshot.grossLineAmountInPaise) * ratio;
+                    const discount = Number(snapshot.discountAmountInPaise) * ratio;
+                    const taxable = Number(snapshot.taxableAmountInPaise) * ratio;
+                    const cgst = Number(snapshot.cgstAmountInPaise) * ratio;
+                    const sgst = Number(snapshot.sgstAmountInPaise) * ratio;
+                    const igst = Number(snapshot.igstAmountInPaise) * ratio;
+                    const totalTax = cgst + sgst + igst;
+                    const refund = taxable + totalTax;
+                    return { gross, discount, taxable, cgst, sgst, igst, totalTax, refund };
+                  })();
                   return (
                     <div
                       key={row.returnItemId}
@@ -1691,6 +1718,110 @@ export default function AdminReturnDetailPage() {
                           style={{ ...qcInputStyle, marginTop: 2 }}
                         />
                       </div>
+
+                      {/* Phase C (P0.2) — discount-aware refund preview.
+                          Recomputes live from the per-item tax snapshot
+                          as admin adjusts the approved quantity.
+
+                          Three states:
+                            1. willRefund + snapshot → full preview with
+                               GST split.
+                            2. willRefund + no snapshot → legacy order;
+                               show gross-only line.
+                            3. !willRefund (REJECTED/DAMAGED/qty=0) →
+                               "no refund" pill. */}
+                      {willRefund && preview && (
+                        <div
+                          style={{
+                            marginTop: 10,
+                            padding: 10,
+                            background: '#f0fdf4',
+                            border: '1px solid #bbf7d0',
+                            borderRadius: 6,
+                            fontSize: 12,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: '#15803d',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
+                              marginBottom: 6,
+                            }}
+                          >
+                            Refund preview
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 16, rowGap: 4 }}>
+                            <div style={{ color: '#374151' }}>Gross ({approvedQty}/{purchasedQty})</div>
+                            <div style={{ textAlign: 'right' }}>₹{(preview.gross / 100).toFixed(2)}</div>
+                            <div style={{ color: '#dc2626' }}>Allocated discount</div>
+                            <div style={{ textAlign: 'right', color: '#dc2626' }}>−₹{(preview.discount / 100).toFixed(2)}</div>
+                            <div style={{ color: '#374151', fontWeight: 600 }}>Net taxable refundable</div>
+                            <div style={{ textAlign: 'right', fontWeight: 600 }}>₹{(preview.taxable / 100).toFixed(2)}</div>
+                            {preview.totalTax > 0 && (
+                              <>
+                                <div style={{ color: '#6b7280' }}>
+                                  GST reversal{preview.cgst > 0 ? ' (CGST + SGST)' : ' (IGST)'}
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  +₹{(preview.totalTax / 100).toFixed(2)}
+                                </div>
+                              </>
+                            )}
+                            <div style={{ borderTop: '1px solid #bbf7d0', gridColumn: '1 / -1', marginTop: 4 }} />
+                            <div style={{ color: '#15803d', fontWeight: 700 }}>
+                              Total refund / credit note
+                            </div>
+                            <div
+                              style={{
+                                textAlign: 'right',
+                                fontWeight: 700,
+                                color: '#15803d',
+                                fontSize: 13,
+                              }}
+                            >
+                              ₹{(preview.refund / 100).toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {willRefund && !preview && (
+                        <div
+                          style={{
+                            marginTop: 10,
+                            padding: 8,
+                            background: '#fef3c7',
+                            border: '1px solid #fde68a',
+                            borderRadius: 6,
+                            fontSize: 11,
+                            color: '#92400e',
+                          }}
+                        >
+                          Legacy order — no per-item discount snapshot. Refund will use
+                          gross unit price × {approvedQty} ={' '}
+                          <strong>
+                            ₹{((Number(item?.orderItem?.unitPrice ?? 0) || 0) * approvedQty).toFixed(2)}
+                          </strong>
+                        </div>
+                      )}
+                      {!willRefund && (
+                        <div
+                          style={{
+                            marginTop: 10,
+                            display: 'inline-block',
+                            padding: '3px 10px',
+                            background: '#f3f4f6',
+                            color: '#374151',
+                            borderRadius: 4,
+                            fontSize: 11,
+                            fontWeight: 600,
+                          }}
+                        >
+                          No refund
+                        </div>
+                      )}
                     </div>
                   );
                 })}

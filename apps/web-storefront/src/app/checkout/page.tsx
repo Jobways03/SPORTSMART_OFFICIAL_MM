@@ -407,14 +407,42 @@ export default function CheckoutPage() {
         value: number; discountAmount: number;
       }>('/customer/coupons/validate', {
         method: 'POST',
-        body: JSON.stringify({ code, subtotal: subtotalForValidation, items: itemsForValidation }),
+        // Single-coupon-per-order policy: pass the currently-applied
+        // code (if any) so the server rejects any attempt to apply a
+        // *different* coupon on top of it. Re-validating the same
+        // code (e.g. after a subtotal change) is allowed.
+        body: JSON.stringify({
+          code,
+          subtotal: subtotalForValidation,
+          items: itemsForValidation,
+          currentCouponCode: appliedCoupon?.code ?? undefined,
+        }),
       });
       if (res.data) {
         setAppliedCoupon(res.data);
         setCouponInput(res.data.code);
       }
     } catch (err: any) {
-      setCouponError(err?.body?.message || err?.message || 'Invalid coupon');
+      // Phase E (P1.4) — 429 from the fraud rate-limiter includes a
+      // retryAfterSeconds field. Show a clearer cooldown message so
+      // the customer knows it's a temporary block (vs. a bad code).
+      if (err?.status === 429) {
+        const retryAfter = Number(err?.body?.retryAfterSeconds ?? 0);
+        if (retryAfter > 0) {
+          const minutes = Math.ceil(retryAfter / 60);
+          setCouponError(
+            `Too many coupon attempts. Try again in ${
+              minutes > 1 ? `${minutes} minutes` : 'a minute'
+            }.`,
+          );
+        } else {
+          setCouponError(
+            err?.body?.message || 'Too many coupon attempts. Please try again later.',
+          );
+        }
+      } else {
+        setCouponError(err?.body?.message || err?.message || 'Invalid coupon');
+      }
       setAppliedCoupon(null);
     } finally {
       setCouponApplying(false);

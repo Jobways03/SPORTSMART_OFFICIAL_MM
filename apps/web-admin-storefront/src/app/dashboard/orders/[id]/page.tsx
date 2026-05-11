@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
+import { DiscountGstBreakdownCard } from './_components/DiscountGstBreakdownCard';
 
 /* ────────── types ────────── */
 interface OrderItem {
@@ -108,6 +109,64 @@ interface OrderDetail {
   subOrders: SubOrder[];
   reassignmentLogs?: ReassignmentLog[];
   discount?: DiscountDetail | null;
+  // Phase B (P0.1, P0.5) — discount allocation + GST + liability ledger
+  // breakdown. Empty arrays for legacy orders placed before allocation
+  // went live.
+  discountBreakdown?: DiscountBreakdown;
+}
+
+interface DiscountBreakdown {
+  orderDiscounts: OrderDiscountRow[];
+  orderItemDiscounts: OrderItemDiscountRow[];
+  taxSnapshots: OrderItemTaxSnapshotRow[];
+  liabilityLedger: DiscountLiabilityLedgerRow[];
+}
+
+interface OrderDiscountRow {
+  id: string;
+  discountId: string;
+  discountCode: string | null;
+  discountType: string;
+  discountMethod: string;
+  discountNature: string;
+  source: string;
+  discountAmountInPaise: string;
+  fundingType: string;
+}
+
+interface OrderItemDiscountRow {
+  id: string;
+  orderItemId: string;
+  subOrderId: string;
+  sellerId: string | null;
+  productId: string;
+  discountId: string;
+  discountCode: string | null;
+  discountAmountInPaise: string;
+  fundingType: string;
+}
+
+interface OrderItemTaxSnapshotRow {
+  orderItemId: string;
+  grossLineAmountInPaise: string;
+  discountAmountInPaise: string;
+  taxableAmountInPaise: string;
+  gstRateBps: number;
+  cgstAmountInPaise: string;
+  sgstAmountInPaise: string;
+  igstAmountInPaise: string;
+  totalTaxAmountInPaise: string;
+  lineTotalAfterDiscountAndTaxInPaise: string;
+}
+
+interface DiscountLiabilityLedgerRow {
+  id: string;
+  orderItemId: string | null;
+  sellerId: string | null;
+  fundingType: string;
+  liabilityParty: string;
+  amountInPaise: string;
+  status: string;
 }
 
 interface DiscountProductLink {
@@ -1120,6 +1179,16 @@ export default function OrderDetailPage() {
               </div>
             </div>
           )}
+
+          {/* -- Discount & GST Breakdown (Phase B P0.1, P0.5) -- */}
+          {order.discountBreakdown &&
+            (order.discountBreakdown.orderDiscounts.length > 0 ||
+              order.discountBreakdown.orderItemDiscounts.length > 0) && (
+              <DiscountGstBreakdownCard
+                breakdown={order.discountBreakdown}
+                orderItems={(order.subOrders || []).flatMap((so) => so.items)}
+              />
+            )}
 
           {/* -- Reassignment History -- */}
           {order.reassignmentLogs && order.reassignmentLogs.length > 0 && (

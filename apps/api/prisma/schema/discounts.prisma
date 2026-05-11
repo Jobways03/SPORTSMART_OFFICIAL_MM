@@ -44,6 +44,101 @@ enum BxgyGetDiscountType {
   FREE
 }
 
+// ============================================
+// Phase B (P0) — Industry-grade discount lifecycle.
+// Funding model, allocation, ledger, redemption, and forward-compatible
+// child code structure. Tax snapshots live in `orders.prisma` /
+// `returns.prisma` next to the order/return models they extend.
+// ============================================
+
+// Who absorbs the cost of the discount. PLATFORM = marketing expense
+// (default); SELLER = deducted from seller settlement; BRAND = brand
+// liability for future co-marketing claims; SHARED = split per the
+// *FundingPercent fields. NONE is reserved for legacy/imported
+// records where attribution is unknown.
+enum DiscountFundingType {
+  PLATFORM
+  SELLER
+  BRAND
+  SHARED
+  NONE
+}
+
+// How seller commission is computed when this discount is applied.
+// GROSS keeps the existing pre-discount commission base (current
+// behavior); NET_AFTER_DISCOUNT computes commission on the post-
+// discount taxable value; SELLER_FUNDED_NET only deducts the seller's
+// share of a SHARED-funded discount before commission.
+enum DiscountCommissionBasis {
+  GROSS
+  NET_AFTER_DISCOUNT
+  SELLER_FUNDED_NET
+}
+
+// TRANSACTIONAL discounts reduce the actual taxable value and money
+// payable by the customer (the only kind handled by the allocation /
+// refund / settlement pipeline). DISPLAY_ONLY is a marketing "MRP
+// slash" that doesn't change the line total — kept on the schema so
+// future PDP/list pages can show a strike-through price without
+// polluting the financial ledger.
+enum DiscountNature {
+  TRANSACTIONAL
+  DISPLAY_ONLY
+}
+
+// Where the redemption originated. CODE = customer typed a coupon;
+// AUTOMATIC = system-applied promo (banner / cart-rule); AFFILIATE =
+// resolved through the affiliate fallback. Drives reporting + the
+// "is reservation required?" decision (AUTOMATIC promos only reserve
+// when they consume a budget/maxUses cap).
+enum DiscountSource {
+  CODE
+  AUTOMATIC
+  AFFILIATE
+}
+
+// Lifecycle of a single coupon redemption. RESERVED is held during
+// checkout (TTL = 15min default); REDEEMED on order commit; RELEASED
+// on checkout failure / TTL expiry; CANCELLED on order cancellation
+// before fulfillment. Used-count and budget reflect REDEEMED only.
+enum DiscountRedemptionStatus {
+  RESERVED
+  REDEEMED
+  RELEASED
+  CANCELLED
+}
+
+// Status of a single child code under a campaign Discount.
+enum DiscountCodeStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+  USED
+  DISABLED
+}
+
+// Who actually bears this entry of the liability ledger. Mirrors
+// fundingType but is per-row so SHARED funding produces multiple
+// ledger entries (PLATFORM share + SELLER share) for the same
+// allocation.
+enum DiscountLiabilityParty {
+  PLATFORM
+  SELLER
+  BRAND
+  SHARED
+}
+
+// Lifecycle of a liability ledger entry. PENDING during reservation;
+// APPLIED on redemption; REVERSED if the order/return undoes the
+// discount; SETTLED once the seller payout cycle has incorporated
+// the deduction.
+enum DiscountLiabilityStatus {
+  PENDING
+  APPLIED
+  REVERSED
+  SETTLED
+}
+
 model Discount {
   id                  String                 @id @default(uuid())
   code                String?                @unique
@@ -76,14 +171,49 @@ model Discount {
   getDiscountValue Decimal?             @map("get_discount_value") @db.Decimal(10, 2)
   maxUsesPerOrder  Int?                 @map("max_uses_per_order")
 
+  // Phase B (P0.5) — funding model. Existing rows default to
+  // PLATFORM/100/GROSS to preserve current settlement behavior
+  // (platform absorbs the full discount cost as marketing expense).
+  fundingType            DiscountFundingType     @default(PLATFORM) @map("funding_type")
+  platformFundingPercent Decimal                 @default(100) @map("platform_funding_percent") @db.Decimal(5, 2)
+  sellerFundingPercent   Decimal                 @default(0) @map("seller_funding_percent") @db.Decimal(5, 2)
+  brandFundingPercent    Decimal                 @default(0) @map("brand_funding_percent") @db.Decimal(5, 2)
+  commissionBasis        DiscountCommissionBasis @default(GROSS) @map("commission_basis")
+  fundingNotes           String?                 @map("funding_notes")
+
+  // Phase B (P0) — distinguishes a transactional discount that
+  // reduces the line total and tax base from a marketing-only
+  // "list price slash" that never enters the allocation/ledger
+  // pipeline. Default TRANSACTIONAL — current behavior.
+  discountNature DiscountNature @default(TRANSACTIONAL) @map("discount_nature")
+
+  // Phase F (P2.3) — affiliate ↔ discount unification. When
+  // affiliateId is set, this Discount represents an affiliate-issued
+  // coupon: redemption goes through the unified pipeline AND records
+  // a ReferralAttribution + AffiliateCommission via the affiliate
+  // facade. affiliateCommissionPercent is an optional override over
+  // the affiliate-level rate. We intentionally don't add a relation
+  // here — the affiliate module owns the Affiliate model and we keep
+  // the cross-module surface to its public facade.
+  affiliateId                String?  @map("affiliate_id")
+  affiliateCommissionPercent Decimal? @map("affiliate_commission_percent") @db.Decimal(5, 2)
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  products    DiscountProduct[]
-  collections DiscountCollection[]
+  products             DiscountProduct[]
+  collections          DiscountCollection[]
+  codes                DiscountCode[]
+  redemptions          DiscountRedemption[]
+  orderDiscounts       OrderDiscount[]
+  orderItemDiscounts   OrderItemDiscount[]
+  liabilityLedgerEntries DiscountLiabilityLedger[]
+  eligibilityRules     DiscountEligibilityRule[]
 
   @@index([code])
   @@index([status])
+  @@index([fundingType])
+  @@index([affiliateId])
   @@map("discounts")
 }
 
@@ -115,4 +245,280 @@ model DiscountCollection {
   @@index([discountId])
   @@index([collectionId])
   @@map("discount_collections")
+}
+
+// ============================================
+// Phase B (P0.6) — Forward-compatible child code table.
+// Existing single-code campaigns continue to use Discount.code
+// (preserved for backward compat). New campaigns can attach many
+// codes (influencer, win-back, post-purchase, bulk) via this table.
+// ============================================
+model DiscountCode {
+  id                    String             @id @default(uuid())
+  discountId            String             @map("discount_id")
+  code                  String             @unique
+  status                DiscountCodeStatus @default(ACTIVE)
+  maxUses               Int?               @map("max_uses")
+  usedCount             Int                @default(0) @map("used_count")
+  // Per-customer assignment (one-time / personalized codes). NULL =
+  // shareable code anyone can redeem.
+  assignedCustomerId    String?            @map("assigned_customer_id")
+  // Affiliate-issued codes can be tied to the originating affiliate
+  // for attribution + commission. NULL for non-affiliate codes.
+  assignedAffiliateId   String?            @map("assigned_affiliate_id")
+  expiresAt             DateTime?          @map("expires_at")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  discount    Discount             @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  redemptions DiscountRedemption[]
+
+  @@index([discountId])
+  @@index([assignedCustomerId])
+  @@index([assignedAffiliateId])
+  @@index([status])
+  @@map("discount_codes")
+}
+
+// ============================================
+// Phase B (P0.3, P0.4) — Reservation lifecycle.
+// Customer attempting checkout reserves a slot (TTL 15 min by
+// default). On order success the row flips to REDEEMED; on failure
+// to RELEASED. Cron releases expired RESERVED rows. usedCount on
+// Discount/DiscountCode is computed from REDEEMED rows only.
+// ============================================
+model DiscountRedemption {
+  id                    String                   @id @default(uuid())
+  discountId            String                   @map("discount_id")
+  discountCodeId        String?                  @map("discount_code_id")
+  // Snapshot of code-as-typed at reservation time (case-insensitive
+  // match handled at lookup). Survives later edits/deletes of the
+  // parent Discount/DiscountCode.
+  discountCode          String?                  @map("discount_code")
+  customerId            String                   @map("customer_id")
+  masterOrderId         String?                  @map("master_order_id")
+  source                DiscountSource           @default(CODE)
+  status                DiscountRedemptionStatus @default(RESERVED)
+  discountAmountInPaise BigInt                   @default(0) @map("discount_amount_in_paise")
+  reservedAt            DateTime                 @default(now()) @map("reserved_at")
+  redeemedAt            DateTime?                @map("redeemed_at")
+  releasedAt            DateTime?                @map("released_at")
+  expiresAt             DateTime                 @map("expires_at")
+  // Idempotency key from the checkout request. Lets us return the
+  // same RESERVED row instead of double-reserving when the client
+  // retries.
+  idempotencyKey        String?                  @map("idempotency_key")
+  createdAt             DateTime                 @default(now()) @map("created_at")
+  updatedAt             DateTime                 @updatedAt @map("updated_at")
+
+  // Discount FK uses RESTRICT — historical redemption rows must
+  // survive admin deletion of the parent Discount (security patch
+  // 20260508130000).
+  discount     Discount      @relation(fields: [discountId], references: [id], onDelete: Restrict)
+  discountCode_ DiscountCode? @relation(fields: [discountCodeId], references: [id], onDelete: SetNull)
+  masterOrder  MasterOrder?  @relation(fields: [masterOrderId], references: [id], onDelete: SetNull)
+
+  // Idempotency-keyed dedup so the same checkout request doesn't
+  // create two RESERVED rows. Combined with the partial unique
+  // indexes below (active-row enforcement) this keeps maxUses /
+  // onePerCustomer honest even under concurrent load.
+  @@unique([discountCodeId, customerId, status, idempotencyKey])
+  @@index([discountId])
+  @@index([discountCodeId])
+  @@index([customerId])
+  @@index([masterOrderId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("discount_redemptions")
+}
+
+// ============================================
+// Phase B (P0.1) — Order-level discount snapshot.
+// One row per discount applied to a MasterOrder. Captures the
+// metadata at order time so later edits to the Discount don't
+// rewrite history. Sum of `discountAmountInPaise` across rows for
+// a MasterOrder must equal MasterOrder.discountAmountInPaise.
+// ============================================
+model OrderDiscount {
+  id                    String              @id @default(uuid())
+  masterOrderId         String              @map("master_order_id")
+  discountId            String              @map("discount_id")
+  discountCodeId        String?             @map("discount_code_id")
+  discountCode          String?             @map("discount_code")
+  discountType          DiscountType        @map("discount_type")
+  discountMethod        DiscountMethod      @map("discount_method")
+  discountNature        DiscountNature      @default(TRANSACTIONAL) @map("discount_nature")
+  source                DiscountSource      @default(CODE)
+  discountAmountInPaise BigInt              @default(0) @map("discount_amount_in_paise")
+  fundingType           DiscountFundingType @default(PLATFORM) @map("funding_type")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  discount    Discount    @relation(fields: [discountId], references: [id])
+
+  @@index([masterOrderId])
+  @@index([discountId])
+  @@index([discountCode])
+  @@map("order_discounts")
+}
+
+// ============================================
+// Phase B (P0.1) — Item-level discount allocation.
+// One row per (item, discount) pair. The sum of allocations on an
+// OrderItem cannot exceed the item's gross. Drives correct refund
+// proration in P0.2 (returns) and correct settlement / commission
+// math in P0.5.
+// ============================================
+model OrderItemDiscount {
+  id                    String              @id @default(uuid())
+  masterOrderId         String              @map("master_order_id")
+  subOrderId            String              @map("sub_order_id")
+  orderItemId           String              @map("order_item_id")
+  sellerId              String?             @map("seller_id")
+  productId             String              @map("product_id")
+  variantId             String?             @map("variant_id")
+  discountId            String              @map("discount_id")
+  discountCodeId        String?             @map("discount_code_id")
+  discountCode          String?             @map("discount_code")
+  discountType          DiscountType        @map("discount_type")
+  discountAmountInPaise BigInt              @default(0) @map("discount_amount_in_paise")
+  fundingType           DiscountFundingType @default(PLATFORM) @map("funding_type")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @updatedAt @map("updated_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  subOrder    SubOrder    @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  orderItem   OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  discount    Discount    @relation(fields: [discountId], references: [id])
+
+  @@index([masterOrderId])
+  @@index([subOrderId])
+  @@index([orderItemId])
+  @@index([sellerId])
+  @@index([discountId])
+  @@map("order_item_discounts")
+}
+
+// ============================================
+// Phase B (P0.5) — Source-of-truth ledger for who bears the
+// discount cost. SHARED-funded discounts produce multiple rows
+// (one per liabilityParty) with `amountInPaise` summing to the
+// total allocation. Settlement reads this; the per-row `status`
+// transitions from PENDING → APPLIED → SETTLED (or REVERSED on
+// returns / cancellations).
+// ============================================
+model DiscountLiabilityLedger {
+  id              String                  @id @default(uuid())
+  masterOrderId   String                  @map("master_order_id")
+  subOrderId      String?                 @map("sub_order_id")
+  orderItemId     String?                 @map("order_item_id")
+  sellerId        String?                 @map("seller_id")
+  discountId      String                  @map("discount_id")
+  discountCodeId  String?                 @map("discount_code_id")
+  discountCode    String?                 @map("discount_code")
+  fundingType     DiscountFundingType     @map("funding_type")
+  liabilityParty  DiscountLiabilityParty  @map("liability_party")
+  amountInPaise   BigInt                  @default(0) @map("amount_in_paise")
+  status          DiscountLiabilityStatus @default(PENDING)
+  reason          String?
+  // Idempotency dedup so a retried order-creation transaction
+  // doesn't double-write the same ledger row (security patch
+  // 20260508130000). Caller generates the key per (order × discount
+  // × party). Partial unique index enforces dedup; null keys allowed
+  // for legacy/imported rows.
+  idempotencyKey  String?                 @map("idempotency_key")
+  createdAt       DateTime                @default(now()) @map("created_at")
+  updatedAt       DateTime                @updatedAt @map("updated_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  discount    Discount    @relation(fields: [discountId], references: [id])
+
+  @@index([masterOrderId])
+  @@index([subOrderId])
+  @@index([orderItemId])
+  @@index([sellerId])
+  @@index([discountId])
+  @@index([liabilityParty])
+  @@index([status])
+  @@map("discount_liability_ledger")
+}
+
+// ============================================
+// Phase E (P1.4) — Coupon attempt tracking.
+//
+// One row per call to POST /customer/coupons/validate. Backs:
+//   - the rate-limiter's sliding-window count per customer / IP
+//   - the admin "abuse" panel listing top-attempted invalid codes
+//   - the analytics dashboard's attempt-count card
+//
+// Sensitive identifiers (`ip_address`, `device_id`) are stored in
+// the clear; ops should rotate / purge in line with project's data
+// retention policy. PII is intentionally minimal (no name/email).
+// ============================================
+
+enum CouponAttemptResult {
+  VALID
+  INVALID
+  EXPIRED
+  NOT_ELIGIBLE
+  BLOCKED
+}
+
+// ============================================
+// Phase E (P1.3) — Discount eligibility rules.
+// One row per rule on a discount; absent rules = unrestricted.
+// See migration 20260508150000 for the value_json schema per rule.
+// ============================================
+
+enum DiscountEligibilityRuleType {
+  FIRST_ORDER_ONLY
+  NEW_CUSTOMER_ONLY
+  CUSTOMER_TIER_IN
+  CUSTOMER_SEGMENT_IN
+  SELLER_IN
+  CATEGORY_IN
+  PRODUCT_IN
+  COLLECTION_IN
+  PAYMENT_METHOD_IN
+  CITY_IN
+  PINCODE_IN
+  MIN_CART_VALUE
+  MIN_ELIGIBLE_ITEM_QUANTITY
+  MAX_REDEMPTIONS_PER_CUSTOMER
+  MAX_REDEMPTIONS_PER_CUSTOMER_WINDOW
+  MIN_DAYS_BETWEEN_REDEMPTIONS
+}
+
+model DiscountEligibilityRule {
+  id         String                      @id @default(uuid())
+  discountId String                      @map("discount_id")
+  ruleType   DiscountEligibilityRuleType @map("rule_type")
+  operator   String?
+  valueJson  Json                        @default("{}") @map("value_json")
+  createdAt  DateTime                    @default(now()) @map("created_at")
+  updatedAt  DateTime                    @updatedAt @map("updated_at")
+
+  discount Discount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+
+  @@index([discountId])
+  @@index([ruleType])
+  @@map("discount_eligibility_rules")
+}
+
+model CouponAttempt {
+  id             String              @id @default(uuid())
+  customerId     String?             @map("customer_id")
+  ipAddress      String?             @map("ip_address")
+  deviceId       String?             @map("device_id")
+  codeAttempted  String              @map("code_attempted")
+  result         CouponAttemptResult
+  reason         String?
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  @@index([customerId, createdAt])
+  @@index([ipAddress, createdAt])
+  @@index([result, createdAt])
+  @@index([codeAttempted])
+  @@map("coupon_attempts")
 }

@@ -739,6 +739,13 @@ const { returnId } = useParams<{ returnId: string }>();
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#16a34a' }}>
               Refund Information
             </h3>
+            {/* Phase C (P0.2) — explain that the refund is computed on
+                the final price paid (after any coupon discount), so
+                customers don't expect the full sticker price back when
+                a coupon was applied. */}
+            <p style={{ fontSize: 12, color: '#374151', margin: '0 0 10px', lineHeight: 1.5 }}>
+              Refund is calculated on the final price paid after coupon discount.
+            </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
               {ret.refundAmount != null && (
                 <div>

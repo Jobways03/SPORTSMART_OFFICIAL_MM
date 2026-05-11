@@ -126,6 +126,24 @@ export interface SettlementCycleDetail {
   createdAt: string;
   sellerSettlements: SettlementCycleSettlementEntry[];
   franchiseSettlements: SettlementCycleSettlementEntry[];
+  // Phase B (P0.5) — seller-funded discount deductions per seller.
+  // Keyed by sellerId. Amounts are paise (BigInt → string on the
+  // wire). Empty for cycles with no seller-funded discounts.
+  discountDeductionsBySeller?: Record<string, {
+    totalAmountInPaise: string;
+    entries: Array<{
+      masterOrderId: string;
+      subOrderId: string | null;
+      orderItemId: string | null;
+      discountId: string;
+      discountCode: string | null;
+      fundingType: string;
+      amountInPaise: string;
+      status: string;
+      reason: string | null;
+      createdAt: string;
+    }>;
+  }>;
 }
 
 export interface RevenueBreakdownEntry {

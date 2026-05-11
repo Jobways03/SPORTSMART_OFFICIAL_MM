@@ -174,7 +174,61 @@ export class SettlementService {
       return null;
     }
 
-    return cycle;
+    // Phase B (P0.5) — attach seller-funded discount deductions per
+    // seller. Pulls from `discount_liability_ledger` filtered to
+    // liability_party=SELLER and rolled up by seller. The UI uses
+    // this to show a "Discount Deductions" line in the per-seller
+    // breakdown.
+    const sellerIds = (cycle.sellerSettlements ?? []).map((s: any) => s.sellerId);
+    let discountDeductionsBySeller: Record<string, {
+      totalAmountInPaise: string;
+      entries: Array<{
+        masterOrderId: string;
+        subOrderId: string | null;
+        orderItemId: string | null;
+        discountId: string;
+        discountCode: string | null;
+        fundingType: string;
+        amountInPaise: string;
+        status: string;
+        reason: string | null;
+        createdAt: Date;
+      }>;
+    }> = {};
+    if (sellerIds.length > 0) {
+      const rows = await this.prisma.discountLiabilityLedger.findMany({
+        where: {
+          sellerId: { in: sellerIds },
+          liabilityParty: 'SELLER',
+          status: { in: ['APPLIED', 'SETTLED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      for (const row of rows) {
+        if (!row.sellerId) continue;
+        const bucket = (discountDeductionsBySeller[row.sellerId] ??= {
+          totalAmountInPaise: '0',
+          entries: [],
+        });
+        bucket.totalAmountInPaise = (
+          BigInt(bucket.totalAmountInPaise) + BigInt(row.amountInPaise)
+        ).toString();
+        bucket.entries.push({
+          masterOrderId: row.masterOrderId,
+          subOrderId: row.subOrderId,
+          orderItemId: row.orderItemId,
+          discountId: row.discountId,
+          discountCode: row.discountCode,
+          fundingType: row.fundingType,
+          amountInPaise: row.amountInPaise.toString(),
+          status: row.status,
+          reason: row.reason,
+          createdAt: row.createdAt,
+        });
+      }
+    }
+
+    return { ...cycle, discountDeductionsBySeller };
   }
 
   /* ── T3: Approve cycle ── */
@@ -320,6 +374,20 @@ export class SettlementService {
       },
     });
 
+    // Phase B (P0.5) — seller-funded discount deductions. Sum of
+    // ledger entries with liability_party=SELLER for this seller.
+    // These are amounts the seller has agreed to absorb (reducing
+    // their settlement); platform-funded discounts do NOT show here.
+    const discountDeductionAgg = await this.prisma.discountLiabilityLedger.aggregate({
+      where: {
+        sellerId,
+        liabilityParty: 'SELLER',
+        status: { in: ['APPLIED', 'SETTLED'] },
+      },
+      _sum: { amountInPaise: true },
+      _count: true,
+    });
+
     return {
       totalEarned: Number(settledAgg._sum.totalSettlementAmount || 0),
       pendingSettlement: Number(pendingAgg._sum.totalSettlementAmount || 0),
@@ -330,6 +398,55 @@ export class SettlementService {
             utrReference: lastPayout.utrReference,
           }
         : null,
+      // Phase B (P0.5)
+      discountDeductions: {
+        // BigInt → string on the wire (Prisma convention).
+        totalAmountInPaise: (
+          discountDeductionAgg._sum.amountInPaise ?? 0n
+        ).toString(),
+        count: discountDeductionAgg._count,
+      },
+    };
+  }
+
+  /**
+   * Phase B (P0.5) — paginated list of seller-funded discount
+   * deductions for a specific seller. Backs the "Discount
+   * Deductions" tab on the seller dashboard.
+   */
+  async getSellerDiscountDeductions(
+    sellerId: string,
+    page: number,
+    limit: number,
+  ) {
+    const skip = (page - 1) * limit;
+    const [rows, total] = await Promise.all([
+      this.prisma.discountLiabilityLedger.findMany({
+        where: {
+          sellerId,
+          liabilityParty: 'SELLER',
+          status: { in: ['APPLIED', 'SETTLED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.discountLiabilityLedger.count({
+        where: {
+          sellerId,
+          liabilityParty: 'SELLER',
+          status: { in: ['APPLIED', 'SETTLED'] },
+        },
+      }),
+    ]);
+    return {
+      items: rows.map((r) => ({
+        ...r,
+        amountInPaise: r.amountInPaise.toString(),
+      })),
+      total,
+      page,
+      limit,
     };
   }
 
