@@ -7,6 +7,7 @@ import {
   FranchiseOrder,
 } from '@/services/orders.service';
 import { useModal } from '@sportsmart/ui';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 import {
   franchiseReturnsService,
   FranchiseReturn,
@@ -430,6 +431,7 @@ const router = useRouter();
                       <th style={thStyle}>Sub Total</th>
                       <th style={thStyle}>Accept Status</th>
                       <th style={thStyle}>Fulfillment</th>
+                      <th style={thStyle}>Delivery</th>
                       <th style={thStyle}>Created</th>
                       <th style={thStyle}>Actions</th>
                     </tr>
@@ -469,6 +471,13 @@ const router = useRouter();
                           <Badge
                             text={fulfillmentLabel(so.fulfillmentStatus)}
                             color={colorForFulfillment(so.fulfillmentStatus)}
+                          />
+                        </td>
+                        <td style={tdStyle}>
+                          <DeliveryMethodBadge
+                            method={(so as any).deliveryMethod ?? null}
+                            awb={(so as any).ithinkAwb}
+                            courier={(so as any).ithinkLogistic}
                           />
                         </td>
                         <td style={tdStyle}>{fmtDate(so.createdAt)}</td>

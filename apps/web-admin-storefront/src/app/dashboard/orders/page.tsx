@@ -3,11 +3,17 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
+import { DeliveryMethodBadge, type DeliveryMethod } from '@/components/DeliveryMethodBadge';
 
 interface SubOrder {
   id: string;
   fulfillmentStatus: string;
   acceptStatus: string;
+  deliveryMethod?: DeliveryMethod;
+  ithinkAwb?: string | null;
+  ithinkLogistic?: string | null;
+  ithinkTrackingUrl?: string | null;
+  selfDeliveryStatus?: string | null;
   items: { productTitle: string; quantity: number }[];
   seller: { sellerShopName: string } | null;
 }
@@ -210,6 +216,13 @@ export default function OrdersPage() {
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 20 }}>
         <MetricCard
+          label="All Orders"
+          value={data?.pagination.total ?? 0}
+          color="#1e3a8a"
+          active={statusFilter === ''}
+          onClick={() => { setStatusFilter(''); setPage(1); }}
+        />
+        <MetricCard
           label="Pending Verification"
           value={metrics.pendingVerify}
           color="#d97706"
@@ -367,6 +380,7 @@ export default function OrdersPage() {
                     <th style={thStyle}>Payment</th>
                     <th style={thStyle}>Order Status</th>
                     <th style={thStyle}>Fulfillment</th>
+                    <th style={thStyle}>Delivery</th>
                     <th style={{ ...thStyle, textAlign: 'center' }}>Items</th>
                   </tr>
                 </thead>
@@ -462,6 +476,35 @@ export default function OrdersPage() {
                               const fColor = s === 'DELIVERED' ? '#15803d' : s === 'SHIPPED' ? '#2563eb' : s === 'PACKED' ? '#d97706' : s === 'CANCELLED' ? '#dc2626' : s === 'FULFILLED' ? '#16a34a' : '#6366f1';
                               return <span key={i}>{badge(fLabel, fColor)}</span>;
                             })}
+                          </div>
+                        </td>
+                        <td style={tdStyle}>
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            {/* One badge per SubOrder; collapses when all
+                                sub-orders share the same method. */}
+                            {(() => {
+                              const methods = new Set(
+                                relevantSubOrders.map((s) => s.deliveryMethod ?? null),
+                              );
+                              if (methods.size === 1) {
+                                const so = relevantSubOrders[0];
+                                return (
+                                  <DeliveryMethodBadge
+                                    method={so?.deliveryMethod ?? null}
+                                    awb={so?.ithinkAwb}
+                                    courier={so?.ithinkLogistic}
+                                  />
+                                );
+                              }
+                              return relevantSubOrders.map((so) => (
+                                <DeliveryMethodBadge
+                                  key={so.id}
+                                  method={so.deliveryMethod ?? null}
+                                  awb={so.ithinkAwb}
+                                  courier={so.ithinkLogistic}
+                                />
+                              ));
+                            })()}
                           </div>
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>

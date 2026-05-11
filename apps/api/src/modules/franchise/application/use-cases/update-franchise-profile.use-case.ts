@@ -7,6 +7,7 @@ import {
 } from '../../../../core/exceptions';
 import { AppException } from '../../../../core/exceptions/app.exception';
 import { computeFranchiseProfileCompletion } from '../../../../core/utils';
+import { ithinkAddressHash } from '../../../admin/application/services/admin-delivery-methods.service';
 import { FranchiseUpdateProfileDto } from '../../presentation/dtos/franchise-update-profile.dto';
 import {
   FranchisePartnerRepository,
@@ -78,6 +79,25 @@ export class UpdateFranchiseProfileUseCase {
 
     updateData.profileCompletionPercentage = profileCompletionPercentage;
     updateData.isProfileCompleted = isProfileCompleted;
+
+    // iThink address-drift detection (same logic as the seller-side
+    // hook): when the warehouse-relevant fields change after a pickup
+    // has been registered with iThink, flip status to STALE so admin
+    // sees the banner and can re-register. Never auto-re-register —
+    // that creates a fresh iThink warehouse_id.
+    const anyMerged = merged as any;
+    if (anyMerged.ithinkPickupAddressId && anyMerged.ithinkRegisteredAddressHash) {
+      const newHash = ithinkAddressHash({
+        address: anyMerged.warehouseAddress,
+        city: anyMerged.city,
+        state: anyMerged.state,
+        pincode: anyMerged.warehousePincode,
+        mobile: anyMerged.phoneNumber,
+      });
+      if (newHash !== anyMerged.ithinkRegisteredAddressHash) {
+        updateData.ithinkWarehouseStatus = 'STALE';
+      }
+    }
 
     // Persist
     const updated = await this.franchiseRepo.updateFranchiseSelect(

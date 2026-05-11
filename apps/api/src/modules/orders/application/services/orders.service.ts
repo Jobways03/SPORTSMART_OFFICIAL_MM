@@ -1762,6 +1762,9 @@ export class OrdersService {
 
     // Strip seller information — customers should not see seller names
     // Add customer-friendly status labels
+    // We DO surface deliveryMethod + tracking URL since customers
+    // benefit from knowing how the order is being delivered and where
+    // to click for live tracking.
     const sanitized = orders.map((o: any) => ({
       ...o,
       orderStatusLabel: this.mapOrderStatusLabel(o.orderStatus),
@@ -1772,6 +1775,11 @@ export class OrdersService {
         fulfillmentStatus: so.fulfillmentStatus,
         acceptStatus: so.acceptStatus,
         deliveredAt: so.deliveredAt,
+        deliveryMethod: so.deliveryMethod,
+        ithinkAwb: so.ithinkAwb,
+        ithinkLogistic: so.ithinkLogistic,
+        ithinkTrackingUrl: so.ithinkTrackingUrl,
+        selfDeliveryStatus: so.selfDeliveryStatus,
         items: so.items,
       })),
     }));
@@ -1796,7 +1804,9 @@ export class OrdersService {
     if (!order) throw new NotFoundAppException('Order not found');
 
     // Strip seller information — show "Fulfilled by SPORTSMART" label
-    // Add customer-friendly status label
+    // Add customer-friendly status label. Tracking + delivery method
+    // are surfaced so the customer detail screen can render a
+    // "Track via iThink" link or display the self-delivery progress.
     return {
       ...order,
       orderStatusLabel: this.mapOrderStatusLabel(order.orderStatus),
@@ -1809,6 +1819,11 @@ export class OrdersService {
         deliveredAt: so.deliveredAt,
         returnWindowEndsAt: so.returnWindowEndsAt,
         fulfilledBy: 'SPORTSMART',
+        deliveryMethod: so.deliveryMethod,
+        ithinkAwb: so.ithinkAwb,
+        ithinkLogistic: so.ithinkLogistic,
+        ithinkTrackingUrl: so.ithinkTrackingUrl,
+        selfDeliveryStatus: so.selfDeliveryStatus,
         items: so.items,
       })),
     };

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 
 interface ReturnLite {
   id: string;
@@ -18,6 +19,9 @@ interface SubOrder {
   fulfillmentStatus: string;
   acceptStatus: string;
   acceptDeadlineAt: string | null;
+  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
+  ithinkAwb?: string | null;
+  ithinkLogistic?: string | null;
   items: { productTitle: string; quantity: number; totalPrice: number }[];
   returns?: ReturnLite[];
   masterOrder: {
@@ -270,6 +274,7 @@ export default function SellerOrdersPage() {
                   <th style={thStyle}>PAYMENT MODE</th>
                   <th style={thStyle}>PAYMENT STATUS</th>
                   <th style={thStyle}>FULFILLMENT</th>
+                  <th style={thStyle}>DELIVERY</th>
                   <th style={thStyle}>ORDER ACCEPT</th>
                   <th style={thStyle}>ORDER AMOUNT</th>
                   <th style={thStyle}>ACTION</th>
@@ -316,6 +321,13 @@ export default function SellerOrdersPage() {
                           : '#6366f1'
                         );
                       })()}
+                    </td>
+                    <td style={tdStyle}>
+                      <DeliveryMethodBadge
+                        method={so.deliveryMethod ?? null}
+                        awb={so.ithinkAwb}
+                        courier={so.ithinkLogistic}
+                      />
                     </td>
                     <td style={tdStyle}>
                       <div>

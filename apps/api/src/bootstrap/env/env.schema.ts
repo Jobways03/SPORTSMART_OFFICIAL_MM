@@ -46,6 +46,31 @@ export const envSchema = z.object({
   SHIPROCKET_PASSWORD: z.string().optional(),
   SHIPROCKET_WEBHOOK_TOKEN: z.string().optional(),
 
+  // iThink Logistics
+  ITHINK_USE_SANDBOX: z
+    .string()
+    .default('true')
+    .transform((v) => v === 'true' || v === '1'),
+  ITHINK_BASE_URL: z.string().default('https://pre-alpha.ithinklogistics.com'),
+  ITHINK_TRACK_URL: z.string().default('https://pre-alpha.ithinklogistics.com'),
+  ITHINK_ACCESS_TOKEN: z.string().optional(),
+  ITHINK_SECRET_KEY: z.string().optional(),
+  ITHINK_DEFAULT_LOGISTICS: z
+    .enum(['delhivery', 'bluedart', 'xpressbees', 'ecom', 'ekart', 'fedex'])
+    .default('delhivery'),
+  ITHINK_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  ITHINK_HTTP_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
+  ITHINK_TRACKING_POLL_INTERVAL_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(29)
+    .default(25),
+  ITHINK_TRACKING_POLL_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+
   // OpenSearch - optional
   OPENSEARCH_NODE: z.string().optional(),
 

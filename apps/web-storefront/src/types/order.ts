@@ -20,6 +20,20 @@ export interface SubOrder {
   fulfilledBy?: string;
   trackingNumber?: string | null;
   courierName?: string | null;
+  // Delivery method fields surfaced by the API. Optional because
+  // historical orders pre-feature have NULL here.
+  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
+  ithinkAwb?: string | null;
+  ithinkLogistic?: string | null;
+  ithinkTrackingUrl?: string | null;
+  selfDeliveryStatus?:
+    | 'PENDING'
+    | 'READY_FOR_PICKUP'
+    | 'OUT_FOR_DELIVERY'
+    | 'DELIVERED'
+    | 'FAILED'
+    | 'CANCELLED'
+    | null;
   items: OrderItem[];
 }
 

@@ -146,6 +146,34 @@ model SubOrder {
   trackingNumber         String?                @map("tracking_number")
   courierName            String?                @map("courier_name")
   shippingLabelUrl       String?                @map("shipping_label_url")
+
+  // ─── Delivery method (NULL until the sub-order is accepted) ──
+  // The seller / franchise picks this at fulfilment time from the
+  // methods their admin has enabled. NULL means the choice hasn't
+  // been made yet (sub-order routed but not yet accepted).
+  deliveryMethod    DeliveryMethod?     @map("delivery_method")
+  // iThink-only fields. trackingNumber + courierName above are
+  // generic legacy fields; these are iThink-specific.
+  ithinkAwb         String?             @map("ithink_awb")
+  ithinkLogistic    String?             @map("ithink_logistic")
+  ithinkTrackingUrl String?             @map("ithink_tracking_url")
+  ithinkOrderRefnum String?             @map("ithink_order_refnum")
+  ithinkBookedAt    DateTime?           @map("ithink_booked_at")
+  // Self-delivery state machine — only used when deliveryMethod = SELF_DELIVERY.
+  selfDeliveryStatus  SelfDeliveryStatus? @map("self_delivery_status")
+  selfDeliveredAt     DateTime?           @map("self_delivered_at")
+  selfDeliveryNotes   String?             @map("self_delivery_notes")
+  // Snapshot of pickup address id at the time of booking — keeps
+  // audit trail if the seller/franchise later re-registers a different
+  // warehouse with iThink. The forward AWB ships from this address.
+  pickupAddressIdSnapshot String? @map("pickup_address_id_snapshot")
+  // Snapshot of return address id at the time of booking. The reverse
+  // pickup (RTO / customer-initiated return) drops at this address.
+  // Without this snapshot, re-registering after the forward AWB would
+  // route the return to whatever warehouse_id is current — which may
+  // be a different physical location.
+  returnAddressIdSnapshot String? @map("return_address_id_snapshot")
+
   commissionProcessed    Boolean                @default(false) @map("commission_processed")
   commissionRateSnapshot Decimal?               @map("commission_rate_snapshot") @db.Decimal(5, 2)
   createdAt              DateTime               @default(now()) @map("created_at")
@@ -162,6 +190,9 @@ model SubOrder {
   @@index([sellerId])
   @@index([franchiseId])
   @@index([fulfillmentNodeType])
+  @@index([deliveryMethod])
+  @@index([ithinkAwb])
+  @@index([selfDeliveryStatus])
   @@map("sub_orders")
 }
 

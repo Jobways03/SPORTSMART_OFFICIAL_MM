@@ -23,6 +23,8 @@ import { SellerResetPasswordController } from './presentation/controllers/seller
 import { SellerProfileController } from './presentation/controllers/seller-profile.controller';
 import { SellerProfileMediaController } from './presentation/controllers/seller-profile-media.controller';
 import { SellerEmailVerificationController } from './presentation/controllers/seller-email-verification.controller';
+import { SellerDeliveryMethodsController } from './presentation/controllers/seller-delivery-methods.controller';
+import { SellerDeliveryMethodsService } from './application/services/seller-delivery-methods.service';
 import { SELLER_REPOSITORY } from './domain/repositories/seller.repository.interface';
 import { PrismaSellerRepository } from './infrastructure/repositories/prisma-seller.repository';
 
@@ -35,8 +37,10 @@ import { PrismaSellerRepository } from './infrastructure/repositories/prisma-sel
     SellerProfileController,
     SellerProfileMediaController,
     SellerEmailVerificationController,
+    SellerDeliveryMethodsController,
   ],
   providers: [
+    SellerDeliveryMethodsService,
     {
       provide: SELLER_REPOSITORY,
       useClass: PrismaSellerRepository,

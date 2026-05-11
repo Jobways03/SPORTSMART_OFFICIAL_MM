@@ -13,6 +13,7 @@ import {
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 
 interface OrderItem {
   productTitle: string;
@@ -27,6 +28,18 @@ interface SubOrder {
   id: string;
   fulfillmentStatus: string;
   acceptStatus: string;
+  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
+  ithinkAwb?: string | null;
+  ithinkLogistic?: string | null;
+  ithinkTrackingUrl?: string | null;
+  selfDeliveryStatus?:
+    | 'PENDING'
+    | 'READY_FOR_PICKUP'
+    | 'OUT_FOR_DELIVERY'
+    | 'DELIVERED'
+    | 'FAILED'
+    | 'CANCELLED'
+    | null;
   items: OrderItem[];
 }
 
@@ -512,6 +525,20 @@ export default function OrdersPage() {
                         {/* Status row */}
                         <div className="mt-5 pt-4 border-t border-ink-100 flex items-center gap-4">
                           <StatusChip tone={tone} label={label} />
+                          {/* Delivery method visible at glance — only when
+                              a method has been chosen, to avoid noise on
+                              orders the seller hasn't yet accepted. */}
+                          {(() => {
+                            const so = order.subOrders[0];
+                            if (!so?.deliveryMethod) return null;
+                            return (
+                              <DeliveryMethodBadge
+                                method={so.deliveryMethod}
+                                awb={so.ithinkAwb}
+                                courier={so.ithinkLogistic}
+                              />
+                            );
+                          })()}
                           <ProgressTrack progressIdx={progressIdx} tone={tone} />
                           <span className="ml-auto inline-flex items-center gap-1 text-caption font-semibold text-ink-700 group-hover:text-ink-900">
                             View

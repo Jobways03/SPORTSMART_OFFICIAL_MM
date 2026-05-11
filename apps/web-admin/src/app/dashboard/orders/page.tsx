@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 
 interface SubOrder {
   id: string;
@@ -10,6 +11,11 @@ interface SubOrder {
   paymentStatus: string;
   fulfillmentStatus: string;
   acceptStatus: string;
+  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
+  ithinkAwb?: string | null;
+  ithinkLogistic?: string | null;
+  ithinkTrackingUrl?: string | null;
+  selfDeliveryStatus?: string | null;
   seller: { id: string; sellerName: string; sellerShopName: string; email: string } | null;
   items: { productTitle: string; quantity: number }[];
 }
@@ -376,6 +382,7 @@ export default function AdminOrdersPage() {
                     <th style={styles.th}>Status</th>
                     <th style={styles.th}>Payment</th>
                     <th style={styles.th}>Fulfillment</th>
+                    <th style={styles.th}>Delivery</th>
                     <th style={styles.th}>Accept</th>
                     <th style={styles.th}>Date</th>
                     <th style={{ ...styles.th, textAlign: 'right' as const }}>
@@ -549,6 +556,31 @@ function OrderRow({
             const p = fulfillmentPill(fs);
             return <Pill key={idx} label={p.label} tone={p.tone} size="xs" />;
           })}
+        </div>
+      </td>
+      <td style={styles.td}>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {(() => {
+            const methods = new Set(relevantSubs.map((s) => s.deliveryMethod ?? null));
+            if (methods.size === 1) {
+              const so = relevantSubs[0];
+              return (
+                <DeliveryMethodBadge
+                  method={so?.deliveryMethod ?? null}
+                  awb={so?.ithinkAwb}
+                  courier={so?.ithinkLogistic}
+                />
+              );
+            }
+            return relevantSubs.map((so) => (
+              <DeliveryMethodBadge
+                key={so.id}
+                method={so.deliveryMethod ?? null}
+                awb={so.ithinkAwb}
+                courier={so.ithinkLogistic}
+              />
+            ));
+          })()}
         </div>
       </td>
       <td style={styles.td}>

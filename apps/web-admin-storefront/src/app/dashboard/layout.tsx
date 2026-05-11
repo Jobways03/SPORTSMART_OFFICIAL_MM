@@ -18,7 +18,6 @@ const navItems = [
   { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: '📒' },
   { label: 'Products', href: '/dashboard/products', icon: '📦' },
   { label: 'Inventory', href: '/dashboard/inventory', icon: '📊' },
-  { label: 'NOVA Brand', href: '/dashboard/nova/warehouses', icon: '🚀' },
   { label: 'Commission', href: '/dashboard/commission', icon: '💰' },
   { label: 'Customers', href: '/dashboard/customers', icon: '👥' },
   { label: 'Wallets', href: '/dashboard/wallets', icon: '💳' },
@@ -32,11 +31,6 @@ const navItems = [
   { label: 'Content', href: '/dashboard/content', icon: '📝' },
   { label: 'Navigation', href: '/dashboard/menus', icon: '🧭' },
   { label: 'Analytics', href: '/dashboard/analytics', icon: '📈' },
-];
-
-const salesChannels = [
-  { label: 'Online Store', href: '#', icon: '🏪' },
-  { label: 'Point of Sale', href: '#', icon: '💳' },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -168,23 +162,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           ))}
 
-          <div className="sidebar-section-label">
-            Sales channels <span className="chevron">›</span>
-          </div>
-          {salesChannels.map((item) => (
-            <Link key={item.label} href={item.href} className="sidebar-item">
-              <span className="sidebar-item-icon">{item.icon}</span>
-              {item.label}
-            </Link>
-          ))}
-
-          <div className="sidebar-section-label">
-            Apps <span className="chevron">›</span>
-          </div>
-          <Link href="#" className="sidebar-item">
-            <span className="sidebar-item-icon">🔍</span>
-            Search & Discovery
-          </Link>
         </nav>
 
         <div className="sidebar-bottom">

@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { IThinkModule } from '../../integrations/ithink/ithink.module';
+
 // Guards
 import { AdminAuthGuard } from '../../core/guards';
 
@@ -37,21 +39,30 @@ import { AdminAuthController } from './presentation/controllers/admin-auth.contr
 import { AdminSellersController } from './presentation/controllers/admin-sellers.controller';
 import { AdminCustomersController } from './presentation/controllers/admin-customers.controller';
 import { AdminRolesController } from './presentation/controllers/admin-roles.controller';
+import {
+  AdminFranchiseDeliveryMethodsController,
+  AdminSellerDeliveryMethodsController,
+} from './presentation/controllers/admin-delivery-methods.controller';
+import { AdminDeliveryMethodsService } from './application/services/admin-delivery-methods.service';
 import { RoleService } from './application/services/role.service';
 
 // Policies
 import { SellerStatusTransitionPolicy } from '../seller/application/policies/seller-status-transition.policy';
 
 @Module({
+  imports: [IThinkModule],
   controllers: [
     AdminAuthController,
     AdminSellersController,
     AdminCustomersController,
     AdminRolesController,
+    AdminSellerDeliveryMethodsController,
+    AdminFranchiseDeliveryMethodsController,
   ],
   providers: [
     AdminAuthGuard,
     RoleService,
+    AdminDeliveryMethodsService,
     {
       provide: ADMIN_REPOSITORY,
       useClass: PrismaAdminRepository,

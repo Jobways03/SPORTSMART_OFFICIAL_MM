@@ -34,6 +34,10 @@ import { FranchiseOrdersService } from './application/services/franchise-orders.
 import { FranchiseOrdersController } from './presentation/controllers/franchise-orders.controller';
 import { AdminFranchiseOrdersController } from './presentation/controllers/admin-franchise-orders.controller';
 
+// Delivery method (iThink / Self Delivery) — Phase 14
+import { FranchiseDeliveryMethodsService } from './application/services/franchise-delivery-methods.service';
+import { FranchiseDeliveryMethodsController } from './presentation/controllers/franchise-delivery-methods.controller';
+
 // Phase 2 imports — Catalog
 import { PrismaFranchiseCatalogRepository } from './infrastructure/repositories/prisma-franchise-catalog.repository';
 import { FRANCHISE_CATALOG_REPOSITORY } from './domain/repositories/franchise-catalog.repository.interface';
@@ -146,8 +150,10 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     FranchiseEmailVerificationController,
     FranchiseMediaController,
     FranchiseStaffController,
+    FranchiseDeliveryMethodsController,
   ],
   providers: [
+    FranchiseDeliveryMethodsService,
     {
       provide: FRANCHISE_PARTNER_REPOSITORY,
       useClass: PrismaFranchiseRepository,

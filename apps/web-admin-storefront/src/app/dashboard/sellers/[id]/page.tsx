@@ -251,6 +251,28 @@ export default function SellerDetailPage() {
             <h1 style={styles.h1}>{seller.sellerName}</h1>
             <Pill label={status.label} tone={status.tone} />
             <Pill label={verify.label} tone={verify.tone} />
+            {/* Quick link to the delivery-method entitlement screen.
+                Marketplace admin toggles iThink / Self Delivery here. */}
+            <Link
+              href={`/dashboard/sellers/${seller.sellerId}/delivery-methods`}
+              style={{
+                marginLeft: 'auto',
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#1e3a8a',
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: 999,
+                textDecoration: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <span aria-hidden="true">🚚</span>
+              Delivery Methods
+            </Link>
           </div>
           <div style={styles.identityMeta}>
             <span style={styles.identityShop}>{seller.sellerShopName}</span>

@@ -5,6 +5,9 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { useModal } from '@sportsmart/ui';
+import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
+import { DeliveryMethodPicker } from '@/components/DeliveryMethodPicker';
+import { SelfDeliveryStatusButtons } from '@/components/SelfDeliveryStatusButtons';
 
 /* -- types -- */
 interface OrderItem {
@@ -69,6 +72,20 @@ interface SubOrderDetail {
   commissionProcessed: boolean;
   trackingNumber: string | null;
   courierName: string | null;
+  // Delivery method fields surfaced from the API.
+  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
+  ithinkAwb?: string | null;
+  ithinkLogistic?: string | null;
+  ithinkTrackingUrl?: string | null;
+  ithinkOrderRefnum?: string | null;
+  selfDeliveryStatus?:
+    | 'PENDING'
+    | 'READY_FOR_PICKUP'
+    | 'OUT_FOR_DELIVERY'
+    | 'DELIVERED'
+    | 'FAILED'
+    | 'CANCELLED'
+    | null;
   items: OrderItem[];
   commissionRecords: CommissionRecord[];
   returns?: ReturnLite[];
@@ -521,6 +538,11 @@ const { id } = useParams<{ id: string }>();
       {order.acceptStatus === 'OPEN' && order.acceptDeadlineAt && (
         <AcceptDeadlineCountdown deadline={order.acceptDeadlineAt} />
       )}
+
+      {/* Delivery method panel — picker if not yet chosen, badge + actions
+          if chosen. Rendered above the timeline so the seller's
+          decision is the first thing they see after accept. */}
+      <DeliverySection order={order} onChanged={() => fetchOrder()} />
 
       {/* -- Status timeline -- */}
       <StatusTimeline
@@ -1977,6 +1999,83 @@ const btnBlue: React.CSSProperties = {
   cursor: 'pointer',
   letterSpacing: '0.03em',
 };
+
+/**
+ * Delivery section: combines the badge, the iThink-vs-self picker
+ * (only shown if no method is yet chosen and the sub-order is
+ * accepted), and the self-delivery status buttons (only for sub-orders
+ * already on the SELF_DELIVERY path). Hidden for rejected / cancelled
+ * sub-orders since there's nothing to ship.
+ */
+function DeliverySection({
+  order,
+  onChanged,
+}: {
+  order: SubOrderDetail;
+  onChanged: () => void;
+}) {
+  const cancelled =
+    order.acceptStatus === 'REJECTED' || order.fulfillmentStatus === 'CANCELLED';
+  if (cancelled) return null;
+
+  const accepted = order.acceptStatus === 'ACCEPTED';
+  const noMethodYet = !order.deliveryMethod;
+  const isSelf = order.deliveryMethod === 'SELF_DELIVERY';
+  const isIThink = order.deliveryMethod === 'ITHINK_LOGISTICS';
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      {/* Always show the current method as a badge — including
+          "Not chosen" so the seller knows action is needed. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
+          Delivery method:
+        </span>
+        <DeliveryMethodBadge
+          method={order.deliveryMethod ?? null}
+          awb={order.ithinkAwb}
+          courier={order.ithinkLogistic}
+          size="md"
+          showAwb={isIThink}
+        />
+        {isIThink && order.ithinkTrackingUrl && (
+          <a
+            href={order.ithinkTrackingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}
+          >
+            Track on iThink ↗
+          </a>
+        )}
+      </div>
+
+      {accepted && noMethodYet && (
+        <div
+          style={{
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: 12,
+            padding: 16,
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: '#374151' }}>
+            Choose how you want to fulfil this order
+          </div>
+          <DeliveryMethodPicker subOrderId={order.id} onChosen={onChanged} />
+        </div>
+      )}
+
+      {isSelf && (
+        <SelfDeliveryStatusButtons
+          subOrderId={order.id}
+          currentStatus={order.selfDeliveryStatus ?? 'PENDING'}
+          onChanged={onChanged}
+        />
+      )}
+    </div>
+  );
+}
 
 const btnRed: React.CSSProperties = {
   padding: '10px 20px',

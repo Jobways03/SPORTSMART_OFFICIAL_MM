@@ -407,6 +407,28 @@ export default function AdminFranchiseDetailPage() {
           <span className={getVerificationBadgeClass(franchise.verificationStatus)}>
             {formatStatus(franchise.verificationStatus)}
           </span>
+          {/* Quick link to delivery-method entitlements (iThink / Self) */}
+          <button
+            type="button"
+            onClick={() => router.push(`/dashboard/franchises/${franchise.id}/delivery-methods`)}
+            style={{
+              marginLeft: 'auto',
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#1e3a8a',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: 999,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span aria-hidden="true">🚚</span>
+            Delivery Methods
+          </button>
         </div>
         <p className="subtitle" style={{ marginTop: 6 }}>
           Owned by {franchise.ownerName} &middot; {franchise.email} &middot; {franchise.phoneNumber}
