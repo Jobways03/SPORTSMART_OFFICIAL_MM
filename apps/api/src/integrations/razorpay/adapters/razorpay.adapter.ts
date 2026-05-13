@@ -5,41 +5,101 @@ import {
   NormalizedRefundResult,
 } from '../types/razorpay.types';
 
+/**
+ * RazorpayAdapter — the only place the rest of the codebase talks to
+ * Razorpay. Phase 0 (PR 0.5): all money values now flow through as
+ * `bigint` paise. The previous `amountInr: number → Math.round(× 100)`
+ * conversions are gone, eliminating the JS-float precision risk on
+ * outbound gateway calls.
+ *
+ * Razorpay's HTTP API accepts paise as an integer in the JSON body.
+ * The intermediate `RazorpayClient` uses `number` (JS Number is safe
+ * up to 2^53 paise ≈ ₹90,071,992,547,409 — beyond any single transaction
+ * or settlement total). Conversion `Number(bigint)` is exact in that
+ * range; above it, we throw rather than silently truncate.
+ */
 @Injectable()
 export class RazorpayAdapter {
   private readonly logger = new Logger(RazorpayAdapter.name);
+  /** Safe upper bound for `Number(bigint)` — beyond this, precision is lost. */
+  private static readonly MAX_SAFE_PAISE: bigint = BigInt(Number.MAX_SAFE_INTEGER);
 
   constructor(private readonly client: RazorpayClient) {}
 
   /**
-   * Create a Razorpay order for checkout.
-   * Amount is in INR (rupees) — adapter converts to paise.
+   * Convert paise BigInt to a JS Number for the HTTP client, guarding
+   * against silent precision loss above 2^53. Throws on out-of-range
+   * inputs so the upstream caller surfaces the bug rather than
+   * shipping a wrong amount to the gateway.
+   */
+  private paiseToClientNumber(amountInPaise: bigint, label: string): number {
+    if (amountInPaise < 0n) {
+      throw new RangeError(`${label}: amountInPaise must be non-negative, got ${amountInPaise}`);
+    }
+    if (amountInPaise > RazorpayAdapter.MAX_SAFE_PAISE) {
+      throw new RangeError(
+        `${label}: amountInPaise ${amountInPaise} exceeds JS Number safe range — ` +
+          `would lose precision when sent to gateway. Split the transaction or escalate.`,
+      );
+    }
+    return Number(amountInPaise);
+  }
+
+  /**
+   * Create a Razorpay order for checkout. `amountInPaise` is paise as
+   * `bigint`; the adapter sends paise straight to Razorpay with no
+   * rupee conversion.
    */
   async createOrder(params: {
-    amountInr: number;
+    amountInPaise: bigint;
     receipt: string;
     notes?: Record<string, string>;
+    /**
+     * Phase 4 (PR 4.3) — caller-stable idempotency key.
+     *
+     * Razorpay dedupes POST /orders attempts that share this header
+     * value. A transient 5xx + retry (PR 4.1's policy, enabled here
+     * by the presence of the key) would otherwise create two orders
+     * with the same receipt — both valid at the gateway, leading to
+     * orphan orders in our DB and confused payment-status pollers.
+     *
+     * Callers derive the key from their domain entity:
+     *   - Checkout:        `checkout-order-${masterOrderId}`
+     *   - Wallet top-up:   `wallet-topup-${pendingTxId}`
+     *   - Exchange-diff:   `exchange-diff-${returnId}`
+     *
+     * Optional for back-compat; callers without a key keep the
+     * pre-PR single-shot behaviour.
+     */
+    idempotencyKey?: string;
   }): Promise<{
     providerOrderId: string;
-    amount: number;
+    amountInPaise: bigint;
     currency: string;
   }> {
     if (!this.client.isConfigured) {
       throw new Error('Razorpay is not configured');
     }
 
-    const amountInPaise = Math.round(params.amountInr * 100);
+    const amountForClient = this.paiseToClientNumber(
+      params.amountInPaise,
+      'createOrder',
+    );
+
     const order = await this.client.createOrder({
-      amount: amountInPaise,
+      amount: amountForClient,
       receipt: params.receipt,
       notes: params.notes,
+      idempotencyKey: params.idempotencyKey,
     });
 
-    this.logger.log(`Razorpay order created: ${order.id} for ₹${params.amountInr}`);
+    this.logger.log(
+      `Razorpay order created: ${order.id} for ${params.amountInPaise.toString()} paise`,
+    );
 
     return {
       providerOrderId: order.id,
-      amount: params.amountInr,
+      amountInPaise: BigInt(order.amount),
       currency: order.currency,
     };
   }
@@ -49,15 +109,18 @@ export class RazorpayAdapter {
    */
   async capturePayment(
     paymentId: string,
-    amountInr: number,
+    amountInPaise: bigint,
   ): Promise<NormalizedPaymentCaptureResult> {
-    const amountInPaise = Math.round(amountInr * 100);
-    const result = await this.client.capturePayment(paymentId, amountInPaise);
+    const amountForClient = this.paiseToClientNumber(
+      amountInPaise,
+      'capturePayment',
+    );
+    const result = await this.client.capturePayment(paymentId, amountForClient);
 
     return {
       providerPaymentId: result.id,
       orderId: '',
-      amount: amountInr,
+      amountInPaise,
       currency: 'INR',
       status: result.captured ? 'captured' : 'failed',
       capturedAt: new Date(),
@@ -65,12 +128,12 @@ export class RazorpayAdapter {
   }
 
   /**
-   * Fetch payment status.
+   * Fetch payment status (paise-native).
    */
   async getPaymentStatus(paymentId: string): Promise<{
     paymentId: string;
     status: string;
-    amount: number;
+    amountInPaise: bigint;
     captured: boolean;
     method: string;
   }> {
@@ -79,53 +142,86 @@ export class RazorpayAdapter {
     return {
       paymentId: payment.id,
       status: payment.status,
-      amount: payment.amount / 100, // paise to INR
+      amountInPaise: BigInt(payment.amount),
       captured: payment.captured,
       method: payment.method,
     };
   }
 
   /**
-   * Initiate a refund. Amount is in INR (rupees).
+   * Phase 0 (PR 0.1) — fetch the raw gateway snapshot needed by the
+   * silent-money-loss guard at verify time. Keeps the amount in paise
+   * (no rupee conversion) and preserves the `order_id` field that
+   * `getPaymentStatus` strips, so callers can assert the payment was
+   * captured against the razorpay_order_id they expect.
+   *
+   * Use this rather than reaching past the adapter to `RazorpayClient`.
+   */
+  async getRawPayment(paymentId: string): Promise<{
+    id: string;
+    amount: number;
+    currency: string;
+    status: string;
+    order_id: string;
+    method: string;
+    captured: boolean;
+  }> {
+    return this.client.fetchPayment(paymentId);
+  }
+
+  /**
+   * Initiate a refund. `amountInPaise` is paise as `bigint`.
+   *
+   * Phase 4 (PR 4.2) — `idempotencyKey` is a caller-stable identifier
+   * (typically the RefundInstruction id) that Razorpay uses to dedupe
+   * retried POSTs. Without it, a transient 5xx + retry produces a
+   * duplicate refund row at the gateway and pays the customer twice.
+   * Optional for back-compat; callers without an idempotency key
+   * lose the retry-safety but retain the previous one-shot behaviour.
    */
   async initiateRefund(
     paymentId: string,
-    amountInr: number,
+    amountInPaise: bigint,
     notes?: Record<string, string>,
+    opts: { idempotencyKey?: string } = {},
   ): Promise<NormalizedRefundResult> {
-    const amountInPaise = Math.round(amountInr * 100);
+    const amountForClient = this.paiseToClientNumber(
+      amountInPaise,
+      'initiateRefund',
+    );
     const result = await this.client.createRefund(paymentId, {
-      amount: amountInPaise,
+      amount: amountForClient,
       speed: 'normal',
       notes,
+      idempotencyKey: opts.idempotencyKey,
     });
 
     this.logger.log(
-      `Refund initiated: ${result.id} for payment ${paymentId} amount ₹${amountInr}`,
+      `Refund initiated: ${result.id} for payment ${paymentId} amount ${amountInPaise.toString()} paise`,
     );
 
     return {
       providerRefundId: result.id,
       paymentId: result.payment_id,
-      amount: amountInr,
+      amountInPaise,
       status: result.status === 'processed' ? 'processed' : 'failed',
       processedAt: new Date(),
     };
   }
 
   /**
-   * Check refund status.
+   * Check refund status (paise-native).
    */
   async getRefundStatus(
     paymentId: string,
     refundId: string,
-  ): Promise<{ refundId: string; status: string; amount: number }> {
+  ): Promise<{ refundId: string; status: string; amountInPaise: bigint }> {
     const refund = await this.client.fetchRefund(paymentId, refundId);
 
     return {
       refundId: refund.id,
       status: refund.status,
-      amount: refund.amount / 100,
+      amountInPaise: BigInt(refund.amount),
     };
   }
 }

@@ -9,6 +9,28 @@ import type {
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { toPaise } from '../../../../core/money/money-field-registry';
+
+/**
+ * Phase 0 (PR 0.6) — precision-safe Decimal-to-paise conversion for
+ * reconciliation comparisons. Uses the canonical `toPaise` (PR 0.4)
+ * which is exact for Decimal and string inputs and throws on
+ * fractional JS Number.
+ *
+ * The reconciler reads from the legacy Decimal columns while the
+ * paise-sibling backfill (Phase 7) is still rolling out. Once paise
+ * columns are populated everywhere, the conversion call sites can be
+ * swapped for direct BigInt reads (one-line change per call site).
+ */
+function decimalToPaise(value: unknown): bigint {
+  return toPaise(value) ?? 0n;
+}
+
+// Phase 2 (PR 2.3) — `bigintPaiseToInt` is gone. The recon columns are
+// now BigInt at the DB level (see migration
+// `20260512140000_recon_payment_int_to_bigint`); the clamping helper
+// existed only to bridge to the old INT columns. Per-kind runners now
+// pass `bigint` straight through to Prisma.
 
 /**
  * Daily reconciliation runs. The runners are intentionally simple — they
@@ -133,12 +155,16 @@ export class ReconciliationService {
 
     let matched = 0;
     let discrepancies = 0;
-    let expectedAmount = 0;
-    let matchedAmount = 0;
+    let expectedAmount = 0n;
+    let matchedAmount = 0n;
     const now = new Date();
 
     for (const o of orders) {
-      const amountPaise = Math.round(Number(o.totalAmount) * 100);
+      // Phase 0 (PR 0.6) — precision-safe paise conversion. Previously
+      // `Math.round(Number(decimal) * 100)` could drift by 1 paise on
+      // values like `999.99`, producing false-positive AMOUNT_MISMATCH
+      // discrepancies (or worse, missing real ones).
+      const amountPaise = decimalToPaise(o.totalAmount);
       expectedAmount += amountPaise;
 
       if (o.paymentStatus === 'PAID') {
@@ -200,11 +226,11 @@ export class ReconciliationService {
 
     let matched = 0;
     let discrepancies = 0;
-    let expectedAmount = 0;
-    let matchedAmount = 0;
+    let expectedAmount = 0n;
+    let matchedAmount = 0n;
 
     for (const so of subOrders) {
-      const amountPaise = Math.round(Number(so.subTotal) * 100);
+      const amountPaise = decimalToPaise(so.subTotal);
       expectedAmount += amountPaise;
       if (so.paymentStatus === 'PAID') {
         matched++;
@@ -216,7 +242,7 @@ export class ReconciliationService {
           masterOrderId: so.masterOrderId,
           orderNumber: so.masterOrder.orderNumber,
           expectedInPaise: amountPaise,
-          actualInPaise: 0,
+          actualInPaise: 0n,
           description:
             `COD sub-order ${so.id} delivered but paymentStatus=${so.paymentStatus}. ` +
             `Has the courier remitted the cash collection?`,
@@ -254,11 +280,11 @@ export class ReconciliationService {
 
     let matched = 0;
     let discrepancies = 0;
-    let expectedAmount = 0;
-    let matchedAmount = 0;
+    let expectedAmount = 0n;
+    let matchedAmount = 0n;
 
     for (const s of paid) {
-      const amountPaise = Math.round(Number(s.totalSettlementAmount) * 100);
+      const amountPaise = decimalToPaise(s.totalSettlementAmount);
       expectedAmount += amountPaise;
       if (s.utrReference) {
         matched++;
@@ -284,7 +310,7 @@ export class ReconciliationService {
       select: { id: true, sellerName: true, totalSettlementAmount: true, updatedAt: true },
     });
     for (const s of stuck) {
-      const amountPaise = Math.round(Number(s.totalSettlementAmount) * 100);
+      const amountPaise = decimalToPaise(s.totalSettlementAmount);
       await this.recordDiscrepancy({
         runId,
         kind: 'STATUS_MISMATCH',
@@ -326,11 +352,11 @@ export class ReconciliationService {
 
     let matched = 0;
     let discrepancies = 0;
-    let expectedAmount = 0;
-    let matchedAmount = 0;
+    let expectedAmount = 0n;
+    let matchedAmount = 0n;
 
     for (const r of returns) {
-      const amountPaise = Math.round(Number(r.refundAmount ?? 0) * 100);
+      const amountPaise = decimalToPaise(r.refundAmount ?? 0);
       expectedAmount += amountPaise;
       if (!r.refundReference) {
         await this.recordDiscrepancy({
@@ -384,17 +410,23 @@ export class ReconciliationService {
 
     let matched = 0;
     let discrepancies = 0;
-    let expectedAmount = 0;
-    let matchedAmount = 0;
+    let expectedAmount = 0n;
+    let matchedAmount = 0n;
 
     for (const row of drifts) {
-      const ledger = Number(row.ledger_sum ?? 0);
-      const balance = row.balance_in_paise;
-      expectedAmount += Math.abs(balance);
+      // Phase 0 (PR 0.6) — stay in BigInt space. Previously
+      // `Number(row.ledger_sum)` would silently drift for sums above
+      // 2^53 paise. The SQL already returns `::bigint`, so the cast is
+      // direct.
+      const ledger = BigInt(row.ledger_sum ?? 0);
+      const balance = BigInt(row.balance_in_paise);
+      const absBalance = balance < 0n ? -balance : balance;
+      expectedAmount += absBalance;
       if (ledger === balance) {
         matched++;
-        matchedAmount += Math.abs(balance);
+        matchedAmount += absBalance;
       } else {
+        const drift = ledger - balance;
         await this.recordDiscrepancy({
           runId,
           kind: 'AMOUNT_MISMATCH',
@@ -403,8 +435,8 @@ export class ReconciliationService {
           actualInPaise: ledger,
           description:
             `Wallet ${row.wallet_id} (user ${row.user_id}) balance ` +
-            `₹${(balance / 100).toFixed(2)} but ledger sums to ` +
-            `₹${(ledger / 100).toFixed(2)} (drift ₹${((ledger - balance) / 100).toFixed(2)}).`,
+            `${balance.toString()} paise but ledger sums to ` +
+            `${ledger.toString()} paise (drift ${drift.toString()} paise).`,
         });
         discrepancies++;
       }
@@ -437,8 +469,11 @@ export class ReconciliationService {
     masterOrderId?: string | null;
     orderNumber?: string | null;
     externalRef?: string | null;
-    expectedInPaise?: number | null;
-    actualInPaise?: number | null;
+    // Phase 2 (PR 2.3) — bigint after the column widening. The
+    // per-kind runners hold paise as bigint locally, so passing it
+    // through unchanged removes the previous clamp helper.
+    expectedInPaise?: bigint | null;
+    actualInPaise?: bigint | null;
     description: string;
   }) {
     return this.prisma.reconciliationDiscrepancy.create({
@@ -521,8 +556,11 @@ export class ReconciliationService {
       d.kind,
       d.status,
       d.orderNumber ?? '',
-      d.expectedInPaise != null ? (d.expectedInPaise / 100).toFixed(2) : '',
-      d.actualInPaise != null ? (d.actualInPaise / 100).toFixed(2) : '',
+      // Phase 2 (PR 2.3) — bigint /100 isn't valid; the discrepancy
+      // columns are BigInt. CSV is human-facing rupees, so Number() at
+      // emit time is fine (drift values stay inside JS safe-integer).
+      d.expectedInPaise != null ? (Number(d.expectedInPaise) / 100).toFixed(2) : '',
+      d.actualInPaise != null ? (Number(d.actualInPaise) / 100).toFixed(2) : '',
       `"${d.description.replace(/"/g, '""')}"`,
       d.createdAt.toISOString(),
     ].join(','));

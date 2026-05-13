@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
@@ -14,7 +14,8 @@ import {
   OrderRepository,
   ORDER_REPOSITORY,
 } from '../../domain/repositories/order.repository.interface';
-import { assertTransition } from '../../../../core/fsm/status-transitions';
+import { assertTransition, isTransitionAllowed } from '../../../../core/fsm/status-transitions';
+import { StockRestoreService } from './stock-restore.service';
 
 export type ReassignTarget =
   | { nodeType: 'SELLER'; nodeId: string }
@@ -48,6 +49,8 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @Inject(ORDER_REPOSITORY)
     private readonly orderRepo: OrderRepository,
@@ -55,6 +58,12 @@ export class OrdersService {
     private readonly catalogFacade: CatalogPublicFacade,
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly prisma: PrismaService,
+    // Phase 0 (PR 0.7) — inverse of `confirmReservation`. Replaces
+    // the previous reject/cancel/reassign paths that asymmetrically
+    // restored only one of the two stock ledgers, drifting the seller
+    // mapping from the variant aggregate. See StockRestoreService for
+    // the symmetric contract.
+    private readonly stockRestore: StockRestoreService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────────────
@@ -382,39 +391,68 @@ export class OrdersService {
             commissionProcessed: true,
           },
         });
-
-        for (const item of so.items) {
-          if (item.variantId) {
-            await tx.productVariant.update({
-              where: { id: item.variantId },
-              data: { stock: { increment: item.quantity } },
-            });
-          } else {
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { baseStock: { increment: item.quantity } },
-            });
-          }
-        }
       }
+
+      // Phase 0 (PR 0.7) — restore stock through the reservation
+      // ledger, not by naively bumping variant.stock. The previous
+      // code incremented `productVariant.stock` for every item even
+      // though `confirmReservation` only ran (and decremented variant
+      // aggregate) for the CONFIRMED subset. Result: phantom stock
+      // for unconfirmed orders, asymmetric drift between mapping and
+      // variant ledgers. The helper now decides per-reservation what
+      // exactly to restore.
+      await this.stockRestore.restoreForOrder(tx, id);
     });
+
+    // Franchise side: the seller-allocation reservation table doesn't
+    // model franchise holds. Walk the franchise sub-orders separately
+    // through the existing facade path. Best-effort: a missing hold
+    // shouldn't block the cancel.
+    for (const so of order.subOrders) {
+      const nodeType = (so as any).fulfillmentNodeType ?? 'SELLER';
+      const franchiseId: string | null = (so as any).franchiseId ?? null;
+      if (nodeType !== 'FRANCHISE' || !franchiseId) continue;
+      for (const item of so.items) {
+        await this.franchiseFacade
+          .unreserveStock(
+            franchiseId,
+            item.productId,
+            item.variantId ?? null,
+            item.quantity,
+            id,
+          )
+          .catch(() => undefined);
+      }
+    }
   }
 
   async acceptSubOrder(id: string) {
     const subOrder = await this.orderRepo.findSubOrderById(id);
     if (!subOrder) throw new NotFoundAppException('Sub-order not found');
+    // Phase 0 (PR 0.8) — admin-callable variant previously had no FSM
+    // check, so an admin could flip a terminally REJECTED sub-order
+    // back to ACCEPTED. Assert the matrix.
+    assertTransition('OrderAcceptStatus', subOrder.acceptStatus, 'ACCEPTED');
     return this.orderRepo.updateSubOrder(id, { acceptStatus: 'ACCEPTED' });
   }
 
   async rejectSubOrder(id: string) {
     const subOrder = await this.orderRepo.findSubOrderById(id);
     if (!subOrder) throw new NotFoundAppException('Sub-order not found');
+    // Phase 0 (PR 0.8) — same shape as acceptSubOrder.
+    assertTransition('OrderAcceptStatus', subOrder.acceptStatus, 'REJECTED');
     return this.orderRepo.updateSubOrder(id, { acceptStatus: 'REJECTED' });
   }
 
   async fulfillSubOrder(id: string) {
     const subOrder = await this.orderRepo.findSubOrderById(id);
     if (!subOrder) throw new NotFoundAppException('Sub-order not found');
+    // Phase 0 (PR 0.8) — fulfillmentStatus is its own FSM. Assert.
+    assertTransition(
+      'OrderFulfillmentStatus',
+      subOrder.fulfillmentStatus,
+      'FULFILLED',
+    );
     return this.orderRepo.updateSubOrder(id, {
       fulfillmentStatus: 'FULFILLED',
     });
@@ -549,35 +587,13 @@ export class OrdersService {
     // franchise: route through the franchise facade which handles ledger
     // writes + reservedQty bookkeeping.
     if (nodeType === 'SELLER' && sellerId) {
+      // Phase 0 (PR 0.7) — restoration now mirrors confirmReservation
+      // symmetrically: CONFIRMED reservations restore BOTH stockQty
+      // AND the variant aggregate. The pre-existing loop only bumped
+      // stockQty, leaving variant.stock permanently under the true
+      // count for the seller's mapping.
       await this.orderRepo.executeTransaction(async (tx) => {
-        const currentReservations = await tx.stockReservation.findMany({
-          where: {
-            orderId: subOrder.masterOrder.id,
-            status: { in: ['RESERVED', 'CONFIRMED'] },
-            mapping: { sellerId },
-          },
-        });
-        for (const res of currentReservations) {
-          if (res.status === 'CONFIRMED') {
-            await tx.stockReservation.update({
-              where: { id: res.id },
-              data: { status: 'RELEASED' },
-            });
-            await tx.sellerProductMapping.update({
-              where: { id: res.mappingId },
-              data: { stockQty: { increment: res.quantity } },
-            });
-          } else {
-            await tx.stockReservation.update({
-              where: { id: res.id },
-              data: { status: 'RELEASED' },
-            });
-            await tx.sellerProductMapping.update({
-              where: { id: res.mappingId },
-              data: { reservedQty: { decrement: res.quantity } },
-            });
-          }
-        }
+        await this.stockRestore.restoreForOrder(tx, subOrder.masterOrder.id, sellerId);
       });
     } else if (nodeType === 'FRANCHISE' && franchiseId) {
       for (const item of subOrder.items) {
@@ -659,9 +675,26 @@ export class OrdersService {
     );
 
     if (allDelivered) {
-      await this.orderRepo.updateMasterOrder(subOrder.masterOrderId, {
-        orderStatus: 'DELIVERED',
-      });
+      // Phase 0 (PR 0.8) — guard the master-status write through the
+      // FSM matrix. The old code blindly wrote DELIVERED regardless of
+      // the master's current state, so an order parked in EXCEPTION_QUEUE
+      // could silently jump straight to DELIVERED in violation of the
+      // matrix (EXCEPTION_QUEUE has no → DELIVERED edge). When the
+      // transition is illegal we leave the master alone — admin needs
+      // to resolve the exception first; the sub-order is already
+      // DELIVERED and visible.
+      const masterCurrent = subOrder.masterOrder.orderStatus;
+      if (isTransitionAllowed('OrderStatus', masterCurrent, 'DELIVERED')) {
+        await this.orderRepo.updateMasterOrder(subOrder.masterOrderId, {
+          orderStatus: 'DELIVERED',
+        });
+      } else {
+        this.logger.warn(
+          `deliverSubOrder: master order ${subOrder.masterOrderId} is in ` +
+            `${masterCurrent} — illegal transition to DELIVERED, leaving master untouched. ` +
+            `Admin must resolve before the order can move to DELIVERED.`,
+        );
+      }
     }
 
     // Publish delivery event (best-effort)
@@ -720,11 +753,29 @@ export class OrdersService {
     // FSM enforcement — pinning the rule that VOIDED → PAID and other
     // illegal transitions are also rejected.
     assertTransition('OrderPaymentStatus', order.paymentStatus, 'PAID');
+    // Phase 0 (PR 0.8) — the old code also wrote `orderStatus: 'DELIVERED'`
+    // unconditionally. Most callers reach this after sub-orders are all
+    // DELIVERED, so the master is in DISPATCHED. Validate before we
+    // bypass the matrix.
+    const willTouchOrderStatus = isTransitionAllowed(
+      'OrderStatus',
+      order.orderStatus,
+      'DELIVERED',
+    );
+    if (!willTouchOrderStatus) {
+      this.logger.warn(
+        `markAsPaid: master order ${id} is in ${order.orderStatus} — ` +
+          `illegal transition to DELIVERED. paymentStatus still flips to PAID; ` +
+          `orderStatus left unchanged (admin to reconcile).`,
+      );
+    }
 
     await this.orderRepo.executeTransaction(async (tx) => {
       await tx.masterOrder.update({
         where: { id },
-        data: { paymentStatus: 'PAID', orderStatus: 'DELIVERED' },
+        data: willTouchOrderStatus
+          ? { paymentStatus: 'PAID', orderStatus: 'DELIVERED' }
+          : { paymentStatus: 'PAID' },
       });
       for (const so of relevantSubOrders) {
         await tx.subOrder.update({
@@ -1146,35 +1197,15 @@ export class OrdersService {
     //    stock update) that isn't expressible as a single tx with our repo.
     //    Rollback on subsequent failure is mitigated by validation above.
     if (previousNodeType === 'SELLER' && previousSellerId) {
+      // Phase 0 (PR 0.7) — symmetric stock restore via the shared helper.
+      // CONFIRMED reservations now correctly bump BOTH stockQty AND the
+      // variant aggregate, not just stockQty.
       await this.orderRepo.executeTransaction(async (tx) => {
-        const currentReservations = await tx.stockReservation.findMany({
-          where: {
-            orderId: subOrder.masterOrder.id,
-            status: { in: ['RESERVED', 'CONFIRMED'] },
-            mapping: { sellerId: previousSellerId },
-          },
-        });
-        for (const res of currentReservations) {
-          if (res.status === 'CONFIRMED') {
-            await tx.stockReservation.update({
-              where: { id: res.id },
-              data: { status: 'RELEASED' },
-            });
-            await tx.sellerProductMapping.update({
-              where: { id: res.mappingId },
-              data: { stockQty: { increment: res.quantity } },
-            });
-          } else {
-            await tx.stockReservation.update({
-              where: { id: res.id },
-              data: { status: 'RELEASED' },
-            });
-            await tx.sellerProductMapping.update({
-              where: { id: res.mappingId },
-              data: { reservedQty: { decrement: res.quantity } },
-            });
-          }
-        }
+        await this.stockRestore.restoreForOrder(
+          tx,
+          subOrder.masterOrder.id,
+          previousSellerId,
+        );
       });
     } else if (previousNodeType === 'FRANCHISE' && previousFranchiseId) {
       for (const item of subOrder.items) {

@@ -4,6 +4,8 @@ import { Prisma, type RetentionAction } from '@prisma/client';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { LegalHoldService } from './legal-hold.service';
+import { LeaderElectedCron } from '../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../cron-observability/cron-instrumentation.service';
 
 /**
  * Phase 7 (PR 7.2) — Daily retention enforcer.
@@ -31,6 +33,14 @@ export class RetentionEnforcerCron {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly legalHold: LegalHoldService,
+    // Phase 1 (PR 1.2) — daily retention enforcement runs across the
+    // ENTIRE file table. We do NOT want N replicas each running
+    // delete-many in parallel.
+    private readonly leader: LeaderElectedCron,
+    // Phase 5 (PR 5.3) — cron-run observability. Records the
+    // `{ acted, held, skipped, dryRun }` shape so ops can chart
+    // retention-policy effect over time + spot a stuck enforcer.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   enabled(): boolean {
@@ -45,6 +55,22 @@ export class RetentionEnforcerCron {
   async run(): Promise<void> {
     if (!this.enabled()) return;
 
+    // Daily run — TTL = 12h (worst-case row count × per-policy work).
+    await this.leader.run('retention-enforcer', 12 * 60 * 60, async () => {
+      try {
+        await this.instr.wrap('retention-enforcer', () => this.runOnce());
+      } catch {
+        // already recorded as FAILED in cron_runs
+      }
+    });
+  }
+
+  private async runOnce(): Promise<{
+    acted: number;
+    held: number;
+    skipped: number;
+    dryRun: boolean;
+  }> {
     const dryRun = this.isDryRun();
     let policies: Array<any> = [];
     try {
@@ -53,7 +79,7 @@ export class RetentionEnforcerCron {
       });
     } catch (err) {
       this.logger.error(`Failed to load policies: ${(err as Error).message}`);
-      return;
+      return { acted: 0, held: 0, skipped: 0, dryRun };
     }
 
     let totals = { acted: 0, held: 0, skipped: 0 };
@@ -73,6 +99,7 @@ export class RetentionEnforcerCron {
         `retention enforcer ${dryRun ? '[DRY-RUN] ' : ''}acted=${totals.acted} held=${totals.held} skipped=${totals.skipped}`,
       );
     }
+    return { ...totals, dryRun };
   }
 
   private async runPolicy(

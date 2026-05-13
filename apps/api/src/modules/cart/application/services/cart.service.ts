@@ -111,17 +111,19 @@ export class CartService {
 
     const cart = await this.cartRepo.upsertCart(customerId);
 
-    const existing = await this.cartRepo.findCartItem(
+    // Phase 1 (PR 1.9) — atomic find-or-increment-or-create. Replaces
+    // the pre-PR `findCartItem` → `addCartItem|updateCartItemQuantity`
+    // pair, which had a read-then-write TOCTOU window: two concurrent
+    // requests for the same (cartId, productId, variantId) both saw no
+    // existing row and both created a new one. The repo now holds a
+    // row lock on the cart for the whole find+write so the second
+    // request increments the first's row instead.
+    await this.cartRepo.incrementOrCreateCartItem(
       cart.id,
       productId,
-      variantId || null,
+      variantId ?? null,
+      quantity,
     );
-
-    if (existing) {
-      await this.cartRepo.updateCartItemQuantity(existing.id, existing.quantity + quantity);
-    } else {
-      await this.cartRepo.addCartItem(cart.id, productId, variantId || null, quantity);
-    }
   }
 
   async updateItem(customerId: string, itemId: string, quantity: number) {

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Seller, SellerSession, SellerPasswordResetOtp } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { hashRefreshToken } from '../../../../core/auth/refresh-token';
 import {
   SellerRepository,
   OtpWithSeller,
@@ -78,7 +79,12 @@ export class PrismaSellerRepository implements SellerRepository {
     ipAddress: string | null;
     expiresAt: Date;
   }): Promise<SellerSession> {
-    return this.prisma.sellerSession.create({ data });
+    // Phase 3 (PR 3.2) — store SHA-256 of the refresh token. Raw token
+    // is returned to the caller via the response body once at issue
+    // time and never persisted.
+    return this.prisma.sellerSession.create({
+      data: { ...data, refreshToken: hashRefreshToken(data.refreshToken) },
+    });
   }
 
   async revokeAllSessions(sellerId: string): Promise<void> {

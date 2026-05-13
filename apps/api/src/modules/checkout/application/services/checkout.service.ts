@@ -9,6 +9,9 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
+import { assertTransition } from '../../../../core/fsm/status-transitions';
 import {
   CatalogPublicFacade,
   AllocationResult,
@@ -58,6 +61,13 @@ export class CheckoutService {
     private readonly eventBus: EventBusService,
     private readonly redis: RedisService,
     private readonly env: EnvService,
+    // Phase 7 (PR 7.6) — paise-sibling dual-write at every masterOrder
+    // update site. The five sites in this file are all status/payment-
+    // flag updates today (no money fields), so the helper no-ops, but
+    // wiring at the call site keeps the apparatus visible and
+    // future-proofs against payload changes (a totalAmount edit slipped
+    // into a status-only update path was the original Phase 0 hazard).
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   // ── Initiate Checkout ──────────────────────────────────────────────────
@@ -774,7 +784,10 @@ export class CheckoutService {
       } catch (err) {
         await this.prisma.masterOrder.update({
           where: { id: result.masterOrderId },
-          data: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
+          data: this.moneyDualWrite.applyPaise('masterOrder', {
+            orderStatus: 'CANCELLED',
+            paymentStatus: 'CANCELLED',
+          }),
         });
         throw new BadRequestAppException(
           `Wallet debit failed: ${(err as Error).message}. Order cancelled.`,
@@ -901,7 +914,10 @@ export class CheckoutService {
       if (payableInRupees <= 0) {
         await this.prisma.masterOrder.update({
           where: { id: result.masterOrderId },
-          data: { paymentStatus: 'PAID', orderStatus: 'PLACED' },
+          data: this.moneyDualWrite.applyPaise('masterOrder', {
+            paymentStatus: 'PAID',
+            orderStatus: 'PLACED',
+          }),
         });
         return {
           orderNumber: result.orderNumber,
@@ -914,14 +930,25 @@ export class CheckoutService {
       }
 
       try {
+        // Phase 0 (PR 0.5) — adapter takes BigInt paise. `payableInRupees`
+        // is still a JS Number for now (chargedTotal is computed in
+        // rupee arithmetic upstream); Phase 7 will route the whole
+        // checkout pipeline through paise. The Math.round + BigInt
+        // conversion is at least localised here and gone after Phase 7.
+        // Phase 4 (PR 4.3) — idempotency key derived from
+        // masterOrderId so a transient 5xx + retry dedupes at Razorpay
+        // and produces one gateway order. Without this, a network
+        // blip during checkout would produce two orphan orders, both
+        // valid, both observable by the orphan-payment confirm cron.
         const razorpayOrder = await this.razorpayAdapter.createOrder({
-          amountInr: payableInRupees,
+          amountInPaise: BigInt(Math.round(payableInRupees * 100)),
           receipt: result.orderNumber,
           notes: {
             masterOrderId: result.masterOrderId,
             orderNumber: result.orderNumber,
             walletPaidPaise: String(walletDebitInPaise),
           },
+          idempotencyKey: `checkout-order-${result.masterOrderId}`,
         });
 
         const paymentExpiresAt = new Date(
@@ -930,10 +957,10 @@ export class CheckoutService {
 
         await this.prisma.masterOrder.update({
           where: { id: result.masterOrderId },
-          data: {
+          data: this.moneyDualWrite.applyPaise('masterOrder', {
             razorpayOrderId: razorpayOrder.providerOrderId,
             paymentExpiresAt,
-          },
+          }),
         });
 
         // Payment-ops: SUCCESS create-order attempt. Best-effort write
@@ -958,7 +985,11 @@ export class CheckoutService {
           payment: {
             razorpayOrderId: razorpayOrder.providerOrderId,
             razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
-            amount: razorpayOrder.amount,
+            // Phase 0 (PR 0.5) — wire field `amount` is rupees for the
+            // legacy frontend Razorpay widget call. Convert from the
+            // adapter's BigInt paise. Phase 7 will switch the wire to
+            // `amountInPaise` end-to-end and drop this branch.
+            amount: Number(razorpayOrder.amountInPaise) / 100,
             currency: razorpayOrder.currency,
             expiresAt: paymentExpiresAt.toISOString(),
           },
@@ -992,7 +1023,10 @@ export class CheckoutService {
         }
         await this.prisma.masterOrder.update({
           where: { id: result.masterOrderId },
-          data: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
+          data: this.moneyDualWrite.applyPaise('masterOrder', {
+            orderStatus: 'CANCELLED',
+            paymentStatus: 'CANCELLED',
+          }),
         });
         throw new BadRequestAppException(
           `Payment initialization failed: ${(err as Error).message}. Order has been cancelled.`,
@@ -1093,13 +1127,92 @@ export class CheckoutService {
       throw new BadRequestAppException('Payment verification failed — invalid signature');
     }
 
+    // Phase 0 (PR 0.1) — silent-money-loss guard. The HMAC above only
+    // proves Razorpay emitted this (orderId, paymentId) pair. It does
+    // NOT prove the captured amount matches the order total or that
+    // the payment is fully captured. Without this, a hostile client
+    // can submit a ₹1 payment for a ₹10,000 order with a valid
+    // signature and flip the order to PAID. We re-fetch the payment
+    // from Razorpay (the source of truth) and reject if the snapshot
+    // doesn't match.
+    let gatewayPayment: Awaited<ReturnType<RazorpayAdapter['getRawPayment']>>;
+    try {
+      gatewayPayment = await this.razorpayAdapter.getRawPayment(
+        input.razorpayPaymentId,
+      );
+    } catch (err: any) {
+      this.logger.error(
+        `Razorpay fetchPayment failed for ${input.razorpayPaymentId}: ${err?.message ?? err}`,
+      );
+      this.paymentOpsFacade
+        .recordAttempt({
+          masterOrderId: order.id,
+          orderNumber: order.orderNumber,
+          kind: 'VERIFY_SIGNATURE',
+          status: 'FAILURE',
+          providerOrderId: input.razorpayOrderId,
+          providerPaymentId: input.razorpayPaymentId,
+          amountInPaise: Math.round(Number(order.totalAmount) * 100),
+          failureReason: `fetchPayment failed: ${err?.message ?? 'unknown'}`,
+        })
+        .catch(() => undefined);
+      throw new BadRequestAppException(
+        'Payment verification failed — could not confirm with gateway. Please retry shortly.',
+      );
+    }
+
+    try {
+      assertGatewayPaymentMatchesOrder(gatewayPayment, {
+        totalAmountInPaise: BigInt(order.totalAmountInPaise),
+        razorpayOrderId: input.razorpayOrderId,
+      });
+    } catch (err: any) {
+      this.paymentOpsFacade
+        .recordAttempt({
+          masterOrderId: order.id,
+          orderNumber: order.orderNumber,
+          kind: 'VERIFY_SIGNATURE',
+          status: 'FAILURE',
+          providerOrderId: input.razorpayOrderId,
+          providerPaymentId: input.razorpayPaymentId,
+          amountInPaise: gatewayPayment.amount,
+          failureReason: err.message,
+        })
+        .catch(() => undefined);
+      this.paymentOpsFacade
+        .flagMismatch({
+          kind: err.code === 'GATEWAY_AMOUNT_MISMATCH'
+            ? 'AMOUNT_MISMATCH'
+            : 'SIGNATURE_INVALID',
+          masterOrderId: order.id,
+          orderNumber: order.orderNumber,
+          providerPaymentId: input.razorpayPaymentId,
+          expectedInPaise: Number(order.totalAmountInPaise),
+          actualInPaise: gatewayPayment.amount,
+          severity: 95,
+          description:
+            `Gateway verification rejected for order ${order.orderNumber}: ${err.message} ` +
+            `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId}).`,
+        })
+        .catch(() => undefined);
+      throw err;
+    }
+
+    // Phase 0 (PR 0.8) — FSM check on both fields we're about to flip.
+    // The `findFirst` above filtered on `orderStatus: PENDING_PAYMENT`,
+    // but admin cancellation in `rejectOrder` can land between read
+    // and write, leaving us about to resurrect a CANCELLED order. The
+    // assertions throw before the update so the order stays cancelled.
+    assertTransition('OrderStatus', order.orderStatus, 'PLACED');
+    assertTransition('OrderPaymentStatus', order.paymentStatus, 'PAID');
+
     await this.prisma.masterOrder.update({
       where: { id: order.id },
-      data: {
+      data: this.moneyDualWrite.applyPaise('masterOrder', {
         orderStatus: 'PLACED',
         paymentStatus: 'PAID',
         razorpayPaymentId: input.razorpayPaymentId,
-      },
+      }),
     });
 
     await this.prisma.subOrder.updateMany({
@@ -1171,9 +1284,12 @@ export class CheckoutService {
       );
     }
 
-    // Create a new Razorpay order (previous one may have expired on Razorpay side)
+    // Create a new Razorpay order (previous one may have expired on Razorpay side).
+    // Phase 0 (PR 0.5) — pass paise from the order's BigInt column
+    // directly. This call site is now precision-safe end-to-end: the
+    // value never enters a JS Number.
     const razorpayOrder = await this.razorpayAdapter.createOrder({
-      amountInr: Number(order.totalAmount),
+      amountInPaise: BigInt(order.totalAmountInPaise),
       receipt: order.orderNumber,
       notes: {
         masterOrderId: order.id,
@@ -1189,10 +1305,10 @@ export class CheckoutService {
 
     await this.prisma.masterOrder.update({
       where: { id: order.id },
-      data: {
+      data: this.moneyDualWrite.applyPaise('masterOrder', {
         razorpayOrderId: razorpayOrder.providerOrderId,
         paymentExpiresAt: newExpiry,
-      },
+      }),
     });
 
     return {
@@ -1201,7 +1317,9 @@ export class CheckoutService {
       payment: {
         razorpayOrderId: razorpayOrder.providerOrderId,
         razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
-        amount: razorpayOrder.amount,
+        // Phase 0 (PR 0.5) — see comment on the equivalent block in
+        // placeOrder above. Wire shape preserved for the soak window.
+        amount: Number(razorpayOrder.amountInPaise) / 100,
         currency: razorpayOrder.currency,
         expiresAt: newExpiry.toISOString(),
       },

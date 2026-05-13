@@ -1,0 +1,110 @@
+name: Frontend CI
+
+# Scope: runs on PRs and pushes that actually touch frontend code, the
+# shared packages they depend on, or this workflow file. Tracks the
+# api-ci.yml pattern but covers the eight web-* apps via a matrix so
+# all of them get lint / typecheck / build on every relevant change.
+#
+# Path-level filtering at the workflow trigger means a pure-API PR
+# does not consume frontend CI minutes; per-app filtering inside the
+# matrix is a future optimization (today's coverage is all-8-always
+# whenever the workflow fires).
+on:
+  pull_request:
+    paths:
+      - "apps/web-*/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/frontend-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/web-*/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/frontend-ci.yml"
+
+# Cancel superseded runs on the same ref (same rationale as api-ci).
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Secret scan runs ONCE per workflow trigger and gates the matrix.
+  # Scanning the same commit eight times (once per matrix cell) would
+  # spam the logs without adding signal — a leaked secret is a leaked
+  # secret regardless of which frontend's build it precedes. The
+  # `needs:` edge below also short-circuits all 8 builds if a scan
+  # detection fires, saving the install + build minutes.
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan every commit in the PR
+          # range, not just the merge commit. Cost is small for a
+          # repo this size.
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: ${{ matrix.app }} — Lint / Typecheck / Build
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    strategy:
+      # fail-fast off so a typecheck regression in one app doesn't
+      # mask build failures in the others. CI minutes vs. signal
+      # density — for 8 apps this is the right trade.
+      fail-fast: false
+      matrix:
+        app:
+          - web-admin
+          - web-admin-storefront
+          - web-affiliate
+          - web-affiliate-admin
+          - web-franchise
+          - web-franchise-admin
+          - web-seller
+          - web-storefront
+    env:
+      NODE_VERSION: "22"
+      PNPM_VERSION: "10.0.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        # `pnpm install --filter "@sportsmart/web-admin..."` (and friends)
+        # pulls only the matrix app and its workspace-package deps.
+        # Saves ~30s per matrix cell vs. installing the full graph.
+        run: pnpm install --frozen-lockfile --filter "@sportsmart/${{ matrix.app }}..."
+
+      - name: Lint
+        run: pnpm --filter "@sportsmart/${{ matrix.app }}" run lint
+
+      # tsc --noEmit picks up the leaf tsconfig.json (PR 8.5) which
+      # extends @sportsmart/tsconfig/nextjs-app.json. Same compilation
+      # surface as `next build`'s type check, just faster and clearer
+      # in the log.
+      - name: Typecheck
+        working-directory: apps/${{ matrix.app }}
+        run: pnpm exec tsc --noEmit
+
+      - name: Build
+        run: pnpm --filter "@sportsmart/${{ matrix.app }}" run build

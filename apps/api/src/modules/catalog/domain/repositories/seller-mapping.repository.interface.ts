@@ -28,7 +28,34 @@ export interface ISellerMappingRepository {
   create(data: any): Promise<any>;
   createMany(data: any[]): Promise<any[]>;
   delete(mappingId: string): Promise<void>;
-  bulkUpdateStock(updates: Array<{ mappingId: string; stockQty: number }>): Promise<any[]>;
+  /**
+   * Phase 1 (PR 1.10) — bulk stock-import floor.
+   *
+   * Enforces `stockQty >= reservedQty` per row inside a single
+   * transaction. Throws `StockBelowReservedError` (from
+   * `../errors/stock-below-reserved.error`) if any row would push
+   * stock below its reserved count — the whole transaction rolls
+   * back so the seller's catalog never lands in a half-imported state.
+   *
+   * On success, `violations` is `[]` and `updated` lists the touched
+   * mappings (id + new stockQty + variant/product for downstream
+   * variant-stock sync).
+   */
+  bulkUpdateStock(
+    updates: Array<{ mappingId: string; stockQty: number }>,
+  ): Promise<{
+    updated: Array<{
+      id: string;
+      stockQty: number;
+      variantId: string | null;
+      productId: string;
+    }>;
+    violations: Array<{
+      mappingId: string;
+      requestedStock: number;
+      reservedQty: number;
+    }>;
+  }>;
   deleteBySellerProductVariantNull(sellerId: string, productId: string): Promise<void>;
 
   // ── My products (seller) ──

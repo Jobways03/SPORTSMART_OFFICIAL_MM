@@ -30,7 +30,15 @@ describe('AuthorizationAuditService', () => {
     const fakeEnv: any = {
       getBoolean: () => opts.enabled !== false,
     };
-    const svc = new AuthorizationAuditService(fakePrisma, fakeEnv);
+    // PR 12.1 — AuthorizationAuditService gained a MetricsRegistry
+    // dependency (flush counter + flush-failure counter, lazy-init in
+    // onModuleInit). Pass-through stub that returns minimal handles so
+    // both counters can register and inc without throwing.
+    const counterHandle = { inc: jest.fn(), value: () => 0 } as any;
+    const fakeMetrics: any = {
+      counter: jest.fn(() => counterHandle),
+    };
+    const svc = new AuthorizationAuditService(fakePrisma, fakeEnv, fakeMetrics);
     return { svc, writes, fakePrisma };
   }
 

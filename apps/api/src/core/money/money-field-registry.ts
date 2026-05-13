@@ -110,38 +110,102 @@ export const MONEY_FIELD_REGISTRY: Readonly<
 };
 
 /**
- * Convert a Decimal-or-number value to integer paise.
+ * Convert a rupee-valued input to integer paise as a `BigInt`.
  *
  * Accepts:
- *   - Prisma.Decimal (from DB reads)
- *   - number (from app code that reads .toNumber() first or uses raw)
- *   - string (Prisma serializes Decimal as string in some paths)
- *   - undefined / null → returns null (caller decides)
+ *   - `Prisma.Decimal` (from DB reads) — converted via the Decimal
+ *     library's own arithmetic (`mul(100).toFixed(0)`), which is exact.
+ *   - `string` — parsed character-by-character so JS float arithmetic
+ *     never touches the value (e.g. `"0.1"` + `"0.2"` performed by the
+ *     caller as Decimal will arrive here as `"0.3"`, not `0.30000…04`).
+ *   - `bigint` — assumed whole rupees; multiplied by 100.
+ *   - integer `number` — multiplied by 100 in BigInt space.
+ *   - `null` / `undefined` → returns `null` (caller decides).
  *
- * Uses Math.round half-away-from-zero (matches Money VO's roundHalfUp).
+ * Rejects:
+ *   - **fractional `number`** — the value has already lost precision
+ *     before reaching this function. The thrown error is the upstream
+ *     fix signal: pass a `Decimal` or a string instead. This is the
+ *     core of PR 0.4; the previous implementation silently rounded.
+ *   - malformed strings → returns `null`.
+ *
+ * Rounding: half-up at the third decimal position for strings.
+ * `Decimal` uses its library default (`ROUND_HALF_EVEN`) on `.toFixed`,
+ * which is bankers' rounding and matches the platform-wide convention
+ * documented in the Money value-object (`core/value-objects/money.ts`).
  */
-export function toPaise(
-  value: unknown,
-): bigint | null {
+export function toPaise(value: unknown): bigint | null {
   if (value === null || value === undefined) return null;
-  // Prisma.Decimal exposes a .toNumber() method. We accept anything
-  // that satisfies the duck type rather than importing Prisma here.
-  const v = value as { toNumber?: () => number };
-  if (typeof v.toNumber === 'function') {
-    return BigInt(roundHalfAwayFromZero(v.toNumber() * 100));
+
+  // ── Prisma.Decimal-like (preferred path) ────────────────────────
+  // Duck-typed on `.mul + .toFixed`. We deliberately do NOT use
+  // `.toNumber()` here — that's the old lossy path that motivated this
+  // rewrite. Decimal libraries (`decimal.js`, `decimal.js-light` —
+  // Prisma uses the latter) compute `.mul(100)` exactly and
+  // `.toFixed(0)` returns a canonical integer string.
+  const d = value as {
+    mul?: (x: number | string) => unknown;
+    toFixed?: (n: number) => string;
+  };
+  if (typeof d.mul === 'function' && typeof d.toFixed === 'function') {
+    const scaled = d.mul(100) as { toFixed: (n: number) => string };
+    return BigInt(scaled.toFixed(0));
   }
+
+  if (typeof value === 'bigint') {
+    // Caller passed whole rupees in BigInt form (rare). Convert to
+    // paise. Stays in BigInt space so no precision loss.
+    return value * 100n;
+  }
+
   if (typeof value === 'number') {
-    return BigInt(roundHalfAwayFromZero(value * 100));
+    if (!Number.isFinite(value)) return null;
+    if (!Number.isInteger(value)) {
+      // Phase 0 (PR 0.4) — silent precision drift was the original
+      // hazard. Refuse to convert fractional JS numbers; the caller
+      // must pass a `Decimal` or a string. This throws loudly so the
+      // upstream bug surfaces in dev/staging rather than corrupting
+      // ledger entries in prod.
+      throw new RangeError(
+        `toPaise: refusing to convert fractional Number ${value} ` +
+          `(precision already lost). Pass a Decimal or a decimal-string instead.`,
+      );
+    }
+    return BigInt(value) * 100n;
   }
+
   if (typeof value === 'string') {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return null;
-    return BigInt(roundHalfAwayFromZero(n * 100));
+    return stringRupeesToPaise(value);
   }
+
   return null;
 }
 
-function roundHalfAwayFromZero(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return value >= 0 ? Math.round(value) : -Math.round(-value);
+/**
+ * Parse a decimal-string of rupees (e.g. `"1234.56"`, `"-99.5"`,
+ * `"1234567890.45"`) into integer paise. Rounds half-up at the third
+ * decimal position. Returns `null` for malformed input.
+ *
+ * Done with string arithmetic so JS float can never touch the value.
+ */
+function stringRupeesToPaise(input: string): bigint | null {
+  const trimmed = input.trim();
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return null;
+
+  const negative = trimmed.startsWith('-');
+  const unsigned = negative ? trimmed.slice(1) : trimmed;
+  const [intPart, fracRaw = ''] = unsigned.split('.');
+
+  // Pad to at least 3 fractional digits so we can examine position 3
+  // for half-up rounding. e.g. "1.5" → "500"; "1.555" → "555".
+  const fracPadded = (fracRaw + '000').slice(0, 3);
+  const twoDigits = fracPadded.slice(0, 2);
+  const roundDigit = fracPadded.charCodeAt(2) - 48; // '0'..'9' → 0..9
+
+  // Drop leading zeros but keep a single "0" so BigInt('') doesn't throw.
+  const paiseDigits = (intPart + twoDigits).replace(/^0+(?=\d)/, '');
+  let paise = BigInt(paiseDigits);
+  if (roundDigit >= 5) paise += 1n;
+
+  return negative ? -paise : paise;
 }

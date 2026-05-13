@@ -26,6 +26,7 @@ import { SellerAuthGuard } from '../../../../../core/guards';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
 import { StockSyncService } from '../../../application/services/stock-sync.service';
+import { StockBelowReservedError } from '../../../domain/errors/stock-below-reserved.error';
 
 // ─── DTOs (inline for this controller) ───────────────────────────────
 
@@ -394,8 +395,31 @@ export class SellerProductMappingController {
       }
     }
 
-    // Perform bulk update
-    const updated = await this.sellerMappingRepo.bulkUpdateStock(dto.updates);
+    // Phase 1 (PR 1.10) — bulk import floor.
+    //
+    // The repo enforces `stockQty >= reservedQty` per row inside a
+    // single transaction. On floor violation it throws
+    // `StockBelowReservedError` (and rolls back any rows already
+    // written), which we translate into a 400 listing every offending
+    // mapping so the seller can fix the whole CSV at once.
+    let updated: Array<{ id: string; stockQty: number; variantId: string | null; productId: string }>;
+    try {
+      const result = await this.sellerMappingRepo.bulkUpdateStock(dto.updates);
+      updated = result.updated;
+    } catch (err) {
+      if (err instanceof StockBelowReservedError) {
+        const lines = err.violations
+          .map(
+            (v) =>
+              `mapping ${v.mappingId}: requested ${v.requestedStock}, reserved ${v.reservedQty}`,
+          )
+          .join('; ');
+        throw new BadRequestAppException(
+          `Bulk stock update rejected — ${err.violations.length} row(s) below reserved stock: ${lines}`,
+        );
+      }
+      throw err;
+    }
 
     // Sync variant stock for each affected mapping (deduplicated by productId+variantId)
     const synced = new Set<string>();
@@ -451,6 +475,22 @@ export class SellerProductMappingController {
     if (dto.stockQty !== undefined) {
       if (dto.stockQty < 0) {
         throw new BadRequestAppException('stockQty must be >= 0');
+      }
+      // Phase 1 (PR 1.10) — single-mapping floor.
+      //
+      // Mirror the bulk endpoint's `stockQty >= reservedQty` invariant
+      // for the per-row update path. Reading the freshly-fetched
+      // `existing.reservedQty` is not TOCTOU-safe by itself (a
+      // concurrent reservation could bump reservedQty between the
+      // check and the write), but the seller-allocation
+      // status-conditional updateMany on the order side prevents
+      // negative-available scenarios, so a tight race here can at
+      // worst delay the seller's import by one retry instead of
+      // overselling.
+      if (dto.stockQty < (existing.reservedQty ?? 0)) {
+        throw new BadRequestAppException(
+          `stockQty (${dto.stockQty}) cannot be less than reservedQty (${existing.reservedQty}) — ${existing.reservedQty} unit(s) are committed to in-flight orders`,
+        );
       }
       updateData.stockQty = dto.stockQty;
     }

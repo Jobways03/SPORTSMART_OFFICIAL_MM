@@ -12,9 +12,31 @@
 # Base is node:22-slim (Debian/glibc): Prisma's default "native" target
 # resolves to debian-openssl-3.0.x without adding binaryTargets to the
 # schema, so local dev on macOS and the container share one schema.
+#
+# Phase 9 (PR 9.4) — Base image is pinned by SHA digest, not just the
+# floating `node:22-slim` tag. The tag is mutable: a republish (intended
+# patch ship or supply-chain compromise of the upstream image) would
+# silently swap the bits we build against. The digest pin makes every
+# rebuild deterministic and detects upstream tampering as a build-time
+# pull failure rather than a runtime surprise.
+#
+# Operator rotation: rebase the digest with each scheduled Node 22.x
+# point-release. To capture the current digest of node:22-slim:
+#
+#   docker pull node:22-slim
+#   docker inspect --format='{{index .RepoDigests 0}}' node:22-slim
+#
+# Paste the resulting `node@sha256:...` value into the FROM line below,
+# then refresh dev's docker-compose / staging build to match before
+# merging. CI on the merge should pull successfully against the pinned
+# digest — if it 404s, the digest is wrong or the image was un-published.
 # ─────────────────────────────────────────────────────────────────────
 
-FROM node:22-slim AS base
+# Placeholder digest. REPLACE WITH A REAL `docker inspect`-derived
+# digest BEFORE the first prod build off this PR; the all-zeros value
+# below is recognised by the env-coverage spec as a valid digest format
+# but no Docker registry will resolve it.
+FROM node:22-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS base
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     CI=true

@@ -138,6 +138,11 @@ model Return {
   @@index([sellerResponseStatus, sellerResponseDueAt])
   @@index([riskScore])
   @@index([replacementStatus])
+  // Phase 2 (PR 2.1) — admin returns queue: `WHERE status = ?
+  // ORDER BY created_at DESC` paginated. The leading single-column
+  // `status` index narrows but doesn't help the sort — Postgres
+  // re-sorts every page. The composite serves both in index order.
+  @@index([status, createdAt(sort: Desc)])
   @@map("returns")
 }
 

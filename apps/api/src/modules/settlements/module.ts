@@ -4,8 +4,10 @@ import { SettlementService } from './settlement.service';
 import { AdminSettlementController } from './admin-settlement.controller';
 import { SellerEarningsController } from './seller-earnings.controller';
 import { AdminAuthGuard, SellerAuthGuard } from '../../core/guards';
+import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
+  imports: [MoneyModule],
   controllers: [AdminSettlementController, SellerEarningsController],
   providers: [
     SettlementsPublicFacade,

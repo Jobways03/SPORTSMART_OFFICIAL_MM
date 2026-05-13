@@ -1,15 +1,42 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { RedisService } from '../../../../bootstrap/cache/redis.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { FranchiseInventoryService } from './franchise-inventory.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
 
-const LOCK_KEY = 'lock:franchise-reservation-cleanup';
-const LOCK_TTL_SECONDS = 60;
-
+/**
+ * Phase 1 (PR 1.8) — Franchise reservation sweeper.
+ *
+ * Audit HI-39 flagged that the franchise side lacked the seller-side
+ * `StockReservation.expiresAt` + sweeper pair. This service was
+ * already present but with three weaknesses:
+ *
+ *   1. `setInterval`-based — didn't fit the project's @Cron
+ *      convention and couldn't be paused via the same env-flag
+ *      pattern as the other crons.
+ *   2. Ad-hoc Redis lock — used the un-fenced `acquireLock` / plain
+ *      `DEL` primitives, so a TTL-mid-work race could let two
+ *      replicas double-release the same reservation.
+ *   3. No env-flag — ops couldn't pause it during incidents.
+ *
+ * PR 1.8 resolves all three: `@Cron(EVERY_MINUTE)`, `LeaderElectedCron`
+ * (uses PR 1.7's fenced token-CAS release), and the new
+ * `FRANCHISE_RESERVATION_SWEEP_ENABLED` env-flag. Default ON because
+ * a stuck reservation is silent inventory loss — better noisy than
+ * silent.
+ *
+ * The franchise side uses ledger-row scan (`FranchiseInventoryLedger`
+ * rows with `movementType = ORDER_RESERVE` and no matching follow-up)
+ * rather than a dedicated `StockReservation` table with `expiresAt`.
+ * The ledger approach is correct for the franchise model (inventory
+ * is journaled by movement type) — adding a parallel `expiresAt`
+ * column would duplicate the source of truth.
+ */
 @Injectable()
-export class FranchiseReservationCleanupService implements OnModuleInit, OnModuleDestroy {
-  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+export class FranchiseReservationCleanupService {
   // Kept in sync with the seller-side TTL
   // (seller-allocation.service.ts:reserveStock default `expiresInMinutes = 15`)
   // so a customer sees the same checkout hold regardless of which node the
@@ -20,44 +47,46 @@ export class FranchiseReservationCleanupService implements OnModuleInit, OnModul
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
+    private readonly env: EnvService,
     private readonly inventoryService: FranchiseInventoryService,
     private readonly logger: AppLoggerService,
+    private readonly leader: LeaderElectedCron,
+    // Phase 5 (PR 5.1) — cron-run observability. Every tick lands a
+    // row in `cron_runs` with start/end/status + the structured
+    // `{ released, contractsSuspended }` shape the heartbeat
+    // dashboard charts.
+    private readonly instr: CronInstrumentationService,
   ) {
     this.logger.setContext('FranchiseReservationCleanupService');
   }
 
-  onModuleInit() {
-    this.cleanupInterval = setInterval(() => this.tick(), 60_000);
-    this.logger.log('Franchise reservation cleanup started (every 60s)');
-  }
+  @Cron(CronExpression.EVERY_MINUTE)
+  async tick(): Promise<void> {
+    if (!this.env.getBoolean('FRANCHISE_RESERVATION_SWEEP_ENABLED', true)) return;
 
-  /**
-   * Gate the sweep behind a Redis lock so only one API instance runs
-   * the cleanup per tick. Without this, every running instance picks up
-   * the same expired ORDER_RESERVE rows and each calls `unreserveStock`
-   * — double-releasing held franchise inventory.
-   */
-  private async tick(): Promise<void> {
-    const acquired = await this.redis.acquireLock(LOCK_KEY, LOCK_TTL_SECONDS);
-    if (!acquired) return;
-    try {
-      await this.cleanup();
-      if (Date.now() - this.lastContractCheck > this.CONTRACT_CHECK_INTERVAL) {
-        await this.checkExpiredContracts();
-        this.lastContractCheck = Date.now();
+    // 2-minute lock so a slow sweep (large backlog) finishes before
+    // the next tick tries to claim the lock.
+    await this.leader.run('franchise-reservation-cleanup', 2 * 60, async () => {
+      try {
+        // Phase 5 (PR 5.1) — wrap so each tick is auditable. Errors
+        // re-thrown by the body land status=FAILED in cron_runs; the
+        // outer try/catch then swallows so the cron tick itself
+        // doesn't propagate to @nestjs/schedule.
+        await this.instr.wrap('franchise-reservation-cleanup', async () => {
+          const released = await this.cleanup();
+          let contractsSuspended = 0;
+          if (Date.now() - this.lastContractCheck > this.CONTRACT_CHECK_INTERVAL) {
+            contractsSuspended = await this.checkExpiredContracts();
+            this.lastContractCheck = Date.now();
+          }
+          return { released, contractsSuspended };
+        });
+      } catch (err) {
+        this.logger.error(
+          `Franchise cleanup tick failed: ${(err as Error)?.message ?? 'unknown error'}`,
+        );
       }
-    } catch (err) {
-      this.logger.error(
-        `Franchise cleanup tick failed: ${(err as Error)?.message ?? 'unknown error'}`,
-      );
-    } finally {
-      await this.redis.releaseLock(LOCK_KEY);
-    }
-  }
-
-  onModuleDestroy() {
-    if (this.cleanupInterval) clearInterval(this.cleanupInterval);
+    });
   }
 
   async cleanup(): Promise<number> {
@@ -118,7 +147,7 @@ export class FranchiseReservationCleanupService implements OnModuleInit, OnModul
 
   // ── Auto-suspend franchises with expired contracts ──────────────────
 
-  private async checkExpiredContracts() {
+  private async checkExpiredContracts(): Promise<number> {
     const expired = await this.prisma.franchisePartner.findMany({
       where: {
         status: 'ACTIVE',
@@ -137,5 +166,6 @@ export class FranchiseReservationCleanupService implements OnModuleInit, OnModul
         `Franchise ${franchise.franchiseCode} auto-suspended — contract expired`,
       );
     }
+    return expired.length;
   }
 }

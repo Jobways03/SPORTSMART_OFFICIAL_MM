@@ -19,6 +19,15 @@ export interface AdminRecord {
   lockUntil: Date | null;
   lastLoginAt: Date | null;
   createdAt: Date;
+  // Phase 10 MFA fields (PR 10.1 schema, PR 10.4 wiring,
+  // PR 10.7 added mfaLastUsedStep for anti-replay).
+  // Optional on the interface because findAdminById's `select`
+  // parameter decides which columns the caller asks for.
+  mfaSecretCiphertext?: string | null;
+  mfaPendingSecretCiphertext?: string | null;
+  mfaEnabledAt?: Date | null;
+  mfaBackupCodesHashes?: unknown;
+  mfaLastUsedStep?: number | null;
 }
 
 export interface AdminSessionRecord {
@@ -129,6 +138,12 @@ export interface AdminRepository {
     expiresAt: Date;
   }): Promise<AdminSessionRecord>;
   revokeAdminSessions(adminId: string): Promise<void>;
+  // PR 10.10 — step-up auth. Stamps `stepUpVerifiedAt = now` on the
+  // specified session row so subsequent destructive-route requests
+  // pass the @RequiresStepUp guard. Caller verifies the TOTP / backup
+  // code before invoking. Optional on the interface for test stub
+  // tolerance; the Prisma implementation provides it.
+  markSessionStepUpVerified?(sessionId: string): Promise<void>;
 
   // ── Admin password reset OTP ────────────────────────────────
   findRecentAdminOtp(params: {

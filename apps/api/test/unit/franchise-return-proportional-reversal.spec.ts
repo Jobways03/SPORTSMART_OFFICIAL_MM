@@ -67,8 +67,14 @@ describe('FranchiseOrdersService.initiateReturn — proportional commission reve
     };
 
     // Constructor: (prisma, inventoryService, commissionService,
-    // catalogFacade, eventBus, logger). initiateReturn doesn't touch
-    // catalogFacade, so an empty stub is fine.
+    // catalogFacade, eventBus, logger, moneyDualWrite). initiateReturn
+    // doesn't touch catalogFacade or the dual-write helper, so empty
+    // / pass-through stubs are fine.
+    const moneyDualWrite = {
+      applyPaise: (_m: string, d: any) => d,
+      applyPaiseMany: (_m: string, rs: any[]) => rs,
+      isApplicable: () => false,
+    };
     const svc = new FranchiseOrdersService(
       prisma as any,
       inventoryService as any,
@@ -76,6 +82,7 @@ describe('FranchiseOrdersService.initiateReturn — proportional commission reve
       {} as any, // catalogFacade
       eventBus,
       logger,
+      moneyDualWrite as any,
     );
 
     return { svc, recordReturnReversal };

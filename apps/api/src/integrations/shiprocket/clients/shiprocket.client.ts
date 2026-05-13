@@ -2,6 +2,44 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Phase 4 (PR 4.8) — retry policy constants. Same shape as Razorpay
+ * (PR 4.1), WhatsApp (PR 4.5), iThink (PR 4.6): max 3 attempts,
+ * full-jitter exponential backoff capped at 5s. Composes with the
+ * pre-existing 401-refresh path — a 401 triggers token refresh + one
+ * retry; a subsequent 5xx then triggers this retry loop.
+ *
+ * Shiprocket's outbound write API doesn't expose an idempotency-key
+ * header. A retry that lands AFTER the first call partially
+ * succeeded can produce a duplicate shipment — documented as the
+ * lesser evil vs silent drop. The application layer (sub-order
+ * stamps shiprocket_order_id after success) detects duplicates on
+ * the next reconciliation pass.
+ */
+const MAX_ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 200;
+const BACKOFF_MAX_MS = 5_000;
+
+function isRetryableStatus(status: number): boolean {
+  return status >= 500 || status === 429;
+}
+
+function isRetryableError(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  return false;
+}
+
+function jitteredBackoff(attempt: number): number {
+  const ceiling = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (attempt - 1));
+  return Math.floor(Math.random() * ceiling);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 @Injectable()
 export class ShiprocketClient implements OnModuleInit {
   private readonly logger = new Logger(ShiprocketClient.name);
@@ -59,11 +97,19 @@ export class ShiprocketClient implements OnModuleInit {
 
   /**
    * Authenticated fetch wrapper. Adds the Bearer token, enforces a
-   * 30s timeout (so a hung Shiprocket call can't pin an order-shipping
-   * request indefinitely), and retries once on 401 after forcing a
-   * token refresh. Without the 401 retry, any admin-side credential
-   * rotation or Shiprocket-initiated revoke would break every in-flight
-   * request until the next process restart.
+   * 30s per-attempt timeout, retries once on 401 after forcing a
+   * token refresh, and (Phase 4, PR 4.8) retries on 5xx / 429 /
+   * transport-error with full-jitter exponential backoff up to
+   * MAX_ATTEMPTS.
+   *
+   * Layered semantics:
+   *   - 401 → token refresh + immediate single retry (existing).
+   *     If THAT retry also fails on 5xx, the outer retry loop picks
+   *     up — this is the "credential rotation racing with a gateway
+   *     blip" case.
+   *   - 5xx / 429 / network → exponential backoff retry (up to 3).
+   *   - 4xx (other than 401, 429) → fail fast — same as Razorpay /
+   *     WhatsApp / iThink classification.
    */
   private async request<T>(
     op: string,
@@ -82,23 +128,56 @@ export class ShiprocketClient implements OnModuleInit {
       });
     };
 
-    let token = await this.authenticate();
-    let res = await doFetch(token);
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        let token = await this.authenticate();
+        let res = await doFetch(token);
 
-    if (res.status === 401) {
-      // Stale token — force refresh and retry once.
-      this.token = null;
-      this.tokenExpiresAt = null;
-      token = await this.authenticate(true);
-      res = await doFetch(token);
+        // 401 → existing one-shot token refresh. If the refreshed
+        // request still 401s (genuinely bad credentials), fall
+        // through to the !res.ok branch which throws.
+        if (res.status === 401) {
+          this.token = null;
+          this.tokenExpiresAt = null;
+          token = await this.authenticate(true);
+          res = await doFetch(token);
+        }
+
+        if (!res.ok) {
+          if (isRetryableStatus(res.status) && attempt < MAX_ATTEMPTS) {
+            this.logger.warn(
+              `Shiprocket ${op} attempt ${attempt}/${MAX_ATTEMPTS} got ${res.status}, retrying...`,
+            );
+            await sleep(jitteredBackoff(attempt));
+            continue;
+          }
+          const body = await res.text();
+          throw new Error(`Shiprocket ${op} failed (${res.status}): ${body}`);
+        }
+
+        return (await res.json()) as T;
+      } catch (err) {
+        lastError = err;
+        // Synthesised "Shiprocket X failed (NNN)" error from the
+        // !res.ok branch — status was already considered for retry
+        // inside the loop, so propagate immediately.
+        if (err instanceof Error && /Shiprocket .* failed \(\d+\)/.test(err.message)) {
+          throw err;
+        }
+        if (isRetryableError(err) && attempt < MAX_ATTEMPTS) {
+          this.logger.warn(
+            `Shiprocket ${op} attempt ${attempt}/${MAX_ATTEMPTS} threw ${(err as Error).message}, retrying...`,
+          );
+          await sleep(jitteredBackoff(attempt));
+          continue;
+        }
+        throw err;
+      }
     }
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Shiprocket ${op} failed (${res.status}): ${body}`);
-    }
-
-    return res.json() as Promise<T>;
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Shiprocket ${op} exhausted retries`);
   }
 
   async createOrder(params: {

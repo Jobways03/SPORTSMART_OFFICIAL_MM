@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../bootstrap/env/env.service';
+import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
 import { UnauthorizedAppException } from '../exceptions';
 
 export type ActorType = 'CUSTOMER' | 'SELLER' | 'FRANCHISE' | 'ADMIN' | 'AFFILIATE';
@@ -51,7 +52,7 @@ export class AnyAuthGuard implements CanActivate {
 
     for (const { type, secret } of attempts) {
       try {
-        const payload = jwt.verify(token, secret) as any;
+        const payload = jwt.verify(token, secret, JWT_VERIFY_OPTIONS) as any;
         if (payload?.sub) {
           // Attach a coarse identity so handlers can log the caller
           // and disambiguate persona. AnyAuthGuard intentionally does

@@ -20,6 +20,11 @@ import { BadRequestAppException } from '../exceptions';
 // ── OrderStatus (master order top-level lifecycle) ─────────────────────────
 
 export type OrderStatus =
+  // Phase 0 (PR 0.8) — `PENDING_PAYMENT` exists in the Prisma enum
+  // (`_base.prisma`) but was missing from the FSM type. Adding it so
+  // `verifyPayment` can assert PENDING_PAYMENT → PLACED at the FSM
+  // layer rather than relying on the `findFirst` filter alone.
+  | 'PENDING_PAYMENT'
   | 'PLACED'
   | 'PENDING_VERIFICATION'
   | 'VERIFIED'
@@ -31,6 +36,10 @@ export type OrderStatus =
   | 'EXCEPTION_QUEUE';
 
 const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
+  // Initial state for ONLINE orders awaiting gateway capture.
+  // Canonical happy path is PENDING_PAYMENT → PLACED (via verifyPayment).
+  // Auto-cancel on payment-window expiry routes to CANCELLED.
+  PENDING_PAYMENT: ['PLACED', 'CANCELLED'],
   PLACED: ['PENDING_VERIFICATION', 'VERIFIED', 'CANCELLED', 'EXCEPTION_QUEUE'],
   PENDING_VERIFICATION: ['VERIFIED', 'CANCELLED', 'EXCEPTION_QUEUE'],
   VERIFIED: ['ROUTED_TO_SELLER', 'CANCELLED', 'EXCEPTION_QUEUE'],

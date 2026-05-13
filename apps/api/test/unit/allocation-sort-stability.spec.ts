@@ -10,8 +10,15 @@ import { SellerAllocationService } from '../../src/modules/catalog/application/s
  * guaranteed stable across queries. Two concurrent allocate() calls could
  * pick different sellers when scores tied, breaking deterministic routing.
  *
- * After the fix, findMany carries `orderBy: { id: 'asc' }` for both
- * sellerProductMapping and franchiseCatalogMapping queries.
+ * After the fix, findMany carries an `id: 'asc'` ordering tier:
+ *   - sellerProductMapping: orderBy { id: 'asc' }
+ *   - franchiseCatalogMapping: orderBy [{ variantId: 'desc' }, { id: 'asc' }]
+ *     (variant-specific rows first for dedup precedence; id-asc keeps
+ *     the tied-score tiebreak deterministic).
+ *
+ * PR 12.7 — franchiseCatalogMapping gained the variant-priority primary
+ * sort. The id-asc deterministic-tiebreak invariant is preserved as
+ * the secondary key, which is what this spec guards.
  */
 
 describe('SellerAllocationService — deterministic findMany order', () => {
@@ -51,7 +58,7 @@ describe('SellerAllocationService — deterministic findMany order', () => {
     expect(callArg.orderBy).toEqual({ id: 'asc' });
   });
 
-  it('franchise catalog findMany uses orderBy id asc', async () => {
+  it('franchise catalog findMany keeps id-asc as the deterministic tiebreak', async () => {
     const { svc, prisma } = makeService();
 
     await svc.allocate({
@@ -62,6 +69,14 @@ describe('SellerAllocationService — deterministic findMany order', () => {
 
     expect(prisma.franchiseCatalogMapping.findMany).toHaveBeenCalled();
     const callArg = prisma.franchiseCatalogMapping.findMany.mock.calls[0][0];
-    expect(callArg.orderBy).toEqual({ id: 'asc' });
+    // The franchise query uses a compound sort: variant-specific rows
+    // come first (so the dedup step keeps the variant-row, not the
+    // product-row fallback), then id-asc keeps tied-score outcomes
+    // deterministic. The spec asserts both layers are present and in
+    // this order — flipping them would break dedup AND tiebreak.
+    expect(callArg.orderBy).toEqual([
+      { variantId: 'desc' },
+      { id: 'asc' },
+    ]);
   });
 });

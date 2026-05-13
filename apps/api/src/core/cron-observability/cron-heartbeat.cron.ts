@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { EventBusService } from '../../bootstrap/events/event-bus.service';
+import { LeaderElectedCron } from '../../bootstrap/scheduler/leader-elected-cron';
 
 /**
  * Phase 8 (PR 8.3) — Heartbeat-of-crons.
@@ -23,6 +24,9 @@ export class CronHeartbeatCron {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly eventBus: EventBusService,
+    // Phase 1 (PR 1.2) — without leader-election, N replicas would
+    // emit cron.silent for every stale job N times per tick.
+    private readonly leader: LeaderElectedCron,
   ) {}
 
   enabled(): boolean {
@@ -33,6 +37,12 @@ export class CronHeartbeatCron {
   async run(): Promise<void> {
     if (!this.enabled()) return;
 
+    await this.leader.run('cron-heartbeat', 10 * 60, async () => {
+      await this.runOnce();
+    });
+  }
+
+  private async runOnce(): Promise<void> {
     let targets: Array<{
       jobName: string;
       expectedIntervalSeconds: number;

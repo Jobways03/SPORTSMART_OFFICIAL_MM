@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthGuard } from '../../core/guards';
+import { MoneyModule } from '../../core/money/money.module';
 
 // Repository
 import { ACCOUNTS_REPOSITORY } from './domain/repositories/accounts.repository.interface';
@@ -20,6 +21,7 @@ import { AccountsSettlementsController } from './presentation/controllers/accoun
 import { AccountsReportsController } from './presentation/controllers/accounts-reports.controller';
 
 @Module({
+  imports: [MoneyModule],
   controllers: [
     AccountsDashboardController,
     AccountsSettlementsController,

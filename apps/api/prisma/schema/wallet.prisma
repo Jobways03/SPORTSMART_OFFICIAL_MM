@@ -3,8 +3,13 @@
 // (we also denormalize `balance_after_in_paise` on each row so the running
 // balance is auditable without re-summing the ledger).
 //
-// Money is stored in paise (₹1 = 100 paise) as Int — same convention as the
-// orders / payments / settlements tables — to avoid float drift.
+// Money is stored in paise (₹1 = 100 paise) as BigInt. The pre-PR-2.2
+// schema used Int — ~₹21M cap (INT max paise = 2,147,483,647). That's
+// plenty for a single retail customer's wallet but reachable on B2B
+// franchise wallets, large promo credits, and admin adjustment rounds.
+// BigInt removes the cap; the application layer marshals to/from `number`
+// at the repository boundary so service code stays in TypeScript's safe-
+// integer range (₹90 trillion).
 
 enum WalletTransactionType {
   TOPUP // user-initiated load (via payment gateway)
@@ -26,7 +31,8 @@ model Wallet {
   userId         String   @unique @map("user_id")
   // Sum of COMPLETED transactions. Maintained transactionally with the
   // ledger row insert so the two never disagree.
-  balanceInPaise Int      @default(0) @map("balance_in_paise")
+  // Phase 2 (PR 2.2) — BigInt. See file header for the rationale.
+  balanceInPaise BigInt   @default(0) @map("balance_in_paise")
   // Currency is fixed to INR for the platform but stored explicitly so
   // analytics + statement endpoints don't need to scrape it from elsewhere.
   currency       String   @default("INR")
@@ -58,10 +64,11 @@ model WalletTransaction {
   type                WalletTransactionType
   status              WalletTransactionStatus @default(COMPLETED)
   // Signed amount in paise: credits positive, debits negative.
-  amountInPaise       Int                     @map("amount_in_paise")
+  // Phase 2 (PR 2.2) — BigInt. See file header for the rationale.
+  amountInPaise       BigInt                  @map("amount_in_paise")
   // Wallet balance immediately after this row was applied. Lets us
   // render statements + reconcile without re-summing the ledger.
-  balanceAfterInPaise Int                     @map("balance_after_in_paise")
+  balanceAfterInPaise BigInt                  @map("balance_after_in_paise")
   // Polymorphic linkage to the upstream record that caused this entry.
   // e.g. ('REFUND', '<refund-id>'), ('TOPUP', '<razorpay-payment-id>'),
   // ('DEBIT', '<order-id>'). Optional for admin-manual adjustments

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { Prisma } from '@prisma/client';
+import { hashRefreshToken } from '../../../../core/auth/refresh-token';
 import {
   AdminRepository,
   AdminRecord,
@@ -45,13 +46,31 @@ export class PrismaAdminRepository implements AdminRepository {
     ipAddress: string | null;
     expiresAt: Date;
   }): Promise<AdminSessionRecord> {
-    return this.prisma.adminSession.create({ data }) as Promise<AdminSessionRecord>;
+    // Phase 3 (PR 3.2) — hash the raw refresh token before persisting.
+    // Callers pass the raw token; the response body returns the raw
+    // token to the client. Only the hash lives in the DB.
+    return this.prisma.adminSession.create({
+      data: { ...data, refreshToken: hashRefreshToken(data.refreshToken) },
+    }) as Promise<AdminSessionRecord>;
   }
 
   async revokeAdminSessions(adminId: string): Promise<void> {
     await this.prisma.adminSession.updateMany({
       where: { adminId, revokedAt: null },
       data: { revokedAt: new Date() },
+    });
+  }
+
+  // PR 10.10 — step-up auth. Stamp the session as freshly step-up-
+  // verified so subsequent destructive-route requests in the
+  // configured window pass the @RequiresStepUp guard. The `data`
+  // shape uses a column that landed in the PR 10.10 schema change;
+  // the cast bypasses the generated-type lag until the operator
+  // runs `prisma generate` post-migration.
+  async markSessionStepUpVerified(sessionId: string): Promise<void> {
+    await this.prisma.adminSession.update({
+      where: { id: sessionId },
+      data: { stepUpVerifiedAt: new Date() } as any,
     });
   }
 

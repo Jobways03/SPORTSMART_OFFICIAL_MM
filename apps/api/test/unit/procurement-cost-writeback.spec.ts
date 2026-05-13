@@ -112,17 +112,21 @@ describe('ProcurementService.approveRequest — write-back variant.costPrice', (
       { itemId: 'it-rejected', approvedQty: 0, landedUnitCost: 0 },
     ]);
 
-    // Variant write for the variant-scoped item.
+    // PR 12.6 — Phase 11 catalog refactor renamed the procurement
+    // write-back column on both Product and ProductVariant: the
+    // costPrice column is now display-only (per the schema comment),
+    // and the platform-wide landed cost consumed by the franchise
+    // procurement flow lives in procurementPrice. The service
+    // continues to write the admin-entered landed cost to the
+    // appropriate variant or product row; only the column changed.
     expect(variantUpdate).toHaveBeenCalledWith({
       where: { id: 'var-1' },
-      data: { costPrice: 10 },
+      data: { procurementPrice: 10 },
     });
-    // NOT called for it-no-variant (no variantId).
     expect(variantUpdate).toHaveBeenCalledTimes(1);
-    // Product write only for it-no-variant (fallback path).
     expect(productUpdate).toHaveBeenCalledWith({
       where: { id: 'prod-2' },
-      data: { costPrice: 20 },
+      data: { procurementPrice: 20 },
     });
     expect(productUpdate).toHaveBeenCalledTimes(1);
   });

@@ -14,13 +14,15 @@ describe('outbox env safety interlocks', () => {
     NODE_ENV: 'development',
     DATABASE_URL: 'postgresql://localhost/test',
     REDIS_URL: 'redis://localhost:6379',
-    JWT_CUSTOMER_SECRET: 'a'.repeat(40),
-    JWT_SELLER_SECRET: 'a'.repeat(40),
-    JWT_FRANCHISE_SECRET: 'a'.repeat(40),
+    // Phase 3 (PR 3.5) — distinct per actor scope; the schema now
+    // enforces pairwise uniqueness.
+    JWT_CUSTOMER_SECRET: 'c'.repeat(40),
+    JWT_SELLER_SECRET: 's'.repeat(40),
+    JWT_FRANCHISE_SECRET: 'f'.repeat(40),
     JWT_ADMIN_SECRET: 'a'.repeat(40),
-    JWT_AFFILIATE_SECRET: 'a'.repeat(40),
-    AFFILIATE_ENCRYPTION_KEY: 'a'.repeat(40),
-    JWT_REFRESH_SECRET: 'a'.repeat(40),
+    JWT_AFFILIATE_SECRET: 'p'.repeat(40),
+    AFFILIATE_ENCRYPTION_KEY: 'k'.repeat(40),
+    JWT_REFRESH_SECRET: 'r'.repeat(40),
   });
 
   it('AUTHORITATIVE=true alone fails fast (no publisher to drain)', () => {

@@ -43,7 +43,15 @@ describe('PrismaCheckoutRepository.cancelOrderTransaction — commission audit',
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
 
-    const repo = new PrismaCheckoutRepository(prisma);
+    // Pass-through stub for MoneyDualWriteHelper: returns the data
+    // payload untouched, matching the production helper's no-op
+    // behaviour when MONEY_DUAL_WRITE_ENABLED=false.
+    const moneyDualWrite: any = {
+      applyPaise: (_model: string, data: any) => data,
+      applyPaiseMany: (_model: string, rows: any[]) => rows,
+      isApplicable: () => false,
+    };
+    const repo = new PrismaCheckoutRepository(prisma, moneyDualWrite);
 
     const order: any = {
       id: 'order-1',

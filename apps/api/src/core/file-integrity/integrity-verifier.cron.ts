@@ -3,6 +3,8 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { EventBusService } from '../../bootstrap/events/event-bus.service';
+import { LeaderElectedCron } from '../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../cron-observability/cron-instrumentation.service';
 import { hashesEqual } from './file-hash.util';
 
 /**
@@ -34,6 +36,12 @@ export class IntegrityVerifierCron {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly eventBus: EventBusService,
+    // Phase 1 (PR 1.2) — multi-replica safety. Hashing+fetching every
+    // file row on every replica would be a per-byte multiplier.
+    private readonly leader: LeaderElectedCron,
+    // Phase 5 (PR 5.3) — cron-run observability. Captures
+    // `{ candidates, backfilled, reverified, violations }` per tick.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   enabled(): boolean {
@@ -52,6 +60,22 @@ export class IntegrityVerifierCron {
   async run(): Promise<void> {
     if (!this.enabled()) return;
 
+    await this.leader.run('integrity-verifier', 2 * 60 * 60, async () => {
+      try {
+        await this.instr.wrap('integrity-verifier', () => this.runOnce());
+      } catch {
+        // already recorded as FAILED in cron_runs
+      }
+    });
+  }
+
+  /** Body extracted so the leader-wrapper stays a one-liner. */
+  private async runOnce(): Promise<{
+    candidates: number;
+    backfilled: number;
+    reverified: number;
+    violations: number;
+  }> {
     const reverifyCutoff = new Date(
       Date.now() - this.reverifyDays() * 24 * 60 * 60 * 1000,
     );
@@ -93,7 +117,7 @@ export class IntegrityVerifierCron {
       this.logger.error(
         `Integrity verifier load failed: ${(err as Error).message}`,
       );
-      return;
+      return { candidates: 0, backfilled: 0, reverified: 0, violations: 0 };
     }
 
     let backfilled = 0;
@@ -146,6 +170,7 @@ export class IntegrityVerifierCron {
         `integrity verifier: backfilled=${backfilled} reverified=${reverified} violations=${violations}`,
       );
     }
+    return { candidates: candidates.length, backfilled, reverified, violations };
   }
 
   /**

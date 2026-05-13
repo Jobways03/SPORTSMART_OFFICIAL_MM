@@ -5,6 +5,7 @@ import {
   FranchisePasswordResetOtp,
 } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { hashRefreshToken } from '../../../../core/auth/refresh-token';
 import {
   FranchisePartnerRepository,
   OtpWithFranchise,
@@ -86,7 +87,11 @@ export class PrismaFranchiseRepository implements FranchisePartnerRepository {
     ipAddress: string | null;
     expiresAt: Date;
   }): Promise<FranchiseSession> {
-    return this.prisma.franchiseSession.create({ data });
+    // Phase 3 (PR 3.2) — hash before persisting. See refresh-token.ts
+    // header for the security rationale.
+    return this.prisma.franchiseSession.create({
+      data: { ...data, refreshToken: hashRefreshToken(data.refreshToken) },
+    });
   }
 
   async revokeAllSessions(franchisePartnerId: string): Promise<void> {

@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import {
   FranchisePartnerRepository,
@@ -44,7 +45,7 @@ export class AdminImpersonateFranchiseUseCase {
         impersonatedBy: adminId,
       },
       this.envService.getString('JWT_FRANCHISE_SECRET'),
-      { expiresIn: 1800 },
+      { expiresIn: 1800, algorithm: JWT_ALGORITHM },
     );
 
     this.logger.log(`Admin ${adminId} impersonating franchise ${franchiseId}`);

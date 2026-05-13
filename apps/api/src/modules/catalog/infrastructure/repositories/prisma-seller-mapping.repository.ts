@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { ISellerMappingRepository, SellerMappingListParams } from '../../domain/repositories/seller-mapping.repository.interface';
+import { StockBelowReservedError } from '../../domain/errors/stock-below-reserved.error';
 
 const MAPPING_SELLER_SELECT = {
   id: true, sellerName: true, sellerShopName: true, email: true, status: true, storeAddress: true, sellerZipCode: true,
@@ -185,18 +186,87 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     await this.prisma.sellerProductMapping.delete({ where: { id: mappingId } });
   }
 
-  async bulkUpdateStock(updates: Array<{ mappingId: string; stockQty: number }>): Promise<any[]> {
+  /**
+   * Phase 1 (PR 1.10) — bulk stock-import floor.
+   *
+   * For each update, issue a status-conditional `updateMany`:
+   *
+   *   UPDATE seller_product_mappings
+   *      SET stock_qty = $newStock
+   *    WHERE id = $mappingId AND reserved_qty <= $newStock
+   *
+   * If the predicate fails (`reserved_qty > newStock`), `count` is 0
+   * and the row is NOT written. We then re-read the row to extract its
+   * current reservedQty and record a violation. After the loop, if any
+   * violations were collected, we throw `StockBelowReservedError` from
+   * inside the transaction callback — Prisma rolls back the rows we
+   * already wrote, so the batch is all-or-nothing.
+   *
+   * Why per-row updateMany instead of one big WHERE-IN with a CASE
+   * expression: each row has its own per-row predicate, and Prisma
+   * doesn't expose a clean way to express that in a single statement.
+   * The N round-trips are fine for the documented batch ceiling
+   * (100 rows; see the controller's `if (dto.updates.length > 100)`).
+   *
+   * Why throw rather than return violations: a half-imported CSV is
+   * harder to recover from than a clean rejection. Throwing inside
+   * `$transaction` is the documented Prisma rollback mechanism.
+   */
+  async bulkUpdateStock(
+    updates: Array<{ mappingId: string; stockQty: number }>,
+  ): Promise<{
+    updated: Array<{ id: string; stockQty: number; variantId: string | null; productId: string }>;
+    violations: Array<{ mappingId: string; requestedStock: number; reservedQty: number }>;
+  }> {
     return this.prisma.$transaction(async (tx) => {
-      const results = [];
+      const violations: Array<{ mappingId: string; requestedStock: number; reservedQty: number }> = [];
+      const successIds: string[] = [];
+
       for (const update of updates) {
-        const result = await tx.sellerProductMapping.update({
-          where: { id: update.mappingId },
+        const result = await tx.sellerProductMapping.updateMany({
+          where: {
+            id: update.mappingId,
+            reservedQty: { lte: update.stockQty }, // floor enforced here
+          },
           data: { stockQty: update.stockQty },
-          select: { id: true, stockQty: true, variantId: true, productId: true },
         });
-        results.push(result);
+
+        if (result.count === 0) {
+          // Either the row was rejected by the floor predicate or
+          // doesn't exist at all. Disambiguate so a missing row
+          // doesn't masquerade as a floor violation (the controller's
+          // existence/ownership check should have caught it already).
+          const current = await tx.sellerProductMapping.findUnique({
+            where: { id: update.mappingId },
+            select: { id: true, reservedQty: true },
+          });
+          if (current) {
+            violations.push({
+              mappingId: update.mappingId,
+              requestedStock: update.stockQty,
+              reservedQty: current.reservedQty,
+            });
+          }
+          // current === null: silently skip — controller's earlier
+          // checks own existence validation, and treating it as a
+          // violation would expose the wrong error to the seller.
+        } else {
+          successIds.push(update.mappingId);
+        }
       }
-      return results;
+
+      if (violations.length > 0) {
+        // Roll back the writes already applied to earlier rows. The
+        // controller catches this error and renders the violation list
+        // to the seller.
+        throw new StockBelowReservedError(violations);
+      }
+
+      const updated = await tx.sellerProductMapping.findMany({
+        where: { id: { in: successIds } },
+        select: { id: true, stockQty: true, variantId: true, productId: true },
+      });
+      return { updated, violations: [] };
     });
   }
 

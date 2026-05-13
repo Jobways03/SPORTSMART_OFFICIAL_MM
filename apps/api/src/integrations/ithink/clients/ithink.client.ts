@@ -56,6 +56,24 @@ export class IThinkApiError extends Error {
 }
 
 /**
+ * Phase 4 (PR 4.6) — 4xx HTTP error class. Caller-side bug (bad
+ * credentials, malformed payload, unknown route). The retry loop
+ * treats this like `IThinkApiError` — fail fast, no point retrying
+ * a deterministic 401. Mirrors the 4xx-no-retry classification in
+ * the Razorpay (PR 4.1) and WhatsApp (PR 4.5) clients.
+ */
+export class IThinkClientError extends Error {
+  constructor(
+    public readonly endpoint: IThinkEndpoint,
+    public readonly httpStatus: number,
+    public readonly responseBody: string,
+  ) {
+    super(`iThink ${endpoint} client error (http ${httpStatus}): ${responseBody.slice(0, 200)}`);
+    this.name = 'IThinkClientError';
+  }
+}
+
+/**
  * Thin POST-only HTTP wrapper for iThink. Responsibilities:
  *
  *  1. Inject `access_token` + `secret_key` into the request body.
@@ -110,6 +128,11 @@ export class IThinkClient {
         // (bad waybill, missing warehouse, etc.). Only retry transport
         // errors and 5xx-ish failures we surfaced as ServiceUnavailable.
         if (error instanceof IThinkApiError) throw error;
+        // Phase 4 (PR 4.6) — 4xx is a caller bug (bad creds, malformed
+        // payload, unknown route). Retrying makes the same wrong call
+        // three times — burns iThink-side capacity and triples
+        // latency. Fail fast instead.
+        if (error instanceof IThinkClientError) throw error;
         if (attempt >= maxAttempts) break;
         const backoffMs = this.computeBackoff(attempt);
         this.logger.warn(
@@ -191,6 +214,13 @@ export class IThinkClient {
     //
     // would silently pass as success if we only branched on status_code.
     if (!response.ok) {
+      // Phase 4 (PR 4.6) — split 4xx vs 5xx classification. 4xx is a
+      // deterministic caller bug; bypass retry via IThinkClientError.
+      // 5xx and 429 stay as ServiceUnavailableException so the retry
+      // loop picks them up.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        throw new IThinkClientError(endpoint, response.status, rawText);
+      }
       throw new ServiceUnavailableException(
         `iThink ${endpoint} http ${response.status}`,
       );

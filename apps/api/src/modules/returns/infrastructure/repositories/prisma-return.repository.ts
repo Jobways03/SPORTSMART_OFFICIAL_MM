@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import {
   CreateReturnData,
   FindAllPaginatedParams,
@@ -14,7 +15,14 @@ const NON_COUNTABLE_STATUSES = ['REJECTED', 'CANCELLED', 'COMPLETED'] as const;
 
 @Injectable()
 export class PrismaReturnRepository implements ReturnRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 7 (PR 7.4) — repository-layer choke for refundAmount writes.
+    // Wired on every mutation method even when the data block looks
+    // status-only; callers reach this repo through several layers and
+    // a money field may arrive via the generic `update(id, data)` path.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
+  ) {}
 
   // ── CRUD ────────────────────────────────────────────────────────────────
 
@@ -349,7 +357,7 @@ export class PrismaReturnRepository implements ReturnRepository {
   async update(id: string, data: Record<string, unknown>): Promise<any> {
     return this.prisma.return.update({
       where: { id },
-      data: data as any,
+      data: this.moneyDualWrite.applyPaise('return', data) as any,
     });
   }
 
@@ -365,7 +373,10 @@ export class PrismaReturnRepository implements ReturnRepository {
       // expectedVersion produces a 0-row update, which Prisma surfaces
       // as P2025 ("record not found").
       where: { id, version: expectedVersion } as any,
-      data: { ...(data as any), version: { increment: 1 } },
+      data: {
+        ...(this.moneyDualWrite.applyPaise('return', data) as any),
+        version: { increment: 1 },
+      },
     });
   }
 
@@ -472,12 +483,12 @@ export class PrismaReturnRepository implements ReturnRepository {
   ): Promise<any> {
     return this.prisma.returnItem.update({
       where: { id: itemId },
-      data: {
+      data: this.moneyDualWrite.applyPaise('returnItem', {
         qcOutcome: data.qcOutcome as any,
         qcQuantityApproved: data.qcQuantityApproved,
         qcNotes: data.qcNotes,
         refundAmount: data.refundAmount,
-      },
+      }),
     });
   }
 
@@ -493,7 +504,7 @@ export class PrismaReturnRepository implements ReturnRepository {
   ): Promise<any> {
     return this.prisma.return.update({
       where: { id: returnId },
-      data: {
+      data: this.moneyDualWrite.applyPaise('return', {
         refundAttempts: { increment: 1 },
         refundLastAttemptAt: new Date(),
         ...(data.success
@@ -502,17 +513,17 @@ export class PrismaReturnRepository implements ReturnRepository {
               refundFailureReason: null,
             }
           : { refundFailureReason: data.failureReason }),
-      },
+      }),
     });
   }
 
   async incrementRefundAttempts(returnId: string): Promise<any> {
     return this.prisma.return.update({
       where: { id: returnId },
-      data: {
+      data: this.moneyDualWrite.applyPaise('return', {
         refundAttempts: { increment: 1 },
         refundLastAttemptAt: new Date(),
-      },
+      }),
     });
   }
 

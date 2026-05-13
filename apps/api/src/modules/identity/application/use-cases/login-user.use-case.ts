@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { LoginResponseData } from '../../presentation/dtos/auth-response.dto';
 import {
@@ -123,7 +124,7 @@ export class LoginUserUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_CUSTOMER_SECRET'),
-      { expiresIn: accessTtlSeconds },
+      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
     );
 
     // Emit event (fire and forget)

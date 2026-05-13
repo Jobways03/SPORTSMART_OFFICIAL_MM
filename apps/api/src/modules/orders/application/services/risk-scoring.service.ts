@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 export type RiskBand = 'GREEN' | 'YELLOW' | 'RED';
 
@@ -35,7 +36,14 @@ const BAND_THRESHOLDS = {
 export class RiskScoringService {
   private readonly logger = new Logger(RiskScoringService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 7 (PR 7.7) — masterOrder.update is status-only here (risk
+    // score + band + reasons), so the helper no-ops; wired for the
+    // coverage-spec invariant and to future-proof against payload
+    // changes that might add a money field.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
+  ) {}
 
   /**
    * Compute and persist the risk score for a single order. Idempotent —
@@ -77,12 +85,12 @@ export class RiskScoringService {
 
     await this.prisma.masterOrder.update({
       where: { id: orderId },
-      data: {
+      data: this.moneyDualWrite.applyPaise('masterOrder', {
         verificationRiskScore: result.score,
         verificationRiskBand: result.band,
         verificationRiskReasons: result.reasons,
         verificationScoredAt: new Date(),
-      },
+      }),
     });
 
     this.logger.log(

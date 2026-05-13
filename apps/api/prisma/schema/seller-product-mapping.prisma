@@ -9,7 +9,22 @@ model SellerProductMapping {
   productId String  @map("product_id")
   variantId String? @map("variant_id")
 
-  // Inventory
+  // Inventory.
+  //
+  // Phase 2 (PR 2.4) — three DB-level CHECK constraints back these
+  // columns (added via migration 20260512150000):
+  //
+  //   stock_qty    >= 0
+  //   reserved_qty >= 0
+  //   reserved_qty <= stock_qty   ← keeps available stock ≥ 0
+  //
+  // Prisma doesn't model CHECK constraints in the schema, so they
+  // live only in the migration SQL. Any raw-SQL or non-Prisma write
+  // that violates them will be rejected by Postgres — the typed
+  // service guards (PR 1.10's CSV import floor, seller-allocation's
+  // `FOR UPDATE` reservation path) stay in place as the primary
+  // enforcement layer, and these constraints are the defence-in-depth
+  // backstop.
   stockQty          Int @default(0) @map("stock_qty")
   reservedQty       Int @default(0) @map("reserved_qty")
   lowStockThreshold Int @default(5) @map("low_stock_threshold")

@@ -1,0 +1,32 @@
+// ============================================
+// Integration poller checkpoints (PR 1.11)
+// ============================================
+//
+// Single-row-per-poller cursor table. The poller writes
+// `lastPolledAt` after a successful tick and reads it back at the
+// start of the next one so a process restart or leader bounce doesn't
+// lose the cursor.
+//
+// Pre-PR, the iThink tracking poller held `lastPolledAt` in a private
+// field on the singleton. On restart the field went null and the
+// poller fell back to a fixed-width "now − intervalMinutes" window —
+// which silently dropped any status events that fell outside that
+// window during the downtime.
+//
+// Generic table so future pollers (Razorpay status, settlement
+// reconciliation, etc.) can share the same primitive. Discriminated
+// by a stable short string `pollerKey`.
+
+model IntegrationPollerCheckpoint {
+  /// Stable short identifier. Convention: "<integration>-<purpose>",
+  /// e.g. "ithink-tracking". Primary key — one row per poller.
+  pollerKey String @id @map("poller_key")
+
+  /// Wall-clock time of the last successful poll completion.
+  /// Cron handlers compute the next window's start from this.
+  lastPolledAt DateTime @map("last_polled_at")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("integration_poller_checkpoints")
+}

@@ -44,8 +44,13 @@ model ReconciliationRun {
   totalDiscrepancies Int @default(0) @map("total_discrepancies")
 
   // Money totals (paise) — useful even when counts match.
-  expectedAmountInPaise Int @default(0) @map("expected_amount_in_paise")
-  matchedAmountInPaise  Int @default(0) @map("matched_amount_in_paise")
+  // Phase 2 (PR 2.3) — BigInt. A single day's GMV trivially exceeds
+  // INT max (~₹21M) on any non-trivial e-commerce platform, so the
+  // run's `expectedAmountInPaise` aggregate would overflow before the
+  // recon could even complete. The previous code clamped via a helper
+  // and logged a warning; the column widening removes the clamp.
+  expectedAmountInPaise BigInt @default(0) @map("expected_amount_in_paise")
+  matchedAmountInPaise  BigInt @default(0) @map("matched_amount_in_paise")
 
   failureReason String? @map("failure_reason") @db.Text
 
@@ -72,8 +77,11 @@ model ReconciliationDiscrepancy {
   orderNumber     String? @map("order_number")
   externalRef     String? @map("external_ref")
 
-  expectedInPaise Int? @map("expected_in_paise")
-  actualInPaise   Int? @map("actual_in_paise")
+  // Phase 2 (PR 2.3) — BigInt. Discrepancy rows carry per-order paise
+  // amounts; a single B2B order can already approach INT max, so the
+  // safety floor matches the run-level aggregates above.
+  expectedInPaise BigInt? @map("expected_in_paise")
+  actualInPaise   BigInt? @map("actual_in_paise")
   description     String @db.Text
 
   resolutionNotes   String?   @map("resolution_notes") @db.Text

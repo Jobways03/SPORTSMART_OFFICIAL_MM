@@ -57,10 +57,17 @@ interface ApplyTransitionInput<K extends StatusKind, R> {
    * both `{ id }` and `{ version }` (so Prisma's CAS works) and a status
    * patch the caller must merge into its own `data` field. Should return
    * the updated row.
+   *
+   * Phase 0 (PR 0.9) — `version` patch is `{ increment: 0 | 1 }`. The
+   * 0 case fires on idempotent same-state transitions so the row's
+   * `version` column does NOT inflate every time a webhook replays the
+   * same status. Callers' auxiliary fields (assignedAdminId, notes,
+   * etc.) still apply on the no-op path, matching their existing
+   * intent.
    */
   update: (
     where: { id: string; version: number },
-    statusPatch: { status: string; version: { increment: 1 } },
+    statusPatch: { status: string; version: { increment: 0 | 1 } },
   ) => Promise<R>;
 }
 
@@ -72,17 +79,17 @@ interface ApplyTransitionInput<K extends StatusKind, R> {
 export async function applyOptimisticTransition<K extends StatusKind, R>(
   input: ApplyTransitionInput<K, R>,
 ): Promise<R> {
-  // Idempotent same-state transitions short-circuit without an UPDATE
-  // (so a retried "approve" call doesn't silently bump version).
+  // Phase 0 (PR 0.9) — idempotent same-state transitions DO NOT bump
+  // version. The previous code's `increment: 1` here inflated version
+  // on every retry, defeating the very idempotency the docstring
+  // promises ("a retried 'approve' call doesn't silently bump
+  // version"). Webhook handlers replaying the same status now leave
+  // the CAS column untouched, so a subsequent legitimate writer with
+  // the same observed version still succeeds.
   if (input.current.status === input.toStatus) {
-    // Caller still wants the row back; re-fetch via the same code path
-    // by issuing a no-op CAS that they'll handle.
     return input.update(
       { id: input.current.id, version: input.current.version },
-      // status unchanged; version unchanged. Prisma allows `increment: 0`
-      // semantics via passing the same value, but we use `increment: 1`
-      // path always — see note below.
-      { status: input.toStatus, version: { increment: 1 } },
+      { status: input.toStatus, version: { increment: 0 } },
     );
   }
 

@@ -39,6 +39,29 @@ jobs:
       PNPM_VERSION: "10.0.0"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # gitleaks needs full history to scan all commits in the
+          # PR range. The default shallow checkout (fetch-depth: 1)
+          # makes it scan only the merge commit, missing leaked
+          # secrets in intermediate commits of the same PR.
+          fetch-depth: 0
+
+      # Run secret scanning EARLY (before any install / build) so a
+      # credential leak fails the workflow in seconds rather than
+      # burning ~5min of compile time. The action exits non-zero on
+      # any detection — gitleaks-action default ruleset covers the
+      # major patterns (AWS keys, GCP / Azure tokens, JWT signing
+      # keys, private SSH keys, generic high-entropy strings).
+      #
+      # GITLEAKS_LICENSE is optional and only required for private
+      # GitHub Organisation accounts; personal-account private repos
+      # use the action for free. If/when this repo moves under an
+      # org, the operator must add the license secret OR swap to a
+      # CLI-install step that bypasses the org-license check.
+      - name: Scan for secrets (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable pnpm
         uses: pnpm/action-setup@v4

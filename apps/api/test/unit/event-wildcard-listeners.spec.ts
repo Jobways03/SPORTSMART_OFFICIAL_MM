@@ -30,7 +30,12 @@ describe('EventEmitter2 — wildcard listener config', () => {
       log: jest.fn(),
       error: jest.fn(),
     };
-    const bus = new EventBusService(emitter, logger);
+    // PR 12.1 — EventBusService gained PrismaService + EnvService for
+    // OUTBOX_DUAL_WRITE persistence. Wildcard tests exercise direct
+    // emit only; OUTBOX_DUAL_WRITE off short-circuits the outbox write.
+    const prisma: any = { outboxEvent: { create: jest.fn() } };
+    const env: any = { getBoolean: () => false };
+    const bus = new EventBusService(emitter, logger, prisma, env);
 
     const wildcardHandler = jest.fn();
     emitter.on('**', wildcardHandler);
@@ -57,7 +62,12 @@ describe('EventEmitter2 — wildcard listener config', () => {
       log: jest.fn(),
       error: jest.fn(),
     };
-    const bus = new EventBusService(emitter, logger);
+    // PR 12.1 — EventBusService gained PrismaService + EnvService for
+    // OUTBOX_DUAL_WRITE persistence. Wildcard tests exercise direct
+    // emit only; OUTBOX_DUAL_WRITE off short-circuits the outbox write.
+    const prisma: any = { outboxEvent: { create: jest.fn() } };
+    const env: any = { getBoolean: () => false };
+    const bus = new EventBusService(emitter, logger, prisma, env);
 
     const adminHandler = jest.fn();
     emitter.on('admin.action.*', adminHandler);
@@ -94,7 +104,12 @@ describe('EventEmitter2 — wildcard listener config', () => {
       log: jest.fn(),
       error: jest.fn(),
     };
-    const bus = new EventBusService(emitter, logger);
+    // PR 12.1 — EventBusService gained PrismaService + EnvService for
+    // OUTBOX_DUAL_WRITE persistence. Wildcard tests exercise direct
+    // emit only; OUTBOX_DUAL_WRITE off short-circuits the outbox write.
+    const prisma: any = { outboxEvent: { create: jest.fn() } };
+    const env: any = { getBoolean: () => false };
+    const bus = new EventBusService(emitter, logger, prisma, env);
 
     const wildcardHandler = jest.fn();
     emitter.on('**', wildcardHandler);

@@ -4,6 +4,7 @@ import { AuditPublicFacade } from '../../../audit/application/facades/audit-publ
 import { LiabilityLedgerPublicFacade } from '../../../liability-ledger/application/facades/liability-ledger-public.facade';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { RefundInstructionService } from '../../../refund-instructions/application/services/refund-instruction.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import {
   classifyExchangePriceDiff,
   classifyStockAvailability,
@@ -56,6 +57,11 @@ export class ReplacementOrderService {
     // is the wallet-credit-this-return key, the former is "give back
     // the difference between the original and replacement SKU".
     private readonly refundInstructions: RefundInstructionService,
+    // Phase 7 (PR 7.4) — paise-sibling dual-write for the replacement
+    // master/sub/item rows created at ₹0. The Decimal source is the
+    // single source of truth; the helper computes the paise sibling so
+    // the manual `*InPaise: 0n` lines stay consistent automatically.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   /**
@@ -320,34 +326,32 @@ export class ReplacementOrderService {
       // earlier). Mark as PAID so it skips checkout-side payment
       // collection.
       const masterOrder = await tx.masterOrder.create({
-        data: {
+        data: this.moneyDualWrite.applyPaise('masterOrder', {
           orderNumber,
           customerId: ret.customerId,
           shippingAddressSnapshot: ret.masterOrder.shippingAddressSnapshot,
           totalAmount: 0,
-          totalAmountInPaise: 0n,
           itemCount: totalQuantity,
           paymentMethod: 'COD' as any,
           paymentStatus: 'PAID' as any,
           orderStatus: 'PLACED' as any,
-        },
+        }),
       });
 
       const subOrder = await tx.subOrder.create({
-        data: {
+        data: this.moneyDualWrite.applyPaise('subOrder', {
           masterOrderId: masterOrder.id,
           sellerId: ret.subOrder.sellerId,
           fulfillmentNodeType: ret.subOrder.fulfillmentNodeType ?? 'SELLER',
           subTotal: 0,
-          subTotalInPaise: 0n,
           paymentStatus: 'PAID' as any,
           fulfillmentStatus: 'UNFULFILLED' as any,
           acceptStatus: 'OPEN' as any,
-        },
+        }),
       });
 
       await tx.orderItem.create({
-        data: {
+        data: this.moneyDualWrite.applyPaise('orderItem', {
           subOrderId: subOrder.id,
           productId: variant.productId,
           variantId: variant.id,
@@ -355,9 +359,8 @@ export class ReplacementOrderService {
           sku: variant.sku,
           quantity: totalQuantity,
           unitPrice: 0,
-          unitPriceInPaise: 0n,
           totalPrice: 0,
-        },
+        }),
       });
 
       // Stamp the replacement-order pointer + status on the return.

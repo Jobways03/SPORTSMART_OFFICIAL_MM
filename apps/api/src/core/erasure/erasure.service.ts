@@ -172,21 +172,21 @@ export class ErasureService {
       return { redacted: [], blocked: blockers };
     }
 
-    // Redact PII. Keep id + createdAt + audit fields.
-    const redactedFields = [
-      'firstName',
-      'lastName',
-      'email',
-      'phoneNumber',
-    ];
+    // Phase 0 (PR 0.10) — the `User` column is named `phone`, not
+    // `phoneNumber`. The pre-existing code wrote `phoneNumber: null`
+    // under an `as any` cast, throwing `P2009` (unknown arg) at
+    // runtime and silently reverting every USER erasure to PENDING.
+    // The `as any` is also gone so the Prisma type system will catch
+    // any future drift.
+    const redactedFields = ['firstName', 'lastName', 'email', 'phone'];
     await this.prisma.user.update({
       where: { id: userId },
       data: {
         firstName: '[REDACTED]',
         lastName: '[REDACTED]',
         email: `redacted-${userId}@erased.local`,
-        phoneNumber: null,
-      } as any,
+        phone: null,
+      },
     });
 
     return {

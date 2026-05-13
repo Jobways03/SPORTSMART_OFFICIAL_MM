@@ -37,6 +37,38 @@ model Admin {
   createdAt           DateTime    @default(now()) @map("created_at")
   updatedAt           DateTime    @updatedAt @map("updated_at")
 
+  // Phase 10 — Admin MFA fields (PR 10.1 schema only; the enrollment +
+  // verification flows land in 10.2 / 10.3).
+  //
+  // mfaSecretCiphertext: AES-GCM-encrypted TOTP secret. Stored ciphertext+
+  //   IV+tag together as base64 in the same column. Encryption key is
+  //   ADMIN_MFA_ENCRYPTION_KEY (declared in env.schema.ts). Never exposed
+  //   over any API; only the in-process decrypt path consumes it.
+  // mfaPendingSecretCiphertext: holds the secret during the enrollment
+  //   handshake (operator sees the otpauth URI, scans QR, sends back a
+  //   TOTP code; only after the code verifies do we move it into the
+  //   live mfaSecretCiphertext column and set mfaEnabledAt). Letting the
+  //   pending and live values coexist prevents a botched enrollment
+  //   from locking the admin out.
+  // mfaEnabledAt: timestamp the admin successfully completed enrollment.
+  //   Null = no MFA. Login flow (PR 10.3) reads this to decide whether
+  //   to issue the step-up challenge.
+  // mfaBackupCodesHashes: bcrypt-hashed one-time backup codes for
+  //   account recovery (TOTP device lost). Stored as a JSON array of
+  //   strings; null until enrollment completes.
+  mfaSecretCiphertext        String?  @map("mfa_secret_ciphertext")
+  mfaPendingSecretCiphertext String?  @map("mfa_pending_secret_ciphertext")
+  mfaEnabledAt               DateTime? @map("mfa_enabled_at")
+  mfaBackupCodesHashes       Json?    @map("mfa_backup_codes_hashes")
+  // PR 10.7 — anti-replay tracking. TOTP step number of the most
+  // recently accepted code; the verifier rejects codes for
+  // step <= mfaLastUsedStep. Step counter is unix_seconds / 30,
+  // monotonically increasing. Int32 max is ~2B steps — about 65
+  // years of TOTP from epoch, plenty. Nullable so admins who
+  // haven't completed any MFA verification pass through without
+  // a baseline (first verify writes the column).
+  mfaLastUsedStep            Int?     @map("mfa_last_used_step")
+
   sessions          AdminSession[]
   actionAuditLogs   AdminActionAuditLog[]
   impersonationLogs AdminImpersonationLog[]
@@ -79,6 +111,11 @@ model AdminSession {
   expiresAt    DateTime  @map("expires_at")
   revokedAt    DateTime? @map("revoked_at")
   createdAt    DateTime  @default(now()) @map("created_at")
+  // PR 10.10 — last time this session passed a fresh MFA step-up
+  // challenge. The @RequiresStepUp() guard rejects requests where
+  // stepUpVerifiedAt is null OR older than the per-route window
+  // (default 5min). Reset to null on revoke / logout.
+  stepUpVerifiedAt DateTime? @map("step_up_verified_at")
 
   admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 

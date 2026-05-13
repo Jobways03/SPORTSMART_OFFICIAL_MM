@@ -1,0 +1,12 @@
+{
+  "_about": "Shared base ESLint config for Next.js frontend apps. Today the rules block hoists web-storefront's pre-existing team rules (no-explicit-any, no-unused-vars, exhaustive-deps — all at warn) so every frontend gets the same lint discipline. The rules sit at warn deliberately: CI doesn't fail on them but devs see nags in their editor. Promote to error rule-by-rule as the codebase catches up. Leaves extend this file via .eslintrc.json with `extends: \"@sportsmart/eslint-config/nextjs.json\"` and stay otherwise empty — additions land here in one place.",
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}

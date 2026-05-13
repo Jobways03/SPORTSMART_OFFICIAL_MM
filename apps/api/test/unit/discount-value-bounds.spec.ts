@@ -28,7 +28,28 @@ describe('DiscountsService — numeric value bounds', () => {
       deleteProductLinks: jest.fn(),
       deleteCollectionLinks: jest.fn(),
     };
-    return { svc: new DiscountsService(discountRepo), discountRepo };
+    // PR 12.1 — DiscountsService gained 3 deps: AffiliatePublicFacade
+    // (unification with affiliate discounts), DiscountEventsService
+    // (P1.1 audit + outbox emission), DiscountEligibilityService
+    // (P1.3 eligibility rules). Value-bounds tests only exercise the
+    // discountRepo path; pass-through stubs are sufficient.
+    const affiliatePublicFacade: any = {};
+    const events: any = {
+      emitDiscountCrud: jest.fn(),
+      onDiscountCreated: jest.fn(),
+      onDiscountUpdated: jest.fn(),
+      onDiscountDeleted: jest.fn(),
+    };
+    const eligibility: any = { evaluate: jest.fn() };
+    return {
+      svc: new DiscountsService(
+        discountRepo,
+        affiliatePublicFacade,
+        events,
+        eligibility,
+      ),
+      discountRepo,
+    };
   };
 
   const baseCreateInput = {

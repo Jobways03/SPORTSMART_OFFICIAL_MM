@@ -6,8 +6,30 @@ import {
   CreateTransactionInput,
   ListWalletsFilter,
   ListWalletsPage,
+  WalletEntity,
   WalletRepository,
+  WalletTransactionEntity,
 } from '../../domain/repositories/wallet.repository.interface';
+
+/**
+ * Phase 2 (PR 2.2) — bigint↔number marshalling at the storage boundary.
+ *
+ * The DB stores wallet money as BIGINT (no overflow). The TypeScript
+ * service layer stays in `number` (safe up to 2^53−1 paise = ~₹90T) so
+ * arithmetic, JSON, and DTOs don't need to learn bigint. These helpers
+ * are the only place the two representations meet.
+ */
+function toWalletEntity(w: Wallet): WalletEntity {
+  return { ...w, balanceInPaise: Number(w.balanceInPaise) };
+}
+
+function toWalletTransactionEntity(t: WalletTransaction): WalletTransactionEntity {
+  return {
+    ...t,
+    amountInPaise: Number(t.amountInPaise),
+    balanceAfterInPaise: Number(t.balanceAfterInPaise),
+  };
+}
 
 /**
  * Tagged error thrown when the optimistic version check loses to a
@@ -26,16 +48,18 @@ export class PrismaWalletRepository implements WalletRepository {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async getOrCreate(userId: string): Promise<Wallet> {
-    return this.prisma.wallet.upsert({
+  async getOrCreate(userId: string): Promise<WalletEntity> {
+    const w = await this.prisma.wallet.upsert({
       where: { userId },
-      create: { userId, balanceInPaise: 0, version: 0 },
+      create: { userId, balanceInPaise: 0n, version: 0 },
       update: {},
     });
+    return toWalletEntity(w);
   }
 
-  async findByUserId(userId: string): Promise<Wallet | null> {
-    return this.prisma.wallet.findUnique({ where: { userId } });
+  async findByUserId(userId: string): Promise<WalletEntity | null> {
+    const w = await this.prisma.wallet.findUnique({ where: { userId } });
+    return w ? toWalletEntity(w) : null;
   }
 
   async applyMutation(args: {
@@ -53,7 +77,7 @@ export class PrismaWalletRepository implements WalletRepository {
       const updated = await tx.wallet.updateMany({
         where: { id: walletId, version: expectedVersion },
         data: {
-          balanceInPaise: newBalanceInPaise,
+          balanceInPaise: BigInt(newBalanceInPaise),
           version: { increment: 1 },
         },
       });
@@ -68,8 +92,8 @@ export class PrismaWalletRepository implements WalletRepository {
           userId: transaction.userId,
           type: transaction.type,
           status: transaction.status ?? 'COMPLETED',
-          amountInPaise: transaction.amountInPaise,
-          balanceAfterInPaise: transaction.balanceAfterInPaise,
+          amountInPaise: BigInt(transaction.amountInPaise),
+          balanceAfterInPaise: BigInt(transaction.balanceAfterInPaise),
           referenceType: transaction.referenceType ?? null,
           referenceId: transaction.referenceId ?? null,
           description: transaction.description,
@@ -82,19 +106,22 @@ export class PrismaWalletRepository implements WalletRepository {
         where: { id: walletId },
       });
 
-      return { wallet, transaction: ledgerRow };
+      return {
+        wallet: toWalletEntity(wallet),
+        transaction: toWalletTransactionEntity(ledgerRow),
+      };
     });
   }
 
-  async insertPending(input: CreateTransactionInput): Promise<WalletTransaction> {
-    return this.prisma.walletTransaction.create({
+  async insertPending(input: CreateTransactionInput): Promise<WalletTransactionEntity> {
+    const row = await this.prisma.walletTransaction.create({
       data: {
         walletId: input.walletId,
         userId: input.userId,
         type: input.type,
         status: 'PENDING',
-        amountInPaise: input.amountInPaise,
-        balanceAfterInPaise: input.balanceAfterInPaise, // == current balance for PENDING
+        amountInPaise: BigInt(input.amountInPaise),
+        balanceAfterInPaise: BigInt(input.balanceAfterInPaise), // == current balance for PENDING
         referenceType: input.referenceType ?? null,
         referenceId: input.referenceId ?? null,
         description: input.description,
@@ -102,6 +129,7 @@ export class PrismaWalletRepository implements WalletRepository {
         createdByAdminId: input.createdByAdminId ?? null,
       },
     });
+    return toWalletTransactionEntity(row);
   }
 
   async completePending(args: {
@@ -119,13 +147,16 @@ export class PrismaWalletRepository implements WalletRepository {
         const wallet = await tx.wallet.findUniqueOrThrow({
           where: { id: args.walletId },
         });
-        return { wallet, transaction: existing };
+        return {
+          wallet: toWalletEntity(wallet),
+          transaction: toWalletTransactionEntity(existing),
+        };
       }
 
       const updated = await tx.wallet.updateMany({
         where: { id: args.walletId, version: args.expectedVersion },
         data: {
-          balanceInPaise: args.newBalanceInPaise,
+          balanceInPaise: BigInt(args.newBalanceInPaise),
           version: { increment: 1 },
         },
       });
@@ -137,42 +168,47 @@ export class PrismaWalletRepository implements WalletRepository {
         where: { id: args.transactionId },
         data: {
           status: 'COMPLETED',
-          balanceAfterInPaise: args.newBalanceInPaise,
+          balanceAfterInPaise: BigInt(args.newBalanceInPaise),
         },
       });
 
       const wallet = await tx.wallet.findUniqueOrThrow({
         where: { id: args.walletId },
       });
-      return { wallet, transaction };
+      return {
+        wallet: toWalletEntity(wallet),
+        transaction: toWalletTransactionEntity(transaction),
+      };
     });
   }
 
-  async findTransactionById(id: string): Promise<WalletTransaction | null> {
-    return this.prisma.walletTransaction.findUnique({ where: { id } });
+  async findTransactionById(id: string): Promise<WalletTransactionEntity | null> {
+    const t = await this.prisma.walletTransaction.findUnique({ where: { id } });
+    return t ? toWalletTransactionEntity(t) : null;
   }
 
   async findTransactionByReference(args: {
     referenceType: string;
     referenceId: string;
     type: WalletTransactionType;
-  }): Promise<WalletTransaction | null> {
+  }): Promise<WalletTransactionEntity | null> {
     // The compound unique on (reference_type, reference_id, type) lets
     // Prisma resolve this via a single index lookup.
-    return this.prisma.walletTransaction.findFirst({
+    const t = await this.prisma.walletTransaction.findFirst({
       where: {
         referenceType: args.referenceType,
         referenceId: args.referenceId,
         type: args.type,
       },
     });
+    return t ? toWalletTransactionEntity(t) : null;
   }
 
   async listTransactions(args: {
     userId: string;
     page: number;
     limit: number;
-  }): Promise<{ items: WalletTransaction[]; total: number }> {
+  }): Promise<{ items: WalletTransactionEntity[]; total: number }> {
     const { userId, page, limit } = args;
     const skip = (page - 1) * limit;
     const [items, total] = await Promise.all([
@@ -184,7 +220,7 @@ export class PrismaWalletRepository implements WalletRepository {
       }),
       this.prisma.walletTransaction.count({ where: { userId } }),
     ]);
-    return { items, total };
+    return { items: items.map(toWalletTransactionEntity), total };
   }
 
   async listWallets(filter: ListWalletsFilter): Promise<ListWalletsPage> {
@@ -202,9 +238,11 @@ export class PrismaWalletRepository implements WalletRepository {
         }
       : undefined;
 
-    const balanceFilter: Record<string, number> = {};
-    if (minBalanceInPaise !== undefined) balanceFilter.gte = minBalanceInPaise;
-    if (maxBalanceInPaise !== undefined) balanceFilter.lte = maxBalanceInPaise;
+    // Phase 2 (PR 2.2) — balance is BIGINT on disk; coerce the filter
+    // bounds at the boundary so Prisma uses the right column type.
+    const balanceFilter: Record<string, bigint> = {};
+    if (minBalanceInPaise !== undefined) balanceFilter.gte = BigInt(minBalanceInPaise);
+    if (maxBalanceInPaise !== undefined) balanceFilter.lte = BigInt(maxBalanceInPaise);
 
     const where: any = {};
     if (userWhere) where.user = userWhere;
@@ -232,7 +270,7 @@ export class PrismaWalletRepository implements WalletRepository {
         userId: w.userId,
         userEmail: w.user.email,
         userFullName: `${w.user.firstName} ${w.user.lastName}`.trim(),
-        balanceInPaise: w.balanceInPaise,
+        balanceInPaise: Number(w.balanceInPaise),
         currency: w.currency,
         updatedAt: w.updatedAt,
       })),
@@ -247,14 +285,14 @@ export class PrismaWalletRepository implements WalletRepository {
     isBlocked: boolean;
     reason?: string | null;
     adminId?: string | null;
-  }): Promise<Wallet> {
+  }): Promise<WalletEntity> {
     // Use upsert so admin can pre-emptively block a wallet that hasn't
     // been touched yet (e.g. a fraudulent signup discovered on review).
-    return this.prisma.wallet.upsert({
+    const w = await this.prisma.wallet.upsert({
       where: { userId: args.userId },
       create: {
         userId: args.userId,
-        balanceInPaise: 0,
+        balanceInPaise: 0n,
         version: 0,
         isBlocked: args.isBlocked,
         blockedReason: args.isBlocked ? args.reason ?? null : null,
@@ -268,5 +306,6 @@ export class PrismaWalletRepository implements WalletRepository {
         blockedByAdminId: args.isBlocked ? args.adminId ?? null : null,
       },
     });
+    return toWalletEntity(w);
   }
 }

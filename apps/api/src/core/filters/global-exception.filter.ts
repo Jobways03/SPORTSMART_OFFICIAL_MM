@@ -305,6 +305,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       // Phase 7 (PR 7.3) — file-URL audit rate limit, plus a reusable
       // 429 surface for any future rate-limited domain code.
       TOO_MANY_REQUESTS: HttpStatus.TOO_MANY_REQUESTS,
+      // Phase 0 (PR 0.1) — gateway-payment verification codes. All map to
+      // 400 because they represent client-facing "your call cannot be
+      // accepted" outcomes rather than server-side faults. The specific
+      // code surfaces in the response body so frontends / Razorpay's
+      // own retry logic can branch on it.
+      GATEWAY_PAYMENT_NOT_CAPTURED: HttpStatus.BAD_REQUEST,
+      GATEWAY_ORDER_ID_MISMATCH: HttpStatus.BAD_REQUEST,
+      GATEWAY_AMOUNT_MISMATCH: HttpStatus.BAD_REQUEST,
     };
     return map[code] || HttpStatus.INTERNAL_SERVER_ERROR;
   }

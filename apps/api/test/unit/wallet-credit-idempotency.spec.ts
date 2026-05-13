@@ -56,12 +56,19 @@ describe('WalletService.credit — idempotency', () => {
       writeAuditLog: jest.fn().mockResolvedValue(undefined),
     };
     const razorpay = {} as never;
+    // Phase 0 (PR 0.2) — paymentOpsFacade for the verifyTopup mismatch alert.
+    // Credit tests don't exercise verifyTopup, so a noop is sufficient.
+    const paymentOps = {
+      flagMismatch: jest.fn().mockResolvedValue(undefined),
+      recordAttempt: jest.fn().mockResolvedValue(undefined),
+    };
 
     const service = new WalletService(
       repo as never,
       eventBus as never,
       audit as never,
       razorpay,
+      paymentOps as never,
     );
     return { service, repo, eventBus };
   }

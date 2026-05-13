@@ -20,8 +20,14 @@ import {
 const makeFakeRepos = () => {
   const sessionRepo = {
     findByRefreshToken: jest.fn(),
+    // Phase 3 (PR 3.6) — added for theft-detection secondary lookup.
+    // Default behaviour: misses (returns null) so existing test
+    // assertions about "Invalid refresh token" still fire when the
+    // primary lookup misses.
+    findByPreviousRefreshToken: jest.fn().mockResolvedValue(null),
     rotateRefreshToken: jest.fn(),
     revoke: jest.fn(),
+    revokeAllUserSessions: jest.fn().mockResolvedValue(undefined),
   } as any;
   const userRepo = {
     findById: jest.fn(),

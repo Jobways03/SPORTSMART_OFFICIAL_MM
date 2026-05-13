@@ -67,6 +67,9 @@ export class LiabilityLedgerPublicFacade {
     sourceId: string;
     reason: string;
     assignedTo?: string | null;
+    // Phase 0 (PR 0.14) — opt-in SLA deadline. Caller passes the
+    // number of hours; the service sets `slaBreachAt` at create.
+    slaHours?: number | null;
   }) {
     return this.adminTask.enqueue(args);
   }

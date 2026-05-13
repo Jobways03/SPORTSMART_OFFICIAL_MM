@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import {
   UnauthorizedAppException,
   ForbiddenAppException,
@@ -49,6 +50,26 @@ export class RefreshSessionUseCase {
     // Look up the session by refresh token
     const session = await this.sessionRepo.findByRefreshToken(refreshToken);
     if (!session) {
+      // Phase 3 (PR 3.6) — refresh-token reuse detection. A miss on
+      // the current-hash slot might mean (a) bogus token (typo, old
+      // logout, etc.) OR (b) the token was rotated away and is now
+      // burned — meaning either an attacker just used it, or the
+      // legitimate user is retrying a stale one. Either way, a hit
+      // on the previous-hash slot means a once-valid token is
+      // resurfacing AFTER a rotation. The safe response is to
+      // revoke every session for that user: the legitimate owner
+      // re-logs in (small inconvenience); the attacker is locked
+      // out of every device (the actual goal).
+      const reused = await this.sessionRepo.findByPreviousRefreshToken(refreshToken);
+      if (reused) {
+        this.logger.warn(
+          `[SECURITY] Refresh-token reuse detected for user=${reused.userId} session=${reused.id}; revoking all sessions for this user.`,
+        );
+        await this.sessionRepo.revokeAllUserSessions(reused.userId);
+        throw new UnauthorizedAppException(
+          'Refresh-token reuse detected — all sessions invalidated for security. Please log in again.',
+        );
+      }
       throw new UnauthorizedAppException('Invalid refresh token');
     }
 
@@ -103,7 +124,7 @@ export class RefreshSessionUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_CUSTOMER_SECRET'),
-      { expiresIn: accessTtlSeconds },
+      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
     );
 
     this.logger.log(`Session refreshed for user: ${user.id}`);

@@ -28,8 +28,14 @@ export class AffiliateAuthController {
     private readonly accessLog: AccessLogService,
   ) {}
 
+  // Phase 3 (PR 3.4) — per-IP rate limit on login. Defends against
+  // credential spray (one attacker IP rotating through many emails)
+  // which slips past the per-account `failedLoginAttempts` /
+  // `lockUntil` lockout. Matches the throttle on the other four
+  // persona login endpoints (customer, admin, seller, franchise).
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async login(@Body() dto: AffiliateLoginDto, @Req() req: Request) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];

@@ -1,7 +1,10 @@
 export interface NormalizedPaymentCaptureResult {
   providerPaymentId: string;
   orderId: string;
-  amount: number;
+  // Phase 0 (PR 0.5) — paise as BigInt. Razorpay's API speaks paise
+  // natively, so the adapter no longer round-trips through rupees-as-
+  // JS-number (the original silent-precision-loss path).
+  amountInPaise: bigint;
   currency: string;
   status: 'captured' | 'failed';
   capturedAt: Date;
@@ -10,7 +13,7 @@ export interface NormalizedPaymentCaptureResult {
 export interface NormalizedRefundResult {
   providerRefundId: string;
   paymentId: string;
-  amount: number;
+  amountInPaise: bigint;
   status: 'processed' | 'failed';
   processedAt: Date;
 }

@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
+import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
 import { UnauthorizedAppException } from '../exceptions';
 
 export interface AffiliateTokenPayload {
@@ -40,6 +41,7 @@ export class AffiliateAuthGuard implements CanActivate {
       payload = jwt.verify(
         token,
         this.envService.getString('JWT_AFFILIATE_SECRET'),
+        JWT_VERIFY_OPTIONS,
       ) as AffiliateTokenPayload;
     } catch {
       throw new UnauthorizedAppException('Invalid or expired token');

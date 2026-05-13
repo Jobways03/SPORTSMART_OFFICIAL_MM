@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AuditPublicFacade } from '../audit/application/facades/audit-public.facade';
+import { MoneyDualWriteHelper } from '../../core/money/money-dual-write.helper';
+import { toPaise } from '../../core/money/money-field-registry';
 
 @Injectable()
 export class SettlementService {
@@ -9,6 +11,9 @@ export class SettlementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditPublicFacade,
+    // Phase 7 (PR 7.5) — paise-sibling dual-write for cycle / seller
+    // settlement / commission record / adjustment writes.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   /* ── T3: Create settlement cycle ── */
@@ -89,29 +94,34 @@ export class SettlementService {
       }
 
       const newCycle = await tx.settlementCycle.create({
-        data: {
+        data: this.moneyDualWrite.applyPaise('settlementCycle', {
           periodStart,
           periodEnd,
           status: 'DRAFT',
-          totalAmount: Math.round(cycleTotalAmount * 100) / 100,
-          totalMargin: Math.round(cycleTotalMargin * 100) / 100,
-        },
+          // .toFixed(2) gives a Decimal-string so the helper's toPaise
+          // can convert exactly; the previous `Math.round(x*100)/100`
+          // expression yields a fractional JS Number that toPaise
+          // rejects (PR 0.4 contract).
+          totalAmount: cycleTotalAmount.toFixed(2),
+          totalMargin: cycleTotalMargin.toFixed(2),
+        }),
       });
 
       // Create per-seller settlements
       for (const [sellerId, data] of sellerMap) {
         const sellerSettlement = await tx.sellerSettlement.create({
-          data: {
+          data: this.moneyDualWrite.applyPaise('sellerSettlement', {
             cycleId: newCycle.id,
             sellerId,
             sellerName: data.sellerName,
             totalOrders: data.orderIds.size,
             totalItems: data.totalItems,
-            totalPlatformAmount: Math.round(data.totalPlatformAmount * 100) / 100,
-            totalSettlementAmount: Math.round(data.totalSettlementAmount * 100) / 100,
-            totalPlatformMargin: Math.round(data.totalPlatformMargin * 100) / 100,
+            // Same Decimal-string conversion as the cycle totals above.
+            totalPlatformAmount: data.totalPlatformAmount.toFixed(2),
+            totalSettlementAmount: data.totalSettlementAmount.toFixed(2),
+            totalPlatformMargin: data.totalPlatformMargin.toFixed(2),
             status: 'PENDING',
-          },
+          }),
         });
 
         // Link commission records to the settlement. Filter on
@@ -120,7 +130,9 @@ export class SettlementService {
         const recordIds = data.records.map((r) => r.id);
         await tx.commissionRecord.updateMany({
           where: { id: { in: recordIds }, settlementId: null },
-          data: { settlementId: sellerSettlement.id },
+          data: this.moneyDualWrite.applyPaise('commissionRecord', {
+            settlementId: sellerSettlement.id,
+          }),
         });
       }
 
@@ -303,7 +315,9 @@ export class SettlementService {
       // Update all linked commission records to SETTLED
       await tx.commissionRecord.updateMany({
         where: { settlementId },
-        data: { status: 'SETTLED' },
+        data: this.moneyDualWrite.applyPaise('commissionRecord', {
+          status: 'SETTLED',
+        }),
       });
 
       // Check if all seller settlements in the cycle are paid
@@ -720,18 +734,33 @@ export class SettlementService {
     }
 
     const adjustment = await this.prisma.settlementAdjustment.create({
-      data: {
+      data: this.moneyDualWrite.applyPaise('settlementAdjustment', {
         settlementId: args.settlementId,
-        amount: args.amount,
+        // .toFixed(2) is defensive — args.amount is a JS Number and
+        // toPaise refuses fractional Numbers. Most callers pass whole
+        // rupee values today, but the conversion is cheap and keeps
+        // the call site safe against payload changes.
+        amount: args.amount.toFixed(2),
         reason: args.reason.trim(),
         notes: args.notes?.trim() || null,
         createdByAdminId: args.adminId ?? null,
-      },
+      }),
     });
 
+    // Increment-operator dual-write: the MoneyDualWriteHelper only
+    // supports `set:` (its header comment is explicit about this), so
+    // we hand-compute the paise increment via the same toPaise() the
+    // helper uses internally. Keeping both columns in lockstep on an
+    // atomic Postgres-side increment is the only correct shape here.
+    const amountInPaiseIncrement = toPaise(args.amount.toFixed(2));
     await this.prisma.sellerSettlement.update({
       where: { id: args.settlementId },
-      data: { totalSettlementAmount: { increment: args.amount } },
+      data: {
+        totalSettlementAmount: { increment: args.amount },
+        ...(amountInPaiseIncrement !== null
+          ? { totalSettlementAmountInPaise: { increment: amountInPaiseIncrement } }
+          : {}),
+      },
     });
 
     await this.audit.writeAuditLog({

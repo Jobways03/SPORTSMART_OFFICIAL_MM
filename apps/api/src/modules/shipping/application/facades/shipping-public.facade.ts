@@ -1,6 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import {
+  isTransitionAllowed,
+  type OrderFulfillmentStatus,
+} from '../../../../core/fsm/status-transitions';
+
+/**
+ * Phase 0 (PR 0.8) — closed set of fulfillment values accepted from
+ * upstream tracking-normalizer output. Any string not in this set is
+ * rejected by `updateShipmentFromTrackingEvent` rather than being
+ * silently coerced via `as any` into the Prisma enum.
+ */
+const VALID_FULFILLMENT_STATUSES: readonly OrderFulfillmentStatus[] = [
+  'UNFULFILLED',
+  'PACKED',
+  'SHIPPED',
+  'FULFILLED',
+  'DELIVERED',
+  'CANCELLED',
+];
 
 /**
  * Shipping facade — uses SubOrder fields (trackingNumber, courierName,
@@ -77,14 +96,53 @@ export class ShippingPublicFacade {
     subOrderId: string,
     event: { status: string; location?: string; timestamp?: Date },
   ): Promise<void> {
-    await this.prisma.subOrder.update({
-      where: { id: subOrderId },
-      data: {
-        fulfillmentStatus: event.status as any,
-      },
-    });
+    // Phase 0 (PR 0.8) — previously this method cast `event.status as
+    // any` and wrote whatever string the tracking normalizer produced
+    // into the Prisma enum. A malformed normalizer output would
+    // corrupt the sub-order state silently. Now:
+    //   1. Reject any value not in the OrderFulfillmentStatus enum
+    //   2. Read current sub-order status and assert the FSM matrix
+    //      allows the transition
+    //   3. Use a status-conditional updateMany so a concurrent admin
+    //      cancel doesn't get overwritten by a late tracking event
+    if (!VALID_FULFILLMENT_STATUSES.includes(event.status as OrderFulfillmentStatus)) {
+      this.logger.warn(
+        `Sub-order ${subOrderId}: rejected tracking event with unknown fulfillment status ${event.status}`,
+      );
+      return;
+    }
+    const target = event.status as OrderFulfillmentStatus;
 
-    this.logger.log(`Sub-order ${subOrderId} updated to fulfillment status: ${event.status}`);
+    const current = await this.prisma.subOrder.findUnique({
+      where: { id: subOrderId },
+      select: { fulfillmentStatus: true },
+    });
+    if (!current) {
+      this.logger.warn(
+        `Sub-order ${subOrderId}: tracking event for missing sub-order`,
+      );
+      return;
+    }
+    if (!isTransitionAllowed('OrderFulfillmentStatus', current.fulfillmentStatus, target)) {
+      this.logger.warn(
+        `Sub-order ${subOrderId}: skipping illegal fulfillment transition ` +
+          `${current.fulfillmentStatus} → ${target} from tracking event`,
+      );
+      return;
+    }
+
+    const result = await this.prisma.subOrder.updateMany({
+      where: { id: subOrderId, fulfillmentStatus: current.fulfillmentStatus },
+      data: { fulfillmentStatus: target },
+    });
+    if (result.count === 0) {
+      this.logger.log(
+        `Sub-order ${subOrderId}: tracking event lost a race against another writer (was ${current.fulfillmentStatus})`,
+      );
+      return;
+    }
+
+    this.logger.log(`Sub-order ${subOrderId} updated to fulfillment status: ${target}`);
   }
 
   async getNdrRtoState(subOrderId: string): Promise<{

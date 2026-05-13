@@ -9,6 +9,8 @@ import {
   type SlaVerdict,
 } from '../sla-tracker.service';
 import { SlaEscalationService } from '../services/sla-escalation.service';
+import { LeaderElectedCron } from '../../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../../cron-observability/cron-instrumentation.service';
 
 /**
  * Phase 6 (PR 6.2) — periodic breach detector.
@@ -55,6 +57,13 @@ export class SlaBreachDetectorCron {
     private readonly tracker: SlaTrackerService,
     private readonly escalation: SlaEscalationService,
     private readonly eventBus: EventBusService,
+    // Phase 1 (PR 1.2) — escalations are externally visible (Slack /
+    // PagerDuty); N replicas firing N escalations per breach is the
+    // exact noise this prevents.
+    private readonly leader: LeaderElectedCron,
+    // Phase 5 (PR 5.2) — cron-run observability. Captures
+    // `{ scanned, opened, escalated, resolved }` per tick.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   enabled(): boolean {
@@ -65,6 +74,24 @@ export class SlaBreachDetectorCron {
   async run(): Promise<void> {
     if (!this.enabled()) return;
 
+    await this.leader.run('sla-breach-detector', 10 * 60, async () => {
+      // Phase 5 (PR 5.2) — wrap so each run records duration +
+      // `{ scanned, opened, escalated, resolved }` in cron_runs.
+      try {
+        await this.instr.wrap('sla-breach-detector', () => this.runOnce());
+      } catch {
+        // instr.wrap already recorded the failure in cron_runs;
+        // swallow so @nestjs/schedule doesn't double-log.
+      }
+    });
+  }
+
+  private async runOnce(): Promise<{
+    scanned: number;
+    opened: number;
+    escalated: number;
+    resolved: number;
+  }> {
     const now = new Date();
     let snapshots: ResourceSnapshot[] = [];
     try {
@@ -73,10 +100,12 @@ export class SlaBreachDetectorCron {
       this.logger.error(
         `SLA candidate collection failed: ${(err as Error).message}`,
       );
-      return;
+      return { scanned: 0, opened: 0, escalated: 0, resolved: 0 };
     }
 
-    if (snapshots.length === 0) return;
+    if (snapshots.length === 0) {
+      return { scanned: 0, opened: 0, escalated: 0, resolved: 0 };
+    }
 
     let verdicts: SlaVerdict[] = [];
     try {
@@ -85,7 +114,7 @@ export class SlaBreachDetectorCron {
       this.logger.error(
         `SLA tracker evaluate failed: ${(err as Error).message}`,
       );
-      return;
+      return { scanned: snapshots.length, opened: 0, escalated: 0, resolved: 0 };
     }
 
     let openedCount = 0;
@@ -122,6 +151,13 @@ export class SlaBreachDetectorCron {
         `SLA cron: opened=${openedCount} escalated=${escalatedCount} resolved=${resolvedCount}`,
       );
     }
+
+    return {
+      scanned: snapshots.length,
+      opened: openedCount,
+      escalated: escalatedCount,
+      resolved: resolvedCount,
+    };
   }
 
   private async collectCandidates(): Promise<ResourceSnapshot[]> {

@@ -15,6 +15,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { DiscountReservationService } from '../services/discount-reservation.service';
+import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
 
 @Injectable()
 export class ReleaseExpiredRedemptionsCron {
@@ -23,18 +25,31 @@ export class ReleaseExpiredRedemptionsCron {
   constructor(
     private readonly env: EnvService,
     private readonly reservation: DiscountReservationService,
+    // Phase 1 (PR 1.2) — every-minute cron firing the same
+    // releaseExpired() N times per tick wastes DB writes.
+    private readonly leader: LeaderElectedCron,
+    // Phase 5 (PR 5.3) — cron-run observability. releaseExpired is
+    // void-returning today; the wrap captures `{ ran: true }` plus
+    // the per-tick duration as the structured metric.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async run(): Promise<void> {
     if (!this.enabled()) return;
-    try {
-      await this.reservation.releaseExpired();
-    } catch (err) {
-      // Never rethrow — keep the cron alive. Log + let the next
-      // tick try again.
-      this.logger.error('Failed to release expired redemptions', err as Error);
-    }
+    // 2-minute lock (2× tick interval).
+    await this.leader.run('release-expired-redemptions', 2 * 60, async () => {
+      try {
+        await this.instr.wrap('release-expired-redemptions', async () => {
+          await this.reservation.releaseExpired();
+          return { ran: true };
+        });
+      } catch (err) {
+        // Never rethrow — keep the cron alive. instr.wrap already
+        // recorded the failure; log here for stdout visibility.
+        this.logger.error('Failed to release expired redemptions', err as Error);
+      }
+    });
   }
 
   private enabled(): boolean {

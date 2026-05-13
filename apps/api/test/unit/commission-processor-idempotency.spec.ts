@@ -43,11 +43,22 @@ describe('PrismaCommissionRepository.processSubOrderCommission — idempotency',
     { orderItemId: 'oi2' },
   ] as any[];
 
+  // Pass-through dual-write helper stub: matches the production
+  // helper's no-op behaviour when MONEY_DUAL_WRITE_ENABLED=false.
+  // These tests don't exercise the commissionSetting upsert path that
+  // actually uses the helper, but the constructor signature requires
+  // an instance to be provided.
+  const mockMoneyDualWrite = {
+    applyPaise: (_m: string, d: any) => d,
+    applyPaiseMany: (_m: string, rs: any[]) => rs,
+    isApplicable: () => false,
+  } as any;
+
   it('writes commission records when the claim succeeds (count=1)', async () => {
     const { tx, subOrderUpdateMany, commissionCreateMany } = buildMockTx(1);
     const prisma = buildPrismaWith(tx);
     const mockOrdersFacade = {} as any;
-    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade);
+    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade, mockMoneyDualWrite);
 
     await repo.processSubOrderCommission('so1', sampleRecords);
 
@@ -65,7 +76,7 @@ describe('PrismaCommissionRepository.processSubOrderCommission — idempotency',
     const { tx, subOrderUpdateMany, commissionCreateMany } = buildMockTx(0);
     const prisma = buildPrismaWith(tx);
     const mockOrdersFacade = {} as any;
-    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade);
+    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade, mockMoneyDualWrite);
 
     await repo.processSubOrderCommission('so1', sampleRecords);
 
@@ -79,7 +90,7 @@ describe('PrismaCommissionRepository.processSubOrderCommission — idempotency',
     const { tx, subOrderUpdateMany, commissionCreateMany } = buildMockTx(1);
     const prisma = buildPrismaWith(tx);
     const mockOrdersFacade = {} as any;
-    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade);
+    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade, mockMoneyDualWrite);
 
     await repo.processSubOrderCommission('so1', []);
 
@@ -91,7 +102,7 @@ describe('PrismaCommissionRepository.processSubOrderCommission — idempotency',
     const { tx, commissionCreateMany } = buildMockTx(1);
     const prisma = buildPrismaWith(tx);
     const mockOrdersFacade = {} as any;
-    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade);
+    const repo = new PrismaCommissionRepository(prisma, mockOrdersFacade, mockMoneyDualWrite);
 
     await repo.processSubOrderCommission('so1', sampleRecords);
 

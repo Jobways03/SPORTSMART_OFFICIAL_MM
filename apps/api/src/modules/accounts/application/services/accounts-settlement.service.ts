@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { BadRequestAppException } from '../../../../core/exceptions';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 type BatchMarkPaidItem = {
   id: string;
@@ -29,6 +30,9 @@ export class AccountsSettlementService {
     private readonly accountsRepo: AccountsRepository,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
+    // Phase 7 (PR 7.5) — paise-sibling dual-write for franchise +
+    // seller settlement cycle creates.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   async listSettlementCycles(
@@ -624,33 +628,32 @@ export class AccountsSettlementService {
 
       // Create settlement cycle
       const cycle = await tx.settlementCycle.create({
-        data: {
+        data: this.moneyDualWrite.applyPaise('settlementCycle', {
           periodStart,
           periodEnd: adjustedEnd,
           status: 'DRAFT',
-          totalAmount: Math.round(cycleTotalAmount * 100) / 100,
-          totalMargin: Math.round(cycleTotalMargin * 100) / 100,
-        },
+          // Decimal-string conversion (PR 7.5) — `Math.round(x*100)/100`
+          // produces a fractional JS Number that toPaise refuses.
+          totalAmount: cycleTotalAmount.toFixed(2),
+          totalMargin: cycleTotalMargin.toFixed(2),
+        }),
       });
 
       // Create per-seller settlements
       let sellerSettlementCount = 0;
       for (const [sellerId, data] of sellerMap) {
         const sellerSettlement = await tx.sellerSettlement.create({
-          data: {
+          data: this.moneyDualWrite.applyPaise('sellerSettlement', {
             cycleId: cycle.id,
             sellerId,
             sellerName: data.sellerName,
             totalOrders: data.orderIds.size,
             totalItems: data.totalItems,
-            totalPlatformAmount:
-              Math.round(data.totalPlatformAmount * 100) / 100,
-            totalSettlementAmount:
-              Math.round(data.totalSettlementAmount * 100) / 100,
-            totalPlatformMargin:
-              Math.round(data.totalPlatformMargin * 100) / 100,
+            totalPlatformAmount: data.totalPlatformAmount.toFixed(2),
+            totalSettlementAmount: data.totalSettlementAmount.toFixed(2),
+            totalPlatformMargin: data.totalPlatformMargin.toFixed(2),
             status: 'PENDING',
-          },
+          }),
         });
 
         const recordIds = data.records.map((r) => r.id);

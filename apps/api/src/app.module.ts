@@ -40,6 +40,7 @@ import { FranchiseModule } from './modules/franchise/module';
 import { NotificationsModule } from './modules/notifications/module';
 import { AdminControlTowerModule } from './modules/admin-control-tower/module';
 import { AdminModule } from './modules/admin/module';
+import { AdminMfaModule } from './modules/admin-mfa/module';
 import { AuditModule } from './modules/audit/module';
 import { FilesModule } from './modules/files/module';
 import { CommissionModule } from './modules/commission/module';
@@ -132,6 +133,7 @@ import { RefundInstructionsModule } from './modules/refund-instructions/module';
     NotificationsModule,
     AdminControlTowerModule,
     AdminModule,
+    AdminMfaModule,
     AuditModule,
     FilesModule,
     CommissionModule,

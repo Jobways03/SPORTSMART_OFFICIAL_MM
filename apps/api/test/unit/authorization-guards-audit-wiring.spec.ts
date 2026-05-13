@@ -46,7 +46,17 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
     // method on a jest spy.
     const env = { getBoolean: () => false } as any; // soak mode
     const audit = { record: jest.fn() } as any;
-    const guard = new PermissionsGuard(reflector, env, audit);
+    // PR 12.1 — Phase 13 added AuditPublicFacade as the 4th
+    // constructor arg so DENY events mirror to the unified AuditLog.
+    // Test cares about the dedicated authorization_audits buffer
+    // (assertions on `audit.record`); a no-op facade stub is enough.
+    // writeAuditLog must return a thenable — the guard chains .catch
+    // on the call to swallow audit failures without breaking the
+    // request path.
+    const unifiedAudit = {
+      writeAuditLog: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit);
     return { guard, reflector, audit };
   }
 

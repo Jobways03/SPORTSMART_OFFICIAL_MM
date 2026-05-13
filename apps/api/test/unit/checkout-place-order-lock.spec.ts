@@ -29,15 +29,36 @@ describe('CheckoutService.placeOrder — per-user concurrency lock', () => {
     const repo: any = {
       placeOrderTransaction: jest.fn(),
     };
+    // PR 12.1 — CheckoutService grew from 8 to 17 deps. Order
+    // mirrors src/.../checkout.service.ts:
+    //   1 repo, 2 sessionService, 3 catalogFacade, 4 franchiseFacade,
+    //   5 discountFacade, 6 shippingOptionsFacade,
+    //   7 discountReservation, 8 discountAllocation,
+    //   9 affiliateFacade, 10 walletFacade, 11 paymentOpsFacade,
+    //   12 razorpayAdapter, 13 prisma, 14 eventBus, 15 redis,
+    //   16 env, 17 moneyDualWrite.
+    // Lock-test only exercises redis + sessionService + repo, so
+    // everything else is a no-op stub.
+    const env: any = { getBoolean: () => false, getNumber: () => 0 };
+    const noop: any = {};
     const svc = new CheckoutService(
-      repo,
-      sessionService,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      redis,
+      repo,             // 1
+      sessionService,   // 2
+      noop,             // 3 catalogFacade
+      noop,             // 4 franchiseFacade
+      noop,             // 5 discountFacade
+      noop,             // 6 shippingOptionsFacade
+      noop,             // 7 discountReservation
+      noop,             // 8 discountAllocation
+      noop,             // 9 affiliateFacade
+      noop,             // 10 walletFacade
+      noop,             // 11 paymentOpsFacade
+      noop,             // 12 razorpayAdapter
+      noop,             // 13 prisma
+      noop,             // 14 eventBus
+      redis,            // 15 redis
+      env,              // 16 env
+      noop,             // 17 moneyDualWrite
     );
     return { svc, redis, sessionService, repo };
   };

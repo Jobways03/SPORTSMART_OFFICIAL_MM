@@ -3,6 +3,7 @@ import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import {
   ForbiddenAppException,
   UnauthorizedAppException,
@@ -92,7 +93,7 @@ export class AffiliateAuthService {
         roles: ['AFFILIATE'],
       },
       this.envService.getString('JWT_AFFILIATE_SECRET'),
-      { expiresIn: '24h' },
+      { expiresIn: '24h', algorithm: JWT_ALGORITHM },
     );
 
     return {

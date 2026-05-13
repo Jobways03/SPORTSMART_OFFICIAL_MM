@@ -3,18 +3,28 @@ import { Prisma } from '@prisma/client';
 import { RefundInstructionService } from '../../src/modules/refund-instructions/application/services/refund-instruction.service';
 
 /**
- * Phase 3 (PR 3.4) — RefundInstructionService.
+ * Phase 3 (PR 3.4) + Phase 12 (ADR-017) — RefundInstructionService.
  *
- * Behaviour to pin:
- *   - Flag-OFF (REFUND_INSTRUCTION_REQUIRED=false): createForDispute
- *     returns null. Caller falls back to legacy direct-credit.
- *   - Flag-ON: creates a RefundInstruction in PROCESSING, runs the saga,
- *     reconciles the row to SUCCESS / FAILED.
- *   - Idempotency: same idempotencyKey returns the existing row instead
- *     of creating a duplicate.
+ * PR 12.4 — Test contract updated for ADR-016 + ADR-017:
+ *   - ADR-016 deleted the `REFUND_INSTRUCTION_REQUIRED` gate for
+ *     disputes; createForDispute always mints an instruction now. The
+ *     flag still applies to return-driven refunds, but those have
+ *     their own tests.
+ *   - ADR-017 added the finance-approval gate: amounts over the
+ *     threshold (default ₹10,000 = 1_000_000 paise) queue as
+ *     PENDING_APPROVAL and skip the saga. Amounts under threshold
+ *     auto-execute via the saga (current behaviour).
+ *
+ * Behaviour pinned by this spec:
+ *   - Under-threshold dispute → creates a PROCESSING row, runs saga,
+ *     reconciles to SUCCESS / FAILED.
+ *   - Over-threshold dispute → creates a PENDING_APPROVAL row,
+ *     skips saga, returns the row for finance review.
+ *   - Idempotency: same idempotencyKey returns the existing row
+ *     instead of creating a duplicate.
  *   - Race: P2002 on insert → fetch & return the winner.
- *   - WALLET method runs the wallet-credit step. Other methods land in
- *     MANUAL_REQUIRED for ops follow-up.
+ *   - WALLET method runs the wallet-credit step. Other methods land
+ *     in MANUAL_REQUIRED for ops follow-up.
  */
 describe('RefundInstructionService', () => {
   function buildService(opts: {
@@ -22,6 +32,8 @@ describe('RefundInstructionService', () => {
     sagaResult?: { status: 'COMPLETED' | 'FAILED'; failureReason?: string; finalContext?: Record<string, unknown> };
     existingByKey?: Record<string, unknown> | null;
     raceOnCreate?: boolean;
+    /** Override the auto-approve threshold (paise). Default 1_000_000 (₹10k). */
+    thresholdPaise?: number;
   }) {
     const created: Record<string, unknown>[] = [];
     const updated: Record<string, unknown>[] = [];
@@ -55,6 +67,16 @@ describe('RefundInstructionService', () => {
       getBoolean: jest
         .fn()
         .mockReturnValue(opts.enabled ?? false),
+      // PR 12.4 — REFUND_AUTO_APPROVE_THRESHOLD_PAISE default matches
+      // the source (1_000_000 paise = ₹10,000). baseArgs uses 5000
+      // paise which stays under threshold and auto-routes through the
+      // saga. Over-threshold cases supply an explicit `thresholdPaise`
+      // opt override. env.getOptional returns undefined (no per-method
+      // override), env.getNumber returns the threshold.
+      getOptional: jest.fn().mockReturnValue(undefined),
+      getNumber: jest
+        .fn()
+        .mockReturnValue(opts.thresholdPaise ?? 1_000_000),
     };
     const wallet = {
       creditFromRefund: jest.fn().mockResolvedValue({
@@ -92,16 +114,36 @@ describe('RefundInstructionService', () => {
     amountInPaise: 5000,
   });
 
-  // ─── Flag-OFF ─────────────────────────────────────────────────────
+  // ─── ADR-017 finance-approval gate ────────────────────────────────
 
-  it('returns null when REFUND_INSTRUCTION_REQUIRED is false', async () => {
-    const { service, prisma } = buildService({});
-    const result = await service.createForDispute(baseArgs());
-    expect(result).toBeNull();
-    expect(prisma.refundInstruction.create).not.toHaveBeenCalled();
+  it('queues PENDING_APPROVAL when amount exceeds the auto-approve threshold', async () => {
+    // 50_000 paise (₹500) under a ₹100 (10_000 paise) threshold →
+    // over-threshold → PENDING_APPROVAL, no saga.
+    const { service, prisma, saga, updated } = buildService({
+      thresholdPaise: 10_000,
+    });
+    const result = await service.createForDispute({
+      ...baseArgs(),
+      amountInPaise: 50_000,
+    });
+    expect(prisma.refundInstruction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourceType: 'DISPUTE',
+        sourceId: 'd-1',
+        amountInPaise: 50_000n,
+        refundMethod: 'WALLET',
+        status: 'PENDING_APPROVAL',
+        idempotencyKey: 'dispute:d-1',
+      }),
+    });
+    // Skipped saga + skipped status reconciliation update; row is
+    // handed back as-is for finance to approve later.
+    expect(saga.run).not.toHaveBeenCalled();
+    expect(updated).toHaveLength(0);
+    expect(result?.status).toBe('PENDING_APPROVAL');
   });
 
-  // ─── Happy path ───────────────────────────────────────────────────
+  // ─── Happy path (under-threshold auto-route) ──────────────────────
 
   it('creates an instruction + runs saga + flips to SUCCESS', async () => {
     const { service, prisma, saga, updated } = buildService({

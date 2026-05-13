@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
+import { LeaderElectedCron } from '../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../cron-observability/cron-instrumentation.service';
 
 /**
  * Periodic cleanup for the idempotency_keys table.
@@ -24,43 +26,58 @@ export class IdempotencySweeperCron {
   constructor(
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    // Phase 1 (PR 1.2) — only one replica per cluster runs the sweep
+    // per tick. Without this, N replicas all execute the same
+    // deleteMany — harmless but wasteful, and made the sweep counter
+    // log misleading.
+    private readonly leader: LeaderElectedCron,
+    // Phase 5 (PR 5.2) — cron-run observability. Records each sweep
+    // in `cron_runs` with the `{ expired, orphans }` shape so ops
+    // can chart deletion rates over time.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   @Cron(CronExpression.EVERY_10_MINUTES)
   async sweep() {
     if (!this.env.getBoolean('IDEMPOTENCY_ENABLED', false)) return;
 
-    try {
-      const now = new Date();
-      const orphanCutoff = new Date(
-        now.getTime() - IdempotencySweeperCron.PENDING_GRACE_MS,
-      );
+    // 10-minute tick × 2 = 20-minute lock TTL.
+    await this.leader.run('idempotency-sweeper', 20 * 60, async () => {
+      try {
+        await this.instr.wrap('idempotency-sweeper', async () => {
+          const now = new Date();
+          const orphanCutoff = new Date(
+            now.getTime() - IdempotencySweeperCron.PENDING_GRACE_MS,
+          );
 
-      // Expired completed rows.
-      const expired = await this.prisma.idempotencyKey.deleteMany({
-        where: {
-          state: 'COMPLETED',
-          expiresAt: { lt: now },
-        },
-      });
+          // Expired completed rows.
+          const expired = await this.prisma.idempotencyKey.deleteMany({
+            where: {
+              state: 'COMPLETED',
+              expiresAt: { lt: now },
+            },
+          });
 
-      // Orphan pending rows (handler crashed, finally never ran).
-      const orphans = await this.prisma.idempotencyKey.deleteMany({
-        where: {
-          state: 'PENDING',
-          createdAt: { lt: orphanCutoff },
-        },
-      });
+          // Orphan pending rows (handler crashed, finally never ran).
+          const orphans = await this.prisma.idempotencyKey.deleteMany({
+            where: {
+              state: 'PENDING',
+              createdAt: { lt: orphanCutoff },
+            },
+          });
 
-      if (expired.count > 0 || orphans.count > 0) {
-        this.logger.log(
-          `swept idempotency keys: ${expired.count} expired, ${orphans.count} orphans`,
+          if (expired.count > 0 || orphans.count > 0) {
+            this.logger.log(
+              `swept idempotency keys: ${expired.count} expired, ${orphans.count} orphans`,
+            );
+          }
+          return { expired: expired.count, orphans: orphans.count };
+        });
+      } catch (err) {
+        this.logger.error(
+          `idempotency sweep failed: ${(err as Error).message}`,
         );
       }
-    } catch (err) {
-      this.logger.error(
-        `idempotency sweep failed: ${(err as Error).message}`,
-      );
-    }
+    });
   }
 }

@@ -44,7 +44,11 @@ export class AdminGetMeUseCase {
       throw new NotFoundAppException('Admin role missing');
     }
 
-    const resolved = await this.permissionResolver.resolve(admin.id, admin.role);
+    // Use the input adminId (guaranteed string) rather than admin.id
+    // (typed `string | undefined` because the projection-style select
+    // returns Partial<Admin>). Both values are the same row by the
+    // findAdminById contract.
+    const resolved = await this.permissionResolver.resolve(adminId, admin.role);
 
     return {
       adminId: admin.id,

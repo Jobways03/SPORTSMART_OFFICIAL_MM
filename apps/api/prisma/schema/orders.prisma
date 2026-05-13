@@ -69,6 +69,9 @@ model CartItem {
   cartId    String  @map("cart_id")
   productId String  @map("product_id")
   variantId String? @map("variant_id")
+  // Phase 2 (PR 2.5) — DB-level invariant: quantity > 0. See
+  // migration 20260512160000. PR 1.9's atomic increment-or-create
+  // is the primary guard; this CHECK covers any future direct insert.
   quantity  Int     @default(1)
 
   cart    Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
@@ -88,6 +91,8 @@ model MasterOrder {
   totalAmount             Decimal            @map("total_amount") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007). BigInt — master order totals can exceed
   // INTEGER's ~₹21M cap on bulk B2B orders.
+  // Phase 2 (PR 2.5) — DB-level invariant: total_amount_in_paise >= 0.
+  // See migration 20260512160000.
   totalAmountInPaise      BigInt             @default(0) @map("total_amount_in_paise")
   paymentMethod           OrderPaymentMethod @default(COD) @map("payment_method")
   paymentStatus           OrderPaymentStatus @default(PENDING) @map("payment_status")
@@ -137,6 +142,17 @@ model MasterOrder {
   @@index([customerId])
   @@index([orderNumber])
   @@index([orderStatus])
+  // Phase 2 (PR 2.1) — customer order history: `WHERE customer_id = ?
+  // ORDER BY created_at DESC`. The single-column `customer_id` index
+  // alone forces a sort over every order for that customer; the
+  // composite lets Postgres serve the page in index order.
+  @@index([customerId, createdAt(sort: Desc)])
+  // Phase 2 (PR 2.1) — payment-expiry sweep cron: `WHERE
+  // order_status = 'PENDING_PAYMENT' AND payment_expires_at < NOW()`.
+  // Same query also drives the orphaned-payment confirm cron.
+  // Without the composite, the cron reads every PENDING_PAYMENT row
+  // even when most have plenty of time left.
+  @@index([orderStatus, paymentExpiresAt])
   @@map("master_orders")
 }
 
@@ -148,6 +164,8 @@ model SubOrder {
   franchiseId            String?                @map("franchise_id")
   subTotal               Decimal                @map("sub_total") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007).
+  // Phase 2 (PR 2.5) — DB-level invariant: sub_total_in_paise >= 0.
+  // See migration 20260512160000.
   subTotalInPaise        BigInt                 @default(0) @map("sub_total_in_paise")
   paymentStatus          OrderPaymentStatus     @default(PENDING) @map("payment_status")
   fulfillmentStatus      OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
@@ -178,6 +196,14 @@ model SubOrder {
   selfDeliveryStatus  SelfDeliveryStatus? @map("self_delivery_status")
   selfDeliveredAt     DateTime?           @map("self_delivered_at")
   selfDeliveryNotes   String?             @map("self_delivery_notes")
+
+  // Phase 4 (PR 4.4) — last-processed tracking event timestamp for
+  // ordering guard. Set by the Shiprocket / iThink webhook handlers
+  // to the event-side timestamp (carrier's own clock). A subsequent
+  // incoming event with an OLDER timestamp is dropped as
+  // out-of-order — the FSM never regresses (e.g. DELIVERED → IN_TRANSIT
+  // flapping when Shiprocket's webhook delivery reorders payloads).
+  lastTrackingEventAt DateTime?           @map("last_tracking_event_at")
   // Snapshot of pickup address id at the time of booking — keeps
   // audit trail if the seller/franchise later re-registers a different
   // warehouse with iThink. The forward AWB ships from this address.
@@ -212,6 +238,19 @@ model SubOrder {
   @@index([deliveryMethod])
   @@index([ithinkAwb])
   @@index([selfDeliveryStatus])
+  // Phase 2 (PR 2.1) — order-acceptance timeout sweeper:
+  // `WHERE accept_status = 'OPEN' AND accept_deadline_at < NOW()`.
+  // Runs every 5 min and would otherwise scan every OPEN sub-order
+  // — those grow unbounded as the marketplace scales.
+  @@index([acceptStatus, acceptDeadlineAt])
+  // Phase 2 (PR 2.1) — seller dashboard "my orders by status":
+  // `WHERE seller_id = ? AND accept_status = ? ORDER BY created_at DESC`.
+  // The leading `(sellerId, acceptStatus)` keys narrow the scan,
+  // `createdAt` serves the ORDER BY without a separate sort.
+  @@index([sellerId, acceptStatus, createdAt(sort: Desc)])
+  // Phase 2 (PR 2.1) — franchise equivalent of the seller dashboard
+  // query (franchise-orders.service.ts uses the same shape).
+  @@index([franchiseId, acceptStatus, createdAt(sort: Desc)])
   @@map("sub_orders")
 }
 
@@ -227,6 +266,11 @@ model OrderItem {
   imageUrl     String?  @map("image_url")
   unitPrice         Decimal  @map("unit_price") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007).
+  // Phase 2 (PR 2.5) — DB-level invariants on this line item:
+  //   quantity              > 0
+  //   unit_price_in_paise   >= 0
+  //   total_price_in_paise  >= 0
+  // See migration 20260512160000.
   unitPriceInPaise  BigInt   @default(0) @map("unit_price_in_paise")
   quantity          Int
   totalPrice        Decimal  @map("total_price") @db.Decimal(10, 2)

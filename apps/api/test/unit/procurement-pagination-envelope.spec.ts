@@ -145,7 +145,15 @@ describe('AdminFranchiseCatalogController.listAllMappings — response envelope'
         total: 45,
       }),
     };
-    const ctrl = new AdminFranchiseCatalogController(repo);
+    // PR 12.1 — controller gained a PrismaService dep for bulk
+    // FranchiseStock lookups. The pagination-envelope test exercises
+    // listAllMappings which now calls franchiseStock.findMany; return
+    // an empty array so the controller doesn't attach stock counts but
+    // also doesn't throw.
+    const prisma: any = {
+      franchiseStock: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const ctrl = new AdminFranchiseCatalogController(repo, prisma);
 
     const res = await ctrl.listAllMappings('2', '20');
 

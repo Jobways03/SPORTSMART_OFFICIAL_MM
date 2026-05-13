@@ -1,16 +1,18 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { Prisma } from '@prisma/client';
-import type { Wallet, WalletTransaction } from '@prisma/client';
 import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { RazorpayAdapter } from '../../../../integrations/razorpay';
+import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 import {
   ApplyMutationResult,
+  WalletEntity,
   WalletRepository,
   WALLET_REPOSITORY,
 } from '../../domain/repositories/wallet.repository.interface';
@@ -56,6 +58,11 @@ export class WalletService {
     private readonly razorpay: RazorpayAdapter,
     private readonly eventBus: EventBusService,
     private readonly audit: AuditPublicFacade,
+    // Phase 0 (PR 0.2) — used to record AMOUNT_MISMATCH alerts on top-up
+    // verifications where the gateway-captured amount diverges from the
+    // pending row's expected amount. PaymentOpsModule is `@Global()` so
+    // this is available without changing WalletModule.imports.
+    private readonly paymentOpsFacade: PaymentOpsFacade,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────
@@ -242,10 +249,19 @@ export class WalletService {
 
     // Create the gateway order BEFORE the pending ledger row, so a
     // gateway failure leaves no orphan row in our DB.
+    // Phase 0 (PR 0.5) — adapter takes BigInt paise. `args.amountInPaise`
+    // is already paise; just coerce to bigint.
+    //
+    // Phase 4 (PR 4.3) — derive the idempotency key from the receipt
+    // we just generated. Same call ⇒ same receipt ⇒ same key, so a
+    // transient 5xx + retry produces one order at Razorpay rather
+    // than two orphan orders both billing the customer.
+    const receipt = `wallet-topup-${Date.now()}-${args.userId.slice(0, 8)}`;
     const rzpOrder = await this.razorpay.createOrder({
-      amountInr: args.amountInPaise / 100,
-      receipt: `wallet-topup-${Date.now()}-${args.userId.slice(0, 8)}`,
+      amountInPaise: BigInt(args.amountInPaise),
+      receipt,
       notes: { kind: 'wallet_topup', userId: args.userId },
+      idempotencyKey: `wallet-topup-${receipt}`,
     });
 
     const pending = await this.repo.insertPending({
@@ -310,6 +326,54 @@ export class WalletService {
       throw new BadRequestAppException('Top-up signature verification failed');
     }
 
+    // Phase 0 (PR 0.2) — silent-money-loss guard. The HMAC above only
+    // proves Razorpay emitted this (orderId, paymentId) pair. It does
+    // NOT prove the payment was captured for the same amount the pending
+    // row was created with. Without this, a customer (or attacker who
+    // intercepts the callback) can submit a ₹1 payment id and have
+    // ₹10,000 credited to their wallet. We re-fetch the payment from
+    // Razorpay (the source of truth) and reject if the snapshot doesn't
+    // match the pending row's amount.
+    let gatewayPayment;
+    try {
+      gatewayPayment = await this.razorpay.getRawPayment(args.razorpayPaymentId);
+    } catch (err: any) {
+      this.logger.error(
+        `Razorpay fetchPayment failed for wallet topup ${args.razorpayPaymentId}: ${err?.message ?? err}`,
+      );
+      throw new BadRequestAppException(
+        'Top-up verification failed — could not confirm with gateway. Please retry shortly.',
+      );
+    }
+
+    try {
+      assertGatewayPaymentMatchesOrder(gatewayPayment, {
+        totalAmountInPaise: BigInt(tx.amountInPaise),
+        razorpayOrderId: args.razorpayOrderId,
+      });
+    } catch (err: any) {
+      // Fire-and-forget — never block the throw on alert-write failure.
+      this.paymentOpsFacade
+        .flagMismatch({
+          kind: err.code === 'GATEWAY_AMOUNT_MISMATCH'
+            ? 'AMOUNT_MISMATCH'
+            : 'SIGNATURE_INVALID',
+          providerPaymentId: args.razorpayPaymentId,
+          expectedInPaise: tx.amountInPaise,
+          actualInPaise: Number(BigInt(gatewayPayment.amount)),
+          severity: 95, // money-safety — top of triage queue
+          description:
+            `Wallet top-up gateway verification rejected for user ${args.userId} ` +
+            `(razorpay_order ${args.razorpayOrderId}, payment ${args.razorpayPaymentId}): ${err.message}.`,
+        })
+        .catch((alertErr) =>
+          this.logger.error(
+            `Failed to record PaymentMismatchAlert for wallet topup: ${alertErr?.message ?? alertErr}`,
+          ),
+        );
+      throw err;
+    }
+
     return this.applyWithRetry(args.userId, async (wallet) => {
       const newBalance = wallet.balanceInPaise + tx.amountInPaise;
       return this.repo.completePending({
@@ -331,7 +395,7 @@ export class WalletService {
     }
   }
 
-  private assertNotBlocked(wallet: Wallet, bypass?: boolean) {
+  private assertNotBlocked(wallet: WalletEntity, bypass?: boolean) {
     if (bypass) return;
     if (wallet.isBlocked) {
       throw new BadRequestAppException(
@@ -372,7 +436,7 @@ export class WalletService {
 
   private async applyWithRetry<T>(
     userId: string,
-    op: (wallet: Wallet) => Promise<T>,
+    op: (wallet: WalletEntity) => Promise<T>,
   ): Promise<T> {
     for (let attempt = 1; attempt <= VERSION_CONFLICT_MAX_RETRIES; attempt++) {
       const wallet = await this.repo.getOrCreate(userId);

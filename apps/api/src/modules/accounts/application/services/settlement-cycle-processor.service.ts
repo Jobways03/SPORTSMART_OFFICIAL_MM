@@ -8,6 +8,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AccountsSettlementService } from './accounts-settlement.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 const LOCK_KEY = 'lock:settlement-auto-cycle';
 const LOCK_TTL = 120;
@@ -27,6 +28,9 @@ export class SettlementCycleProcessorService
     private readonly redis: RedisService,
     private readonly envService: EnvService,
     private readonly settlementService: AccountsSettlementService,
+    // Phase 7 (PR 7.5) — paise-sibling dual-write for the placeholder
+    // PAID cycle inserted when a window has no pending records.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {
     this.enabled =
       this.envService
@@ -105,13 +109,13 @@ export class SettlementCycleProcessorService
         // inserting a zero-valued placeholder so the pointer still advances.
         // Otherwise the processor would spin on the same empty window forever.
         await this.prisma.settlementCycle.create({
-          data: {
+          data: this.moneyDualWrite.applyPaise('settlementCycle', {
             periodStart: nextStart,
             periodEnd: nextEnd,
             status: 'PAID',
             totalAmount: 0,
             totalMargin: 0,
-          },
+          }),
         });
         this.logger.log(
           `No pending records for ${nextStart.toISOString()} → ${nextEnd.toISOString()}; created empty PAID cycle to advance pointer.`,

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { OrdersService } from '../services/orders.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import {
   ORDER_REPOSITORY,
   OrderRepository,
@@ -18,6 +19,11 @@ export class OrdersPublicFacade {
     private readonly prisma: PrismaService,
     @Inject(ORDER_REPOSITORY)
     private readonly orderRepo: OrderRepository,
+    // Phase 7 (PR 7.8) — paise-sibling dual-write at the facade
+    // boundary; the four subOrder writes here are 3 status-only
+    // updates (helper no-ops) + 1 create with subTotal + nested
+    // orderItem rows that need their own paise transforms.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   // ── Read: Master Order ────────────────────────────────────
@@ -41,6 +47,16 @@ export class OrdersPublicFacade {
         orderNumber: true,
         customerId: true,
         totalAmount: true,
+        // Phase 0 (PR 0.1) — paise sibling needed by PaymentsPublicFacade
+        // to compare the gateway-reported captured amount against the
+        // platform's expected order total. The Decimal `totalAmount`
+        // above is preserved for callers in the soak window.
+        totalAmountInPaise: true,
+        // Phase 0 (PR 0.1) — needed so the payments facade can assert the
+        // gateway's payment.order_id matches the razorpay_order_id we
+        // minted at checkout. Without this, a payment captured against
+        // a different order could be applied here.
+        razorpayOrderId: true,
         paymentMethod: true,
         paymentStatus: true,
         orderStatus: true,
@@ -103,6 +119,38 @@ export class OrdersPublicFacade {
 
   async findSubOrderByTrackingNumber(trackingNumber: string) {
     return this.orderRepo.findSubOrderByTrackingNumber(trackingNumber);
+  }
+
+  /**
+   * Phase 4 (PR 4.4) — atomically claim a tracking event for a
+   * sub-order if its timestamp is newer than the last recorded one.
+   *
+   * Uses a status-conditional `updateMany`: the row's
+   * `lastTrackingEventAt` must be either NULL or earlier than the
+   * incoming `eventTimestamp` for the update to land. The Postgres
+   * predicate is the canonical place to enforce the invariant — two
+   * concurrent webhook deliveries for the same AWB serialise at the
+   * row, and only the newer-timestamp request wins `count === 1`.
+   * The loser sees `count === 0` and drops its event as out-of-order.
+   *
+   * Returns true iff this caller's event was accepted (and the
+   * timestamp persisted).
+   */
+  async claimTrackingEvent(
+    subOrderId: string,
+    eventTimestamp: Date,
+  ): Promise<boolean> {
+    const result = await this.prisma.subOrder.updateMany({
+      where: {
+        id: subOrderId,
+        OR: [
+          { lastTrackingEventAt: null },
+          { lastTrackingEventAt: { lt: eventTimestamp } },
+        ],
+      },
+      data: { lastTrackingEventAt: eventTimestamp },
+    });
+    return result.count === 1;
   }
 
   async findSubOrdersForNode(params: {
@@ -299,12 +347,12 @@ export class OrdersPublicFacade {
   async rejectSubOrder(subOrderId: string, reason: string, note?: string) {
     return this.prisma.subOrder.update({
       where: { id: subOrderId },
-      data: {
-        acceptStatus: 'REJECTED',
-        fulfillmentStatus: 'CANCELLED',
+      data: this.moneyDualWrite.applyPaise('subOrder', {
+        acceptStatus: 'REJECTED' as const,
+        fulfillmentStatus: 'CANCELLED' as const,
         rejectionReason: reason,
         rejectionNote: note ?? null,
-      },
+      }),
     });
   }
 
@@ -316,12 +364,12 @@ export class OrdersPublicFacade {
   }) {
     return this.prisma.subOrder.update({
       where: { id: subOrderId },
-      data: {
+      data: this.moneyDualWrite.applyPaise('subOrder', {
         fulfillmentStatus: data.fulfillmentStatus as any,
         trackingNumber: data.trackingNumber ?? undefined,
         courierName: data.courierName ?? undefined,
         shippingLabelUrl: data.shippingLabelUrl ?? undefined,
-      },
+      }),
     });
   }
 
@@ -332,7 +380,9 @@ export class OrdersPublicFacade {
   async markSubOrderCommissionProcessed(subOrderId: string) {
     await this.prisma.subOrder.update({
       where: { id: subOrderId },
-      data: { commissionProcessed: true },
+      data: this.moneyDualWrite.applyPaise('subOrder', {
+        commissionProcessed: true,
+      }),
     });
   }
 
@@ -357,30 +407,42 @@ export class OrdersPublicFacade {
       imageUrl?: string;
     }>;
   }) {
+    // Nested orderItems need their own paise transforms — the helper
+    // only walks top-level keys on the modelKey it was given, so the
+    // outer applyPaise('subOrder', ...) covers subTotal/subTotalInPaise
+    // but the nested `items.create` array bypasses it. applyPaiseMany
+    // handles each orderItem row (unitPrice/totalPrice → paise siblings).
+    // .toFixed(2) is defensive: input.subTotal / item prices arrive as
+    // JS Numbers that may be fractional after cart arithmetic, and
+    // toPaise refuses fractional Numbers (PR 0.4 contract).
+    const orderItems = this.moneyDualWrite.applyPaiseMany(
+      'orderItem',
+      data.items.map((item) => ({
+        productId: item.productId,
+        variantId: item.variantId ?? null,
+        sku: item.sku ?? null,
+        productTitle: item.productTitle,
+        variantTitle: item.variantTitle ?? null,
+        masterSku: item.masterSku ?? null,
+        unitPrice: Number(item.unitPrice).toFixed(2),
+        quantity: item.quantity,
+        totalPrice: Number(item.totalPrice).toFixed(2),
+        imageUrl: item.imageUrl ?? null,
+      })),
+    );
     return this.prisma.subOrder.create({
-      data: {
+      data: this.moneyDualWrite.applyPaise('subOrder', {
         masterOrderId: data.masterOrderId,
         sellerId: data.sellerId ?? null,
         franchiseId: data.franchiseId ?? null,
         fulfillmentNodeType: data.fulfillmentNodeType,
-        subTotal: data.subTotal,
+        subTotal: Number(data.subTotal).toFixed(2),
         acceptDeadlineAt: data.acceptDeadlineAt ?? null,
         commissionRateSnapshot: data.commissionRateSnapshot ?? null,
         items: {
-          create: data.items.map((item) => ({
-            productId: item.productId,
-            variantId: item.variantId ?? null,
-            sku: item.sku ?? null,
-            productTitle: item.productTitle,
-            variantTitle: item.variantTitle ?? null,
-            masterSku: item.masterSku ?? null,
-            unitPrice: item.unitPrice,
-            quantity: item.quantity,
-            totalPrice: item.totalPrice,
-            imageUrl: item.imageUrl ?? null,
-          })),
+          create: orderItems,
         },
-      },
+      }),
       include: { items: true },
     });
   }
@@ -409,6 +471,52 @@ export class OrdersPublicFacade {
     }
 
     return updated;
+  }
+
+  /**
+   * Phase 0 (PR 0.12) — conditional flip of `paymentStatus` to close
+   * the TOCTOU window between `getMasterOrderBasic` and the prior
+   * `updatePaymentStatus` call. Only flips when the current status is
+   * in `from`, and reports `{ flipped }` so the caller can decide
+   * whether to fan out (event publish, side-effects). Concurrent
+   * webhook deliveries both hitting `flipPaymentStatusIfFrom` produce
+   * exactly one `flipped=true` and one `flipped=false`.
+   *
+   * Returns the freshly-loaded row regardless of the flip outcome so
+   * the caller can introspect (e.g. emit "already PAID" log line).
+   */
+  async flipPaymentStatusIfFrom(
+    masterOrderId: string,
+    from: string[],
+    to: string,
+  ): Promise<{
+    flipped: boolean;
+    order: { id: string; paymentStatus: string } | null;
+  }> {
+    const result = await this.prisma.masterOrder.updateMany({
+      where: {
+        id: masterOrderId,
+        paymentStatus: { in: from as any },
+      },
+      data: { paymentStatus: to as any },
+    });
+
+    // Mirror the side-effect of `updatePaymentStatus` on the PAID path —
+    // sub-orders inherit the new status. Conditional on count > 0 so
+    // we don't re-write on a stale loser.
+    if (result.count > 0 && to === 'PAID') {
+      await this.prisma.subOrder.updateMany({
+        where: { masterOrderId, acceptStatus: { not: 'REJECTED' } },
+        data: { paymentStatus: 'PAID' },
+      });
+    }
+
+    const order = await this.prisma.masterOrder.findUnique({
+      where: { id: masterOrderId },
+      select: { id: true, paymentStatus: true },
+    });
+
+    return { flipped: result.count > 0, order };
   }
 
   /**

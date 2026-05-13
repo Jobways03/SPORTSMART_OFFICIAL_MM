@@ -76,8 +76,13 @@ export class PaymentOpsService {
         masterOrderId: args.masterOrderId ?? null,
         orderNumber: args.orderNumber ?? null,
         providerPaymentId: args.providerPaymentId ?? null,
-        expectedInPaise: args.expectedInPaise ?? null,
-        actualInPaise: args.actualInPaise ?? null,
+        // Phase 2 (PR 2.3) — columns are BigInt; the facade signature
+        // stays `number` for caller convenience. Coerce at the boundary
+        // here so the Prisma client gets the right type.
+        expectedInPaise:
+          args.expectedInPaise != null ? BigInt(args.expectedInPaise) : null,
+        actualInPaise:
+          args.actualInPaise != null ? BigInt(args.actualInPaise) : null,
         description: args.description,
         severity: args.severity ?? 50,
       },

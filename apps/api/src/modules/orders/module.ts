@@ -9,15 +9,17 @@ import { OrdersService } from './application/services/orders.service';
 import { OrderTimeoutService } from './application/services/order-timeout.service';
 import { OrderAcceptanceSlaProcessor } from './application/services/order-acceptance-sla.processor';
 import { RoutingHealthService } from './application/services/routing-health.service';
+import { StockRestoreService } from './application/services/stock-restore.service';
 import { OrdersPublicFacade } from './application/facades/orders-public.facade';
 import { PrismaOrderRepository } from './infrastructure/repositories/prisma-order.repository';
 import { ORDER_REPOSITORY } from './domain/repositories/order.repository.interface';
 import { AdminAuthGuard, SellerAuthGuard, UserAuthGuard } from '../../core/guards';
 import { CatalogModule } from '../catalog/module';
 import { FranchiseModule } from '../franchise/module';
+import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
-  imports: [CatalogModule, FranchiseModule],
+  imports: [CatalogModule, FranchiseModule, MoneyModule],
   controllers: [
     AdminOrdersController,
     AdminRoutingController,
@@ -34,6 +36,7 @@ import { FranchiseModule } from '../franchise/module';
     OrderTimeoutService,
     OrderAcceptanceSlaProcessor,
     RoutingHealthService,
+    StockRestoreService,
     OrdersPublicFacade,
     {
       provide: ORDER_REPOSITORY,

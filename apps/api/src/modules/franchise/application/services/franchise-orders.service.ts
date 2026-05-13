@@ -11,6 +11,7 @@ import {
 import { FranchiseInventoryService } from './franchise-inventory.service';
 import { FranchiseCommissionService } from './franchise-commission.service';
 import { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 const RETURN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes (matches orders module)
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -25,6 +26,10 @@ export class FranchiseOrdersService {
     private readonly catalogFacade: CatalogPublicFacade,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
+    // Phase 7 (PR 7.7) — paise-sibling dual-write for the subOrder
+    // split-out path that creates a follow-up sub-order with the
+    // item's totalPrice as the new subTotal.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {
     this.logger.setContext('FranchiseOrdersService');
   }
@@ -423,13 +428,17 @@ export class FranchiseOrdersService {
               Date.now() + ACCEPT_DEADLINE_MS,
             );
             const newSubOrder = await this.prisma.subOrder.create({
-              data: {
+              data: this.moneyDualWrite.applyPaise('subOrder', {
                 masterOrderId: subOrder.masterOrder.id,
                 ...(primary.nodeType === 'SELLER'
                   ? { sellerId: primary.sellerId }
                   : { franchiseId: primary.franchiseId! }),
                 fulfillmentNodeType: primary.nodeType,
-                subTotal: Number(item.totalPrice),
+                // Pass the Decimal directly so the helper's toPaise
+                // can convert exactly via .mul(100).toFixed(0). The
+                // earlier `Number(item.totalPrice)` collapse would
+                // produce a fractional JS Number that toPaise rejects.
+                subTotal: item.totalPrice,
                 paymentStatus: subOrder.paymentStatus,
                 fulfillmentStatus: 'UNFULFILLED',
                 acceptStatus: 'OPEN',
@@ -448,7 +457,7 @@ export class FranchiseOrdersService {
                     totalPrice: item.totalPrice,
                   },
                 },
-              },
+              }),
             });
 
             reassignmentSuccessful = true;

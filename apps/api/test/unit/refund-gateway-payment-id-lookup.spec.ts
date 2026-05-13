@@ -41,14 +41,19 @@ describe('RefundGatewayService — payment id lookup', () => {
       warn: jest.fn(),
       error: jest.fn(),
     };
-    // RefundGatewayService takes 5 deps (logger, razorpay, prisma,
-    // walletFacade, paymentOps). The wallet + paymentOps paths aren't
-    // exercised by the payment-id-lookup tests, so stub them.
+    // PR 12.1 — RefundGatewayService now takes 6 deps; the 6th is
+    // RefundInstructionService for the wallet-refund routing via the
+    // ADR-017 finance approval gate. The payment-id-lookup tests
+    // exercise the ONLINE gateway path only, so stub.
     const walletFacade: any = {
       creditFromRefund: jest.fn(),
     };
     const paymentOps: any = {
       recordAttempt: jest.fn().mockResolvedValue(undefined),
+    };
+    const refundInstructions: any = {
+      createForReturn: jest.fn(),
+      createForDispute: jest.fn(),
     };
     const svc = new RefundGatewayService(
       logger,
@@ -56,6 +61,7 @@ describe('RefundGatewayService — payment id lookup', () => {
       prisma,
       walletFacade,
       paymentOps,
+      refundInstructions,
     );
     return { svc, razorpayAdapter, prisma };
   };
@@ -80,10 +86,17 @@ describe('RefundGatewayService — payment id lookup', () => {
     const result = await svc.processRefund(baseInput);
 
     expect(result.success).toBe(true);
+    // PR 12.5 — Phase 7 (ADR-007) paise migration: amount crosses the
+    // Razorpay adapter boundary as a BigInt of paise, not a Number of
+    // rupees. baseInput.amount is 100 (rupees) → service multiplies by
+    // 100 and passes 10000n. Phase 13 also split the gateway-options
+    // (idempotencyKey) into a 4th positional argument distinct from
+    // the metadata bag.
     expect(razorpayAdapter.initiateRefund).toHaveBeenCalledWith(
       'pay_realID123',
-      100,
+      10000n,
       expect.any(Object),
+      expect.objectContaining({ idempotencyKey: expect.any(String) }),
     );
   });
 

@@ -123,9 +123,13 @@ describe('ProcurementService.approveRequest — per-franchise price precedence',
     ]);
 
     expect(overrideUpdate).not.toHaveBeenCalled();
+    // PR 12.6 — Phase 11 catalog refactor: the platform-wide landed
+    // cost now lives in procurementPrice; costPrice became display-
+    // only. The Option A fallback still writes when no override
+    // exists; only the column changed.
     expect(variantUpdate).toHaveBeenCalledWith({
       where: { id: 'var-1' },
-      data: { costPrice: 10 },
+      data: { procurementPrice: 10 },
     });
   });
 

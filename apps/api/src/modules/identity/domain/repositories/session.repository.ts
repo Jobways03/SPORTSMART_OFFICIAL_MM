@@ -4,6 +4,8 @@ export interface SessionRecord {
   id: string;
   userId: string;
   refreshToken: string;
+  /** Phase 3 (PR 3.6) — last-rotation slot for theft detection. */
+  previousRefreshTokenHash?: string | null;
   userAgent: string | null;
   ipAddress: string | null;
   expiresAt: Date;
@@ -14,6 +16,13 @@ export interface SessionRepository {
   findById(id: string): Promise<SessionRecord | null>;
   findByUserId(userId: string): Promise<SessionRecord[]>;
   findByRefreshToken(refreshToken: string): Promise<SessionRecord | null>;
+  /**
+   * Phase 3 (PR 3.6) — secondary lookup against the previous-rotation
+   * hash. A hit here, combined with a miss on `findByRefreshToken`,
+   * means a now-burned refresh token is being replayed — the
+   * use-case responds by revoking every session for the user.
+   */
+  findByPreviousRefreshToken(refreshToken: string): Promise<SessionRecord | null>;
   save(session: unknown): Promise<void>;
   revoke(sessionId: string): Promise<void>;
 

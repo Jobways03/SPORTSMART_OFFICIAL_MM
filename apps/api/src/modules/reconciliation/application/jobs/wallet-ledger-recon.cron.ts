@@ -99,7 +99,12 @@ export class WalletLedgerReconCron
     try {
       // Cursor-paginated scan — order by id so the cursor is stable.
       // Reconcile each batch, skip walk to next batch.
-      type WalletRow = { id: string; userId: string; balanceInPaise: number };
+      // Phase 2 (PR 2.2) — wallet money columns are BIGINT, so Prisma
+      // surfaces them as `bigint`. The recon cron is a direct Prisma
+      // caller (no repo boundary), so the arithmetic and the drift
+      // event payload work in bigint locally. `.toString()` on the
+      // event payload because JSON doesn't serialise bigint.
+      type WalletRow = { id: string; userId: string; balanceInPaise: bigint };
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const wallets: WalletRow[] = await this.prisma.wallet.findMany({
@@ -115,7 +120,7 @@ export class WalletLedgerReconCron
             where: { walletId: w.id, status: 'COMPLETED' },
             _sum: { amountInPaise: true },
           });
-          const ledgerSum = sumRow._sum.amountInPaise ?? 0;
+          const ledgerSum: bigint = sumRow._sum.amountInPaise ?? 0n;
           totalReconciled += 1;
           if (ledgerSum !== w.balanceInPaise) {
             totalDrifted += 1;
@@ -134,9 +139,14 @@ export class WalletLedgerReconCron
                 payload: {
                   walletId: w.id,
                   userId: w.userId,
-                  balanceInPaise: w.balanceInPaise,
-                  ledgerSumInPaise: ledgerSum,
-                  driftInPaise: driftPaise,
+                  // Phase 2 (PR 2.2) — narrow bigint → number for the
+                  // event payload (JSON can't carry bigint natively).
+                  // Drift values stay well inside JS's safe-integer
+                  // range; the column widening is about storage, not
+                  // about per-event payload magnitude.
+                  balanceInPaise: Number(w.balanceInPaise),
+                  ledgerSumInPaise: Number(ledgerSum),
+                  driftInPaise: Number(driftPaise),
                 },
               })
               .catch(() => undefined);

@@ -30,7 +30,20 @@ export class AdminTaskService {
     sourceId: string;
     reason: string;
     assignedTo?: string | null;
+    /**
+     * Phase 0 (PR 0.14) — hours from `now()` before the task counts as
+     * SLA-breached. Drives the breach-detector cron. Set on first
+     * enqueue only; idempotent recovery on P2002 preserves the
+     * original deadline so retries don't sneakily extend the SLA.
+     *
+     * Default is null (no SLA) to keep legacy callers unchanged.
+     */
+    slaHours?: number | null;
   }): Promise<AdminTask> {
+    const slaBreachAt =
+      args.slaHours && args.slaHours > 0
+        ? new Date(Date.now() + args.slaHours * 60 * 60 * 1000)
+        : null;
     try {
       const row = await this.prisma.adminTask.create({
         data: {
@@ -39,10 +52,14 @@ export class AdminTaskService {
           sourceId: args.sourceId,
           reason: args.reason,
           assignedTo: args.assignedTo ?? null,
+          slaBreachAt,
         },
       });
       this.logger.log(
-        `AdminTask ${row.id} enqueued: kind=${args.kind} source=${args.sourceType}:${args.sourceId}`,
+        `AdminTask ${row.id} enqueued: kind=${args.kind} source=${args.sourceType}:${args.sourceId}` +
+          (slaBreachAt
+            ? ` slaBreachAt=${slaBreachAt.toISOString()}`
+            : ''),
       );
       return row;
     } catch (err) {

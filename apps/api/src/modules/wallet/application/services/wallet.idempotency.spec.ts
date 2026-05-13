@@ -1,7 +1,10 @@
 import { Prisma } from '@prisma/client';
-import type { Wallet, WalletTransaction } from '@prisma/client';
 import { WalletService } from './wallet.service';
-import { WalletRepository } from '../../domain/repositories/wallet.repository.interface';
+import {
+  WalletEntity,
+  WalletTransactionEntity,
+  WalletRepository,
+} from '../../domain/repositories/wallet.repository.interface';
 
 /**
  * Phase 13 — wallet idempotency unit tests.
@@ -16,7 +19,7 @@ import { WalletRepository } from '../../domain/repositories/wallet.repository.in
  */
 describe('WalletService — credit idempotency', () => {
   const userId = 'cust-1';
-  const wallet: Wallet = {
+  const wallet: WalletEntity = {
     id: 'wallet-1',
     userId,
     balanceInPaise: 0,
@@ -28,13 +31,14 @@ describe('WalletService — credit idempotency', () => {
     version: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
-  } as Wallet;
+  };
 
-  const existingTx: WalletTransaction = {
+  const existingTx: WalletTransactionEntity = {
     id: 'tx-existing',
     walletId: wallet.id,
     userId,
     type: 'REFUND' as any,
+    status: 'COMPLETED' as any,
     amountInPaise: 50000,
     balanceAfterInPaise: 50000,
     referenceType: 'RefundInstruction',
@@ -43,7 +47,7 @@ describe('WalletService — credit idempotency', () => {
     internalNotes: null,
     createdByAdminId: null,
     createdAt: new Date(),
-  } as WalletTransaction;
+  };
 
   function buildService(repoOverrides: Partial<WalletRepository>): WalletService {
     const baseRepo: WalletRepository = {
@@ -61,7 +65,13 @@ describe('WalletService — credit idempotency', () => {
     const noopEventBus = { publish: jest.fn().mockResolvedValue(undefined) } as any;
     const noopAudit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
     const noopRazorpay = {} as any;
-    return new WalletService(repo, noopRazorpay, noopEventBus, noopAudit);
+    // Phase 0 (PR 0.2) — facade injected purely for the verifyTopup amount
+    // check. Credit/debit tests don't exercise it; noop is fine.
+    const noopPaymentOps = {
+      flagMismatch: jest.fn().mockResolvedValue(undefined),
+      recordAttempt: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    return new WalletService(repo, noopRazorpay, noopEventBus, noopAudit, noopPaymentOps);
   }
 
   describe('fast path — duplicate detected before mutation', () => {

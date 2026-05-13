@@ -20,6 +20,8 @@
     "react-quill-new": "^3.8.3"
   },
   "devDependencies": {
+    "@sportsmart/eslint-config": "workspace:*",
+    "@sportsmart/tsconfig": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

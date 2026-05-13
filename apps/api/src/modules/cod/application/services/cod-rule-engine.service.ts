@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { CodRule, CodRuleKind } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 export interface CodEvaluationInput {
   pincode: string;
@@ -21,7 +22,12 @@ export interface CodEvaluationResult {
  */
 @Injectable()
 export class CodRuleEngine {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 7 (PR 7.7) — paise-sibling dual-write for codDecisionLog
+    // (orderTotalInr → orderTotalInPaise).
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
+  ) {}
 
   async listRules() {
     return this.prisma.codRule.findMany({
@@ -128,15 +134,18 @@ export class CodRuleEngine {
 
   private async logDecision(input: CodEvaluationInput, result: CodEvaluationResult) {
     await this.prisma.codDecisionLog.create({
-      data: {
+      data: this.moneyDualWrite.applyPaise('codDecisionLog', {
         customerId: input.customerId,
         pincode: input.pincode,
         sellerId: input.sellerId,
-        orderTotalInr: input.orderTotalInr,
+        // .toFixed(2) — input.orderTotalInr is a JS Number; toPaise
+        // refuses fractional Numbers, so convert to Decimal-string
+        // for exact paise conversion.
+        orderTotalInr: Number(input.orderTotalInr).toFixed(2),
         eligible: result.eligible,
         decidedBy: result.decidedBy,
         reason: result.reason,
-      },
+      }),
     });
   }
 

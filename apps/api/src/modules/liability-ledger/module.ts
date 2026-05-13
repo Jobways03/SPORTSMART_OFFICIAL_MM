@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthGuard } from '../../core/guards';
 import { AdminTaskService } from './application/services/admin-task.service';
+import { AdminTaskSlaBreachCron } from './application/services/admin-task-sla-breach.cron';
 import { LogisticsClaimService } from './application/services/logistics-claim.service';
 import { PlatformExpenseService } from './application/services/platform-expense.service';
 import { SellerDebitService } from './application/services/seller-debit.service';
@@ -27,6 +28,9 @@ import { AdminLiabilityLedgerController } from './presentation/controllers/admin
     LogisticsClaimService,
     PlatformExpenseService,
     AdminTaskService,
+    // Phase 0 (PR 0.14) — SLA-breach detector for admin tasks. Cron
+    // registration is automatic via @Cron; no extra wiring needed.
+    AdminTaskSlaBreachCron,
     LiabilityLedgerPublicFacade,
     // Controller dep — needed by Nest DI when AdminLiabilityLedgerController
     // is wired alongside the existing services.

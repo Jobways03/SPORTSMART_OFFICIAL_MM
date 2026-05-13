@@ -94,6 +94,9 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     ResendAdminResetOtpUseCase,
     ResetAdminPasswordUseCase,
   ],
-  exports: [],
+  // Phase 10 (PR 10.5) — Export the repository binding so the
+  // admin-mfa module (which composes the existing AdminRepository
+  // for MFA writes) can inject it without redeclaring the provider.
+  exports: [ADMIN_REPOSITORY],
 })
 export class AdminModule {}

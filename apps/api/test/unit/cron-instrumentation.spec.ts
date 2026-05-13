@@ -30,10 +30,16 @@ describe('CronInstrumentationService', () => {
         }),
       },
     };
+    // Phase 5 (PR 5.6) — MetricsRegistry is a required constructor
+    // dep; use a fresh one per build so per-test metric counters
+    // don't bleed across cases.
+    const { MetricsRegistry } = require('../../src/core/metrics/metrics.registry');
+    const metrics = new MetricsRegistry();
     return {
-      svc: new CronInstrumentationService(fakePrisma),
+      svc: new CronInstrumentationService(fakePrisma, metrics),
       created,
       updated,
+      metrics,
     };
   }
 

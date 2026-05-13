@@ -33,6 +33,7 @@ import { CustomerReturnsController } from './presentation/controllers/customer-r
 import { AdminReturnsController } from './presentation/controllers/admin-returns.controller';
 import { SellerReturnsController } from './presentation/controllers/seller-returns.controller';
 import { FranchiseReturnsController } from './presentation/controllers/franchise-returns.controller';
+import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { FranchiseReturnsController } from './presentation/controllers/franchise
     WalletModule,
     LiabilityLedgerModule,
     DiscountsModule,
+    MoneyModule,
   ],
   controllers: [
     CustomerReturnsController,

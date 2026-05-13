@@ -13,9 +13,11 @@ import {
   AdminCodRulesController,
   CodEvaluateController,
 } from './presentation/controllers/cod.controller';
+import { MoneyModule } from '../../core/money/money.module';
 
 @Global()
 @Module({
+  imports: [MoneyModule],
   controllers: [AdminCodRulesController, CodEvaluateController],
   providers: [
     AdminAuthGuard,

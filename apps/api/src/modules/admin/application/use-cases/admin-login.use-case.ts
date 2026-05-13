@@ -4,6 +4,7 @@ import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
@@ -22,7 +23,8 @@ interface AdminLoginInput {
   ipAddress?: string;
 }
 
-export interface AdminLoginResult {
+export interface AdminLoginSession {
+  mfaRequired?: false;
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
@@ -33,6 +35,32 @@ export interface AdminLoginResult {
     role: string;
   };
 }
+
+// Phase 10 (PR 10.6) — Discriminated union return type. When the
+// admin has MFA enrolled (mfaEnabledAt != null) the use case stops
+// after password verification and returns this challenge shape
+// instead of a session. Caller posts the TOTP code + challengeToken
+// to /admin/mfa/verify-challenge to obtain the session.
+export interface AdminLoginMfaChallenge {
+  mfaRequired: true;
+  /**
+   * Short-lived JWT (5min) carrying the adminId in `sub` and
+   * `aud=admin-mfa-challenge`. Verified by the challenge endpoint
+   * before TOTP verification. Audience claim prevents the
+   * challenge token from being mis-used as a session token.
+   */
+  challengeToken: string;
+  challengeExpiresIn: number;
+  admin: {
+    adminId: string;
+    email: string;
+  };
+}
+
+export type AdminLoginResult = AdminLoginSession | AdminLoginMfaChallenge;
+
+export const ADMIN_MFA_CHALLENGE_AUD = 'admin-mfa-challenge';
+const MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
 
 @Injectable()
 export class AdminLoginUseCase {
@@ -50,7 +78,11 @@ export class AdminLoginUseCase {
   private auditLogin(
     actorId: string | undefined,
     actorRole: string | undefined,
-    action: 'ADMIN_LOGIN_SUCCESS' | 'ADMIN_LOGIN_FAILED' | 'ADMIN_LOGIN_BLOCKED',
+    action:
+      | 'ADMIN_LOGIN_SUCCESS'
+      | 'ADMIN_LOGIN_FAILED'
+      | 'ADMIN_LOGIN_BLOCKED'
+      | 'ADMIN_LOGIN_MFA_CHALLENGE_ISSUED',
     metadata: Record<string, unknown>,
     ipAddress?: string,
     userAgent?: string,
@@ -149,10 +181,60 @@ export class AdminLoginUseCase {
       throw new UnauthorizedAppException('Invalid credentials');
     }
 
-    // Successful login
+    // Password verified — reset the failure counter and lock window
+    // up front so the next password attempt starts clean regardless
+    // of whether MFA succeeds. (Failed MFA attempts get their own
+    // counter in PR 10.7; for now, a wrong TOTP code doesn't lock
+    // the account but also doesn't relock just because the password
+    // succeeded.)
     await this.adminRepo.updateAdmin(admin.id, {
       failedLoginAttempts: 0,
       lockUntil: null,
+    });
+
+    // Phase 10 (PR 10.6) — MFA challenge branch. If the admin has
+    // enrolled MFA, pause here: issue a short-lived challenge token
+    // and return the challenge shape. The caller posts the
+    // challengeToken + TOTP code to /admin/mfa/verify-challenge to
+    // obtain the actual session. lastLoginAt is intentionally NOT
+    // set yet — the audit signal is "login completed", which a
+    // password-only halt doesn't qualify as.
+    const mfaState = await this.adminRepo.findAdminById(admin.id, {
+      mfaEnabledAt: true,
+    });
+    if (mfaState?.mfaEnabledAt) {
+      const challengeToken = jwt.sign(
+        {
+          sub: admin.id,
+          email: admin.email,
+          aud: ADMIN_MFA_CHALLENGE_AUD,
+        },
+        this.envService.getString('JWT_ADMIN_SECRET'),
+        {
+          expiresIn: MFA_CHALLENGE_TTL_SECONDS,
+          algorithm: JWT_ALGORITHM,
+        },
+      );
+
+      this.auditLogin(
+        admin.id,
+        admin.role,
+        'ADMIN_LOGIN_MFA_CHALLENGE_ISSUED',
+        {},
+        ipAddress,
+        userAgent,
+      );
+
+      return {
+        mfaRequired: true,
+        challengeToken,
+        challengeExpiresIn: MFA_CHALLENGE_TTL_SECONDS,
+        admin: { adminId: admin.id, email: admin.email },
+      };
+    }
+
+    // Successful login (no MFA enrolled)
+    await this.adminRepo.updateAdmin(admin.id, {
       lastLoginAt: new Date(),
     });
 
@@ -180,7 +262,7 @@ export class AdminLoginUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_ADMIN_SECRET'),
-      { expiresIn: accessTtlSeconds },
+      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
     );
 
     this.logger.log(`Admin logged in: ${admin.id} (${admin.role})`);

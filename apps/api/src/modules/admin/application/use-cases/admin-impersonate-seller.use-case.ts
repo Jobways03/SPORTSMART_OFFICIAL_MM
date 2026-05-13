@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import { NotFoundAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
 import {
@@ -64,7 +65,7 @@ export class AdminImpersonateSellerUseCase {
         impersonatedBy: adminId,
       },
       this.envService.getString('JWT_SELLER_SECRET'),
-      { expiresIn: 1800 }, // 30 minutes
+      { expiresIn: 1800, algorithm: JWT_ALGORITHM }, // 30 minutes
     );
 
     // Log impersonation

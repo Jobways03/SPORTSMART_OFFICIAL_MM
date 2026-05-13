@@ -147,6 +147,18 @@ model AdminTask {
   resolvedBy      String?          @map("resolved_by")
   resolutionNote  String?          @map("resolution_note")
 
+  // Phase 0 (PR 0.14) — deadline for OPEN/CLAIMED tasks; the SLA
+  // breach detector cron flips priority and notifies finance once
+  // `now() > slaBreachAt`. Null = no SLA (legacy task or admin
+  // chose not to gate). Common values:
+  //   - REFUND_INSTRUCTION_FAILED → +24h (customer is stuck)
+  //   - LOGISTICS_CLAIM_REVIEW    → +48h (slower lane)
+  //   - SELLER_DEBIT_DISPUTED     → +72h (negotiation has slack)
+  slaBreachAt     DateTime?        @map("sla_breach_at")
+  // True once the SLA-breach cron has fired the escalation event for
+  // this task. Prevents the cron from re-firing every tick.
+  slaBreachedAt   DateTime?        @map("sla_breached_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt       @map("updated_at")
 
@@ -156,5 +168,9 @@ model AdminTask {
   @@unique([kind, sourceType, sourceId])
   @@index([status])
   @@index([assignedTo])
+  // Phase 0 (PR 0.14) — index drives the SLA-breach detector cron's
+  // `WHERE status IN (OPEN, CLAIMED) AND slaBreachAt < now() AND
+  // slaBreachedAt IS NULL` query.
+  @@index([status, slaBreachAt])
   @@map("admin_tasks")
 }

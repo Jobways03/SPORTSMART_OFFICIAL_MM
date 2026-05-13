@@ -35,10 +35,18 @@ describe('SellerProductMappingController.updateMapping — pincode re-resolve', 
       setContext: jest.fn(),
       log: jest.fn(),
     };
+    // PR 12.1 — StockSyncService dependency added as 4th arg. Tests
+    // that hit the updateMapping(stockQty) path call into
+    // syncVariantStockFromMappings; pass-through stub returns
+    // undefined so the call completes.
+    const stockSyncService: any = {
+      syncVariantStockFromMappings: jest.fn().mockResolvedValue(undefined),
+    };
     const ctrl = new SellerProductMappingController(
       sellerMappingRepo,
       storefrontRepo,
       logger,
+      stockSyncService,
     );
     return { ctrl, sellerMappingRepo };
   };

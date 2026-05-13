@@ -22,7 +22,11 @@ describe('RequestLoggingMiddleware — request id correlation', () => {
       log: jest.fn(),
       setContext: jest.fn(),
     };
-    const middleware = new RequestLoggingMiddleware(logger);
+    // Phase 5 (PR 5.7) — middleware now requires a MetricsRegistry.
+    // Use a fresh registry so per-test histogram observations don't
+    // bleed across cases.
+    const { MetricsRegistry } = require('../../src/core/metrics/metrics.registry');
+    const middleware = new RequestLoggingMiddleware(logger, new MetricsRegistry());
     const headers: Record<string, string> = {};
     const listeners: Record<string, Array<() => void>> = {};
     const res: any = {

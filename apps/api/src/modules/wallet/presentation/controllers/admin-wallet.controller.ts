@@ -16,6 +16,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard, PolicyGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Policy } from '../../../../core/decorators/policy.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { WalletService } from '../../application/services/wallet.service';
 import {
@@ -74,7 +75,13 @@ export class AdminWalletController {
     };
   }
 
+  // Phase 1 (PR 1.3) — @Idempotent: admin manual credit adjustments
+  // are money-moving and ops-visible. A double-click on the adjust
+  // button must not write the credit twice. (WalletService already
+  // has a UNIQUE (referenceType, referenceId, type) backstop for the
+  // refund path; this decorator catches CREDIT_ADJUSTMENT too.)
   @Post(':userId/credit')
+  @Idempotent()
   @Permissions('wallets.adjust')
   @Policy({
     resourceType: 'wallet',
@@ -104,7 +111,9 @@ export class AdminWalletController {
     };
   }
 
+  // Phase 1 (PR 1.3) — @Idempotent: same shape as creditWallet.
   @Post(':userId/debit')
+  @Idempotent()
   @Permissions('wallets.adjust')
   @Policy({
     resourceType: 'wallet',

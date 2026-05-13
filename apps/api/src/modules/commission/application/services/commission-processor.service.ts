@@ -7,6 +7,7 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import {
   CommissionRepository,
   COMMISSION_REPOSITORY,
@@ -29,6 +30,10 @@ export class CommissionProcessorService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly ordersFacade: OrdersPublicFacade,
+    // Phase 7 (PR 7.7) — paise-sibling dual-write for the manual
+    // commission-record adjustment path (admin overrides the
+    // algorithm-produced earning + margin).
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   onModuleInit() {
@@ -468,22 +473,27 @@ export class CommissionProcessorService implements OnModuleInit {
 
     // Preserve the processor's original value on first adjustment only —
     // subsequent tweaks leave `originalAdminEarning` untouched so the column
-    // always reflects what the algorithm produced.
+    // always reflects what the algorithm produced. Pass the Decimal verbatim
+    // (no Number(...) collapse) so the dual-write helper's toPaise can
+    // convert exactly when MONEY_DUAL_WRITE_ENABLED is on.
     const preserveOriginal =
-      record.originalAdminEarning == null ? Number(record.adminEarning) : undefined;
+      record.originalAdminEarning == null ? record.adminEarning : undefined;
 
     const updated = await this.prisma.commissionRecord.update({
       where: { id: recordId },
-      data: {
-        adminEarning: newEarning,
-        platformMargin: newEarning,
+      data: this.moneyDualWrite.applyPaise('commissionRecord', {
+        // newEarning arrives as a JS Number from input.newAdminEarning.
+        // .toFixed(2) gives toPaise a Decimal-string to parse exactly,
+        // sidestepping the fractional-Number RangeError.
+        adminEarning: Number(newEarning).toFixed(2),
+        platformMargin: Number(newEarning).toFixed(2),
         adjustedBy: input.adminId,
         adjustedAt: new Date(),
         adjustmentReason: input.reason.trim(),
         ...(preserveOriginal !== undefined
           ? { originalAdminEarning: preserveOriginal }
           : {}),
-      },
+      }),
     });
 
     this.eventBus

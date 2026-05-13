@@ -8,9 +8,10 @@ import { PrismaCommissionRepository } from './infrastructure/repositories/prisma
 import { COMMISSION_REPOSITORY } from './domain/repositories/commission.repository.interface';
 import { AdminAuthGuard, SellerAuthGuard } from '../../core/guards';
 import { OrdersModule } from '../orders/module';
+import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
-  imports: [OrdersModule],
+  imports: [OrdersModule, MoneyModule],
   controllers: [AdminCommissionController, SellerCommissionController],
   providers: [
     AdminAuthGuard,

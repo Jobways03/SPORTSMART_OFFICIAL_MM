@@ -8,6 +8,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { isTransitionAllowed } from '../../../../core/fsm/status-transitions';
 
 const LOCK_KEY = 'lock:stale-return-processor';
 const LOCK_TTL = 120;
@@ -119,10 +120,27 @@ export class StaleReturnProcessorService
 
     for (const ret of stale) {
       try {
-        await this.prisma.return.update({
-          where: { id: ret.id },
+        // Phase 0 (PR 0.8) — guard the transition + CAS on status so a
+        // concurrent customer-cancel / admin-reject doesn't get clobbered.
+        // `updateMany` returns count=0 when the WHERE clause matched no
+        // rows (status moved underneath us); we skip the history write
+        // in that case so the audit trail stays honest.
+        if (!isTransitionAllowed('ReturnStatus', ret.status, 'CANCELLED')) {
+          this.logger.warn(
+            `Skipping ${ret.returnNumber}: ${ret.status} → CANCELLED is not in the FSM matrix`,
+          );
+          continue;
+        }
+        const result = await this.prisma.return.updateMany({
+          where: { id: ret.id, status: ret.status as any },
           data: { status: 'CANCELLED', closedAt: new Date() },
         });
+        if (result.count === 0) {
+          this.logger.log(
+            `Skipped auto-cancel for ${ret.returnNumber}: status changed under us (was ${ret.status})`,
+          );
+          continue;
+        }
         await this.prisma.returnStatusHistory.create({
           data: {
             returnId: ret.id,
@@ -159,10 +177,23 @@ export class StaleReturnProcessorService
 
     for (const ret of stale) {
       try {
-        await this.prisma.return.update({
-          where: { id: ret.id },
+        // Phase 0 (PR 0.8) — same CAS-on-status pattern as autoCancelStale.
+        if (!isTransitionAllowed('ReturnStatus', ret.status, 'COMPLETED')) {
+          this.logger.warn(
+            `Skipping ${ret.returnNumber}: ${ret.status} → COMPLETED is not in the FSM matrix`,
+          );
+          continue;
+        }
+        const result = await this.prisma.return.updateMany({
+          where: { id: ret.id, status: ret.status as any },
           data: { status: 'COMPLETED', closedAt: new Date() },
         });
+        if (result.count === 0) {
+          this.logger.log(
+            `Skipped auto-close for ${ret.returnNumber}: status changed under us (was ${ret.status})`,
+          );
+          continue;
+        }
         await this.prisma.returnStatusHistory.create({
           data: {
             returnId: ret.id,

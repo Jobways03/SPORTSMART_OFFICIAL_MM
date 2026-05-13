@@ -179,14 +179,24 @@ export class RefundGatewayService {
         };
       }
 
+      // Phase 0 (PR 0.5) — adapter takes BigInt paise. `input.amount`
+      // is rupees as JS Number (legacy contract); convert locally.
+      // Phase 7 will route refund amounts as paise end-to-end.
+      //
+      // Phase 4 (PR 4.2) — pass an idempotency key derived from the
+      // return id. A transient 502 on the Razorpay refund POST plus a
+      // retry would otherwise create a duplicate refund (paying the
+      // customer twice from our balance). With the key, Razorpay
+      // dedupes attempts and returns the existing refund on replay.
       const refundResult = await this.razorpayAdapter.initiateRefund(
         order.razorpayPaymentId,
-        input.amount,
+        BigInt(Math.round(input.amount * 100)),
         {
           return_id: input.returnId,
           return_number: input.returnNumber,
           order_number: input.orderNumber,
         },
+        { idempotencyKey: `refund-${input.returnId}` },
       );
 
       // Payment-ops audit trail — record success path.

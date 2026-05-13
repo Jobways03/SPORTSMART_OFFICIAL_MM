@@ -7,8 +7,35 @@ import type {
 
 export const WALLET_REPOSITORY = Symbol('WALLET_REPOSITORY');
 
-export interface WalletWithLatest extends Wallet {
-  transactions: WalletTransaction[];
+/**
+ * Phase 2 (PR 2.2) — boundary types.
+ *
+ * The Prisma `Wallet` / `WalletTransaction` types now expose money
+ * columns as `bigint` (matching the BIGINT column type). Application
+ * code reasoned in `number` for years and the values stay comfortably
+ * inside JavaScript's safe-integer range (₹90 trillion), so we
+ * marshal at the repo boundary instead of forcing every caller to
+ * juggle `bigint`.
+ *
+ * `WalletEntity` and `WalletTransactionEntity` mirror Prisma's row
+ * shape with the money fields re-typed as `number`. The repo
+ * implementation `Number(...)` -casts on read and `BigInt(...)`-casts
+ * on write; everything outside the repo stays number-typed.
+ */
+export type WalletEntity = Omit<Wallet, 'balanceInPaise'> & {
+  balanceInPaise: number;
+};
+
+export type WalletTransactionEntity = Omit<
+  WalletTransaction,
+  'amountInPaise' | 'balanceAfterInPaise'
+> & {
+  amountInPaise: number;
+  balanceAfterInPaise: number;
+};
+
+export interface WalletWithLatest extends WalletEntity {
+  transactions: WalletTransactionEntity[];
 }
 
 export interface CreateTransactionInput {
@@ -26,8 +53,8 @@ export interface CreateTransactionInput {
 }
 
 export interface ApplyMutationResult {
-  wallet: Wallet;
-  transaction: WalletTransaction;
+  wallet: WalletEntity;
+  transaction: WalletTransactionEntity;
 }
 
 export interface ListWalletsFilter {
@@ -61,9 +88,9 @@ export interface ListWalletsPage {
 
 export interface WalletRepository {
   /** Lazy: returns existing or creates a fresh row at balance 0. */
-  getOrCreate(userId: string): Promise<Wallet>;
+  getOrCreate(userId: string): Promise<WalletEntity>;
 
-  findByUserId(userId: string): Promise<Wallet | null>;
+  findByUserId(userId: string): Promise<WalletEntity | null>;
 
   /**
    * Atomic: bumps balance by `deltaInPaise` (signed) iff `expectedVersion`
@@ -87,7 +114,7 @@ export interface WalletRepository {
    * Used when initiating a top-up: we record the intent so we have an
    * id to return + later flip to COMPLETED on signature verify.
    */
-  insertPending(input: CreateTransactionInput): Promise<WalletTransaction>;
+  insertPending(input: CreateTransactionInput): Promise<WalletTransactionEntity>;
 
   /**
    * Flip a PENDING transaction to COMPLETED and apply the balance change
@@ -100,7 +127,7 @@ export interface WalletRepository {
     newBalanceInPaise: number;
   }): Promise<ApplyMutationResult>;
 
-  findTransactionById(id: string): Promise<WalletTransaction | null>;
+  findTransactionById(id: string): Promise<WalletTransactionEntity | null>;
 
   /**
    * Phase 3 (PR 3.2) — idempotency lookup. Returns the transaction
@@ -112,13 +139,13 @@ export interface WalletRepository {
     referenceType: string;
     referenceId: string;
     type: WalletTransactionType;
-  }): Promise<WalletTransaction | null>;
+  }): Promise<WalletTransactionEntity | null>;
 
   listTransactions(args: {
     userId: string;
     page: number;
     limit: number;
-  }): Promise<{ items: WalletTransaction[]; total: number }>;
+  }): Promise<{ items: WalletTransactionEntity[]; total: number }>;
 
   listWallets(filter: ListWalletsFilter): Promise<ListWalletsPage>;
 
@@ -132,5 +159,5 @@ export interface WalletRepository {
     isBlocked: boolean;
     reason?: string | null;
     adminId?: string | null;
-  }): Promise<Wallet>;
+  }): Promise<WalletEntity>;
 }

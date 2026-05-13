@@ -1,10 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { hashRefreshToken } from '../../../../core/auth/refresh-token';
 import {
   SessionRepository,
   SessionRecord,
 } from '../../domain/repositories/session.repository';
 
+/**
+ * Phase 3 (PR 3.2) — refresh-token hashing at the storage boundary.
+ *
+ * Every write hashes the raw token before persisting; every read
+ * hashes the incoming lookup value. Callers continue to pass raw
+ * tokens (response bodies, request bodies) — the hash never leaks
+ * past this repo.
+ */
 @Injectable()
 export class PrismaSessionRepository implements SessionRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -21,19 +30,47 @@ export class PrismaSessionRepository implements SessionRepository {
 
   async findByRefreshToken(refreshToken: string): Promise<SessionRecord | null> {
     return this.prisma.session.findFirst({
-      where: { refreshToken },
+      where: { refreshToken: hashRefreshToken(refreshToken) },
     }) as Promise<SessionRecord | null>;
   }
 
+  /**
+   * Phase 3 (PR 3.6) — secondary lookup against the previous-rotation
+   * hash. Hashes the raw input and queries only the burned-hash
+   * column; the use-case calls this only after `findByRefreshToken`
+   * misses, so the two-query cost is paid only on the (rare) theft
+   * path.
+   */
+  async findByPreviousRefreshToken(refreshToken: string): Promise<SessionRecord | null> {
+    return this.prisma.session.findFirst({
+      where: { previousRefreshTokenHash: hashRefreshToken(refreshToken) },
+    }) as Promise<SessionRecord | null>;
+  }
+
+  /**
+   * Phase 3 (PR 3.6) — rotation now records the burned hash. We
+   * read the current `refreshToken` value from the row, then in a
+   * single update: stash that value into `previousRefreshTokenHash`
+   * and write the new hash into `refreshToken`. The findUnique +
+   * update pair is racy on its own (two concurrent rotations could
+   * see the same "current"), but the refresh endpoint's caller
+   * already serialises per-session (a single client driving its
+   * own refresh), so the realistic concurrency is 1.
+   */
   async rotateRefreshToken(
     sessionId: string,
     newRefreshToken: string,
     newExpiresAt: Date,
   ): Promise<SessionRecord> {
+    const current = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { refreshToken: true },
+    });
     return this.prisma.session.update({
       where: { id: sessionId },
       data: {
-        refreshToken: newRefreshToken,
+        previousRefreshTokenHash: current?.refreshToken ?? null,
+        refreshToken: hashRefreshToken(newRefreshToken),
         expiresAt: newExpiresAt,
       },
     }) as Promise<SessionRecord>;
@@ -57,7 +94,9 @@ export class PrismaSessionRepository implements SessionRepository {
     ipAddress: string | null;
     expiresAt: Date;
   }): Promise<SessionRecord> {
-    return this.prisma.session.create({ data }) as Promise<SessionRecord>;
+    return this.prisma.session.create({
+      data: { ...data, refreshToken: hashRefreshToken(data.refreshToken) },
+    }) as Promise<SessionRecord>;
   }
 
   async revokeAllUserSessions(userId: string): Promise<void> {

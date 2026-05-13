@@ -13,13 +13,15 @@ describe('authorization env flags — schema shape', () => {
   const baseEnv = {
     DATABASE_URL: 'postgresql://x',
     REDIS_URL: 'redis://x',
-    JWT_CUSTOMER_SECRET: 'a'.repeat(32),
-    JWT_SELLER_SECRET: 'a'.repeat(32),
-    JWT_FRANCHISE_SECRET: 'a'.repeat(32),
+    // Phase 3 (PR 3.5) — distinct per actor scope; schema enforces
+    // pairwise uniqueness.
+    JWT_CUSTOMER_SECRET: 'c'.repeat(32),
+    JWT_SELLER_SECRET: 's'.repeat(32),
+    JWT_FRANCHISE_SECRET: 'f'.repeat(32),
     JWT_ADMIN_SECRET: 'a'.repeat(32),
-    JWT_AFFILIATE_SECRET: 'a'.repeat(32),
-    AFFILIATE_ENCRYPTION_KEY: 'a'.repeat(32),
-    JWT_REFRESH_SECRET: 'a'.repeat(32),
+    JWT_AFFILIATE_SECRET: 'p'.repeat(32),
+    AFFILIATE_ENCRYPTION_KEY: 'k'.repeat(32),
+    JWT_REFRESH_SECRET: 'r'.repeat(32),
   };
 
   it('PERMISSIONS_GUARD_STRICT defaults to "false"', () => {

@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
+import {
+  CounterHandle,
+  HistogramHandle,
+  MetricsRegistry,
+} from '../metrics/metrics.registry';
 
 /**
  * Phase 8 (PR 8.3) — Cron run instrumentation.
@@ -28,6 +33,19 @@ import { PrismaService } from '../../bootstrap/database/prisma.service';
  *   });
  *
  * give us a SQL-queryable per-cron metric without log scraping.
+ *
+ * Phase 5 (PR 5.6) — every wrap also emits two Prometheus metrics so
+ * the cron observability surface is visible to Grafana / scrapers
+ * without requiring SQL access:
+ *
+ *   `cron_runs_total{jobName, status}` — counter, monotonically
+ *     incremented per finish. status ∈ {SUCCEEDED, FAILED}.
+ *
+ *   `cron_run_duration_ms{jobName}` — histogram observation per
+ *     finish (both success and failure paths). Bucket boundaries
+ *     come from the registry default (10ms…30s); for slow daily
+ *     crons (reconciliation) the +Inf bucket carries everything
+ *     past 30s, which is fine for dashboards.
  */
 @Injectable()
 export class CronInstrumentationService {
@@ -36,7 +54,26 @@ export class CronInstrumentationService {
   /** Hard cap on error string length so a runaway trace doesn't OOM the row. */
   private static readonly ERROR_MAX_BYTES = 4 * 1024;
 
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly runsCounter: CounterHandle;
+  private readonly durationHistogram: HistogramHandle;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly metrics: MetricsRegistry,
+  ) {
+    // Register at construct time so the /metrics endpoint shows the
+    // HELP / TYPE lines even before any cron has fired (a Grafana
+    // panel pinned to these names needs the descriptor lines to
+    // resolve consistently across deploys).
+    this.runsCounter = this.metrics.counter(
+      'cron_runs_total',
+      'Cron runs completed, per job and terminal status.',
+    );
+    this.durationHistogram = this.metrics.histogram(
+      'cron_run_duration_ms',
+      'Cron run wall-clock duration in milliseconds, per job.',
+    );
+  }
 
   async wrap<T>(jobName: string, fn: () => Promise<T>): Promise<T> {
     const started = Date.now();
@@ -81,8 +118,17 @@ export class CronInstrumentationService {
     result?: unknown,
     err?: Error,
   ): Promise<void> {
-    if (!runId) return;
     const durationMs = Date.now() - started;
+
+    // Phase 5 (PR 5.6) — Prometheus metrics. Emit regardless of
+    // whether the cron_runs row was successfully created: a failure
+    // to insert the audit row (e.g. DB blip) shouldn't mean the
+    // duration / status is also missing from /metrics, which is the
+    // dashboard that pages on-call.
+    this.runsCounter.inc({ jobName, status });
+    this.durationHistogram.observe(durationMs, { jobName });
+
+    if (!runId) return;
     const errorText = err
       ? truncate(err.stack ?? err.message, CronInstrumentationService.ERROR_MAX_BYTES)
       : null;

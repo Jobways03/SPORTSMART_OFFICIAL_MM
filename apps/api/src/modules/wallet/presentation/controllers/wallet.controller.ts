@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { UserAuthGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { WalletService } from '../../application/services/wallet.service';
 import {
   InitiateTopupDto,
@@ -41,7 +42,10 @@ export class WalletController {
     return { success: true, message: 'Transactions retrieved', data };
   }
 
+  // Phase 1 (PR 1.3) — @Idempotent: a retried top-up POST must not
+  // create a second Razorpay order + second pending WalletTransaction.
   @Post('topup')
+  @Idempotent()
   async initiateTopup(@Req() req: any, @Body() body: InitiateTopupDto) {
     const data = await this.wallet.initiateTopup({
       userId: req.userId,
@@ -50,7 +54,10 @@ export class WalletController {
     return { success: true, message: 'Top-up initiated', data };
   }
 
+  // Phase 1 (PR 1.3) — @Idempotent: layered with PR 0.2's amount-check.
+  // A retried verify must not double-credit the wallet.
   @Post('topup/verify')
+  @Idempotent()
   async verifyTopup(@Req() req: any, @Body() body: VerifyTopupDto) {
     if (
       !body?.walletTransactionId ||

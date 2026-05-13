@@ -11,6 +11,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { RefundInstructionService } from '../../application/services/refund-instruction.service';
@@ -222,7 +223,12 @@ export class AdminRefundApprovalsController {
     };
   }
 
+  // Phase 1 (PR 1.3) — @Idempotent: approval triggers the refund saga
+  // (gateway call + wallet credit). A retried PATCH must not double-
+  // run the saga; the instruction's own status guard is the inner
+  // belt, this decorator the outer.
   @Patch(':id/approve')
+  @Idempotent()
   @Permissions('refunds.approve')
   async approve(@Req() req: any, @Param('id') id: string) {
     const updated = await this.service.approveByFinance({
@@ -236,7 +242,10 @@ export class AdminRefundApprovalsController {
     };
   }
 
+  // Phase 1 (PR 1.3) — reject doesn't move money but does emit an
+  // audit + customer-notification event. Decorate for consistency.
   @Patch(':id/reject')
+  @Idempotent()
   @Permissions('refunds.approve')
   async reject(
     @Req() req: any,

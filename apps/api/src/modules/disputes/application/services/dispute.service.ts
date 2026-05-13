@@ -1055,12 +1055,41 @@ export class DisputeService {
         this.logger.error(
           `Failed to create RefundInstruction for dispute ${updated.disputeNumber}: ${(err as Error).message}`,
         );
+        // Phase 0 (PR 0.14) — set a 24h SLA on the admin task so the
+        // breach-detector cron escalates if finance hasn't acted by
+        // then. The customer's dispute shows "resolved" but their
+        // wallet hasn't been credited yet; we cannot let the task
+        // sit indefinitely in the ops queue.
         await this.ledger
           .enqueueAdminTask({
             kind: 'REFUND_INSTRUCTION_FAILED',
             sourceType: 'DISPUTE',
             sourceId: updated.id,
             reason: `RefundInstruction enqueue failed: ${(err as Error).message}`,
+            slaHours: 24,
+          })
+          .catch(() => undefined);
+        // Phase 0 (PR 0.14) — notify the customer their dispute is
+        // resolved but the refund is pending manual review. Without
+        // this, customers see "resolved" in their portal but never
+        // get the money / wallet credit and have to file a follow-up
+        // ticket. Best-effort emit; the admin task is the canonical
+        // recovery channel.
+        await this.eventBus
+          .publish({
+            eventName: 'disputes.refund_failure.queued',
+            aggregate: 'Dispute',
+            aggregateId: updated.id,
+            occurredAt: new Date(),
+            payload: {
+              disputeId: updated.id,
+              disputeNumber: updated.disputeNumber,
+              customerId: updated.filedById,
+              masterOrderId: updated.masterOrderId,
+              amountInPaise: amountInPaise.toString(),
+              reason: (err as Error).message,
+              slaHours: 24,
+            },
           })
           .catch(() => undefined);
       }

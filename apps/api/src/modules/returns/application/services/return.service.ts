@@ -43,6 +43,7 @@ import { ReplacementOrderService } from './replacement-order.service';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { verifyRazorpaySignature } from './razorpay-signature';
 import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 export interface CreateReturnInput {
   subOrderId: string;
@@ -201,6 +202,10 @@ export class ReturnService {
     // for legacy orders without per-item tax snapshots; caller falls
     // back to the existing gross-price refund logic in that case.
     private readonly discountAllocation: DiscountAllocationService,
+    // Phase 7 (PR 7.3) — paise-sibling dual-write for refundAmount /
+    // amount columns on the return / returnItem / refundTransaction
+    // models. No-ops when MONEY_DUAL_WRITE_ENABLED=false (dev/CI).
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {
     this.logger.setContext('ReturnService');
   }
@@ -1475,12 +1480,12 @@ export class ReturnService {
       for (const decision of perItemRefunds) {
         await tx.returnItem.update({
           where: { id: decision.returnItemId },
-          data: {
+          data: this.moneyDualWrite.applyPaise('returnItem', {
             qcOutcome: decision.qcOutcome as any,
             qcQuantityApproved: decision.qcQuantityApproved,
             qcNotes: decision.qcNotes,
             refundAmount: decision.refundAmount,
-          },
+          }),
         });
 
         // Phase C (P0.2) — write tax reversal line + liability
@@ -1589,7 +1594,7 @@ export class ReturnService {
       // 3. Update the return record itself
       await tx.return.update({
         where: { id: returnId },
-        data: {
+        data: this.moneyDualWrite.applyPaise('return', {
           status: newStatus as any,
           qcCompletedAt: new Date(),
           qcDecision: qcDecision as any,
@@ -1621,7 +1626,7 @@ export class ReturnService {
             customerRemedy === 'EXCHANGE'
               ? input.exchangeTargetVariantId ?? null
               : null,
-        },
+        }),
       });
 
       // 4. Append status history
@@ -1972,18 +1977,22 @@ export class ReturnService {
       refundMethod: detectedMethod,
     });
 
-    // Audit: record the gateway attempt before updating return state
+    // Audit: record the gateway attempt before updating return state.
+    // amount is the source Decimal; routing through the dual-write
+    // helper writes amountInPaise transactionally. Passing the
+    // Decimal verbatim (not Number(...)) avoids the float-coercion
+    // hazard PR 0.4's toPaise was built to refuse.
     await this.prisma.refundTransaction.create({
-      data: {
+      data: this.moneyDualWrite.applyPaise('refundTransaction', {
         returnId,
         attemptNumber: (ret.refundAttempts ?? 0) + 1,
-        amount: Number(ret.refundAmount),
+        amount: ret.refundAmount,
         gatewayRefundId: gatewayResult.gatewayRefundId ?? null,
         status: gatewayResult.success ? 'INITIATED' : 'FAILED',
         failureReason: gatewayResult.failureReason ?? null,
         actorType,
         actorId,
-      },
+      }),
     });
 
     // Update return state. If the gateway settled synchronously (wallet
@@ -2311,18 +2320,19 @@ export class ReturnService {
       failureReason: gatewayResult.failureReason,
     });
 
-    // Audit row for this retry attempt
+    // Audit row for this retry attempt. Same dual-write + Decimal
+    // pass-through pattern as the initial-attempt write above.
     await this.prisma.refundTransaction.create({
-      data: {
+      data: this.moneyDualWrite.applyPaise('refundTransaction', {
         returnId,
         attemptNumber: (ret.refundAttempts ?? 0) + 1,
-        amount: Number(ret.refundAmount),
+        amount: ret.refundAmount,
         gatewayRefundId: gatewayResult.gatewayRefundId ?? null,
         status: gatewayResult.success ? 'INITIATED' : 'FAILED',
         failureReason: gatewayResult.failureReason ?? null,
         actorType,
         actorId,
-      },
+      }),
     });
 
     await this.returnRepo.recordStatusChange(
@@ -2504,10 +2514,20 @@ export class ReturnService {
       );
     }
 
+    // Phase 0 (PR 0.5) — adapter takes BigInt paise. diffPaise is
+    // already paise as JS Number; coerce to bigint without going
+    // through rupees.
+    //
+    // Phase 4 (PR 4.3) — idempotency key keyed on returnId so a
+    // transient 5xx + retry dedupes at Razorpay. One return = one
+    // exchange-diff order; replaying the request must converge on
+    // the same gateway order, not mint a parallel one the customer
+    // could mistakenly pay twice.
     const order = await this.razorpayAdapter.createOrder({
-      amountInr: diffPaise / 100,
+      amountInPaise: BigInt(diffPaise),
       receipt: `${ret.returnNumber}-XCHG`,
       notes: { returnId: ret.id, returnNumber: ret.returnNumber },
+      idempotencyKey: `exchange-diff-${ret.id}`,
     });
 
     await this.prisma.return.update({

@@ -95,6 +95,13 @@ model Session {
   id           String    @id @default(uuid())
   userId       String    @map("user_id")
   refreshToken String    @map("refresh_token")
+  // Phase 3 (PR 3.6) — refresh-token reuse detection. Holds the
+  // SHA-256 of the LAST rotation's refresh token (now "burned"). A
+  // refresh request that hashes to this value, after missing on the
+  // current `refresh_token` slot, signals theft: revoke every session
+  // for this user. Nullable on new sessions (no rotation yet); written
+  // on every subsequent rotate.
+  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
   userAgent    String?   @map("user_agent")
   ipAddress    String?   @map("ip_address")
   expiresAt    DateTime  @map("expires_at")
@@ -105,6 +112,10 @@ model Session {
 
   @@index([userId])
   @@index([refreshToken])
+  // Phase 3 (PR 3.6) — secondary-lookup index for theft detection.
+  // The use-case only hits this index when the primary refresh-token
+  // lookup misses, so contention is bounded.
+  @@index([previousRefreshTokenHash])
   @@map("sessions")
 }
 

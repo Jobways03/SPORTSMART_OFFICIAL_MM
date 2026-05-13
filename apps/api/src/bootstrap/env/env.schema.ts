@@ -26,8 +26,20 @@ export const envSchema = z.object({
   // account numbers at rest. 32 bytes (64 hex chars or 44 base64
   // chars) for AES-256. Generate with `openssl rand -hex 32`.
   AFFILIATE_ENCRYPTION_KEY: z.string().min(32),
+  // Phase 10 — App-layer key for encrypting admin TOTP secrets at
+  // rest. Same 32-byte / AES-256 shape as the affiliate key. Now
+  // listed in requiredInProd (PR 10.8) so prod refuses to boot
+  // without it — the PR 10.6 login-time challenge reads this on
+  // every MFA-enrolled admin login. Optional in dev/staging so
+  // local development without MFA can skip generating a key.
+  ADMIN_MFA_ENCRYPTION_KEY: z.string().min(32).optional(),
   JWT_REFRESH_SECRET: z.string().min(32),
-  JWT_ACCESS_TTL: z.string().default('7d'),
+  // Phase 3 (PR 3.3) — tightened from the pre-PR default of '7d'.
+  // A stolen access token is now valid for at most 1 hour against
+  // a still-active session; renewals go through the (hashed,
+  // rotation-on-use) refresh flow from PR 3.2. Operators can still
+  // override per-env, subject to the cross-field validation below.
+  JWT_ACCESS_TTL: z.string().default('1h'),
   JWT_REFRESH_TTL: z.string().default('30d'),
 
   // S3 - optional in dev
@@ -40,11 +52,26 @@ export const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  // Phase 4 (PR 4.7) — webhook replay window in seconds. The
+  // controller compares `payload.created_at` against the server
+  // clock and rejects events outside ±this many seconds. 300 (5 min)
+  // matches Stripe's default; tighter values (60s, 30s) are sensible
+  // in high-paranoia environments.
+  RAZORPAY_WEBHOOK_REPLAY_WINDOW_SECONDS: z.coerce.number().int().positive().default(300),
 
   // Shiprocket - optional
   SHIPROCKET_EMAIL: z.string().optional(),
   SHIPROCKET_PASSWORD: z.string().optional(),
   SHIPROCKET_WEBHOOK_TOKEN: z.string().optional(),
+  // Phase 1 (PR 1.4) — HMAC-SHA256 secret for Shiprocket webhook
+  // signature verification. When set, the controller requires the
+  // `X-Shiprocket-Signature` header in Stripe-style `t=<ts>,v1=<hmac>`
+  // format. When unset, the controller falls back to the legacy
+  // `x_token` body-bearer check with a deprecation warning. Move all
+  // environments to HMAC by setting this and coordinating with
+  // Shiprocket dashboard config; the bearer-token path will be
+  // removed in a follow-up release.
+  SHIPROCKET_WEBHOOK_HMAC_SECRET: z.string().optional(),
 
   // iThink Logistics
   ITHINK_USE_SANDBOX: z
@@ -308,6 +335,28 @@ export const envSchema = z.object({
   // runbook). Crons are no-ops when disabled.
   SLA_BREACH_DETECTOR_ENABLED: z.string().default('false'),
 
+  // Phase 0 (PR 0.14) — admin-task SLA-breach detector. ON by default
+  // so refund-instruction failures escalate within 24h of the dispute
+  // decision. Flip off only to suppress noisy escalations during ops
+  // incidents.
+  ADMIN_TASK_SLA_BREACH_ENABLED: z.string().default('true'),
+
+  // Phase 1 (PR 1.5) — Stuck-saga sweep cron. ON by default so a
+  // crash-mid-saga can never silently strand a customer's refund.
+  // Set false to pause auto-escalation during an ops incident where
+  // many sagas are legitimately running long.
+  REFUND_SAGA_SWEEP_ENABLED: z.string().default('true'),
+  // Sagas in STARTED / IN_PROGRESS older than this many minutes are
+  // FAIL-and-escalated. Default 5 min — Razorpay's hard refund
+  // timeout is 30s, leaving 9.5× headroom for the longest legit run.
+  REFUND_SAGA_STUCK_MINUTES: z.coerce.number().int().min(1).default(5),
+
+  // Phase 1 (PR 1.8) — Franchise reservation cleanup cron. ON by
+  // default so a crash-mid-checkout doesn't strand franchise stock
+  // forever. Set false to pause during ops incidents where the
+  // franchise inventory ledger is being manually reconciled.
+  FRANCHISE_RESERVATION_SWEEP_ENABLED: z.string().default('true'),
+
   // Phase 7 (PR 7.2) — retention enforcer. Off by default. Two flags
   // here so the cron can soak in DRY-RUN mode (writes execution audit
   // rows but doesn't mutate files) before going live.
@@ -356,6 +405,103 @@ export const envSchema = z.object({
   WEBHOOK_DELIVERY_ENABLED: z.string().default('false'),
   WEBHOOK_HMAC_SECRET: z.string().optional(),
 }).superRefine((env, ctx) => {
+  // Phase 3 (PR 3.3) — JWT TTL policy. Cross-field validation:
+  //   - both TTLs parse to a positive duration
+  //   - REFRESH_TTL > ACCESS_TTL (otherwise refresh is useless)
+  //   - in production, ACCESS_TTL <= 24h (backstop against operator
+  //     reverting to a multi-day default)
+  //
+  // Same `<digits><unit>` grammar the login use-cases use. Keep
+  // parseDurationSeconds local — it's intentionally not exported so
+  // the schema is the single owner of the "is this string a valid
+  // TTL" check.
+  const parseDurationSeconds = (value: string | undefined): number | null => {
+    if (!value) return null;
+    const m = /^(\d+)(s|m|h|d)$/.exec(value);
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    if (n <= 0) return null;
+    const unitToSec: Record<string, number> = {
+      s: 1, m: 60, h: 3600, d: 86400,
+    };
+    return n * unitToSec[m[2]];
+  };
+
+  const accessSec = parseDurationSeconds(env.JWT_ACCESS_TTL);
+  const refreshSec = parseDurationSeconds(env.JWT_REFRESH_TTL);
+
+  if (accessSec === null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JWT_ACCESS_TTL'],
+      message: `JWT_ACCESS_TTL must be a positive duration like '15m', '1h', '24h' (got '${env.JWT_ACCESS_TTL}')`,
+    });
+  }
+  if (refreshSec === null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JWT_REFRESH_TTL'],
+      message: `JWT_REFRESH_TTL must be a positive duration like '7d', '30d' (got '${env.JWT_REFRESH_TTL}')`,
+    });
+  }
+  if (accessSec !== null && refreshSec !== null && refreshSec <= accessSec) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JWT_REFRESH_TTL'],
+      message: `JWT_REFRESH_TTL must be greater than JWT_ACCESS_TTL (refresh is useless if it expires first). Got access=${env.JWT_ACCESS_TTL}, refresh=${env.JWT_REFRESH_TTL}.`,
+    });
+  }
+
+  // Phase 3 (PR 3.5) — JWT secret pairwise uniqueness. The six secrets
+  // exist precisely to keep per-actor token forgery independent: a
+  // leaked customer secret must not be reusable to forge admin tokens.
+  // AnyAuthGuard's verify-against-each-secret loop makes collisions
+  // especially damaging — the first match wins, so a collision
+  // silently misroutes the token's actor type.
+  //
+  // Pairwise distinctness check runs on EVERY env (not prod-only)
+  // because a colliding dev/staging env masks the prod misconfig
+  // (operator clones a dev config and forgets to rotate).
+  const jwtSecretKeys: Array<keyof typeof env> = [
+    'JWT_CUSTOMER_SECRET',
+    'JWT_SELLER_SECRET',
+    'JWT_FRANCHISE_SECRET',
+    'JWT_ADMIN_SECRET',
+    'JWT_AFFILIATE_SECRET',
+    'JWT_REFRESH_SECRET',
+  ];
+  const reportedKeys = new Set<keyof typeof env>();
+  for (let i = 0; i < jwtSecretKeys.length; i++) {
+    for (let j = i + 1; j < jwtSecretKeys.length; j++) {
+      const a = jwtSecretKeys[i];
+      const b = jwtSecretKeys[j];
+      const va = env[a];
+      const vb = env[b];
+      if (typeof va !== 'string' || typeof vb !== 'string') continue;
+      if (va !== vb) continue;
+      // Add ONE issue per colliding key, but include the partner name
+      // in the message so ops sees both sides. Tracking which keys
+      // have been reported avoids N² duplicate issues when many keys
+      // share a single value (the "all six identical" worst case).
+      if (!reportedKeys.has(a)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [a],
+          message: `JWT secret collision: ${String(a)} and ${String(b)} share the same value. Each actor scope must have its own secret to preserve per-actor token isolation.`,
+        });
+        reportedKeys.add(a);
+      }
+      if (!reportedKeys.has(b)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [b],
+          message: `JWT secret collision: ${String(b)} and ${String(a)} share the same value. Each actor scope must have its own secret to preserve per-actor token isolation.`,
+        });
+        reportedKeys.add(b);
+      }
+    }
+  }
+
   // Phase 2 (PR 2.5) — outbox safety interlocks. Run on EVERY env (not
   // just prod) because misconfiguring these in dev silently corrupts
   // local development too. Catching here is far cheaper than discovering
@@ -386,6 +532,74 @@ export const envSchema = z.object({
   // on start instead.
   if (env.NODE_ENV !== 'production') return;
 
+  // Phase 3 (PR 3.3) — prod-only cap on JWT_ACCESS_TTL. A 24h ceiling
+  // is the explicit operational policy: longer-lived access tokens
+  // turn every cross-device logout into a 24h vulnerability window.
+  // Dev / staging stay flexible so debugging long-running flows
+  // doesn't require constant re-logins.
+  if (accessSec !== null && accessSec > 24 * 3600) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['JWT_ACCESS_TTL'],
+      message: `JWT_ACCESS_TTL must be <= 24h in production (got '${env.JWT_ACCESS_TTL}'). Use refresh-token rotation for longer sessions.`,
+    });
+  }
+
+  // Phase 3 (PR 3.7) — strict CORS-origins policy in production.
+  // Reject the three classic foot-guns:
+  //
+  //   - `*` (wildcard) combined with `credentials: true` in main.ts
+  //     is a credential-exfiltration setup.
+  //   - `http://...` allows a stripping CDN bug to send Bearer tokens
+  //     in plaintext.
+  //   - Malformed entries (typo'd scheme, embedded whitespace) silently
+  //     misbehave inside Express's CORS middleware.
+  //
+  // Comma-separated list; the whole value is rejected if ANY entry is
+  // invalid (fail-closed for the allow-list).
+  const corsRaw = env.CORS_ORIGINS;
+  if (typeof corsRaw === 'string') {
+    const origins = corsRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (origins.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['CORS_ORIGINS'],
+        message: `CORS_ORIGINS must be an explicit comma-separated allow-list in production (got empty).`,
+      });
+    }
+    for (const origin of origins) {
+      if (origin === '*') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CORS_ORIGINS'],
+          message: `CORS_ORIGINS wildcard '*' is rejected in production — combined with credentials it leaks Bearer tokens to any site visited by the user.`,
+        });
+        continue;
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(origin);
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CORS_ORIGINS'],
+          message: `CORS_ORIGINS entry '${origin}' is not a valid URL.`,
+        });
+        continue;
+      }
+      if (parsed.protocol !== 'https:') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CORS_ORIGINS'],
+          message: `CORS_ORIGINS entry '${origin}' must use https:// in production (got '${parsed.protocol}').`,
+        });
+      }
+    }
+  }
+
   const requiredInProd: Array<keyof typeof env> = [
     'RAZORPAY_KEY_ID',
     'RAZORPAY_KEY_SECRET',
@@ -394,6 +608,13 @@ export const envSchema = z.object({
     'S3_REGION',
     'S3_ACCESS_KEY',
     'S3_SECRET_KEY',
+    // PR 10.8 — Phase 10's MFA flow (PR 10.6 login challenge,
+    // PR 10.7 anti-replay) reads ADMIN_MFA_ENCRYPTION_KEY on every
+    // verify-challenge request to decrypt the admin's stored TOTP
+    // secret. Without the key, an enrolled admin literally cannot
+    // complete login — better to fail at boot than to surface that
+    // as a 500 on the first MFA-required login attempt in prod.
+    'ADMIN_MFA_ENCRYPTION_KEY',
   ];
   for (const key of requiredInProd) {
     const value = env[key];
@@ -402,6 +623,107 @@ export const envSchema = z.object({
         code: z.ZodIssueCode.custom,
         path: [key],
         message: `${key} is required when NODE_ENV=production`,
+      });
+    }
+  }
+
+  // Phase 6 (PR 6.1) — flags that MUST be on in production. The
+  // feature defaults to off in dev/test/staging (cheap test harness,
+  // no false-positive alerts on empty DBs) but in production the
+  // off-state means losing a built-and-tested observability or
+  // correctness path. Each entry carries a one-line reason; edit
+  // this list when promoting a flag from dev-default to prod-required.
+  const requiredOnInProd: Array<{
+    key: keyof typeof env;
+    reason: string;
+  }> = [
+    {
+      key: 'CRON_HEARTBEAT_ENABLED',
+      reason:
+        'PRs 5.1–5.5 wired every @Cron service into the heartbeat detector. Off in prod means silent crons stay silent.',
+    },
+    {
+      key: 'SLA_BREACH_DETECTOR_ENABLED',
+      reason:
+        'PR 6.2 — SlaBreachDetectorCron walks non-terminal returns/disputes/tickets every 5 min. Off in prod means stuck cases sit unflagged, missing the SLA escalation that downstream Slack/PagerDuty handlers depend on.',
+    },
+    {
+      key: 'AUDIT_CHAIN_ANCHOR_ENABLED',
+      reason:
+        'PR 6.3 — AuditChainAnchorCron pins the hourly Merkle anchor that tamper-evidence verification depends on. Off in prod means no anchors land, the chain-walk verifier scans unboundedly far back, and retroactive log tampering goes undetectable for the duration of the gap.',
+    },
+    {
+      key: 'IDEMPOTENCY_ENABLED',
+      reason:
+        'PR 6.4 — @Idempotent() decorates every money-mutating POST (payments, refunds, payouts, wallet credits, return approvals, disputes). Off in prod, the interceptor short-circuits and a client retry on a network timeout triggers a duplicate capture / refund / payout; the X-Idempotency-Key header becomes advisory rather than load-bearing.',
+    },
+    {
+      key: 'INTEGRITY_VERIFIER_ENABLED',
+      reason:
+        'PR 6.5 — IntegrityVerifierCron is the only mechanism that catches silent file tampering (SHA-256 mismatch on KYC docs, invoices, return-evidence photos, catalog assets). Off in prod, the hourly re-hash never runs, the violation event never fires, and the legacy-row hash backfill never completes. Tamper-detection becomes manual-audit-only.',
+    },
+    {
+      key: 'ERASURE_PROCESSOR_ENABLED',
+      reason:
+        'PR 6.6 — ErasureProcessorCron drains the DataErasureRequest queue that the customer-portal "delete my account" button and the support-side erasure tool both write to. Off in prod, requests sit indefinitely in PENDING and statutory windows (DPDPA Section 12, GDPR Article 17 — 30-day default) get missed silently, with monetary regulatory exposure.',
+    },
+    {
+      key: 'WALLET_LEDGER_RECON_ENABLED',
+      reason:
+        'PR 6.7 — WalletLedgerReconCron asserts daily that sum(WalletTransaction WHERE COMPLETED) === Wallet.balanceInPaise for every wallet, and emits wallet.ledger.drift_detected on mismatch. Off in prod, the only signal of a service-bypass / manual SQL patch / migration bug / corruption is a downstream customer complaint or a manual finance audit — by which point the historical evidence to identify the cause is gone.',
+    },
+    {
+      key: 'EVENT_DEDUP_ENABLED',
+      reason:
+        'PR 6.8 — Outbox delivery is at-least-once by design (ADR-008). EventDeduplicationService.tryConsume — the atomic INSERT into event_deduplication keyed on (eventId, handlerName) — is the mechanism that converts at-least-once delivery into effective exactly-once at the handler boundary. Off in prod, a publisher restart / consumer crash / operator replay re-fires every handler: customers receive duplicate notifications, duplicate audit rows pollute the tamper-evidence chain, and any handler whose next-layer CAS has a bug silently double-applies.',
+    },
+    {
+      key: 'OUTBOX_ENABLED',
+      reason:
+        'PR 6.9 — Runs the publisher worker that drains outbox_events. ADR-008 built the outbox specifically to close the crash-loss window for in-process EventBus delivery; off in prod, the publisher never runs, the table grows unbounded when OUTBOX_DUAL_WRITE is on, and every event silently sits when OUTBOX_AUTHORITATIVE is on. Keep on so an operator flipping OUTBOX_DUAL_WRITE during the soak rollout does not have a first-batch orphan gap.',
+    },
+    {
+      key: 'OUTBOX_DUAL_WRITE',
+      reason:
+        'PR 6.10 — Pairs with OUTBOX_ENABLED to complete the ADR-008 crash-safety contract: PR 6.9 ensures the publisher drains, 6.10 ensures events actually reach the outbox. Off in prod, EventBusService runs the legacy direct-bus path only and a process crash between handler-start and handler-finish drops the event entirely. This is the exact failure ADR-008 was built to close. Soak mode (DUAL_WRITE on, AUTHORITATIVE off) is the valid minimum; flipping AUTHORITATIVE on later is a clean post-cutover step.',
+    },
+    {
+      key: 'REFUND_GATEWAY_RECON_ENABLED',
+      reason:
+        'PR 6.11 — RefundGatewayReconCron is the safety net against Razorpay webhook drops: every hour it scans PROCESSING RefundInstruction rows older than 24h with a gatewayRefundId and emits refund.gateway.stuck (the follow-up will GET against Razorpay and close them out). Off in prod, refunds whose webhook never landed (500, network blip, IP-allowlist miss, restart window) sit indefinitely; the only signal is a customer support escalation ("I asked for a refund 3 days ago") — a money-correctness failure visible to customers.',
+    },
+    {
+      key: 'RETENTION_ENFORCER_ENABLED',
+      reason:
+        'PR 6.12 — Companion to ERASURE_PROCESSOR_ENABLED (PR 6.6): erasure is reactive (customer asks), retention is proactive (data lifecycle limits independent of any request). RetentionEnforcerCron walks each enabled RetentionPolicy daily and applies DELETE / ARCHIVE / REDACT against files older than retainDays, gated by LegalHoldService. Off in prod, every retention policy is decorative — KYC docs, support photos, return-evidence, expired-listing assets accumulate past their statutory windows (DPDPA §8(7), GDPR Article 5(1)(e) storage-limitation). RETENTION_ENFORCER_DRY_RUN stays an operator rollout lever; this gate only forces the cron to run.',
+    },
+    {
+      key: 'ABAC_ENABLED',
+      reason:
+        'PR 6.13 — Forces the policy evaluator into strict (fail-closed) mode for prod. In soak mode (default), no matching ALLOW on a @Policy route lets the request through with a wouldHaveBlocked=true audit line — useful for rollout, dangerous as a durable prod posture (a new @Policy route added without proper rules, or a policy misconfiguration, silently allows traffic that the ABAC design was meant to deny). Prerequisite: the soak audit lines from staging must already drive @Policy coverage to completeness before this gate is flipped on. The audit-readiness controller exists for that purpose.',
+    },
+    {
+      key: 'REFUND_SAGA_ENABLED',
+      reason:
+        'PR 6.14 — ADR-009 RefundSagaService.execute is the orchestration entry point for every refund. ON: opens refund_sagas row with each step PENDING, persists transitions, runs compensations + records failure on the row, crash leaves a resumable record the saga sweeper picks up. OFF (runWithoutSaga): no persistence, no resumability — a crash between steps lands whichever step ran (gateway hit / wallet credited) without the counter-step firing, and manual finance mop-up is the only recovery. Prerequisite: saga rewrite dual-soak validated before flipping.',
+    },
+    {
+      key: 'COD_REFUND_PENDING_ENABLED',
+      reason:
+        'PR 6.15 — Pairs with REFUND_GATEWAY_RECON_ENABLED (PR 6.11) to cover both refund channels. COD orders refund via manual bank-transfer / UPI (no gateway), the refund instruction sits in MANUAL_REQUIRED until finance wires the money out-of-band. CodRefundPendingCron emits refund.cod.pending_aged every 4h for instructions stuck past 48h and surfaces the MANUAL_REQUIRED total to the dashboard gauge. Off in prod, the COD refund queue is invisible to engineering; finance discovers aged-pending refunds via customer escalations only.',
+    },
+    {
+      key: 'MONEY_DUAL_WRITE_ENABLED',
+      reason:
+        'PR 7.1 — ADR-007 paise migration step 2 (dual-write base camp). MoneyDualWriteHelper.applyPaise computes the paise sibling for every Decimal money column on write and persists both in the same transaction. Off in prod, new writes drift away from the paise siblings going forward, and the step-3 backfill has to be re-run repeatedly to catch up — by the time step 4 (read-switch) lands, the only defensible posture is "every prod write has been dual-writing for the full retention window of any rows the read-switch will touch." Per-call-site wiring is a separate rollout; this gate only forces the apparatus on.',
+    },
+  ];
+  for (const { key, reason } of requiredOnInProd) {
+    if (!truthy(env[key])) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${String(key)} must be 'true' when NODE_ENV=production. ${reason}`,
       });
     }
   }

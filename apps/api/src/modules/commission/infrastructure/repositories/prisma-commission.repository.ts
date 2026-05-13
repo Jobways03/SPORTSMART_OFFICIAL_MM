@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import {
   CommissionRepository,
@@ -16,6 +17,11 @@ export class PrismaCommissionRepository implements CommissionRepository {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ordersFacade: OrdersPublicFacade,
+    // Phase 7 (PR 7.7) — paise-sibling dual-write for the
+    // commissionSetting create + upsert paths. Settings have three
+    // money fields (commissionValue, secondCommissionValue,
+    // maxCommissionAmount).
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
   ) {}
 
   /* ── Processing ───────────────────────────────────────────────────── */
@@ -168,7 +174,9 @@ export class PrismaCommissionRepository implements CommissionRepository {
 
     if (!settings) {
       settings = await this.prisma.commissionSetting.create({
-        data: { id: 'global' },
+        data: this.moneyDualWrite.applyPaise('commissionSetting', {
+          id: 'global',
+        }),
       });
     }
 
@@ -176,25 +184,37 @@ export class PrismaCommissionRepository implements CommissionRepository {
   }
 
   async upsertCommissionSettings(data: CommissionSettingsData): Promise<any> {
+    // Upsert has TWO data blocks (update + create) — wrap both through
+    // the helper so paise siblings stay in lockstep on either branch.
+    // The values are JS Numbers from the admin-input boundary; convert
+    // via .toFixed(2) defensively for exact toPaise parsing.
+    const commissionValueDec = Number(data.commissionValue).toFixed(2);
+    const secondCommissionValueDec = Number(
+      data.secondCommissionValue ?? 0,
+    ).toFixed(2);
+    const maxCommissionAmountDec =
+      data.maxCommissionAmount == null
+        ? null
+        : Number(data.maxCommissionAmount).toFixed(2);
     return this.prisma.commissionSetting.upsert({
       where: { id: 'global' },
-      update: {
+      update: this.moneyDualWrite.applyPaise('commissionSetting', {
         commissionType: data.commissionType as any,
-        commissionValue: data.commissionValue,
-        secondCommissionValue: data.secondCommissionValue ?? 0,
+        commissionValue: commissionValueDec,
+        secondCommissionValue: secondCommissionValueDec,
         fixedCommissionType: data.fixedCommissionType ?? 'Product',
         enableMaxCommission: data.enableMaxCommission ?? false,
-        maxCommissionAmount: data.maxCommissionAmount ?? null,
-      },
-      create: {
+        maxCommissionAmount: maxCommissionAmountDec,
+      }),
+      create: this.moneyDualWrite.applyPaise('commissionSetting', {
         id: 'global',
         commissionType: data.commissionType as any,
-        commissionValue: data.commissionValue,
-        secondCommissionValue: data.secondCommissionValue ?? 0,
+        commissionValue: commissionValueDec,
+        secondCommissionValue: secondCommissionValueDec,
         fixedCommissionType: data.fixedCommissionType ?? 'Product',
         enableMaxCommission: data.enableMaxCommission ?? false,
-        maxCommissionAmount: data.maxCommissionAmount ?? null,
-      },
+        maxCommissionAmount: maxCommissionAmountDec,
+      }),
     });
   }
 

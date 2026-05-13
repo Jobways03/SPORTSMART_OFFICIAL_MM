@@ -12,10 +12,16 @@ import {
   LegacyPlaceOrderTransactionResult,
 } from '../../domain/repositories/checkout.repository.interface';
 import { BadRequestAppException } from '../../../../core/exceptions';
+import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 
 @Injectable()
 export class PrismaCheckoutRepository implements ICheckoutRepository {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 7 (PR 7.6) — paise-sibling dual-write for the order /
+    // sub-order / commission writes inside the place-order transaction.
+    private readonly moneyDualWrite: MoneyDualWriteHelper,
+  ) {}
 
   // ── Address operations ───────────────────────────────────────────────────
 
@@ -284,24 +290,27 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
       // the frontend confirms the Razorpay payment; COD orders go straight
       // to PLACED.
       const masterOrder = await tx.masterOrder.create({
-        data: {
+        data: this.moneyDualWrite.applyPaise('masterOrder', {
           orderNumber,
           customerId: input.customerId,
           shippingAddressSnapshot: input.addressSnapshot,
-          totalAmount: input.totalAmount,
+          // .toFixed(2) gives a Decimal-string the helper's toPaise
+          // can convert exactly; raw JS Numbers from upstream cart-sum
+          // arithmetic may be fractional and toPaise rejects those.
+          totalAmount: Number(input.totalAmount).toFixed(2),
           paymentMethod,
           paymentStatus: isOnline ? 'PENDING' : 'PENDING',
           orderStatus: isOnline ? 'PENDING_PAYMENT' : 'PLACED',
           itemCount: input.itemCount,
           discountCode: input.discountCode ?? null,
-          discountAmount: input.discountAmount ?? 0,
+          discountAmount: Number(input.discountAmount ?? 0).toFixed(2),
           // Shipping snapshot (v1). Stored both as FK + name so the
           // order detail still renders correctly if the option is
           // renamed or soft-deleted later.
           shippingOptionId: input.shippingOptionId ?? null,
           shippingOptionName: input.shippingOptionName ?? null,
           shippingFeeInPaise: input.shippingFeeInPaise ?? 0n,
-        },
+        }),
       });
 
       // Affiliate attribution — write the ReferralAttribution row in
@@ -509,17 +518,20 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         });
 
         await tx.subOrder.create({
-          data: {
+          data: this.moneyDualWrite.applyPaise('subOrder', {
             masterOrderId: masterOrder.id,
             sellerId,
-            subTotal,
+            // Same Decimal-string conversion as the masterOrder.create
+            // above — subTotal accumulates from item totals as a JS
+            // Number, may be fractional.
+            subTotal: Number(subTotal).toFixed(2),
             paymentStatus: 'PENDING',
             fulfillmentStatus: 'UNFULFILLED',
             acceptStatus: 'OPEN',
             items: {
               create: orderItemsData,
             },
-          },
+          }),
           include: { items: true },
         });
       }
@@ -634,24 +646,28 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           if (commissionRecord) {
             await tx.commissionRecord.update({
               where: { id: commissionRecord.id },
-              data: {
+              data: this.moneyDualWrite.applyPaise('commissionRecord', {
                 refundedAdminEarning: commissionRecord.adminEarning,
                 status: 'REFUNDED',
-              },
+              }),
             });
             await tx.commissionReversalRecord.create({
-              data: {
+              data: this.moneyDualWrite.applyPaise('commissionReversalRecord', {
                 commissionRecordId: commissionRecord.id,
                 source: 'MANUAL',
                 returnId: null,
                 returnNumber: null,
                 reversedQty: item.quantity,
+                // commissionRecord.totalPrice and adminEarning are
+                // Decimal-typed values read from the DB above, so the
+                // helper's toPaise can convert exactly — no .toFixed
+                // dance needed here.
                 totalRefundAmount: commissionRecord.totalPrice,
                 refundedAdminEarning: commissionRecord.adminEarning,
                 actorType: 'SYSTEM',
                 actorId: null,
                 note: `Customer cancellation of order ${order.orderNumber}`,
-              },
+              }),
             });
           }
         }

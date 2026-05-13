@@ -1,11 +1,15 @@
 import {
   Body,
   Controller,
+  Headers,
   HttpCode,
   HttpStatus,
   Logger,
   Post,
+  Req,
+  RawBodyRequest,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import {
   BadRequestAppException,
@@ -14,6 +18,7 @@ import {
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
+import { verifyPayload } from '../../../../core/webhooks/webhook-signer';
 
 /**
  * Shiprocket sends tracking events as JSON POSTs. The relevant fields are
@@ -31,12 +36,46 @@ interface ShiprocketWebhookPayload {
   current_status_code?: number;
   shipment_status?: string;
   order_id?: string;
+  // Phase 4 (PR 4.4) — carrier-side event timestamp. Shiprocket
+  // sends this under several names depending on the integration
+  // version; we parse whichever is present. ISO-8601 strings or
+  // Unix-seconds numbers both accepted.
+  current_timestamp?: string | number;
+  status_received_at?: string | number;
+  etd?: string | number;
   // Shiprocket payloads sometimes nest the AWB inside `data`. Accept both.
   data?: {
     awb?: string;
     current_status?: string;
     shipment_status?: string;
+    current_timestamp?: string | number;
+    status_received_at?: string | number;
   };
+}
+
+/**
+ * Phase 4 (PR 4.4) — extract the carrier-side event timestamp from a
+ * Shiprocket payload. Falls back to `new Date()` when no usable field
+ * is present (treating the event as "happened now"); the monotonic-
+ * order property is still defended by the CAS predicate on
+ * `lastTrackingEventAt`.
+ */
+export function parseEventTimestamp(payload: ShiprocketWebhookPayload): Date {
+  const raw =
+    payload.current_timestamp ??
+    payload.status_received_at ??
+    payload.etd ??
+    payload.data?.current_timestamp ??
+    payload.data?.status_received_at;
+  if (raw == null) return new Date();
+  if (typeof raw === 'number') {
+    // Unix-seconds heuristic: values below 10^12 are seconds, above
+    // are milliseconds. (Year 33658 ≈ 10^15 ms; anything below 10^12
+    // ms is sub-year-1973, which we never see in production.)
+    return new Date(raw < 1_000_000_000_000 ? raw * 1000 : raw);
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
 const WEBHOOK_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
@@ -58,25 +97,80 @@ export class TrackingWebhookController {
   ) {}
 
   /**
-   * Shiprocket includes a token in a custom header for verification. Token
-   * comparison is constant-time to avoid timing leaks.
+   * Phase 1 (PR 1.4) — verify the webhook request using one of two
+   * mechanisms, in priority order:
+   *
+   *   1. **HMAC mode** (preferred, replay-protected): when
+   *      `SHIPROCKET_WEBHOOK_HMAC_SECRET` is set, the controller
+   *      requires `X-Shiprocket-Signature: t=<unix_ts>,v1=<hex>`
+   *      Stripe-style. The HMAC is computed over `<ts>.<rawBody>`
+   *      and a 5-minute timestamp window blocks replays beyond that
+   *      window. This is the secure path.
+   *
+   *   2. **Bearer-token mode** (legacy, deprecated): when
+   *      `SHIPROCKET_WEBHOOK_HMAC_SECRET` is unset, fall back to
+   *      the legacy `x_token`-in-body check. Logs a deprecation
+   *      WARN on every successful verification so ops can see the
+   *      cutover progress. This path stays for the operator-side
+   *      cutover window only.
+   *
+   * The audit's CR-8: "the token is in the body, easy to intercept;
+   * no HMAC, no timestamp window". HMAC mode closes both.
    */
-  private verifyToken(token: string | undefined): void {
+  private verifyRequest(args: {
+    rawBody: Buffer | undefined;
+    signatureHeader: string | undefined;
+    bodyToken: string | undefined;
+  }): void {
+    const hmacSecret = this.envService.getOptional(
+      'SHIPROCKET_WEBHOOK_HMAC_SECRET',
+    );
+    if (hmacSecret) {
+      // HMAC path — preferred.
+      if (!args.rawBody) {
+        throw new BadRequestAppException('Missing raw request body');
+      }
+      if (!args.signatureHeader) {
+        throw new UnauthorizedAppException(
+          'Missing X-Shiprocket-Signature header',
+        );
+      }
+      const ok = verifyPayload(
+        args.rawBody.toString('utf8'),
+        args.signatureHeader,
+        hmacSecret,
+      );
+      if (!ok) {
+        throw new UnauthorizedAppException(
+          'Invalid Shiprocket webhook signature',
+        );
+      }
+      return;
+    }
+
+    // Legacy bearer-token path — deprecated. Logs a warning each
+    // time so operators can see whether the HMAC cutover has
+    // actually rolled out.
+    this.logger.warn(
+      'Shiprocket webhook authenticated via legacy bearer-token path. ' +
+        'Set SHIPROCKET_WEBHOOK_HMAC_SECRET and migrate the dashboard ' +
+        'config to remove the bearer-token fallback.',
+    );
     const expected = this.envService.getOptional('SHIPROCKET_WEBHOOK_TOKEN');
     if (!expected) {
       throw new UnauthorizedAppException(
-        'Webhook token not configured on server',
+        'Webhook auth not configured (neither HMAC nor bearer-token)',
       );
     }
-    if (!token) {
+    if (!args.bodyToken) {
       throw new UnauthorizedAppException('Missing webhook token');
     }
-    if (token.length !== expected.length) {
+    if (args.bodyToken.length !== expected.length) {
       throw new UnauthorizedAppException('Invalid webhook token');
     }
     let mismatch = 0;
     for (let i = 0; i < expected.length; i++) {
-      mismatch |= expected.charCodeAt(i) ^ token.charCodeAt(i);
+      mismatch |= expected.charCodeAt(i) ^ args.bodyToken.charCodeAt(i);
     }
     if (mismatch !== 0) {
       throw new UnauthorizedAppException('Invalid webhook token');
@@ -97,18 +191,18 @@ export class TrackingWebhookController {
   @Post('shiprocket')
   @HttpCode(HttpStatus.OK)
   async handleShiprocketWebhook(
+    @Headers('x-shiprocket-signature') signatureHeader: string | undefined,
+    @Req() req: RawBodyRequest<Request>,
     @Body() payload: ShiprocketWebhookPayload,
   ) {
-    // Shiprocket sends the verification token via the request body — there
-    // is no signed header. We accept it from the body or from a custom
-    // header for flexibility. The Authorization header is also commonly
-    // used in their dashboard config.
-    // (Token-extraction here keeps the controller signature simple — wire
-    // the actual header name once your Shiprocket dashboard is configured.)
-    // For now we expect the token in `(payload as any).x_token` or fall
-    // back to the configured value if the dashboard sends it differently.
-    const token = (payload as any).x_token;
-    this.verifyToken(token);
+    // Phase 1 (PR 1.4) — verify via HMAC (preferred) or legacy
+    // bearer-token (deprecated). HMAC mode is gated on the env var
+    // being set, so operators control the cutover.
+    this.verifyRequest({
+      rawBody: req.rawBody,
+      signatureHeader,
+      bodyToken: (payload as any).x_token,
+    });
 
     // Resolve the AWB number — Shiprocket nests it inconsistently.
     const awb =
@@ -165,6 +259,31 @@ export class TrackingWebhookController {
       return {
         success: false,
         message: 'No matching sub-order for AWB',
+      };
+    }
+
+    // Phase 4 (PR 4.4) — ordering guard. Compare the incoming event's
+    // carrier-side timestamp against the sub-order's
+    // `lastTrackingEventAt`. The CAS-style updateMany inside
+    // `claimTrackingEvent` only succeeds if the new timestamp is
+    // strictly newer (or no prior event has been recorded). A
+    // false return means the event arrived out-of-order — typical
+    // cause is Shiprocket's at-least-once delivery reordering
+    // payloads under load. Drop the late event so the FSM never
+    // regresses (e.g. DELIVERED → IN_TRANSIT flapping).
+    const eventTimestamp = parseEventTimestamp(payload);
+    const claimed = await this.ordersFacade.claimTrackingEvent(
+      subOrder.id,
+      eventTimestamp,
+    );
+    if (!claimed) {
+      this.logger.warn(
+        `Shiprocket out-of-order event for AWB ${awb} ` +
+          `(event_ts=${eventTimestamp.toISOString()}, status=${status}); dropped.`,
+      );
+      return {
+        success: true,
+        message: 'Out-of-order event dropped',
       };
     }
 

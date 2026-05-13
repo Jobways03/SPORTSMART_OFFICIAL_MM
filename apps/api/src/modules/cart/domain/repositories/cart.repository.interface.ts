@@ -50,6 +50,28 @@ export interface CartRepository {
   countActiveItemsForVariant(variantId: string): Promise<number>;
   /** Same, but for a base-product (no variant) line item. */
   countActiveItemsForProduct(productId: string): Promise<number>;
+  /**
+   * Phase 1 (PR 1.9) — atomic add primitive.
+   *
+   * Find-or-update-or-create a cart_items row for
+   * (cartId, productId, variantId) in a single transaction. Implementations
+   * MUST hold a row-level lock on the cart row for the duration of the
+   * find+write so two concurrent calls for the same key serialise and
+   * the second sees the first's row (and increments quantity) instead
+   * of producing a duplicate line.
+   *
+   * Why a method-level primitive instead of a transaction in the
+   * service: the lock target (`SELECT ... FOR UPDATE`) is a SQL detail
+   * the service shouldn't know about. The repo owns the storage
+   * mechanics; the service stays at the "merge this quantity into the
+   * cart" level.
+   */
+  incrementOrCreateCartItem(
+    cartId: string,
+    productId: string,
+    variantId: string | null,
+    quantityDelta: number,
+  ): Promise<void>;
 }
 
 export const CART_REPOSITORY = Symbol('CartRepository');

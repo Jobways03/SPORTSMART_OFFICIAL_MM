@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { UserAuthGuard } from '../../../core/guards';
+import { Idempotent } from '../../../core/decorators/idempotent.decorator';
 import { CheckoutService } from '../application/services/checkout.service';
 
 @ApiTags('Checkout')
@@ -50,7 +51,13 @@ export class CheckoutController {
   }
 
   // ── POST /customer/checkout/place-order ─────────────────────────────
+  // Phase 1 (PR 1.3) — @Idempotent: a retried place-order POST (browser
+  // refresh, network blip during the Razorpay-order create, double-tap
+  // on the "Pay" button) returns the original response instead of
+  // creating a duplicate MasterOrder + duplicate Razorpay order +
+  // duplicate stock reservation. Client MUST supply X-Idempotency-Key.
   @Post('place-order')
+  @Idempotent()
   async placeOrder(
     @Req() req: any,
     @Body()
@@ -112,7 +119,14 @@ export class CheckoutController {
   }
 
   // ── POST /customer/checkout/payment/verify ──────────────────────────
+  // Phase 1 (PR 1.3) — @Idempotent: layered with PR 0.12's TOCTOU
+  // close inside the facade. The TOCTOU close prevents duplicate
+  // event fan-out on the DB side; this decorator prevents duplicate
+  // gateway round-trips on the API side (a retried verify still
+  // hits Razorpay's fetchPayment, which has rate limits worth
+  // respecting).
   @Post('payment/verify')
+  @Idempotent()
   async verifyPayment(
     @Req() req: any,
     @Body()
