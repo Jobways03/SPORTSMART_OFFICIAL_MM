@@ -26,37 +26,62 @@ interface NavItem {
   anyOf?: string[];
 }
 
-const navItems: NavItem[] = [
-  { label: 'Home', href: '/dashboard', icon: '🏠' }, // always visible — admin landing page
-  { label: 'Orders', href: '/dashboard/orders', icon: '📋', hasPendingBadge: true, anyOf: ['orders.read'] },
-  { label: 'Returns', href: '/dashboard/returns', icon: '↩️', anyOf: ['returns.read'] },
-  { label: 'Disputes', href: '/dashboard/disputes', icon: '⚖️', anyOf: ['disputes.read'] },
-  { label: 'Finance Approvals', href: '/dashboard/finance/refund-approvals', icon: '💸', anyOf: ['refunds.approve', 'refunds.read'] },
-  // Hidden — replacement/exchange flow disabled in UI for now.
-  // { label: 'Replacements', href: '/dashboard/replacements', icon: '🔁' },
-  { label: 'Risk Review', href: '/dashboard/risk-review', icon: '⚠️', anyOf: ['risk.review'] },
+// Sidebar groups, ordered by how often an admin uses them during a
+// typical day. Operations is what touches money and customers right
+// now (highest priority); Growth is reporting / campaigns (lowest).
+// Section headers render automatically when `section` changes between
+// adjacent visible items.
+type NavSection = 'operations' | 'care' | 'finance' | 'risk' | 'growth';
+
+const SECTION_LABELS: Record<NavSection, string> = {
+  operations: 'Operations',
+  care: 'Customer Care',
+  finance: 'Finance',
+  risk: 'Risk',
+  growth: 'Growth',
+};
+
+const navItems: (NavItem & { section?: NavSection })[] = [
+  // Home stands alone at the top — no section header above it.
+  { label: 'Home', href: '/dashboard', icon: '🏠' },
+
+  // Operations — day-to-day order/catalog work, highest priority.
+  { label: 'Orders', href: '/dashboard/orders', icon: '📋', hasPendingBadge: true, anyOf: ['orders.read'], section: 'operations' },
+  { label: 'Products', href: '/dashboard/products', icon: '📦', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
+  // Inventory has no dedicated permission key today — falls under products.
+  { label: 'Inventory', href: '/dashboard/inventory', icon: '📊', anyOf: ['products.read'], section: 'operations' },
+
+  // Customer Care — escalations and people-facing queues.
+  { label: 'Returns', href: '/dashboard/returns', icon: '↩️', anyOf: ['returns.read'], section: 'care' },
+  { label: 'Disputes', href: '/dashboard/disputes', icon: '⚖️', anyOf: ['disputes.read'], section: 'care' },
+  { label: 'Support', href: '/dashboard/support', icon: '💬', anyOf: ['support.read'], section: 'care' },
+  { label: 'Customers', href: '/dashboard/customers', icon: '👥', anyOf: ['customers.read'], section: 'care' },
+
+  // Finance — money flow. Approvals first because they block payouts.
+  { label: 'Finance Approvals', href: '/dashboard/finance/refund-approvals', icon: '💸', anyOf: ['refunds.approve', 'refunds.read'], section: 'finance' },
+  { label: 'Commission', href: '/dashboard/commission', icon: '💰', anyOf: ['settlements.read'], section: 'finance' },
+  { label: 'Wallets', href: '/dashboard/wallets', icon: '💳', anyOf: ['wallets.read'], section: 'finance' },
+  { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: '🛡️', anyOf: ['paymentOps.read'], section: 'finance' },
+  { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: '⚖️', anyOf: ['recon.read'], section: 'finance' },
   // Liability Ledger is finance ops — `refunds.approve` already gates the
   // backend list endpoint, mirror that here.
-  { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: '📒', anyOf: ['refunds.approve'] },
-  { label: 'Products', href: '/dashboard/products', icon: '📦', anyOf: ['products.read', 'catalog.read'] },
-  // Inventory has no dedicated permission key today — falls under products.
-  { label: 'Inventory', href: '/dashboard/inventory', icon: '📊', anyOf: ['products.read'] },
+  { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: '📒', anyOf: ['refunds.approve'], section: 'finance' },
+
+  // Risk — fraud / abuse review, occasional but high-stakes.
+  { label: 'Risk Review', href: '/dashboard/risk-review', icon: '⚠️', anyOf: ['risk.review'], section: 'risk' },
+
+  // Growth — campaigns and reporting, used less frequently.
+  { label: 'Discounts', href: '/dashboard/discounts', icon: '🏷️', anyOf: ['discounts.read'], section: 'growth' },
+  { label: 'Marketing', href: '/dashboard/marketing', icon: '📣', anyOf: ['discounts.read'], section: 'growth' },
+  { label: 'Analytics', href: '/dashboard/analytics', icon: '📈', anyOf: ['analytics.read'], section: 'growth' },
+
+  // Hidden — replacement/exchange flow disabled in UI for now.
+  // { label: 'Replacements', href: '/dashboard/replacements', icon: '🔁' },
   // NOVA Brand entry removed per product request — route still exists at
   // /dashboard/nova/* if needed directly.
-  { label: 'Commission', href: '/dashboard/commission', icon: '💰', anyOf: ['settlements.read'] },
-  { label: 'Customers', href: '/dashboard/customers', icon: '👥', anyOf: ['customers.read'] },
-  { label: 'Wallets', href: '/dashboard/wallets', icon: '💳', anyOf: ['wallets.read'] },
-  { label: 'Support', href: '/dashboard/support', icon: '💬', anyOf: ['support.read'] },
-  { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: '🛡️', anyOf: ['paymentOps.read'] },
-  { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: '⚖️', anyOf: ['recon.read'] },
-  { label: 'Notifications', href: '/dashboard/notifications', icon: '🔔', anyOf: ['notifications.read'] },
-  { label: 'Access Logs', href: '/dashboard/access-logs', icon: '🔐', anyOf: ['audit.read'] },
-  { label: 'Marketing', href: '/dashboard/marketing', icon: '📣', anyOf: ['discounts.read'] },
-  { label: 'Discounts', href: '/dashboard/discounts', icon: '🏷️', anyOf: ['discounts.read'] },
-  { label: 'Shipping', href: '/dashboard/settings/shipping', icon: '🚚', anyOf: ['shipping.read'] },
-  { label: 'Content', href: '/dashboard/content', icon: '📝', anyOf: ['content.read'] },
-  { label: 'Navigation', href: '/dashboard/menus', icon: '🧭', anyOf: ['storefront.read'] },
-  { label: 'Analytics', href: '/dashboard/analytics', icon: '📈', anyOf: ['analytics.read'] },
+  // Moved into Settings (still reachable at the same URLs via the Settings hub):
+  //   Notifications, Storefront Content, Storefront Navigation,
+  //   Shipping, Access Logs, Admin Activity.
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -165,8 +190,20 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
               Your account has no sections to display. Contact a Super Admin.
             </div>
           )}
-          {(visibleNavItems ?? []).map((item) => (
+          {(visibleNavItems ?? []).map((item, idx) => {
+            const prev = idx > 0 ? visibleNavItems![idx - 1] : null;
+            // Show a section label whenever the section changes between
+            // adjacent visible items. Items without a section (Home) are
+            // treated as their own no-header group.
+            const showSectionLabel =
+              item.section && (!prev || prev.section !== item.section);
+            return (
             <div key={item.href}>
+              {showSectionLabel && item.section && (
+                <div className="sidebar-section-label">
+                  {SECTION_LABELS[item.section]}
+                </div>
+              )}
               <Link
                 href={item.href}
                 className={`sidebar-item${isActive(item.href) ? ' active' : ''}`}
@@ -219,7 +256,8 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
                 </>
               )}
             </div>
-          ))}
+            );
+          })}
 
         </nav>
 

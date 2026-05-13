@@ -19,6 +19,7 @@ export interface AccessLogEntry {
   id: string;
   actorType: AccessActorType;
   actorId: string;
+  actorRole: string | null;
   kind: AccessEventKind;
   ipAddress: string | null;
   userAgent: string | null;
@@ -26,6 +27,93 @@ export interface AccessLogEntry {
   succeeded: boolean;
   reason: string | null;
   createdAt: string;
+}
+
+// Sub-roles that exist within actorType=ADMIN (mirrors the ADMIN_ROLES
+// constant in core/guards/admin-auth.guard.ts). Other actor types may
+// gain sub-roles later; for now only ADMIN has them.
+export type AdminSubRole =
+  | 'SUPER_ADMIN'
+  | 'SELLER_ADMIN'
+  | 'SELLER_SUPPORT'
+  | 'SELLER_OPERATIONS'
+  | 'AFFILIATE_ADMIN';
+
+export const ADMIN_SUB_ROLES: AdminSubRole[] = [
+  'SUPER_ADMIN',
+  'SELLER_ADMIN',
+  'SELLER_SUPPORT',
+  'SELLER_OPERATIONS',
+  'AFFILIATE_ADMIN',
+];
+
+/**
+ * Human-friendly labels for admin sub-roles. Mirrors the wording shown
+ * in the role-picker dropdown elsewhere in the admin UI so the same
+ * role is referred to the same way across pages.
+ *
+ * `formatRoleLabel()` falls back to title-casing an unknown role so
+ * future additions still render sensibly without a code change.
+ */
+export const ADMIN_SUB_ROLE_LABEL: Record<AdminSubRole, string> = {
+  SUPER_ADMIN: 'Super Admin',
+  SELLER_ADMIN: 'Seller Admin',
+  SELLER_SUPPORT: 'Seller Support',
+  SELLER_OPERATIONS: 'Seller Operations',
+  AFFILIATE_ADMIN: 'Affiliate Admin',
+};
+
+export function formatRoleLabel(role: string | null | undefined): string {
+  if (!role) return '';
+  if ((ADMIN_SUB_ROLE_LABEL as Record<string, string>)[role]) {
+    return (ADMIN_SUB_ROLE_LABEL as Record<string, string>)[role];
+  }
+  // Title-case unknown role keys: SELLER_NEW_THING → Seller New Thing.
+  return role
+    .split('_')
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join(' ');
+}
+
+export interface ByRoleResponse {
+  actorRole: string;
+  actorType: AccessActorType | null;
+  since: string;
+  hours: number;
+  items: AccessLogEntry[];
+}
+
+export interface RecentActorRow {
+  actorType: AccessActorType;
+  actorId: string;
+  actorRole: string | null;
+  eventCount: number;
+  lastEventAt: string;
+  lastEventKind: AccessEventKind | null;
+  lastEventSucceeded: boolean | null;
+  lastEventIp: string | null;
+  // Populated for ADMIN actors so operators can tell two SELLER_OPERATIONS
+  // admins apart. Null for actor types not yet enriched (CUSTOMER, SELLER,
+  // FRANCHISE, AFFILIATE) and for failed-login pseudo-actors that don't
+  // have a matching admins row.
+  displayName: string | null;
+  email: string | null;
+  // Additional custom-role names from admin_role_assignments. Excludes
+  // system roles (which are the same as the primary role enum).
+  customRoles: string[] | null;
+}
+
+export interface RecentActorsResponse {
+  actorType: AccessActorType;
+  since: string;
+  hours: number;
+  items: RecentActorRow[];
+}
+
+export interface RecentFailuresResponse {
+  since: string;
+  hours: number;
+  items: AccessLogEntry[];
 }
 
 export interface SpikeRow {
@@ -73,6 +161,45 @@ export const adminAccessLogsService = {
   ): Promise<ApiResponse<SpikeResponse>> {
     return apiClient<SpikeResponse>(
       `/admin/access-logs/spike/failed-logins${buildQs(args)}`,
+    );
+  },
+
+  listByRole(
+    actorRole: string,
+    args: {
+      actorType?: AccessActorType;
+      kind?: AccessEventKind;
+      hours?: number;
+      limit?: number;
+    } = {},
+  ): Promise<ApiResponse<ByRoleResponse>> {
+    return apiClient<ByRoleResponse>(
+      `/admin/access-logs/by-role/${encodeURIComponent(actorRole)}${buildQs(args)}`,
+    );
+  },
+
+  recentActors(
+    args: {
+      actorType?: AccessActorType;
+      actorRole?: string;
+      hours?: number;
+      limit?: number;
+    } = {},
+  ): Promise<ApiResponse<RecentActorsResponse>> {
+    return apiClient<RecentActorsResponse>(
+      `/admin/access-logs/recent-actors${buildQs(args)}`,
+    );
+  },
+
+  recentFailures(
+    args: {
+      actorType?: AccessActorType;
+      hours?: number;
+      limit?: number;
+    } = {},
+  ): Promise<ApiResponse<RecentFailuresResponse>> {
+    return apiClient<RecentFailuresResponse>(
+      `/admin/access-logs/recent-failures${buildQs(args)}`,
     );
   },
 };

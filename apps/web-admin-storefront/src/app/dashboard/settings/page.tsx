@@ -40,6 +40,48 @@ const SETTINGS_TILES: SettingTile[] = [
     icon: '🚚',
     requires: { anyOf: ['shipping.read', 'shipping.write'] },
   },
+  {
+    title: 'Notifications',
+    description: 'Notification templates, channels (email / SMS / WhatsApp), and customer preference defaults.',
+    href: '/dashboard/notifications',
+    icon: '🔔',
+    requires: { anyOf: ['notifications.read'] },
+  },
+  {
+    title: 'Storefront Content',
+    description: 'Static pages, banners, and merchandising blocks shown on the customer storefront.',
+    href: '/dashboard/content',
+    icon: '📝',
+    requires: { anyOf: ['content.read'] },
+  },
+  {
+    title: 'Blog posts',
+    description: 'News, reviews, and articles shown on /blogs and the homepage blog strip.',
+    href: '/dashboard/blog-posts',
+    icon: '✍️',
+    requires: { anyOf: ['content.read'] },
+  },
+  {
+    title: 'Storefront Navigation',
+    description: 'Category trees, menu structure, and navigation visible to customers.',
+    href: '/dashboard/menus',
+    icon: '🧭',
+    requires: { anyOf: ['storefront.read'] },
+  },
+  {
+    title: 'Access Logs',
+    description: 'Cross-actor sign-in audit trail and brute-force detection.',
+    href: '/dashboard/access-logs',
+    icon: '🔐',
+    requires: { anyOf: ['audit.read'] },
+  },
+  {
+    title: 'Admin Activity',
+    description: 'Unified timeline merging admin authentication with RBAC mutations and admin actions.',
+    href: '/dashboard/admin-activity',
+    icon: '📜',
+    requires: { anyOf: ['roles.read'] },
+  },
 ];
 
 export default function SettingsHubPage() {

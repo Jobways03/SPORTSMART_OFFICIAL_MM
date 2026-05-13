@@ -50,12 +50,17 @@ export class AdminAuthController {
         ipAddress,
       });
 
-      const adminId = (data as any)?.admin?.id ?? (data as any)?.adminId;
+      const adminId =
+        (data as any)?.admin?.adminId ??
+        (data as any)?.admin?.id ??
+        (data as any)?.adminId;
+      const adminRole = (data as any)?.admin?.role ?? null;
       if (adminId) {
         this.accessLog
           .record({
             actorType: 'ADMIN',
             actorId: adminId,
+            actorRole: adminRole,
             kind: 'LOGIN_SUCCESS',
             ipAddress,
             userAgent,
@@ -89,12 +94,14 @@ export class AdminAuthController {
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   async logout(@Req() req: Request) {
     const adminId = (req as any).adminId;
+    const adminRole = (req as any).adminRole ?? null;
     await this.logoutUseCase.execute(adminId);
 
     this.accessLog
       .record({
         actorType: 'ADMIN',
         actorId: adminId,
+        actorRole: adminRole,
         kind: 'LOGOUT',
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],

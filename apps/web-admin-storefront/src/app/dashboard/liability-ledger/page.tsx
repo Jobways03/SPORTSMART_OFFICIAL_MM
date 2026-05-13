@@ -75,7 +75,15 @@ export default function LiabilityLedgerPage() {
           <button
             key={t.key}
             type="button"
-            onClick={() => setTab(t.key)}
+            onClick={() => {
+              if (t.key === tab) return;
+              // Drop previous tab's rows before switching so React doesn't
+              // render the new tab's table against the old tab's row shape
+              // (PlatformExpenseRow has no sellerId, SellerDebitTable needs it).
+              setRows([]);
+              setLoading(true);
+              setTab(t.key);
+            }}
             style={{
               height: 32,
               padding: '0 14px',
@@ -171,8 +179,8 @@ function SellerDebitTable({ rows }: { rows: SellerDebitRow[] }) {
       <tbody>
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-            <Td><strong>{r.sourceType}</strong> — {r.sourceId.slice(0, 8)}…</Td>
-            <Td style={{ fontFamily: 'ui-monospace, monospace' }}>{r.sellerId.slice(0, 8)}…</Td>
+            <Td><strong>{r.sourceType}</strong> — {r.sourceId?.slice(0, 8) ?? '—'}…</Td>
+            <Td style={{ fontFamily: 'ui-monospace, monospace' }}>{r.sellerId?.slice(0, 8) ?? '—'}…</Td>
             <Td><strong>{fmtPaise(r.amountInPaise)}</strong></Td>
             <Td>{r.status}</Td>
             <Td style={{ maxWidth: 360 }}>{r.reason}</Td>
@@ -195,7 +203,7 @@ function LogisticsClaimTable({ rows }: { rows: LogisticsClaimRow[] }) {
       <tbody>
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-            <Td><strong>{r.sourceType}</strong> — {r.sourceId.slice(0, 8)}…</Td>
+            <Td><strong>{r.sourceType}</strong> — {r.sourceId?.slice(0, 8) ?? '—'}…</Td>
             <Td>{r.courierName ?? '—'}</Td>
             <Td style={{ fontFamily: 'ui-monospace, monospace' }}>{r.awbNumber ?? '—'}</Td>
             <Td><strong>{fmtPaise(r.amountInPaise)}</strong></Td>
@@ -219,7 +227,7 @@ function PlatformExpenseTable({ rows }: { rows: PlatformExpenseRow[] }) {
       <tbody>
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-            <Td><strong>{r.sourceType}</strong> — {r.sourceId.slice(0, 8)}…</Td>
+            <Td><strong>{r.sourceType}</strong> — {r.sourceId?.slice(0, 8) ?? '—'}…</Td>
             <Td>{r.expenseType}</Td>
             <Td><strong>{fmtPaise(r.amountInPaise)}</strong></Td>
             <Td style={{ maxWidth: 360 }}>{r.reason}</Td>

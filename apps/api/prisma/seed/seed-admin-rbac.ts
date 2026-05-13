@@ -197,14 +197,8 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'orders.read',
     ],
   },
-  {
-    name: 'Nova / Warehouse Manager',
-    description: 'Own-brand procurement, warehouses, stock.',
-    permissions: [
-      'nova.read', 'nova.write', 'nova.procurement', 'nova.stock',
-      'products.read',
-    ],
-  },
+  // 'Nova / Warehouse Manager' deferred to MVP 2 — own-brand
+  // procurement isn't part of MVP 1 scope. Re-enable here when ready.
   {
     name: 'Marketing Manager',
     description: 'Banners, FAQ, CMS pages, navigation, discounts, coupons.',

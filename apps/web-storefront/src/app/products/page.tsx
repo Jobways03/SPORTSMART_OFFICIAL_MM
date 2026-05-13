@@ -25,7 +25,16 @@ function ProductsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const searchQuery = searchParams.get('search') || '';
+  // `brand=<slug>` and `collection=<slug>` (e.g. `/products?brand=puma` from
+  // the partner-brand tiles, or `/products?collection=ball` from a collection
+  // CTA) are resolved server-side to brandId/collectionId. `sport=<x>` has no
+  // real attribute on products yet, so we still fold it into a search query
+  // so links like `/products?sport=cricket` match by title text.
+  const sportParam = searchParams.get('sport') || '';
+  const brandSlugParam = searchParams.get('brand') || '';
+  const collectionSlugParam = searchParams.get('collection') || '';
+  const rawSearch = searchParams.get('search') || '';
+  const searchQuery = rawSearch || sportParam;
   const categoryId = searchParams.get('categoryId') || '';
   const brandId = searchParams.get('brandId') || '';
   const sortBy = searchParams.get('sortBy') || '';
@@ -84,6 +93,8 @@ function ProductsContent() {
     if (searchQuery) params.set('search', searchQuery);
     if (categoryId) params.set('categoryId', categoryId);
     if (brandId) params.set('brandId', brandId);
+    if (brandSlugParam) params.set('brand', brandSlugParam);
+    if (collectionSlugParam) params.set('collection', collectionSlugParam);
     if (sortBy) params.set('sortBy', sortBy);
     if (minPrice) params.set('minPrice', minPrice);
     if (maxPrice) params.set('maxPrice', maxPrice);
@@ -192,13 +203,24 @@ function ProductsContent() {
     );
   };
 
-  const headerTitle = searchQuery
-    ? `Results for "${searchQuery}"`
-    : categoryId
-      ? 'Category'
-      : brandId
-        ? 'Brand'
-        : 'All products';
+  const titleCase = (s: string) =>
+    s
+      .split('-')
+      .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+      .join(' ');
+  const headerTitle = sportParam
+    ? titleCase(sportParam)
+    : brandSlugParam
+      ? titleCase(brandSlugParam)
+      : collectionSlugParam
+        ? titleCase(collectionSlugParam)
+        : rawSearch
+          ? `Results for "${rawSearch}"`
+          : categoryId
+            ? 'Category'
+            : brandId
+              ? 'Brand'
+              : 'All products';
 
   return (
     <StorefrontShell>

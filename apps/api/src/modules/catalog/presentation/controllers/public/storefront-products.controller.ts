@@ -13,6 +13,7 @@ import { CatalogCacheService } from '../../../application/services/catalog-cache
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { Request } from 'express';
 import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
+import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 
 @ApiTags('Storefront')
 @Controller('storefront/products')
@@ -20,6 +21,7 @@ export class StorefrontProductsController {
   constructor(
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly cache: CatalogCacheService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get()
@@ -34,6 +36,8 @@ export class StorefrontProductsController {
   @ApiQuery({ name: 'minPrice', required: false })
   @ApiQuery({ name: 'maxPrice', required: false })
   @ApiQuery({ name: 'collectionId', required: false })
+  @ApiQuery({ name: 'brand', required: false, description: 'Brand slug — resolved to brandId' })
+  @ApiQuery({ name: 'collection', required: false, description: 'Collection slug — resolved to collectionId' })
   async listProducts(
     @Req() req: Request,
     @Query('page') page?: string,
@@ -45,9 +49,29 @@ export class StorefrontProductsController {
     @Query('minPrice') minPrice?: string,
     @Query('maxPrice') maxPrice?: string,
     @Query('collectionId') collectionId?: string,
+    @Query('brand') brandSlug?: string,
+    @Query('collection') collectionSlug?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(60, Math.max(1, parseInt(limit || '20', 10) || 20));
+
+    // Resolve slug → id for the homepage-style links like
+    // /products?brand=puma or /products?collection=ball. An ID passed
+    // directly via brandId/collectionId still wins.
+    if (!brandId && brandSlug) {
+      const brand = await this.prisma.brand.findUnique({
+        where: { slug: brandSlug },
+        select: { id: true },
+      });
+      if (brand) brandId = brand.id;
+    }
+    if (!collectionId && collectionSlug) {
+      const col = await this.prisma.productCollection.findUnique({
+        where: { slug: collectionSlug },
+        select: { id: true },
+      });
+      if (col) collectionId = col.id;
+    }
 
     // Parse filters from query params
     const rawQuery = req.query as Record<string, any>;

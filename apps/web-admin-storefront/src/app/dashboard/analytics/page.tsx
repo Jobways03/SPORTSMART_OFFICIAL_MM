@@ -41,6 +41,14 @@ export default function AnalyticsDashboardPage() {
   const [funnel, setFunnel] = useState<ConversionFunnel | null>(null);
   const [compare, setCompare] = useState<SalesCompare | null>(null);
   const [loading, setLoading] = useState(true);
+  const [csvErr, setCsvErr] = useState<string | null>(null);
+
+  // Pre-built ISO range so each CSV button can request the same window the
+  // page is currently showing.
+  const csvRange = {
+    start: new Date(start).toISOString(),
+    end: new Date(end + 'T23:59:59').toISOString(),
+  };
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -79,65 +87,125 @@ export default function AnalyticsDashboardPage() {
     setRange({ start: s.toISOString().slice(0, 10), end: e.toISOString().slice(0, 10) });
   };
 
+  // Determine which preset is currently selected so the chip lights up.
+  const activePreset = (() => {
+    const startD = new Date(start);
+    const endD = new Date(end);
+    const today = new Date().toISOString().slice(0, 10);
+    if (end !== today) return null;
+    const diff = Math.round((endD.getTime() - startD.getTime()) / 86400000);
+    return PRESETS.find((p) => p.days === diff)?.days ?? null;
+  })();
+
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1280 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div style={{ padding: '28px 28px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: '#0F1115' }}>Analytics</h1>
-          <p style={{ marginTop: 4, fontSize: 14, color: '#525A65' }}>Sales, orders, customers, and conversion.</p>
+          <div style={eyebrow}>INSIGHTS</div>
+          <h1 style={pageTitle}>Analytics</h1>
+          <p style={pageSubtitle}>Sales, orders, customers, and conversion at a glance.</p>
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {PRESETS.map((p) => (
-            <button key={p.days} type="button" onClick={() => setPreset(p.days)} style={{
-              height: 32, padding: '0 12px', border: '1px solid #D2D6DC', background: '#fff',
-              borderRadius: 9999, fontSize: 12, fontWeight: 500, cursor: 'pointer',
-            }}>{p.label}</button>
-          ))}
-          <input type="date" value={start} onChange={(e) => setRange((r) => ({ ...r, start: e.target.value }))} style={dateInput} />
-          <span style={{ fontSize: 12, color: '#7A828F' }}>→</span>
-          <input type="date" value={end} onChange={(e) => setRange((r) => ({ ...r, end: e.target.value }))} style={dateInput} />
+        <div style={dateBar}>
+          <div style={chipGroup}>
+            {PRESETS.map((p) => {
+              const active = activePreset === p.days;
+              return (
+                <button
+                  key={p.days}
+                  type="button"
+                  onClick={() => setPreset(p.days)}
+                  style={chipStyle(active)}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={dateInputGroup}>
+            <input
+              type="date"
+              value={start}
+              onChange={(e) => setRange((r) => ({ ...r, start: e.target.value }))}
+              style={dateInput}
+            />
+            <span style={{ fontSize: 12, color: '#94A3B8' }}>→</span>
+            <input
+              type="date"
+              value={end}
+              onChange={(e) => setRange((r) => ({ ...r, end: e.target.value }))}
+              style={dateInput}
+            />
+          </div>
         </div>
       </div>
+
+      {csvErr && (
+        <div style={{
+          padding: '10px 14px',
+          marginBottom: 14,
+          background: '#FEF2F2',
+          border: '1px solid #FCA5A5',
+          color: '#B91C1C',
+          fontSize: 13,
+          borderRadius: 10,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 12,
+        }}>
+          <span>{csvErr}</span>
+          <button
+            type="button"
+            onClick={() => setCsvErr(null)}
+            style={{ background: 'transparent', border: 'none', color: '#B91C1C', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {loading && !sales ? (
         <div style={{ padding: 40, color: '#7A828F', textAlign: 'center' }}>Loading…</div>
       ) : (
         <>
           {/* KPI cards with vs-prior-period delta */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 18 }}>
             <Kpi
               label="Gross revenue"
               value={sales ? inr(sales.grossRevenue) : '—'}
               sub={`${sales?.orderCount ?? 0} orders`}
               delta={compare?.deltas.grossRevenuePct ?? null}
+              accent="indigo"
             />
             <Kpi
               label="Net revenue"
               value={sales ? inr(sales.netRevenue) : '—'}
               sub={`AOV ${sales ? inr(sales.averageOrderValue) : '—'}`}
               delta={compare?.deltas.netRevenuePct ?? null}
+              accent="teal"
             />
             <Kpi
               label="Order count"
               value={String(sales?.orderCount ?? 0)}
               sub={`${customers?.newInPeriod ?? 0} new · ${customers?.returningInPeriod ?? 0} returning`}
               delta={compare?.deltas.orderCountPct ?? null}
+              accent="amber"
             />
             <Kpi
               label="Paid orders"
               value={String(funnel?.ordersPaid ?? 0)}
               sub={`${((funnel?.checkoutToPaidRate ?? 0) * 100).toFixed(0)}% checkout→paid`}
+              accent="rose"
             />
           </div>
 
           {/* Sales by day — simple SVG bar chart */}
           <Card
             title="Revenue by day"
-            csvHref={adminAnalyticsService.csvUrl(
-              'sales-daily',
-              new Date(start).toISOString(),
-              new Date(end + 'T23:59:59').toISOString(),
-            )}
+            csvReport="sales-daily"
+            csvRange={csvRange}
+            onCsvError={setCsvErr}
           >
             {sales && sales.byDay.length > 0 ? (
               <SvgBars data={sales.byDay} />
@@ -150,18 +218,16 @@ export default function AnalyticsDashboardPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
             <Card
               title="Order status mix"
-              csvHref={adminAnalyticsService.csvUrl(
-                'order-status-mix',
-                new Date(start).toISOString(),
-                new Date(end + 'T23:59:59').toISOString(),
-              )}
+              csvReport="order-status-mix"
+              csvRange={csvRange}
+              onCsvError={setCsvErr}
             >
               {statusMix.length === 0 ? (
                 <div style={{ color: '#7A828F', fontSize: 13, padding: 16 }}>No data.</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr style={{ borderBottom: '1px solid #F3F4F6' }}>
+                    <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
                       <th style={tinyTh}>Status</th>
                       <th style={{ ...tinyTh, textAlign: 'right' }}>Count</th>
                       <th style={{ ...tinyTh, textAlign: 'right' }}>Amount</th>
@@ -169,10 +235,10 @@ export default function AnalyticsDashboardPage() {
                   </thead>
                   <tbody>
                     {statusMix.map((s) => (
-                      <tr key={s.status} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                        <td style={tinyTd}>{s.status.replace(/_/g, ' ').toLowerCase()}</td>
-                        <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{s.count}</td>
-                        <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{inr(s.amount)}</td>
+                      <tr key={s.status} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                        <td style={tinyTd}><StatusChip status={s.status} /></td>
+                        <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{s.count}</td>
+                        <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#475569' }}>{inr(s.amount)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -182,11 +248,9 @@ export default function AnalyticsDashboardPage() {
 
             <Card
               title="Top products"
-              csvHref={adminAnalyticsService.csvUrl(
-                'top-products',
-                new Date(start).toISOString(),
-                new Date(end + 'T23:59:59').toISOString(),
-              )}
+              csvReport="top-products"
+              csvRange={csvRange}
+              onCsvError={setCsvErr}
             >
               {topProducts.length === 0 ? (
                 <div style={{ color: '#7A828F', fontSize: 13, padding: 16 }}>No data.</div>
@@ -200,11 +264,9 @@ export default function AnalyticsDashboardPage() {
           <div style={{ marginTop: 12 }}>
             <Card
               title="Slowest movers (bottom products)"
-              csvHref={adminAnalyticsService.csvUrl(
-                'bottom-products',
-                new Date(start).toISOString(),
-                new Date(end + 'T23:59:59').toISOString(),
-              )}
+              csvReport="bottom-products"
+              csvRange={csvRange}
+              onCsvError={setCsvErr}
             >
               {bottomProducts.length === 0 ? (
                 <div style={{ color: '#7A828F', fontSize: 13, padding: 16 }}>No data.</div>
@@ -233,75 +295,142 @@ function Kpi({
   value,
   sub,
   delta,
+  accent = 'indigo',
 }: {
   label: string;
   value: string;
   sub?: string;
   /** Percent change vs prior period; null = baseline was zero. */
   delta?: number | null;
+  /** Subtle accent strip — gives each KPI a quiet identity without
+      flooding the page with colour. */
+  accent?: 'indigo' | 'teal' | 'amber' | 'rose';
 }) {
-  let deltaTxt: React.ReactNode = null;
+  const accentColor = {
+    indigo: '#6366F1',
+    teal: '#14B8A6',
+    amber: '#F59E0B',
+    rose: '#F43F5E',
+  }[accent];
+
+  let deltaPill: React.ReactNode = null;
   if (delta != null) {
     const positive = delta >= 0;
-    deltaTxt = (
+    deltaPill = (
       <span
         style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: positive ? '#15803d' : '#b91c1c',
-          marginLeft: 8,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 3,
+          fontSize: 11.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: positive ? '#ECFDF5' : '#FEF2F2',
+          color: positive ? '#047857' : '#B91C1C',
+          border: `1px solid ${positive ? '#A7F3D0' : '#FECACA'}`,
         }}
       >
-        {positive ? '▲' : '▼'} {Math.abs(delta).toFixed(1)}%
+        {positive ? '↑' : '↓'} {Math.abs(delta).toFixed(1)}%
       </span>
-    );
-  } else if (delta === null) {
-    deltaTxt = (
-      <span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 8 }}>—</span>
     );
   }
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 16, padding: 16 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#7A828F', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
-      <div style={{ display: 'flex', alignItems: 'baseline', marginTop: 4 }}>
-        <div style={{ fontSize: 24, fontWeight: 700, color: '#0F1115', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
-        {deltaTxt}
+    <div style={{ ...kpiCard, position: 'relative', overflow: 'hidden' }}>
+      <span
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          bottom: 0,
+          width: 3,
+          background: accentColor,
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 14 }}>
+        <div style={kpiLabel}>{label}</div>
+        {deltaPill}
       </div>
-      {sub && <div style={{ fontSize: 11, color: '#7A828F', marginTop: 4 }}>{sub}</div>}
+      <div style={kpiValue}>{value}</div>
+      {sub && <div style={kpiSub}>{sub}</div>}
     </div>
   );
 }
 
+
 function Card({
   title,
   children,
-  csvHref,
+  csvReport,
+  csvRange,
+  onCsvError,
 }: {
   title: string;
   children: React.ReactNode;
-  csvHref?: string;
+  /** When set, renders a "CSV" button that fetches the report with the
+      admin bearer token and triggers a blob download. */
+  csvReport?: 'sales-daily' | 'top-products' | 'bottom-products' | 'order-status-mix';
+  csvRange?: { start: string; end: string };
+  onCsvError?: (msg: string) => void;
 }) {
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (!csvReport || !csvRange) return;
+    setDownloading(true);
+    try {
+      await adminAnalyticsService.downloadCsv(csvReport, csvRange.start, csvRange.end);
+    } catch (e) {
+      onCsvError?.(e instanceof Error ? e.message : 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
-    <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 16, padding: 16, marginTop: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h3 style={{ fontSize: 13, fontWeight: 600, color: '#525A65', textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0 }}>{title}</h3>
-        {csvHref && (
-          <a
-            href={csvHref}
-            download
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid #E5E7EB',
+        borderRadius: 14,
+        padding: '18px 20px',
+        marginTop: 14,
+        boxShadow: '0 1px 0 rgba(15,23,42,0.02)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <h3 style={{ fontSize: 12, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
+          {title}
+        </h3>
+        {csvReport && (
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={downloading}
             style={{
-              fontSize: 11,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 11.5,
               fontWeight: 600,
-              color: '#525A65',
-              textDecoration: 'none',
-              border: '1px solid #D2D6DC',
-              borderRadius: 6,
-              padding: '3px 8px',
+              color: '#475569',
+              border: '1px solid #E2E8F0',
+              borderRadius: 8,
+              padding: '5px 10px',
+              background: downloading ? '#F1F5F9' : '#F8FAFC',
+              cursor: downloading ? 'not-allowed' : 'pointer',
+              opacity: downloading ? 0.7 : 1,
             }}
           >
-            ⬇ CSV
-          </a>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            {downloading ? 'Downloading…' : 'CSV'}
+          </button>
         )}
       </div>
       {children}
@@ -310,23 +439,64 @@ function Card({
 }
 
 function ProductTable({ rows }: { rows: ProductPerformance[] }) {
+  const maxRevenue = Math.max(1, ...rows.map((r) => r.revenue));
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
       <thead>
-        <tr style={{ borderBottom: '1px solid #F3F4F6' }}>
+        <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
+          <th style={{ ...tinyTh, width: 40 }}>#</th>
           <th style={tinyTh}>Product</th>
           <th style={{ ...tinyTh, textAlign: 'right' }}>Units</th>
           <th style={{ ...tinyTh, textAlign: 'right' }}>Revenue</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((p) => (
-          <tr key={p.productId} style={{ borderBottom: '1px solid #F3F4F6' }}>
-            <td style={{ ...tinyTd, fontWeight: 500 }}>{p.title.length > 30 ? p.title.slice(0, 28) + '…' : p.title}</td>
-            <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{p.unitsSold}</td>
-            <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{inr(p.revenue)}</td>
-          </tr>
-        ))}
+        {rows.map((p, idx) => {
+          const pct = (p.revenue / maxRevenue) * 100;
+          return (
+            <tr key={p.productId} style={{ borderBottom: '1px solid #F1F5F9' }}>
+              <td style={{ ...tinyTd, color: '#94A3B8', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                {idx + 1}
+              </td>
+              <td style={{ ...tinyTd, fontWeight: 500, color: '#0F172A' }} title={p.title}>
+                {p.title.length > 32 ? p.title.slice(0, 30) + '…' : p.title}
+              </td>
+              <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#475569' }}>
+                {p.unitsSold}
+              </td>
+              <td style={{ ...tinyTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: '#0F172A', position: 'relative' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      display: 'inline-block',
+                      width: 60,
+                      height: 6,
+                      borderRadius: 999,
+                      background: '#F1F5F9',
+                      overflow: 'hidden',
+                      position: 'relative',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        height: '100%',
+                        width: `${pct}%`,
+                        background:
+                          idx === 0
+                            ? 'linear-gradient(90deg, #6366F1, #4338CA)'
+                            : '#C7D2FE',
+                        borderRadius: 999,
+                      }}
+                    />
+                  </span>
+                  <span style={{ minWidth: 64, textAlign: 'right' }}>{inr(p.revenue)}</span>
+                </div>
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -334,20 +504,80 @@ function ProductTable({ rows }: { rows: ProductPerformance[] }) {
 
 function SvgBars({ data }: { data: SalesSummary['byDay'] }) {
   const w = 1100;
-  const h = 200;
-  const pad = 24;
+  const h = 240;
+  const padX = 24;
+  const padTop = 28;
+  const padBottom = 32;
+  const chartH = h - padTop - padBottom;
   const max = Math.max(1, ...data.map((d) => d.revenue));
-  const barW = (w - pad * 2) / data.length - 4;
+  const barW = (w - padX * 2) / data.length - 6;
+  // Grid lines at 25/50/75/100% of max
+  const gridLines = [0.25, 0.5, 0.75, 1];
   return (
     <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+      <defs>
+        {/* Soft indigo gradient: feels data-focused without competing for
+            attention. Lighter at top, deeper at the base for visual weight. */}
+        <linearGradient id="bar-grad-indigo" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#A5B4FC" />
+          <stop offset="100%" stopColor="#6366F1" />
+        </linearGradient>
+        <linearGradient id="bar-grad-peak" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#6366F1" />
+          <stop offset="100%" stopColor="#4338CA" />
+        </linearGradient>
+      </defs>
+      {/* Grid lines + y-axis ticks */}
+      {gridLines.map((g) => {
+        const y = padTop + chartH * (1 - g);
+        return (
+          <g key={g}>
+            <line x1={padX + 36} y1={y} x2={w - padX} y2={y} stroke="#EEF2FF" />
+            <text x={padX + 30} y={y + 3} fontSize="9" fill="#94A3B8" textAnchor="end">
+              ₹{Math.round(max * g).toLocaleString('en-IN')}
+            </text>
+          </g>
+        );
+      })}
       {data.map((d, i) => {
-        const x = pad + i * (barW + 4);
-        const barH = (d.revenue / max) * (h - pad * 2);
-        const y = h - pad - barH;
+        const x = padX + 40 + i * ((w - padX * 2 - 40) / data.length);
+        const slot = (w - padX * 2 - 40) / data.length;
+        const thisBarW = Math.min(barW, slot - 6);
+        const barH = (d.revenue / max) * chartH;
+        const y = padTop + chartH - barH;
+        const isTop = d.revenue === max && d.revenue > 0;
         return (
           <g key={d.date}>
-            <rect x={x} y={y} width={barW} height={barH} fill="#0F1115" rx={4} />
-            <text x={x + barW / 2} y={h - 8} textAnchor="middle" fontSize="9" fill="#525A65">
+            <rect
+              x={x}
+              y={y}
+              width={thisBarW}
+              height={barH}
+              fill={isTop ? 'url(#bar-grad-peak)' : 'url(#bar-grad-indigo)'}
+              rx={6}
+            />
+            {/* Highlight max-day value above the bar */}
+            {isTop && (
+              <text
+                x={x + thisBarW / 2}
+                y={y - 6}
+                textAnchor="middle"
+                fontSize="10"
+                fontWeight="700"
+                fill="#4338CA"
+                style={{ fontVariantNumeric: 'tabular-nums' }}
+              >
+                ₹{Math.round(d.revenue).toLocaleString('en-IN')}
+              </text>
+            )}
+            <text
+              x={x + thisBarW / 2}
+              y={h - 10}
+              textAnchor="middle"
+              fontSize="10"
+              fill="#94A3B8"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
               {d.date.slice(5)}
             </text>
           </g>
@@ -357,29 +587,181 @@ function SvgBars({ data }: { data: SalesSummary['byDay'] }) {
   );
 }
 
+function StatusChip({ status }: { status: string }) {
+  const s = status.toLowerCase();
+  const map: Record<string, { bg: string; fg: string; border: string; dot: string }> = {
+    delivered: { bg: '#F0FDF4', fg: '#15803D', border: '#BBF7D0', dot: '#22C55E' },
+    cancelled: { bg: '#FEF2F2', fg: '#B91C1C', border: '#FECACA', dot: '#EF4444' },
+    'exception queue': { bg: '#FFFBEB', fg: '#B45309', border: '#FDE68A', dot: '#F59E0B' },
+    exception: { bg: '#FFFBEB', fg: '#B45309', border: '#FDE68A', dot: '#F59E0B' },
+    'routed to seller': { bg: '#EFF6FF', fg: '#1D4ED8', border: '#BFDBFE', dot: '#3B82F6' },
+    routed: { bg: '#EFF6FF', fg: '#1D4ED8', border: '#BFDBFE', dot: '#3B82F6' },
+    paid: { bg: '#F0FDF4', fg: '#15803D', border: '#BBF7D0', dot: '#22C55E' },
+    refunded: { bg: '#F5F3FF', fg: '#6D28D9', border: '#DDD6FE', dot: '#8B5CF6' },
+  };
+  const tone = map[s] ?? { bg: '#F1F5F9', fg: '#475569', border: '#E2E8F0', dot: '#94A3B8' };
+  const label = status.replace(/_/g, ' ').toLowerCase();
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '3px 10px 3px 8px',
+      borderRadius: 999,
+      fontSize: 11.5,
+      fontWeight: 600,
+      background: tone.bg,
+      color: tone.fg,
+      border: `1px solid ${tone.border}`,
+      textTransform: 'capitalize',
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: tone.dot }} />
+      {label}
+    </span>
+  );
+}
+
 function FunnelView({ funnel }: { funnel: ConversionFunnel }) {
   const max = Math.max(funnel.cartCreated, funnel.checkoutInitiated, funnel.ordersPlaced, funnel.ordersPaid, 1);
+  // Indigo progression: light → deep indigo signals "moving deeper into the
+  // funnel". The final "Orders paid" bar gets the darkest indigo so the eye
+  // naturally lands on the conversion outcome, without alarming reds.
   const steps = [
-    { label: 'Carts created', value: funnel.cartCreated, color: '#cbd5e1' },
-    { label: 'Checkout initiated (est.)', value: funnel.checkoutInitiated, color: '#94a3b8' },
-    { label: 'Orders placed', value: funnel.ordersPlaced, color: '#475569' },
-    { label: 'Orders paid', value: funnel.ordersPaid, color: '#0F1115' },
+    { label: 'Carts created', value: funnel.cartCreated, color: '#C7D2FE' },
+    { label: 'Checkout initiated (est.)', value: funnel.checkoutInitiated, color: '#818CF8' },
+    { label: 'Orders placed', value: funnel.ordersPlaced, color: '#6366F1' },
+    { label: 'Orders paid', value: funnel.ordersPaid, color: '#4338CA' },
   ];
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {steps.map((s) => (
-        <div key={s.label} style={{ display: 'grid', gridTemplateColumns: '180px 1fr 80px', gap: 12, alignItems: 'center' }}>
-          <span style={{ fontSize: 13, color: '#525A65' }}>{s.label}</span>
-          <div style={{ background: '#F3F4F6', borderRadius: 9999, height: 24, overflow: 'hidden' }}>
-            <div style={{ background: s.color, width: `${(s.value / max) * 100}%`, height: '100%', borderRadius: 9999 }} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {steps.map((s, i) => {
+        const prev = i > 0 ? steps[i - 1].value : null;
+        const dropPct = prev != null && prev > 0 ? Math.round((1 - s.value / prev) * 100) : null;
+        return (
+          <div key={s.label} style={{ display: 'grid', gridTemplateColumns: '200px 1fr 100px', gap: 14, alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 13, color: '#0F172A', fontWeight: 500 }}>{s.label}</div>
+              {dropPct !== null && (
+                <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                  {dropPct > 0 ? `↓ ${dropPct}% from prev` : 'no drop'}
+                </div>
+              )}
+            </div>
+            <div style={{ background: '#F1F5F9', borderRadius: 9999, height: 26, overflow: 'hidden', position: 'relative' }}>
+              <div style={{
+                background: s.color,
+                width: `${(s.value / max) * 100}%`,
+                height: '100%',
+                borderRadius: 9999,
+                transition: 'width 300ms ease',
+              }} />
+            </div>
+            <span style={{ textAlign: 'right', fontSize: 15, fontWeight: 700, color: '#0F172A', fontVariantNumeric: 'tabular-nums' }}>
+              {s.value.toLocaleString('en-IN')}
+            </span>
           </div>
-          <span style={{ textAlign: 'right', fontSize: 14, fontWeight: 600, color: '#0F1115', fontVariantNumeric: 'tabular-nums' }}>{s.value.toLocaleString('en-IN')}</span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-const tinyTh: React.CSSProperties = { padding: '6px 10px', textAlign: 'left', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#7A828F' };
-const tinyTd: React.CSSProperties = { padding: '8px 10px', fontSize: 13, color: '#0F1115' };
-const dateInput: React.CSSProperties = { height: 32, padding: '0 8px', border: '1px solid #D2D6DC', background: '#fff', borderRadius: 9999, fontSize: 12, outline: 'none' };
+const tinyTh: React.CSSProperties = {
+  padding: '10px 12px',
+  textAlign: 'left',
+  fontSize: 10.5,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  color: '#64748B',
+};
+const tinyTd: React.CSSProperties = { padding: '12px 12px', fontSize: 13, color: '#0F172A' };
+const dateInput: React.CSSProperties = {
+  height: 34,
+  padding: '0 10px',
+  border: '1px solid #D2D6DC',
+  background: '#fff',
+  borderRadius: 8,
+  fontSize: 12.5,
+  outline: 'none',
+  color: '#0F172A',
+  fontVariantNumeric: 'tabular-nums',
+};
+const eyebrow: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 1.2,
+  color: '#64748B',
+  marginBottom: 4,
+};
+const pageTitle: React.CSSProperties = {
+  fontSize: 28,
+  fontWeight: 700,
+  margin: 0,
+  color: '#0F172A',
+  letterSpacing: '-0.02em',
+};
+const pageSubtitle: React.CSSProperties = {
+  marginTop: 6,
+  fontSize: 13.5,
+  color: '#64748B',
+  lineHeight: 1.55,
+  maxWidth: 560,
+};
+const dateBar: React.CSSProperties = {
+  display: 'flex',
+  gap: 10,
+  alignItems: 'center',
+  flexWrap: 'wrap',
+};
+const chipGroup: React.CSSProperties = {
+  display: 'inline-flex',
+  background: '#F1F5F9',
+  padding: 3,
+  borderRadius: 10,
+  gap: 2,
+};
+const chipStyle = (active: boolean): React.CSSProperties => ({
+  padding: '6px 14px',
+  fontSize: 12.5,
+  fontWeight: 600,
+  border: 'none',
+  borderRadius: 8,
+  background: active ? '#fff' : 'transparent',
+  color: active ? '#0F172A' : '#64748B',
+  cursor: 'pointer',
+  boxShadow: active ? '0 1px 0 rgba(15,23,42,0.06), 0 2px 6px -2px rgba(15,23,42,0.12)' : 'none',
+  transition: 'background 120ms ease, color 120ms ease',
+});
+const dateInputGroup: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+};
+const kpiCard: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #E5E7EB',
+  borderRadius: 14,
+  padding: '18px 20px',
+  boxShadow: '0 1px 0 rgba(15,23,42,0.02)',
+};
+const kpiLabel: React.CSSProperties = {
+  fontSize: 11.5,
+  fontWeight: 700,
+  color: '#64748B',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+};
+const kpiValue: React.CSSProperties = {
+  fontSize: 30,
+  fontWeight: 700,
+  color: '#0F172A',
+  fontVariantNumeric: 'tabular-nums',
+  letterSpacing: '-0.02em',
+  lineHeight: 1.1,
+};
+const kpiSub: React.CSSProperties = {
+  fontSize: 12,
+  color: '#64748B',
+  marginTop: 6,
+};

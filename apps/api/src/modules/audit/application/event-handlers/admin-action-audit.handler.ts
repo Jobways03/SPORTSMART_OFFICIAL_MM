@@ -9,7 +9,12 @@ export class AdminActionAuditHandler {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  @OnEvent('admin.action.*')
+  // `**` (not `*`) so multi-segment names like `admin.action.role.created`
+  // match. EventEmitter2's single-segment wildcard `*` matches exactly
+  // one segment, which silently ignored every event with a deeper path —
+  // mirror of the same wildcard bug previously fixed for `@OnEvent('**')`
+  // in EventsModule.
+  @OnEvent('admin.action.**')
   async handleAdminAction(event: DomainEvent): Promise<void> {
     try {
       const { adminId, actionType, sellerId, reason, metadata } = event.payload as any;

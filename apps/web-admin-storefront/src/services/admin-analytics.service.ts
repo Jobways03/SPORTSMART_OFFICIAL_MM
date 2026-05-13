@@ -80,16 +80,47 @@ export const adminAnalyticsService = {
     return apiClient<ConversionFunnel>(`/admin/analytics/conversion${buildQs({ start, end })}`);
   },
   /**
-   * Build a downloadable CSV URL for the given report. Returned as a
-   * full URL so the browser can hit it directly with `<a download>`
-   * (apiClient would try to JSON-parse and fail for CSV).
+   * Download a CSV report. Uses an authenticated fetch (bearer token
+   * from sessionStorage) → Blob → object-URL <a> click, because:
+   *   1. the endpoint sits behind AdminAuthGuard, and a plain
+   *      `<a download href>` wouldn't carry the Authorization header;
+   *   2. apiClient would try to JSON.parse the response and fail.
+   * Throws so callers can surface "Download failed" in the UI.
    */
-  csvUrl(
+  async downloadCsv(
     report: 'sales-daily' | 'top-products' | 'bottom-products' | 'order-status-mix',
     start: string,
     end: string,
-  ): string {
-    return `${API_BASE}/admin/analytics/export/${report}.csv${buildQs({ start, end })}`;
+  ): Promise<void> {
+    const token =
+      typeof window !== 'undefined'
+        ? window.sessionStorage.getItem('adminAccessToken')
+        : null;
+    const url = `${API_BASE}/api/v1/admin/analytics/export/${report}.csv${buildQs({ start, end })}`;
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!res.ok) {
+      let msg = `Download failed (${res.status})`;
+      try {
+        const json = await res.json();
+        if (json?.message) msg = Array.isArray(json.message) ? json.message.join(', ') : String(json.message);
+      } catch { /* response wasn't JSON */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    // Filename comes from Content-Disposition; fall back to "<report>.csv".
+    const disposition = res.headers.get('Content-Disposition') ?? '';
+    const match = /filename="?([^"]+)"?/i.exec(disposition);
+    const filename = match?.[1] ?? `${report}.csv`;
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
   },
 };
 
