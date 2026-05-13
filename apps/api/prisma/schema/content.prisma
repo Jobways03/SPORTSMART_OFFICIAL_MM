@@ -46,6 +46,101 @@ model StaticPage {
   @@map("static_pages")
 }
 
+// PR — Storefront content blocks.
+//
+// One row per homepage slot (hero-slide-1, sport-running, deal-goggles,
+// banner-tennis, promo-flexnest, brand-adidas, …). Slot is free-form
+// TEXT — the storefront defines what slot keys exist; the table just
+// stores the admin-supplied image + copy for each one.
+//
+// When a row is absent (or row.active=false), the storefront's MediaTile
+// fallback renders the curated Unsplash placeholder for that slot.
+model StorefrontContentBlock {
+  id           String   @id @default(uuid())
+  slot         String   @unique
+  imageUrl     String?  @map("image_url")
+  eyebrow      String?
+  headline     String?
+  subhead      String?  @db.Text
+  ctaLabel     String?  @map("cta_label")
+  ctaHref      String?  @map("cta_href")
+  // Price treatment shown on the tile (e.g. "₹999" + "Onwards"). Optional
+  // — when null, the storefront falls back to its hardcoded per-slot price
+  // (for the seeded slots) or shows nothing (for admin-added slots).
+  price        String?
+  priceCaption String?  @map("price_caption")
+  active       Boolean  @default(true)
+  updatedById  String?  @map("updated_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([active])
+  @@map("storefront_content_blocks")
+}
+
+// Blog posts — admin-authored news/articles shown on /blogs and on a
+// homepage strip. Status is binary (visible / hidden) to match the
+// admin UI radio. publishedAt is set when status flips to VISIBLE so we
+// can order by it on the public list.
+enum BlogPostStatus {
+  VISIBLE
+  HIDDEN
+}
+
+model BlogPost {
+  id           String         @id @default(uuid())
+  slug         String         @unique
+  title        String
+  excerpt      String?        @db.Text
+  contentHtml  String         @default("") @map("content_html") @db.Text
+  imageUrl     String?        @map("image_url")
+  author       String?
+  category     String         @default("News")
+  tags         String[]       @default([])
+  status       BlogPostStatus @default(HIDDEN)
+  publishedAt  DateTime?      @map("published_at")
+  metaTitle    String?        @map("meta_title")
+  metaDesc     String?        @map("meta_desc")
+  createdById  String?        @map("created_by_id")
+  updatedById  String?        @map("updated_by_id")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+
+  @@index([status, publishedAt])
+  @@index([category, status])
+  @@map("blog_posts")
+}
+
+// Admin-editable list of slots within each storefront section. Sections
+// (Hero, Sport tiles strip, Banner promo, …) are fixed in the storefront
+// because each has its own grid layout / aspect ratio, but the *number
+// and identity* of slots inside each section is admin-controlled so they
+// can add a 9th sport tile or a 4th hero slide without engineering work.
+//
+// The seed migration inserts the original 38 slots with isSystem=true.
+// Admins can still delete system slots (no protection enforced) — the
+// flag is informational so the UI can warn ("This is a default slot —
+// removing it will fall back to the curated placeholder").
+//
+// When a slot definition is removed, any StorefrontContentBlock with the
+// same slot key becomes orphaned. The service deletes the block in the
+// same transaction so the storefront's public map doesn't keep serving
+// a slot the admin has retired.
+model StorefrontSlotDefinition {
+  id          String   @id @default(uuid())
+  sectionKey  String   @map("section_key")
+  slotKey     String   @unique @map("slot_key")
+  label       String
+  position    Int      @default(0)
+  defaultHref String?  @map("default_href")
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([sectionKey, position])
+  @@map("storefront_slot_definitions")
+}
+
 model FaqEntry {
   id        String   @id @default(uuid())
   category  String

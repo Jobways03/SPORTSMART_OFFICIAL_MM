@@ -834,11 +834,6 @@ const router = useRouter();
       {/* Status Banner */}
       {renderStatusBanner()}
 
-      {/* Status history timeline — full audit trail of moderation decisions */}
-      {Array.isArray(product.statusHistory) && product.statusHistory.length > 0 && (
-        <StatusHistoryPanel entries={product.statusHistory} />
-      )}
-
       {/* Status notice removed — editing allowed at all times */}
 
       {/* Section 1: Basic Info */}
@@ -1626,6 +1621,13 @@ const router = useRouter();
             </button>
           )}
         </div>
+      )}
+
+      {/* Status history timeline — full audit trail of moderation decisions.
+          Lives at the bottom so the editable form is the first thing the
+          seller sees; history is reference-only and pushed below. */}
+      {Array.isArray(product.statusHistory) && product.statusHistory.length > 0 && (
+        <StatusHistoryPanel entries={product.statusHistory} />
       )}
 
     </div>

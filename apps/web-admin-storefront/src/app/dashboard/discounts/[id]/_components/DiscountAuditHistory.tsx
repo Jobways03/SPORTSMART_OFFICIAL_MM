@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiClient } from '@/lib/api-client';
+import { formatRoleLabel } from '@/services/admin-access-logs.service';
 
 interface AuditRow {
   id: string;
@@ -203,7 +204,7 @@ export function DiscountAuditHistory({ discountId }: { discountId: string }) {
                     </span>
                     <span style={{ color: '#6b7280' }}>
                       by {row.actorId ? truncate(row.actorId, 14) : 'system'}
-                      {row.actorRole ? ` · ${row.actorRole}` : ''}
+                      {row.actorRole ? ` · ${formatRoleLabel(row.actorRole)}` : ''}
                     </span>
                   </div>
                   <span style={{ color: '#9ca3af', fontSize: 11 }}>

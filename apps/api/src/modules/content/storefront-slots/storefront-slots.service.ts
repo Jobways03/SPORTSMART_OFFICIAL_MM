@@ -1,0 +1,201 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../../../bootstrap/database/prisma.service';
+import {
+  BadRequestAppException,
+  ConflictAppException,
+  NotFoundAppException,
+} from '../../../core/exceptions';
+
+export interface SlotDefinitionDto {
+  id: string;
+  sectionKey: string;
+  slotKey: string;
+  label: string;
+  position: number;
+  defaultHref: string | null;
+  isSystem: boolean;
+}
+
+export interface CreateSlotInput {
+  sectionKey: string;
+  slotKey?: string;
+  label: string;
+  defaultHref?: string | null;
+  position?: number;
+}
+
+/**
+ * Source of truth for which slots exist within each storefront section.
+ * Sections themselves (Hero, Sport tiles strip, Banner promo, …) are
+ * fixed in storefront code because each carries layout/aspect/tone, but
+ * the slot list is data so admins can add / remove slots without a
+ * deploy.
+ */
+@Injectable()
+export class StorefrontSlotsService {
+  private readonly logger = new Logger(StorefrontSlotsService.name);
+
+  // The set of allowed section keys, kept in sync with the storefront
+  // home components. New sections would be a deploy — they need new
+  // grid/aspect/tone code, so admins can't add sections, only slots.
+  private static readonly ALLOWED_SECTIONS = new Set([
+    'hero',
+    'sport-tiles-strip',
+    'equipping-champions',
+    'most-loved-deals',
+    'banner-promo',
+    'unite-play',
+    'partner-promos',
+    'brand-chips',
+  ]);
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  async list(): Promise<SlotDefinitionDto[]> {
+    const rows = await this.prisma.storefrontSlotDefinition.findMany({
+      orderBy: [{ sectionKey: 'asc' }, { position: 'asc' }],
+    });
+    return rows.map(this.toDto);
+  }
+
+  async create(input: CreateSlotInput): Promise<SlotDefinitionDto> {
+    if (!input.label?.trim()) {
+      throw new BadRequestAppException('label is required');
+    }
+    if (!input.sectionKey || !StorefrontSlotsService.ALLOWED_SECTIONS.has(input.sectionKey)) {
+      throw new BadRequestAppException(
+        `Unknown section "${input.sectionKey}". Allowed: ${[
+          ...StorefrontSlotsService.ALLOWED_SECTIONS,
+        ].join(', ')}`,
+      );
+    }
+
+    const slotKey = await this.resolveUniqueSlotKey(
+      input.slotKey || this.deriveSlotKey(input.sectionKey, input.label),
+    );
+
+    // Position = next at end of section unless an explicit position is
+    // supplied. We don't try to re-shuffle existing siblings — admins
+    // can manually drag-reorder later if we add that UI.
+    let position = input.position ?? 0;
+    if (input.position === undefined) {
+      const last = await this.prisma.storefrontSlotDefinition.findFirst({
+        where: { sectionKey: input.sectionKey },
+        orderBy: { position: 'desc' },
+        select: { position: true },
+      });
+      position = (last?.position ?? 0) + 1;
+    }
+
+    const row = await this.prisma.storefrontSlotDefinition.create({
+      data: {
+        sectionKey: input.sectionKey,
+        slotKey,
+        label: input.label.trim(),
+        position,
+        defaultHref: input.defaultHref?.trim() || null,
+        isSystem: false,
+      },
+    });
+    this.logger.log(
+      `Slot created section=${input.sectionKey} key=${slotKey} pos=${position}`,
+    );
+    return this.toDto(row);
+  }
+
+  /**
+   * Remove a slot definition. Also delete the associated content block
+   * (if any) in the same transaction — otherwise the row is orphaned
+   * and the public map keeps serving it until an admin manually resets
+   * the block.
+   */
+  async remove(id: string): Promise<void> {
+    const def = await this.prisma.storefrontSlotDefinition.findUnique({
+      where: { id },
+    });
+    if (!def) throw new NotFoundAppException('Slot definition not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.storefrontContentBlock
+        .delete({ where: { slot: def.slotKey } })
+        .catch((err) => {
+          if ((err as { code?: string })?.code !== 'P2025') throw err;
+        });
+      await tx.storefrontSlotDefinition.delete({ where: { id } });
+    });
+    this.logger.log(`Slot deleted section=${def.sectionKey} key=${def.slotKey}`);
+  }
+
+  // ─── helpers ──────────────────────────────────────────────────────
+
+  private async resolveUniqueSlotKey(raw: string): Promise<string> {
+    const base = this.slugify(raw);
+    if (!base) {
+      throw new BadRequestAppException(
+        'slot key cannot be derived — pass an explicit slotKey or use a label with letters/numbers',
+      );
+    }
+    let candidate = base;
+    let attempt = 1;
+    while (true) {
+      const clash = await this.prisma.storefrontSlotDefinition.findUnique({
+        where: { slotKey: candidate },
+        select: { id: true },
+      });
+      if (!clash) return candidate;
+      attempt += 1;
+      candidate = `${base}-${attempt}`;
+      if (attempt > 50) {
+        throw new ConflictAppException(
+          'Too many slots share this label — try a more specific name',
+        );
+      }
+    }
+  }
+
+  private deriveSlotKey(sectionKey: string, label: string): string {
+    // Sections use a stable prefix in the seeded data (sport-cricket,
+    // champ-running, …). Use the section key's first segment as the
+    // prefix so newly-created slots fit the same pattern.
+    const prefixMap: Record<string, string> = {
+      hero: 'hero-slide',
+      'sport-tiles-strip': 'sport',
+      'equipping-champions': 'champ',
+      'most-loved-deals': 'deal',
+      'banner-promo': 'banner',
+      'unite-play': 'play',
+      'partner-promos': 'promo',
+      'brand-chips': 'brand',
+    };
+    const prefix = prefixMap[sectionKey] ?? 'slot';
+    return `${prefix}-${label}`;
+  }
+
+  private slugify(s: string): string {
+    return s
+      .toLowerCase()
+      .trim()
+      .normalize('NFKD')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64);
+  }
+
+  private toDto = (row: {
+    id: string;
+    sectionKey: string;
+    slotKey: string;
+    label: string;
+    position: number;
+    defaultHref: string | null;
+    isSystem: boolean;
+  }): SlotDefinitionDto => ({
+    id: row.id,
+    sectionKey: row.sectionKey,
+    slotKey: row.slotKey,
+    label: row.label,
+    position: row.position,
+    defaultHref: row.defaultHref,
+    isSystem: row.isSystem,
+  });
+}
