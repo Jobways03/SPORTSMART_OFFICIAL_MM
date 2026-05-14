@@ -18,17 +18,26 @@ export class CartService {
     const cart = await this.cartRepo.findByCustomerId(customerId);
 
     if (!cart) {
-      return { items: [], totalAmount: 0, itemCount: 0 };
+      return {
+        items: [],
+        savedItems: [],
+        totalAmount: 0,
+        itemCount: 0,
+      };
     }
 
+    // Sprint 3 Story 2.3 — totals only count active items. Saved items
+    // are visible but don't tally toward the cart subtotal (matches
+    // typical e-commerce checkout where "save for later" is excluded
+    // from the order until moved back).
     let totalAmount = 0;
-    const items = await Promise.all(
+    const shaped = await Promise.all(
       cart.items.map(async (item) => {
         const price = item.variant
           ? Number(item.variant.price)
           : Number(item.product.basePrice ?? 0);
         const lineTotal = price * item.quantity;
-        totalAmount += lineTotal;
+        if (!item.savedForLater) totalAmount += lineTotal;
 
         const imageUrl =
           item.variant?.images?.[0]?.url ||
@@ -45,6 +54,7 @@ export class CartService {
           productId: item.productId,
           variantId: item.variantId,
           quantity: item.quantity,
+          savedForLater: item.savedForLater,
           productTitle: item.product.title,
           variantTitle: item.variant?.title || null,
           slug: item.product.slug,
@@ -58,11 +68,51 @@ export class CartService {
       }),
     );
 
+    const items = shaped.filter((i) => !i.savedForLater);
+    const savedItems = shaped.filter((i) => i.savedForLater);
+
     return {
       items,
+      savedItems,
       totalAmount: Math.round(totalAmount * 100) / 100,
       itemCount: items.reduce((sum, i) => sum + i.quantity, 0),
     };
+  }
+
+  /**
+   * Sprint 3 Story 2.3 — park a cart item. Quantity is preserved
+   * (snap-back behavior). Caller must own the cart.
+   */
+  async saveForLater(customerId: string, itemId: string) {
+    const cart = await this.cartRepo.findCartByCustomerId(customerId);
+    if (!cart) throw new NotFoundAppException('Cart not found');
+    const item = await this.cartRepo.findCartItemById(itemId, cart.id);
+    if (!item) throw new NotFoundAppException('Cart item not found');
+    await this.cartRepo.setSavedForLater(itemId, true);
+  }
+
+  /**
+   * Sprint 3 Story 2.3 — move a saved item back into the active cart.
+   * Re-validates stock — the item may have gone out of stock while
+   * parked, in which case we 400 with a clear message rather than
+   * silently moving a now-unfulfillable item back to the cart.
+   */
+  async moveToCart(customerId: string, itemId: string) {
+    const cart = await this.cartRepo.findCartByCustomerId(customerId);
+    if (!cart) throw new NotFoundAppException('Cart not found');
+    const item = await this.cartRepo.findCartItemById(itemId, cart.id);
+    if (!item) throw new NotFoundAppException('Cart item not found');
+
+    const availableStock = await this.cartRepo.getAggregatedStock(
+      item.productId,
+      item.variantId,
+    );
+    if (availableStock < item.quantity) {
+      throw new BadRequestAppException(
+        `Cannot move to cart — only ${availableStock} in stock, item has quantity ${item.quantity}`,
+      );
+    }
+    await this.cartRepo.setSavedForLater(itemId, false);
   }
 
   async addItem(

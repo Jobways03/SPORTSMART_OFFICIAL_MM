@@ -20,6 +20,7 @@ import { SearchModule } from './modules/search/module';
 import { InventoryModule } from './modules/inventory/module';
 import { CartModule } from './modules/cart/module';
 import { WalletModule } from './modules/wallet/module';
+import { WishlistModule } from './modules/wishlist/wishlist.module';
 import { SupportModule } from './modules/support/module';
 import { OwnBrandModule } from './modules/own-brand/module';
 import { PaymentOpsModule } from './modules/payments-ops/module';
@@ -115,6 +116,7 @@ import { TaxModule } from './modules/tax/module';
     InventoryModule,
     CartModule,
     WalletModule,
+    WishlistModule,
     SupportModule,
     OwnBrandModule,
     PaymentOpsModule,

@@ -160,8 +160,15 @@ export class FilesController {
 }
 
 /**
- * Admin-only listing across all files (debug + moderation surface).
- * Mounted separately so the AdminAuthGuard isolation is explicit.
+ * Admin moderation surface — list/search across all files in the platform
+ * plus per-file detail with the full attachment graph. Distinct from the
+ * customer-facing FilesController above, which scopes everything to the
+ * caller's own files.
+ *
+ * Sprint 2 (Story 1.2) rewrite: previous version reached into the
+ * service's private PrismaService via `as any`. Now goes through
+ * proper FileService methods (`listForAdmin`, `findByIdForAdmin`) so
+ * authorisation + invariants live in one place.
  */
 @ApiTags('Files — Admin')
 @Controller('admin/files')
@@ -173,21 +180,33 @@ export class AdminFilesController {
   async list(
     @Query('purpose') purpose?: string,
     @Query('uploadedBy') uploadedBy?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('includeDeleted') includeDeleted?: string,
+    @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    // Reuse the service via the prisma client through findById is not
-    // appropriate; we expose a thin one-off here for admin moderation.
-    // Kept tiny — not paginated yet (defer to admin needs).
-    const items = await (this.service as any).prisma.fileMetadata.findMany({
-      where: {
-        ...(purpose ? { purpose: purpose.toUpperCase() as FilePurpose } : {}),
-        ...(uploadedBy ? { uploadedBy } : {}),
-        deletedAt: null,
-      },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(parseInt(limit || '100', 10) || 100, 500),
+    const data = await this.service.listForAdmin({
+      purpose: purpose ? (purpose.toUpperCase() as FilePurpose) : undefined,
+      uploadedBy: uploadedBy?.trim() || undefined,
+      fromDate: fromDate ? new Date(fromDate) : undefined,
+      toDate: toDate ? new Date(toDate) : undefined,
+      includeDeleted: includeDeleted === 'true',
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
     });
-    return { success: true, message: 'Files retrieved', data: { items } };
+    return { success: true, message: 'Files retrieved', data };
+  }
+
+  /**
+   * Admin detail — file metadata + every attachment so the moderator
+   * can decide whether deleting the file would orphan a return, a
+   * ticket, a KYC record, etc.
+   */
+  @Get(':id')
+  async getOne(@Param('id') id: string) {
+    const data = await this.service.findByIdForAdmin(id);
+    return { success: true, message: 'File retrieved', data };
   }
 }
 

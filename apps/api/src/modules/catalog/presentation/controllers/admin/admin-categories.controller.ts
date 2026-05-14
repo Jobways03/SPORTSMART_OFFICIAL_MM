@@ -82,7 +82,18 @@ export class AdminCategoriesController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a category' })
   async create(@Body() body: any) {
-    const { name, slug: customSlug, description, imageUrl, parentId, sortOrder, isActive } = body;
+    const {
+      name,
+      slug: customSlug,
+      description,
+      imageUrl,
+      bannerUrl,
+      metaTitle,
+      metaDescription,
+      parentId,
+      sortOrder,
+      isActive,
+    } = body;
     if (!name || !name.trim()) throw new BadRequestAppException('name is required');
 
     const slug = customSlug || toSlug(name);
@@ -98,7 +109,11 @@ export class AdminCategoriesController {
 
     const category = await this.categoryRepo.create({
       name: name.trim(), slug, description: description || null,
-      imageUrl: imageUrl || null, parentId: parentId || null,
+      imageUrl: imageUrl || null,
+      bannerUrl: bannerUrl || null,
+      metaTitle: metaTitle?.trim() || null,
+      metaDescription: metaDescription?.trim() || null,
+      parentId: parentId || null,
       level, sortOrder: sortOrder ?? 0, isActive: isActive !== false,
     });
 
@@ -123,6 +138,11 @@ export class AdminCategoriesController {
     }
     if (body.description !== undefined) data.description = body.description;
     if (body.imageUrl !== undefined) data.imageUrl = body.imageUrl;
+    if (body.bannerUrl !== undefined) data.bannerUrl = body.bannerUrl || null;
+    if (body.metaTitle !== undefined)
+      data.metaTitle = body.metaTitle?.trim() || null;
+    if (body.metaDescription !== undefined)
+      data.metaDescription = body.metaDescription?.trim() || null;
     if (body.sortOrder !== undefined) data.sortOrder = body.sortOrder;
     if (body.isActive !== undefined) data.isActive = body.isActive;
 

@@ -41,6 +41,8 @@ model User {
   // Phase 13 GST — wallet adjustments raised against this user
   // (goodwill credits, time-barred refund routing).
   walletAdjustments WalletAdjustment[]
+  // Sprint 3 Story 2.2 — buyer-facing wishlist (see wishlist.prisma).
+  wishlistItems     WishlistItem[]
 
   @@map("users")
 }

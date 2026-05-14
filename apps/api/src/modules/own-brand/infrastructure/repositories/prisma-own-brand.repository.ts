@@ -221,6 +221,118 @@ export class PrismaOwnBrandRepository implements OwnBrandRepository {
     });
   }
 
+  async transferStock(args: {
+    fromWarehouseId: string;
+    toWarehouseId: string;
+    productId: string;
+    variantId?: string | null;
+    quantity: number;
+    reason?: string | null;
+    adminId?: string | null;
+  }): Promise<{
+    fromStock: import('@prisma/client').OwnBrandStock;
+    toStock: import('@prisma/client').OwnBrandStock;
+  }> {
+    if (args.quantity <= 0) {
+      throw new Error('Transfer quantity must be positive');
+    }
+    if (args.fromWarehouseId === args.toWarehouseId) {
+      throw new Error('Source and destination warehouses must differ');
+    }
+    const variantId = args.variantId ?? null;
+
+    return this.prisma.$transaction(async (tx) => {
+      // Source: must have enough *free* stock (qty minus reservations).
+      // Block the transfer if it would push the source below zero or
+      // into reserved units — reservations are real orders that haven't
+      // shipped yet, transferring out from under them would over-sell.
+      const fromExisting = await tx.ownBrandStock.findFirst({
+        where: {
+          warehouseId: args.fromWarehouseId,
+          productId: args.productId,
+          variantId,
+        },
+      });
+      if (!fromExisting) {
+        throw new Error(
+          `No stock row at source warehouse ${args.fromWarehouseId} for this product`,
+        );
+      }
+      const available = fromExisting.stockQty - fromExisting.reservedQty;
+      if (available < args.quantity) {
+        throw new Error(
+          `Insufficient stock at source — available ${available} (qty ${fromExisting.stockQty} − reserved ${fromExisting.reservedQty}), requested ${args.quantity}`,
+        );
+      }
+
+      const fromNewQty = fromExisting.stockQty - args.quantity;
+      const fromStock = await tx.ownBrandStock.update({
+        where: { id: fromExisting.id },
+        data: { stockQty: fromNewQty },
+      });
+      await tx.ownBrandStockMovement.create({
+        data: {
+          warehouseId: args.fromWarehouseId,
+          productId: args.productId,
+          variantId,
+          kind: 'TRANSFER_OUT',
+          delta: -args.quantity,
+          stockAfter: fromNewQty,
+          reason: args.reason ?? null,
+          refType: 'transfer',
+          refId: args.toWarehouseId,
+          createdByAdminId: args.adminId ?? null,
+        },
+      });
+
+      // Destination: upsert pattern matches adjustStock so the first
+      // transfer to a new warehouse creates the stock row in-band.
+      const toExisting = await tx.ownBrandStock.findFirst({
+        where: {
+          warehouseId: args.toWarehouseId,
+          productId: args.productId,
+          variantId,
+        },
+      });
+      const toNewQty = (toExisting?.stockQty ?? 0) + args.quantity;
+      const toStock = toExisting
+        ? await tx.ownBrandStock.update({
+            where: { id: toExisting.id },
+            data: { stockQty: toNewQty },
+          })
+        : await tx.ownBrandStock.create({
+            data: {
+              warehouseId: args.toWarehouseId,
+              productId: args.productId,
+              variantId,
+              stockQty: toNewQty,
+              // Carry the source's last landed cost as a sensible
+              // default — this is what most accounting systems do for
+              // intra-company transfers (no new cost basis).
+              ...(fromExisting.lastLandedCost
+                ? { lastLandedCost: fromExisting.lastLandedCost }
+                : {}),
+            },
+          });
+      await tx.ownBrandStockMovement.create({
+        data: {
+          warehouseId: args.toWarehouseId,
+          productId: args.productId,
+          variantId,
+          kind: 'TRANSFER_IN',
+          delta: args.quantity,
+          stockAfter: toNewQty,
+          reason: args.reason ?? null,
+          refType: 'transfer',
+          refId: args.fromWarehouseId,
+          createdByAdminId: args.adminId ?? null,
+        },
+      });
+
+      return { fromStock, toStock };
+    });
+  }
+
   async listReceiptsForPo(
     poId: string,
   ): Promise<import('@prisma/client').OwnBrandProcurementReceipt[]> {

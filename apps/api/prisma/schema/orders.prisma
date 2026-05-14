@@ -73,6 +73,13 @@ model CartItem {
   // migration 20260512160000. PR 1.9's atomic increment-or-create
   // is the primary guard; this CHECK covers any future direct insert.
   quantity  Int     @default(1)
+  // Sprint 3 Story 2.3 — save-for-later flag. Default false (item is
+  // active in the cart). Toggled via /save-for-later and /move-to-cart
+  // endpoints. Active and saved items share the same (cart, product,
+  // variant) unique slot so an item can only be in one state at a time.
+  // The addItem path flips this back to false on re-add, so saved
+  // items "snap back" into the active cart when the user re-adds them.
+  savedForLater Boolean @default(false) @map("saved_for_later")
 
   cart    Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
   product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -101,6 +108,22 @@ model MasterOrder {
   orderStatus             OrderStatus        @default(PLACED) @map("order_status")
   verifiedBy              String?            @map("verified_by")
   verificationRemarks     String?            @map("verification_remarks")
+
+  // Verification queue claim (migration 20260504120000_add_verification_claim).
+  // Ops verifier holds an exclusive claim on a PLACED order; auto-expires
+  // after 15 minutes so abandoned claims don't block the queue.
+  claimedByAdminId String?   @map("claimed_by_admin_id")
+  claimedAt        DateTime? @map("claimed_at")
+  claimExpiresAt   DateTime? @map("claim_expires_at")
+
+  // Verification pre-screening risk band (migration 20260504130000_add_verification_risk_score).
+  // GREEN/YELLOW/RED computed lazily on first queue interaction; reasons
+  // is a JSON array of human-readable signals that drove the band.
+  verificationRiskScore   Int?      @map("verification_risk_score")
+  verificationRiskBand    String?   @map("verification_risk_band")
+  verificationRiskReasons Json?     @map("verification_risk_reasons")
+  verificationScoredAt    DateTime? @map("verification_scored_at")
+
   itemCount               Int                @map("item_count")
 
   // Discount / coupon (AMOUNT_OFF_ORDER applied at checkout). totalAmount
@@ -153,6 +176,11 @@ model MasterOrder {
   // Without the composite, the cron reads every PENDING_PAYMENT row
   // even when most have plenty of time left.
   @@index([orderStatus, paymentExpiresAt])
+  // Verification queue indexes exist in DB (migrations 20260504120000 +
+  // 20260504130000) but are not redeclared here because their original
+  // names exceed Postgres's 63-byte identifier limit, which the Prisma
+  // validator rejects even when the index already exists in the database.
+  // Queries continue to use them; addressing this needs a rename migration.
   @@map("master_orders")
 }
 

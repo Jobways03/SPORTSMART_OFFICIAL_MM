@@ -82,6 +82,20 @@ const SETTINGS_TILES: SettingTile[] = [
     icon: '📜',
     requires: { anyOf: ['roles.read'] },
   },
+  {
+    title: 'Audit Logs',
+    description: 'Hash-chained audit trail of business-critical mutations. Filter, inspect payload, verify integrity, and export CSV.',
+    href: '/dashboard/audit-logs',
+    icon: '📚',
+    requires: { anyOf: ['audit.read'] },
+  },
+  {
+    title: 'Active Sessions',
+    description: 'View active refresh-token sessions across admins, users, sellers, and franchises. Force-logout suspicious sessions.',
+    href: '/dashboard/sessions',
+    icon: '🔓',
+    requires: { anyOf: ['sessions.read'] },
+  },
 ];
 
 export default function SettingsHubPage() {

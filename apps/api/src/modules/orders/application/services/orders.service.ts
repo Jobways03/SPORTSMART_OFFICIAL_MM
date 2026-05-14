@@ -10,6 +10,7 @@ import {
 } from '../../../catalog/application/facades/catalog-public.facade';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import {
   OrderRepository,
   ORDER_REPOSITORY,
@@ -21,7 +22,11 @@ export type ReassignTarget =
   | { nodeType: 'SELLER'; nodeId: string }
   | { nodeType: 'FRANCHISE'; nodeId: string };
 
-const RETURN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes (dev/demo — commission fires shortly after delivery)
+// Return window is now driven by RETURN_WINDOW_DAYS env. Prod default
+// is 14 days; dev can override to a small fractional value (e.g. 0.0014
+// ≈ 2 minutes) to test the post-window commission confirm path quickly.
+// Read once at constructor; not hot-reloaded — process restart picks up
+// the new value. Computed at use site to avoid stale-module issues.
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
@@ -50,6 +55,10 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
+  // Memoised at construct time. Prod sets RETURN_WINDOW_DAYS=14 in env;
+  // dev/demo overrides with a fractional day to test the post-window
+  // commission confirm path without waiting two weeks.
+  private readonly returnWindowMs: number;
 
   constructor(
     @Inject(ORDER_REPOSITORY)
@@ -64,7 +73,14 @@ export class OrdersService {
     // mapping from the variant aggregate. See StockRestoreService for
     // the symmetric contract.
     private readonly stockRestore: StockRestoreService,
-  ) {}
+    private readonly env: EnvService,
+  ) {
+    const days = this.env.getNumber('RETURN_WINDOW_DAYS', 14);
+    this.returnWindowMs = Math.round(days * 24 * 60 * 60 * 1000);
+    this.logger.log(
+      `Return window: ${days} day(s) (${this.returnWindowMs}ms)`,
+    );
+  }
 
   // ────────────────────────────────────────────────────────────────────────
   // Admin methods
@@ -663,7 +679,7 @@ export class OrdersService {
     const updated = await this.orderRepo.updateSubOrder(id, {
       fulfillmentStatus: 'DELIVERED',
       deliveredAt: now,
-      returnWindowEndsAt: new Date(now.getTime() + RETURN_WINDOW_MS),
+      returnWindowEndsAt: new Date(now.getTime() + this.returnWindowMs),
     });
 
     // Check if ALL active (non-rejected) sub-orders are now DELIVERED
@@ -710,7 +726,7 @@ export class OrdersService {
           sellerId: subOrder.sellerId,
           deliveredAt: now.toISOString(),
           returnWindowEndsAt: new Date(
-            now.getTime() + RETURN_WINDOW_MS,
+            now.getTime() + this.returnWindowMs,
           ).toISOString(),
           allDelivered,
         },
@@ -1925,6 +1941,71 @@ export class OrdersService {
           }
         : null;
 
+    // Sprint 3 Story 2.5 — synthesized buyer timeline.
+    //
+    // No dedicated order_status_history table exists yet; the timeline
+    // is composed from the timestamps the order/sub-order rows already
+    // carry. Only events with a real timestamp are emitted — "what's
+    // next" projections are the frontend's concern.
+    //
+    // Each entry: { kind, label, at, subOrderId? }
+    //   - kind: stable enum-like string the FE can switch on for
+    //     icons / colours. Don't render the label as a fallback.
+    //   - label: humanised English copy — small enough to inline; if
+    //     we ever localise, move to i18n keys here.
+    //   - at: ISO datetime (or null for projected; today we don't
+    //     emit projected).
+    //   - subOrderId: present for per-sub-order events so the FE can
+    //     scope the entry to a particular shipment in the UI.
+    type TimelineEvent = {
+      kind: string;
+      label: string;
+      at: Date;
+      subOrderId?: string;
+    };
+    const timeline: TimelineEvent[] = [];
+    timeline.push({
+      kind: 'ORDER_PLACED',
+      label: 'Order placed',
+      at: order.createdAt,
+    });
+    if (order.verifiedAt) {
+      timeline.push({
+        kind: 'ORDER_VERIFIED',
+        label: 'Order verified',
+        at: order.verifiedAt,
+      });
+    }
+    for (const so of order.subOrders) {
+      if (so.lastTrackingEventAt) {
+        timeline.push({
+          kind: 'TRACKING_UPDATED',
+          label: 'Shipment update',
+          at: so.lastTrackingEventAt,
+          subOrderId: so.id,
+        });
+      }
+      if (so.deliveredAt) {
+        timeline.push({
+          kind: 'SHIPMENT_DELIVERED',
+          label: 'Delivered',
+          at: so.deliveredAt,
+          subOrderId: so.id,
+        });
+      }
+    }
+    if (order.orderStatus === 'CANCELLED') {
+      // No dedicated cancelledAt field — best-effort to surface that
+      // it happened. updatedAt is the last write, which is the cancel
+      // for a cancelled order in practice.
+      timeline.push({
+        kind: 'ORDER_CANCELLED',
+        label: 'Order cancelled',
+        at: order.updatedAt,
+      });
+    }
+    timeline.sort((a, b) => a.at.getTime() - b.at.getTime());
+
     // Strip seller information — show "Fulfilled by SPORTSMART" label
     // Add customer-friendly status label. Tracking + delivery method
     // are surfaced so the customer detail screen can render a
@@ -1934,6 +2015,7 @@ export class OrdersService {
       orderStatusLabel: this.mapOrderStatusLabel(order.orderStatus),
       appliedDiscount,
       shipping,
+      timeline,
       subOrders: order.subOrders.map((so: any) => ({
         id: so.id,
         subTotal: so.subTotal,
@@ -1941,6 +2023,10 @@ export class OrdersService {
         fulfillmentStatus: so.fulfillmentStatus,
         acceptStatus: so.acceptStatus,
         deliveredAt: so.deliveredAt,
+        // Sprint 3 Story 2.5 — surface per-sub-order timestamps the
+        // frontend needs to render the timeline alongside each shipment.
+        acceptDeadlineAt: so.acceptDeadlineAt,
+        lastTrackingEventAt: so.lastTrackingEventAt,
         returnWindowEndsAt: so.returnWindowEndsAt,
         fulfilledBy: 'SPORTSMART',
         deliveryMethod: so.deliveryMethod,

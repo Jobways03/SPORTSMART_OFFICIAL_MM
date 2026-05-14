@@ -24,6 +24,11 @@ export default function PayoutBatchDetailPage() {
   const [error, setError] = useState('');
   const [showIngest, setShowIngest] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Story 4.2 — mismatch-only filter. When on, the table only shows
+  // FAILED rows whose failureReason starts with `BANK_AMOUNT_MISMATCH:`
+  // so finance ops can triage rows that need a re-upload separately
+  // from genuine bank failures.
+  const [mismatchOnly, setMismatchOnly] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -80,6 +85,19 @@ export default function PayoutBatchDetailPage() {
   const total = batch.payouts.reduce((sum, p) => sum + Number(p.amount), 0);
   const paidCount = batch.payouts.filter((p) => p.status === 'COMPLETED').length;
   const failedCount = batch.payouts.filter((p) => p.status === 'FAILED').length;
+  // Bank-amount-mismatch rows are a subset of FAILED. The service writes
+  // `BANK_AMOUNT_MISMATCH:expected=<bigint paise> actual=<bigint paise>`
+  // into failureReason when the bank's PAID amount differs from the
+  // settlement total by more than 1 paise. Operators need to triage
+  // these separately from genuine bank rejections, so we parse the
+  // reason here and surface a filter + count banner.
+  const mismatchRows = batch.payouts
+    .map((p) => ({ payout: p, parsed: parseMismatch(p.failureReason) }))
+    .filter((r) => r.parsed !== null);
+  const mismatchCount = mismatchRows.length;
+  const visiblePayouts = mismatchOnly
+    ? mismatchRows.map((r) => r.payout)
+    : batch.payouts;
 
   return (
     <div style={{ padding: '24px 32px' }}>
@@ -126,12 +144,32 @@ export default function PayoutBatchDetailPage() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 18 }}>
         <SummaryStat label="Payouts" value={String(batch.payouts.length)} />
         <SummaryStat label="Total amount" value={'₹' + total.toLocaleString('en-IN', { minimumFractionDigits: 2 })} />
         <SummaryStat label="Paid" value={String(paidCount)} accent="#16a34a" />
         <SummaryStat label="Failed" value={String(failedCount)} accent={failedCount > 0 ? '#dc2626' : undefined} />
+        <SummaryStat label="Mismatches" value={String(mismatchCount)} accent={mismatchCount > 0 ? '#b45309' : undefined} />
       </div>
+
+      {mismatchCount > 0 && (
+        <div style={mismatchBanner}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, color: '#92400e' }}>
+              <strong>{mismatchCount}</strong> payout row{mismatchCount === 1 ? '' : 's'} flagged because the bank-reported
+              amount differed from the settlement total by more than 1 paise.
+              The underlying settlement was left <code style={inlineCode}>APPROVED</code> so you can re-ingest after correction.
+            </div>
+            <button
+              type="button"
+              onClick={() => setMismatchOnly((v) => !v)}
+              style={mismatchToggleBtn(mismatchOnly)}
+            >
+              {mismatchOnly ? 'Show all rows' : 'Show only mismatches'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={tableWrap}>
         <table style={tableStyle}>
@@ -146,22 +184,51 @@ export default function PayoutBatchDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {batch.payouts.map((p) => (
-              <tr key={p.id} style={tr}>
-                <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>{p.settlementId}</td>
-                <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>{p.sellerId}</td>
-                <td style={{ ...td, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-                  ₹{Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                </td>
-                <td style={td}><StatusBadge status={p.status} /></td>
-                <td style={{ ...td, fontSize: 11, color: '#475569' }}>
-                  {p.utrReference ?? p.failureReason ?? '—'}
-                </td>
-                <td style={{ ...td, fontSize: 11, color: '#64748b' }}>
-                  {p.paidAt ? new Date(p.paidAt).toLocaleString('en-IN') : '—'}
+            {visiblePayouts.length === 0 ? (
+              <tr>
+                <td colSpan={6} style={{ ...td, textAlign: 'center', color: '#64748b', padding: '24px 10px' }}>
+                  {mismatchOnly ? 'No mismatched rows in this batch.' : 'No payouts.'}
                 </td>
               </tr>
-            ))}
+            ) : (
+              visiblePayouts.map((p) => {
+                const mismatch = parseMismatch(p.failureReason);
+                return (
+                  <tr key={p.id} style={mismatch ? { ...tr, background: '#fffbeb' } : tr}>
+                    <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>{p.settlementId}</td>
+                    <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>{p.sellerId}</td>
+                    <td style={{ ...td, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                      ₹{Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      {mismatch && (
+                        <div style={{ fontSize: 11, color: '#b45309', fontWeight: 600, marginTop: 2 }}>
+                          Bank: ₹{(Number(mismatch.actualPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          {' '}
+                          <span style={{ color: '#92400e', fontWeight: 700 }}>
+                            (Δ {mismatch.driftSign}₹
+                            {(Math.abs(Number(mismatch.driftPaise)) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })})
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                    <td style={td}>
+                      <StatusBadge status={p.status} />
+                      {mismatch && (
+                        <div style={mismatchBadge}>BANK_AMOUNT_MISMATCH</div>
+                      )}
+                    </td>
+                    <td style={{ ...td, fontSize: 11, color: '#475569' }}>
+                      {p.utrReference ??
+                        (mismatch
+                          ? `Expected ${(Number(mismatch.expectedPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}, bank sent ${(Number(mismatch.actualPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                          : (p.failureReason ?? '—'))}
+                    </td>
+                    <td style={{ ...td, fontSize: 11, color: '#64748b' }}>
+                      {p.paidAt ? new Date(p.paidAt).toLocaleString('en-IN') : '—'}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
             {batch.payouts.length === 0 && (
               <tr>
                 <td colSpan={6} style={{ ...td, textAlign: 'center', color: '#94a3b8', padding: 24 }}>
@@ -400,6 +467,80 @@ const errorBox: React.CSSProperties = {
   marginTop: 12, padding: 10, background: '#fef2f2', border: '1px solid #fecaca',
   borderRadius: 6, color: '#991b1b', fontSize: 12,
 };
+
+// Story 4.2 — mismatch banner + badge styling. Amber instead of red so
+// operators can tell at a glance these are "fixable on re-upload"
+// rather than "the bank rejected us."
+const mismatchBanner: React.CSSProperties = {
+  marginBottom: 16,
+  padding: '12px 14px',
+  background: '#fffbeb',
+  border: '1px solid #fde68a',
+  borderRadius: 8,
+};
+const mismatchBadge: React.CSSProperties = {
+  display: 'inline-block',
+  marginTop: 4,
+  padding: '1px 6px',
+  fontSize: 10,
+  fontWeight: 700,
+  background: '#fef3c7',
+  color: '#92400e',
+  borderRadius: 4,
+  letterSpacing: 0.3,
+};
+const inlineCode: React.CSSProperties = {
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontSize: 11,
+  background: '#fef3c7',
+  color: '#92400e',
+  padding: '0 4px',
+  borderRadius: 3,
+};
+function mismatchToggleBtn(active: boolean): React.CSSProperties {
+  return {
+    height: 30,
+    padding: '0 14px',
+    background: active ? '#92400e' : '#fff',
+    color: active ? '#fff' : '#92400e',
+    border: '1px solid #92400e',
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  };
+}
+
+/**
+ * Parse a `BANK_AMOUNT_MISMATCH:expected=<paise> actual=<paise>`
+ * failureReason string. Returns null for any other reason so the
+ * caller can fall back to the raw text. Paise are bigints in the
+ * source string but stay as strings here — the UI only needs them
+ * for display and the drift is bounded by sane settlement totals.
+ */
+function parseMismatch(reason: string | null | undefined): {
+  expectedPaise: string;
+  actualPaise: string;
+  driftPaise: string;
+  driftSign: '+' | '-' | '';
+} | null {
+  if (!reason || !reason.startsWith('BANK_AMOUNT_MISMATCH:')) return null;
+  const m = /expected=(\d+)\s+actual=(\d+)/.exec(reason);
+  if (!m) return null;
+  // Settlement totals comfortably fit in Number (max ~₹90T in paise is
+  // way under 2^53), so the parse here doesn't need BigInt literals.
+  // String → Number is safe for display and arithmetic at this scale.
+  const expected = Number(m[1]);
+  const actual = Number(m[2]);
+  const drift = actual - expected;
+  return {
+    expectedPaise: String(expected),
+    actualPaise: String(actual),
+    driftPaise: String(drift),
+    driftSign: drift > 0 ? '+' : drift < 0 ? '-' : '',
+  };
+}
 const modalBackdrop: React.CSSProperties = {
   position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)',
   display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,

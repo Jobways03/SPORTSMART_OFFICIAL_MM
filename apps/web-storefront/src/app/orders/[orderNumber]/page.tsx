@@ -13,6 +13,7 @@ import type {
   SubOrder,
   ReturnEligibilityResponse,
   ReturnEligibilityItem,
+  OrderTimelineEvent,
 } from '@/types/order';
 
 /** Subset of the `Return` row shape the listing endpoint returns. */
@@ -175,6 +176,93 @@ const fulfillmentColor = (status: string, paymentStatus?: string) => {
   }
 };
 
+// Maps timeline event kinds to a small icon glyph + accent colour.
+// Kept inline so the entire vertical-bar timeline is self-contained.
+const TIMELINE_KIND_STYLE: Record<string, { icon: string; color: string }> = {
+  ORDER_PLACED: { icon: '✎', color: '#2563eb' },
+  ORDER_VERIFIED: { icon: '✓', color: '#0d9488' },
+  TRACKING_UPDATED: { icon: '↗', color: '#7c3aed' },
+  SHIPMENT_DELIVERED: { icon: '✓', color: '#16a34a' },
+  ORDER_CANCELLED: { icon: '✗', color: '#dc2626' },
+};
+
+function OrderTimeline({ events }: { events: OrderTimelineEvent[] }) {
+  if (!events || events.length === 0) return null;
+  const formatWhen = (iso: string) =>
+    new Date(iso).toLocaleString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  return (
+    <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      {events.map((ev, idx) => {
+        const style = TIMELINE_KIND_STYLE[ev.kind] ?? { icon: '●', color: '#6b7280' };
+        const isLast = idx === events.length - 1;
+        return (
+          <li key={`${ev.kind}-${ev.at}-${ev.subOrderId ?? ''}`} style={{ position: 'relative', paddingLeft: 28, paddingBottom: isLast ? 0 : 18 }}>
+            {!isLast && (
+              <span
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  left: 9,
+                  top: 20,
+                  bottom: -2,
+                  width: 2,
+                  background: '#e5e7eb',
+                }}
+              />
+            )}
+            <span
+              aria-hidden
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                background: style.color,
+                color: '#fff',
+                fontSize: 11,
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {style.icon}
+            </span>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{ev.label}</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+              {formatWhen(ev.at)}
+              {ev.subOrderId && <span style={{ marginLeft: 6, color: '#9ca3af' }}>· shipment</span>}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// Formats "X hr Y min" or "X min" relative to now. Returns null when the
+// deadline has already passed — caller shows a different label in that case.
+function formatCountdown(iso: string): string | null {
+  const deltaMs = new Date(iso).getTime() - Date.now();
+  if (deltaMs <= 0) return null;
+  const totalMin = Math.round(deltaMs / 60000);
+  if (totalMin < 60) return `${totalMin} min left`;
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  if (hours < 24) return mins === 0 ? `${hours} hr left` : `${hours} hr ${mins} min left`;
+  const days = Math.floor(hours / 24);
+  const remHr = hours % 24;
+  return remHr === 0 ? `${days} d left` : `${days} d ${remHr} hr left`;
+}
+
 function OrderProgressTracker({ orderStatus, fulfillmentStatus, paymentStatus }: { orderStatus?: string; fulfillmentStatus: string; paymentStatus?: string }) {
   const isCancelled = orderStatus === 'CANCELLED' || fulfillmentStatus === 'CANCELLED';
   if (isCancelled) {
@@ -250,6 +338,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [retryingPayment, setRetryingPayment] = useState(false);
   // Summary of whether the Return Items button should be enabled. Set
   // from the eligibility endpoint after the order loads. When disabled,
   // we also capture a reason so the customer sees *why* (forfeit policy
@@ -369,6 +458,49 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     }
   };
 
+  // Story 2.4 — payment retry. Asks the backend to mint a new Razorpay
+  // order for this MasterOrder, then opens the Razorpay checkout modal
+  // in-page. Success path POSTs to /payment/verify (the modal handler
+  // does this — see lib/razorpay.ts).
+  const handleRetryPayment = async () => {
+    setRetryingPayment(true);
+    try {
+      const res = await apiClient<{ razorpayOrderId: string; amountInPaise: number; currency: string }>(
+        `/customer/checkout/payment/retry`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ orderNumber }),
+        },
+      );
+      if (!res.success || !res.data?.razorpayOrderId) {
+        void notify(res.message || 'Failed to start a new payment session');
+        return;
+      }
+      const { openRazorpayCheckout } = await import('@/lib/razorpay');
+      const result = await openRazorpayCheckout({
+        razorpayOrderId: res.data.razorpayOrderId,
+        amountInPaise: res.data.amountInPaise,
+        currency: res.data.currency,
+        orderNumber: orderNumber!,
+        customerName: order?.shippingAddressSnapshot?.fullName ?? null,
+        customerPhone: order?.shippingAddressSnapshot?.phone ?? null,
+      });
+      if (result.status === 'success') {
+        void notify('Payment successful');
+        fetchOrder();
+      } else if (result.status === 'dismissed') {
+        // No-op — customer can hit Retry again. Don't surface a noisy
+        // "cancelled" toast because dismissals are routine.
+      } else {
+        void notify(result.error || 'Payment did not complete');
+      }
+    } catch (err: any) {
+      void notify(err?.message || 'Failed to start a new payment session');
+    } finally {
+      setRetryingPayment(false);
+    }
+  };
+
   const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
   const formatDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -401,6 +533,17 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     order.orderStatus !== 'CANCELLED' &&
     order.orderStatus !== 'DELIVERED' &&
     !displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED' || so.fulfillmentStatus === 'SHIPPED' || so.fulfillmentStatus === 'FULFILLED');
+
+  // Story 2.4 part 2 — retry-payment surface. ONLINE orders that
+  // didn't complete the Razorpay handoff get stuck in
+  // PENDING_VERIFICATION. The /customer/checkout/payment/retry
+  // endpoint creates a fresh Razorpay order keyed to this MasterOrder
+  // so the customer can re-pay without losing the order shell.
+  const canRetryPayment =
+    order.paymentMethod !== 'COD' &&
+    order.paymentStatus !== 'PAID' &&
+    order.paymentStatus !== 'CANCELLED' &&
+    order.orderStatus !== 'CANCELLED';
 
   // Use clean customer-friendly status labels
   const displayStatusLabel = customerStatusLabel(order.orderStatus || 'PLACED', order.paymentStatus);
@@ -464,6 +607,17 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           />
         </div>
 
+        {/* Order Timeline — synthesized from row timestamps server-side.
+            Renders below the high-level progress tracker so customers can
+            see exactly when each transition happened (and, for multi-seller
+            orders, which shipment it relates to). */}
+        {order.timeline && order.timeline.length > 0 && (
+          <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 16, marginBottom: 20, background: '#fff' }}>
+            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: '#111827' }}>Timeline</h3>
+            <OrderTimeline events={order.timeline} />
+          </div>
+        )}
+
         {/* Shipping Address */}
         <div style={{ background: '#f9fafb', borderRadius: 10, padding: 16, marginBottom: 20 }}>
           <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>Shipping Address</h3>
@@ -498,6 +652,51 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
               </div>
               <span style={{ fontSize: 13, color: '#6b7280' }}>Subtotal: {formatPrice(Number(so.subTotal))}</span>
             </div>
+
+            {/* Seller-accept countdown — only meaningful while we're
+                still waiting for the seller. Once they accept, the
+                fulfillmentStatus advances past PENDING and we hide it. */}
+            {so.acceptDeadlineAt &&
+              so.acceptStatus === 'PENDING' &&
+              !['DELIVERED', 'SHIPPED', 'PACKED', 'FULFILLED', 'CANCELLED'].includes(so.fulfillmentStatus) &&
+              (() => {
+                const remaining = formatCountdown(so.acceptDeadlineAt);
+                const overdue = remaining === null;
+                return (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: '8px 12px',
+                      background: overdue ? '#fef2f2' : '#fffbeb',
+                      border: `1px solid ${overdue ? '#fecaca' : '#fde68a'}`,
+                      borderRadius: 8,
+                      fontSize: 12,
+                      color: overdue ? '#991b1b' : '#92400e',
+                    }}
+                  >
+                    {overdue
+                      ? 'Seller has missed the accept deadline — order will be re-routed automatically.'
+                      : `Awaiting seller acceptance · ${remaining}`}
+                  </div>
+                );
+              })()}
+
+            {/* Last shipment update timestamp — surfaced when we have a
+                tracking event but the row hasn't reached DELIVERED yet,
+                so customers know when the courier last updated. */}
+            {so.lastTrackingEventAt && so.fulfillmentStatus !== 'DELIVERED' && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+                Last courier update:{' '}
+                <span style={{ color: '#374151', fontWeight: 500 }}>
+                  {new Date(so.lastTrackingEventAt).toLocaleString('en-IN', {
+                    day: 'numeric',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </span>
+              </div>
+            )}
 
             {/* Shipment tracking — shown once a courier has picked up */}
             {so.trackingNumber && (
@@ -658,6 +857,25 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                   </span>
                 </span>
               ) : null
+            )}
+            {canRetryPayment && (
+              <button
+                onClick={handleRetryPayment}
+                disabled={retryingPayment}
+                style={{
+                  padding: '10px 24px',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  border: '1px solid #16a34a',
+                  background: '#16a34a',
+                  color: '#fff',
+                  borderRadius: 8,
+                  cursor: retryingPayment ? 'not-allowed' : 'pointer',
+                  opacity: retryingPayment ? 0.7 : 1,
+                }}
+              >
+                {retryingPayment ? 'Starting…' : 'Retry Payment'}
+              </button>
             )}
             {canCancel && (
               <button

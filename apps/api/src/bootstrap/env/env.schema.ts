@@ -272,10 +272,48 @@ export const envSchema = z.object({
   COD_REFUND_PENDING_INTERVAL_MINUTES: z.coerce.number().default(4 * 60),
   COD_REFUND_PENDING_STUCK_HOURS: z.coerce.number().default(48),
 
+  // Sprint 2 Story 1.4 cleanup — guardrail thresholds layered on top of
+  // the admin-editable cod_rules engine. Engine still owns the dynamic
+  // policy; these are hard upper / lower bounds so a misconfigured rule
+  // set can't silently push COD limits to extreme values. Override per
+  // env if business needs to shift the absolute envelope.
+  //
+  // Bounds matter — without min/max, an ops typo like
+  // `COD_FALLBACK_MAX_ORDER_VALUE_INR=-1` would silently allow every
+  // order through (orderValue is always > -1), bypassing the guardrail.
+  // Same shape for the abuse counters — non-positive values would
+  // either disable the guard or block legitimate customers forever.
+  COD_FALLBACK_MAX_ORDER_VALUE_INR: z.coerce.number().int().positive().default(10000),
+  COD_FALLBACK_MIN_ORDER_VALUE_INR: z.coerce.number().int().nonnegative().default(100),
+  // Repeated-cancellation guard: if a customer has this many COD orders
+  // cancelled in the lookback window, COD is blocked. The window is in
+  // days.
+  COD_ABUSE_RECENT_CANCEL_LIMIT: z.coerce.number().int().positive().default(3),
+  COD_ABUSE_LOOKBACK_DAYS: z.coerce.number().int().positive().default(30),
+
   // Phase B (P0.3) — discount-redemption expiry cron. Lazy expiry
   // is the primary correctness mechanism; this cron keeps the
   // active-reservation count fresh for the admin UI and metrics.
   DISCOUNT_RESERVATION_CRON_ENABLED: z.string().default('true'),
+
+  // Sprint 4 Story 3.4 — auto-detect low-stock conditions every 30 min.
+  // Off in dev / staging by default if you want to test the manual
+  // /admin/inventory/alerts/sweep endpoint in isolation; left on by
+  // default because the steady-state correctness path needs it.
+  LOW_STOCK_SWEEP_CRON_ENABLED: z.string().default('true'),
+
+  // Sprint 6 Story 5.1 — delegate /search/products to OpenSearch when
+  // ON. Default OFF so the proven Prisma path keeps running until ops
+  // stands up OpenSearch + runs POST /admin/search/reindex backfill.
+  SEARCH_OPENSEARCH_ENABLED: z.string().default('false'),
+
+  // Return window in days. Customer can file a return up to this many
+  // days after sub-order delivery. **PROD MUST SET 14** — the previous
+  // hard-coded 2-minute value (`RETURN_WINDOW_MS = 2 * 60 * 1000` in
+  // orders.service.ts) was a dev/demo override to test the commission
+  // confirm path quickly without waiting two weeks. Local dev can keep
+  // 0.0014 (~2 min) by setting `RETURN_WINDOW_DAYS=0.0014`.
+  RETURN_WINDOW_DAYS: z.string().default('14'),
 
   // Phase B (P0.1, P0.5) — feature flag for the new allocation/
   // reservation pipeline at checkout. When OFF, the legacy

@@ -37,9 +37,20 @@ function decimalToPaise(value: unknown): bigint {
  * compare what we expected to receive (orders + their declared totals)
  * vs what was actually settled (paymentStatus=PAID, COD remitted, etc).
  *
- * Phase scope: PAYMENT + COD only get a real implementation. SETTLEMENT
- * and REFUND are scaffolded with the same shape; they hook into the
- * settlement + return modules later (each follows the same pattern).
+ * All five kinds are implemented end-to-end:
+ *   PAYMENT     — ONLINE orders: PAID without razorpayPaymentId, or
+ *                 PENDING past paymentExpiresAt.
+ *   COD         — COD orders: DELIVERED without remittance, or remitted
+ *                 amount drift.
+ *   SETTLEMENT  — PAID seller settlements without UTR, or APPROVED
+ *                 settlements stuck >7d without transition.
+ *   REFUND      — Return.refundProcessedAt set but refundReference null.
+ *   WALLET      — Per-wallet balance vs ledger-sum drift check
+ *                 (point-in-time; period dates ignored).
+ *
+ * Discrepancies fire `reconciliation.discrepancies.found` for pager
+ * alerting; the run row holds expected/matched/discrepancy counts +
+ * amounts for the admin dashboard.
  */
 @Injectable()
 export class ReconciliationService {

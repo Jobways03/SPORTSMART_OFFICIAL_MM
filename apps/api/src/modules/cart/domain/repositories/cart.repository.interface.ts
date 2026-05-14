@@ -9,6 +9,9 @@ export interface CartItemWithDetails {
   productId: string;
   variantId: string | null;
   quantity: number;
+  // Sprint 3 Story 2.3 — true when the item is parked, false when
+  // it's in the active cart and counts toward order total.
+  savedForLater: boolean;
   product: {
     id: string;
     title: string;
@@ -72,6 +75,11 @@ export interface CartRepository {
     variantId: string | null,
     quantityDelta: number,
   ): Promise<void>;
+
+  /** Sprint 3 Story 2.3 — set the saved-for-later flag on a cart item.
+   *  Idempotent. Caller is responsible for verifying the item belongs
+   *  to the requesting customer. */
+  setSavedForLater(itemId: string, value: boolean): Promise<void>;
 }
 
 export const CART_REPOSITORY = Symbol('CartRepository');

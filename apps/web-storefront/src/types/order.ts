@@ -20,6 +20,11 @@ export interface SubOrder {
   fulfilledBy?: string;
   trackingNumber?: string | null;
   courierName?: string | null;
+  // Sprint 3 Story 2.5 — per-sub-order timestamps surfaced so the
+  // timeline panel can show "seller must accept by ..." countdown and
+  // last shipment update without re-deriving them.
+  acceptDeadlineAt?: string | null;
+  lastTrackingEventAt?: string | null;
   // Delivery method fields surfaced by the API. Optional because
   // historical orders pre-feature have NULL here.
   deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
@@ -35,6 +40,23 @@ export interface SubOrder {
     | 'CANCELLED'
     | null;
   items: OrderItem[];
+}
+
+// Sprint 3 Story 2.5 — synthesized buyer timeline. Each event has a
+// stable `kind` the UI can switch on for icons/colours plus a
+// pre-localised English `label`. Optional `subOrderId` lets the UI
+// associate a row with a specific shipment (e.g. multi-seller order).
+export interface OrderTimelineEvent {
+  kind:
+    | 'ORDER_PLACED'
+    | 'ORDER_VERIFIED'
+    | 'TRACKING_UPDATED'
+    | 'SHIPMENT_DELIVERED'
+    | 'ORDER_CANCELLED'
+    | string;
+  label: string;
+  at: string;
+  subOrderId?: string;
 }
 
 export interface ShippingAddressSnapshot {
@@ -73,6 +95,8 @@ export interface OrderDetail {
     feeInPaise: string;
     feeInRupees: string;
   } | null;
+  // Sprint 3 Story 2.5 — synthesized event list, oldest first.
+  timeline?: OrderTimelineEvent[];
 }
 
 export interface ReturnEligibilityItem {

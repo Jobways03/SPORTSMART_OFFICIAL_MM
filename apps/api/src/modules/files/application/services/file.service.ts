@@ -375,6 +375,78 @@ export class FileService {
     return '';
   }
 
+  // ── Admin moderation surface (Sprint 2 Story 1.2) ───────────────
+  // Distinct from listByResource: admins moderate across the whole
+  // platform, not just one resource. Encapsulated here so the
+  // controller doesn't reach into PrismaService directly — the prior
+  // `(service as any).prisma.fileMetadata.findMany` antipattern.
+
+  /**
+   * Paginated admin moderation list. Filters by purpose, uploader,
+   * date range, and optionally includes soft-deleted rows (default
+   * excludes them — admins explicitly request deleted-only via the
+   * `includeDeleted` flag for retention/legal review).
+   */
+  async listForAdmin(filters: {
+    purpose?: FilePurpose;
+    uploadedBy?: string;
+    fromDate?: Date;
+    toDate?: Date;
+    includeDeleted?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(Math.max(1, filters.limit ?? 50), 200);
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = {
+      ...(filters.purpose ? { purpose: filters.purpose } : {}),
+      ...(filters.uploadedBy ? { uploadedBy: filters.uploadedBy } : {}),
+      ...(filters.includeDeleted ? {} : { deletedAt: null }),
+    };
+    if (filters.fromDate || filters.toDate) {
+      where.createdAt = {
+        ...(filters.fromDate ? { gte: filters.fromDate } : {}),
+        ...(filters.toDate ? { lte: filters.toDate } : {}),
+      };
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.fileMetadata.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.fileMetadata.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
+  }
+
+  /**
+   * Admin file detail — same as findById but includes the attachment
+   * graph so the moderator can see every place the file is in use
+   * before deciding to delete or escalate.
+   */
+  async findByIdForAdmin(id: string): Promise<FileMetadata & { attachments: FileAttachment[] }> {
+    const file = await this.prisma.fileMetadata.findUnique({
+      where: { id },
+      include: { attachments: true },
+    });
+    if (!file) {
+      throw new NotFoundAppException(`File ${id} not found`);
+    }
+    return file as FileMetadata & { attachments: FileAttachment[] };
+  }
+
   // ── Soft delete ──────────────────────────────────────────────────
 
   async softDelete(id: string, requesterId: string, requesterIsAdmin: boolean) {

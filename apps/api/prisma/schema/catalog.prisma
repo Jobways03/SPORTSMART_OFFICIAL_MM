@@ -8,6 +8,16 @@ model Category {
   slug        String   @unique
   description String?
   imageUrl    String?  @map("image_url")
+  // Story Phase 5 Cat-1 — wide banner shown on the category landing
+  // page. Distinct from `imageUrl` which is the square thumbnail used
+  // in nav menus and category grids.
+  bannerUrl   String?  @map("banner_url")
+  // SEO blocks — set per-category so search engines pick up the
+  // canonical headline / blurb rather than the generic site default.
+  // Both nullable; the storefront falls back to `name` + first 160
+  // chars of `description` when these are empty.
+  metaTitle       String? @map("meta_title")
+  metaDescription String? @map("meta_description")
   parentId    String?  @map("parent_id")
   level       Int      @default(0)
   sortOrder   Int      @default(0) @map("sort_order")
@@ -202,6 +212,11 @@ model Product {
   sellerMappings           SellerProductMapping[]
   metafields               ProductMetafield[]
   franchiseCatalogMappings FranchiseCatalogMapping[]
+  // Sprint 3 Story 2.2 — see wishlist.prisma.
+  wishlistItems            WishlistItem[]
+  // Story 3.5 — quantity-based pricing tiers for upsell hints on PDP.
+  // Display-only at v1; cart-time application is a separate story.
+  pricingTiers             ProductPricingTier[]
 
   @@index([sellerId])
   @@index([categoryId])
@@ -211,6 +226,59 @@ model Product {
   @@index([slug])
   @@index([isDeleted])
   @@map("products")
+}
+
+// Story 3.5 — Product Pricing Tiers (display-only at v1).
+//
+// Each row represents one rung on the quantity ladder:
+//   "Save 10% if you buy 5 or more — current 3, add 2 more to unlock"
+//
+// We store the discount as a *percent* of unit price rather than a
+// fixed amount so the tier auto-tracks price changes (no stale
+// per-paise math to refresh when the seller updates base price).
+//
+// Scope decision (2026-05-13): cart-time price mutation is OUT.
+// Operators populate the tiers; PDP renders the ladder + active tier;
+// checkout still charges the base price. Wiring tiers into actual
+// pricing requires stacking-vs-coupon semantics, refund-line basis,
+// and commission-base policy — none of which is decided yet. Adding
+// it carelessly silently changes settlement.
+model ProductPricingTier {
+  id        String  @id @default(uuid())
+  productId String  @map("product_id")
+  // Nullable — tier can target a specific variant OR apply to all
+  // variants when null. ANSI NULLs-distinct unique enforces "one tier
+  // per (product, variant, minQuantity)" without collapsing the
+  // "any variant" case across variants.
+  variantId String? @map("variant_id")
+
+  // Inclusive lower bound: tier applies when cart line quantity >=
+  // minQuantity. Multiple tiers per product form a ladder; the
+  // highest matching tier wins at display time.
+  minQuantity Int @map("min_quantity")
+
+  // Percent off the line's unit price. 0–100 enforced at the service
+  // layer; the column itself accepts the raw value to keep migrations
+  // straightforward.
+  discountPercent Decimal @map("discount_percent") @db.Decimal(5, 2)
+
+  // Optional override copy ("Buy 5+ save 10%"). Falls back to a
+  // formatted default when null. Useful when ops wants a campaign
+  // tagline instead of the bare math.
+  displayLabel String? @map("display_label")
+
+  // Off by default so creates can be staged before going live.
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, variantId, minQuantity], name: "product_variant_qty_unique")
+  @@index([productId])
+  @@index([productId, isActive])
+  @@map("product_pricing_tiers")
 }
 
 model ProductOption {
@@ -283,6 +351,8 @@ model ProductVariant {
   cartItems                CartItem[]
   sellerMappings           SellerProductMapping[]
   franchiseCatalogMappings FranchiseCatalogMapping[]
+  // Sprint 3 Story 2.2 — see wishlist.prisma.
+  wishlistItems            WishlistItem[]
 
   @@index([productId])
   @@index([sku])

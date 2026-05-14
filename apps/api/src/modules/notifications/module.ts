@@ -23,6 +23,7 @@ import { CustomerNotificationsController } from './presentation/controllers/cust
 import { AdminNotificationLogsController } from './presentation/controllers/list-notification-logs.controller';
 import { AdminNotificationTemplatesController } from './presentation/controllers/preview-template.controller';
 import { AdminNotificationPreferencesController } from './presentation/controllers/admin-preferences.controller';
+import { AdminNotificationDispatchController } from './presentation/controllers/admin-dispatch.controller';
 import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port';
 
 @Module({
@@ -32,6 +33,7 @@ import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port'
     AdminNotificationLogsController,
     AdminNotificationTemplatesController,
     AdminNotificationPreferencesController,
+    AdminNotificationDispatchController,
   ],
   providers: [
     UserAuthGuard,

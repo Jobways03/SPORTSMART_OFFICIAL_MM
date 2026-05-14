@@ -1,10 +1,40 @@
+# Dependencies
 node_modules
+
+# Build output
 dist
 .next
+.turbo
 coverage
+
+# Environment files (commit only .env.example variants)
 .env
 .env.local
 .env.*.local
-pnpm-lock.yaml
+
+# OS / IDE noise
 .DS_Store
+.vscode/*.code-workspace
+
+# TypeScript incremental build cache
 *.tsbuildinfo
+
+# Schema / config backups that crept in during refactors. Force-add a
+# specific intentional .bak (`git add -f`) only if you really need to
+# park one in tree — usually moving it to docs/ or a scratch branch is
+# the right call.
+*.bak
+*.bak.*
+
+# Brain-dump / scratch output files that have ended up at app roots
+# (Sprint 1 Story 0.6 cleaned up `apps/api/result.txt`). Drop spec
+# content into `docs/` instead; drop ad-hoc test output into a
+# git-ignored `tmp/` directory.
+result.txt
+*.scratch.md
+
+# pnpm-lock.yaml — INTENTIONALLY committed (reproducible installs +
+# CI cache hits). Do not add to this ignore file. Listed here as a
+# guard against future regressions; remove the explicit !-rule if pnpm
+# changes its lockfile name.
+!pnpm-lock.yaml

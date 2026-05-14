@@ -122,6 +122,12 @@ export const PERMISSIONS = {
   // Audit
   'audit.read':             'View + export audit log',
 
+  // Sessions — Story 6.3 admin session-revocation surface. Read lists
+  // active refresh-token sessions across actor tables; revoke flips
+  // revokedAt so the next refresh request fails closed.
+  'sessions.read':          'View active sessions across actors',
+  'sessions.revoke':        'Force-logout any session',
+
   // Notifications
   'notifications.read':     'View notification logs + templates',
   'notifications.write':    'Edit templates + retry notifications',
@@ -286,6 +292,7 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'tax.configure':                  'HIGH',
   'wallet.adjustment.create':       'MEDIUM',
   'wallet.adjustment.approve':      'HIGH',
+  'sessions.revoke':        'HIGH',
 };
 
 /**

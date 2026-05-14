@@ -17,6 +17,7 @@ import { PriceTag } from '@/components/ui/PriceTag';
 import { Badge } from '@/components/ui/Badge';
 import { apiClient } from '@/lib/api-client';
 import { sanitizeProductHtml } from '@/lib/sanitize';
+import { PricingTiersStrip } from './_components/PricingTiersStrip';
 
 interface ProductImage {
   id: string;
@@ -606,6 +607,15 @@ export default function ProductDetailPage() {
                 )}
               </section>
             )}
+
+            {/* Story 3.5 — volume-pricing upsell strip. Display-only at
+                v1; renders nothing when the product has no tiers, so
+                this is a no-op for the long tail of products. */}
+            <PricingTiersStrip
+              productId={product.id}
+              variantId={selectedVariant?.id ?? null}
+              currentQuantity={1}
+            />
 
             {/* Specs */}
             <section className="mt-10">

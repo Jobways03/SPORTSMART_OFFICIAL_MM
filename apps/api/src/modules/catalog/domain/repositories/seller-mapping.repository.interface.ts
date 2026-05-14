@@ -67,6 +67,11 @@ export interface ISellerMappingRepository {
   removeServiceArea(sellerId: string, pincode: string): Promise<void>;
   removeServiceAreas(sellerId: string, pincodes: string[]): Promise<number>;
   findServiceArea(sellerId: string, pincode: string): Promise<any | null>;
+  /** Sprint 4 Story 3.1 — flip the COD-eligible flag on a single
+   *  (seller, pincode) pair. Idempotent. Caller is responsible for
+   *  verifying the seller owns the pincode (findServiceArea returns
+   *  null if not). */
+  setCodEligibility(sellerId: string, pincode: string, eligible: boolean): Promise<void>;
 
   // ── Auto-repair ──
   autoRepairMissingMappingsForSeller(sellerId: string): Promise<number>;

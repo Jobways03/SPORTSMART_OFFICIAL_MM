@@ -1,0 +1,377 @@
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+
+// Cross-table session representation. The four session tables (admins,
+// users, sellers, franchises) all have the same essential shape but
+// different foreign-key columns, so we project them into one row type
+// before returning so the FE doesn't need 4 separate fetches.
+export interface ActiveSessionRow {
+  id: string;
+  actorType: 'ADMIN' | 'USER' | 'SELLER' | 'FRANCHISE';
+  actorId: string;
+  actorEmail: string | null;
+  actorName: string | null;
+  actorRole: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export type ActorType = ActiveSessionRow['actorType'];
+
+interface ListFilters {
+  actorType?: ActorType;
+  actorId?: string;
+  ipAddress?: string;
+  limit?: number;
+}
+
+/**
+ * Story 6.3 — admin session revocation surface.
+ *
+ * Lists active (`revokedAt IS NULL AND expiresAt > now`) refresh-token
+ * sessions across all four actor tables and supports force-logout by
+ * setting `revokedAt = now()`. Revocation is soft — the row stays for
+ * audit replay. The next refresh-token call from the revoked session
+ * lands in the rejection path because the guard checks `revokedAt`.
+ *
+ * Each revocation writes an AuditLog row (module=`security`,
+ * resource=`session`) so the action is hash-chained alongside other
+ * security events.
+ */
+@Injectable()
+export class AdminSessionsService {
+  private readonly logger = new Logger(AdminSessionsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditPublicFacade,
+  ) {}
+
+  async list(filters: ListFilters = {}): Promise<{
+    items: ActiveSessionRow[];
+    total: number;
+  }> {
+    const limit = Math.min(filters.limit ?? 200, 500);
+    const now = new Date();
+    const ipFilter = filters.ipAddress
+      ? { ipAddress: filters.ipAddress }
+      : {};
+
+    const activeWhere = (idCol: Record<string, string | undefined>) => ({
+      revokedAt: null,
+      expiresAt: { gt: now },
+      ...idCol,
+      ...ipFilter,
+    });
+
+    // Fan out only to the actor tables the caller is interested in.
+    // Without a filter, hit all four — uncommon but fine since the
+    // result is already sorted+limited per-source.
+    const want = (t: ActorType) => !filters.actorType || filters.actorType === t;
+
+    const [adminRows, userRows, sellerRows, franchiseRows] = await Promise.all([
+      want('ADMIN')
+        ? this.prisma.adminSession.findMany({
+            where: activeWhere(filters.actorId ? { adminId: filters.actorId } : {}),
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            include: {
+              admin: {
+                select: { id: true, email: true, name: true, role: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      want('USER')
+        ? this.prisma.session.findMany({
+            where: activeWhere(filters.actorId ? { userId: filters.actorId } : {}),
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            include: {
+              user: {
+                select: { id: true, email: true, firstName: true, lastName: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      want('SELLER')
+        ? this.prisma.sellerSession.findMany({
+            where: activeWhere(filters.actorId ? { sellerId: filters.actorId } : {}),
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            include: {
+              seller: {
+                select: { id: true, email: true, sellerName: true, sellerShopName: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      want('FRANCHISE')
+        ? this.prisma.franchiseSession.findMany({
+            where: activeWhere(filters.actorId ? { franchisePartnerId: filters.actorId } : {}),
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            include: {
+              franchisePartner: {
+                select: { id: true, email: true, businessName: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const rows: ActiveSessionRow[] = [
+      ...adminRows.map((s: any) => ({
+        id: s.id,
+        actorType: 'ADMIN' as const,
+        actorId: s.adminId,
+        actorEmail: s.admin?.email ?? null,
+        actorName: s.admin?.name ?? null,
+        actorRole: s.admin?.role ?? null,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+      })),
+      ...userRows.map((s: any) => ({
+        id: s.id,
+        actorType: 'USER' as const,
+        actorId: s.userId,
+        actorEmail: s.user?.email ?? null,
+        actorName: [s.user?.firstName, s.user?.lastName].filter(Boolean).join(' ') || null,
+        actorRole: null,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+      })),
+      ...sellerRows.map((s: any) => ({
+        id: s.id,
+        actorType: 'SELLER' as const,
+        actorId: s.sellerId,
+        actorEmail: s.seller?.email ?? null,
+        actorName: s.seller?.sellerShopName ?? s.seller?.sellerName ?? null,
+        actorRole: null,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+      })),
+      ...franchiseRows.map((s: any) => ({
+        id: s.id,
+        actorType: 'FRANCHISE' as const,
+        actorId: s.franchisePartnerId,
+        actorEmail: s.franchisePartner?.email ?? null,
+        actorName: s.franchisePartner?.businessName ?? null,
+        actorRole: null,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+      })),
+    ];
+
+    rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const sliced = rows.slice(0, limit);
+    return { items: sliced, total: rows.length };
+  }
+
+  /**
+   * Revoke a single session. Returns the actor type so the caller can
+   * narrate the audit log entry. Throws NotFoundException if no active
+   * session matches the id across any of the four tables.
+   *
+   * Safety: an admin cannot revoke their own session through this
+   * surface — without that guard, an admin who suspects a takeover
+   * could lock themselves out mid-investigation. They should sign out
+   * via the regular logout path instead, which is intentional and
+   * recovers cleanly.
+   */
+  async revokeOne(args: {
+    sessionId: string;
+    actorType: ActorType;
+    revokedByAdminId: string;
+    revokedByAdminRole?: string;
+    reason?: string;
+  }): Promise<{ revoked: true; sessionId: string; actorType: ActorType; actorId: string }> {
+    const now = new Date();
+    let actorId: string | null = null;
+
+    switch (args.actorType) {
+      case 'ADMIN': {
+        const row = await this.prisma.adminSession.findUnique({
+          where: { id: args.sessionId },
+          select: { adminId: true, revokedAt: true },
+        });
+        if (!row) throw new NotFoundException('Session not found');
+        if (row.adminId === args.revokedByAdminId) {
+          throw new BadRequestException(
+            'Cannot revoke your own admin session. Use the logout flow to end your own session.',
+          );
+        }
+        if (row.revokedAt) {
+          // Idempotent — already revoked, treat as success without
+          // re-stamping (audit chain should record the first revoke).
+          return { revoked: true, sessionId: args.sessionId, actorType: 'ADMIN', actorId: row.adminId };
+        }
+        await this.prisma.adminSession.update({
+          where: { id: args.sessionId },
+          data: { revokedAt: now, stepUpVerifiedAt: null },
+        });
+        actorId = row.adminId;
+        break;
+      }
+      case 'USER': {
+        const row = await this.prisma.session.findUnique({
+          where: { id: args.sessionId },
+          select: { userId: true, revokedAt: true },
+        });
+        if (!row) throw new NotFoundException('Session not found');
+        if (row.revokedAt) {
+          return { revoked: true, sessionId: args.sessionId, actorType: 'USER', actorId: row.userId };
+        }
+        await this.prisma.session.update({
+          where: { id: args.sessionId },
+          data: { revokedAt: now },
+        });
+        actorId = row.userId;
+        break;
+      }
+      case 'SELLER': {
+        const row = await this.prisma.sellerSession.findUnique({
+          where: { id: args.sessionId },
+          select: { sellerId: true, revokedAt: true },
+        });
+        if (!row) throw new NotFoundException('Session not found');
+        if (row.revokedAt) {
+          return { revoked: true, sessionId: args.sessionId, actorType: 'SELLER', actorId: row.sellerId };
+        }
+        await this.prisma.sellerSession.update({
+          where: { id: args.sessionId },
+          data: { revokedAt: now },
+        });
+        actorId = row.sellerId;
+        break;
+      }
+      case 'FRANCHISE': {
+        const row = await this.prisma.franchiseSession.findUnique({
+          where: { id: args.sessionId },
+          select: { franchisePartnerId: true, revokedAt: true },
+        });
+        if (!row) throw new NotFoundException('Session not found');
+        if (row.revokedAt) {
+          return { revoked: true, sessionId: args.sessionId, actorType: 'FRANCHISE', actorId: row.franchisePartnerId };
+        }
+        await this.prisma.franchiseSession.update({
+          where: { id: args.sessionId },
+          data: { revokedAt: now },
+        });
+        actorId = row.franchisePartnerId;
+        break;
+      }
+    }
+
+    await this.audit.writeAuditLog({
+      actorId: args.revokedByAdminId,
+      actorRole: args.revokedByAdminRole,
+      action: 'session.revoke',
+      module: 'security',
+      resource: 'session',
+      resourceId: args.sessionId,
+      metadata: {
+        targetActorType: args.actorType,
+        targetActorId: actorId,
+        reason: args.reason ?? null,
+      },
+    });
+
+    this.logger.log(
+      `Session revoked: ${args.actorType} session ${args.sessionId} by admin ${args.revokedByAdminId}`,
+    );
+
+    return { revoked: true, sessionId: args.sessionId, actorType: args.actorType, actorId: actorId! };
+  }
+
+  /**
+   * Revoke every active session for one actor. Useful when an admin
+   * confirms account takeover suspicion. Audit log records the count
+   * for later forensic review.
+   */
+  async revokeAllForActor(args: {
+    actorType: ActorType;
+    actorId: string;
+    revokedByAdminId: string;
+    revokedByAdminRole?: string;
+    reason?: string;
+  }): Promise<{ revoked: number; actorType: ActorType; actorId: string }> {
+    const now = new Date();
+    let count = 0;
+
+    // Same self-protection as revokeOne — never let an admin nuke
+    // their own session set in bulk. They'd lock themselves out and
+    // the only recovery is a DB-level reset.
+    if (args.actorType === 'ADMIN' && args.actorId === args.revokedByAdminId) {
+      throw new BadRequestException(
+        'Cannot revoke your own admin sessions. Use the logout flow to end your own session.',
+      );
+    }
+
+    switch (args.actorType) {
+      case 'ADMIN': {
+        const r = await this.prisma.adminSession.updateMany({
+          where: { adminId: args.actorId, revokedAt: null },
+          data: { revokedAt: now, stepUpVerifiedAt: null },
+        });
+        count = r.count;
+        break;
+      }
+      case 'USER': {
+        const r = await this.prisma.session.updateMany({
+          where: { userId: args.actorId, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        count = r.count;
+        break;
+      }
+      case 'SELLER': {
+        const r = await this.prisma.sellerSession.updateMany({
+          where: { sellerId: args.actorId, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        count = r.count;
+        break;
+      }
+      case 'FRANCHISE': {
+        const r = await this.prisma.franchiseSession.updateMany({
+          where: { franchisePartnerId: args.actorId, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        count = r.count;
+        break;
+      }
+    }
+
+    await this.audit.writeAuditLog({
+      actorId: args.revokedByAdminId,
+      actorRole: args.revokedByAdminRole,
+      action: 'session.revoke_all',
+      module: 'security',
+      resource: 'session',
+      resourceId: args.actorId,
+      metadata: {
+        targetActorType: args.actorType,
+        revokedCount: count,
+        reason: args.reason ?? null,
+      },
+    });
+
+    this.logger.log(
+      `Revoked ${count} session(s) for ${args.actorType} ${args.actorId} by admin ${args.revokedByAdminId}`,
+    );
+
+    return { revoked: count, actorType: args.actorType, actorId: args.actorId };
+  }
+}

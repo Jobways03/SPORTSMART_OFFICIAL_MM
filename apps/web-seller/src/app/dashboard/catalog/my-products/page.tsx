@@ -78,6 +78,20 @@ export default function MyProductsPage() {
   // Edit modal (per mapping row)
   const [showEditModal, setShowEditModal] = useState(false);
   const [editMapping, setEditMapping] = useState<{ product: MappedProduct; mapping: MappingRow } | null>(null);
+
+  // Story 3.5 — bulk CSV stock update. Sellers paste a 2-column
+  // `mappingId,stockQty` CSV (header row optional); we batch into 100-
+  // row PATCH calls against /seller/catalog/mapping/bulk-stock. The
+  // existing my-products list is the source of mappingIds; clicking
+  // "Copy template" downloads a CSV pre-populated with the current
+  // rows so the seller only has to edit quantities.
+  const [showBulkCsv, setShowBulkCsv] = useState(false);
+  const [bulkCsvText, setBulkCsvText] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    updated: number;
+    failed: Array<{ row: number; reason: string }>;
+  } | null>(null);
   const [editForm, setEditForm] = useState<EditFormData>({ stockQty: '', pickupPincode: '', dispatchSla: '', isActive: true });
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState('');
@@ -385,9 +399,28 @@ export default function MyProductsPage() {
             <span className="products-header-count">({pagination.total})</span>
           )}
         </h1>
-        <Link href="/dashboard/catalog" className="products-add-btn">
-          + BROWSE CATALOG
-        </Link>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowBulkCsv(true);
+              setBulkResult(null);
+            }}
+            className="form-btn"
+            style={{ fontSize: 13, padding: '8px 14px' }}
+            disabled={products.length === 0}
+            title={
+              products.length === 0
+                ? 'Add at least one mapping before bulk update'
+                : 'Bulk update stock from a CSV'
+            }
+          >
+            BULK CSV STOCK
+          </button>
+          <Link href="/dashboard/catalog" className="products-add-btn">
+            + BROWSE CATALOG
+          </Link>
+        </div>
       </div>
 
       {/* Search */}
@@ -826,8 +859,279 @@ export default function MyProductsPage() {
           </div>
         </div>
       )}
+
+      {/* Story 3.5 — bulk CSV stock update */}
+      {showBulkCsv && (
+        <div
+          className="variant-modal-backdrop"
+          onClick={() => !bulkBusy && setShowBulkCsv(false)}
+        >
+          <div
+            className="variant-modal"
+            style={{ maxWidth: 720 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="variant-modal-header">
+              <h2>Bulk stock update</h2>
+              <button
+                type="button"
+                className="variant-modal-close"
+                onClick={() => !bulkBusy && setShowBulkCsv(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="variant-modal-body" style={{ padding: 20 }}>
+              <p style={{ fontSize: 13, color: '#4b5563', margin: '0 0 12px' }}>
+                Paste a CSV with two columns: <code>mappingId,stockQty</code>. The header row is optional.
+                Each batch of 100 rows is sent in a single request; large files are chunked automatically.
+              </p>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button
+                  type="button"
+                  className="form-btn"
+                  style={{ fontSize: 12, padding: '6px 12px' }}
+                  onClick={() => {
+                    const template = buildCsvTemplate(products);
+                    downloadCsv(template, 'stock-update-template.csv');
+                  }}
+                >
+                  Download template
+                </button>
+                <button
+                  type="button"
+                  className="form-btn"
+                  style={{ fontSize: 12, padding: '6px 12px' }}
+                  onClick={() => {
+                    setBulkCsvText(buildCsvTemplate(products));
+                  }}
+                >
+                  Prefill in textarea
+                </button>
+              </div>
+              <textarea
+                value={bulkCsvText}
+                onChange={(e) => setBulkCsvText(e.target.value)}
+                placeholder={'mappingId,stockQty\n6c0b…-…,12\n7a1d…-…,25'}
+                disabled={bulkBusy}
+                rows={10}
+                style={{
+                  width: '100%',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: 12,
+                  padding: 10,
+                  border: '1px solid #d1d5db',
+                  borderRadius: 6,
+                  background: '#fff',
+                  resize: 'vertical',
+                }}
+              />
+              {bulkResult && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    padding: 12,
+                    borderRadius: 8,
+                    background: bulkResult.failed.length === 0 ? '#f0fdf4' : '#fffbeb',
+                    border: `1px solid ${bulkResult.failed.length === 0 ? '#bbf7d0' : '#fde68a'}`,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    {bulkResult.updated} row{bulkResult.updated === 1 ? '' : 's'} updated
+                    {bulkResult.failed.length > 0
+                      ? `, ${bulkResult.failed.length} failed`
+                      : ''}
+                  </div>
+                  {bulkResult.failed.length > 0 && (
+                    <ul
+                      style={{
+                        marginTop: 8,
+                        paddingLeft: 18,
+                        fontSize: 12,
+                        color: '#92400e',
+                        maxHeight: 140,
+                        overflow: 'auto',
+                      }}
+                    >
+                      {bulkResult.failed.slice(0, 50).map((f, i) => (
+                        <li key={i}>
+                          Row {f.row}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="variant-modal-footer">
+              <button
+                className="form-btn"
+                onClick={() => !bulkBusy && setShowBulkCsv(false)}
+                disabled={bulkBusy}
+              >
+                Close
+              </button>
+              <button
+                className="form-btn"
+                style={{ background: '#111', color: '#fff', borderColor: '#111' }}
+                disabled={bulkBusy || !bulkCsvText.trim()}
+                onClick={async () => {
+                  const token = getStoredToken();
+                  if (!token) return;
+                  setBulkBusy(true);
+                  setBulkResult(null);
+                  try {
+                    const parsed = parseStockCsv(bulkCsvText);
+                    if (parsed.updates.length === 0) {
+                      showToast(
+                        'error',
+                        parsed.failed.length > 0
+                          ? `No valid rows. ${parsed.failed.length} parse error(s).`
+                          : 'CSV is empty.',
+                      );
+                      setBulkResult({ updated: 0, failed: parsed.failed });
+                      return;
+                    }
+                    // Validate mappingIds belong to current seller's list
+                    // — the backend re-checks ownership, but giving
+                    // immediate feedback for obvious typos saves a
+                    // round trip.
+                    const knownMappingIds = new Set<string>();
+                    for (const p of products) {
+                      for (const m of p.mappings) knownMappingIds.add(m.id);
+                    }
+                    const verified: typeof parsed.updates = [];
+                    for (const u of parsed.updates) {
+                      if (!knownMappingIds.has(u.mappingId)) {
+                        parsed.failed.push({
+                          row: u.sourceRow,
+                          reason: `mappingId not in your products list`,
+                        });
+                      } else {
+                        verified.push(u);
+                      }
+                    }
+                    // Batch into 100-row chunks — backend enforces 100/req.
+                    let updated = 0;
+                    for (let i = 0; i < verified.length; i += 100) {
+                      const chunk = verified.slice(i, i + 100).map((u) => ({
+                        mappingId: u.mappingId,
+                        stockQty: u.stockQty,
+                      }));
+                      try {
+                        await sellerProductService.bulkUpdateStock(token, chunk);
+                        updated += chunk.length;
+                      } catch (e: any) {
+                        // Whole batch failed — record once with the
+                        // first row's line number for traceability.
+                        parsed.failed.push({
+                          row: verified[i].sourceRow,
+                          reason:
+                            e?.body?.message ??
+                            e?.message ??
+                            `Batch ${Math.floor(i / 100) + 1} failed`,
+                        });
+                      }
+                    }
+                    setBulkResult({ updated, failed: parsed.failed });
+                    if (updated > 0) {
+                      showToast(
+                        'success',
+                        `Updated ${updated} mapping${updated === 1 ? '' : 's'}`,
+                      );
+                      fetchProducts({ page: pagination.page });
+                    }
+                  } finally {
+                    setBulkBusy(false);
+                  }
+                }}
+              >
+                {bulkBusy ? 'Applying…' : 'Apply updates'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+// ── Story 3.5 helpers ────────────────────────────────────────────
+
+// Build a CSV body listing every mapping the seller has, pre-populated
+// with the current stockQty so the seller only edits the numbers.
+function buildCsvTemplate(products: MappedProduct[]): string {
+  const rows = ['mappingId,stockQty'];
+  for (const p of products) {
+    for (const m of p.mappings) {
+      rows.push(`${m.id},${m.stockQty}`);
+    }
+  }
+  return rows.join('\n');
+}
+
+// Trigger a client-side download of the given CSV string.
+function downloadCsv(text: string, filename: string): void {
+  if (typeof window === 'undefined') return;
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+interface ParsedStockCsv {
+  updates: Array<{ mappingId: string; stockQty: number; sourceRow: number }>;
+  failed: Array<{ row: number; reason: string }>;
+}
+
+// Parse the seller-pasted CSV. We're lenient: trim whitespace, skip
+// blank lines, allow an optional header row. Each non-blank, non-header
+// row must be `<uuid>,<non-negative integer>`.
+function parseStockCsv(text: string): ParsedStockCsv {
+  const updates: ParsedStockCsv['updates'] = [];
+  const failed: ParsedStockCsv['failed'] = [];
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
+    if (!raw) continue;
+    // Header detection — any line whose first cell isn't UUID-ish.
+    if (i === 0 && /[a-z]/i.test(raw.split(',')[0]) && !/^[0-9a-f-]{20,}$/i.test(raw.split(',')[0])) {
+      continue;
+    }
+    const cells = raw.split(',').map((c) => c.trim());
+    if (cells.length < 2) {
+      failed.push({ row: i + 1, reason: 'expected `mappingId,stockQty`' });
+      continue;
+    }
+    const [mappingId, qtyRaw] = cells;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mappingId)) {
+      failed.push({ row: i + 1, reason: 'mappingId is not a UUID' });
+      continue;
+    }
+    const qty = Number(qtyRaw);
+    if (!Number.isInteger(qty) || qty < 0) {
+      failed.push({ row: i + 1, reason: 'stockQty must be a non-negative integer' });
+      continue;
+    }
+    updates.push({ mappingId, stockQty: qty, sourceRow: i + 1 });
+  }
+  return { updates, failed };
+}
+
+// Reads the seller bearer token. Mirrors the inline helper used
+// elsewhere on this page — kept as a local function so the parse +
+// apply path doesn't have to look it up on every cell.
+function getStoredToken(): string | null {
+  try {
+    return sessionStorage.getItem('accessToken');
+  } catch {
+    return null;
+  }
 }
 
 // ===== Product Row Group (product row + expandable variant rows) =====

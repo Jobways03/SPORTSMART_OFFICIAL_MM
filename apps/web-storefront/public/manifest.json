@@ -1,0 +1,38 @@
+{
+  "name": "Sportsmart — India's Sports Marketplace",
+  "short_name": "Sportsmart",
+  "description": "Premium sports gear, apparel, and accessories. Multi-seller marketplace with same-day delivery in major Indian cities.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FAFAFA",
+  "theme_color": "#3FA1AE",
+  "lang": "en-IN",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["shopping", "sports"],
+  "shortcuts": [
+    {
+      "name": "My Orders",
+      "url": "/orders",
+      "description": "Track your recent orders"
+    },
+    {
+      "name": "Help",
+      "url": "/help/tickets",
+      "description": "Customer support tickets"
+    }
+  ]
+}
