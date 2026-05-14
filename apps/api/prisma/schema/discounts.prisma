@@ -86,6 +86,31 @@ enum DiscountNature {
   DISPLAY_ONLY
 }
 
+// Phase 4 GST (2026-05-13) — GST treatment of a discount. Distinct
+// from DiscountNature: DiscountNature controls whether allocation +
+// settlement ledgers fire at all; DiscountTaxTreatment controls how
+// the tax engine treats the discount when the line GST snapshot is
+// computed.
+//
+// PRE_SUPPLY_TRANSACTIONAL  — Engine reduces taxable value (CGST §15).
+//                              Default for cart/checkout coupons.
+// POST_SUPPLY_LINKED        — Discount applies after invoice; engine
+//                              keeps taxable = gross; Phase 11 emits
+//                              a credit note for the reversal.
+// POST_SUPPLY_UNLINKED      — Goodwill / ad-hoc adjustment; engine
+//                              keeps taxable = gross; no credit note;
+//                              tracked via wallet_adjustments.
+// DISPLAY_ONLY              — MRP-slash marketing copy; no allocation
+//                              ledger row, no tax effect.
+//
+// See docs/tax/CA.md §3 + docs/tax/GOODWILL_CREDIT_POLICY.md.
+enum DiscountTaxTreatment {
+  PRE_SUPPLY_TRANSACTIONAL
+  POST_SUPPLY_LINKED
+  POST_SUPPLY_UNLINKED
+  DISPLAY_ONLY
+}
+
 // Where the redemption originated. CODE = customer typed a coupon;
 // AUTOMATIC = system-applied promo (banner / cart-rule); AFFILIATE =
 // resolved through the affiliate fallback. Drives reporting + the
@@ -186,6 +211,10 @@ model Discount {
   // "list price slash" that never enters the allocation/ledger
   // pipeline. Default TRANSACTIONAL — current behavior.
   discountNature DiscountNature @default(TRANSACTIONAL) @map("discount_nature")
+
+  // Phase 4 GST (2026-05-13) — GST treatment for the tax engine.
+  // See enum docs above + docs/tax/CA.md §3.
+  taxTreatment DiscountTaxTreatment @default(PRE_SUPPLY_TRANSACTIONAL) @map("tax_treatment")
 
   // Phase F (P2.3) — affiliate ↔ discount unification. When
   // affiliateId is set, this Discount represents an affiliate-issued

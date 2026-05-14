@@ -52,6 +52,7 @@ model Wallet {
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions WalletTransaction[]
+  adjustments  WalletAdjustment[]
 
   @@map("wallets")
 }
@@ -85,6 +86,7 @@ model WalletTransaction {
   createdAt           DateTime                @default(now()) @map("created_at")
 
   wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  adjustments WalletAdjustment[]
 
   @@index([walletId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
@@ -97,4 +99,111 @@ model WalletTransaction {
   // continue to coexist freely.
   @@unique([referenceType, referenceId, type])
   @@map("wallet_transactions")
+}
+
+// Phase 13 GST — Wallet adjustments (goodwill + time-barred refunds).
+//
+// Business-layer record of "we owe this customer N paise but the
+// credit-note path can't (or shouldn't) carry the money". Once
+// approved, posts a wallet_transactions row of type CREDIT_ADJUSTMENT
+// (the wallet ledger stays the source of truth for the balance).
+//
+// Separate from wallet_transactions because:
+//   1. Carries GST context (source invoice, absorbed tax components)
+//      that the wallet ledger doesn't model.
+//   2. Approval workflow — small goodwill credits can auto-approve,
+//      high-value ones must queue for finance review.
+//   3. Phase 12 cron's `GST_CREDIT_NOTE_TIME_BARRED` AdminTask
+//      hands work to this table once finance triages.
+enum WalletAdjustmentKind {
+  // Sec 34 cutoff passed; the credit-note path is unavailable. The
+  // refund routes through wallet; the GST cost sticks to the platform
+  // (captured in the would_have_been_* columns for GSTR-1/3B audit).
+  TIME_BARRED_CREDIT_NOTE
+  // Admin-initiated goodwill credit (apology, compensation). No
+  // return / GST reversal.
+  GOODWILL
+  // Admin-initiated debit (chargeback, fraud reversal). Stored as
+  // a negative amountInPaise.
+  MANUAL_DEBIT
+  // Catch-all. Forces `reason` to be meaningful at write time.
+  MANUAL_OTHER
+}
+
+enum WalletAdjustmentStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  REVERSED
+}
+
+model WalletAdjustment {
+  id String @id @default(uuid())
+
+  customerId String  @map("customer_id")
+  walletId   String? @map("wallet_id")
+
+  // Business context — only TIME_BARRED_CREDIT_NOTE carries the full
+  // return / sub-order / source-invoice triple.
+  subOrderId          String? @map("sub_order_id")
+  returnId            String? @map("return_id")
+  sourceTaxDocumentId String? @map("source_tax_document_id")
+
+  // Caller-supplied idempotency key (e.g.
+  // `TIME_BARRED_CREDIT_NOTE:${returnId}`). Stops a retried QC
+  // submission or cron re-run from inserting a duplicate pending row.
+  idempotencyKey String @unique @map("idempotency_key")
+
+  kind   WalletAdjustmentKind
+  status WalletAdjustmentStatus @default(PENDING_APPROVAL)
+
+  // Signed paise. + = credit to customer (refund/goodwill); - = debit
+  // (chargeback). Passed verbatim to WalletService.credit / .debit.
+  amountInPaise BigInt @map("amount_in_paise")
+  currency      String @default("INR")
+
+  // "Absorbed GST" snapshot — what the credit note WOULD have reversed
+  // if Section 34 weren't time-barring it. Reported separately in
+  // GSTR-1 / 3B so finance can show audit how much GST cost the
+  // platform absorbed in the period.
+  wouldHaveBeenTaxableInPaise   BigInt? @map("would_have_been_taxable_in_paise")
+  wouldHaveBeenCgstInPaise      BigInt? @map("would_have_been_cgst_in_paise")
+  wouldHaveBeenSgstInPaise      BigInt? @map("would_have_been_sgst_in_paise")
+  wouldHaveBeenIgstInPaise      BigInt? @map("would_have_been_igst_in_paise")
+  wouldHaveBeenTotalTaxInPaise  BigInt? @map("would_have_been_total_tax_in_paise")
+
+  reason String
+
+  // Audit trail
+  requestedByAdminId String?   @map("requested_by_admin_id")
+  requestedAt        DateTime  @default(now()) @map("requested_at")
+  approvedByAdminId  String?   @map("approved_by_admin_id")
+  approvedAt         DateTime? @map("approved_at")
+  rejectedByAdminId  String?   @map("rejected_by_admin_id")
+  rejectedAt         DateTime? @map("rejected_at")
+  rejectionReason    String?   @map("rejection_reason")
+
+  // Set on approval — references the wallet_transactions row that
+  // actually moved the money.
+  walletTransactionId String? @map("wallet_transaction_id")
+
+  // High-value gate. When true, only wallet.adjustment.approve can
+  // flip status to APPROVED. The Phase 13 threshold is env-tunable.
+  requiresDualApproval Boolean @default(false) @map("requires_dual_approval")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  customer            User                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  wallet              Wallet?             @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  return              Return?             @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  sourceTaxDocument   TaxDocument?        @relation("WalletAdjustmentSourceInvoice", fields: [sourceTaxDocumentId], references: [id], onDelete: Restrict)
+  walletTransaction   WalletTransaction?  @relation(fields: [walletTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([customerId])
+  @@index([walletId])
+  @@index([status])
+  @@index([returnId])
+  @@index([sourceTaxDocumentId])
+  @@map("wallet_adjustments")
 }

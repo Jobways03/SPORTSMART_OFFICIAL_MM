@@ -30,6 +30,9 @@ import { AffiliateModule } from '../affiliate/module';
 import { WalletModule } from '../wallet/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { MoneyModule } from '../../core/money/money.module';
+// Phase 6 GST — TaxSnapshotService runs after every order to write
+// snapshots + summaries even when no discount applies.
+import { TaxModule } from '../tax/module';
 import { CodModule } from '../cod/module';
 
 @Module({
@@ -42,6 +45,7 @@ import { CodModule } from '../cod/module';
     WalletModule,
     RazorpayModule,
     MoneyModule,
+    TaxModule,
     CodModule,
   ],
   controllers: [

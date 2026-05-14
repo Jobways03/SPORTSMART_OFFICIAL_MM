@@ -34,9 +34,9 @@ describe('CheckoutService.placeOrder — per-user concurrency lock', () => {
     //   1 repo, 2 sessionService, 3 catalogFacade, 4 franchiseFacade,
     //   5 discountFacade, 6 shippingOptionsFacade,
     //   7 discountReservation, 8 discountAllocation,
-    //   9 affiliateFacade, 10 walletFacade, 11 paymentOpsFacade,
-    //   12 razorpayAdapter, 13 prisma, 14 eventBus, 15 redis,
-    //   16 env, 17 moneyDualWrite.
+    //   9 taxSnapshot, 10 affiliateFacade, 11 walletFacade,
+    //   12 paymentOpsFacade, 13 razorpayAdapter, 14 prisma,
+    //   15 eventBus, 16 redis, 17 env, 18 moneyDualWrite.
     // Lock-test only exercises redis + sessionService + repo, so
     // everything else is a no-op stub.
     const env: any = { getBoolean: () => false, getNumber: () => 0 };
@@ -50,15 +50,16 @@ describe('CheckoutService.placeOrder — per-user concurrency lock', () => {
       noop,             // 6 shippingOptionsFacade
       noop,             // 7 discountReservation
       noop,             // 8 discountAllocation
-      noop,             // 9 affiliateFacade
-      noop,             // 10 walletFacade
-      noop,             // 11 paymentOpsFacade
-      noop,             // 12 razorpayAdapter
-      noop,             // 13 prisma
-      noop,             // 14 eventBus
-      redis,            // 15 redis
-      env,              // 16 env
-      noop,             // 17 moneyDualWrite
+      noop,             // 9 taxSnapshot
+      noop,             // 10 affiliateFacade
+      noop,             // 11 walletFacade
+      noop,             // 12 paymentOpsFacade
+      noop,             // 13 razorpayAdapter
+      noop,             // 14 prisma
+      noop,             // 15 eventBus
+      redis,            // 16 redis
+      env,              // 17 env
+      noop,             // 18 moneyDualWrite
     );
     return { svc, redis, sessionService, repo };
   };

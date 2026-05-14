@@ -187,6 +187,44 @@ export const PERMISSIONS = {
   // Analytics
   'analytics.read':         'View analytics dashboards',
   'analytics.export':       'Export analytics CSV',
+
+  // ─── Tax / GST / Invoice / Credit Note / E-way Bill / TCS ──────
+  // Phase 1 of the GST/tax/invoice system (2026-05-13). See
+  // docs/tax/CA.md and the 27-phase plan. New tax permissions are
+  // added to SUPER_ADMIN via ALL_PERMISSION_KEYS (catch-all); other
+  // role-specific grants land in Phase 12 (RBAC + audit).
+  'tax.read':                       'View tax config + HSN/UQC/state masters',
+  'tax.configure':                  'Edit HSN / UQC / GST rates / shipping SAC / tax_config',
+  'tax.gstin.verify':               'Verify seller/customer GSTIN (mark isGstVerified)',
+  'tax.invoice.read':               'View tax invoices + Bills of Supply',
+  'tax.invoice.download':           'Download invoice PDFs',
+  'tax.invoice.regeneratePdf':      'Regenerate invoice PDF after template change',
+  'tax.creditNote.read':            'View credit notes',
+  'tax.creditNote.download':        'Download credit note PDFs',
+  'tax.creditNote.create':          'Manually create a credit note (admin override path)',
+  'tax.creditNote.timebarOverride': 'Approve credit note past Section 34 window (finance only)',
+  'tax.creditNote.timebarReview':   'Review time-barred returns for finance booking',
+  'tax.debitNote.create':           'Create debit note (upward price correction, admin only)',
+  'tax.reports.read':               'View tax reports (invoice register, HSN summary, etc.)',
+  'tax.reports.export':             'Export GSTR-1 / 3B / 8 / TCS / HSN CSV',
+  'tax.tcs.read':                   'View TCS ledger + GSTR-8 status',
+  'tax.tcs.compute':                'Manually trigger TCS computation',
+  'tax.tcs.export':                 'Generate GSTR-8 CSV/JSON',
+  'tax.tcs.markFiled':              'Mark TCS rows as FILED post-GSTR-8 submission',
+  'tax.tcs.markPaidToGovt':         'Mark TCS rows as PAID_TO_GOVT post remittance',
+  'tax.ewayBill.read':              'View e-way bills',
+  'tax.ewayBill.generate':          'Trigger e-way bill generation',
+  'tax.ewayBill.cancel':            'Cancel e-way bill (within 24h)',
+  'tax.ewayBill.override':          'Allow ship without e-way bill (audited)',
+  'tax.einvoice.manage':            'Manage e-invoice / IRN settings',
+  'tax.einvoice.cancelWithinWindow': 'Cancel IRN via IRP within 24h',
+  'tax.override':                   'Approve product / invoice with missing tax data',
+
+  // Wallet adjustments (goodwill, support, time-barred refunds)
+  'wallet.adjustment.read':         'View wallet adjustments + goodwill ledger',
+  'wallet.adjustment.create':       'Create wallet adjustment (small amounts)',
+  'wallet.adjustment.approve':      'Approve high-value wallet adjustments (above threshold)',
+  'wallet.adjustment.reject':       'Reject a pending wallet adjustment',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -241,6 +279,19 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'payouts.export':         'HIGH',
   'payouts.ingestResponse': 'HIGH',
   'recon.transition':       'MEDIUM',
+
+  // Tax / GST / Invoice — high-risk classifications
+  'tax.invoice.regeneratePdf':      'HIGH',
+  'tax.creditNote.create':          'CRITICAL',
+  'tax.creditNote.timebarOverride': 'CRITICAL',
+  'tax.debitNote.create':           'CRITICAL',
+  'tax.ewayBill.override':          'HIGH',
+  'tax.tcs.markFiled':              'HIGH',
+  'tax.tcs.markPaidToGovt':         'HIGH',
+  'tax.override':                   'CRITICAL',
+  'tax.configure':                  'HIGH',
+  'wallet.adjustment.create':       'MEDIUM',
+  'wallet.adjustment.approve':      'HIGH',
   'sessions.revoke':        'HIGH',
 };
 

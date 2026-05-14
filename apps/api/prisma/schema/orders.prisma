@@ -259,6 +259,10 @@ model SubOrder {
   // level settlement deduction for seller-funded discounts).
   orderItemDiscounts OrderItemDiscount[]
 
+  // Phase 15 GST — e-way bill rows for this sub-order. Active row
+  // is unique (partial unique index); cancelled rows accumulate.
+  eWayBills EWayBill[]
+
   @@index([masterOrderId])
   @@index([sellerId])
   @@index([franchiseId])
@@ -372,7 +376,31 @@ model OrderItemTaxSnapshot {
   id                                  String   @id @default(uuid())
   masterOrderId                       String   @map("master_order_id")
   subOrderId                          String   @map("sub_order_id")
-  orderItemId                         String   @unique @map("order_item_id")
+  // Phase 7 GST — nullable for non-PRODUCT lines (SHIPPING, GIFT_WRAP,
+  // etc.). PRODUCT lines still get a non-null orderItemId enforced by
+  // the existing UNIQUE constraint (multiple NULLs allowed under
+  // Postgres NULLS DISTINCT). A partial UNIQUE on (subOrderId,
+  // lineType) WHERE lineType != 'PRODUCT' enforces one-per-sub-order
+  // for non-PRODUCT lines (in migration SQL, not Prisma — Prisma
+  // doesn't express partial unique indexes).
+  orderItemId                         String?  @unique @map("order_item_id")
+
+  // Phase 5 GST (2026-05-13) — line classification.
+  // PRODUCT lines reference an orderItemId (unique constraint above).
+  // Non-PRODUCT lines (SHIPPING / GIFT_WRAP / etc.) arrive in Phase 7
+  // with a relaxed uniqueness rule.
+  lineType                            TaxLineType  @default(PRODUCT) @map("line_type")
+  supplierType                        SupplierType? @map("supplier_type")
+  sellerId                            String?  @map("seller_id")
+  productId                           String?  @map("product_id")
+  variantId                           String?  @map("variant_id")
+  description                         String?
+  uqcCode                             String?  @map("uqc_code")
+  // Decimal quantity supports weight-based / pair-based goods (KGS,
+  // PRS, MTR). PRODUCT lines retain the Int order_items.quantity in
+  // OrderItem; this is a snapshot for the tax document.
+  quantity                            Decimal? @db.Decimal(12, 3)
+
   // Pre-discount line gross (unitPrice × qty in paise).
   grossLineAmountInPaise              BigInt   @default(0) @map("gross_line_amount_in_paise")
   // Sum of all OrderItemDiscount rows for this item.
@@ -380,30 +408,139 @@ model OrderItemTaxSnapshot {
   // The GST taxable base = gross - discount. GST is calculated on
   // this. Sum across items must equal the order's taxable base.
   taxableAmountInPaise                BigInt   @default(0) @map("taxable_amount_in_paise")
+
   // Rate in basis points (e.g., 1800 = 18%). Sourced from the
   // product/category at order time and snapshotted so later rate
   // changes don't rewrite history.
   gstRateBps                          Int      @default(0) @map("gst_rate_bps")
+  // Phase 5 — supply taxability + pricing-mode for accurate reporting.
+  supplyTaxability                    SupplyTaxability @default(TAXABLE) @map("supply_taxability")
+  priceIncludesTax                    Boolean  @default(true) @map("price_includes_tax")
+  // Phase 5 — compensation cess (sports goods generally don't carry
+  // cess today; schema-ready for future HSN that may).
+  cessRateBps                         Int      @default(0) @map("cess_rate_bps")
+  cessAmountInPaise                   BigInt   @default(0) @map("cess_amount_in_paise")
+
   // CGST + SGST for intra-state supply (each half the total).
   cgstAmountInPaise                   BigInt   @default(0) @map("cgst_amount_in_paise")
   sgstAmountInPaise                   BigInt   @default(0) @map("sgst_amount_in_paise")
   // IGST for inter-state supply (full rate; cgst/sgst are 0).
   igstAmountInPaise                   BigInt   @default(0) @map("igst_amount_in_paise")
   totalTaxAmountInPaise               BigInt   @default(0) @map("total_tax_amount_in_paise")
-  // Final line total = taxable + total tax. Sum across items =
+  // Final line total = taxable + total tax (+ cess). Sum across items =
   // total customer charge for line items (excl. shipping).
   lineTotalAfterDiscountAndTaxInPaise BigInt   @default(0) @map("line_total_after_discount_and_tax_in_paise")
+
   hsnCode                             String?  @map("hsn_code")
-  // State code (ISO 3166-2:IN format like "IN-KA") at the time of
-  // sale. Used to determine intra-state vs inter-state classification
-  // alongside the seller/platform GSTIN state.
+  // Phase 5 — supplier/buyer GSTIN snapshots (Section 31 requires
+  // these on every tax invoice).
+  sellerGstin                         String?  @map("seller_gstin")
+  buyerGstin                          String?  @map("buyer_gstin")
+  // GST 2-digit state codes (Phase 1 canonical format).
+  sellerStateCode                     String?  @map("seller_state_code")
+  // Phase 2 wrote this as the resolved place-of-supply state code.
   placeOfSupply                       String?  @map("place_of_supply")
+  taxSplitType                        TaxSplitType? @map("tax_split_type")
+  // Phase 5 — reverse-charge flag. Always false for B2C goods today;
+  // schema-ready for future special-categories or B2B cases.
+  reverseChargeApplicable             Boolean  @default(false) @map("reverse_charge_applicable")
+
+  currencyCode                        String   @default("INR") @map("currency_code")
+  // Phase 5 — COMPLETE if all GST fields resolvable; INCOMPLETE in
+  // test mode when product is TAXABLE but missing HSN/rate; EXEMPT
+  // for NIL/EXEMPT/NON_GST supplies.
+  taxDataStatus                       TaxDataStatus @default(COMPLETE) @map("tax_data_status")
+
   createdAt                           DateTime @default(now()) @map("created_at")
   updatedAt                           DateTime @updatedAt @map("updated_at")
 
-  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  // Phase 7 — relation optional now that orderItemId is nullable.
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
 
   @@index([masterOrderId])
   @@index([subOrderId])
+  @@index([lineType])
+  @@index([supplierType])
+  @@index([sellerId])
+  @@index([supplyTaxability])
+  @@index([taxDataStatus])
+  @@index([sellerStateCode])
   @@map("order_item_tax_snapshots")
+}
+
+// Phase 5 GST (2026-05-13) — per-SubOrder aggregate of all tax-line
+// snapshots within that SubOrder. Drives the seller invoice header
+// in Phase 8 (one SubOrder = one tax document = one invoice).
+//
+// Computed at order-finalisation time alongside the per-line snapshots
+// in DiscountAllocationService. Re-computed whenever a snapshot is
+// upserted (i.e. on allocation retry).
+//
+// Conservation invariant:
+//   sub_order_tax_summaries[X].taxableAmountInPaise ===
+//   sum of order_item_tax_snapshots WHERE subOrderId=X .taxableAmountInPaise
+// Same for cgst / sgst / igst / total tax / cess.
+model SubOrderTaxSummary {
+  id            String   @id @default(uuid())
+  masterOrderId String   @map("master_order_id")
+  subOrderId    String   @unique @map("sub_order_id")
+  sellerId      String?  @map("seller_id")
+  supplierType  SupplierType? @map("supplier_type")
+
+  // Snapshot of supplier + buyer GST identity at order time.
+  sellerGstin              String? @map("seller_gstin")
+  sellerStateCode          String? @map("seller_state_code")
+  buyerGstin               String? @map("buyer_gstin")
+  placeOfSupplyStateCode   String? @map("place_of_supply_state_code")
+  taxSplitType             TaxSplitType? @map("tax_split_type")
+
+  taxableAmountInPaise   BigInt  @default(0) @map("taxable_amount_in_paise")
+  cgstAmountInPaise      BigInt  @default(0) @map("cgst_amount_in_paise")
+  sgstAmountInPaise      BigInt  @default(0) @map("sgst_amount_in_paise")
+  igstAmountInPaise      BigInt  @default(0) @map("igst_amount_in_paise")
+  totalTaxAmountInPaise  BigInt  @default(0) @map("total_tax_amount_in_paise")
+  cessAmountInPaise      BigInt  @default(0) @map("cess_amount_in_paise")
+  roundOffAmountInPaise  BigInt  @default(0) @map("round_off_amount_in_paise")
+  invoiceTotalInPaise    BigInt  @default(0) @map("invoice_total_in_paise")
+
+  currencyCode    String   @default("INR") @map("currency_code")
+  taxDataStatus   TaxDataStatus @default(COMPLETE) @map("tax_data_status")
+  lineCount       Int      @default(0) @map("line_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([masterOrderId])
+  @@index([sellerId])
+  @@index([taxDataStatus])
+  @@index([supplierType])
+  @@map("sub_order_tax_summaries")
+}
+
+// Phase 5 GST — master-order aggregate. One row per MasterOrder.
+// Drives the customer-facing "tax summary" panel on order detail and
+// the reconciliation reports.
+model OrderTaxSummary {
+  id            String   @id @default(uuid())
+  masterOrderId String   @unique @map("master_order_id")
+
+  taxableAmountInPaise   BigInt @default(0) @map("taxable_amount_in_paise")
+  cgstAmountInPaise      BigInt @default(0) @map("cgst_amount_in_paise")
+  sgstAmountInPaise      BigInt @default(0) @map("sgst_amount_in_paise")
+  igstAmountInPaise      BigInt @default(0) @map("igst_amount_in_paise")
+  totalTaxAmountInPaise  BigInt @default(0) @map("total_tax_amount_in_paise")
+  cessAmountInPaise      BigInt @default(0) @map("cess_amount_in_paise")
+  roundOffAmountInPaise  BigInt @default(0) @map("round_off_amount_in_paise")
+  invoiceTotalInPaise    BigInt @default(0) @map("invoice_total_in_paise")
+
+  currencyCode   String   @default("INR") @map("currency_code")
+  taxDataStatus  TaxDataStatus @default(COMPLETE) @map("tax_data_status")
+  subOrderCount  Int      @default(0) @map("sub_order_count")
+  lineCount      Int      @default(0) @map("line_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([taxDataStatus])
+  @@map("order_tax_summaries")
 }

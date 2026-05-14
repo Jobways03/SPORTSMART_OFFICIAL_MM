@@ -17,9 +17,10 @@ import { DISCOUNT_REPOSITORY } from './domain/repositories/discount.repository.i
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
 import { AffiliateModule } from '../affiliate/module';
 import { AuditModule } from '../audit/module';
+import { TaxModule } from '../tax/module';
 
 @Module({
-  imports: [AffiliateModule, AuditModule],
+  imports: [AffiliateModule, AuditModule, TaxModule],
   controllers: [AdminDiscountsController, CustomerDiscountsController],
   providers: [
     AdminAuthGuard,
