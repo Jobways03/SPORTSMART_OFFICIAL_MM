@@ -39,6 +39,35 @@ model Seller {
   isDeleted Boolean   @default(false) @map("is_deleted")
   deletedAt DateTime? @map("deleted_at")
 
+  // ─── GST fields (Phase 1 GST — 2026-05-13) ─────────────────────
+  // Primary GSTIN summary on Seller. Detailed multi-GSTIN records
+  // live in SellerGstin (one row per state-registered GSTIN).
+  // For sellers with a single GSTIN, only this summary block is
+  // required + one SellerGstin row marked isPrimary=true.
+  // The free-text `state` field above remains for legacy reasons;
+  // `gstStateCode` is the canonical 2-digit GST code used by the
+  // tax engine. CA review TODO: data-migrate `state` → `gstStateCode`.
+  //
+  // Verification: admin runs GST format check + (optionally) GST-
+  // portal lookup; isGstVerified flips true once approved. Composition
+  // sellers issue Bill of Supply rather than Tax Invoice.
+  //
+  // See docs/tax/GST_ASSUMPTIONS.md §11 (composition seller policy).
+  gstin                         String?              @map("gstin")
+  legalBusinessName             String?              @map("legal_business_name")
+  registeredBusinessAddressJson Json?                @map("registered_business_address_json")
+  gstStateCode                  String?              @map("gst_state_code")
+  gstRegistrationType           GstRegistrationType  @default(REGULAR) @map("gst_registration_type")
+  isGstVerified                 Boolean              @default(false) @map("is_gst_verified")
+  gstVerifiedAt                 DateTime?            @map("gst_verified_at")
+  gstVerifiedBy                 String?              @map("gst_verified_by")
+  gstVerificationNotes          String?              @map("gst_verification_notes")
+  // PAN (positions 3-12 of GSTIN). Stored separately for cross-
+  // validation. panLast4 used for masked display in admin UI.
+  panNumber                     String?              @map("pan_number")
+  panLast4                      String?              @map("pan_last_4")
+  panVerified                   Boolean              @default(false) @map("pan_verified")
+
   // ─── Logistics entitlements (admin-controlled) ────────────────
   // Toggled by marketplace admin in web-admin-storefront. The seller
   // picks the actual delivery method per shipment from whatever is
@@ -68,6 +97,11 @@ model Seller {
   subOrders         SubOrder[]
   commissionRecords CommissionRecord[]
   sellerSettlements SellerSettlement[]
+  gstins            SellerGstin[]      // Phase 1 GST — multi-GSTIN support
+  // Phase 16 GST — TCS (Section 52) settlement ledger rows per
+  // (sellerId, filingPeriod). One ACTIVE (non-REVERSED) row per
+  // pairing enforced by partial UNIQUE index in the migration.
+  gstTcsSettlements GstTcsSettlementLedger[]
 
   @@index([status])
   @@index([isProfileCompleted])

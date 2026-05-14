@@ -5,6 +5,7 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../exceptions';
+import { TaxDocumentRetentionService } from '../../modules/tax/application/services/tax-document-retention.service';
 
 /**
  * Phase 7 (PR 7.4) — Data erasure (GDPR-style "right to be forgotten").
@@ -41,7 +42,13 @@ export class ErasureService {
   /** USER_REQUEST cooldown — gives the user 24h to undo a misclick. */
   private static readonly USER_REQUEST_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 21 GST — captures statutory-hold metadata on the erasure
+    // outcome so the admin compliance UI can show "N tax documents
+    // preserved under Section 36" without re-deriving from the DB.
+    private readonly taxRetention: TaxDocumentRetentionService,
+  ) {}
 
   async requestErasure(input: {
     subjectType: 'USER' | 'SELLER' | 'AFFILIATE' | 'FRANCHISE';
@@ -189,9 +196,40 @@ export class ErasureService {
       },
     });
 
+    // Phase 21 GST — capture the tax-document statutory-hold summary
+    // on the outcome. Not a blocker (the user's erasure right is
+    // satisfied by `users` row redaction); the documents themselves
+    // carry their own snapshotted PII and outlive the user under
+    // Section 36 / 8-year retention.
+    const retention = await this.taxRetention
+      .getRetentionSummaryForUser(userId)
+      .catch((err) => {
+        this.logger.warn(
+          `Erasure ${userId}: retention summary failed (will record empty): ${(err as Error).message}`,
+        );
+        return null;
+      });
+
     return {
       redacted: redactedFields.map((f) => `users.${f}`),
       blocked: [],
+      statutoryHold: retention
+        ? {
+            // Plain JSON-safe shape — Dates serialised to ISO.
+            preservedBy: 'CGST Section 36 / 8-year retention',
+            documentsUnderRetention: retention.documentsUnderRetention,
+            totalDocuments: retention.totalDocuments,
+            earliestDocumentDate:
+              retention.earliestDocumentDate?.toISOString() ?? null,
+            latestRetentionExpiry:
+              retention.latestRetentionExpiry?.toISOString() ?? null,
+            retentionYears: retention.retentionYears,
+            note:
+              retention.hasActiveStatutoryHold
+                ? 'Tax documents (invoices / credit notes / receipts) carry their own snapshotted buyer name + addresses at issuance time. These records are preserved as statutory evidence; the customer\'s right to be forgotten is satisfied by the users-row redaction above.'
+                : 'No tax documents under active statutory hold for this user.',
+          }
+        : null,
     };
   }
 

@@ -42,22 +42,50 @@ import {
   type FundingConfig,
 } from '../../domain/allocation/funding';
 import {
-  calculateLineGst,
   calculateGstReversal,
 } from '../../domain/tax/calculate-gst';
 import { DiscountReservationService } from './discount-reservation.service';
 import { DiscountEventsService } from './discount-events.service';
+// Phase 2 GST — place-of-supply resolver replaces the hardcoded
+// `isIntraState: false` in the per-item snapshot loop. See
+// docs/tax/CA.md §A Phase 2 log.
+import { PlaceOfSupplyService } from '../../../tax/application/services/place-of-supply.service';
+import type { PlaceOfSupplyResult } from '../../../tax/domain/place-of-supply';
+// Phase 3 GST — engine v2: inclusive/exclusive split, taxability
+// taxonomy, cess. Replaces the per-snapshot call to legacy
+// calculateLineGst. See docs/tax/CA.md §A Phase 3 / Phase 4 log.
+import {
+  calculateLineTax,
+  type TaxabilityName,
+} from '../../../tax/domain/tax-engine';
 import { Prisma } from '@prisma/client';
+import type { DiscountTaxTreatment, SupplyTaxability } from '@prisma/client';
 
 /**
- * Default GST rate (in basis points) for products that don't yet have
- * an HSN-derived rate set. 0 = "no GST recorded" — the snapshot still
- * carries `gross / discount / taxable` but tax components are zero.
+ * Default GST rate (in basis points) used at runtime only when:
+ *   - The product row has gstRateBps = 0 (legacy / unconfigured), AND
+ *   - The product is TAXABLE (NIL/EXEMPT/NON_GST short-circuit to 0
+ *     in the engine regardless).
  *
- * Once a Product.gstRateBps column is added (follow-up to Phase B),
- * this default goes away and the rate is sourced per product.
+ * Phase 1 added per-product `gstRateBps` + `supplyTaxability` columns
+ * (defaulting to 0 / TAXABLE for back-compat). In test mode this
+ * constant is irrelevant — the product's own value wins. In strict
+ * mode (TAX_STRICT_MODE=true), `Product.gstRateBps = 0` for a
+ * TAXABLE product is an error surfaced at moderation; orders should
+ * never reach allocation with such a product. See
+ * docs/tax/CA.md §3 row 10 and HSN_RATE_POLICY.md.
  */
 const DEFAULT_GST_RATE_BPS = 0;
+
+/** Type for per-item tax data loaded from Product + Variant. */
+interface ItemTaxData {
+  hsnCode: string | null;
+  gstRateBps: number;
+  cessRateBps: number;
+  supplyTaxability: TaxabilityName;
+  priceIncludesTax: boolean;
+  uqcCode: string | null;
+}
 
 export interface AllocationContext {
   masterOrderId: string;
@@ -103,6 +131,22 @@ export interface AllocationContext {
     getDiscountValueInPaise?: bigint;
     getDiscountPercentage?: number;
   };
+  /**
+   * Phase 4 GST — GST treatment of this discount.
+   * If omitted, the service loads it from the Discount row.
+   *
+   *   PRE_SUPPLY_TRANSACTIONAL → engine subtracts discount from
+   *                              taxable value (default behaviour).
+   *   POST_SUPPLY_LINKED       → engine keeps taxable = gross;
+   *                              Phase 11 emits a credit note.
+   *   POST_SUPPLY_UNLINKED     → engine keeps taxable = gross;
+   *                              wallet_adjustments instead.
+   *   DISPLAY_ONLY             → engine sees gross = paid price;
+   *                              no discount subtraction.
+   *
+   * See docs/tax/CA.md §3 + GOODWILL_CREDIT_POLICY.md.
+   */
+  taxTreatment?: DiscountTaxTreatment;
 }
 
 @Injectable()
@@ -114,6 +158,8 @@ export class DiscountAllocationService {
     private readonly reservation: DiscountReservationService,
     // Phase E (P1.1) — emit liability-recorded + refund-prorated.
     private readonly events: DiscountEventsService,
+    // Phase 2 GST — resolve CGST/SGST vs IGST per sub-order.
+    private readonly placeOfSupply: PlaceOfSupplyService,
   ) {}
 
   /**
@@ -136,14 +182,47 @@ export class DiscountAllocationService {
       return;
     }
 
+    // Phase 2 GST — resolve place-of-supply per sub-order BEFORE the
+    // write transaction. Reads master order + seller/franchise/platform
+    // state codes. In test mode (TAX_STRICT_MODE=false), missing or
+    // ambiguous data falls back to IGST (inter-state) with a warning
+    // logged. In strict mode this throws and the caller surfaces a
+    // friendly checkout error.
+    let posMap: Map<string, PlaceOfSupplyResult> = new Map();
+    try {
+      posMap = await this.placeOfSupply.resolveForMasterOrder(ctx.masterOrderId);
+    } catch (err) {
+      // Resolver only throws in strict mode. Rethrow so checkout aborts.
+      this.logger.error(
+        `Place-of-supply resolution failed for order ${ctx.masterOrderId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
+
+    // Phase 4 GST — resolve discount tax treatment.
+    // Caller may pass `ctx.taxTreatment` (test helpers do); otherwise
+    // load from the Discount row. Default PRE_SUPPLY_TRANSACTIONAL
+    // preserves the legacy behaviour where discount reduces taxable
+    // value (CGST §15).
+    let taxTreatment: DiscountTaxTreatment = ctx.taxTreatment ?? 'PRE_SUPPLY_TRANSACTIONAL';
+    if (!ctx.taxTreatment) {
+      const discountRow = await this.prisma.discount.findUnique({
+        where: { id: ctx.discountId },
+        select: { taxTreatment: true },
+      });
+      if (discountRow) taxTreatment = discountRow.taxTreatment;
+    }
+
     await this.prisma.$transaction(async (tx) => {
-      // 1. Load canonical order + items + sub-orders.
+      // 1. Load canonical order + items + sub-orders. Phase 5 added
+      // productTitle (snapshot description) to the projection.
       const items = await tx.orderItem.findMany({
         where: { subOrder: { masterOrderId: ctx.masterOrderId } },
         select: {
           id: true,
           productId: true,
           variantId: true,
+          productTitle: true,
           quantity: true,
           subOrderId: true,
           unitPriceInPaise: true,
@@ -234,58 +313,368 @@ export class DiscountAllocationService {
         });
       }
 
-      // 5. Write tax snapshots per item. We always write a snapshot
-      // for every item (allocated or not) so refund proration has
-      // consistent data — items not allocated still need their gross
-      // snapshot for full-price refunds.
+      // 5. Phase 4 GST — load per-product + per-variant tax fields in
+      // batch (no Prisma relation from OrderItem → Product/Variant,
+      // so we query by ID set). Used to resolve HSN, GST rate,
+      // taxability, inclusive-pricing flag, UQC per line.
+      const productIds = [...new Set(allocatableItems.map((it) => it.productId))];
+      const variantIds = [
+        ...new Set(allocatableItems.map((it) => it.variantId).filter((v): v is string => !!v)),
+      ];
+      const [products, variants] = await Promise.all([
+        productIds.length
+          ? tx.product.findMany({
+              where: { id: { in: productIds } },
+              select: {
+                id: true,
+                hsnCode: true,
+                gstRateBps: true,
+                supplyTaxability: true,
+                taxInclusivePricing: true,
+                cessRateBps: true,
+                defaultUqcCode: true,
+                // Phase 5 — supplierType derivation (SELLER vs OWN_BRAND).
+                productSource: true,
+              },
+            })
+          : Promise.resolve([]),
+        variantIds.length
+          ? tx.productVariant.findMany({
+              where: { id: { in: variantIds } },
+              select: {
+                id: true,
+                hsnCodeOverride: true,
+                gstRateBpsOverride: true,
+                taxInclusivePricingOverride: true,
+                uqcCodeOverride: true,
+              },
+            })
+          : Promise.resolve([]),
+      ]);
+      const productById = new Map(products.map((p) => [p.id, p]));
+      const variantById = new Map(variants.map((v) => [v.id, v]));
+      // Item metadata (description, qty) keyed by orderItemId — used
+      // to populate snapshot description + quantity in Phase 5.
+      const itemMetadataById = new Map(
+        items.map((it) => [it.id, { productTitle: it.productTitle, quantity: it.quantity }]),
+      );
+
+      // Tax snapshots are written for EVERY item (allocated or not).
+      // Items not allocated still need their gross snapshot so refund
+      // proration has consistent data.
       const allocByItemId = new Map<string, ItemAllocation>(
         result.allocations.map((a) => [a.orderItemId, a]),
       );
+
+      // Phase 5 GST — per-sub-order accumulator for SubOrderTaxSummary.
+      // Keyed by subOrderId; populated during the snapshot loop and
+      // upserted after.
+      interface SubOrderAccum {
+        masterOrderId: string;
+        subOrderId: string;
+        sellerId: string | null;
+        supplierType: 'MARKETPLACE_SELLER' | 'FRANCHISE' | 'OWN_BRAND' | 'SPORTSMART' | null;
+        sellerStateCode: string | null;
+        placeOfSupplyStateCode: string | null;
+        taxSplitType: 'CGST_SGST' | 'IGST' | null;
+        taxableInPaise: bigint;
+        cgstInPaise: bigint;
+        sgstInPaise: bigint;
+        igstInPaise: bigint;
+        totalTaxInPaise: bigint;
+        cessInPaise: bigint;
+        invoiceTotalInPaise: bigint;
+        lineCount: number;
+        anyIncomplete: boolean;
+        allExempt: boolean;
+      }
+      const subOrderAccums = new Map<string, SubOrderAccum>();
+
       for (const it of allocatableItems) {
         const allocated = allocByItemId.get(it.orderItemId);
         const discountInPaise = allocated?.discountInPaise ?? 0n;
-        const gst = calculateLineGst({
+
+        // Phase 2 GST — POS per sub-order.
+        const pos = posMap.get(it.subOrderId);
+        const isIntraState = pos?.isIntraState ?? false;
+
+        // Phase 4 GST — resolve per-item tax data (variant overrides
+        // beat product defaults; both nullable; fall back safely).
+        const product = productById.get(it.productId);
+        const variant = it.variantId ? variantById.get(it.variantId) : null;
+        const itemTaxData: ItemTaxData = {
+          hsnCode: variant?.hsnCodeOverride ?? product?.hsnCode ?? null,
+          gstRateBps:
+            variant?.gstRateBpsOverride ?? product?.gstRateBps ?? DEFAULT_GST_RATE_BPS,
+          cessRateBps: product?.cessRateBps ?? 0,
+          supplyTaxability: ((product?.supplyTaxability as SupplyTaxability) ??
+            'TAXABLE') as TaxabilityName,
+          priceIncludesTax:
+            variant?.taxInclusivePricingOverride ?? product?.taxInclusivePricing ?? true,
+          uqcCode: variant?.uqcCodeOverride ?? product?.defaultUqcCode ?? null,
+        };
+
+        // Phase 4 GST — honor the discount tax treatment. For PRE_
+        // SUPPLY_TRANSACTIONAL the discount reduces taxable; for the
+        // other treatments the engine sees zero discount (allocation
+        // ledger still records the allocated amount for downstream
+        // reporting, but the GST math ignores it).
+        const effectiveDiscountForTax =
+          taxTreatment === 'PRE_SUPPLY_TRANSACTIONAL' ? discountInPaise : 0n;
+
+        // Phase 3 GST — engine v2.
+        const tax = calculateLineTax({
           grossInPaise: it.grossInPaise,
-          discountInPaise,
-          gstRateBps: DEFAULT_GST_RATE_BPS,
-          // Default to inter-state (IGST) — refined when address
-          // module exposes place-of-supply. The actual GST values
-          // are zero at default rate so this is harmless until
-          // rates are wired.
-          isIntraState: false,
+          discountInPaise: effectiveDiscountForTax,
+          gstRateBps: itemTaxData.gstRateBps,
+          cessRateBps: itemTaxData.cessRateBps,
+          priceIncludesTax: itemTaxData.priceIncludesTax,
+          isIntraState,
+          supplyTaxability: itemTaxData.supplyTaxability,
         });
+
+        // Phase 5 GST — derive supplierType + taxDataStatus.
+        // SupplierType: OWN_BRAND if product is OWN_BRAND, otherwise
+        // MARKETPLACE_SELLER. Franchise / SPORTSMART supplier types
+        // are reserved for future fulfilment-node sourcing changes.
+        const supplierType =
+          product?.productSource === 'OWN_BRAND'
+            ? 'OWN_BRAND'
+            : ('MARKETPLACE_SELLER' as const);
+
+        // taxDataStatus:
+        //   EXEMPT     — non-taxable supply
+        //   INCOMPLETE — taxable but missing HSN or gstRateBps=0
+        //   COMPLETE   — taxable with full data
+        let taxDataStatus: 'COMPLETE' | 'INCOMPLETE' | 'EXEMPT';
+        if (
+          itemTaxData.supplyTaxability === 'NIL_RATED' ||
+          itemTaxData.supplyTaxability === 'EXEMPT' ||
+          itemTaxData.supplyTaxability === 'NON_GST' ||
+          itemTaxData.supplyTaxability === 'OUT_OF_SCOPE'
+        ) {
+          taxDataStatus = 'EXEMPT';
+        } else if (!itemTaxData.hsnCode || itemTaxData.gstRateBps <= 0) {
+          taxDataStatus = 'INCOMPLETE';
+        } else {
+          taxDataStatus = 'COMPLETE';
+        }
+
+        const meta = itemMetadataById.get(it.orderItemId);
+
         await tx.orderItemTaxSnapshot.upsert({
           where: { orderItemId: it.orderItemId },
           create: {
             masterOrderId: ctx.masterOrderId,
             subOrderId: it.subOrderId,
             orderItemId: it.orderItemId,
-            grossLineAmountInPaise: gst.grossInPaise,
-            discountAmountInPaise: gst.discountInPaise,
-            taxableAmountInPaise: gst.taxableInPaise,
-            gstRateBps: gst.gstRateBps,
-            cgstAmountInPaise: gst.cgstInPaise,
-            sgstAmountInPaise: gst.sgstInPaise,
-            igstAmountInPaise: gst.igstInPaise,
-            totalTaxAmountInPaise: gst.totalTaxInPaise,
-            lineTotalAfterDiscountAndTaxInPaise: gst.lineTotalInPaise,
+            // Phase 5 — line classification + supplier/product context.
+            lineType: 'PRODUCT',
+            supplierType,
+            sellerId: it.sellerId ?? null,
+            productId: it.productId,
+            variantId: it.variantId ?? null,
+            description: meta?.productTitle ?? null,
+            uqcCode: itemTaxData.uqcCode,
+            quantity: meta?.quantity != null ? new Prisma.Decimal(meta.quantity) : null,
+            // Money fields from engine v2.
+            grossLineAmountInPaise: tax.grossInPaise,
+            // Persist the ALLOCATED discount (not the tax-effective one).
+            discountAmountInPaise: discountInPaise,
+            taxableAmountInPaise: tax.taxableInPaise,
+            gstRateBps: tax.gstRateBps,
+            supplyTaxability: itemTaxData.supplyTaxability,
+            priceIncludesTax: itemTaxData.priceIncludesTax,
+            cessRateBps: itemTaxData.cessRateBps,
+            cessAmountInPaise: tax.cessInPaise,
+            cgstAmountInPaise: tax.cgstInPaise,
+            sgstAmountInPaise: tax.sgstInPaise,
+            igstAmountInPaise: tax.igstInPaise,
+            totalTaxAmountInPaise: tax.totalTaxInPaise,
+            lineTotalAfterDiscountAndTaxInPaise: tax.lineTotalInPaise,
+            hsnCode: itemTaxData.hsnCode,
+            sellerStateCode: pos?.supplierStateCode ?? null,
+            placeOfSupply: pos?.placeOfSupplyStateCode ?? null,
+            taxSplitType: pos?.taxSplitType ?? null,
+            reverseChargeApplicable: false,
+            currencyCode: 'INR',
+            taxDataStatus,
           },
           update: {
-            // Idempotent retry: update the snapshot to the current
-            // calculation. Discount can change if allocation is
-            // re-run (e.g. retry path).
-            grossLineAmountInPaise: gst.grossInPaise,
-            discountAmountInPaise: gst.discountInPaise,
-            taxableAmountInPaise: gst.taxableInPaise,
-            gstRateBps: gst.gstRateBps,
-            cgstAmountInPaise: gst.cgstInPaise,
-            sgstAmountInPaise: gst.sgstInPaise,
-            igstAmountInPaise: gst.igstInPaise,
-            totalTaxAmountInPaise: gst.totalTaxInPaise,
-            lineTotalAfterDiscountAndTaxInPaise: gst.lineTotalInPaise,
+            lineType: 'PRODUCT',
+            supplierType,
+            sellerId: it.sellerId ?? null,
+            productId: it.productId,
+            variantId: it.variantId ?? null,
+            description: meta?.productTitle ?? null,
+            uqcCode: itemTaxData.uqcCode,
+            quantity: meta?.quantity != null ? new Prisma.Decimal(meta.quantity) : null,
+            grossLineAmountInPaise: tax.grossInPaise,
+            discountAmountInPaise: discountInPaise,
+            taxableAmountInPaise: tax.taxableInPaise,
+            gstRateBps: tax.gstRateBps,
+            supplyTaxability: itemTaxData.supplyTaxability,
+            priceIncludesTax: itemTaxData.priceIncludesTax,
+            cessRateBps: itemTaxData.cessRateBps,
+            cessAmountInPaise: tax.cessInPaise,
+            cgstAmountInPaise: tax.cgstInPaise,
+            sgstAmountInPaise: tax.sgstInPaise,
+            igstAmountInPaise: tax.igstInPaise,
+            totalTaxAmountInPaise: tax.totalTaxInPaise,
+            lineTotalAfterDiscountAndTaxInPaise: tax.lineTotalInPaise,
+            hsnCode: itemTaxData.hsnCode,
+            sellerStateCode: pos?.supplierStateCode ?? null,
+            placeOfSupply: pos?.placeOfSupplyStateCode ?? null,
+            taxSplitType: pos?.taxSplitType ?? null,
+            reverseChargeApplicable: false,
+            currencyCode: 'INR',
+            taxDataStatus,
           },
         });
+
+        // Phase 5 GST — accumulate per-sub-order totals.
+        let accum = subOrderAccums.get(it.subOrderId);
+        if (!accum) {
+          accum = {
+            masterOrderId: ctx.masterOrderId,
+            subOrderId: it.subOrderId,
+            sellerId: it.sellerId ?? null,
+            supplierType,
+            sellerStateCode: pos?.supplierStateCode ?? null,
+            placeOfSupplyStateCode: pos?.placeOfSupplyStateCode ?? null,
+            taxSplitType: pos?.taxSplitType ?? null,
+            taxableInPaise: 0n,
+            cgstInPaise: 0n,
+            sgstInPaise: 0n,
+            igstInPaise: 0n,
+            totalTaxInPaise: 0n,
+            cessInPaise: 0n,
+            invoiceTotalInPaise: 0n,
+            lineCount: 0,
+            anyIncomplete: false,
+            allExempt: true,
+          };
+          subOrderAccums.set(it.subOrderId, accum);
+        }
+        accum.taxableInPaise += tax.taxableInPaise;
+        accum.cgstInPaise += tax.cgstInPaise;
+        accum.sgstInPaise += tax.sgstInPaise;
+        accum.igstInPaise += tax.igstInPaise;
+        accum.totalTaxInPaise += tax.totalTaxInPaise;
+        accum.cessInPaise += tax.cessInPaise;
+        accum.invoiceTotalInPaise += tax.lineTotalInPaise;
+        accum.lineCount += 1;
+        if (taxDataStatus === 'INCOMPLETE') accum.anyIncomplete = true;
+        if (taxDataStatus !== 'EXEMPT') accum.allExempt = false;
       }
+
+      // Phase 5 GST — upsert SubOrderTaxSummary per sub-order.
+      // Aggregate status: any INCOMPLETE wins; else all-EXEMPT → EXEMPT;
+      // else COMPLETE.
+      const masterAccum = {
+        taxable: 0n,
+        cgst: 0n,
+        sgst: 0n,
+        igst: 0n,
+        totalTax: 0n,
+        cess: 0n,
+        invoiceTotal: 0n,
+        lineCount: 0,
+        subOrderCount: 0,
+        anyIncomplete: false,
+        allExempt: true,
+      };
+
+      for (const a of subOrderAccums.values()) {
+        const subStatus: 'COMPLETE' | 'INCOMPLETE' | 'EXEMPT' =
+          a.anyIncomplete ? 'INCOMPLETE' : a.allExempt ? 'EXEMPT' : 'COMPLETE';
+
+        await tx.subOrderTaxSummary.upsert({
+          where: { subOrderId: a.subOrderId },
+          create: {
+            masterOrderId: a.masterOrderId,
+            subOrderId: a.subOrderId,
+            sellerId: a.sellerId,
+            supplierType: a.supplierType ?? undefined,
+            sellerStateCode: a.sellerStateCode,
+            placeOfSupplyStateCode: a.placeOfSupplyStateCode,
+            taxSplitType: a.taxSplitType ?? undefined,
+            taxableAmountInPaise: a.taxableInPaise,
+            cgstAmountInPaise: a.cgstInPaise,
+            sgstAmountInPaise: a.sgstInPaise,
+            igstAmountInPaise: a.igstInPaise,
+            totalTaxAmountInPaise: a.totalTaxInPaise,
+            cessAmountInPaise: a.cessInPaise,
+            invoiceTotalInPaise: a.invoiceTotalInPaise,
+            currencyCode: 'INR',
+            taxDataStatus: subStatus,
+            lineCount: a.lineCount,
+          },
+          update: {
+            sellerId: a.sellerId,
+            supplierType: a.supplierType ?? undefined,
+            sellerStateCode: a.sellerStateCode,
+            placeOfSupplyStateCode: a.placeOfSupplyStateCode,
+            taxSplitType: a.taxSplitType ?? undefined,
+            taxableAmountInPaise: a.taxableInPaise,
+            cgstAmountInPaise: a.cgstInPaise,
+            sgstAmountInPaise: a.sgstInPaise,
+            igstAmountInPaise: a.igstInPaise,
+            totalTaxAmountInPaise: a.totalTaxInPaise,
+            cessAmountInPaise: a.cessInPaise,
+            invoiceTotalInPaise: a.invoiceTotalInPaise,
+            currencyCode: 'INR',
+            taxDataStatus: subStatus,
+            lineCount: a.lineCount,
+          },
+        });
+
+        masterAccum.taxable += a.taxableInPaise;
+        masterAccum.cgst += a.cgstInPaise;
+        masterAccum.sgst += a.sgstInPaise;
+        masterAccum.igst += a.igstInPaise;
+        masterAccum.totalTax += a.totalTaxInPaise;
+        masterAccum.cess += a.cessInPaise;
+        masterAccum.invoiceTotal += a.invoiceTotalInPaise;
+        masterAccum.lineCount += a.lineCount;
+        masterAccum.subOrderCount += 1;
+        if (a.anyIncomplete) masterAccum.anyIncomplete = true;
+        if (!a.allExempt) masterAccum.allExempt = false;
+      }
+
+      // Phase 5 GST — upsert OrderTaxSummary at the master level.
+      const masterStatus: 'COMPLETE' | 'INCOMPLETE' | 'EXEMPT' =
+        masterAccum.anyIncomplete ? 'INCOMPLETE' : masterAccum.allExempt ? 'EXEMPT' : 'COMPLETE';
+      await tx.orderTaxSummary.upsert({
+        where: { masterOrderId: ctx.masterOrderId },
+        create: {
+          masterOrderId: ctx.masterOrderId,
+          taxableAmountInPaise: masterAccum.taxable,
+          cgstAmountInPaise: masterAccum.cgst,
+          sgstAmountInPaise: masterAccum.sgst,
+          igstAmountInPaise: masterAccum.igst,
+          totalTaxAmountInPaise: masterAccum.totalTax,
+          cessAmountInPaise: masterAccum.cess,
+          invoiceTotalInPaise: masterAccum.invoiceTotal,
+          currencyCode: 'INR',
+          taxDataStatus: masterStatus,
+          subOrderCount: masterAccum.subOrderCount,
+          lineCount: masterAccum.lineCount,
+        },
+        update: {
+          taxableAmountInPaise: masterAccum.taxable,
+          cgstAmountInPaise: masterAccum.cgst,
+          sgstAmountInPaise: masterAccum.sgst,
+          igstAmountInPaise: masterAccum.igst,
+          totalTaxAmountInPaise: masterAccum.totalTax,
+          cessAmountInPaise: masterAccum.cess,
+          invoiceTotalInPaise: masterAccum.invoiceTotal,
+          currencyCode: 'INR',
+          taxDataStatus: masterStatus,
+          subOrderCount: masterAccum.subOrderCount,
+          lineCount: masterAccum.lineCount,
+        },
+      });
 
       // 6. Write liability ledger — funding split per allocated item.
       for (const a of result.allocations) {

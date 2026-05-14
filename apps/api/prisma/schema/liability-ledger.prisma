@@ -51,6 +51,36 @@ enum AdminTaskKind {
   // filtering doesn't have to scrape the `reason` text.
   RETURN_REFUND_FAILED
   RETURN_LIABILITY_LEDGER_BACKFILL
+  // Phase 12 GST — Section 34 time-bar workflow. TIME_BARRED is
+  // opened when a return crosses the 30-Sept-of-FY+1 deadline before
+  // the credit note was issued (platform absorbs the GST cost +
+  // refund must route through wallet_adjustment). APPROACHING is the
+  // 7-day early-warning so ops can chase the credit note out the door
+  // before the deadline hits.
+  GST_CREDIT_NOTE_TIME_BARRED
+  GST_CREDIT_NOTE_TIME_BAR_APPROACHING
+  // Phase 15 GST — E-way bill (CBIC Rule 138). FAILED opens when all
+  // adapter retries are exhausted; seller cannot ship until resolved.
+  // EXPIRED opens when an issued EWB passes validUntil without delivery.
+  EWAY_BILL_GENERATION_FAILED
+  EWAY_BILL_EXPIRED
+  // Phase 16 GST — GSTR-8 monthly filing reminders + TCS compute
+  // failures. FILING_DUE opens N days before the 10th-of-month
+  // deadline; COMPUTATION_FAILED opens when the per-seller TCS pass
+  // crashes (e.g. inconsistent invoice state).
+  GSTR8_FILING_DUE
+  TCS_COMPUTATION_FAILED
+  // Phase 19 GST — opens when the PDF retry cron exhausts retries
+  // without a successful render+upload. Ops / finance triages.
+  TAX_DOCUMENT_PDF_FAILED
+  // Phase 22 GST — e-invoice / NIC IRP workflow.
+  //   GENERATION_FAILED   — retry cap exhausted without an IRN; seller
+  //                         is above turnover threshold so the invoice
+  //                         is non-compliant until resolved.
+  //   CANCELLATION_FAILED — admin tried to cancel an IRN within the
+  //                         24-hour CBIC window but NIC refused.
+  EINVOICE_GENERATION_FAILED
+  EINVOICE_CANCELLATION_FAILED
   OTHER
 }
 

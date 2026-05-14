@@ -35,6 +35,12 @@ model User {
   // Optional 1:1 link to a wallet record. Created lazily on first
   // top-up / refund credit; users without wallet activity have no row.
   wallet            Wallet?
+  // Phase 1 GST — B2B customers may register one or more GSTINs.
+  // Default behaviour for B2C is zero rows on this relation.
+  taxProfiles       CustomerTaxProfile[]
+  // Phase 13 GST — wallet adjustments raised against this user
+  // (goodwill credits, time-barred refund routing).
+  walletAdjustments WalletAdjustment[]
 
   @@map("users")
 }

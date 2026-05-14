@@ -1,0 +1,113 @@
+// ============================================
+// Phase 15 GST — E-way Bills (CBIC Rule 138)
+// ============================================
+//
+// Electronic Way Bill — required for the movement of goods of
+// consignment value exceeding ₹50,000 (default; some states have
+// higher intra-state thresholds). One EWB per sub-order (per CBIC
+// convention even when the sub-order ships in multiple packages).
+//
+// Phase 15 ships the schema + EWayBillService + stub provider. The
+// real NIC e-Waybill API integration lands in a later phase tied to
+// the e-invoicing decision (CA confirms timing).
+//
+// See:
+//   - docs/tax/EWAY_BILL_POLICY.md (full operational policy)
+//   - docs/tax/CA.md §A Phase 15 log
+
+enum EWayBillStatus {
+  // ₹50k threshold not crossed (or intra-state below state threshold).
+  // Row exists so the audit trail records the explicit decision.
+  NOT_REQUIRED
+  // Threshold crossed; awaiting seller to mark PACKED + provide
+  // transport details + adapter call.
+  REQUIRED
+  // Adapter call in flight.
+  PENDING
+  // Successfully issued — ewbNumber + validUntil populated.
+  GENERATED
+  // Cancelled within 24h of generation.
+  CANCELLED
+  // Past validUntil without delivery; AdminTask `EWAY_BILL_EXPIRED` raised.
+  EXPIRED
+  // All retries exhausted; AdminTask `EWAY_BILL_GENERATION_FAILED` raised.
+  FAILED
+}
+
+enum EWayBillTransportMode {
+  ROAD
+  RAIL
+  AIR
+  SHIP
+}
+
+model EWayBill {
+  id String @id @default(uuid())
+
+  // Linkage
+  subOrderId    String  @map("sub_order_id")
+  taxDocumentId String? @map("tax_document_id")
+
+  // Issuer GSTIN — captured here for EWB-report filtering without a
+  // join back to tax_documents.
+  supplierGstin String? @map("supplier_gstin")
+
+  // Provider-side identifiers. ewbNumber is null until status = GENERATED.
+  ewbNumber  String?   @map("ewb_number")
+  ewbDate    DateTime? @map("ewb_date")
+  validUntil DateTime? @map("valid_until")
+
+  // 'stub' in dev/test; 'nic' once the real adapter is wired.
+  provider String @default("stub")
+
+  // Transport metadata
+  transportMode    EWayBillTransportMode @default(ROAD) @map("transport_mode")
+  vehicleNumber    String?               @map("vehicle_number")
+  transporterId    String?               @map("transporter_id")
+  transporterName  String?               @map("transporter_name")
+
+  // Origin + destination snapshot (frozen at EWB-generation time so
+  // a later address edit doesn't silently change the EWB record).
+  fromPincode   String? @map("from_pincode")
+  fromStateCode String? @map("from_state_code")
+  toPincode     String? @map("to_pincode")
+  toStateCode   String? @map("to_state_code")
+  distanceKm    Int?    @map("distance_km")
+
+  // Snapshot of the invoice total at generation time (post-discount,
+  // incl. GST + shipping). Drives the ₹50k threshold decision.
+  consignmentValueInPaise BigInt @map("consignment_value_in_paise")
+
+  status EWayBillStatus @default(NOT_REQUIRED)
+
+  // Cancellation + failure audit
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancelledBy        String?   @map("cancelled_by")
+  cancellationReason String?   @map("cancellation_reason")
+  failureReason      String?   @map("failure_reason")
+  retryCount         Int       @default(0) @map("retry_count")
+
+  // Raw provider payloads — dev visibility (stub) + prod support
+  // (NIC payload reproducibility).
+  rawRequestJson  Json? @map("raw_request_json")
+  rawResponseJson Json? @map("raw_response_json")
+
+  // Admin override — set when ship-allowed despite EWB being
+  // REQUIRED/FAILED. Tied to permission `tax.ewayBill.override`.
+  overrideAdminId String?   @map("override_admin_id")
+  overrideAt      DateTime? @map("override_at")
+  overrideReason  String?   @map("override_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subOrder    SubOrder     @relation(fields: [subOrderId], references: [id], onDelete: Restrict)
+  taxDocument TaxDocument? @relation(fields: [taxDocumentId], references: [id], onDelete: Restrict)
+
+  // Indexes for status/expiry/retry queues are PARTIAL — declared in
+  // the migration SQL since Prisma can't express partial indexes
+  // natively. See `20260513220000_eway_bills`.
+  @@index([status])
+  @@index([supplierGstin])
+  @@map("e_way_bills")
+}

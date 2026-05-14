@@ -127,4 +127,58 @@ export class WalletPublicFacade {
     const { balanceInPaise } = await this.wallet.getBalance(userId);
     return balanceInPaise >= amountInPaise;
   }
+
+  /**
+   * Phase 13 — Post a wallet adjustment (goodwill, time-barred refund,
+   * or manual). Distinct from `creditFromRefund` so the audit trail
+   * captures the adjustment ID (which carries the GST-policy context)
+   * rather than a refund ID.
+   *
+   * Idempotency: the wallet ledger's UNIQUE on (referenceType,
+   * referenceId, type) means the same adjustmentId can only post once.
+   * Repeated calls return the existing wallet_transactions row.
+   */
+  creditAdjustment(args: {
+    userId: string;
+    amountInPaise: number;
+    adjustmentId: string;
+    description: string;
+    internalNotes?: string;
+    createdByAdminId?: string;
+    /** Defaults to false; time-barred refunds set true to bypass holds. */
+    bypassBlock?: boolean;
+  }) {
+    return this.wallet.credit({
+      userId: args.userId,
+      amountInPaise: args.amountInPaise,
+      type: 'CREDIT_ADJUSTMENT',
+      referenceType: 'wallet_adjustment',
+      referenceId: args.adjustmentId,
+      description: args.description,
+      internalNotes: args.internalNotes,
+      createdByAdminId: args.createdByAdminId,
+      bypassBlock: args.bypassBlock ?? false,
+    });
+  }
+
+  /** Phase 13 — Debit counterpart for MANUAL_DEBIT adjustments. */
+  debitAdjustment(args: {
+    userId: string;
+    amountInPaise: number;
+    adjustmentId: string;
+    description: string;
+    internalNotes?: string;
+    createdByAdminId?: string;
+  }) {
+    return this.wallet.debit({
+      userId: args.userId,
+      amountInPaise: args.amountInPaise,
+      type: 'DEBIT_ADJUSTMENT',
+      referenceType: 'wallet_adjustment',
+      referenceId: args.adjustmentId,
+      description: args.description,
+      internalNotes: args.internalNotes,
+      createdByAdminId: args.createdByAdminId,
+    });
+  }
 }

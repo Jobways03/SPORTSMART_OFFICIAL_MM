@@ -21,6 +21,10 @@ import { DiscountPublicFacade } from '../../../discounts/application/facades/dis
 import { ShippingOptionsPublicFacade } from '../../../shipping-options/application/facades/shipping-options-public.facade';
 import { DiscountReservationService } from '../../../discounts/application/services/discount-reservation.service';
 import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
+// Phase 6 GST — TaxSnapshotService writes order_item_tax_snapshots +
+// sub_order_tax_summaries + order_tax_summaries for EVERY order
+// (with or without a discount applied). See docs/tax/CA.md §A.
+import { TaxSnapshotService } from '../../../tax/application/services/tax-snapshot.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
@@ -53,6 +57,8 @@ export class CheckoutService {
     private readonly shippingOptionsFacade: ShippingOptionsPublicFacade,
     private readonly discountReservation: DiscountReservationService,
     private readonly discountAllocation: DiscountAllocationService,
+    // Phase 6 GST.
+    private readonly taxSnapshot: TaxSnapshotService,
     private readonly affiliateFacade: AffiliatePublicFacade,
     private readonly walletFacade: WalletPublicFacade,
     private readonly paymentOpsFacade: PaymentOpsFacade,
@@ -865,6 +871,38 @@ export class CheckoutService {
       } catch {
         // ignore — a retry path can be added later if needed
       }
+    }
+
+    // Phase 6 GST — write tax snapshots + per-sub-order + master
+    // summaries for EVERY order, with or without a discount. Runs in
+    // its own transaction; idempotent on retry (upserts on unique
+    // keys). Failure is non-fatal — order is already committed and
+    // customer was charged correctly; a recovery cron can re-run
+    // snapshot creation (Phase 19 PDF retry already polls for missing
+    // tax artefacts and triggers a retry).
+    try {
+      // Resolve tax treatment from the discount row if a discount was
+      // applied; otherwise default PRE_SUPPLY_TRANSACTIONAL has no
+      // effect (no allocation rows for the snapshot service to read).
+      let taxTreatment: 'PRE_SUPPLY_TRANSACTIONAL' | 'POST_SUPPLY_LINKED' | 'POST_SUPPLY_UNLINKED' | 'DISPLAY_ONLY' =
+        'PRE_SUPPLY_TRANSACTIONAL';
+      if (discountId) {
+        const dRow = await this.prisma.discount.findUnique({
+          where: { id: discountId },
+          select: { taxTreatment: true },
+        });
+        if (dRow?.taxTreatment) taxTreatment = dRow.taxTreatment;
+      }
+      await this.taxSnapshot.createSnapshotsForMasterOrder(
+        result.masterOrderId,
+        { taxTreatment },
+      );
+    } catch (err) {
+      this.logger.error(
+        `Tax snapshot creation failed for order ${result.masterOrderId}: ${(err as Error)?.message}`,
+        (err as Error)?.stack,
+      );
+      // Order proceeds; tax recovery cron handles missing snapshots.
     }
 
     // Publish domain events for order creation

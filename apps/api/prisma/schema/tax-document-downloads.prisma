@@ -1,0 +1,67 @@
+// ============================================
+// Phase 20 GST — Tax document download audit
+// ============================================
+// Every signed-URL issuance from the tax-document download endpoint
+// writes a row here. Captures auth scope decisions (ALLOWED vs DENIED
+// with reason) so a flooding attempt or scope violation leaves a trail.
+//
+// Separate from `file_url_audits` because tax-document IDs aren't
+// FileMetadata IDs and the retention policy is different (statutory
+// 8-year window per Section 36).
+//
+// See:
+//   - docs/tax/CA.md §A Phase 20 log
+//   - apps/api/src/modules/tax/application/services/tax-document-download.service.ts
+
+enum TaxDocumentActorType {
+  CUSTOMER
+  SELLER
+  ADMIN
+  FRANCHISE
+  SYSTEM
+}
+
+enum TaxDocumentDownloadOutcome {
+  ALLOWED
+  // Scope violation — actor tried to download a document not owned
+  // by them (customer asking for another customer's invoice, seller
+  // asking for a different supplier's, etc.).
+  DENIED_SCOPE
+  // PDF hasn't been rendered yet (status != PDF_GENERATED).
+  DENIED_NOT_READY
+  // Recent-download count exceeded the per-(actor, document) cap.
+  DENIED_RATE_LIMIT
+  // Document is VOIDED_DRAFT / SUPERSEDED — never legally issued.
+  DENIED_VOIDED
+}
+
+model TaxDocumentDownloadAudit {
+  id String @id @default(uuid())
+
+  taxDocumentId String @map("tax_document_id")
+
+  actorType TaxDocumentActorType @map("actor_type")
+  actorId   String               @map("actor_id")
+  actorRole String?              @map("actor_role")
+
+  outcome    TaxDocumentDownloadOutcome
+  denyReason String?                    @map("deny_reason")
+
+  // Audit-only: the URL we minted (when ALLOWED). For replay we trust
+  // the URL's own expiry; this column lets incident response answer
+  // "this URL leaked — when did we issue it?".
+  issuedUrl     String?   @map("issued_url")
+  urlExpiresAt  DateTime? @map("url_expires_at")
+  ttlSeconds    Int       @default(300) @map("ttl_seconds")
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  taxDocument TaxDocument @relation(fields: [taxDocumentId], references: [id], onDelete: Restrict)
+
+  @@index([taxDocumentId, createdAt])
+  @@index([actorType, actorId, createdAt])
+  @@map("tax_document_download_audits")
+}

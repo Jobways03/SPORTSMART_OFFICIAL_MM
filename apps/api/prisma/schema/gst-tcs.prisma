@@ -1,0 +1,106 @@
+// ============================================
+// Phase 16 GST — TCS (Section 52) settlement ledger + GSTR-8 source
+// ============================================
+//
+// Section 52 of the CGST Act requires an e-commerce operator
+// (Sportsmart) to collect 1% TCS on the net value of taxable supplies
+// made by other suppliers (MARKETPLACE_SELLER / FRANCHISE) at the time
+// of crediting their account. The operator remits TCS monthly via
+// GSTR-8.
+//
+// Rate:
+//   Intra-state: 0.5% CGST + 0.5% SGST  (100 bps total)
+//   Inter-state: 1% IGST                 (100 bps)
+//
+// One row per (sellerId, filingPeriod). The "net taxable supply"
+// aggregation is computed dynamically from existing `tax_documents`
+// at compute time; this table is the snapshot + lifecycle record.
+//
+// See:
+//   - docs/tax/TCS_POLICY.md  (full operational policy)
+//   - docs/tax/CA.md §A Phase 16 log
+
+enum TcsStatus {
+  // Computed at settlement-run time; settlement will deduct.
+  COMPUTED
+  // Settlement has deducted the TCS amount from the seller's payout.
+  COLLECTED
+  // Included in a filed GSTR-8 (admin marked-filed after upload).
+  FILED
+  // TCS amount remitted to government (admin marked-paid).
+  PAID_TO_GOVT
+  // Reversed via correction; `correctionOfId` chain replays history.
+  REVERSED
+}
+
+model GstTcsSettlementLedger {
+  id String @id @default(uuid())
+
+  // (sellerId, filingPeriod) is the business key. Platform-direct
+  // supplies (OWN_BRAND / SPORTSMART) are excluded per TCS_POLICY §2
+  // — we never write rows for them.
+  sellerId     String? @map("seller_id")
+  // Calendar month "YYYY-MM". Per CBIC, GSTR-8 is monthly.
+  filingPeriod String  @map("filing_period")
+
+  // Frozen snapshot at compute time so a later GSTIN/state change
+  // doesn't rewrite filed history.
+  supplierGstin     String? @map("supplier_gstin")
+  supplierStateCode String? @map("supplier_state_code")
+
+  // Aggregates (paise) at computation time.
+  grossTaxableSupplyInPaise BigInt @default(0) @map("gross_taxable_supply_in_paise")
+  creditNoteReversalInPaise BigInt @default(0) @map("credit_note_reversal_in_paise")
+  netTaxableSupplyInPaise   BigInt @default(0) @map("net_taxable_supply_in_paise")
+
+  // Split between intra-state (CGST+SGST TCS at 0.5% each) and
+  // inter-state (IGST TCS at 1%). Derived from constituent invoices.
+  intraStateTaxableInPaise BigInt @default(0) @map("intra_state_taxable_in_paise")
+  interStateTaxableInPaise BigInt @default(0) @map("inter_state_taxable_in_paise")
+
+  // Historical TCS rate snapshot so a rate change doesn't rewrite
+  // the past. Stored as basis points (100 = 1%).
+  tcsRateBps        Int    @default(100) @map("tcs_rate_bps")
+  cgstTcsInPaise    BigInt @default(0)   @map("cgst_tcs_in_paise")
+  sgstTcsInPaise    BigInt @default(0)   @map("sgst_tcs_in_paise")
+  igstTcsInPaise    BigInt @default(0)   @map("igst_tcs_in_paise")
+  totalTcsInPaise   BigInt @default(0)   @map("total_tcs_in_paise")
+
+  // Carry-forward of negative net-supply situations (credit notes in
+  // the period exceed invoices). Captured here for the NEXT period's
+  // compute pass to consume.
+  adjustmentCarriedForwardInPaise BigInt @default(0) @map("adjustment_carried_forward_in_paise")
+
+  status TcsStatus @default(COMPUTED)
+
+  // Lifecycle stamps + audit trail.
+  computedAt       DateTime  @default(now()) @map("computed_at")
+  computedBy       String?   @map("computed_by")
+  computedReason   String?   @map("computed_reason")
+  collectedAt      DateTime? @map("collected_at")
+  settlementId     String?   @map("settlement_id")
+  filedAt          DateTime? @map("filed_at")
+  filedBy          String?   @map("filed_by")
+  paidToGovtAt     DateTime? @map("paid_to_govt_at")
+  paidBy           String?   @map("paid_by")
+  paymentReference String?   @map("payment_reference")
+
+  // Correction lineage. A REVERSED row is paired with a corrected
+  // replacement whose `correctionOfId` points back to this row.
+  correctionOfId String? @map("correction_of_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt       @map("updated_at")
+
+  seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  // Phase 17 GST — back-link to the settlement(s) that collected this
+  // TCS row. Usually 1:1 (one settlement → one ledger row), but the
+  // schema allows N to keep the correction-flow flexibility (a
+  // REVERSED row's predecessor settlement still points back).
+  sellerSettlements SellerSettlement[]
+
+  @@index([filingPeriod])
+  @@index([status])
+  @@index([supplierGstin])
+  @@map("gst_tcs_settlement_ledger")
+}

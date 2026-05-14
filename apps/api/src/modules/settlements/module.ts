@@ -5,9 +5,13 @@ import { AdminSettlementController } from './admin-settlement.controller';
 import { SellerEarningsController } from './seller-earnings.controller';
 import { AdminAuthGuard, SellerAuthGuard } from '../../core/guards';
 import { MoneyModule } from '../../core/money/money.module';
+import { TaxModule } from '../tax/module';
 
 @Module({
-  imports: [MoneyModule],
+  // Phase 17 GST — TaxModule provides SettlementTcsHookService which
+  // SettlementService uses on approve / mark-paid to keep the TCS
+  // ledger in sync.
+  imports: [MoneyModule, TaxModule],
   controllers: [AdminSettlementController, SellerEarningsController],
   providers: [
     SettlementsPublicFacade,

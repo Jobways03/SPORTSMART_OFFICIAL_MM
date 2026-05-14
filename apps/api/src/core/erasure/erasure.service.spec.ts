@@ -67,7 +67,21 @@ function buildService(opts: {
     wallet: { findFirst: emptyFirst },
   } as any;
 
-  const service = new ErasureService(prisma);
+  // Phase 21 — second arg is TaxDocumentRetentionService. The test
+  // stubs the method that processUser actually calls so the outcome
+  // JSON gains a deterministic `statutoryHold` block.
+  const taxRetentionStub: any = {
+    getRetentionSummaryForUser: jest.fn().mockResolvedValue({
+      userId: 'stub',
+      totalDocuments: 0,
+      documentsUnderRetention: 0,
+      earliestDocumentDate: null,
+      latestRetentionExpiry: null,
+      retentionYears: 8,
+      hasActiveStatutoryHold: false,
+    }),
+  };
+  const service = new ErasureService(prisma, taxRetentionStub);
 
   // Inject the blockers via the private method's table lookups when
   // the test asks for them. The simplest path: replace the prototype
@@ -98,9 +112,21 @@ describe('ErasureService.processOne — USER subject (PR 0.10)', () => {
     // Final request flipped to COMPLETED with phone in the outcome.
     const final = erasureUpdate.mock.calls[erasureUpdate.mock.calls.length - 1][0];
     expect(final.data.status).toBe('COMPLETED');
-    expect(final.data.outcome).toEqual({
-      redacted: ['users.firstName', 'users.lastName', 'users.email', 'users.phone'],
-      blocked: [],
+    // Phase 21 — outcome now carries a `statutoryHold` block; the
+    // redacted + blocked shape remains stable for any downstream
+    // consumer that pre-dates Phase 21.
+    expect(final.data.outcome.redacted).toEqual([
+      'users.firstName',
+      'users.lastName',
+      'users.email',
+      'users.phone',
+    ]);
+    expect(final.data.outcome.blocked).toEqual([]);
+    expect(final.data.outcome.statutoryHold).toMatchObject({
+      preservedBy: 'CGST Section 36 / 8-year retention',
+      retentionYears: 8,
+      documentsUnderRetention: 0,
+      totalDocuments: 0,
     });
   });
 

@@ -113,6 +113,27 @@ model Return {
   customerNotes String?   @map("customer_notes")
   closedAt      DateTime? @map("closed_at")
 
+  // Phase 12 GST — Section 34 credit-note eligibility. NULL on legacy
+  // rows and on returns that haven't reached QC yet. The daily cron
+  // (TaxCreditNoteTimeBarCron) populates these once QC completes:
+  //
+  //   ELIGIBLE                — within Sec 34 window; CreditNoteService
+  //                             will issue a real CREDIT_NOTE.
+  //   TIME_BARRED             — past 30 Sept of FY+1. The wallet
+  //                             refund path proceeds, but no GST
+  //                             output liability reduction is possible.
+  //   REQUIRES_FINANCE_REVIEW — within 7 days of cutoff, or source
+  //                             invoice complications. Manual triage.
+  //
+  // `credit_note_time_bar_reason` carries the human-readable reason
+  // stamped on the wallet_adjustment ledger entry; `finance_reviewed_*`
+  // record the override audit trail.
+  creditNoteEligibilityStatus    CreditNoteEligibilityStatus? @map("credit_note_eligibility_status")
+  creditNoteEligibilityCheckedAt DateTime?                    @map("credit_note_eligibility_checked_at")
+  creditNoteTimeBarReason        String?                      @map("credit_note_time_bar_reason")
+  financeReviewedBy              String?                      @map("finance_reviewed_by")
+  financeReviewedAt              DateTime?                    @map("finance_reviewed_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -127,6 +148,10 @@ model Return {
   // Phase B (P0.2) — credit-note / GST reversal snapshot rows
   // (one per returned item) for QC-approved discounted returns.
   taxReversalLines ReturnTaxReversalLine[]
+
+  // Phase 13 GST — wallet adjustments raised against this return
+  // (time-barred refunds typically — see WalletAdjustment kind).
+  walletAdjustments WalletAdjustment[]
 
   @@index([customerId])
   @@index([subOrderId])
@@ -143,6 +168,10 @@ model Return {
   // `status` index narrows but doesn't help the sort — Postgres
   // re-sorts every page. The composite serves both in index order.
   @@index([status, createdAt(sort: Desc)])
+  // Phase 12 GST — partial indexes for the Sec 34 time-bar cron live
+  // in the migration SQL (`returns_credit_note_eligibility_idx` +
+  // `returns_credit_note_eligibility_pending_idx`). Prisma can't
+  // express partial indexes natively, so we don't declare them here.
   @@map("returns")
 }
 

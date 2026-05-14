@@ -3,6 +3,7 @@ import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AuditPublicFacade } from '../audit/application/facades/audit-public.facade';
 import { MoneyDualWriteHelper } from '../../core/money/money-dual-write.helper';
 import { toPaise } from '../../core/money/money-field-registry';
+import { SettlementTcsHookService } from '../tax/application/services/settlement-tcs-hook.service';
 
 @Injectable()
 export class SettlementService {
@@ -14,6 +15,8 @@ export class SettlementService {
     // Phase 7 (PR 7.5) — paise-sibling dual-write for cycle / seller
     // settlement / commission record / adjustment writes.
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    // Phase 17 GST — TCS deduction at approval + collection at mark-paid.
+    private readonly tcsHook: SettlementTcsHookService,
   ) {}
 
   /* ── T3: Create settlement cycle ── */
@@ -244,7 +247,7 @@ export class SettlementService {
   }
 
   /* ── T3: Approve cycle ── */
-  async approveCycle(cycleId: string) {
+  async approveCycle(cycleId: string, actorId?: string) {
     const cycle = await this.prisma.settlementCycle.findUnique({
       where: { id: cycleId },
     });
@@ -272,7 +275,28 @@ export class SettlementService {
       });
     });
 
-    return { success: true, message: 'Settlement cycle approved' };
+    // Phase 17 GST — apply TCS to every SellerSettlement in the cycle.
+    // Runs after the APPROVED flip so the TCS hook sees the settlements
+    // in their final approved shape. Errors per-settlement are logged
+    // by the hook and don't roll back the cycle approval — finance
+    // can re-run targeted compute via the admin endpoint.
+    let tcsResult;
+    try {
+      tcsResult = await this.tcsHook.applyToCycleOnApprove({
+        cycleId,
+        actorId,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `TCS apply-on-approve failed for cycle ${cycleId}: ${(err as Error).message}`,
+      );
+    }
+
+    return {
+      success: true,
+      message: 'Settlement cycle approved',
+      tcs: tcsResult,
+    };
   }
 
   /* ── T3: Mark a seller settlement as paid ── */
@@ -335,6 +359,20 @@ export class SettlementService {
         });
       }
     });
+
+    // Phase 17 GST — flip the linked TCS row COMPUTED → COLLECTED so
+    // the GSTR-8 export reflects "TCS money actually collected from
+    // seller payout". Runs after the transaction commits since the
+    // hook does its own writes; if it fails, the payout has already
+    // happened and we just need finance to retry markCollected via the
+    // admin endpoint.
+    try {
+      await this.tcsHook.markCollectedOnPay({ settlementId });
+    } catch (err) {
+      this.logger.warn(
+        `TCS mark-collected failed for settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
 
     // Audit the payout — settlement payouts are real money movements and
     // need to be traceable to a specific admin action with the UTR.

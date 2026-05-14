@@ -51,6 +51,18 @@ model SellerSettlement {
   totalPlatformAmountInPaise   BigInt @default(0) @map("total_platform_amount_in_paise")
   totalSettlementAmountInPaise BigInt @default(0) @map("total_settlement_amount_in_paise")
   totalPlatformMarginInPaise   BigInt @default(0) @map("total_platform_margin_in_paise")
+
+  // Phase 17 GST — TCS (Section 52) deduction snapshot. The TCS
+  // amount lives in the linked `gst_tcs_settlement_ledger` row; we
+  // denormalise the paise amount + the historical rate here so the
+  // seller payout statement can render without a join, and so the
+  // displayed "net payout" equals (totalSettlement − tcsDeducted)
+  // exactly.
+  tcsLedgerId           String?  @map("tcs_ledger_id")
+  tcsDeductedInPaise    BigInt   @default(0)   @map("tcs_deducted_in_paise")
+  tcsRateBpsSnapshot    Int      @default(100) @map("tcs_rate_bps_snapshot")
+  tcsFilingPeriod       String?  @map("tcs_filing_period")
+
   status                SellerSettlementStatus @default(PENDING) @map("status")
   paidAt                DateTime?              @map("paid_at")
   utrReference          String?                @map("utr_reference")
@@ -60,6 +72,7 @@ model SellerSettlement {
   cycle             SettlementCycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   commissionRecords CommissionRecord[]
+  tcsLedger         GstTcsSettlementLedger? @relation(fields: [tcsLedgerId], references: [id], onDelete: Restrict)
 
   @@unique([cycleId, sellerId])
   @@index([cycleId])

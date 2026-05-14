@@ -363,6 +363,105 @@ export const envSchema = z.object({
   RETENTION_ENFORCER_ENABLED: z.string().default('false'),
   RETENTION_ENFORCER_DRY_RUN: z.string().default('true'),
 
+  // Phase 12 GST — Section 34 credit-note time-bar cron. Classifies
+  // QC-approved returns into ELIGIBLE / TIME_BARRED / REQUIRES_FINANCE_REVIEW
+  // and opens AdminTask rows for the latter two. ON by default in dev so
+  // engineers can exercise the flow end-to-end without flipping a flag;
+  // ops sets to 'false' to silence during incidents.
+  TAX_CREDIT_NOTE_TIMEBAR_CRON_ENABLED: z.string().default('true'),
+  // Returns within this many days of the Sec 34 cutoff are flagged as
+  // REQUIRES_FINANCE_REVIEW so finance can chase the credit note out
+  // the door before the deadline. Default 7 days matches the working
+  // assumption in docs/tax/CREDIT_NOTE_TIME_BAR_POLICY.md.
+  TAX_CREDIT_NOTE_TIMEBAR_APPROACHING_DAYS: z.coerce.number().int().min(0).default(7),
+  // Per-tick scan cap. The cron is best-effort — if the QC backlog
+  // ever exceeds this, the next tick catches the remainder. Keeps
+  // connection-pool pressure bounded.
+  TAX_CREDIT_NOTE_TIMEBAR_SCAN_LIMIT: z.coerce.number().int().min(1).default(500),
+
+  // Phase 13 GST — wallet adjustments. Adjustments above this paise
+  // threshold require the explicit `wallet.adjustment.approve`
+  // permission to move PENDING_APPROVAL → APPROVED, even when the
+  // caller has `wallet.adjustment.create`. Default ₹5,000 = 500_000
+  // paise. Set to 0 to require approval on ALL adjustments.
+  WALLET_ADJUSTMENT_DUAL_APPROVAL_THRESHOLD_PAISE:
+    z.coerce.number().int().min(0).default(500_000),
+  // When true, small TIME_BARRED_CREDIT_NOTE adjustments below the
+  // dual-approval threshold auto-approve at creation (one-shot
+  // request-then-post). When false, even small TIME_BARRED rows
+  // sit in PENDING_APPROVAL — finance reviews every single one.
+  // Default true matches the dev-permissive mode; CA should flip
+  // this off in prod once the audit shape settles.
+  WALLET_ADJUSTMENT_AUTO_APPROVE_BELOW_THRESHOLD:
+    z.string().default('true'),
+
+  // Phase 15 GST — E-way bill provider selector. 'stub' produces
+  // placeholder EWB numbers + logs the would-be NIC payload to
+  // `e_way_bills.raw_request_json`; 'nic' wires the real CBIC
+  // e-Waybill API (lands in a later phase tied to e-invoicing). Keep
+  // 'stub' in dev/test so engineers can exercise the ship-block + retry
+  // UI without NIC credentials.
+  EWAY_BILL_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+
+  // Phase 19 GST — tax-document PDF storage provider. 'stub' writes
+  // rendered HTML to `apps/api/storage/tax-pdfs/...` so dev can open
+  // the file directly; 's3' / 'cloudinary' wire real cloud storage
+  // once the upstream adapters land. Switching is single-line at boot
+  // — the service-layer code is identical across providers.
+  TAX_PDF_STORAGE_PROVIDER: z.enum(['stub', 's3']).default('stub'),
+  // Phase 19 GST — PDF render retry cron. ON by default in dev so a
+  // freshly-generated invoice has its PDF rendered within ~5 minutes
+  // without manual intervention; ops disables during incidents.
+  TAX_PDF_RETRY_CRON_ENABLED: z.string().default('true'),
+  TAX_PDF_RETRY_CAP: z.coerce.number().int().min(1).default(5),
+  TAX_PDF_RETRY_COOLDOWN_MINUTES: z.coerce.number().int().min(1).default(5),
+  TAX_PDF_RETRY_SCAN_LIMIT: z.coerce.number().int().min(1).default(50),
+
+  // Phase 20 GST — Tax-document download rate limit (per-actor +
+  // per-document, sliding window). Defaults: 20 downloads in 5
+  // minutes. SYSTEM actors (cron jobs / internal services) bypass.
+  TAX_DOWNLOAD_RATE_LIMIT_PER_WINDOW:
+    z.coerce.number().int().min(1).default(20),
+  TAX_DOWNLOAD_RATE_LIMIT_WINDOW_MINUTES:
+    z.coerce.number().int().min(1).default(5),
+  TAX_DOWNLOAD_SIGNED_URL_TTL_SECONDS:
+    z.coerce.number().int().min(30).default(300),
+
+  // Phase 21 GST — Statutory retention window for tax documents +
+  // audit trails. Default 8 years per CGST Section 36 / Rule 56. CA
+  // can adjust without code change (rate-snapshot is per-row so this
+  // only affects future calculations, not historical filings).
+  TAX_DOCUMENT_RETENTION_YEARS:
+    z.coerce.number().int().min(1).max(50).default(8),
+
+  // Phase 22 GST — E-invoice provider selector. 'stub' produces
+  // deterministic IRN fixtures so the full lifecycle (generate /
+  // cancel / retry) is exercisable in dev/test without NIC creds.
+  // 'nic' wires the real CBIC IRP API (crashes loudly until wired
+  // — see TaxModule factory).
+  EINVOICE_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+  // Phase 22 GST — IRN retry cron flags.
+  TAX_EINVOICE_RETRY_CRON_ENABLED: z.string().default('true'),
+  TAX_EINVOICE_RETRY_CAP: z.coerce.number().int().min(1).default(5),
+  TAX_EINVOICE_RETRY_COOLDOWN_MINUTES: z.coerce.number().int().min(1).default(5),
+  TAX_EINVOICE_RETRY_SCAN_LIMIT: z.coerce.number().int().min(1).default(50),
+  // Phase 22 GST — applicability threshold. 0 = use the policy default
+  // (₹5 crore = 5_00_00_000_00 paise). Override to a different paise
+  // value to lower / raise the gate per CBIC notification updates.
+  TAX_EINVOICE_TURNOVER_THRESHOLD_PAISE:
+    z.coerce.number().int().min(0).default(0),
+
+  // Phase 23 GST — two-stage flag rollout from dev-permissive to
+  // prod-strict. tax_config table is the canonical source; these envs
+  // are boot-time fallbacks for when the config row hasn't been
+  // seeded yet. The rollout order is:
+  //   1. ship code with both OFF.
+  //   2. flip TAX_AUDIT_MODE=true on staging — soak the violation logs.
+  //   3. flip TAX_STRICT_MODE=true on prod once CA signs off — DRAFT
+  //      banner suppresses + hard validation begins.
+  TAX_AUDIT_MODE: z.string().default('false'),
+  TAX_STRICT_MODE: z.string().default('false'),
+
   // Phase 7 (PR 7.4) — erasure processor cron. Off by default; flip on
   // after compliance signs off on the cooldown window + outcome shape.
   ERASURE_PROCESSOR_ENABLED: z.string().default('false'),

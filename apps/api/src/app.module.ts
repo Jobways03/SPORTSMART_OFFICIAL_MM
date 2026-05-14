@@ -72,6 +72,7 @@ import { SandboxModule } from './core/sandbox/sandbox.module';
 import { MoneyModule } from './core/money/money.module';
 import { PaymentsSagaModule } from './modules/payments-saga/module';
 import { RefundInstructionsModule } from './modules/refund-instructions/module';
+import { TaxModule } from './modules/tax/module';
 
 @Module({
   imports: [
@@ -104,6 +105,7 @@ import { RefundInstructionsModule } from './modules/refund-instructions/module';
     MoneyModule,
     PaymentsSagaModule,
     RefundInstructionsModule,
+    TaxModule,
 
     // business
     IdentityModule,
