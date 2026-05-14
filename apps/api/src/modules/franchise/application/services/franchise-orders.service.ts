@@ -12,13 +12,17 @@ import { FranchiseInventoryService } from './franchise-inventory.service';
 import { FranchiseCommissionService } from './franchise-commission.service';
 import { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 
-const RETURN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes (matches orders module)
+// Return window memoised at construct time from RETURN_WINDOW_DAYS env.
+// Prod default 14 days; matches OrdersService. See orders.service.ts.
 const ACCEPT_DEADLINE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DISPATCH_DEADLINE_HOURS = 48;
 
 @Injectable()
 export class FranchiseOrdersService {
+  private readonly returnWindowMs: number;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventoryService: FranchiseInventoryService,
@@ -30,8 +34,11 @@ export class FranchiseOrdersService {
     // split-out path that creates a follow-up sub-order with the
     // item's totalPrice as the new subTotal.
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    private readonly env: EnvService,
   ) {
     this.logger.setContext('FranchiseOrdersService');
+    const days = this.env.getNumber('RETURN_WINDOW_DAYS', 14);
+    this.returnWindowMs = Math.round(days * 24 * 60 * 60 * 1000);
   }
 
   // ── List orders assigned to franchise ──────────────────────────────────
@@ -700,7 +707,7 @@ export class FranchiseOrdersService {
       data: {
         fulfillmentStatus: 'DELIVERED',
         deliveredAt: now,
-        returnWindowEndsAt: new Date(now.getTime() + RETURN_WINDOW_MS),
+        returnWindowEndsAt: new Date(now.getTime() + this.returnWindowMs),
       },
     });
 

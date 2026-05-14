@@ -1,15 +1,33 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import { OpenSearchAdapter } from '../../../../integrations/opensearch/adapters/opensearch.adapter';
 
 @Injectable()
 export class SearchPublicFacade {
   private readonly logger = new Logger(SearchPublicFacade.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly env: EnvService,
+    // Sprint 6 Story 5.1 — delegate to OpenSearch when the operational
+    // flag is on AND the adapter is configured. Optional so the facade
+    // still constructs in test harnesses that don't wire the adapter.
+    @Optional() private readonly openSearch?: OpenSearchAdapter,
+  ) {}
 
   /**
-   * Search products using Prisma full-text-like queries.
-   * When OpenSearch is configured, this should delegate to the OpenSearch adapter.
+   * Search products. Path selection (Sprint 6 Story 5.1):
+   *
+   *   SEARCH_OPENSEARCH_ENABLED=true  → delegate to OpenSearchAdapter.
+   *                                     Adapter has its own fallback to
+   *                                     empty results on transport error
+   *                                     (so a momentary OS blip can't
+   *                                     hang storefront search).
+   *   otherwise                       → Prisma full-text fallback.
+   *
+   * Default is OFF so the proven Prisma path keeps running until ops
+   * stands up OpenSearch + runs the backfill (POST /admin/search/reindex).
    */
   async searchProducts(
     query: string,
@@ -20,6 +38,33 @@ export class SearchPublicFacade {
     page: number;
     limit: number;
   }> {
+    if (this.useOpenSearch()) {
+      try {
+        const result = await this.openSearch!.searchProducts({
+          query,
+          categoryId: filters.categoryId as string | undefined,
+          brandId: filters.brandId as string | undefined,
+          minPrice: filters.minPrice as number | undefined,
+          maxPrice: filters.maxPrice as number | undefined,
+          page: Number(filters.page) || 1,
+          limit: Number(filters.limit) || 20,
+        });
+        return {
+          items: result.items,
+          total: result.total,
+          page: Number(filters.page) || 1,
+          limit: Number(filters.limit) || 20,
+        };
+      } catch (err) {
+        // Adapter swallows transport errors internally per its
+        // contract; landing here means the call shape itself broke.
+        // Fall through to Prisma so storefront search never goes
+        // dark on an OpenSearch outage.
+        this.logger.warn(
+          `OpenSearch search failed, falling back to Prisma: ${(err as Error).message}`,
+        );
+      }
+    }
     const page = Number(filters.page) || 1;
     const limit = Number(filters.limit) || 20;
     const categoryId = filters.categoryId as string | undefined;
@@ -130,5 +175,18 @@ export class SearchPublicFacade {
       ...brands.map((b) => ({ type: 'brand' as const, text: b.name, id: b.id })),
       ...categories.map((c) => ({ type: 'category' as const, text: c.name, id: c.id })),
     ];
+  }
+
+  /**
+   * Sprint 6 Story 5.1 — operational flag check. Two conditions: env
+   * flag is on AND the adapter is injected (means OpenSearchModule
+   * was imported by the consuming app module). Either-or fails
+   * closed to the Prisma path.
+   */
+  private useOpenSearch(): boolean {
+    return (
+      this.env.getBoolean('SEARCH_OPENSEARCH_ENABLED', false) &&
+      this.openSearch !== undefined
+    );
   }
 }

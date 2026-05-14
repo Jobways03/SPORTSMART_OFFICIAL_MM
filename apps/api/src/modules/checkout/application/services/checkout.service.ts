@@ -26,6 +26,7 @@ import { AffiliatePublicFacade } from '../../../affiliate/application/facades/af
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
+import { CodRuleEngine } from '../../../cod/application/services/cod-rule-engine.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
@@ -57,6 +58,10 @@ export class CheckoutService {
     private readonly walletFacade: WalletPublicFacade,
     private readonly paymentOpsFacade: PaymentOpsFacade,
     private readonly razorpayAdapter: RazorpayAdapter,
+    // Sprint 2 Story 1.4 — COD eligibility gate. The rule engine
+    // auto-logs every evaluation to cod_decision_log, so there's no
+    // need for a separate audit call here.
+    private readonly codRuleEngine: CodRuleEngine,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly redis: RedisService,
@@ -484,6 +489,37 @@ export class CheckoutService {
 
     if (session.items.length === 0) {
       throw new BadRequestAppException('No items to order');
+    }
+
+    // Sprint 2 Story 1.4 — COD eligibility gate.
+    // Run before any heavy work (allocation, payment-intent, etc.) so a
+    // blocked pincode / customer / value gets a fast clean 400 and the
+    // cart isn't half-mutated. CodRuleEngine writes the decision to
+    // cod_decision_log internally — required for the SPRINT_PLAN exit
+    // criterion ("COD evaluation logged"). Default = allow when no
+    // rule matches, so an empty rules table doesn't break checkout.
+    if (method === 'COD') {
+      const pincode =
+        (session.addressSnapshot as { postalCode?: string } | null)?.postalCode;
+      if (!pincode) {
+        throw new BadRequestAppException(
+          'Cannot evaluate COD — address pincode missing from session',
+        );
+      }
+      const orderTotalInr = session.items.reduce(
+        (sum, it) => sum + (it.lineTotal ?? 0),
+        0,
+      );
+      const eligibility = await this.codRuleEngine.evaluate({
+        pincode,
+        customerId: userId,
+        orderTotalInr,
+      });
+      if (!eligibility.eligible) {
+        throw new BadRequestAppException(
+          `COD not available for this order: ${eligibility.reason ?? 'blocked by COD rule'}`,
+        );
+      }
     }
 
     // Group items by fulfillment node (nodeType + nodeId)

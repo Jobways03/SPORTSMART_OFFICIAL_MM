@@ -16,8 +16,10 @@ import { OwnBrandService } from '../../application/services/own-brand.service';
 import {
   AdjustStockDto,
   CreateWarehouseDto,
+  TransferStockDto,
   UpdateWarehouseDto,
 } from '../dtos/own-brand.dtos';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 
 @ApiTags('NOVA — Warehouses & Stock')
 @Controller('admin/nova')
@@ -99,5 +101,23 @@ export class AdminNovaWarehousesController {
       limit: limit ? parseInt(limit, 10) : 100,
     });
     return { success: true, message: 'Stock movements retrieved', data };
+  }
+
+  // Story 3.4 — atomic stock transfer between two Nova warehouses.
+  // Single tx writes both legs of the movement ledger so partial
+  // failures can't leave stock floating.
+  @Post('stocks/transfer')
+  @Permissions('nova.stock')
+  async transferStock(@Req() req: any, @Body() body: TransferStockDto) {
+    const data = await this.service.transferStock({
+      fromWarehouseId: body.fromWarehouseId,
+      toWarehouseId: body.toWarehouseId,
+      productId: body.productId,
+      variantId: body.variantId ?? null,
+      quantity: Number(body.quantity),
+      reason: body.reason,
+      adminId: req.adminId,
+    });
+    return { success: true, message: 'Stock transferred', data };
   }
 }

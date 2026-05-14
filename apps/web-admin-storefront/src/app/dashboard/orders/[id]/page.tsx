@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import { DiscountGstBreakdownCard } from './_components/DiscountGstBreakdownCard';
+import { ShipmentPanel } from './_components/ShipmentPanel';
+import { adminShippingService } from '@/services/admin-shipping.service';
 
 /* ────────── types ────────── */
 interface OrderItem {
@@ -466,6 +468,62 @@ function AdminOrderTimeline({ orderStatus, paymentStatus, fulfillmentStatuses }:
   );
 }
 
+/**
+ * Story 3.3 — bulk label print button. Fetches each sub-order's label
+ * via the existing admin-shipping label endpoint and opens labelUrl /
+ * manifestUrl in new tabs. Sequential so the browser's tab-spam guard
+ * fires only on the first click instead of every sub-order. Skips
+ * sub-orders that don't have a shipment yet (returns 404) rather than
+ * aborting the whole sweep.
+ */
+function BulkLabelButton({ subOrderIds }: { subOrderIds: string[] }) {
+  const [busy, setBusy] = useState(false);
+  if (subOrderIds.length === 0) return null;
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        setBusy(true);
+        try {
+          for (const id of subOrderIds) {
+            try {
+              const res = await adminShippingService.getLabel(id);
+              const label: any = res.data;
+              if (label?.labelUrl) {
+                window.open(String(label.labelUrl), '_blank', 'noopener,noreferrer');
+              }
+              if (label?.manifestUrl && label.manifestUrl !== label.labelUrl) {
+                window.open(String(label.manifestUrl), '_blank', 'noopener,noreferrer');
+              }
+            } catch {
+              // 404 / no shipment yet — silently skip; the operator
+              // already saw the per-sub-order ShipmentPanel that
+              // would have told them to attach AWB first.
+            }
+          }
+        } finally {
+          setBusy(false);
+        }
+      }}
+      disabled={busy}
+      title="Open every available label/manifest URL in new tabs"
+      style={{
+        padding: '4px 10px',
+        fontSize: 12,
+        fontWeight: 600,
+        background: '#fff',
+        color: '#111827',
+        border: '1px solid #d1d5db',
+        borderRadius: 6,
+        cursor: busy ? 'not-allowed' : 'pointer',
+        opacity: busy ? 0.6 : 1,
+      }}
+    >
+      {busy ? 'Fetching…' : `Print all labels (${subOrderIds.length})`}
+    </button>
+  );
+}
+
 /* ────────── page ────────── */
 export default function OrderDetailPage() {
   const { notify } = useModal();
@@ -622,6 +680,12 @@ export default function OrderDetailPage() {
           <OrderStatusBanner status={currentStatus} />
           <StatusBadge label={`Payment ${order.paymentStatus.toLowerCase()}`} variant={paymentBadgeVariant(order.paymentStatus)} />
           <StatusBadge label={allDelivered ? 'Delivered' : allFulfilled ? 'Fulfilled' : 'Unfulfilled'} variant={allFulfilled ? 'success' : 'info'} />
+          {/* Story 3.3 — bulk label print. Fetches each sub-order's
+              label info sequentially and opens each label/manifest URL
+              in a new tab so the operator can print them all in one
+              click. The print order matches the sub-order order shown
+              below. */}
+          <BulkLabelButton subOrderIds={relevantSubOrders.map((s) => s.id)} />
         </div>
         <div style={{ fontSize: 13, color: '#6b7280' }}>{fmtDate(order.createdAt)} from Online Store</div>
       </div>
@@ -943,6 +1007,15 @@ export default function OrderDetailPage() {
                 <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #f3f4f6', fontSize: 12, color: '#f59e0b', fontWeight: 500 }}>
                   Verify this order to enable actions
                 </div>
+              )}
+
+              {/* Story 3.3 — admin shipping panel. Surfaces current
+                  shipment (AWB/courier/status), exposes the
+                  "Attach AWB" form when nothing's been recorded, and
+                  hides label + NDR/RTO behind an expand toggle so
+                  the panel stays light by default. */}
+              {so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED' && (
+                <ShipmentPanel subOrderId={so.id} onChange={fetchOrder} />
               )}
 
               {/* Delivery & Commission Info */}

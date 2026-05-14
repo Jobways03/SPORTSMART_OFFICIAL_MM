@@ -1,11 +1,16 @@
 import {
-  Controller, Post, Body, HttpCode, HttpStatus, Logger, UseGuards,
+  Controller, Post, Body, HttpCode, HttpStatus, Logger, OnModuleInit, UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { BadRequestAppException } from '../../../core/exceptions';
 import { AnyAuthGuard } from '../../../core/guards';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import {
+  CounterHandle,
+  HistogramHandle,
+  MetricsRegistry,
+} from '../../../core/metrics/metrics.registry';
 
 // Inputs go directly into a Gemini prompt; cap them so a malicious
 // caller can't explode token usage (which costs money) or try prompt
@@ -23,9 +28,33 @@ const AI_RATE_LIMIT = { default: { limit: 10, ttl: 60_000 } };
 @ApiTags('AI Content')
 @Controller('ai')
 @UseGuards(AnyAuthGuard)
-export class AiContentController {
+export class AiContentController implements OnModuleInit {
   private readonly logger = new Logger(AiContentController.name);
   private client: GoogleGenerativeAI | null = null;
+
+  // Story 7.2 — observability for AI usage. Registered once at boot;
+  // `outcome` label split surfaces success vs. each failure mode so
+  // ops can tell at a glance whether Gemini is the bottleneck, our
+  // input validation, or quota exhaustion.
+  private requestCounter!: CounterHandle;
+  private durationHist!: HistogramHandle;
+
+  constructor(private readonly metrics: MetricsRegistry) {}
+
+  onModuleInit(): void {
+    this.requestCounter = this.metrics.counter(
+      'ai_generation_requests_total',
+      'AI content-generation calls split by outcome (success | parse_error | gemini_error | validation_error | not_configured).',
+    );
+    this.durationHist = this.metrics.histogram(
+      'ai_generation_duration_ms',
+      'Wall-clock duration of AI content-generation calls. ' +
+        'Includes the full Gemini round-trip + our JSON-parsing step.',
+      // Gemini Flash typically responds in 1–5s; allow headroom for
+      // slower-prompt outliers so the bucket distribution stays useful.
+      [100, 250, 500, 1000, 2000, 5000, 10000, 20000, 30000],
+    );
+  }
 
   private getClient(): GoogleGenerativeAI {
     if (!this.client) {
@@ -47,9 +76,14 @@ export class AiContentController {
     // quota indefinitely. Guard + throttle fix the DoS surface; input
     // length caps below block the prompt-injection-via-bulk-payload
     // variant (stuff a novel into `title` to hijack the prompt).
+    const startedAt = Date.now();
     const title = (body?.title ?? '').toString().trim();
-    if (!title) throw new BadRequestAppException('Product title is required');
+    if (!title) {
+      this.requestCounter?.inc({ outcome: 'validation_error' });
+      throw new BadRequestAppException('Product title is required');
+    }
     if (title.length > MAX_TITLE_LEN) {
+      this.requestCounter?.inc({ outcome: 'validation_error' });
       throw new BadRequestAppException(
         `Title must be ${MAX_TITLE_LEN} characters or fewer`,
       );
@@ -76,8 +110,18 @@ Generate the following in JSON format:
 
 Return ONLY valid JSON, no markdown, no code fences, no explanation.`;
 
+    let client: GoogleGenerativeAI;
     try {
-      const client = this.getClient();
+      client = this.getClient();
+    } catch (err: any) {
+      // GEMINI_API_KEY missing — distinct outcome so ops sees this
+      // bucket separately from real Gemini errors.
+      this.requestCounter?.inc({ outcome: 'not_configured' });
+      this.durationHist?.observe(Date.now() - startedAt);
+      throw err;
+    }
+
+    try {
       const model = client.getGenerativeModel({ model: 'gemini-2.0-flash' });
       const response = await model.generateContent(prompt);
       const result = response.response;
@@ -87,6 +131,9 @@ Return ONLY valid JSON, no markdown, no code fences, no explanation.`;
       text = text.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
 
       const parsed = JSON.parse(text);
+
+      this.requestCounter?.inc({ outcome: 'success' });
+      this.durationHist?.observe(Date.now() - startedAt);
 
       return {
         success: true,
@@ -102,11 +149,14 @@ Return ONLY valid JSON, no markdown, no code fences, no explanation.`;
       this.logger.error(
         `AI generation failed: ${err?.message ?? 'unknown error'}`,
       );
+      this.durationHist?.observe(Date.now() - startedAt);
       if (err instanceof SyntaxError) {
+        this.requestCounter?.inc({ outcome: 'parse_error' });
         throw new BadRequestAppException('AI returned invalid content. Try again.');
       }
       // Surface a generic message to the client so Gemini internals
       // (model ids, retry counts, quota hints) don't leak out.
+      this.requestCounter?.inc({ outcome: 'gemini_error' });
       throw new BadRequestAppException('AI generation failed. Please try again.');
     }
   }

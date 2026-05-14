@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { RefundSagaService } from './application/services/refund-saga.service';
 import { StuckSagaSweepCron } from './application/jobs/stuck-saga-sweep.cron';
+import { AdminRefundSagasController } from './presentation/controllers/admin-refund-sagas.controller';
+import { AdminAuthGuard } from '../../core/guards';
 import { LiabilityLedgerModule } from '../liability-ledger/module';
 
 /**
@@ -18,7 +20,8 @@ import { LiabilityLedgerModule } from '../liability-ledger/module';
 @Global()
 @Module({
   imports: [LiabilityLedgerModule],
-  providers: [RefundSagaService, StuckSagaSweepCron],
+  controllers: [AdminRefundSagasController],
+  providers: [RefundSagaService, StuckSagaSweepCron, AdminAuthGuard],
   exports: [RefundSagaService],
 })
 export class PaymentsSagaModule {}

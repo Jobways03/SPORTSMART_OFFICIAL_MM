@@ -30,6 +30,7 @@ import { AffiliateModule } from '../affiliate/module';
 import { WalletModule } from '../wallet/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { MoneyModule } from '../../core/money/money.module';
+import { CodModule } from '../cod/module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { MoneyModule } from '../../core/money/money.module';
     WalletModule,
     RazorpayModule,
     MoneyModule,
+    CodModule,
   ],
   controllers: [
     CustomerAddressController,

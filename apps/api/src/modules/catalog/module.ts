@@ -15,6 +15,8 @@ import { SellerAllocationService } from './application/services/seller-allocatio
 import { DuplicateDetectionService } from './application/services/duplicate-detection.service';
 import { CatalogCacheService } from './application/services/catalog-cache.service';
 import { StockSyncService } from './application/services/stock-sync.service';
+// Story 3.5 — pricing tier service (display-only at v1).
+import { ProductPricingTierService } from './application/services/product-pricing-tier.service';
 
 // Guards
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
@@ -76,6 +78,10 @@ import { AdminBrandsController } from './presentation/controllers/admin/admin-br
 // Controllers - Public (Filters)
 import { StorefrontFiltersController } from './presentation/controllers/public/storefront-filters.controller';
 
+// Story 3.5 — pricing tier controllers (admin CRUD + public read).
+import { AdminProductPricingTiersController } from './presentation/controllers/admin/admin-product-pricing-tiers.controller';
+import { StorefrontProductPricingTiersController } from './presentation/controllers/public/storefront-product-pricing-tiers.controller';
+
 // Controllers - Seller (Service Area)
 import { SellerServiceAreaController } from './presentation/controllers/seller/seller-service-area.controller';
 
@@ -109,6 +115,8 @@ import { CartModule } from '../cart/module';
     AdminBrandsController,
     StorefrontFiltersController,
     SellerServiceAreaController,
+    AdminProductPricingTiersController,
+    StorefrontProductPricingTiersController,
   ],
   providers: [
     // ── Repository bindings ─────────────────────────────────────────────
@@ -135,6 +143,7 @@ import { CartModule } from '../cart/module';
     DuplicateDetectionService,
     CatalogCacheService,
     StockSyncService,
+    ProductPricingTierService,
 
     // ── Guards & adapters ───────────────────────────────────────────────
     SellerAuthGuard,

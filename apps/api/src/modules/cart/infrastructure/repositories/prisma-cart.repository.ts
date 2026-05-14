@@ -191,15 +191,41 @@ export class PrismaCartRepository implements CartRepository {
       });
 
       if (existing) {
+        // Sprint 3 Story 2.3 — snap-back: if the existing row was
+        // saved-for-later, re-adding flips it back into the active
+        // cart with the new quantity added. Matches typical e-commerce
+        // UX (user re-finds an item and adds it; they expect it to
+        // appear in the active cart, not stay parked).
         await tx.cartItem.update({
           where: { id: existing.id },
-          data: { quantity: existing.quantity + quantityDelta },
+          data: {
+            quantity: existing.quantity + quantityDelta,
+            savedForLater: false,
+          },
         });
       } else {
         await tx.cartItem.create({
-          data: { cartId, productId, variantId, quantity: quantityDelta },
+          data: {
+            cartId,
+            productId,
+            variantId,
+            quantity: quantityDelta,
+            savedForLater: false,
+          },
         });
       }
+    });
+  }
+
+  /**
+   * Sprint 3 Story 2.3 — flip the saved-for-later flag on a cart item.
+   * The service layer is responsible for ownership checks; this just
+   * does the write. Idempotent (setting to the same value is a no-op).
+   */
+  async setSavedForLater(itemId: string, value: boolean): Promise<void> {
+    await this.prisma.cartItem.update({
+      where: { id: itemId },
+      data: { savedForLater: value },
     });
   }
 }

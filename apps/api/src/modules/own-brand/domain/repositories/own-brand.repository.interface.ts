@@ -138,6 +138,26 @@ export interface OwnBrandRepository {
     limit?: number;
   }): Promise<OwnBrandStockMovement[]>;
 
+  /**
+   * Story 3.4 — atomic transfer of Nova stock between two warehouses.
+   * Single transaction writes TRANSFER_OUT on source + TRANSFER_IN on
+   * destination so the ledger always balances. Rejects if the source
+   * doesn't have enough free stock (`stockQty - reservedQty < quantity`).
+   * Returns updated rows for both warehouses.
+   */
+  transferStock(args: {
+    fromWarehouseId: string;
+    toWarehouseId: string;
+    productId: string;
+    variantId?: string | null;
+    quantity: number;
+    reason?: string | null;
+    adminId?: string | null;
+  }): Promise<{
+    fromStock: OwnBrandStock;
+    toStock: OwnBrandStock;
+  }>;
+
   /** Receipt audit rows for a PO, ordered chronologically. */
   listReceiptsForPo(poId: string): Promise<OwnBrandProcurementReceipt[]>;
   /** Sum of available stock (stockQty - reservedQty) across all active warehouses

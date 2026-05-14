@@ -8,6 +8,17 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
+
+// Sprint 3 Story 2.4 — compute "today + N days" as an ISO date string
+// (YYYY-MM-DD). Uses server-local day boundaries; for an India-only
+// marketplace that's IST and consistent enough for buyer-side EDD.
+// If/when we add weekend or holiday awareness, change here, not in
+// every controller that calls quoteForCart.
+function addDaysIsoDate(daysAhead: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + daysAhead);
+  return d.toISOString().slice(0, 10);
+}
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 export type RateType = 'FLAT' | 'FREE';
@@ -36,6 +47,15 @@ export interface QuoteResult {
   amountMoreForFreeShippingInPaise: bigint | null;
   transitMinDays: number | null;
   transitMaxDays: number | null;
+  // Sprint 3 Story 2.4 — computed delivery-date range. Server-side so
+  // the timezone is consistent (uses server day boundaries; the UI
+  // doesn't have to think about DST or locale midnight). Null when
+  // transit-day estimates aren't configured on the option. Format is
+  // ISO date (YYYY-MM-DD), not full ISO timestamp, because EDD is a
+  // day-granular concept — there's no business meaning to "delivered
+  // at 14:32 on Friday".
+  estimatedDeliveryFrom: string | null;
+  estimatedDeliveryTo: string | null;
 }
 
 @Injectable()
@@ -161,6 +181,16 @@ export class ShippingOptionsService {
         ? threshold - netCartValueInPaise
         : null;
 
+    // Sprint 3 Story 2.4 — compute EDD date range from transit days.
+    // `today` is captured once per quote so the from/to dates stay
+    // self-consistent even if the call straddles midnight.
+    const eddFrom = opt.transitMinDays != null
+      ? addDaysIsoDate(opt.transitMinDays)
+      : null;
+    const eddTo = opt.transitMaxDays != null
+      ? addDaysIsoDate(opt.transitMaxDays)
+      : null;
+
     return {
       optionId: opt.id,
       name: opt.name,
@@ -173,6 +203,8 @@ export class ShippingOptionsService {
       amountMoreForFreeShippingInPaise: amountMore,
       transitMinDays: opt.transitMinDays,
       transitMaxDays: opt.transitMaxDays,
+      estimatedDeliveryFrom: eddFrom,
+      estimatedDeliveryTo: eddTo,
     };
   }
 

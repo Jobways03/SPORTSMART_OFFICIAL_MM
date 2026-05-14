@@ -9,7 +9,7 @@ import { PrismaClient } from '@prisma/client';
 import {
   ALL_PERMISSION_KEYS,
   PermissionKey,
-} from '../../src/modules/admin/application/services/permission-registry';
+} from '../../src/core/authorization/permission-registry';
 
 const prisma = new PrismaClient();
 
@@ -20,7 +20,7 @@ interface SystemRoleSeed {
 }
 
 // Helpers — derive read-only or every-* permission sets from the catalog.
-const allReadKeys = ALL_PERMISSION_KEYS.filter((k) => k.endsWith('.read'));
+const allReadKeys = ALL_PERMISSION_KEYS.filter((k: PermissionKey) => k.endsWith('.read'));
 
 const SYSTEM_ROLES: SystemRoleSeed[] = [
   {

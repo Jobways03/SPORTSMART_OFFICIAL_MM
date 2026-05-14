@@ -151,6 +151,67 @@ export class OwnBrandService {
     return this.repo.listStockMovements(args);
   }
 
+  // Story 3.4 — transfer stock between two Nova warehouses. Validates
+  // shape + that both warehouses exist + the product is an OWN_BRAND
+  // product before handing off to the repo's atomic transaction. The
+  // repo enforces the "available >= quantity" check inside the tx so
+  // there's no TOCTOU window where two concurrent transfers could
+  // both pass validation and over-draw the source.
+  async transferStock(args: {
+    fromWarehouseId: string;
+    toWarehouseId: string;
+    productId: string;
+    variantId?: string | null;
+    quantity: number;
+    reason: string;
+    adminId?: string;
+  }) {
+    if (!Number.isInteger(args.quantity) || args.quantity <= 0) {
+      throw new BadRequestAppException('quantity must be a positive integer');
+    }
+    if (args.fromWarehouseId === args.toWarehouseId) {
+      throw new BadRequestAppException(
+        'Source and destination warehouses must differ',
+      );
+    }
+    if (!args.reason?.trim()) {
+      throw new BadRequestAppException('reason is required');
+    }
+    const [fromWh, toWh, prod] = await Promise.all([
+      this.repo.findWarehouseById(args.fromWarehouseId),
+      this.repo.findWarehouseById(args.toWarehouseId),
+      this.repo.findProductById(args.productId),
+    ]);
+    if (!fromWh) throw new NotFoundAppException('Source warehouse not found');
+    if (!toWh) throw new NotFoundAppException('Destination warehouse not found');
+    if (!prod) throw new NotFoundAppException('Product not found');
+    if (prod.productSource !== 'OWN_BRAND') {
+      throw new BadRequestAppException(
+        'Product is not an OWN_BRAND product — convert it first',
+      );
+    }
+    try {
+      return await this.repo.transferStock({
+        fromWarehouseId: args.fromWarehouseId,
+        toWarehouseId: args.toWarehouseId,
+        productId: args.productId,
+        variantId: args.variantId ?? null,
+        quantity: args.quantity,
+        reason: args.reason.trim(),
+        adminId: args.adminId ?? null,
+      });
+    } catch (e: any) {
+      // The repo throws `Error('Insufficient stock — …')` and
+      // `Error('No stock row …')`. Convert to BadRequest so the
+      // operator-facing surface returns 400 with the precise reason
+      // rather than 500.
+      if (e?.message?.startsWith('Insufficient stock') || e?.message?.startsWith('No stock row')) {
+        throw new BadRequestAppException(e.message);
+      }
+      throw e;
+    }
+  }
+
   listReceiptsForPo(poId: string) {
     return this.repo.listReceiptsForPo(poId);
   }

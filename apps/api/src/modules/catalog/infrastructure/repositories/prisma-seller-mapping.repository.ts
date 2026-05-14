@@ -360,6 +360,13 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     return result.count;
   }
 
+  async setCodEligibility(sellerId: string, pincode: string, eligible: boolean): Promise<void> {
+    await this.prisma.sellerServiceArea.update({
+      where: { sellerId_pincode: { sellerId, pincode } },
+      data: { codEligible: eligible },
+    });
+  }
+
   async findServiceArea(sellerId: string, pincode: string): Promise<any | null> {
     return this.prisma.sellerServiceArea.findUnique({
       where: { sellerId_pincode: { sellerId, pincode } },

@@ -142,17 +142,92 @@ export class AdminAuditController {
     };
   }
 
+  // ── Event log query API (Sprint 2 Story 1.3) ──────────────────────
+  // EventLog is the catalogue of every domain event published through
+  // the outbox (ADR-008). Distinct from AuditLog (which records admin
+  // actions) — EventLog captures what the SYSTEM did. Both are written
+  // automatically; only AuditLog was queryable until now.
+
+  /**
+   * Paginated event log query. Filter by event name (`returns.return.approved`),
+   * aggregate (the model — e.g. `Return`, `Order`), aggregate id, and
+   * date range. Indexed columns: eventName, (aggregate, aggregateId),
+   * createdAt — all supported filters hit an index.
+   */
+  @Get('events')
+  @Permissions('audit.read')
+  async listEvents(
+    @Query('eventName') eventName?: string,
+    @Query('aggregate') aggregate?: string,
+    @Query('aggregateId') aggregateId?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const p = parseInt(page || '1', 10) || 1;
+    const l = Math.min(parseInt(limit || '100', 10) || 100, 500);
+    const where: any = {};
+    if (eventName) where.eventName = eventName;
+    if (aggregate) where.aggregate = aggregate;
+    if (aggregateId) where.aggregateId = aggregateId;
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
+    }
+    const [items, total] = await Promise.all([
+      this.prisma.eventLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (p - 1) * l,
+        take: l,
+      }),
+      this.prisma.eventLog.count({ where }),
+    ]);
+    return {
+      success: true,
+      message: 'Event logs',
+      data: { items, total, page: p, limit: l },
+    };
+  }
+
+  /**
+   * Event detail — full payload JSON for forensic / replay work.
+   * Pair with the existing `verify-chain` endpoints when investigating
+   * "did this event actually fire when audit says it did?"
+   */
+  @Get('events/:id')
+  @Permissions('audit.read')
+  async getEvent(@Param('id') id: string) {
+    const row = await this.prisma.eventLog.findUnique({ where: { id } });
+    if (!row) throw new NotFoundAppException('Event log not found');
+    return { success: true, message: 'Event log', data: row };
+  }
+
   @Get('export.csv')
   @Permissions('audit.read')
   @Header('Content-Type', 'text/csv')
   async exportCsv(
-    @Query('fromDate') fromDate: string,
-    @Query('toDate') toDate: string,
+    // Filters mirror /admin/audit/logs one-for-one. Previously this
+    // accepted only module + dates, so downloads silently included
+    // rows the viewer had filtered out via resource/actor/action —
+    // a real "what you see is not what you download" bug.
     @Query('module') module: string | undefined,
+    @Query('resource') resource: string | undefined,
+    @Query('resourceId') resourceId: string | undefined,
+    @Query('actorId') actorId: string | undefined,
+    @Query('action') action: string | undefined,
+    @Query('fromDate') fromDate: string | undefined,
+    @Query('toDate') toDate: string | undefined,
     @Res() res: Response,
   ) {
     const where: any = {};
     if (module) where.module = module;
+    if (resource) where.resource = resource;
+    if (resourceId) where.resourceId = resourceId;
+    if (actorId) where.actorId = actorId;
+    if (action) where.action = action;
     if (fromDate || toDate) {
       where.createdAt = {};
       if (fromDate) where.createdAt.gte = new Date(fromDate);
@@ -164,16 +239,29 @@ export class AdminAuditController {
       take: 100_000,
     });
     const header = 'created_at,actor_id,actor_role,module,resource,resource_id,action,ip\n';
-    const body = rows.map((r) => [
-      r.createdAt.toISOString(),
-      r.actorId ?? '',
-      r.actorRole ?? '',
-      r.module,
-      r.resource,
-      r.resourceId ?? '',
-      r.action,
-      r.ipAddress ?? '',
-    ].join(',')).join('\n');
+    // CSV values may contain commas / quotes / newlines (esp. in
+    // hand-typed reason strings). Escape per RFC 4180 — wrap in
+    // double quotes and double-up any embedded quotes.
+    const csvEscape = (v: string | null | undefined): string => {
+      const s = (v ?? '').toString();
+      if (s === '') return '';
+      if (/[,"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const body = rows
+      .map((r) =>
+        [
+          csvEscape(r.createdAt.toISOString()),
+          csvEscape(r.actorId),
+          csvEscape(r.actorRole),
+          csvEscape(r.module),
+          csvEscape(r.resource),
+          csvEscape(r.resourceId),
+          csvEscape(r.action),
+          csvEscape(r.ipAddress),
+        ].join(','),
+      )
+      .join('\n');
     res.setHeader('Content-Disposition', `attachment; filename="audit-${Date.now()}.csv"`);
     res.send(header + body);
   }

@@ -10,6 +10,10 @@ interface ServiceArea {
   city: string | null;
   state: string | null;
   isActive: boolean;
+  // Story 3.1 — per-pincode COD eligibility. Off by default; flip via
+  // the toggle in the row. Customers shipping to a pincode where this
+  // is false will see ONLINE-only at checkout.
+  codEligible: boolean;
   createdAt: string;
 }
 
@@ -34,6 +38,9 @@ export default function ServiceAreasPage() {
   const [removingPincode, setRemovingPincode] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  // Tracks which pincode rows have a COD toggle mid-flight so the
+  // button shows a loading state without locking the rest of the table.
+  const [togglingCod, setTogglingCod] = useState<Set<string>>(new Set());
 
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     setToast({ message, type });
@@ -117,6 +124,43 @@ export default function ServiceAreasPage() {
     }
   };
 
+  // Toggle the COD-eligible flag for a single pincode. Optimistic
+  // update — flip locally before the round-trip so the toggle feels
+  // snappy, then reconcile from the server response. If the request
+  // errors, the catch path rolls back to the previous value.
+  const handleToggleCod = async (sa: ServiceArea) => {
+    const token = getToken();
+    if (!token) return;
+    const nextValue = !sa.codEligible;
+    setTogglingCod((prev) => new Set(prev).add(sa.pincode));
+    setServiceAreas((prev) =>
+      prev.map((row) => (row.pincode === sa.pincode ? { ...row, codEligible: nextValue } : row)),
+    );
+    try {
+      await sellerProductService.setServiceAreaCodEligibility(
+        token,
+        sa.pincode,
+        nextValue,
+      );
+      showToast(
+        `COD ${nextValue ? 'enabled' : 'disabled'} for pincode ${sa.pincode}`,
+        'success',
+      );
+    } catch (err: any) {
+      // Rollback the optimistic flip.
+      setServiceAreas((prev) =>
+        prev.map((row) => (row.pincode === sa.pincode ? { ...row, codEligible: sa.codEligible } : row)),
+      );
+      showToast(err?.message || 'Failed to update COD eligibility', 'error');
+    } finally {
+      setTogglingCod((prev) => {
+        const next = new Set(prev);
+        next.delete(sa.pincode);
+        return next;
+      });
+    }
+  };
+
   // Filter service areas by search query (client-side filter on current page)
   const filtered = searchQuery.trim()
     ? serviceAreas.filter(
@@ -186,6 +230,7 @@ export default function ServiceAreasPage() {
                 <th>City</th>
                 <th>State</th>
                 <th>Status</th>
+                <th style={{ width: 130 }}>COD eligible</th>
                 <th style={{ width: 100 }}>Actions</th>
               </tr>
             </thead>
@@ -212,6 +257,53 @@ export default function ServiceAreasPage() {
                     >
                       {sa.isActive ? 'Active' : 'Inactive'}
                     </span>
+                  </td>
+                  <td>
+                    {(() => {
+                      const busy = togglingCod.has(sa.pincode);
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleCod(sa)}
+                          disabled={busy}
+                          aria-pressed={sa.codEligible}
+                          title={
+                            sa.codEligible
+                              ? 'Cash on Delivery is currently allowed for this pincode'
+                              : 'Cash on Delivery is currently blocked for this pincode'
+                          }
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '3px 10px',
+                            borderRadius: 100,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background: sa.codEligible ? '#ecfdf5' : '#fef2f2',
+                            color: sa.codEligible ? '#047857' : '#b91c1c',
+                            border: `1px solid ${sa.codEligible ? '#a7f3d0' : '#fecaca'}`,
+                            cursor: busy ? 'not-allowed' : 'pointer',
+                            opacity: busy ? 0.6 : 1,
+                          }}
+                        >
+                          <span
+                            aria-hidden
+                            style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: '50%',
+                              background: sa.codEligible ? '#10b981' : '#ef4444',
+                            }}
+                          />
+                          {busy
+                            ? '...'
+                            : sa.codEligible
+                              ? 'Enabled'
+                              : 'Disabled'}
+                        </button>
+                      );
+                    })()}
                   </td>
                   <td>
                     {confirmRemove === sa.pincode ? (

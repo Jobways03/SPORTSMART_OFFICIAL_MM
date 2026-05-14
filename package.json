@@ -2,12 +2,22 @@
   "name": "sportsmart-marketplace",
   "private": true,
   "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
   "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "db:setup": "pnpm --filter @sportsmart/api prisma:deploy && pnpm --filter @sportsmart/api seed:quick",
+    "db:reset": "pnpm --filter @sportsmart/api db:reset",
+    "db:status": "pnpm --filter @sportsmart/api db:status",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test",
-    "format": "turbo run format"
+    "format": "turbo run format",
+    "typecheck": "pnpm --filter @sportsmart/api exec tsc --noEmit",
+    "smoke": "node apps/api/test/smoke/run.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

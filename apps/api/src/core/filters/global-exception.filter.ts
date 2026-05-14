@@ -67,7 +67,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
     const response = ctx.getResponse<Response>();
 
-    const normalized = this.normalizeException(exception);
+    // Pulled set by RequestLoggingMiddleware on every request. Threaded
+    // into normalizeException so internal error logs include req=<id>
+    // and can be correlated with the [HTTP] line written on response
+    // finish. Empty-string fallback keeps the log line shape stable
+    // (`req=` with no value) when the filter is invoked outside the
+    // HTTP context (e.g., from unit tests).
+    const requestId = (request as Request & { id?: string })?.id ?? '';
+
+    const normalized = this.normalizeException(exception, requestId);
 
     if (this.problemDetailsEnabled()) {
       this.emitProblemDetails(response, request, normalized);
@@ -78,7 +86,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   // ─── Translation (shared) ─────────────────────────────────────────
 
-  private normalizeException(exception: unknown): NormalizedError {
+  private normalizeException(
+    exception: unknown,
+    requestId = '',
+  ): NormalizedError {
     if (exception instanceof HttpException) {
       return this.fromHttpException(exception);
     }
@@ -86,9 +97,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return this.fromAppException(exception);
     }
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
-      return this.fromPrismaError(exception);
+      return this.fromPrismaError(exception, requestId);
     }
-    return this.fromUnknown(exception);
+    return this.fromUnknown(exception, requestId);
   }
 
   private fromHttpException(err: HttpException): NormalizedError {
@@ -156,12 +167,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   private fromPrismaError(
     err: Prisma.PrismaClientKnownRequestError,
+    requestId = '',
   ): NormalizedError {
     // Log the raw Prisma message + meta server-side; client only sees
     // the sanitized version. Prisma messages leak table / column names
-    // which are noise in customer-facing error UI.
+    // which are noise in customer-facing error UI. req=<id> matches the
+    // request id the request-logging middleware writes on response
+    // finish so error + HTTP lines correlate by grep.
     this.logger.warn(
-      `Prisma error ${err.code}: ${err.message.split('\n')[0]} | meta=${JSON.stringify(err.meta ?? {})}`,
+      `Prisma error ${err.code}: ${err.message.split('\n')[0]} | meta=${JSON.stringify(err.meta ?? {})} req=${requestId}`,
     );
 
     switch (err.code) {
@@ -195,7 +209,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         };
       default:
         this.logger.error(
-          `Unmapped Prisma error ${err.code}: ${err.message}`,
+          `Unmapped Prisma error ${err.code}: ${err.message} req=${requestId}`,
           err.stack,
         );
         return {
@@ -207,11 +221,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
   }
 
-  private fromUnknown(exception: unknown): NormalizedError {
+  private fromUnknown(
+    exception: unknown,
+    requestId = '',
+  ): NormalizedError {
     this.logger.error(
       `Unhandled exception: ${
         exception instanceof Error ? exception.message : String(exception)
-      }`,
+      } req=${requestId}`,
       exception instanceof Error ? exception.stack : undefined,
     );
     return {

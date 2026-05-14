@@ -412,4 +412,21 @@ export const sellerProductService = {
       headers: { Authorization: `Bearer ${token}` },
     });
   },
+
+  // Story 3.1 — flip the COD-eligible flag on a specific pincode. The
+  // backend stores `cod_eligible BOOLEAN DEFAULT FALSE` (added in
+  // migration `20260513140000_add_seller_service_area_cod_eligible`)
+  // and only emits COD as an option at checkout when the pincode the
+  // customer is shipping to has this flag set.
+  setServiceAreaCodEligibility(
+    token: string,
+    pincode: string,
+    codEligible: boolean,
+  ): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/seller/service-areas/${pincode}/cod`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ codEligible }),
+    });
+  },
 };

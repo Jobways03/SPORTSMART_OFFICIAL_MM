@@ -5,6 +5,7 @@ import { LowStockAlertService } from './application/services/low-stock-alert.ser
 import { SellerInventoryController } from './presentation/controllers/seller-inventory.controller';
 import { AdminInventoryController } from './presentation/controllers/admin-inventory.controller';
 import { AdminLowStockAlertsController } from './presentation/controllers/admin-low-stock-alerts.controller';
+import { LowStockSweepCron } from './application/jobs/low-stock-sweep.cron';
 import { PrismaInventoryManagementRepository } from './infrastructure/repositories/prisma-inventory-management.repository';
 import { INVENTORY_MANAGEMENT_REPOSITORY } from './domain/repositories/inventory-management.repository.interface';
 import { FranchiseModule } from '../franchise/module';
@@ -26,6 +27,10 @@ import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
     InventoryPublicFacade,
     InventoryManagementService,
     LowStockAlertService,
+    // Sprint 4 Story 3.4 — auto-sweep cron. Manual sweep endpoint still
+    // available; the cron makes the steady-state case work without
+    // operator intervention.
+    LowStockSweepCron,
     SellerAuthGuard,
     AdminAuthGuard,
     {

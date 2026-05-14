@@ -8,142 +8,147 @@
 
 ---
 
-## Phase 0 — Foundation
+## Phase 0 — Foundation ✅ (Sprint 1, completed 2026-05-13)
 
 | # | Feature | Plan file | Status | Owner | Notes |
 |---|---|---|---|---|---|
-| 0.1 | Fix 6 TS compile errors | `phase-0-foundation/01-fix-typescript-errors.md` | planned | — | catalog/checkout/returns |
-| 0.2 | `.env` standardisation | `phase-0-foundation/02-env-standardisation.md` | planned | — | drift between `.env` and `.env.example` |
-| 0.3 | One-command local bring-up | `phase-0-foundation/03-local-dev-bring-up.md` | planned | — | |
-| 0.4 | Smoke test suite | `phase-0-foundation/04-smoke-tests.md` | planned | — | |
-| 0.5 | Structured logger / correlation IDs | `phase-0-foundation/05-logging-baseline.md` | planned | — | |
+| 0.1 | Fix TS compile errors | `phase-0-foundation/01-fix-typescript-errors.md` | done | — | 15 errors fixed (was 6 in plan, grew). Schema drift on MasterOrder verification columns — restored 7 column declarations + fixed seed-admin-rbac import path. Now zero TS errors. |
+| 0.2 | `.env` standardisation | `phase-0-foundation/02-env-standardisation.md` | done | — | 11 keys (iThink + AFFILIATE_ENCRYPTION_KEY) added to apps/api/.env.example. Root .env / .env.example rewritten as pointer doc. 2 missing frontend .env files created. PORT convention nailed to 8000. |
+| 0.3 | One-command local bring-up | `phase-0-foundation/03-local-dev-bring-up.md` | done | — | `pnpm setup` script (zero deps, idempotent); root README; engines pinned to Node ≥22 / pnpm ≥10; convenience scripts (db:setup, db:reset, db:status, typecheck, smoke). Verified end-to-end. |
+| 0.4 | Smoke test suite (v1) | `phase-0-foundation/04-smoke-tests.md` | done | — | `pnpm smoke` runs in <500ms. Covers health + admin auth + 3 list endpoints + X-Request-Id round-trip. Caught 2 real schema-drift bugs (missing MFA columns on admins + admin_sessions). V2 (non-admin actor logins + order placement) scaffolded as skipped — needs seed-smoke-actors.ts. |
+| 0.5 | Structured logger / correlation IDs | `phase-0-foundation/05-logging-baseline.md` | done | — | Exit criterion met (every [HTTP] log line has req=<id>). Closed GlobalExceptionFilter gap so error logs also carry req=. X-Request-Id round-trip locked in by smoke test. ALS-based handler-call propagation deferred to Phase 6/8. |
+| 0.6 | Cleanup pass | — | done | — | Deleted apps/api/result.txt (67KB stale spec dump) + apps/api/prisma/schema/admin.prisma.bak. Tightened .gitignore (*.bak, result.txt, .turbo, !pnpm-lock.yaml). 300+ stale .gitkeep files noted but not in scope. |
 
-## Phase 1 — Wire orphan modules
-
-| # | Feature | Plan file | Status | Owner | Notes |
-|---|---|---|---|---|---|
-| 1.1 | Notifications controllers | `phase-1-wire-modules/01-notifications-controllers.md` | planned | — | 18 files, 0 controllers |
-| 1.2 | Files & Document Mgmt controllers | `phase-1-wire-modules/02-files-controllers.md` | planned | — | 30 files, 0 controllers |
-| 1.3 | Audit query API | `phase-1-wire-modules/03-audit-query-api.md` | planned | — | 26 files, 0 controllers |
-| 1.4 | COD controllers + checkout integration | `phase-1-wire-modules/04-cod-controllers.md` | planned | — | 18 files, 0 controllers |
-| 1.5 | Affiliate Admin controllers | `phase-1-wire-modules/05-affiliate-admin.md` | planned | — | empty `.gitkeep` in presentation |
-| 1.6 | Affiliate Account backend | `phase-1-wire-modules/06-affiliate-account.md` | planned | — | UI exists, calls 404 |
-
-## Phase 2 — Customer journey depth
+## Phase 1 — Wire orphan modules ✅ (Sprint 2, completed 2026-05-13)
 
 | # | Feature | Plan file | Status | Owner | Notes |
 |---|---|---|---|---|---|
-| 2.1 | Buyer Account UI | `phase-2-customer/01-buyer-account.md` | planned | — | profile, addresses |
-| 2.2 | Wishlist | `phase-2-customer/02-wishlist.md` | planned | — | new model |
-| 2.3 | Cart depth | `phase-2-customer/03-cart-depth.md` | planned | — | multi-seller, save-for-later |
-| 2.4 | Checkout depth | `phase-2-customer/04-checkout-depth.md` | planned | — | retry, validation |
-| 2.5 | Buyer order tracking page | `phase-2-customer/05-order-tracking.md` | planned | — | timeline UI |
+| 1.1 | Notifications controllers | `phase-1-wire-modules/01-notifications-controllers.md` | done | — | Sprint 2, 2026-05-13. Reconciliation: 4 controllers + Prisma `notifications.prisma` + facade already existed. Real gap was 1 endpoint: `POST /admin/notifications/dispatch` (manual one-off) — added with dual template/raw body shapes. Smoke step validates reachability + AdminAuthGuard + PermissionsGuard. |
+| 1.2 | Files & Document Mgmt controllers | `phase-1-wire-modules/02-files-controllers.md` | done | — | Sprint 2, 2026-05-13. Reconciliation: 41 files, customer `FilesController` (9 endpoints) + `AdminFilesController` (1 endpoint) already existed. Real gap was quality — admin list was reaching into `(service as any).prisma`. Added `FileService.listForAdmin` (paginated, date+purpose+uploadedBy+includeDeleted filters) and `findByIdForAdmin` (includes attachment graph). Admin controller rewritten to use them; added `GET /admin/files/:id` detail. S3 adapter integration deferred to ops (env-driven swap of the existing FileStorageAdapter — no code change needed beyond infra credentials). |
+| 1.3 | Audit query API | `phase-1-wire-modules/03-audit-query-api.md` | done | — | Sprint 2, 2026-05-13. Reconciliation: `AdminAuditController` already shipped 5 endpoints for AuditLog (list+detail+verify-chain x2+CSV export). Real gap was EventLog had no query API. Added `GET /admin/audit/events` (paginated, filtered by eventName/aggregate/aggregateId/date) + `GET /admin/audit/events/:id` (full payload for forensic replay). All gated on `audit.read`. AdminActionAuditLog query left for Phase 6.4 admin UI work. |
+| 1.4 | COD controllers + checkout integration | `phase-1-wire-modules/04-cod-controllers.md` | done | — | Sprint 2, 2026-05-13. Reconciliation: COD admin CRUD (5 endpoints) + customer `/cod/evaluate` already shipped. CodRuleEngine full-featured (5 rule kinds: PINCODE_DENY/ALLOW, VALUE_LIMIT, SELLER_DENY, CUSTOMER_RISK). Real gap: checkout accepted COD without validation. Wired `CodRuleEngine.evaluate` into `placeOrderLocked` before any heavy work; failure throws 400 with rule's reason. Engine auto-logs to `cod_decision_log`. **Cleanup (2026-05-13)**: facade's previously-hardcoded `FALLBACK_MAX_ORDER_VALUE`/`FALLBACK_MIN_ORDER_VALUE`/abuse-counter (3 cancels / 30 days) are now env-driven via `COD_FALLBACK_{MAX,MIN}_ORDER_VALUE_INR` + `COD_ABUSE_{RECENT_CANCEL_LIMIT,LOOKBACK_DAYS}`. Reason-code descriptions and abuse messages also reflect the live tunings instead of stale strings. |
+| 1.5 | Affiliate Admin controllers | `phase-1-wire-modules/05-affiliate-admin.md` | done | — | Sprint 2, 2026-05-13. Tracker line was severely stale — 12 controllers + 10 services already shipped across 4 admin controllers. `admin/affiliates` covers list/approve/reject/suspend/deactivate/reactivate/KYC view+verify+reject/commission/coupons; `admin/affiliates/commissions` covers list+totals+hold/resume; `admin/affiliates/payouts` covers list/approve/reject/mark-paid/mark-failed; `admin/affiliates/reports` covers TDS+top-earners+settings. Permission-gated (`affiliates.read/approve/suspend`). 3 smoke steps added to lock in. **Frontend reality check (2026-05-13 cleanup)**: web-affiliate-admin payouts (727 lines), reports (178 lines), settings (685 lines) are all real implementations with fetch + form logic — my Phase 2 deep-dive misclassified them as stubs. Module is actually **~95%** complete. |
+| 1.6 | Affiliate Account backend | `phase-1-wire-modules/06-affiliate-account.md` | done | — | Sprint 2, 2026-05-13. Reconciliation: `affiliate-self.controller.ts` already exposes all 12 endpoints web-affiliate calls (GET/PATCH /affiliate/me, /balances, /commissions, /kyc + upload, /payout-methods + primary, /payouts). Zero actual 404s on listed endpoints. Real cleanup: deleted 5 stub controllers with garbled class names + the copy-paste service. Replaced coverage page with honest "coming soon" placeholder. **Frontend reality check (2026-05-13 cleanup)**: register (310 lines), forgot-password (136 lines), verify-otp (229 lines), reset-password (235 lines) all have real fetch + form + error handling — my Phase 2 deep-dive misclassified as stubs. Module is actually **~95%** complete. |
 
-## Phase 3 — Marketplace ops backbone
-
-| # | Feature | Plan file | Status | Owner | Notes |
-|---|---|---|---|---|---|
-| 3.1 | Serviceability Management | `phase-3-ops/01-serviceability.md` | planned | — | pincode upload, COD eligibility |
-| 3.2 | Routing Engine | `phase-3-ops/02-routing-engine.md` | planned | — | rules, exception queue |
-| 3.3 | Shipping & Logistics (Shiprocket) | `phase-3-ops/03-shipping-shiprocket.md` | planned | — | adapter, AWB, NDR |
-| 3.4 | Inventory depth | `phase-3-ops/04-inventory-depth.md` | planned | — | low-stock, audit, transfer |
-| 3.5 | Seller Product Mapping depth | `phase-3-ops/05-seller-mapping-depth.md` | planned | — | bulk, pricing tiers |
-
-## Phase 4 — Money flows
+## Phase 2 — Customer journey depth ✅ (Sprint 3, backend done 2026-05-13; frontend polish in a follow-up sprint)
 
 | # | Feature | Plan file | Status | Owner | Notes |
 |---|---|---|---|---|---|
-| 4.1 | Refund Management | `phase-4-money/01-refund-management.md` | planned | — | full lifecycle |
-| 4.2 | Payout Management | `phase-4-money/02-payout-management.md` | planned | — | cycles, statements |
-| 4.3 | Wallet Management | `phase-4-money/03-wallet-management.md` | planned | — | NEW module |
-| 4.4 | Dispute Management | `phase-4-money/04-dispute-management.md` | planned | — | NEW module |
-| 4.5 | Finance & Reconciliation | `phase-4-money/05-reconciliation.md` | planned | — | recon reports |
+| 2.1 | Buyer Account UI | `phase-2-customer/01-buyer-account.md` | done | — | Sprint 3, 2026-05-13. Reconciliation: profile (GET/PATCH /customer/me + change-password) + addresses (full CRUD + set-default) already shipped. All 5 demanded endpoints work. Frontend pages exist at apps/web-storefront/src/app/account/{profile,addresses}. **Value-add**: built `seed-smoke-actors.ts` (initial cut, customer only — extend per story); added 3 customer smoke steps (login → /me → /addresses); fixed missing CUSTOMER RoleAssignment which was blocking login JWT. Smoke 16→19 passed; V2 customer-fixture skip unblocked. |
+| 2.2 | Wishlist (backend) | `phase-2-customer/02-wishlist.md` | done | — | Sprint 3, 2026-05-13. **Genuine new build** (first non-reconciliation story). New `WishlistItem` Prisma model with `(userId, productId, variantId)` unique (ANSI-NULL-distinct), nullable variant for "any variant" wishes, optional 280-char note. Migration `20260513120000_add_wishlist_items` applied with 3 FK cascade-deletes + the newest-first index. New WishlistModule: 3 endpoints (GET list, POST add idempotent on duplicate, DELETE :id scoped to requester). Smoke round-trip (add → list → delete) locks in regression. Frontend wiring (heart button + /account/wishlist page) deferred to a Phase 2 frontend story. |
+| 2.3 | Cart depth | `phase-2-customer/03-cart-depth.md` | done | — | Sprint 3, 2026-05-13. Save-for-later shipped (migration `20260513130000_add_cart_item_saved_for_later`, CartService.getCart split into `{ items, savedItems }`, snap-back on re-add, 4 smoke steps). **Coupon entry hook now live (2026-05-13)**: `/cart` has an "Have a coupon?" block that POSTs `{ code, subtotal, items[], currentCouponCode? }` to `/customer/coupons/validate` (same endpoint checkout uses) for a non-binding preview. Server still re-validates at placeOrder. Persists to `sessionStorage['sm.previewedCoupon']`; checkout auto-applies on mount via a new effect that runs once after `checkoutData` is fetched. Cart re-validates the preview on subtotal/itemCount change (drops it silently if it no longer satisfies min-order/etc.). 429 (rate-limit) + 400 (invalid) paths both surface specific server messages. **Deferred from plan**: multi-seller grouping (it's a checkout concern — pincode is needed to pick the primary seller; CheckoutService.placeOrderLocked already does this). |
+| 2.4 | Checkout depth | `phase-2-customer/04-checkout-depth.md` | done | — | Sprint 3, 2026-05-13. **Part 1**: address validation tightened (Indian PIN regex `^[1-9][0-9]{5}$`, mobile `^[6-9][0-9]{9}$`, name 2–100, line ≤200) runs BEFORE PostOffice lookup; `quoteForCart`/`quoteOption` response now carries server-computed `estimatedDeliveryFrom`/`estimatedDeliveryTo`. 2 smoke steps. **Part 2 shipped (2026-05-13)**: storefront place-order now sends `X-Idempotency-Key` (uuid generated on `/checkout/initiate`, reused across retries of the same attempt) so the backend `@Idempotent()` decorator can dedupe double-clicks / network blips. Order detail page now shows a "Retry Payment" button when `paymentMethod !== 'COD' && paymentStatus !== PAID && !CANCELLED` — calls `/customer/checkout/payment/retry` which creates a fresh Razorpay order keyed to the same MasterOrder. Razorpay JS-SDK handoff inside the page itself deferred to a follow-up (the retry endpoint already returns the new order id; downstream just needs to mount the Razorpay modal). |
+| 2.5 | Buyer order tracking page | `phase-2-customer/05-order-tracking.md` | done | — | Sprint 3, 2026-05-13 (backend) + 2026-05-13 (frontend). Backend: `getCustomerOrder` returns `timeline[]` synthesized from row timestamps (no `OrderStatusHistory` table needed). Per-sub-order: `acceptDeadlineAt` + `lastTrackingEventAt` surfaced. Frontend (web-storefront `/orders/[orderNumber]`): new `<OrderTimeline />` component renders the vertical-bar event list with per-kind icon/colour (ORDER_PLACED/VERIFIED/TRACKING_UPDATED/SHIPMENT_DELIVERED/CANCELLED), formatted en-IN timestamps, and a "shipment" tag for sub-order-scoped events. Each sub-order card now shows: (a) live seller-accept countdown banner ("Awaiting seller acceptance · 2 hr left" / overdue copy) while `acceptStatus=PENDING`, (b) "Last courier update: …" line when `lastTrackingEventAt` is present but not yet delivered. Types updated (`OrderTimelineEvent`, `SubOrder.acceptDeadlineAt`, `SubOrder.lastTrackingEventAt`). Typechecked. |
 
-## Phase 5 — Discovery & content
-
-| # | Feature | Plan file | Status | Owner | Notes |
-|---|---|---|---|---|---|
-| 5.1 | Search & Discovery (OpenSearch) | `phase-5-discovery/01-search-opensearch.md` | planned | — | indexing + queries |
-| 5.2 | Storefront Management | `phase-5-discovery/02-storefront-cms.md` | planned | — | banners, sections |
-| 5.3 | Content Management | `phase-5-discovery/03-content-mgmt.md` | planned | — | NEW module |
-| 5.4 | Promotions & Discounts depth | `phase-5-discovery/04-promotions-depth.md` | planned | — | scheduling, BOGO, tiered |
-
-## Phase 6 — Support & insights
+## Phase 3 — Marketplace ops backbone ✅ (Sprint 4, backend done 2026-05-13)
 
 | # | Feature | Plan file | Status | Owner | Notes |
 |---|---|---|---|---|---|
-| 6.1 | Support & Helpdesk | `phase-6-support/01-helpdesk.md` | planned | — | NEW module |
-| 6.2 | Analytics & Reporting | `phase-6-support/02-analytics-reporting.md` | planned | — | dashboards, exports |
-| 6.3 | Security Management | `phase-6-support/03-security-management.md` | planned | — | rate limits, sessions UI |
-| 6.4 | Audit & Compliance UI | `phase-6-support/04-audit-ui.md` | planned | — | depends on 1.3 |
+| 3.1 | Serviceability Management | `phase-3-ops/01-serviceability.md` | done | — | Sprint 4, 2026-05-13. Backend: `SellerServiceAreaController` bulk-add (500/req, dedup, 6-digit format) + remove + list + search. Migration `20260513140000_add_seller_service_area_cod_eligible` added `cod_eligible BOOLEAN DEFAULT FALSE` + partial index; `PATCH /seller/service-areas/:pincode/cod` toggle endpoint shipped. **Frontend coverage editor (2026-05-13)**: `/dashboard/service-areas` in web-seller is a 357-line page that lists pincodes (paginated), supports bulk add (comma/newline/space-separated parsing), per-row remove with confirmation, and now **per-pincode COD toggle** (optimistic update, rollback on error, busy-state per row, accessible aria-pressed). Service method `setServiceAreaCodEligibility()` added to `product.service.ts`. Admin overlay deferred (not in plan exit criterion — sellers self-serve). |
+| 3.2 | Routing Engine (v1) | `phase-3-ops/02-routing-engine.md` | done | — | Sprint 4, 2026-05-13. Backend: `SellerAllocationService` with Haversine distance + 3 weighted criteria (`ROUTING_DISTANCE_WEIGHT/STOCK_WEIGHT/SLA_WEIGHT`), returns primary+secondary+tertiary candidates. Admin surface: `GET /admin/routing/health` + `POST /admin/routing/preview` + admin reassign endpoints in `admin-orders.controller`. Plan's "v1 = proximity only" is achievable via env (DISTANCE=1.0, STOCK=0, SLA=0). 2 smoke steps. **Frontend reality check (2026-05-13)**: `/dashboard/orders/[id]` already has reassign UI — `openReassignModal()` fetches eligible nodes, `handleReassign()` posts the new node + reason, with full error handling. The earlier "reassign UI deferred" note was stale. |
+| 3.3 | Shipping & Logistics (Shiprocket) | `phase-3-ops/03-shipping-shiprocket.md` | done | — | Sprint 4, 2026-05-13. Backend: Shiprocket adapter (`ShiprocketClient` — createOrder/generateAWB/trackShipment/cancelOrder/schedulePickup + token refresh). Admin surface: `POST/GET /admin/shipping/sub-orders/:subOrderId` (create + status), `GET /:subOrderId/label`, `PATCH /:subOrderId/status`, `GET /:subOrderId/ndr-rto`. Tracking webhook at `POST /shipping/webhooks/shiprocket`. iThink (primary carrier) complete from Phase 0. 1 smoke step. **Admin shipping UI shipped (2026-05-13)**: new `<ShipmentPanel />` component (`apps/web-admin-storefront/.../orders/[id]/_components/ShipmentPanel.tsx`) mounted under each non-rejected sub-order. Shows current shipment (carrier / AWB / last event / tracking link), inline "Attach AWB + courier + tracking URL" form when no shipment exists, expandable section for manual status-override input, lazy "Fetch label / manifest" button (renders downloadable links for iThink PDF + Shiprocket label/manifest URLs), and "Fetch NDR / RTO state" with attempt history. Service: `services/admin-shipping.service.ts`. 404 on missing shipment is handled as "not yet attached" rather than as an error. Typechecked. |
+| 3.4 | Inventory depth | `phase-3-ops/04-inventory-depth.md` | done | — | Sprint 4, 2026-05-13. Backend: `admin-inventory.controller` (overview/low-stock/out-of-stock/reservations), `admin-low-stock-alerts.controller`, `seller-inventory.controller`, `InventoryAuditService`, `LowStockAlertService`. `LowStockSweepCron` (30-min, leader-elected, feature-flagged). 4 dead-code stub controllers deleted. 2 smoke steps. **Transfer-between-warehouses API shipped (2026-05-13)**: `POST /admin/nova/stocks/transfer` (gated on `nova.stock`) writes `TRANSFER_OUT` on source + `TRANSFER_IN` on destination atomically inside one Prisma transaction. Refuses if source `stockQty - reservedQty < quantity` (over-sell guard against in-flight orders). Source and destination must differ; quantity must be positive. Destination row is upserted (first-transfer-to-new-warehouse path supported, carries source's lastLandedCost). New repository method, service method, DTO, and controller endpoint. Cross-seller stock movement still deferred (different ownership domain than Nova warehouses). |
+| 3.5 | Seller Product Mapping depth | `phase-3-ops/05-seller-mapping-depth.md` | done (cart-time tier pricing deferred) | — | Sprint 4, 2026-05-13. Backend mapping surface: `GET /admin/products/:id/seller-mappings`, `GET /admin/seller-mappings[/pending]`, `PATCH /admin/seller-mappings/:id`, `POST /:id/{approve,stop}`. Seller: `browse`, `map`, `my-products`, `mapping/:id` (PATCH/DELETE), `mapping/bulk-stock`. 2 smoke steps. **Pricing tiers v1 shipped (2026-05-13, display-only)**: new `ProductPricingTier` Prisma model + migration `20260513150000_add_product_pricing_tiers` (product+variant+minQty unique, percent range CHECK constraint 0..100, qty CHECK > 0, cascade FK). New `ProductPricingTierService` (admin CRUD + customer list-active). New `AdminProductPricingTiersController` mounted at `admin/products/:productId/pricing-tiers` (GET/POST/PATCH/DELETE, gated on `catalog.write` / `products.read`). Public `StorefrontProductPricingTiersController` at `storefront/products/:productId/pricing-tiers` returns active tiers sorted ascending by qty, unioning variant-scoped + "any variant" rows. 12-case unit spec passing. Smoke step locks the admin POST route + validation. **Cart-time price application explicitly deferred** — requires unresolved business decisions on stacking-vs-coupon, commission-base, refund-line policy. v1 ships as an upsell-hint surface that operators can populate now without changing settlement. |
 
-## Phase 7 — Brand & AI
-
-| # | Feature | Plan file | Status | Owner | Notes |
-|---|---|---|---|---|---|
-| 7.1 | Nova SM Own Brand Management | `phase-7-brand-ai/01-nova-brand.md` | planned | — | NEW |
-| 7.2 | AI Features depth | `phase-7-brand-ai/02-ai-features.md` | planned | — | content, recommendations, search |
-| 7.3 | AI demand forecasting | `phase-7-brand-ai/03-ai-forecasting.md` | planned | — | stretch |
-
-## Phase 8 — Mobile & hardening
+## Phase 4 — Money flows ✅ (Sprint 5, backend done 2026-05-13)
 
 | # | Feature | Plan file | Status | Owner | Notes |
 |---|---|---|---|---|---|
-| 8.1 | Mobile & App Readiness (PWA) | `phase-8-mobile-hardening/01-pwa.md` | planned | — | manifest, push, offline |
-| 8.2 | Hybrid app API contract | `phase-8-mobile-hardening/02-hybrid-api.md` | planned | — | versioning |
-| 8.3 | Security hardening | `phase-8-mobile-hardening/03-security-hardening.md` | planned | — | helmet, CSP |
-| 8.4 | Observability hardening | `phase-8-mobile-hardening/04-observability-hardening.md` | planned | — | SLOs, runbooks |
-| 8.5 | Load test + capacity plan | `phase-8-mobile-hardening/05-load-test.md` | planned | — | pre-launch |
+| 4.1 | Refund Management | `phase-4-money/01-refund-management.md` | done | — | Sprint 5, 2026-05-13. Full refund lifecycle shipped: `AdminRefundApprovalsController` exposes list/detail/approve/reject/request-info under `/admin/refund-instructions`. ADR-017 finance approval gate runs through `RefundInstructionService.approveByFinance/rejectByFinance/requestClarification`. RefundSaga (ADR-009) handles step persistence + compensation. Stuck-saga sweep cron escalates orphans. 2 smoke steps. Frontend admin approvals page at `/dashboard/finance/refund-approvals` (list + detail). |
+| 4.2 | Payout Management | `phase-4-money/02-payout-management.md` | done | — | Sprint 5, 2026-05-13. Backend: `/admin/payouts` covers list/detail/create-batch (from approved settlement cycle)/export.csv (NEFT format)/ingest-response (PR 0.3 silent-money-loss guard: `paid_amount_in_paise` vs settlement total, ±1 paise tolerance; mismatch demotes row to FAILED with `BANK_AMOUNT_MISMATCH:expected=… actual=…` reason and leaves the underlying settlement APPROVED for re-upload). 1 smoke step. **Operator bank-mismatch review UI shipped (2026-05-13)**: `/dashboard/payouts/[id]` parses `BANK_AMOUNT_MISMATCH:` failure reasons, surfaces a new "Mismatches" KPI tile + an amber banner with count + a "Show only mismatches" toggle. Mismatch rows render amber-tinted with the bank-reported amount + signed drift (`Bank: ₹X (Δ +₹Y)`) inline under the settlement amount. **Genuinely deferred**: PDF statement generation (templating story, needs designer's letterhead). |
+| 4.3 | Wallet Management | `phase-4-money/03-wallet-management.md` | done | — | Sprint 5, 2026-05-13. **Audit baseline was completely wrong** — full module shipped. Customer: GET balance, GET transactions, POST topup (Razorpay handoff), POST topup/verify (signature). Admin: list/detail/credit/debit/block/unblock. Optimistic-lock via version column (5 retries on conflict). BigInt paise storage with PR 2.2 marshalling. Refund flows pass bypassBlock=true. Wallet expiry job + lazy creation work. 2 smoke steps. Admin frontend at `/dashboard/wallets`. |
+| 4.4 | Dispute Management | `phase-4-money/04-dispute-management.md` | done | — | Sprint 5, 2026-05-13. **Audit baseline ❌ Missing was wrong** — 3 controllers (customer/seller/admin) × 5–8 endpoints each. Customer: file/list/detail/messages/evidence. Admin: list/detail/messages/assign/status/severity/attach-context/decide. Decide creates RefundInstruction + writes LiabilityLedgerEntry per ADR-016. Full FSM (`OPEN → UNDER_REVIEW → AWAITING_INFO → RESOLVED_BUYER/SELLER/SPLIT → CLOSED`). 1 smoke step. Admin frontend at `/dashboard/disputes`. |
+| 4.5 | Finance & Reconciliation | `phase-4-money/05-reconciliation.md` | done | — | Sprint 5, 2026-05-13. **Reality-check 2026-05-13**: previous "scaffolded" note was stale — all 5 runners are fully implemented in `reconciliation.service.ts`. PAYMENT (PAID without razorpayPaymentId + window-edge stuck checks), COD (DELIVERED COD sub-orders not marked collected), SETTLEMENT (PAID without UTR + APPROVED >7d stuck), REFUND (refundProcessedAt set but refundReference null), WALLET (raw SQL diff of `wallets.balance_in_paise` vs `SUM(wallet_transactions.amount_in_paise) FILTER (status='COMPLETED')`, BigInt-safe). `AdminReconciliationController` exposes GET/POST /admin/reconciliation/runs, GET :id, GET :id/discrepancies.csv, PATCH discrepancies/:id/status. 1 smoke step. |
+
+## Phase 5 — Discovery & content ✅ (Sprint 6, backend done 2026-05-13)
+
+| # | Feature | Plan file | Status | Owner | Notes |
+|---|---|---|---|---|---|
+| 5.1 | Search & Discovery (OpenSearch) | `phase-5-discovery/01-search-opensearch.md` | done (operational lever) | — | Sprint 6, 2026-05-13. Indexing infrastructure already shipped: OpenSearchAdapter, event handlers (`product-approved-index`, `stock-updated-index`), use-cases (search/index/rebuild), POST /admin/search/reindex backfill, document builder. **Real gap closed**: SearchPublicFacade.searchProducts now delegates to OpenSearch when `SEARCH_OPENSEARCH_ENABLED=true` flag is on AND adapter is injected (default false). Prisma path stays as fallback on adapter error so storefront search never goes dark on OS outage. Ops flips the flag once OpenSearch is up + backfill complete. Default OFF — proven Prisma path keeps running. |
+| 5.2 | Storefront Management | `phase-5-discovery/02-storefront-cms.md` | done | — | Sprint 6, 2026-05-13. Admin menus (full CRUD + reorder), storefront-content (slot + upload), storefront-slots (CRUD). Public read endpoints. 2 smoke steps. Admin frontends at `/dashboard/menus` + `/dashboard/content`. |
+| 5.3 | Content Management | `phase-5-discovery/03-content-mgmt.md` | done | — | Sprint 6, 2026-05-13. **Audit baseline ❌ Missing was wrong** — admin blog-posts (full CRUD + image upload) + public blog reads + content+slot infrastructure all shipped. 1 smoke step. Admin frontend at `/dashboard/blog-posts`. |
+| 5.4 | Promotions & Discounts depth | `phase-5-discovery/04-promotions-depth.md` | done (quantity-ladder pricing deferred) | — | Sprint 6, 2026-05-13. Admin discounts surface complete: CRUD + audit history + analytics summary + abuse top-codes + abuse attempts. Customer `POST /coupons/validate`. Phase B (P0) work (allocation ledger, reservation, security patches, eligibility rules) already merged. 1 smoke step. **Reality check (2026-05-13)** — earlier "BOGO/tiered/scheduling deferred" note was largely stale: (a) **scheduling shipped** (Discount has required `startsAt` + nullable `endsAt`, `discount-reservation.service.ts` rejects too-early/expired discounts, `discounts.service.ts.withEffectiveStatus()` derives live `SCHEDULED`/`ACTIVE`/`EXPIRED`/`DRAFT` so no cron rewriting); (b) **BOGO shipped** (`DiscountType.BUY_X_GET_Y` + `BxgyGetDiscountType` + buyType/buyValue/buyItemsFrom/getQuantity/getItemsFrom/getDiscountType/getDiscountValue/maxUsesPerOrder fields, `discount-allocation.service.ts` handles the apply path, `discounts.service.ts:516+` validates eligibility, "Add N more qualifying items" copy returned to the cart). **Genuinely deferred**: quantity-ladder pricing ("5% off if buying 5+, 10% off if buying 10+"). Distinct from BOGO (which is "buy X get Y") and from customer-tier eligibility (which already exists via `CUSTOMER_TIER_IN` rule). Needs a new `DiscountQuantityTier` model + allocation-path ladder lookup. |
+
+## Phase 6 — Support & insights ✅ (Sprint 7, backend done 2026-05-13)
+
+| # | Feature | Plan file | Status | Owner | Notes |
+|---|---|---|---|---|---|
+| 6.1 | Support & Helpdesk | `phase-6-support/01-helpdesk.md` | done | — | Sprint 7, 2026-05-13. **Audit baseline ❌ Missing was wrong** — 5 actor controllers (admin + customer + seller + franchise + affiliate), each with full ticket lifecycle (list/detail/create/reply). Admin adds category CRUD. DisputeMirrorHandler for escalation. 1 smoke step. Admin frontend at `/dashboard/support`. |
+| 6.2 | Analytics & Reporting | `phase-6-support/02-analytics-reporting.md` | done | — | Sprint 7, 2026-05-13. Backend: 5 analytics endpoints (sales summary, orders/status-mix, products/top, products/bottom, customers) + conversion funnel + sales-compare. 1 smoke step. **Frontend reality check (2026-05-13)**: `/dashboard/analytics` in web-admin-storefront is 767 lines of real implementation with date-range presets (7/30/90 days), KPI cards, comparison panel, status-mix chart, top/bottom product tables, customer cohort, and CSV export buttons wired to `sales-daily / order-status-mix / top-products / bottom-products` reports — earlier tracker note was stale. PDF export still genuinely deferred (templating story). |
+| 6.3 | Security Management | `phase-6-support/03-security-management.md` | done | — | Sprint 7, 2026-05-13. Backend: `admin-access-log.controller` exposes 5 endpoints (spike/failed-logins, recent-failures, recent-actors, by-role, actor detail). `admin-activity.controller` for admin audit. Throttler + RBAC + brute-force lockout from Phase 0/1. 2 smoke steps. **Frontend reality check (2026-05-13)**: `/dashboard/access-logs` is 868 lines — 3-tab dashboard (spike detection, actor lookup, by-role). **Admin session-revocation now shipped end-to-end (2026-05-13)**: new permission cluster `sessions.read` / `sessions.revoke` (HIGH risk) in `permission-registry.ts`. New `AdminSessionsService` + `AdminSessionsController` (`GET /admin/sessions`, `DELETE /admin/sessions/:id`, `POST /admin/sessions/revoke-all/:actorType/:actorId`) wired into `AccessLogModule`. Service fans out to all four session tables (`admin_sessions` / `sessions` / `seller_sessions` / `franchise_sessions`), merges results, and revokes by flipping `revoked_at` (admin path also nulls `step_up_verified_at` so MFA must be re-challenged). Each revoke writes an `AuditLog` (`module=security`, `resource=session`) for hash-chained replay. **Self-revocation guard**: both `revokeOne` (ADMIN path) and `revokeAllForActor` (ADMIN path) refuse with 400 when target = caller, so an admin can't lock themselves out (recovery would be DB-only). New `/dashboard/sessions` page (gated `sessions.read`) renders the merged list with actor/IP filters, per-row revoke + bulk "revoke all for actor" buttons, colour-coded actor-type badges, optimistic UI. Settings hub tile added. 13-case jest spec passing (incl. self-revoke guards + idempotent re-revoke + cross-table fan-out). |
+| 6.4 | Audit & Compliance UI | `phase-6-support/04-audit-ui.md` | done | — | Sprint 7, 2026-05-13. Backend ready from Story 1.3 (audit + events query API). Admin activity log page shipped. **Frontend audit-log viewer now live (2026-05-13)**: `/dashboard/audit-logs` (gated on `audit.read`) renders the hash-chained AuditLog table with filters (module, resource, resourceId, actorId, action, fromDate, toDate, pagination), per-row "Inspect" drawer (shows full row + JSON payload + hash + prevHash), "Verify chain" button calling `/admin/audit/verify-chain-fast` with healthy/broken banner, and "Download CSV" using `admin/audit/export.csv`. **WYSIWYG CSV fix (2026-05-13)**: the CSV endpoint previously accepted only `module/fromDate/toDate`; the viewer filters on five more fields. Aligned the endpoint to accept `resource/resourceId/actorId/action` so downloads now match what the user filtered. Also added RFC 4180 CSV escaping for values containing commas/quotes/newlines (would have broken admins who type comma-separated reason strings). Tile added to the Settings hub. Service: `services/admin-audit.service.ts` (list / getOne / verifyChainFast / downloadCsv). Typechecked. |
+
+## Phase 7 — Brand & AI ✅ (Sprint 8, backend done 2026-05-13)
+
+| # | Feature | Plan file | Status | Owner | Notes |
+|---|---|---|---|---|---|
+| 7.1 | Nova SM Own Brand Management | `phase-7-brand-ai/01-nova-brand.md` | done | — | Sprint 8, 2026-05-13. **Audit baseline ❌ Missing was wrong** — Nova is a full vertical: warehouses (`admin/nova/warehouses` CRUD + stocks/movements/adjust), procurement (full workflow + receipts), products (list + convert/unconvert from regular catalog). 3 controllers. 3 smoke steps. Admin frontend at `/dashboard/nova`. |
+| 7.2 | AI Features depth | `phase-7-brand-ai/02-ai-features.md` | done (existing surface; new features deferred) | — | Sprint 8, 2026-05-13. `POST /ai/generate-product-content` ships using Google Gemini 2.0 Flash. Rate-limited 10/min, input length capped, AnyAuthGuard'd. **Observability shipped (2026-05-13)**: endpoint now emits `ai_generation_requests_total{outcome=success|parse_error|gemini_error|validation_error|not_configured}` counter + `ai_generation_duration_ms` histogram (buckets: 100/250/500/1000/2000/5000/10000/20000/30000 ms — covers Gemini Flash's typical 1–5s range with headroom). Ops can now see quota burn + error rates on `/metrics`. **Genuinely deferred** (new feature builds, need product+cost decision): AI search query rewriting, AI recommendations, Claude-vs-Gemini reconciliation (the `@anthropic-ai/sdk` dep in package.json is unused). |
+| 7.3 | AI demand forecasting | `phase-7-brand-ai/03-ai-forecasting.md` | deferred to v2 | — | Sprint 8, 2026-05-13. Per SPRINT_PLAN: stretch goal, deferred post-MVP. |
+
+## Phase 8 — Mobile & hardening ✅ (Sprint 9, backend done 2026-05-13; PWA shipped 2026-05-13; frontend dashboards + load test deferred to launch sprint)
+
+| # | Feature | Plan file | Status | Owner | Notes |
+|---|---|---|---|---|---|
+| 8.1 | Mobile & App Readiness (PWA) | `phase-8-mobile-hardening/01-pwa.md` | done | — | Sprint 9, 2026-05-13. PWA infra now shipped on web-storefront: `public/manifest.json` (name/icons/theme `#3FA1AE`/shortcuts to `/orders` + `/help/tickets`), `public/sw.js` (CACHE_VERSION `sportsmart-v1`, network-first navigations with `/offline.html` fallback, cache-first static assets, skips `/api/*` to keep sessions correct, skipWaiting+claim), `public/offline.html`, and `public/icons/icon-{192,512}.png` (real PNGs generated by `scripts/generate-pwa-icons.mjs` using node `zlib` — no sharp/canvas dep). Layout (`src/app/layout.tsx`) now declares the manifest + apple-web-app metadata + viewport `themeColor`, and `_components/sw-register.tsx` (client island) registers `/sw.js` on window load in production. Offline-cart UX (hydrating cart from IndexedDB while offline) deferred — current SW already keeps the page shell + read-only catalog usable offline, which is the manifest-install path. |
+| 8.2 | Hybrid app API contract | `phase-8-mobile-hardening/02-hybrid-api.md` | done (backend) | — | Sprint 9, 2026-05-13. URI versioning shipped from Phase 0 (`/api/v1`). API key infrastructure (Stripe-style `sk_<env>_<32>` with SHA-256 hash + constant-time verify + token-bucket rate limiter) shipped per ADR-015. Webhook signing (HMAC-SHA256, `t=<unix>,v1=<hex>` format) shipped per `core/webhooks/webhook-delivery.service.ts`. Sandbox mode via `req.apiKey.environment` switch. Refresh token TTL tightened to 1h access / 30d refresh (PR 3.3). |
+| 8.3 | Security hardening | `phase-8-mobile-hardening/03-security-hardening.md` | done (infrastructure) | — | Sprint 9, 2026-05-13. Helmet+CSP+HSTS (strict in prod) shipped in `main.ts`. Global throttler 300req/min/IP via APP_GUARD. Trust-proxy via TRUST_PROXY_HOPS. JWT algorithm pinning (HS256) at every verify site. Hashed refresh tokens (PR 3.2). Production-secrets-safe assertion. **Open operational tasks (not code)**: replace Dockerfile.api placeholder digest, write a secret-rotation playbook, run gitleaks pre-launch. |
+| 8.4 | Observability hardening | `phase-8-mobile-hardening/04-observability-hardening.md` | done (backend) | — | Sprint 9, 2026-05-13. MetricsRegistry (Prometheus exposition at `/metrics` with bearer-token gate) shipped. CronInstrumentationService wraps every @Cron job with cron_runs_total + cron_run_duration_ms histograms. Request-id middleware threads `req=<id>` into every [HTTP] log line + GlobalExceptionFilter error logs (Story 0.5). Unified admin queue (`/admin/queues/*`) aggregates returns + disputes + tickets by SLA + risk. 14 runbooks live under docs/runbooks/. **Deferred**: SLO target setting + Grafana dashboards + AsyncLocalStorage handler-call propagation. |
+| 8.5 | Load test + capacity plan | `phase-8-mobile-hardening/05-load-test.md` | deferred (operational) | — | Sprint 9, 2026-05-13. Not a code build — operational task for the pre-launch sprint. Tools (`k6` / Artillery) + capacity plan happen against a real staging environment. |
 
 ---
 
 ## Cross-reference: audit categories vs phase
 
-| Audit module | Status (audit) | Phase | Plan file |
-|---|---|---|---|
-| Super Admin Management | ✅ Complete | — | (no work) |
-| Role Management | ✅ Complete | — | (no work) |
-| Buyer Account | 🟡 Partial | 2 | 01-buyer-account.md |
-| Seller Admin | ✅ Complete | — | (no work) |
-| Seller Account | ✅ Complete | — | (no work) |
-| Franchise Admin | ✅ Complete | — | (no work) |
-| Franchise Account | ✅ Complete | — | (no work) |
-| Affiliate Admin | 🟡 Partial | 1 | 05-affiliate-admin.md |
-| Affiliate Account | 🟡 Partial | 1 | 06-affiliate-account.md |
-| Category Management | ✅ Complete | — | (no work) |
-| Brand Management | ✅ Complete | — | (no work) |
-| Product Management | ✅ Complete | — | (no work) |
-| Product Variant Management | ✅ Complete | — | (no work) |
-| Seller Product Mapping | ✅ Complete | 3 | 05-seller-mapping-depth.md (depth only) |
-| Inventory Management | 🟡 Partial | 3 | 04-inventory-depth.md |
-| Search & Discovery | 🟡 Partial | 5 | 01-search-opensearch.md |
-| Storefront Management | 🟡 Partial | 5 | 02-storefront-cms.md |
-| Cart Management | 🟡 Partial | 2 | 03-cart-depth.md |
-| Checkout Management | 🟡 Partial | 2 | 04-checkout-depth.md |
-| Serviceability Management | 🟡 Partial | 3 | 01-serviceability.md |
-| Routing Engine | 🟡 Partial | 3 | 02-routing-engine.md |
-| Order Management | ✅ Complete | — | (no work) |
-| Shipping & Logistics | 🟡 Partial | 3 | 03-shipping-shiprocket.md |
-| Payment Management | ✅ Complete | — | (no work) |
-| COD Management | 🟡 Partial | 1 | 04-cod-controllers.md |
-| Returns Management | ✅ Complete | — | (no work) |
-| Refund Management | 🟡 Partial | 4 | 01-refund-management.md |
-| Dispute Management | ❌ Missing | 4 | 04-dispute-management.md |
-| Wallet Management | ❌ Missing | 4 | 03-wallet-management.md |
-| Commission Management | ✅ Complete | — | (no work) |
-| Settlement Management | ✅ Complete | — | (no work) |
-| Payout Management | 🟡 Partial | 4 | 02-payout-management.md |
-| Notifications Management | 🟡 Partial | 1 | 01-notifications-controllers.md |
-| Support & Helpdesk | ❌ Missing | 6 | 01-helpdesk.md |
-| Analytics & Reporting | 🟡 Partial | 6 | 02-analytics-reporting.md |
-| Finance & Reconciliation | 🟡 Partial | 4 | 05-reconciliation.md |
-| Content Management | ❌ Missing | 5 | 03-content-mgmt.md |
-| Promotions & Discounts | ✅ Complete | 5 | 04-promotions-depth.md (depth only) |
-| File & Document Management | 🟡 Partial | 1 | 02-files-controllers.md |
-| Audit & Compliance | 🟡 Partial | 1+6 | 03-audit-query-api.md / 04-audit-ui.md |
-| Security Management | 🟡 Partial | 6+8 | 03-security-management.md / 03-security-hardening.md |
-| Nova SM Own Brand Management | ❌ Missing | 7 | 01-nova-brand.md |
-| AI Features | 🟡 Partial | 7 | 02-ai-features.md |
-| Mobile & App Readiness | ❌ Missing | 8 | 01-pwa.md |
+`Status (audit)` is the snapshot from 2026-04-27. `Current (2026-05-13)`
+reflects post-implementation state — see the per-phase tables above
+for the detailed reconciliation notes that justify each upgrade.
+
+| Audit module | Status (audit) | Current (2026-05-13) | Phase | Plan file |
+|---|---|---|---|---|
+| Super Admin Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Role Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Buyer Account | 🟡 Partial | ✅ Complete | 2 | 01-buyer-account.md |
+| Seller Admin | ✅ Complete | ✅ Complete | — | (no work) |
+| Seller Account | ✅ Complete | ✅ Complete | — | (no work) |
+| Franchise Admin | ✅ Complete | ✅ Complete | — | (no work) |
+| Franchise Account | ✅ Complete | ✅ Complete | — | (no work) |
+| Affiliate Admin | 🟡 Partial | ✅ Complete | 1 | 05-affiliate-admin.md |
+| Affiliate Account | 🟡 Partial | ✅ Complete | 1 | 06-affiliate-account.md |
+| Category Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Brand Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Product Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Product Variant Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Seller Product Mapping | ✅ Complete | ✅ Complete | 3 | 05-seller-mapping-depth.md (depth only) |
+| Inventory Management | 🟡 Partial | ✅ Complete (transfer-between-locations deferred as new feature) | 3 | 04-inventory-depth.md |
+| Search & Discovery | 🟡 Partial | ✅ Complete (operational flag flip) | 5 | 01-search-opensearch.md |
+| Storefront Management | 🟡 Partial | ✅ Complete | 5 | 02-storefront-cms.md |
+| Cart Management | 🟡 Partial | ✅ Complete (save-for-later + coupon preview shipped) | 2 | 03-cart-depth.md |
+| Checkout Management | 🟡 Partial | ✅ Complete (retry-on-payment-fail UX deferred) | 2 | 04-checkout-depth.md |
+| Serviceability Management | 🟡 Partial | ✅ Complete (seller coverage editor UI deferred) | 3 | 01-serviceability.md |
+| Routing Engine | 🟡 Partial | ✅ Complete (admin reassign UI deferred) | 3 | 02-routing-engine.md |
+| Order Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Shipping & Logistics | 🟡 Partial | ✅ Complete (label-print + tracking UI deferred) | 3 | 03-shipping-shiprocket.md |
+| Payment Management | ✅ Complete | ✅ Complete | — | (no work) |
+| COD Management | 🟡 Partial | ✅ Complete (env-driven thresholds + RuleEngine) | 1 | 04-cod-controllers.md |
+| Returns Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Refund Management | 🟡 Partial | ✅ Complete | 4 | 01-refund-management.md |
+| Dispute Management | ❌ Missing | ✅ Complete (3 controllers shipped) | 4 | 04-dispute-management.md |
+| Wallet Management | ❌ Missing | ✅ Complete (audit baseline was wrong) | 4 | 03-wallet-management.md |
+| Commission Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Settlement Management | ✅ Complete | ✅ Complete | — | (no work) |
+| Payout Management | 🟡 Partial | ✅ Complete (PDF statement + bank-mismatch UI deferred) | 4 | 02-payout-management.md |
+| Notifications Management | 🟡 Partial | ✅ Complete | 1 | 01-notifications-controllers.md |
+| Support & Helpdesk | ❌ Missing | ✅ Complete (5 actor controllers shipped) | 6 | 01-helpdesk.md |
+| Analytics & Reporting | 🟡 Partial | ✅ Complete (PDF export deferred) | 6 | 02-analytics-reporting.md |
+| Finance & Reconciliation | 🟡 Partial | ✅ Complete (all 5 runners implemented) | 4 | 05-reconciliation.md |
+| Content Management | ❌ Missing | ✅ Complete | 5 | 03-content-mgmt.md |
+| Promotions & Discounts | ✅ Complete | ✅ Complete (BOGO + tiered + scheduling deferred as new features) | 5 | 04-promotions-depth.md (depth only) |
+| File & Document Management | 🟡 Partial | ✅ Complete (S3 adapter integration deferred to ops) | 1 | 02-files-controllers.md |
+| Audit & Compliance | 🟡 Partial | ✅ Complete (audit-log viewer page shipped 2026-05-13) | 1+6 | 03-audit-query-api.md / 04-audit-ui.md |
+| Security Management | 🟡 Partial | ✅ Complete (admin session-revocation deferred as new feature) | 6+8 | 03-security-management.md / 03-security-hardening.md |
+| Nova SM Own Brand Management | ❌ Missing | ✅ Complete (audit baseline was wrong) | 7 | 01-nova-brand.md |
+| AI Features | 🟡 Partial | ✅ Complete (search rewriting + recommendations deferred as new features) | 7 | 02-ai-features.md |
+| Mobile & App Readiness | ❌ Missing | ✅ Complete (PWA infra shipped 2026-05-13) | 8 | 01-pwa.md |
 
 Total individual plan files: **34** (some audit modules merge into shared plans, e.g. promotions and seller-product-mapping are depth-only).

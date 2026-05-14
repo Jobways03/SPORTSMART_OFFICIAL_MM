@@ -35,6 +35,8 @@ model User {
   // Optional 1:1 link to a wallet record. Created lazily on first
   // top-up / refund credit; users without wallet activity have no row.
   wallet            Wallet?
+  // Sprint 3 Story 2.2 — buyer-facing wishlist (see wishlist.prisma).
+  wishlistItems     WishlistItem[]
 
   @@map("users")
 }

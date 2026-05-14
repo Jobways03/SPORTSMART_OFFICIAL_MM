@@ -8,6 +8,7 @@ import { adminMetafieldsService } from '@/services/admin-metafields.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
+import { PricingTiersPanel } from '../../components/PricingTiersPanel';
 import '../../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
 
@@ -2258,6 +2259,20 @@ const router = useRouter();
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
+      )}
+
+      {/* Story 3.5 — volume pricing tier manager. Mounts only when
+          we have a product loaded; passes the existing variant list
+          so the create form can scope a tier to a specific SKU. */}
+      {product && (
+        <PricingTiersPanel
+          productId={productId}
+          variants={(product.variants ?? []).map((v: any) => ({
+            id: v.id,
+            title: v.title ?? v.name ?? null,
+            sku: v.sku ?? null,
+          }))}
+        />
       )}
 
       {/* Modals */}

@@ -112,6 +112,19 @@ export default function CheckoutPage() {
   const [initiating, setInitiating] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [placedOrderNumber, setPlacedOrderNumber] = useState<string | null>(null);
+  // Idempotency key for the place-order POST. Backend requires
+  // `X-Idempotency-Key` on this endpoint so a retried submit (network
+  // blip, double-click, refresh-during-call) returns the original
+  // response instead of creating a duplicate order. We generate the
+  // key once per checkout attempt and reuse it across retries so the
+  // server can dedupe correctly. Reset when a new checkout-initiate
+  // succeeds (different session = different key).
+  const [placeOrderIdemKey, setPlaceOrderIdemKey] = useState<string>(
+    () =>
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [removingUnserviceable, setRemovingUnserviceable] = useState(false);
@@ -355,6 +368,15 @@ export default function CheckoutPage() {
       });
       if (res.data) {
         setCheckoutData(res.data);
+        // Fresh checkout session — generate a new idempotency key so
+        // server-side dedupe doesn't collide with a previous attempt's
+        // cached response. Re-uses the existing key across retries of
+        // *this* attempt (handled by the button click path).
+        setPlaceOrderIdemKey(
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `idem-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        );
         if (!res.data.allServiceable) {
           setError(res.message || `${res.data.unserviceableCount} item(s) cannot be delivered to this address`);
         }
@@ -470,7 +492,42 @@ export default function CheckoutPage() {
     setAppliedCoupon(null);
     setCouponInput('');
     setCouponError('');
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.removeItem('sm.previewedCoupon');
+    }
   };
+
+  // Story 2.3 — auto-apply any coupon the customer previewed on the
+  // cart page. We wait for checkoutData (serviceableAmount drives the
+  // real validation) and only fire once per session. If the previewed
+  // code is no longer valid (subtotal dropped below threshold, expired,
+  // etc.) the existing error handler will surface it and we clear the
+  // stale preview.
+  useEffect(() => {
+    if (!checkoutData) return;
+    if (appliedCoupon) return; // already applied — don't fight the user
+    if (typeof window === 'undefined') return;
+    const raw = window.sessionStorage.getItem('sm.previewedCoupon');
+    if (!raw) return;
+    let previewed: { code: string } | null = null;
+    try {
+      previewed = JSON.parse(raw) as { code: string };
+    } catch {
+      window.sessionStorage.removeItem('sm.previewedCoupon');
+      return;
+    }
+    if (!previewed?.code || previewed.code === couponInput) return;
+    setCouponInput(previewed.code);
+    // Defer one microtask so `couponInput` flushes before validation.
+    Promise.resolve().then(() => {
+      handleApplyCoupon().catch(() => {
+        // Stale preview — drop it so we don't keep retrying. The
+        // handler already populated couponError for the customer.
+        window.sessionStorage.removeItem('sm.previewedCoupon');
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutData]);
 
   const handlePlaceOrder = async () => {
     if (!checkoutData) {
@@ -498,6 +555,10 @@ export default function CheckoutPage() {
         : 0;
       const res = await apiClient<{ orderNumber: string }>('/customer/checkout/place-order', {
         method: 'POST',
+        // Backend `@Idempotent()` requires this. Same key across retries
+        // of this checkout attempt returns the original response instead
+        // of duplicating the order.
+        headers: { 'X-Idempotency-Key': placeOrderIdemKey },
         body: JSON.stringify({
           paymentMethod: 'COD',
           ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),

@@ -35,6 +35,23 @@ export class CartController {
     return { success: true, message: 'Item added to cart' };
   }
 
+  // Sprint 3 Story 2.3 — save-for-later round-trip. Parking and
+  // unparking are separate endpoints so the client UX can show
+  // distinct loading states (and so we can charge them to different
+  // analytics buckets later).
+
+  @Post('items/:itemId/save-for-later')
+  async saveForLater(@Req() req: any, @Param('itemId') itemId: string) {
+    await this.cartService.saveForLater(req.userId, itemId);
+    return { success: true, message: 'Item saved for later' };
+  }
+
+  @Post('items/:itemId/move-to-cart')
+  async moveToCart(@Req() req: any, @Param('itemId') itemId: string) {
+    await this.cartService.moveToCart(req.userId, itemId);
+    return { success: true, message: 'Item moved back to cart' };
+  }
+
   @Patch('items/:itemId')
   async updateItem(
     @Req() req: any,

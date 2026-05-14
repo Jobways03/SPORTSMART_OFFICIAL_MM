@@ -27,6 +27,11 @@ model SellerServiceArea {
   sellerId  String   @map("seller_id")
   pincode   String
   isActive  Boolean  @default(true) @map("is_active")
+  // Sprint 4 Story 3.1 — per-pincode COD eligibility. Independent of
+  // isActive (a seller may deliver to a pincode but not accept COD
+  // there). Default false so a newly-added pincode is delivery-only
+  // until the seller opts in.
+  codEligible Boolean @default(false) @map("cod_eligible")
   createdAt DateTime @default(now()) @map("created_at")
 
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)

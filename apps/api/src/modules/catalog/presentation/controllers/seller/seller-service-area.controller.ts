@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -66,6 +67,9 @@ export class SellerServiceAreaController {
           id: sa.id,
           pincode: sa.pincode,
           isActive: sa.isActive,
+          // Sprint 4 Story 3.1 — per-pincode COD eligibility. Default
+          // false on newly-added rows; flip via /:pincode/cod.
+          codEligible: sa.codEligible ?? false,
           createdAt: sa.createdAt,
         })),
         pagination: {
@@ -125,6 +129,41 @@ export class SellerServiceAreaController {
         requested: uniquePincodes.length,
         duplicatesSkipped: uniquePincodes.length - addedCount,
       },
+    };
+  }
+
+  // ─── Toggle COD eligibility on a single pincode (Sprint 4 Story 3.1) ─
+
+  @Patch(':pincode/cod')
+  @HttpCode(HttpStatus.OK)
+  async setCodEligibility(
+    @Req() req: Request,
+    @Param('pincode') pincode: string,
+    @Body() body: { codEligible: boolean },
+  ) {
+    const sellerId = (req as any).sellerId;
+    if (typeof body?.codEligible !== 'boolean') {
+      throw new BadRequestAppException('codEligible (boolean) is required');
+    }
+    if (!/^\d{6}$/.test(pincode)) {
+      throw new BadRequestAppException(
+        'pincode must be 6 digits in the URL path',
+      );
+    }
+    const existing = await this.sellerMappingRepo.findServiceArea(sellerId, pincode);
+    if (!existing) {
+      throw new BadRequestAppException(
+        `Pincode ${pincode} is not in your service areas — add it first via POST /seller/service-areas`,
+      );
+    }
+    await this.sellerMappingRepo.setCodEligibility(sellerId, pincode, body.codEligible);
+    this.logger.log(
+      `Seller ${sellerId} ${body.codEligible ? 'enabled' : 'disabled'} COD on pincode ${pincode}`,
+    );
+    return {
+      success: true,
+      message: `COD ${body.codEligible ? 'enabled' : 'disabled'} for pincode ${pincode}`,
+      data: { pincode, codEligible: body.codEligible },
     };
   }
 
