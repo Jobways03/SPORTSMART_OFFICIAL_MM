@@ -11,12 +11,59 @@ import { AppException } from '../exceptions/app.exception';
 import { DuplicateCaseException } from '../exceptions/duplicate-case.exception';
 import { AppLoggerService } from '../../bootstrap/logging/app-logger.service';
 import { EnvService } from '../../bootstrap/env/env.service';
+import { RequestContextService } from '../../bootstrap/logging/request-context';
 import {
   APP_CODE_TO_PROBLEM_SLUG,
   PROBLEM_TYPES,
   ProblemTypeSlug,
   problemTypeUri,
 } from './problem-types';
+
+/**
+ * Phase 11 (2026-05-16) — known-safe keys in PrismaClientKnownRequestError.meta.
+ *
+ * Prisma populates `meta` with diagnostic context per error code.
+ * Most fields name schema-side artefacts (model, column, relation,
+ * constraint) which are not sensitive — they're in the source repo.
+ * A few — notably `database_error` on connection-class errors —
+ * carry raw Postgres messages that can include row values.
+ *
+ * Allow-list approach: copy through fields we expect, drop everything
+ * else with a `(redacted: <name>)` summary so a developer reading the
+ * log knows what was stripped. New Prisma versions adding diagnostic
+ * fields will be redacted by default until this list is extended.
+ */
+const PRISMA_META_SAFE_KEYS: ReadonlySet<string> = new Set([
+  'modelName',
+  'target',
+  'cause',
+  'field_name',
+  'relation_name',
+  'model_a_name',
+  'model_b_name',
+  'constraint',
+  'column_name',
+  'table',
+  'database_name',
+  'code',
+]);
+
+export function sanitizePrismaMeta(
+  meta: unknown,
+): Record<string, unknown> {
+  if (!meta || typeof meta !== 'object') return {};
+  const safe: Record<string, unknown> = {};
+  const redacted: string[] = [];
+  for (const [key, value] of Object.entries(meta as Record<string, unknown>)) {
+    if (PRISMA_META_SAFE_KEYS.has(key)) {
+      safe[key] = value;
+    } else {
+      redacted.push(key);
+    }
+  }
+  if (redacted.length > 0) safe._redacted = redacted;
+  return safe;
+}
 
 /**
  * Internal canonical error shape that both the legacy and RFC 7807
@@ -70,10 +117,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     // Pulled set by RequestLoggingMiddleware on every request. Threaded
     // into normalizeException so internal error logs include req=<id>
     // and can be correlated with the [HTTP] line written on response
-    // finish. Empty-string fallback keeps the log line shape stable
-    // (`req=` with no value) when the filter is invoked outside the
-    // HTTP context (e.g., from unit tests).
-    const requestId = (request as Request & { id?: string })?.id ?? '';
+    // finish. Phase 11 (2026-05-16) — fall back to ALS-stored context
+    // when the filter fires outside an HTTP request scope (e.g.
+    // exceptions thrown from inside an async event handler that
+    // bubble up here). Empty-string fallback keeps the log line shape
+    // stable when neither source has a value (e.g. unit tests).
+    const requestId =
+      (request as Request & { id?: string })?.id ??
+      RequestContextService.requestId() ??
+      '';
 
     const normalized = this.normalizeException(exception, requestId);
 
@@ -169,13 +221,19 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     err: Prisma.PrismaClientKnownRequestError,
     requestId = '',
   ): NormalizedError {
-    // Log the raw Prisma message + meta server-side; client only sees
-    // the sanitized version. Prisma messages leak table / column names
-    // which are noise in customer-facing error UI. req=<id> matches the
-    // request id the request-logging middleware writes on response
-    // finish so error + HTTP lines correlate by grep.
+    // Phase 11 (2026-05-16) — sanitize Prisma meta before logging.
+    //
+    // Pre-Phase-11 we logged `JSON.stringify(err.meta ?? {})`, which
+    // for some error codes (notably P1001/P1010 — connection +
+    // permission) includes a raw `database_error` field containing
+    // server-side DB messages with row values, internal connection
+    // strings, and (under specific RLS configurations) row contents.
+    // Allow-list the known-safe Prisma meta keys instead so an unknown
+    // key (likely a new Prisma version's diagnostic field) is summarised
+    // by name only.
+    const sanitizedMeta = sanitizePrismaMeta(err.meta);
     this.logger.warn(
-      `Prisma error ${err.code}: ${err.message.split('\n')[0]} | meta=${JSON.stringify(err.meta ?? {})} req=${requestId}`,
+      `Prisma error ${err.code}: ${err.message.split('\n')[0]} | meta=${JSON.stringify(sanitizedMeta)} req=${requestId}`,
     );
 
     switch (err.code) {
@@ -413,6 +471,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
    */
   private parseField(message: string): string {
     const m = message.match(/^([A-Za-z_][A-Za-z0-9_.]*)/);
-    return m ? m[1] : 'unknown';
+    return m ? m[1]! : 'unknown';
   }
 }

@@ -272,6 +272,15 @@ model ProcurementRequest {
   receivedAt   DateTime? @map("received_at")
   settledAt    DateTime? @map("settled_at")
 
+  /// Phase 7 (2026-05-16) — SLA timestamps. `slaApproveBy` is set on
+  /// `submitRequest` to `requestedAt + PROCUREMENT_APPROVAL_SLA_HOURS`
+  /// (default 48h). The breach cron emits `procurement.sla_breached`
+  /// for requests still SUBMITTED past their deadline; ops can see
+  /// from `slaBreachedAt` which were already notified so we don't
+  /// re-notify on every tick.
+  slaApproveBy   DateTime? @map("sla_approve_by")
+  slaBreachedAt  DateTime? @map("sla_breached_at")
+
   // Shipment tracking — captured by admin on /dispatch so the franchise can
   // answer "where is my shipment?" without a support ping.
   trackingNumber     String?   @map("tracking_number")
@@ -292,6 +301,7 @@ model ProcurementRequest {
   @@index([franchiseId, status])
   @@index([status])
   @@index([requestNumber])
+  @@index([status, slaApproveBy])
   @@map("procurement_requests")
 }
 

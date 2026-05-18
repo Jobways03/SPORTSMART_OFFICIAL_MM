@@ -358,6 +358,18 @@ model ProductVariant {
   @@index([sku])
   @@index([status])
   @@index([isDeleted])
+  // Phase 4 follow-up (2026-05-16) — per-product SKU uniqueness.
+  // The application layer already enforces this in
+  // PrismaVariantRepository (create + update); the DB-level constraint
+  // closes the race window where two concurrent creates would both
+  // pass the app-level check and both insert. NULL skus are allowed
+  // (digital goods, draft variants without a real SKU yet) and are
+  // not unique-compared by PostgreSQL.
+  //
+  // The migration includes a pre-flight query the team runs first to
+  // surface any existing duplicates; once those are resolved the
+  // constraint can be added safely.
+  @@unique([productId, sku], name: "product_variants_product_sku_unique")
   @@map("product_variants")
 }
 

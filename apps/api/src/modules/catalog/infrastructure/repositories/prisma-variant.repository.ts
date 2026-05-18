@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { IVariantRepository } from '../../domain/repositories/variant.repository.interface';
 
@@ -6,15 +6,56 @@ import { IVariantRepository } from '../../domain/repositories/variant.repository
 export class PrismaVariantRepository implements IVariantRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Phase 4.6 (2026-05-16) — pagination.
+   *
+   * Loading every variant of a product in one shot via `include`
+   * triggers an N+1 fetch through optionValues → optionValue →
+   * optionDefinition for each variant. For a product with 500 variants
+   * × 3 option dimensions each, that's 1500+ joins per call. The
+   * legacy signature stays for back-compat (it routes through
+   * findPageByProductId with a default page size), but callers should
+   * migrate to the paginated method for admin lists.
+   */
   async findByProductId(productId: string): Promise<any[]> {
-    return this.prisma.productVariant.findMany({
-      where: { productId, isDeleted: false },
-      include: {
-        optionValues: { include: { optionValue: { include: { optionDefinition: true } } } },
-        images: { orderBy: { sortOrder: 'asc' } },
-      },
-      orderBy: { sortOrder: 'asc' },
+    // Default to 200/variant cap when callers haven't migrated to
+    // pagination yet. Most products have far fewer than 200 variants;
+    // the ones that exceed this are admin-only and need the
+    // paginated path anyway.
+    const { items } = await this.findPageByProductId(productId, {
+      page: 1,
+      limit: 200,
     });
+    return items;
+  }
+
+  async findPageByProductId(
+    productId: string,
+    opts: { page: number; limit: number },
+  ): Promise<{ items: any[]; total: number; page: number; limit: number }> {
+    const page = Math.max(1, opts.page);
+    const limit = Math.min(Math.max(1, opts.limit), 500);
+    const skip = (page - 1) * limit;
+    const [items, total] = await Promise.all([
+      this.prisma.productVariant.findMany({
+        where: { productId, isDeleted: false },
+        include: {
+          optionValues: {
+            include: {
+              optionValue: { include: { optionDefinition: true } },
+            },
+          },
+          images: { orderBy: { sortOrder: 'asc' } },
+        },
+        orderBy: { sortOrder: 'asc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.productVariant.count({
+        where: { productId, isDeleted: false },
+      }),
+    ]);
+    return { items, total, page, limit };
   }
 
   async findById(variantId: string, productId: string): Promise<any | null> {
@@ -58,7 +99,7 @@ export class PrismaVariantRepository implements IVariantRepository {
 
     const primaryImage =
       variant.product.images.length > 0
-        ? variant.product.images[0].url
+        ? variant.product.images[0]!.url
         : null;
 
     return {
@@ -92,6 +133,27 @@ export class PrismaVariantRepository implements IVariantRepository {
   }
 
   async create(data: any): Promise<any> {
+    // Phase 4.6 (2026-05-16) — per-product SKU uniqueness guard.
+    // The schema doesn't carry `@@unique([productId, sku])` (would
+    // require a migration); we enforce it at the repo boundary so
+    // imports + admin edits can't introduce duplicates that would
+    // crash the inventory lookup at checkout. NULL SKUs are allowed
+    // (mappings without a real SKU are valid for digital goods).
+    if (data?.sku && data?.productId) {
+      const existing = await this.prisma.productVariant.findFirst({
+        where: {
+          productId: data.productId,
+          sku: data.sku,
+          isDeleted: false,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        throw new ConflictException(
+          `SKU "${data.sku}" is already used by another variant on this product`,
+        );
+      }
+    }
     return this.prisma.productVariant.create({
       data,
       include: {
@@ -102,6 +164,30 @@ export class PrismaVariantRepository implements IVariantRepository {
   }
 
   async update(variantId: string, data: any): Promise<any> {
+    // SKU uniqueness re-check on updates that change the SKU.
+    if (data?.sku) {
+      const current = await this.prisma.productVariant.findUnique({
+        where: { id: variantId },
+        select: { productId: true, sku: true },
+      });
+      // Only re-check if the SKU is actually changing.
+      if (current && current.sku !== data.sku) {
+        const conflict = await this.prisma.productVariant.findFirst({
+          where: {
+            productId: current.productId,
+            sku: data.sku,
+            isDeleted: false,
+            NOT: { id: variantId },
+          },
+          select: { id: true },
+        });
+        if (conflict) {
+          throw new ConflictException(
+            `SKU "${data.sku}" is already used by another variant on this product`,
+          );
+        }
+      }
+    }
     return this.prisma.productVariant.update({
       where: { id: variantId },
       data,

@@ -166,7 +166,10 @@ export default function WalletsPage() {
                     <span
                       style={{
                         fontWeight: 600,
-                        color: w.balanceInPaise > 0 ? '#15803d' : '#0F1115',
+                        // Compare via BigInt so the sign check works
+                        // identically for `number` and `string` inputs
+                        // (BigInt-serialised balances arrive as strings).
+                        color: BigInt(w.balanceInPaise) > 0n ? '#15803d' : '#0F1115',
                       }}
                     >
                       {formatPaise(w.balanceInPaise)}

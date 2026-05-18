@@ -17,9 +17,10 @@ import { AdminAuthGuard, SellerAuthGuard, UserAuthGuard } from '../../core/guard
 import { CatalogModule } from '../catalog/module';
 import { FranchiseModule } from '../franchise/module';
 import { MoneyModule } from '../../core/money/money.module';
+import { TaxModule } from '../tax/module';
 
 @Module({
-  imports: [CatalogModule, FranchiseModule, MoneyModule],
+  imports: [CatalogModule, FranchiseModule, MoneyModule, TaxModule],
   controllers: [
     AdminOrdersController,
     AdminRoutingController,

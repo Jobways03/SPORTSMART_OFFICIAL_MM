@@ -313,6 +313,9 @@ export class PrismaProductRepository implements IProductRepository {
           // remain visible through ProductStatusHistory.
           rejectionReason: null,
           changeRequestNote: null,
+          // Admin accepted this as a new product, so the duplicate match
+          // is no longer a concern — dismiss the warning permanently.
+          potentialDuplicateOf: null,
           moderatorId: moderator?.moderatorId ?? null,
           reviewedAt,
         },

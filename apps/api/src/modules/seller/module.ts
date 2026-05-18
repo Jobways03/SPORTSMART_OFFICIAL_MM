@@ -13,31 +13,44 @@ import { UploadSellerMediaUseCase } from './application/use-cases/upload-seller-
 import { DeleteSellerMediaUseCase } from './application/use-cases/delete-seller-media.use-case';
 import { SendEmailVerificationOtpUseCase } from './application/use-cases/send-email-verification-otp.use-case';
 import { VerifySellerEmailUseCase } from './application/use-cases/verify-seller-email.use-case';
+import { SubmitSellerOnboardingUseCase } from './application/use-cases/submit-seller-onboarding.use-case';
+import { ApproveSellerUseCase } from './application/use-cases/approve-seller.use-case';
+import { RejectSellerUseCase } from './application/use-cases/reject-seller.use-case';
+import { LogoutSellerUseCase } from './application/use-cases/logout-seller.use-case';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
-import { SellerAuthGuard } from '../../core/guards';
+import { SellerAuthGuard, AdminAuthGuard, PermissionsGuard } from '../../core/guards';
 import { SellerRegisterController } from './presentation/controllers/seller-register.controller';
 import { SellerLoginController } from './presentation/controllers/seller-login.controller';
+import { SellerLogoutController } from './presentation/controllers/seller-logout.controller';
 import { SellerForgotPasswordController } from './presentation/controllers/seller-forgot-password.controller';
 import { SellerResetPasswordController } from './presentation/controllers/seller-reset-password.controller';
 import { SellerProfileController } from './presentation/controllers/seller-profile.controller';
 import { SellerProfileMediaController } from './presentation/controllers/seller-profile-media.controller';
 import { SellerEmailVerificationController } from './presentation/controllers/seller-email-verification.controller';
 import { SellerDeliveryMethodsController } from './presentation/controllers/seller-delivery-methods.controller';
+import { SubmitSellerOnboardingController } from './presentation/controllers/submit-seller-onboarding.controller';
+import { ApproveSellerController } from './presentation/controllers/approve-seller.controller';
+import { RejectSellerController } from './presentation/controllers/reject-seller.controller';
 import { SellerDeliveryMethodsService } from './application/services/seller-delivery-methods.service';
 import { SELLER_REPOSITORY } from './domain/repositories/seller.repository.interface';
 import { PrismaSellerRepository } from './infrastructure/repositories/prisma-seller.repository';
+import { SellerAuditHandler } from './application/event-handlers/seller-audit.handler';
 
 @Module({
   controllers: [
     SellerRegisterController,
     SellerLoginController,
+    SellerLogoutController,
     SellerForgotPasswordController,
     SellerResetPasswordController,
     SellerProfileController,
     SellerProfileMediaController,
     SellerEmailVerificationController,
     SellerDeliveryMethodsController,
+    SubmitSellerOnboardingController,
+    ApproveSellerController,
+    RejectSellerController,
   ],
   providers: [
     SellerDeliveryMethodsService,
@@ -48,6 +61,7 @@ import { PrismaSellerRepository } from './infrastructure/repositories/prisma-sel
     SellerPublicFacade,
     RegisterSellerUseCase,
     LoginSellerUseCase,
+    LogoutSellerUseCase,
     ForgotPasswordSellerUseCase,
     VerifyResetOtpSellerUseCase,
     ResendResetOtpSellerUseCase,
@@ -59,9 +73,19 @@ import { PrismaSellerRepository } from './infrastructure/repositories/prisma-sel
     DeleteSellerMediaUseCase,
     SendEmailVerificationOtpUseCase,
     VerifySellerEmailUseCase,
+    SubmitSellerOnboardingUseCase,
+    ApproveSellerUseCase,
+    RejectSellerUseCase,
     EmailOtpAdapter,
     CloudinaryAdapter,
     SellerAuthGuard,
+    AdminAuthGuard,
+    PermissionsGuard,
+    // Listens to every seller.* event and writes a structured row to
+    // audit_logs via AuditPublicFacade (which is exported from the
+    // @Global AuditModule). Without this provider entry, the @OnEvent
+    // decorators on the handler are never bound.
+    SellerAuditHandler,
   ],
   exports: [SellerPublicFacade],
 })

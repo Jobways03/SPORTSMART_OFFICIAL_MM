@@ -32,11 +32,18 @@
 # digest — if it 404s, the digest is wrong or the image was un-published.
 # ─────────────────────────────────────────────────────────────────────
 
-# Placeholder digest. REPLACE WITH A REAL `docker inspect`-derived
-# digest BEFORE the first prod build off this PR; the all-zeros value
-# below is recognised by the env-coverage spec as a valid digest format
-# but no Docker registry will resolve it.
-FROM node:22-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS base
+# Phase 9 (2026-05-16) — Base image pinned by SHA256 digest.
+#
+# Resolved 2026-05-16 against Docker Hub (library/node, tag 22-slim).
+# Rotate on each Node 22.x point release via:
+#
+#   infra/scripts/pin-base-image.sh node:22-slim
+#
+# The script pulls the tag fresh, captures `RepoDigests[0]`, refuses
+# all-zeros, and rewrites the digest portion of THIS FROM line. The
+# tag stays in the line for readability — Docker uses the digest as
+# the source of truth.
+FROM node:22-slim@sha256:689c11043dad91472750cd824c97dd5e2318e9dd6f954e492fe7af0135d33ceb AS base
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     CI=true

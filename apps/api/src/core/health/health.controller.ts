@@ -1,8 +1,10 @@
-import { Controller, Get, HttpCode, HttpStatus, Res } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { Controller, Get, HttpCode, HttpStatus, Query, Res } from '@nestjs/common';
+import { ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { RedisService } from '../../bootstrap/cache/redis.service';
+import { EnvService } from '../../bootstrap/env/env.service';
+import { ExternalDepsProbeService } from './external-deps-probe.service';
 
 @ApiTags('Health')
 @Controller('health')
@@ -10,6 +12,8 @@ export class HealthController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly env: EnvService,
+    private readonly externalProbe: ExternalDepsProbeService,
   ) {}
 
   /**
@@ -21,13 +25,29 @@ export class HealthController {
    * this endpoint returned 200 regardless of the check results, so a
    * node with a broken DB connection happily stayed in rotation and
    * shed the failures onto customers.
+   *
+   * Phase 11 (2026-05-16) — External-dependency probes are optional
+   * and OFF by default for the LB-facing /health route to keep the
+   * happy path under a few ms. Set `?external=1` (or the env flag
+   * `HEALTH_EXTERNAL_PROBES_DEFAULT=true`) to include Razorpay / S3 /
+   * Cloudinary. The full probe lives at `/health/deps` so dashboards
+   * and dedicated alerts can call it on their own cadence without
+   * tying it to LB readiness.
    */
   @Get()
-  async check(@Res({ passthrough: true }) res: Response) {
-    const checks: Record<string, string> = {};
+  @ApiQuery({ name: 'external', required: false })
+  async check(
+    @Res({ passthrough: true }) res: Response,
+    @Query('external') external?: string,
+  ) {
+    const checks: Record<string, unknown> = {};
 
     try {
-      await this.prisma.$queryRawUnsafe('SELECT 1');
+      // Phase 11 (2026-05-16) — use $queryRaw template literal rather
+      // than $queryRawUnsafe. Both work here (no params), but the
+      // template-literal form is the team's standard and removes the
+      // grep noise of "unsafe" calls in health code.
+      await this.prisma.$queryRaw`SELECT 1`;
       checks.database = 'ok';
     } catch {
       checks.database = 'error';
@@ -40,13 +60,45 @@ export class HealthController {
       checks.redis = 'error';
     }
 
-    const healthy = Object.values(checks).every((v) => v === 'ok');
+    // Phase 11 (2026-05-16) — opt-in external probes. Counted into
+    // the overall `healthy` boolean only when explicitly requested
+    // (default OFF). LBs that need external-dependency awareness
+    // should poll /health?external=1 or set the env default.
+    const includeExternal =
+      external === '1' ||
+      external === 'true' ||
+      this.env.getString('HEALTH_EXTERNAL_PROBES_DEFAULT', 'false') === 'true';
+    if (includeExternal) {
+      const external = await this.externalProbe.probeAll();
+      checks.external = external;
+    }
+
+    const healthy = this.allOk(checks);
     res.status(healthy ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE);
 
     return {
       success: healthy,
       status: healthy ? 'healthy' : 'degraded',
       checks,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Phase 11 (2026-05-16) — dedicated external-deps probe.
+   *
+   * Returns Razorpay / S3 / Cloudinary status without touching DB or
+   * Redis. Use for dashboards + dedicated alerts ("Razorpay degraded
+   * for 5 minutes") on a cadence independent of LB readiness.
+   */
+  @Get('deps')
+  async deps(@Res({ passthrough: true }) res: Response) {
+    const probes = await this.externalProbe.probeAll();
+    const anyDegraded = Object.values(probes).some((p) => p.status === 'degraded');
+    res.status(anyDegraded ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.OK);
+    return {
+      success: !anyDegraded,
+      probes,
       timestamp: new Date().toISOString(),
     };
   }
@@ -64,5 +116,28 @@ export class HealthController {
   @HttpCode(HttpStatus.OK)
   live() {
     return { status: 'alive', timestamp: new Date().toISOString() };
+  }
+
+  /**
+   * Walk the (possibly nested) check tree and return false if any
+   * leaf value indicates failure. Treats the new `external` nested
+   * object's `status` strings consistently with the legacy
+   * 'ok' / 'error' string leaves.
+   */
+  private allOk(checks: Record<string, unknown>): boolean {
+    for (const value of Object.values(checks)) {
+      if (typeof value === 'string') {
+        if (value !== 'ok') return false;
+        continue;
+      }
+      if (value && typeof value === 'object') {
+        // External-probe leaves: { razorpay: { status: 'ok' | 'degraded' | 'skipped' } }
+        for (const child of Object.values(value as Record<string, { status?: string }>)) {
+          const s = child?.status;
+          if (s === 'degraded') return false;
+        }
+      }
+    }
+    return true;
   }
 }

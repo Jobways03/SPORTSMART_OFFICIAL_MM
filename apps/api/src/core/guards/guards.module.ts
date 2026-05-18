@@ -5,6 +5,7 @@ import { PolicyGuard } from './policy.guard';
 import { PolicyEvaluatorService } from '../authorization/policy-evaluator.service';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
+import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
 
 /**
  * Phase 4 — Global guards module.
@@ -33,6 +34,7 @@ import { AdminPermissionResolver } from '../authorization/admin-permission-resol
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AdminPermissionResolver,
+    RbacOrphanSweepCron,
   ],
   exports: [
     PermissionsGuard,
@@ -41,6 +43,7 @@ import { AdminPermissionResolver } from '../authorization/admin-permission-resol
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AdminPermissionResolver,
+    RbacOrphanSweepCron,
   ],
 })
 export class GuardsModule {}

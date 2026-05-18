@@ -16,7 +16,7 @@ import { Type } from 'class-transformer';
 export class PosSaleItemDto {
   @IsNotEmpty({ message: 'Product ID is required' })
   @IsUUID()
-  productId: string;
+  productId!: string;
 
   @IsOptional()
   @IsUUID()
@@ -25,12 +25,12 @@ export class PosSaleItemDto {
   @IsNotEmpty({ message: 'Quantity is required' })
   @IsNumber({}, { message: 'Quantity must be a number' })
   @Min(1, { message: 'Quantity must be at least 1' })
-  quantity: number;
+  quantity!: number;
 
   @IsNotEmpty({ message: 'Unit price is required' })
   @IsNumber({}, { message: 'Unit price must be a number' })
   @Min(0, { message: 'Unit price must be at least 0' })
-  unitPrice: number;
+  unitPrice!: number;
 
   @IsOptional()
   @IsNumber({}, { message: 'Line discount must be a number' })
@@ -66,5 +66,5 @@ export class PosRecordSaleDto {
   @IsArray({ message: 'Items must be an array' })
   @ValidateNested({ each: true })
   @Type(() => PosSaleItemDto)
-  items: PosSaleItemDto[];
+  items!: PosSaleItemDto[];
 }

@@ -111,6 +111,7 @@ export default function DashboardLayout({
     { href: '/dashboard/catalog', label: 'Browse Catalog', icon: '&#128270;', disabled: !isActive, description: 'Find and map existing products' },
     { href: '/dashboard/catalog/my-products', label: 'My Products', icon: '&#128230;', disabled: !isActive, description: 'View all your mapped products' },
     { href: '/dashboard/products', label: 'Submit Product', icon: '&#128221;', disabled: !isActive, description: 'Create your own product listing' },
+    { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128200;', disabled: !isActive, description: 'Stock levels, low-stock, out-of-stock' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;', disabled: !isActive },
     { href: '/dashboard/returns', label: 'Returns', icon: '&#8617;', disabled: !isActive },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },

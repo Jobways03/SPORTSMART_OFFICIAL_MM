@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react';
+import { useModal } from '@sportsmart/ui';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import {
@@ -31,6 +32,7 @@ const STATUS_COLORS: Record<TicketStatus, string> = {
 
 export default function TicketDetailPage() {
   const authStatus = useAuthGuard();
+  const { confirmDialog } = useModal();
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<TicketDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -160,7 +162,13 @@ export default function TicketDetailPage() {
   }
 
   async function close() {
-    if (!confirm('Close this ticket? You can re-open it by replying again.')) return;
+    const ok = await confirmDialog({
+      title: 'Close this ticket?',
+      message: 'You can re-open it by replying again.',
+      confirmText: 'Close ticket',
+      cancelText: 'Keep open',
+    });
+    if (!ok) return;
     setClosing(true);
     sendingRef.current = true;
     try {

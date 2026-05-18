@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { useModal } from '@sportsmart/ui';
 import { NovaTabs } from '../components/nova-tabs';
 import {
   adminNovaService,
@@ -14,6 +15,7 @@ const PAGE_SIZE = 20;
 
 export default function NovaProductsPage() {
   const router = useRouter();
+  const { confirmDialog, notify } = useModal();
   const [data, setData] = useState<{ items: OwnBrandProduct[]; total: number } | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
@@ -55,13 +57,20 @@ export default function NovaProductsPage() {
   };
 
   const unconvert = async (productId: string) => {
-    if (!confirm('Revert this product to SELLER source? Only allowed when stock is 0.')) return;
+    const ok = await confirmDialog({
+      title: 'Revert this product to SELLER source?',
+      message: 'Only allowed when stock is 0. The product will leave the Nova brand.',
+      confirmText: 'Revert',
+      cancelText: 'Keep as Nova',
+      danger: true,
+    });
+    if (!ok) return;
     setActioning(productId);
     try {
       await adminNovaService.unconvertProduct(productId);
       fetchData();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Could not unconvert');
+      notify({ kind: 'error', message: err instanceof Error ? err.message : 'Could not unconvert' });
     } finally {
       setActioning(null);
     }

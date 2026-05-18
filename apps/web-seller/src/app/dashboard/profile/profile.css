@@ -315,11 +315,23 @@
   border: 2px solid #e5e7eb;
 }
 
-.media-preview-circle img,
-.media-preview-rect img {
+/* Profile photo: a person — `cover` is the right crop, the head stays
+   in frame and the empty corners of a square photo don't show. */
+.media-preview-circle img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Shop logo: a brand mark — must show in full. `cover` was clipping
+   logos when their aspect ratio didn't match 160:90. `contain`
+   letterboxes inside the grey container so the entire logo is
+   visible. The grey background plays the role of the negative space
+   when source ratios don't match. */
+.media-preview-rect img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .media-placeholder-icon {

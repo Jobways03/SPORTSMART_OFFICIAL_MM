@@ -59,6 +59,15 @@ export interface TemplateInput {
     | 'paymentMode'
     | 'originalDocumentNumber'
     | 'reason'
+    // Phase 22 e-invoice metadata — required on the printed invoice
+    // per CBIC GST e-invoicing spec when the document was IRP-signed.
+    // Nullable on documents that aren't e-invoice-applicable (B2C,
+    // sub-threshold, BILL_OF_SUPPLY).
+    | 'irn'
+    | 'ackNo'
+    | 'ackDate'
+    | 'qrCodeUrl'
+    | 'einvoiceStatus'
   >;
   lines: Array<
     Pick<
@@ -316,12 +325,72 @@ function baseEnvelope(opts: EnvelopeOptions): string {
     }
   </table>
 
+  ${renderEinvoiceBlock(d)}
+
   <div class="footer">
     Line items: ${lineCount} · Currency: ${e(d.currencyCode)} · Payment mode: ${e(d.paymentMode ?? '—')}<br />
     ${e(opts.footerNote)}
   </div>
 </body>
 </html>`;
+}
+
+/**
+ * Render the e-invoice metadata block (IRN + Ack No + Ack Date + QR code).
+ *
+ * CBIC e-invoicing spec requires the IRN, Ack number, Ack date, and a
+ * scannable QR code to appear on every printed copy of an e-invoice
+ * (TAX_INVOICE / INVOICE_CUM_BILL_OF_SUPPLY / CREDIT_NOTE / DEBIT_NOTE
+ * that fell into the e-invoice net by turnover + B2B + opt-in gates).
+ *
+ * The QR encodes the IRP-signed JSON content; recipients scan it to
+ * verify document authenticity against the IRP without trusting our
+ * PDF rendering. We store the URL the IRP returns (`qrCodeUrl`) at
+ * generation time and render an `<img>` here — the PDF rendering
+ * engine (Puppeteer / Playwright when wired) fetches it at render
+ * time. The image is intentionally a normal `<img>` so the PDF
+ * binary embeds the bitmap.
+ *
+ * Returns an empty string for documents that didn't get an IRN
+ * (B2C, sub-threshold sellers, BILL_OF_SUPPLY, LEGACY_RECEIPT).
+ */
+function renderEinvoiceBlock(d: TemplateInput['document']): string {
+  // Only render the block when IRN was actually generated. einvoiceStatus
+  // values: NOT_APPLICABLE | PENDING | GENERATED | FAILED.
+  if (d.einvoiceStatus !== 'GENERATED' || !d.irn) return '';
+
+  const ackDateFmt = d.ackDate
+    ? new Date(d.ackDate).toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : '—';
+
+  const qrImage = d.qrCodeUrl
+    ? `<img src="${e(d.qrCodeUrl)}" alt="IRN QR Code — scan to verify on IRP" width="140" height="140" style="border:1px solid #d0d7de; padding:4px; background:#fff;" />`
+    : `<div style="width:140px; height:140px; border:1px dashed #d0d7de; padding:8px; font-size:10px; color:#888; text-align:center; box-sizing:border-box;">QR pending — fetch from IRP if needed</div>`;
+
+  return `
+  <div class="einvoice-block" style="margin-top:18px; padding:12px 14px; border:1px solid #d0d7de; border-radius:6px; background:#fafbfc; display:flex; gap:16px; align-items:flex-start;">
+    <div style="flex-shrink:0;">
+      ${qrImage}
+    </div>
+    <div style="flex:1; font-size:11px; line-height:1.5;">
+      <div style="font-weight:600; margin-bottom:4px; font-size:12px;">e-Invoice (CBIC IRP)</div>
+      <div><span style="color:#666;">IRN:</span> <code style="word-break:break-all;">${e(d.irn)}</code></div>
+      <div><span style="color:#666;">Ack No:</span> ${e(d.ackNo ?? '—')}</div>
+      <div><span style="color:#666;">Ack Date:</span> ${e(ackDateFmt)} IST</div>
+      <div style="margin-top:6px; color:#555; font-style:italic;">
+        Scan the QR with the GSTN e-Invoice mobile app or any compliant
+        scanner to verify this invoice against the Invoice Registration
+        Portal (IRP).
+      </div>
+    </div>
+  </div>`;
 }
 
 function renderLineRow(

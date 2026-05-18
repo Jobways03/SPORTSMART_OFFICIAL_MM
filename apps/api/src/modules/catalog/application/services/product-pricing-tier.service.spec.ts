@@ -157,8 +157,8 @@ describe('ProductPricingTierService', () => {
         },
       });
       const rows = await service.listActiveForProduct({ productId: 'p-1' });
-      expect(rows[0].discountPercent).toBe(10.5);
-      expect(rows[0].displayLabel).toBe('Buy 5+ save 10.5%');
+      expect(rows[0]!.discountPercent).toBe(10.5);
+      expect(rows[0]!.displayLabel).toBe('Buy 5+ save 10.5%');
     });
   });
 

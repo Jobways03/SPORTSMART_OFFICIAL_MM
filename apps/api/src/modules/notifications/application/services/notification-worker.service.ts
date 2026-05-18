@@ -20,6 +20,20 @@ const MAX_ATTEMPTS = 3;
 // Exponential backoff: 30s · 2m · 8m
 const RETRY_DELAYS_MS = [30_000, 120_000, 480_000];
 
+// Phase 10 (2026-05-16) — within-batch concurrency.
+//
+// The pre-Phase-10 worker awaited each dispatch sequentially, so one
+// slow provider call (e.g. a 5s WhatsApp retry storm) stalled the
+// entire batch behind it. At 500ms × 10 jobs = 20/sec theoretical
+// ceiling, the queue would silently back up during email bursts.
+//
+// We now process each batch via Promise.allSettled — every job in
+// the batch dispatches in parallel; settled when all return. Setting
+// this cap higher than MAX_JOBS_PER_TICK has no effect (the batch
+// size IS the upper bound). Lower it if a provider gets unhappy
+// under parallel load.
+const MAX_CONCURRENT_DISPATCH = 10;
+
 /**
  * Polling worker — pulls notification jobs off the Redis queue, resolves
  * the recipient destination (when the job carries a `recipientId`),
@@ -65,10 +79,32 @@ export class NotificationWorker implements OnModuleInit, OnModuleDestroy {
     if (this.running) return; // skip overlapping ticks
     this.running = true;
     try {
+      // Phase 10 (2026-05-16) — drain up to MAX_JOBS_PER_TICK in
+      // parallel. Dequeue is still sequential (LPOP is atomic; an
+      // attempted batch-pop would either need MULTI/EXEC or an
+      // LMPOP, neither of which buy us much over N small pops).
+      // The dispatch step is where the wall-clock goes; parallel
+      // there alone lifts the per-tick ceiling from 10/sec to roughly
+      // (10 / slowest-provider-RTT).
+      const jobs: NotificationJob[] = [];
       for (let i = 0; i < MAX_JOBS_PER_TICK; i++) {
         const job = await this.queue.dequeue();
         if (!job) break;
-        await this.handle(job);
+        jobs.push(job);
+      }
+      if (jobs.length === 0) return;
+
+      // Each handle() catches its own provider errors and writes its
+      // own audit row, so a single failure doesn't poison the batch.
+      // allSettled rather than all so a thrown exception (rare —
+      // handle() catches internally) still settles the other jobs.
+      const slice = jobs.slice(0, MAX_CONCURRENT_DISPATCH);
+      await Promise.allSettled(slice.map((job) => this.handle(job)));
+      // If the batch ever exceeds MAX_CONCURRENT_DISPATCH (won't
+      // today, but the constant decoupling is intentional), drain
+      // the remainder serially. Belt + braces.
+      for (let i = MAX_CONCURRENT_DISPATCH; i < jobs.length; i++) {
+        await this.handle(jobs[i]!);
       }
     } catch (err) {
       this.logger.error(`Worker tick crashed: ${(err as Error).message}`);

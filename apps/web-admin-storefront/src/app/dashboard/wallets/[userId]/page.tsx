@@ -436,7 +436,9 @@ function TransactionsTable({ transactions }: { transactions: AdminWalletTransact
                   textAlign: 'right',
                   fontVariantNumeric: 'tabular-nums',
                   fontWeight: 600,
-                  color: tx.amountInPaise >= 0 ? '#15803d' : '#b91c1c',
+                  // Compare via BigInt so the sign check works for
+                  // both number and string (BigInt-serialised) amounts.
+                  color: BigInt(tx.amountInPaise) >= 0n ? '#15803d' : '#b91c1c',
                 }}
               >
                 {signedAmount(tx)}

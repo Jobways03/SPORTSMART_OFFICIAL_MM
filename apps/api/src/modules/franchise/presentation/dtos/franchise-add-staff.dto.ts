@@ -10,11 +10,11 @@ import {
 export class FranchiseAddStaffDto {
   @IsNotEmpty()
   @IsString()
-  name: string;
+  name!: string;
 
   @IsNotEmpty()
   @IsEmail()
-  email: string;
+  email!: string;
 
   @IsOptional()
   @IsString()
@@ -22,10 +22,10 @@ export class FranchiseAddStaffDto {
 
   @IsNotEmpty()
   @IsIn(['MANAGER', 'POS_OPERATOR', 'WAREHOUSE_STAFF'])
-  role: string;
+  role!: string;
 
   @IsNotEmpty()
   @IsString()
   @MinLength(8)
-  password: string;
+  password!: string;
 }

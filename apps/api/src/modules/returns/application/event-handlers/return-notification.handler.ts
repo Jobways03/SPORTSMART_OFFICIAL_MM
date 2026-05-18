@@ -3,7 +3,9 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EmailService } from '../../../../integrations/email/email.service';
+import { escapeHtml, safeHtml } from '../../../../core/util/escape-html';
 
 @Injectable()
 export class ReturnNotificationHandler {
@@ -11,8 +13,31 @@ export class ReturnNotificationHandler {
     private readonly emailService: EmailService,
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
+    private readonly env: EnvService,
   ) {
     this.logger.setContext('ReturnNotificationHandler');
+  }
+
+  /**
+   * Phase 5.3 (2026-05-16) — escalation recipient.
+   *
+   * Pre-2026-05-16 this was hardcoded `admin@sportsmart.com` in two
+   * places (stale-return + refund-exhaustion). Now sourced from env
+   * `ADMIN_ESCALATION_EMAIL` so ops can redirect alerts to a
+   * distribution list or PagerDuty inbox without a code change. The
+   * fallback retains the legacy address so a missing env value
+   * doesn't drop the alert silently — but a log warning fires so
+   * the misconfiguration surfaces.
+   */
+  private getEscalationEmail(): string {
+    const configured = this.env.getString('ADMIN_ESCALATION_EMAIL', '');
+    if (configured && configured.trim().length > 0) {
+      return configured.trim();
+    }
+    this.logger.warn(
+      'ADMIN_ESCALATION_EMAIL is not configured — falling back to admin@sportsmart.com. Set this env var to route escalations to your ops distribution list.',
+    );
+    return 'admin@sportsmart.com';
   }
 
   // Helper to get customer email + name + return + order details
@@ -50,7 +75,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #1f2937; margin-top: 0;">Return Request Received</h3>
         <p>Hi ${name},</p>
         <p>We've received your return request for order <strong>${ret.masterOrder.orderNumber}</strong>.</p>
@@ -79,7 +104,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #16a34a; margin-top: 0;">Return Approved</h3>
         <p>Hi ${name},</p>
         <p>Your return request <strong>${ret.returnNumber}</strong> has been approved${event.payload.autoApproved ? ' automatically' : ''}.</p>
@@ -107,7 +132,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #dc2626; margin-top: 0;">Return Request Rejected</h3>
         <p>Hi ${name},</p>
         <p>Unfortunately, your return request <strong>${ret.returnNumber}</strong> has been rejected.</p>
@@ -138,7 +163,7 @@ export class ReturnNotificationHandler {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
       });
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #2563eb; margin-top: 0;">Pickup Scheduled</h3>
         <p>Hi ${name},</p>
         <p>A pickup has been scheduled for your return <strong>${ret.returnNumber}</strong>.</p>
@@ -166,7 +191,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #2563eb; margin-top: 0;">Return In Transit</h3>
         <p>Hi ${name},</p>
         <p>Your return <strong>${ret.returnNumber}</strong> is now in transit to our warehouse.</p>
@@ -190,7 +215,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #2563eb; margin-top: 0;">Return Received at Warehouse</h3>
         <p>Hi ${name},</p>
         <p>Your return <strong>${ret.returnNumber}</strong> has been received at our warehouse.</p>
@@ -223,7 +248,7 @@ export class ReturnNotificationHandler {
 
       const headerColor = event.payload.qcDecision === 'REJECTED' ? '#dc2626' : '#16a34a';
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: ${headerColor}; margin-top: 0;">Quality Check Complete</h3>
         <p>Hi ${name},</p>
         <p>The quality check for your return <strong>${ret.returnNumber}</strong> is complete. Your return has been ${decisionText}.</p>
@@ -261,7 +286,7 @@ export class ReturnNotificationHandler {
         'CASH': 'cash',
       }[event.payload.refundMethod] || event.payload.refundMethod;
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #2563eb; margin-top: 0;">Refund Processing</h3>
         <p>Hi ${name},</p>
         <p>We've initiated the refund for your return <strong>${ret.returnNumber}</strong>.</p>
@@ -289,7 +314,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #16a34a; margin-top: 0;">Refund Completed</h3>
         <p>Hi ${name},</p>
         <p>Your refund for return <strong>${ret.returnNumber}</strong> has been completed.</p>
@@ -469,7 +494,7 @@ export class ReturnNotificationHandler {
       const ret = await this.getReturnContext(event.payload.returnId);
       if (!ret) return;
       // Notify admin via existing admin email
-      const adminEmail = 'admin@sportsmart.com';
+      const adminEmail = this.getEscalationEmail();
       await this.emailService.send({
         to: adminEmail,
         subject: `Stale return escalation — ${event.payload.returnNumber}`,
@@ -498,7 +523,7 @@ export class ReturnNotificationHandler {
     lastFailureReason: string | null;
   }>) {
     try {
-      const adminEmail = 'admin@sportsmart.com';
+      const adminEmail = this.getEscalationEmail();
       const fmt = `\u20B9${Number(event.payload.refundAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       await this.emailService.send({
         to: adminEmail,
@@ -527,7 +552,7 @@ export class ReturnNotificationHandler {
       if (!ret?.customer?.email) return;
       const name = `${ret.customer.firstName} ${ret.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #6b7280; margin-top: 0;">Return Cancelled</h3>
         <p>Hi ${name},</p>
         <p>Your return request <strong>${ret.returnNumber}</strong> has been cancelled as requested.</p>

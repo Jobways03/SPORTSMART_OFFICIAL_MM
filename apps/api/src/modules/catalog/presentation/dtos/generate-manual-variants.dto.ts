@@ -3,12 +3,12 @@ import { Type } from 'class-transformer';
 
 export class ManualOptionDto {
   @IsString()
-  name: string;
+  name!: string;
 
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
-  values: string[];
+  values!: string[];
 }
 
 export class GenerateManualVariantsDto {
@@ -16,5 +16,5 @@ export class GenerateManualVariantsDto {
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Type(() => ManualOptionDto)
-  options: ManualOptionDto[];
+  options!: ManualOptionDto[];
 }

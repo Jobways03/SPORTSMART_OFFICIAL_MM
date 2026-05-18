@@ -4,6 +4,7 @@ import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EmailService } from '../../../../integrations/email/email.service';
+import { safeHtml, rawHtml } from '../../../../core/util/escape-html';
 
 @Injectable()
 export class OrderNotificationHandler {
@@ -49,6 +50,12 @@ export class OrderNotificationHandler {
     });
   }
 
+  /**
+   * Wrap a content fragment in the shared SPORTSMART email shell. The
+   * `content` parameter MUST already be HTML-safe — callers build it
+   * via `safeHtml\`...\`` so user data is escaped. The static shell
+   * around it has no interpolation and is safe by construction.
+   */
   private wrapTemplate(content: string): string {
     return `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
@@ -71,15 +78,16 @@ export class OrderNotificationHandler {
       const order = await this.getMasterOrderContext(event.payload.masterOrderId);
       if (!order?.customer?.email) return;
       const name = `${order.customer.firstName} ${order.customer.lastName}`.trim();
+      const totalFormatted = Number(event.payload.totalAmount).toFixed(2);
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #16a34a; margin-top: 0;">Order Placed Successfully</h3>
         <p>Hi ${name},</p>
         <p>We've received your order. Thank you for shopping with SPORTSMART!</p>
         <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
           <p style="margin: 4px 0;"><strong>Order Number:</strong> ${event.payload.orderNumber}</p>
           <p style="margin: 4px 0;"><strong>Items:</strong> ${event.payload.itemCount}</p>
-          <p style="margin: 4px 0;"><strong>Total Amount:</strong> \u20B9${Number(event.payload.totalAmount).toFixed(2)}</p>
+          <p style="margin: 4px 0;"><strong>Total Amount:</strong> ₹${totalFormatted}</p>
           <p style="margin: 4px 0;"><strong>Payment Method:</strong> ${order.paymentMethod}</p>
         </div>
         <p>We'll notify you when your order is shipped.</p>
@@ -101,15 +109,23 @@ export class OrderNotificationHandler {
       const order = await this.getMasterOrderContext(event.payload.masterOrderId);
       if (!order?.customer?.email) return;
       const name = `${order.customer.firstName} ${order.customer.lastName}`.trim();
+      const amountFormatted = Number(event.payload.amount).toFixed(2);
 
-      const content = `
+      // Reference row is conditionally rendered. The wrapping <p> is
+      // static markup; only the reference string itself can come from
+      // a payment provider — pass it through safeHtml so it's escaped.
+      const referenceRow = event.payload.paymentReference
+        ? safeHtml`<p style="margin: 4px 0;"><strong>Reference:</strong> ${event.payload.paymentReference}</p>`
+        : '';
+
+      const content = safeHtml`
         <h3 style="color: #16a34a; margin-top: 0;">Payment Received</h3>
         <p>Hi ${name},</p>
         <p>We've received your payment for order <strong>${event.payload.orderNumber}</strong>.</p>
         <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
-          <p style="margin: 4px 0;"><strong>Amount:</strong> \u20B9${Number(event.payload.amount).toFixed(2)}</p>
+          <p style="margin: 4px 0;"><strong>Amount:</strong> ₹${amountFormatted}</p>
           <p style="margin: 4px 0;"><strong>Payment Method:</strong> ${event.payload.paymentMethod}</p>
-          ${event.payload.paymentReference ? `<p style="margin: 4px 0;"><strong>Reference:</strong> ${event.payload.paymentReference}</p>` : ''}
+          ${rawHtml(referenceRow)}
         </div>
         <p>Your order is being processed and will be shipped soon.</p>
       `;
@@ -134,16 +150,26 @@ export class OrderNotificationHandler {
       if (!subOrder?.masterOrder?.customer?.email) return;
       const name = `${subOrder.masterOrder.customer.firstName} ${subOrder.masterOrder.customer.lastName}`.trim();
 
-      const content = `
+      // The shipping block is conditional. Build it via safeHtml so
+      // courier name / tracking number (carrier-controlled) are escaped.
+      let shippingBlock = '';
+      if (subOrder.trackingNumber) {
+        const courierRow = subOrder.courierName
+          ? safeHtml`<p style="margin: 4px 0;"><strong>Courier:</strong> ${subOrder.courierName}</p>`
+          : '';
+        shippingBlock = safeHtml`
+          <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
+            ${rawHtml(courierRow)}
+            <p style="margin: 4px 0;"><strong>Tracking Number:</strong> ${subOrder.trackingNumber}</p>
+          </div>
+        `;
+      }
+
+      const content = safeHtml`
         <h3 style="color: #2563eb; margin-top: 0;">Your Order is Shipped</h3>
         <p>Hi ${name},</p>
         <p>Your order <strong>${subOrder.masterOrder.orderNumber}</strong> has been shipped and is on its way to you.</p>
-        ${subOrder.trackingNumber ? `
-        <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
-          ${subOrder.courierName ? `<p style="margin: 4px 0;"><strong>Courier:</strong> ${subOrder.courierName}</p>` : ''}
-          <p style="margin: 4px 0;"><strong>Tracking Number:</strong> ${subOrder.trackingNumber}</p>
-        </div>
-        ` : ''}
+        ${rawHtml(shippingBlock)}
         <p>You'll receive another notification once your order is delivered.</p>
       `;
 
@@ -200,8 +226,14 @@ export class OrderNotificationHandler {
       }
       if (!recipientEmail) return;
 
-      const itemSummary = subOrder.items
-        .map((i) => `&bull; ${i.quantity} \u00D7 ${i.productTitle}`)
+      // Build the item bullet list via safeHtml — productTitle is
+      // seller-controlled and must be escaped. Join via rawHtml since
+      // each row is already a sanitized safeHtml fragment.
+      const itemRows = subOrder.items
+        .map(
+          (i) =>
+            safeHtml`&bull; ${i.quantity} × ${i.productTitle}`,
+        )
         .join('<br>');
 
       const verb = isReassignment ? 'Reassigned' : 'New';
@@ -209,14 +241,23 @@ export class OrderNotificationHandler {
         ? 'A sub-order has been reassigned to you. Please review and accept or reject within the deadline.'
         : 'A new order has been assigned to you. Please review and accept or reject within the deadline.';
 
-      const content = `
+      // Deadline row is conditional and uses a Date.toLocaleString that
+      // we control — but it ultimately becomes a string that could in
+      // principle contain anything, so escape via safeHtml regardless.
+      const deadlineRow = (subOrder as any).acceptDeadlineAt
+        ? safeHtml`<p style="margin: 4px 0;"><strong>Accept by:</strong> ${new Date(
+            (subOrder as any).acceptDeadlineAt,
+          ).toLocaleString()}</p>`
+        : '';
+
+      const content = safeHtml`
         <h3 style="color: #2563eb; margin-top: 0;">${verb} order: ${subOrder.masterOrder.orderNumber}</h3>
         <p>Hi ${recipientName || 'there'},</p>
         <p>${intro}</p>
         <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
           <p style="margin: 4px 0;"><strong>Order:</strong> ${subOrder.masterOrder.orderNumber}</p>
-          <p style="margin: 4px 0;"><strong>Items:</strong><br>${itemSummary}</p>
-          ${subOrder.acceptDeadlineAt ? `<p style="margin: 4px 0;"><strong>Accept by:</strong> ${new Date(subOrder.acceptDeadlineAt).toLocaleString()}</p>` : ''}
+          <p style="margin: 4px 0;"><strong>Items:</strong><br>${rawHtml(itemRows)}</p>
+          ${rawHtml(deadlineRow)}
         </div>
         <p>Open your dashboard to review the details and respond.</p>
       `;
@@ -272,7 +313,7 @@ export class OrderNotificationHandler {
       if (!subOrder?.masterOrder?.customer?.email) return;
       const name = `${subOrder.masterOrder.customer.firstName} ${subOrder.masterOrder.customer.lastName}`.trim();
 
-      const content = `
+      const content = safeHtml`
         <h3 style="color: #16a34a; margin-top: 0;">Your Order is Delivered</h3>
         <p>Hi ${name},</p>
         <p>Your order <strong>${subOrder.masterOrder.orderNumber}</strong> has been delivered. We hope you love your purchase!</p>

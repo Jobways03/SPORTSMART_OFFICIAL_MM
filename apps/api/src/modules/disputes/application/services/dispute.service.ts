@@ -1257,7 +1257,7 @@ export class DisputeService {
         new Set(subs.map((s) => s.sellerId).filter((x): x is string => !!x)),
       );
       if (uniqueSellers.length === 1) {
-        return uniqueSellers[0];
+        return uniqueSellers[0]!;
       }
       if (uniqueSellers.length > 1) {
         throw new BadRequestAppException(

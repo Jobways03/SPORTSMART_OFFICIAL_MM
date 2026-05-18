@@ -132,6 +132,10 @@ enum WalletAdjustmentKind {
 
 enum WalletAdjustmentStatus {
   PENDING_APPROVAL
+  // Intermediate state for dual-approval rows: one admin has signed off,
+  // a second distinct admin must approve before money moves. Only rows
+  // with requiresDualApproval=true can transition through this state.
+  FIRST_APPROVED
   APPROVED
   REJECTED
   REVERSED
@@ -175,13 +179,17 @@ model WalletAdjustment {
   reason String
 
   // Audit trail
-  requestedByAdminId String?   @map("requested_by_admin_id")
-  requestedAt        DateTime  @default(now()) @map("requested_at")
-  approvedByAdminId  String?   @map("approved_by_admin_id")
-  approvedAt         DateTime? @map("approved_at")
-  rejectedByAdminId  String?   @map("rejected_by_admin_id")
-  rejectedAt         DateTime? @map("rejected_at")
-  rejectionReason    String?   @map("rejection_reason")
+  requestedByAdminId      String?   @map("requested_by_admin_id")
+  requestedAt             DateTime  @default(now()) @map("requested_at")
+  // First sign-off on a dual-approval row. Stays null on single-approval
+  // rows (the row goes straight from PENDING_APPROVAL to APPROVED).
+  firstApprovedByAdminId  String?   @map("first_approved_by_admin_id")
+  firstApprovedAt         DateTime? @map("first_approved_at")
+  approvedByAdminId       String?   @map("approved_by_admin_id")
+  approvedAt              DateTime? @map("approved_at")
+  rejectedByAdminId       String?   @map("rejected_by_admin_id")
+  rejectedAt              DateTime? @map("rejected_at")
+  rejectionReason         String?   @map("rejection_reason")
 
   // Set on approval — references the wallet_transactions row that
   // actually moved the money.

@@ -36,8 +36,15 @@ export class PaymentOpsFacade {
     masterOrderId?: string | null;
     orderNumber?: string | null;
     providerPaymentId?: string | null;
-    expectedInPaise?: number | null;
-    actualInPaise?: number | null;
+    /**
+     * Paise values can be `number` (when small enough to fit in
+     * Number.MAX_SAFE_INTEGER), `bigint`, or `string` (BigInt
+     * serialised across an HTTP boundary). We accept all three so
+     * callers don't have to coerce — coercion happens once at the
+     * persistence boundary in the service.
+     */
+    expectedInPaise?: number | bigint | string | null;
+    actualInPaise?: number | bigint | string | null;
     description: string;
     severity?: number;
   }) {

@@ -23,6 +23,21 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    # Phase 14 (2026-05-16) — enable AOF (append-only file) persistence.
+    # Default Redis runs RDB-only snapshots every few minutes; on a
+    # crash between snapshots we'd lose outbox publisher locks, in-
+    # flight idempotency keys, and the rate-limit counters that
+    # protect refund APIs. AOF writes every command to disk and fsyncs
+    # every second (`appendfsync everysec`) so worst-case data loss
+    # is ~1 second of writes — well within our DPDP / payment audit
+    # tolerance. Prod runs ElastiCache Redis with AOF enabled at the
+    # AWS parameter-group level; this dev/staging config mirrors it.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
     volumes:
       - redis_data:/data
     healthcheck:

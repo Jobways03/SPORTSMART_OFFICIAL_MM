@@ -20,6 +20,7 @@ import {
   ForbiddenAppException,
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { FranchiseCommissionService } from './franchise-commission.service';
 
 @Injectable()
@@ -36,6 +37,7 @@ export class ProcurementService {
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
     private readonly prisma: PrismaService,
+    private readonly env: EnvService,
   ) {
     this.logger.setContext('ProcurementService');
   }
@@ -175,9 +177,23 @@ export class ProcurementService {
       );
     }
 
+    // Phase 7 (2026-05-16) — compute the approval-SLA deadline so the
+    // breach cron has something to scan against. The deadline is wall
+    // clock; we don't subtract weekends/holidays because admins are
+    // available around the clock for procurement triage.
+    const requestedAt = new Date();
+    const slaHours = this.env.getNumber('PROCUREMENT_APPROVAL_SLA_HOURS', 48);
+    const slaApproveBy = new Date(
+      requestedAt.getTime() + slaHours * 60 * 60 * 1000,
+    );
+
     const updated = await this.procurementRepo.update(requestId, {
       status: 'SUBMITTED',
-      requestedAt: new Date(),
+      requestedAt,
+      slaApproveBy,
+      // Clear any stale breach flag from a previous SUBMITTED→DRAFT
+      // round-trip so the cron starts fresh.
+      slaBreachedAt: null,
     });
 
     await this.eventBus.publish({
@@ -189,6 +205,7 @@ export class ProcurementService {
         requestId,
         franchiseId,
         requestNumber: request.requestNumber,
+        slaApproveBy,
       },
     });
 

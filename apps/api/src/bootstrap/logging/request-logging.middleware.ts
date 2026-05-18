@@ -7,6 +7,7 @@ import {
   MetricsRegistry,
 } from '../../core/metrics/metrics.registry';
 import { HttpErrorRateMonitor } from './http-error-rate-monitor';
+import { RequestContextService } from './request-context';
 
 const REQUEST_ID_HEADER = 'x-request-id';
 
@@ -29,9 +30,10 @@ const REQUEST_ID_HEADER = 'x-request-id';
  */
 export function sanitizeRoute(rawUrl: string): string {
   // Already a route template? (Contains a `:placeholder` segment.)
-  if (rawUrl.includes('/:')) return rawUrl.split('?')[0];
+  if (rawUrl.includes('/:')) return rawUrl.split('?')[0]!;
 
-  const noQuery = rawUrl.split('?')[0];
+  const noQuery = rawUrl.split('?')[0]!;
+
   const segments = noQuery.split('/');
   const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   const NUMERIC_RE = /^\d+$/;
@@ -99,7 +101,7 @@ export class RequestLoggingMiddleware implements NestMiddleware {
 
     const start = Date.now();
 
-    res.on('finish', () => {
+    const finishHook = () => {
       const duration = Date.now() - start;
 
       // Phase 5 (PR 5.7) — emit duration histogram. Prefer the route
@@ -130,8 +132,18 @@ export class RequestLoggingMiddleware implements NestMiddleware {
         `${req.method} ${req.originalUrl} ${res.statusCode} - ${duration}ms req=${requestId}`,
         'HTTP',
       );
-    });
+    };
+    res.on('finish', finishHook);
 
-    next();
+    // Phase 11 (2026-05-16) — bind the request id into the
+    // AsyncLocalStorage store so downstream services (and any
+    // synchronously-published in-process events) read the same id
+    // without needing `req` threaded through. The handler runs
+    // inside this `run()` call; the `finish` listener above will
+    // fire outside the store but uses the captured `requestId`
+    // closure variable directly.
+    RequestContextService.run({ requestId }, () => {
+      next();
+    });
   }
 }

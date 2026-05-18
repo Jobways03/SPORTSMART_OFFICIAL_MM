@@ -2,11 +2,18 @@ import { Injectable } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../bootstrap/logging/app-logger.service';
+import { htmlToText } from './html-to-text';
 
 export interface SendMailOptions {
   to: string;
   subject: string;
   html: string;
+  /**
+   * Plain-text alternative body. When omitted, the EmailService
+   * auto-derives one from `html` via `htmlToText`. Pass an explicit
+   * `text` only when the auto-derived version would lose structure
+   * that hand-formatting can preserve.
+   */
   text?: string;
 }
 
@@ -70,7 +77,19 @@ export class EmailService {
   }
 
   async send(options: SendMailOptions): Promise<boolean> {
-    const { to, subject, html, text } = options;
+    const { to, subject, html } = options;
+    // Phase 5 follow-up (2026-05-16) — every email now ships with a
+    // plain-text alternative. RFC 2046 strongly recommends a
+    // multipart/alternative payload (text + html) so clients that
+    // can't or won't render HTML (text-only mail-readers, narrow
+    // screen-reader inboxes, spam-filter snippet previews, mobile
+    // notification expansions) get a readable body. Callers can
+    // still pass an explicit `text` when the auto-derived version
+    // would miss important structure.
+    const text =
+      options.text && options.text.trim().length > 0
+        ? options.text
+        : htmlToText(html);
 
     if (!this.transporter) {
       this.logger.warn(`[DEV-MAIL] To: ${to} | Subject: ${subject}`);
@@ -84,7 +103,7 @@ export class EmailService {
         to,
         subject,
         html,
-        text: text || undefined,
+        text,
       });
       this.logger.log(`Email sent to ${to}: ${info.messageId}`);
       return true;

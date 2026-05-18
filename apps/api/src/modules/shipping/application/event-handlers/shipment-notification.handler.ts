@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EmailService } from '../../../../integrations/email/email.service';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { safeHtml, rawHtml } from '../../../../core/util/escape-html';
 
 @Injectable()
 export class ShipmentNotificationHandler {
@@ -30,13 +31,18 @@ export class ShipmentNotificationHandler {
       if (!subOrder?.masterOrder?.customer?.email) return;
 
       const customer = subOrder.masterOrder.customer;
+      // AWB + courier come from carrier webhook payloads, so they're
+      // external input. Escape every interpolation via safeHtml.
+      const trackingRow = awb
+        ? safeHtml`<p>Tracking: <strong>${awb}</strong> via ${courierName || 'courier'}</p>`
+        : '';
       await this.emailService.send({
         to: customer.email,
         subject: `Order Shipped — ${subOrder.masterOrder.orderNumber}`,
-        html: `<h2>Your Order Has Been Shipped!</h2>
+        html: safeHtml`<h2>Your Order Has Been Shipped!</h2>
           <p>Hi ${customer.firstName},</p>
           <p>Your order <strong>${subOrder.masterOrder.orderNumber}</strong> has been dispatched.</p>
-          ${awb ? `<p>Tracking: <strong>${awb}</strong> via ${courierName || 'courier'}</p>` : ''}`,
+          ${rawHtml(trackingRow)}`,
       });
 
       this.logger.log(`Shipment dispatch email sent for sub-order ${subOrderId}`);
@@ -65,7 +71,7 @@ export class ShipmentNotificationHandler {
       await this.emailService.send({
         to: customer.email,
         subject: `Order Delivered — ${subOrder.masterOrder.orderNumber}`,
-        html: `<h2>Your Order Has Been Delivered!</h2>
+        html: safeHtml`<h2>Your Order Has Been Delivered!</h2>
           <p>Hi ${customer.firstName},</p>
           <p>Your order <strong>${subOrder.masterOrder.orderNumber}</strong> has been delivered.</p>
           <p>If you have any issues, you can request a return within 7 days.</p>`,

@@ -32,8 +32,8 @@ describe('allocateOrderLevel — fixed-amount discount across items', () => {
       totalDiscountInPaise: 30_000n,
     });
     expect(r.allocations).toHaveLength(2);
-    expect(r.allocations[0].discountInPaise).toBe(10_000n);
-    expect(r.allocations[1].discountInPaise).toBe(20_000n);
+    expect(r.allocations[0]!.discountInPaise).toBe(10_000n);
+    expect(r.allocations[1]!.discountInPaise).toBe(20_000n);
     expect(r.totalAllocatedInPaise).toBe(30_000n);
   });
 
@@ -105,8 +105,8 @@ describe('allocateOrderLevel — fixed-amount discount across items', () => {
       eligibleProductIds: new Set(['eligible']),
     });
     expect(r.allocations).toHaveLength(1);
-    expect(r.allocations[0].orderItemId).toBe('a');
-    expect(r.allocations[0].discountInPaise).toBe(30_000n);
+    expect(r.allocations[0]!.orderItemId).toBe('a');
+    expect(r.allocations[0]!.discountInPaise).toBe(30_000n);
     expect(r.totalAllocatedInPaise).toBe(30_000n);
   });
 
@@ -129,10 +129,10 @@ describe('allocateOrderLevel — fixed-amount discount across items', () => {
       items,
       totalDiscountInPaise: 20_000n,
     });
-    expect(r.allocations[0].subOrderId).toBe('sub-A');
-    expect(r.allocations[0].sellerId).toBe('seller-A');
-    expect(r.allocations[1].subOrderId).toBe('sub-B');
-    expect(r.allocations[1].sellerId).toBe('seller-B');
+    expect(r.allocations[0]!.subOrderId).toBe('sub-A');
+    expect(r.allocations[0]!.sellerId).toBe('seller-A');
+    expect(r.allocations[1]!.subOrderId).toBe('sub-B');
+    expect(r.allocations[1]!.sellerId).toBe('seller-B');
   });
 
   it('zero discount returns empty', () => {
@@ -168,7 +168,7 @@ describe('allocateOrderLevel — fixed-amount discount across items', () => {
       totalDiscountInPaise: 10_000n, // ridiculously large
     });
     expect(r.totalAllocatedInPaise).toBe(100n);
-    expect(r.allocations[0].discountInPaise).toBe(100n);
+    expect(r.allocations[0]!.discountInPaise).toBe(100n);
   });
 
   it('handles BigInt amounts beyond Number.MAX_SAFE_INTEGER', () => {
@@ -181,8 +181,8 @@ describe('allocateOrderLevel — fixed-amount discount across items', () => {
       items,
       totalDiscountInPaise: 100_000_000_000_000n, // 10%
     });
-    expect(r.allocations[0].discountInPaise).toBe(50_000_000_000_000n);
-    expect(r.allocations[1].discountInPaise).toBe(50_000_000_000_000n);
+    expect(r.allocations[0]!.discountInPaise).toBe(50_000_000_000_000n);
+    expect(r.allocations[1]!.discountInPaise).toBe(50_000_000_000_000n);
     expect(r.totalAllocatedInPaise).toBe(100_000_000_000_000n);
   });
 });
@@ -212,8 +212,8 @@ describe('allocateBxgy — discount attaches to GET items only', () => {
       getDiscountType: 'FREE',
     });
     expect(r.allocations).toHaveLength(1);
-    expect(r.allocations[0].orderItemId).toBe('free');
-    expect(r.allocations[0].discountInPaise).toBe(50_000n);
+    expect(r.allocations[0]!.orderItemId).toBe('free');
+    expect(r.allocations[0]!.discountInPaise).toBe(50_000n);
     expect(r.totalAllocatedInPaise).toBe(50_000n);
   });
 
@@ -241,8 +241,8 @@ describe('allocateBxgy — discount attaches to GET items only', () => {
       getDiscountType: 'FREE',
     });
     expect(r.allocations).toHaveLength(1);
-    expect(r.allocations[0].orderItemId).toBe('cheap');
-    expect(r.allocations[0].discountInPaise).toBe(50_000n);
+    expect(r.allocations[0]!.orderItemId).toBe('cheap');
+    expect(r.allocations[0]!.discountInPaise).toBe(50_000n);
   });
 
   it('PERCENTAGE: 50% off get items', () => {
@@ -261,7 +261,7 @@ describe('allocateBxgy — discount attaches to GET items only', () => {
       getDiscountType: 'PERCENTAGE',
       getDiscountPercentage: 50,
     });
-    expect(r.allocations[0].discountInPaise).toBe(50_000n);
+    expect(r.allocations[0]!.discountInPaise).toBe(50_000n);
   });
 
   it('AMOUNT_OFF: capped at unit price (cannot make line negative)', () => {
@@ -281,7 +281,7 @@ describe('allocateBxgy — discount attaches to GET items only', () => {
       getDiscountValueInPaise: 999_999_999n, // way more than unit price
     });
     // Capped at unit price.
-    expect(r.allocations[0].discountInPaise).toBe(100_000n);
+    expect(r.allocations[0]!.discountInPaise).toBe(100_000n);
   });
 
   it('multi-unit line: rolls up per-item allocation when multiple slots come from same line', () => {
@@ -301,7 +301,7 @@ describe('allocateBxgy — discount attaches to GET items only', () => {
       getDiscountType: 'FREE',
     });
     expect(r.allocations).toHaveLength(1);
-    expect(r.allocations[0].discountInPaise).toBe(200_000n); // 2 × ₹1,000
+    expect(r.allocations[0]!.discountInPaise).toBe(200_000n); // 2 × ₹1,000
   });
 
   it('zero getQuantity returns empty', () => {

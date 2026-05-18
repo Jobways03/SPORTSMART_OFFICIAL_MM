@@ -74,7 +74,8 @@ export class VariantGeneratorService {
     // Create variants in a transaction
     await this.prisma.$transaction(async (tx) => {
       for (let i = 0; i < combinations.length; i++) {
-        const combo = combinations[i];
+        const combo = combinations[i]!;
+
         const title = combo.map((id) => valueMap.get(id) || id).join(' / ');
 
         const variant = await tx.productVariant.create({

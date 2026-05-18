@@ -1,1 +1,0 @@
-export enum EventLogType { DOMAIN = 'DOMAIN', INTEGRATION = 'INTEGRATION', SYSTEM = 'SYSTEM' }

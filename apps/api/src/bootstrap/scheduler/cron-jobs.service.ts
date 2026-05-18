@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../database/prisma.service';
+import { EnvService } from '../env/env.service';
+import { EventBusService } from '../events/event-bus.service';
 import { LowStockAlertService } from '../../modules/inventory/application/services/low-stock-alert.service';
 import { ReconciliationService } from '../../modules/reconciliation/application/services/reconciliation.service';
 import { computeSlaTarget } from '../../modules/support/application/services/support.service';
@@ -31,6 +33,10 @@ export class CronJobsService {
     // discriminates per-tick metrics: hourly-low-stock-sweep,
     // ticket-sla-breach, daily-reconciliation, cleanup-stale-pending-files.
     private readonly instr: CronInstrumentationService,
+    // Phase 7 (2026-05-16) — procurement SLA breach cron needs env
+    // (cron flag) + event bus (breach notification).
+    private readonly env: EnvService,
+    private readonly eventBus: EventBusService,
   ) {}
 
   /** Hourly — refresh low-stock alerts on seller mappings. */
@@ -143,6 +149,103 @@ export class CronJobsService {
         // already recorded as FAILED in cron_runs
       }
     });
+  }
+
+  /**
+   * Phase 7 (2026-05-16) — hourly procurement approval SLA breach scan.
+   *
+   * A submitted procurement request enters a configurable approval
+   * window (default 48h, env `PROCUREMENT_APPROVAL_SLA_HOURS`). Past
+   * the deadline, we emit `procurement.sla_breached` so the existing
+   * notification pipeline can escalate to ops + the franchise owner.
+   * The `slaBreachedAt` timestamp is set the first time the cron flags
+   * a request so subsequent ticks do not re-notify until the request
+   * leaves SUBMITTED state.
+   */
+  @Cron(CronExpression.EVERY_HOUR)
+  async procurementSlaBreachCheck() {
+    if (
+      this.env.getString('PROCUREMENT_SLA_BREACH_CRON_ENABLED', 'true') !==
+      'true'
+    ) {
+      return;
+    }
+    await this.leader.run(
+      'procurement-sla-breach',
+      2 * 60 * 60,
+      async () => {
+        try {
+          await this.instr.wrap('procurement-sla-breach', async () => {
+            const now = new Date();
+            // Scan SUBMITTED requests past their deadline that we
+            // haven't already flagged. The `slaBreachedAt: null`
+            // predicate prevents re-notification — clearing the flag
+            // requires the request to move out of SUBMITTED (approved,
+            // rejected, or sent back to DRAFT).
+            const breached = await this.prisma.procurementRequest.findMany({
+              where: {
+                status: 'SUBMITTED',
+                slaApproveBy: { not: null, lt: now },
+                slaBreachedAt: null,
+              },
+              select: {
+                id: true,
+                requestNumber: true,
+                franchiseId: true,
+                slaApproveBy: true,
+                requestedAt: true,
+              },
+              take: 200,
+            });
+
+            for (const r of breached) {
+              await this.prisma.procurementRequest.update({
+                where: { id: r.id },
+                data: { slaBreachedAt: now },
+              });
+              await this.eventBus
+                .publish({
+                  eventName: 'procurement.sla_breached',
+                  aggregate: 'ProcurementRequest',
+                  aggregateId: r.id,
+                  occurredAt: now,
+                  payload: {
+                    requestId: r.id,
+                    requestNumber: r.requestNumber,
+                    franchiseId: r.franchiseId,
+                    slaApproveBy: r.slaApproveBy,
+                    breachedAt: now,
+                    waitingHours: r.requestedAt
+                      ? Math.round(
+                          (now.getTime() - r.requestedAt.getTime()) /
+                            (60 * 60 * 1000),
+                        )
+                      : null,
+                  },
+                })
+                .catch((err: unknown) => {
+                  // Don't let one bad subscriber strand the rest of
+                  // the batch — the row is already flagged so we
+                  // won't re-emit on the next tick.
+                  this.logger.warn(
+                    `[cron] procurement-sla event publish failed for ${r.requestNumber}: ${(err as Error).message}`,
+                  );
+                });
+            }
+            if (breached.length > 0) {
+              this.logger.warn(
+                `[cron] procurement-SLA: flagged ${breached.length} request(s) as breached`,
+              );
+            }
+            return { breached: breached.length };
+          });
+        } catch (err) {
+          this.logger.error(
+            `[cron] procurement-SLA failed: ${(err as Error).message}`,
+          );
+        }
+      },
+    );
   }
 
   /**

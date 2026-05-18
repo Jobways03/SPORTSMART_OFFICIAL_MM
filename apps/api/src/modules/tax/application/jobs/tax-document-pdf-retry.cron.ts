@@ -42,19 +42,19 @@ export class TaxDocumentPdfRetryCron {
   ) {}
 
   enabled(): boolean {
-    return this.env.getBoolean('TAX_PDF_RETRY_CRON_ENABLED' as any, true);
+    return this.env.getBoolean('TAX_PDF_RETRY_CRON_ENABLED', true);
   }
 
   private retryCap(): number {
-    return this.env.getNumber('TAX_PDF_RETRY_CAP' as any, 5);
+    return this.env.getNumber('TAX_PDF_RETRY_CAP', 5);
   }
 
   private cooldownMinutes(): number {
-    return this.env.getNumber('TAX_PDF_RETRY_COOLDOWN_MINUTES' as any, 5);
+    return this.env.getNumber('TAX_PDF_RETRY_COOLDOWN_MINUTES', 5);
   }
 
   private scanLimit(): number {
-    return this.env.getNumber('TAX_PDF_RETRY_SCAN_LIMIT' as any, 50);
+    return this.env.getNumber('TAX_PDF_RETRY_SCAN_LIMIT', 50);
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)

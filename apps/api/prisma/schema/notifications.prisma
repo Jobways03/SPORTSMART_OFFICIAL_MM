@@ -91,6 +91,80 @@ model NotificationSuppression {
   @@map("notification_suppressions")
 }
 
+/// Phase 6 (2026-05-16) — WhatsApp session-window + opt-out state.
+///
+/// WhatsApp Cloud API constrains outbound messages:
+///   • Inside a 24-hour "customer service window" from the user's last
+///     inbound message, free-form text is allowed.
+///   • Outside the window, only pre-approved HSM templates (with
+///     placeholder parameters) may be sent.
+///   • Users can opt out at any time by replying STOP / UNSUBSCRIBE.
+///     Sending after opt-out is a TOS violation and degrades sender
+///     reputation.
+///
+/// One row per E.164 phone number. The send gate looks up the row,
+/// blocks if `optedOutAt` is non-null, and decides text-vs-template
+/// from `lastInboundAt`. The inbound webhook updates both fields.
+model WhatsappSession {
+  id          String @id @default(uuid())
+  /// E.164 phone number without leading "+". Always digits-only so
+  /// lookup keys stay stable regardless of how upstream formatted it.
+  phoneE164   String @unique @map("phone_e164")
+  /// Optional link to a customer record. Helps ops correlate without
+  /// joining via Customer.phoneNumber, which may differ in formatting.
+  customerId  String? @map("customer_id")
+
+  /// Last inbound message timestamp from this phone. The 24-hour
+  /// customer service window starts here. NULL = never replied.
+  lastInboundAt  DateTime? @map("last_inbound_at")
+  /// Latest outbound timestamp — diagnostic only, not used for gating.
+  lastOutboundAt DateTime? @map("last_outbound_at")
+
+  /// When opt-out was recorded. NULL = opted in. Setting this to a
+  /// non-null value hard-blocks every outbound to this phone, including
+  /// templates, until manually cleared by a compliance request.
+  optedOutAt   DateTime? @map("opted_out_at")
+  /// Free-form opt-out source: "USER_STOP" | "USER_UNSUBSCRIBE" |
+  /// "MANUAL_BLOCK" | "BOUNCED".
+  optOutReason String?   @map("opt_out_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([customerId])
+  @@index([optedOutAt])
+  @@map("whatsapp_sessions")
+}
+
+/// Phase 6 (2026-05-16) — raw inbound WhatsApp messages.
+///
+/// Append-only log of every message Meta forwards to our webhook.
+/// Keep the original payload so we can replay if the parsing logic
+/// changes. The session row is updated separately and is the source
+/// of truth for the 24h window.
+model WhatsappInbound {
+  id              String   @id @default(uuid())
+  /// Provider message id from Meta — used for dedupe (webhook can
+  /// deliver the same message multiple times under retry).
+  providerMessageId String  @unique @map("provider_message_id")
+  /// Sender E.164, digits-only.
+  fromPhoneE164   String   @map("from_phone_e164")
+  /// Message type from Meta: "text" | "interactive" | "button" | ...
+  messageType     String   @map("message_type")
+  /// Extracted plain-text body for STOP-keyword detection. May be
+  /// empty for non-text messages (sticker, image, etc.).
+  textBody        String?  @db.Text @map("text_body")
+  /// Whether STOP-keyword detection fired on this message.
+  isOptOutSignal  Boolean  @default(false) @map("is_opt_out_signal")
+  /// Original Meta webhook payload. Stored as JSON for replay/debug.
+  rawPayload      Json     @map("raw_payload")
+  receivedAt      DateTime @default(now()) @map("received_at")
+
+  @@index([fromPhoneE164, receivedAt(sort: Desc)])
+  @@index([receivedAt(sort: Desc)])
+  @@map("whatsapp_inbound")
+}
+
 model NotificationLog {
   id      String              @id @default(uuid())
   channel NotificationChannel

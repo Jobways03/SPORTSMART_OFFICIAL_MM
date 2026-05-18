@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 
 interface Discount {
@@ -46,6 +47,7 @@ const DISCOUNT_TYPES = [
 
 export default function DiscountsPage() {
   const router = useRouter();
+  const { confirmDialog, notify } = useModal();
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('All');
@@ -80,7 +82,14 @@ export default function DiscountsPage() {
         <div style={{ display: 'flex', gap: 10 }}>
           <button
             onClick={async () => {
-              if (!window.confirm('Migrate every legacy affiliate coupon into the unified pipeline?')) return;
+              const ok = await confirmDialog({
+                title: 'Migrate legacy affiliate coupons?',
+                message:
+                  'This unifies every legacy affiliate coupon into the discount pipeline. Existing redemptions stay; only the storage flips.',
+                confirmText: 'Migrate',
+                cancelText: 'Cancel',
+              });
+              if (!ok) return;
               try {
                 const res = await apiClient<{ total: number; unified: number; skipped: number; errors: Array<{ id: string; message: string }> }>(
                   '/admin/discounts/affiliate/unify',
@@ -88,14 +97,15 @@ export default function DiscountsPage() {
                 );
                 const d = res.data;
                 if (!d) {
-                  window.alert('Unify request completed.');
+                  await notify('Unify request completed.');
                   return;
                 }
-                window.alert(
-                  `Unified ${d.unified} of ${d.total}.\nSkipped: ${d.skipped}.\nErrors: ${d.errors.length}.`,
-                );
+                await notify({
+                  kind: 'success',
+                  message: `Unified ${d.unified} of ${d.total}.\nSkipped: ${d.skipped}.\nErrors: ${d.errors.length}.`,
+                });
               } catch (e: any) {
-                window.alert(`Failed: ${e?.message ?? 'unknown error'}`);
+                await notify({ kind: 'error', message: `Failed: ${e?.message ?? 'unknown error'}` });
               }
             }}
             style={{

@@ -170,6 +170,34 @@ export class RazorpayAdapter {
   }
 
   /**
+   * Phase 3.1 (2026-05-16) — orphan-payment recovery. Returns every
+   * payment Razorpay has on file for the given order id. Empty array
+   * means the customer never paid. The poller uses this to detect
+   * orders where the customer paid but our verify endpoint never
+   * fired (browser closed mid-redirect, webhook dropped, etc.).
+   */
+  async fetchOrderPayments(orderId: string): Promise<
+    Array<{
+      paymentId: string;
+      status: string;
+      amountInPaise: bigint;
+      captured: boolean;
+      method: string;
+      createdAt: Date;
+    }>
+  > {
+    const result = await this.client.fetchOrderPayments(orderId);
+    return result.items.map((p) => ({
+      paymentId: p.id,
+      status: p.status,
+      amountInPaise: BigInt(p.amount),
+      captured: p.captured,
+      method: p.method,
+      createdAt: new Date(p.created_at * 1000),
+    }));
+  }
+
+  /**
    * Initiate a refund. `amountInPaise` is paise as `bigint`.
    *
    * Phase 4 (PR 4.2) — `idempotencyKey` is a caller-stable identifier

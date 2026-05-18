@@ -84,11 +84,12 @@ export class RefundSagaService {
 
     // 2. Forward pass: execute each step in order. Persist after each.
     for (let i = 0; i < input.steps.length; i++) {
-      const step = input.steps[i];
+      const step = input.steps[i]!;
+
       stepRecords[i] = {
-        ...stepRecords[i],
+        ...stepRecords[i]!,
         status: 'IN_PROGRESS',
-        attempts: stepRecords[i].attempts + 1,
+        attempts: stepRecords[i]!.attempts + 1,
         startedAt: new Date().toISOString(),
       };
       await this.persistSteps(saga.id, stepRecords, 'IN_PROGRESS');
@@ -99,7 +100,7 @@ export class RefundSagaService {
           context = { ...context, ...out.contextUpdate };
         }
         stepRecords[i] = {
-          ...stepRecords[i],
+          ...stepRecords[i]!,
           status: 'SUCCEEDED',
           result: out.result,
           completedAt: new Date().toISOString(),
@@ -108,14 +109,14 @@ export class RefundSagaService {
       } catch (err) {
         const message = (err as Error).message ?? String(err);
         stepRecords[i] = {
-          ...stepRecords[i],
+          ...stepRecords[i]!,
           status: 'FAILED',
           error: message,
           completedAt: new Date().toISOString(),
         };
         // Mark remaining steps SKIPPED.
         for (let j = i + 1; j < stepRecords.length; j++) {
-          stepRecords[j] = { ...stepRecords[j], status: 'SKIPPED' };
+          stepRecords[j] = { ...stepRecords[j]!, status: 'SKIPPED' };
         }
         // 3. Compensate previously-succeeded steps in reverse order.
         const compensations = await this.runCompensations(
@@ -230,8 +231,10 @@ export class RefundSagaService {
   ): Promise<SagaCompensationRecord[]> {
     const compensations: SagaCompensationRecord[] = [];
     for (let i = forwardSteps.length - 1; i >= 0; i--) {
-      const step = forwardSteps[i];
-      const record = forwardRecords[i];
+      const step = forwardSteps[i]!;
+
+      const record = forwardRecords[i]!;
+
       // Skip compensation if the forward step didn't succeed (nothing to undo).
       if (record.status !== 'SUCCEEDED') continue;
       if (!step.compensate) {

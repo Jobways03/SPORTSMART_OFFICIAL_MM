@@ -49,7 +49,7 @@ function pickClosestSource(
     if (b.distance === null) return -1;
     return a.distance - b.distance;
   });
-  return candidates[0];
+  return candidates[0]!;
 }
 
 @Injectable()

@@ -34,6 +34,8 @@ export class SellerTaxDocumentsController {
     @Query('limit') limit?: string,
     @Query('documentType') documentType?: string,
     @Query('financialYear') financialYear?: string,
+    @Query('orderId') orderId?: string,
+    @Query('subOrderId') subOrderId?: string,
   ) {
     const safePage = Math.max(1, parseInt(page ?? '1', 10) || 1);
     const safeLimit = Math.min(50, Math.max(1, parseInt(limit ?? '20', 10) || 20));
@@ -43,6 +45,8 @@ export class SellerTaxDocumentsController {
     };
     if (documentType) where.documentType = documentType;
     if (financialYear) where.financialYear = financialYear;
+    if (subOrderId) where.subOrderId = subOrderId;
+    if (orderId) where.masterOrderId = orderId;
 
     const [items, total] = await Promise.all([
       this.prisma.taxDocument.findMany({

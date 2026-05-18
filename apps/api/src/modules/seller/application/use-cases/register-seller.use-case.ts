@@ -8,6 +8,7 @@ import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
+import { SendEmailVerificationOtpUseCase } from './send-email-verification-otp.use-case';
 
 interface RegisterSellerInput {
   sellerName: string;
@@ -24,6 +25,7 @@ export class RegisterSellerUseCase {
     private readonly sellerRepo: SellerRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
+    private readonly sendEmailVerificationOtp: SendEmailVerificationOtpUseCase,
   ) {
     this.logger.setContext('RegisterSellerUseCase');
   }
@@ -64,6 +66,18 @@ export class RegisterSellerUseCase {
       }).catch((err) => {
         this.logger.error(`Failed to publish seller registration event: ${err}`);
       });
+
+      // Auto-send email-verification OTP so the seller can verify in
+      // the same flow without an extra click. Fire-and-forget: SMTP
+      // problems shouldn't fail registration — the seller can request
+      // a re-send from the verify-email screen if the first send failed.
+      this.sendEmailVerificationOtp
+        .execute(seller.id)
+        .catch((err) => {
+          this.logger.error(
+            `Failed to send email verification OTP at registration for seller ${seller.id}: ${err}`,
+          );
+        });
 
       this.logger.log(`Seller registered: ${seller.id}`);
 

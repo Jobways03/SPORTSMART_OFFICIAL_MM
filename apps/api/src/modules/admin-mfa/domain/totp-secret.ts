@@ -31,7 +31,7 @@ export function bufferToBase32(buf: Buffer): string {
   let value = 0;
   let output = '';
   for (let i = 0; i < buf.length; i++) {
-    value = (value << 8) | buf[i];
+    value = (value << 8) | buf[i]!;
     bits += 8;
     while (bits >= 5) {
       output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];

@@ -6,6 +6,7 @@ import {
   ConflictAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { BCRYPT_TARGET_COST } from '../../../../core/auth/bcrypt-policy';
 
 /**
  * Phase 1 affiliate registration service.
@@ -64,7 +65,12 @@ export class AffiliateRegistrationService {
     if (input.password.length < 8) {
       throw new BadRequestAppException('Password must be at least 8 characters long.');
     }
-    const passwordHash = await bcrypt.hash(input.password, 10);
+    // Phase 13 (2026-05-16) — bumped from cost 10 to BCRYPT_TARGET_COST.
+    // Cost 10 is below the team standard (every other actor module
+    // — admin, seller, franchise, customer — uses 12). Login enforces
+    // a rehash-on-success if a legacy cost-10 hash is detected, so
+    // existing affiliate accounts upgrade silently on next sign-in.
+    const passwordHash = await bcrypt.hash(input.password, BCRYPT_TARGET_COST);
 
     const affiliate = await this.prisma.affiliate.create({
       data: {

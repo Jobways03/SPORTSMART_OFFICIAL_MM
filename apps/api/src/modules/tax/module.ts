@@ -16,6 +16,7 @@ import { WalletModule } from '../wallet/module';
 import { NotificationsModule } from '../notifications/module';
 import {
   AdminAuthGuard,
+  PermissionsGuard,
   SellerAuthGuard,
   UserAuthGuard,
 } from '../../core/guards';
@@ -42,9 +43,11 @@ import { TaxModeService } from './application/services/tax-mode.service';
 import { TaxAuditReadinessService } from './application/services/tax-audit-readiness.service';
 import { TaxNotificationService } from './application/services/tax-notification.service';
 import { TaxCompatibilityService } from './application/services/tax-compatibility.service';
+import { TaxPublicFacade } from './application/facades/tax-public.facade';
 import { CustomerTaxDocumentsController } from './presentation/controllers/customer-tax-documents.controller';
 import { SellerTaxDocumentsController } from './presentation/controllers/seller-tax-documents.controller';
 import { AdminTaxReportsController } from './presentation/controllers/admin-tax-reports.controller';
+import { AdminTaxOperationsController } from './presentation/controllers/admin-tax-operations.controller';
 import { TaxCreditNoteTimeBarCron } from './application/jobs/tax-credit-note-timebar.cron';
 import { TaxDocumentPdfRetryCron } from './application/jobs/tax-document-pdf-retry.cron';
 import { EInvoiceRetryCron } from './application/jobs/einvoice-retry.cron';
@@ -71,7 +74,7 @@ import { EnvService } from '../../bootstrap/env/env.service';
 const ewayBillProvider = {
   provide: EWAY_BILL_PROVIDER,
   useFactory: (env: EnvService): EWayBillProvider => {
-    const choice = env.getString('EWAY_BILL_PROVIDER' as any, 'stub');
+    const choice = env.getString('EWAY_BILL_PROVIDER', 'stub');
     switch (choice) {
       case 'stub':
         return new StubEWayBillProvider();
@@ -96,7 +99,7 @@ const ewayBillProvider = {
 const einvoiceProvider = {
   provide: EINVOICE_PROVIDER,
   useFactory: (env: EnvService): EInvoiceProvider => {
-    const choice = env.getString('EINVOICE_PROVIDER' as any, 'stub');
+    const choice = env.getString('EINVOICE_PROVIDER', 'stub');
     switch (choice) {
       case 'stub':
         return new StubEInvoiceProvider();
@@ -118,7 +121,7 @@ const einvoiceProvider = {
 const taxPdfStorageProvider = {
   provide: TAX_PDF_STORAGE_PROVIDER,
   useFactory: (env: EnvService): TaxPdfStorageProvider => {
-    const choice = env.getString('TAX_PDF_STORAGE_PROVIDER' as any, 'stub');
+    const choice = env.getString('TAX_PDF_STORAGE_PROVIDER', 'stub');
     switch (choice) {
       case 'stub':
         return new StubTaxPdfStorageProvider();
@@ -140,11 +143,13 @@ const taxPdfStorageProvider = {
     CustomerTaxDocumentsController,
     SellerTaxDocumentsController,
     AdminTaxReportsController,
+    AdminTaxOperationsController,
   ],
   providers: [
     // Phase 25 — guards consumed by the controllers above. Same
     // pattern as WalletModule / SettlementsModule.
     AdminAuthGuard,
+    PermissionsGuard,
     SellerAuthGuard,
     UserAuthGuard,
     PlaceOfSupplyService,
@@ -171,6 +176,7 @@ const taxPdfStorageProvider = {
     TaxAuditReadinessService,
     TaxNotificationService,
     TaxCompatibilityService,
+    TaxPublicFacade,
     taxPdfStorageProvider,
     einvoiceProvider,
     TaxCreditNoteTimeBarCron,
@@ -201,6 +207,7 @@ const taxPdfStorageProvider = {
     TaxAuditReadinessService,
     TaxNotificationService,
     TaxCompatibilityService,
+    TaxPublicFacade,
   ],
 })
 export class TaxModule {}

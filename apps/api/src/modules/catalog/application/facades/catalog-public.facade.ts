@@ -6,9 +6,15 @@ import {
   SellerAllocationService,
   AllocationResult,
   StockReservationResult,
+  AllocateAndReserveResult,
 } from '../services/seller-allocation.service';
 
-export { AllocationResult, StockReservationResult, AllocatedSeller } from '../services/seller-allocation.service';
+export {
+  AllocationResult,
+  StockReservationResult,
+  AllocatedSeller,
+  AllocateAndReserveResult,
+} from '../services/seller-allocation.service';
 
 @Injectable()
 export class CatalogPublicFacade {
@@ -83,6 +89,24 @@ export class CatalogPublicFacade {
     expiresInMinutes?: number;
   }): Promise<StockReservationResult> {
     return this.allocationService.reserveStock(input);
+  }
+
+  /**
+   * One-shot allocate + reserve with automatic primary→secondary→tertiary
+   * fallback if the highest-ranked candidate loses a concurrent reservation
+   * race. Preferred over calling `allocate` + `reserveStock` separately —
+   * the combined path closes the TOCTOU window between the two calls.
+   */
+  async allocateAndReserve(input: {
+    productId: string;
+    variantId?: string;
+    customerPincode: string;
+    quantity: number;
+    orderId?: string;
+    expiresInMinutes?: number;
+    excludeMappingIds?: string[];
+  }): Promise<AllocateAndReserveResult> {
+    return this.allocationService.allocateAndReserve(input);
   }
 
   async releaseReservation(reservationId: string): Promise<void> {

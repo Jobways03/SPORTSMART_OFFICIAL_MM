@@ -1,0 +1,42 @@
+// Phase 7 (2026-05-16) — Per-tenant AI usage tracking.
+//
+// One row per (subject, day, provider). `subject` is the actor's id
+// — whichever guard let the request in: seller, admin, customer, or
+// franchise. The orchestrator increments on every successful call;
+// the controller refuses with 429 when today's count for this
+// subject hits the configured daily cap (`AI_DAILY_QUOTA_PER_TENANT`).
+//
+// The (subject, day, provider) split rather than just (subject, day)
+// keeps the data useful for ops debug: "Did seller X exhaust Gemini
+// and fall back to Claude, or did they exceed the global cap?"
+
+model AiUsageQuota {
+  id String @id @default(uuid())
+
+  /// Actor identifier — seller/admin/customer id. We don't FK because
+  /// the column has to hold ids from several different tables.
+  subject String
+
+  /// Optional classification of the actor table for diagnostics.
+  /// Common values: "SELLER" | "ADMIN" | "CUSTOMER" | "FRANCHISE".
+  subjectType String? @map("subject_type")
+
+  /// Provider name — "gemini" | "anthropic". Matches AiProvider.name.
+  provider String
+
+  /// Bucket date in UTC (yyyy-mm-dd at 00:00:00). Daily quotas reset
+  /// at UTC midnight; finer-grained bucketing would multiply rows
+  /// without buying much for daily-cap enforcement.
+  day DateTime
+
+  /// Calls counted this day.
+  callCount Int @default(0) @map("call_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([subject, day, provider], name: "ai_usage_quota_unique")
+  @@index([subject, day])
+  @@index([day])
+  @@map("ai_usage_quotas")
+}

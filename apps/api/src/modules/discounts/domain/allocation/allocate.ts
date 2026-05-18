@@ -97,13 +97,15 @@ export function allocateOrderLevel(
 
     let cursor = 0;
     while (remainder > 0n) {
-      const target = ranked[cursor % ranked.length];
+      const target = ranked[cursor % ranked.length]!;
+
       // Cap rule: an allocation cannot exceed item gross.
-      const item = eligible[target.idx];
-      const current = allocations[target.idx].discountInPaise;
+      const item = eligible[target.idx]!;
+
+      const current = allocations[target.idx]!.discountInPaise;
       if (current < item.grossInPaise) {
         allocations[target.idx] = {
-          ...allocations[target.idx],
+          ...allocations[target.idx]!,
           discountInPaise: current + 1n,
         };
         remainder -= 1n;

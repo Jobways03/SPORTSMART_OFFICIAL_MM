@@ -58,6 +58,7 @@ describe('env schema — NODE_ENV=production gate', () => {
     S3_ACCESS_KEY: 'akid',
     S3_SECRET_KEY: 'akidsecret',
     ADMIN_MFA_ENCRYPTION_KEY: 'm'.repeat(32),
+    APP_URL: 'https://api.sportsmart.com',
     CORS_ORIGINS: 'https://app.sportsmart.com',
     // Phase 6 — every requiredOnInProd flag must be 'true' in prod.
     CRON_HEARTBEAT_ENABLED: 'true',

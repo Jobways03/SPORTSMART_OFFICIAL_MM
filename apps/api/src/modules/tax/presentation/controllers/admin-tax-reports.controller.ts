@@ -1,30 +1,19 @@
 // Phase 25 GST — Admin-facing tax reports + audit-readiness API.
 //
 // Aggregates the per-service surfaces built in Phases 16–23 into HTTP
-// endpoints the Super Admin dashboard calls:
+// endpoints the Super Admin dashboard calls.
 //
-//   GET /admin/tax/audit-readiness       — Phase 23 readiness report.
-//   GET /admin/tax/mode                  — Phase 23 current mode.
-//   GET /admin/tax/reports/gstr1.csv     — Phase 18 §4 B2B CSV.
-//   GET /admin/tax/reports/gstr1/:section.csv — §5 / §7 / §9B / §12 / §13.
-//   GET /admin/tax/reports/gstr3b.csv    — Phase 18 GSTR-3B 3.1 CSV.
-//   GET /admin/tax/reports/gstr8.csv     — Phase 16 GSTR-8 CSV.
-//   GET /admin/tax/reports/gstr8.json    — Phase 16 GSTR-8 JSON (NIC).
-//   GET /admin/tax/reports/gstr8/summary — Period summary card data.
-//   POST /admin/tax/tcs/mark-filed       — Bulk Phase 16 markFiled.
-//   POST /admin/tax/tcs/mark-paid        — Bulk Phase 16 markPaidToGovt.
-//
-// Auth: AdminAuthGuard at the controller level. Per-endpoint
-// permission checks (tax.reports.read, tax.tcs.mark-filed, etc.) are
-// declared via metadata for a future @RequirePermissions decorator
-// (Phase 26 lands the permission middleware that consumes them).
+// Auth: AdminAuthGuard + PermissionsGuard + @Permissions(...). Every
+// endpoint gates on a specific tax.* permission key declared in
+// `core/authorization/permission-registry.ts` so a non-finance admin
+// (SELLER_SUPPORT, AFFILIATE_ADMIN, etc.) cannot pull GSTR exports or
+// flip TCS lifecycle rows.
 
 import {
   Body,
   Controller,
   Get,
   Header,
-  Headers,
   HttpException,
   HttpStatus,
   Param,
@@ -36,7 +25,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
-import { AdminAuthGuard } from '../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Gstr1ReportService } from '../../application/services/gstr1-report.service';
 import { Gstr3bReportService } from '../../application/services/gstr3b-report.service';
 import { Gstr8ReportService } from '../../application/services/gstr8-report.service';
@@ -46,7 +36,7 @@ import { TcsService } from '../../application/services/tcs.service';
 
 @ApiTags('Admin / Tax')
 @Controller('admin/tax')
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminTaxReportsController {
   constructor(
     private readonly readiness: TaxAuditReadinessService,
@@ -60,12 +50,35 @@ export class AdminTaxReportsController {
   // ── Mode + readiness ────────────────────────────────────────────
 
   @Get('mode')
+  @Permissions('tax.reports.read')
   async getMode() {
     const mode = await this.mode.getMode();
     return { success: true, message: 'Tax mode retrieved', data: { mode } };
   }
 
+  @Post('mode')
+  @Permissions('tax.configure')
+  async setMode(
+    @Req() req: any,
+    @Body() body: { mode: 'OFF' | 'AUDIT' | 'STRICT' },
+  ) {
+    const allowed: ReadonlyArray<'OFF' | 'AUDIT' | 'STRICT'> = ['OFF', 'AUDIT', 'STRICT'];
+    if (!body?.mode || !allowed.includes(body.mode)) {
+      throw new HttpException(
+        { success: false, message: 'mode must be OFF, AUDIT, or STRICT', code: 'INVALID_MODE' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    await this.mode.setMode(body.mode, req.adminId ?? null);
+    return {
+      success: true,
+      message: `Tax mode set to ${body.mode}`,
+      data: { mode: body.mode },
+    };
+  }
+
   @Get('audit-readiness')
+  @Permissions('tax.reports.read')
   async auditReadiness() {
     const report = await this.readiness.build();
     return {
@@ -79,6 +92,7 @@ export class AdminTaxReportsController {
 
   /** §4 B2B CSV. */
   @Get('reports/gstr1.csv')
+  @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr1B2bCsv(
     @Res() res: Response,
@@ -99,6 +113,7 @@ export class AdminTaxReportsController {
 
   /** §5 B2C Large / §7 B2C Small / §9B Credit Notes / §12 HSN / §13 Docs Issued. */
   @Get('reports/gstr1/:section.csv')
+  @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr1SectionCsv(
     @Res() res: Response,
@@ -150,6 +165,7 @@ export class AdminTaxReportsController {
   // ── GSTR-3B ─────────────────────────────────────────────────────
 
   @Get('reports/gstr3b.csv')
+  @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr3bCsv(
     @Res() res: Response,
@@ -171,6 +187,7 @@ export class AdminTaxReportsController {
   // ── GSTR-8 (platform-side TCS) ──────────────────────────────────
 
   @Get('reports/gstr8.csv')
+  @Permissions('tax.tcs.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr8Csv(
     @Res() res: Response,
@@ -183,6 +200,7 @@ export class AdminTaxReportsController {
   }
 
   @Get('reports/gstr8.json')
+  @Permissions('tax.tcs.export')
   async gstr8Json(
     @Query('filingPeriod') filingPeriod?: string,
     @Query('operatorGstin') operatorGstin?: string,
@@ -210,6 +228,7 @@ export class AdminTaxReportsController {
   }
 
   @Get('reports/gstr8/summary')
+  @Permissions('tax.tcs.read')
   async gstr8Summary(@Query('filingPeriod') filingPeriod?: string) {
     assertPeriod(filingPeriod);
     const summary = await this.gstr8.summarise(filingPeriod!);
@@ -223,6 +242,7 @@ export class AdminTaxReportsController {
   // ── TCS lifecycle transitions ───────────────────────────────────
 
   @Post('tcs/mark-filed')
+  @Permissions('tax.tcs.markFiled')
   async markFiled(
     @Req() req: any,
     @Body() body: { ledgerIds: string[] },
@@ -249,6 +269,7 @@ export class AdminTaxReportsController {
   }
 
   @Post('tcs/mark-paid')
+  @Permissions('tax.tcs.markPaidToGovt')
   async markPaid(
     @Req() req: any,
     @Body() body: { ledgerIds: string[]; paymentReference: string },

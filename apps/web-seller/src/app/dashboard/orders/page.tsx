@@ -134,17 +134,65 @@ export default function SellerOrdersPage() {
     fetchOrders(1);
   };
 
-  const handleAction = async (e: React.MouseEvent, subOrderId: string, action: string, body?: object) => {
+  /**
+   * Phase 8 (2026-05-16) — optimistic accept/reject flip.
+   *
+   * Pre-Phase-8 this method called the API, awaited the response,
+   * THEN refetched the list. That gave the seller a 1–3s "frozen UI"
+   * window where the button stayed enabled and the row showed the
+   * old status — sellers described it as "the click didn't go
+   * through" and double-clicked, causing duplicate accepts.
+   *
+   * Now: we apply the expected state change immediately, then call
+   * the API. On success the next refetch confirms it. On failure we
+   * revert the optimistic update and surface the error in actionError.
+   */
+  const applyOptimistic = (subOrderId: string, action: string) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        subOrders: (prev.subOrders ?? []).map((s: SubOrder) =>
+          s.id === subOrderId
+            ? {
+                ...s,
+                acceptStatus:
+                  action === 'accept'
+                    ? 'ACCEPTED'
+                    : action === 'reject'
+                      ? 'REJECTED'
+                      : s.acceptStatus,
+              }
+            : s,
+        ),
+      };
+    });
+  };
+
+  const handleAction = async (
+    e: React.MouseEvent,
+    subOrderId: string,
+    action: string,
+    body?: object,
+  ) => {
     e.stopPropagation();
     setActionLoading(subOrderId);
+
+    // Snapshot current state for rollback if the API rejects us.
+    const snapshot = data;
+    applyOptimistic(subOrderId, action);
+
     try {
       await apiClient(`/seller/orders/${subOrderId}/${action}`, {
         method: 'PATCH',
         body: body ? JSON.stringify(body) : undefined,
       });
+      // Re-fetch to absorb any server-side side effects (deadline
+      // updates, fulfillment status changes from auto-reallocation).
       fetchOrders(page);
     } catch {
-      // ignore
+      // Revert to snapshot — the optimistic flip turned out to be wrong.
+      if (snapshot) setData(snapshot);
     } finally {
       setActionLoading(null);
     }
@@ -154,6 +202,10 @@ export default function SellerOrdersPage() {
     if (!rejectModal) return;
     e.stopPropagation();
     setActionLoading(rejectModal.subOrderId);
+
+    const snapshot = data;
+    applyOptimistic(rejectModal.subOrderId, 'reject');
+
     try {
       await apiClient(`/seller/orders/${rejectModal.subOrderId}/reject`, {
         method: 'PATCH',
@@ -164,7 +216,7 @@ export default function SellerOrdersPage() {
       });
       fetchOrders(page);
     } catch {
-      // ignore
+      if (snapshot) setData(snapshot);
     } finally {
       setActionLoading(null);
       setRejectModal(null);

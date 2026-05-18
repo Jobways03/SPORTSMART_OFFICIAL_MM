@@ -148,6 +148,56 @@ export class StorefrontAllocationController {
   }
 
   /**
+   * POST /storefront/allocate/and-reserve
+   * One-shot: rank candidates AND reserve stock against the best one, with
+   * automatic primary→secondary→tertiary fallback if a higher-ranked
+   * candidate loses a concurrent reservation race. Prefer this over the
+   * two-step allocate → reserve flow for write-heavy paths (checkout).
+   */
+  @Post('and-reserve')
+  @HttpCode(HttpStatus.CREATED)
+  async allocateAndReserve(
+    @Body()
+    body: {
+      productId: string;
+      variantId?: string;
+      customerPincode: string;
+      quantity: number;
+      orderId?: string;
+      expiresInMinutes?: number;
+    },
+  ) {
+    if (!body.productId) throw new BadRequestAppException('productId is required');
+    if (!body.customerPincode) throw new BadRequestAppException('customerPincode is required');
+    if (!body.quantity || body.quantity < 1) {
+      throw new BadRequestAppException('quantity must be >= 1');
+    }
+
+    const result = await this.allocationService.allocateAndReserve({
+      productId: body.productId,
+      variantId: body.variantId,
+      customerPincode: body.customerPincode,
+      quantity: body.quantity,
+      orderId: body.orderId,
+      expiresInMinutes: body.expiresInMinutes,
+    });
+
+    return {
+      success: true,
+      message:
+        result.skippedMappingIds.length > 0
+          ? `Reserved on ${result.chosenRank} after ${result.skippedMappingIds.length} fallback(s)`
+          : `Reserved on ${result.chosenRank} candidate`,
+      data: {
+        reservation: result.reservation,
+        chosenCandidate: result.chosenCandidate,
+        chosenRank: result.chosenRank,
+        skippedMappingIds: result.skippedMappingIds,
+      },
+    };
+  }
+
+  /**
    * POST /storefront/allocate/confirm
    * Confirm a reservation (after payment success).
    */

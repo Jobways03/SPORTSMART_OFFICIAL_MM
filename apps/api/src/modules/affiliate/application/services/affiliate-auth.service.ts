@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
 import {
   ForbiddenAppException,
   UnauthorizedAppException,
@@ -18,6 +19,8 @@ const LOCK_DURATION_MINUTES = 15;
 
 @Injectable()
 export class AffiliateAuthService {
+  private readonly logger = new Logger(AffiliateAuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly envService: EnvService,
@@ -84,6 +87,24 @@ export class AffiliateAuthService {
         where: { id: affiliate.id },
         data: { failedLoginAttempts: 0, lockUntil: null },
       });
+    }
+
+    // Phase 13 (2026-05-16) — opportunistic rehash. Legacy hashes
+    // stored at the pre-Phase-13 cost of 10 get re-hashed at the
+    // current target (12) on the user's next successful sign-in.
+    // Best-effort: a write failure here doesn't block login.
+    if (shouldRehash(affiliate.passwordHash)) {
+      try {
+        const upgraded = await hashPassword(input.password);
+        await this.prisma.affiliate.update({
+          where: { id: affiliate.id },
+          data: { passwordHash: upgraded },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to rehash affiliate ${affiliate.id} on login: ${(err as Error).message}`,
+        );
+      }
     }
 
     const token = jwt.sign(

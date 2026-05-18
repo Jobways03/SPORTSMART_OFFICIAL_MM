@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import {
   approveOrder,
@@ -66,6 +67,7 @@ interface OrderDetail {
 }
 
 export default function VerificationDetailPage() {
+  const { confirmDialog } = useModal();
   const params = useParams();
   const router = useRouter();
   const id = String(params?.id || '');
@@ -113,7 +115,15 @@ export default function VerificationDetailPage() {
 
   const handleReject = async () => {
     if (submitting) return;
-    if (!confirm('Reject this order? Stock will be restored and the order will be cancelled.')) return;
+    const ok = await confirmDialog({
+      title: 'Reject this order?',
+      message:
+        'Stock will be restored and the order will be cancelled. This cannot be undone.',
+      confirmText: 'Reject order',
+      cancelText: 'Keep order',
+      danger: true,
+    });
+    if (!ok) return;
     setSubmitting('reject');
     setError(null);
     try {

@@ -358,7 +358,7 @@ function evalMinDaysBetweenRedemptions(
     return { allowed: true };
   const last = ctx.redemptionHistory.reduce(
     (a, r) => (r.redeemedAt > a ? r.redeemedAt : a),
-    ctx.redemptionHistory[0].redeemedAt,
+    ctx.redemptionHistory[0]!.redeemedAt,
   );
   const diffDays = (Date.now() - last.getTime()) / (24 * 60 * 60 * 1000);
   if (diffDays < minDays) {

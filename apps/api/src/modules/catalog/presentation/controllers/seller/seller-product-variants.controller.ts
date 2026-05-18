@@ -37,7 +37,7 @@ import { StockSyncService } from '../../../application/services/stock-sync.servi
 class GenerateVariantsDto {
   @IsArray()
   @ArrayNotEmpty()
-  optionValueIds: string[][];
+  optionValueIds!: string[][];
 }
 
 @ApiTags('Seller Products')
@@ -125,7 +125,7 @@ export class SellerProductVariantsController {
       // Find or create OptionValues
       const valueIds: string[] = [];
       for (let i = 0; i < opt.values.length; i++) {
-        const val = opt.values[i].trim();
+        const val = opt.values[i]!.trim();
         if (!val) continue;
 
         const optionValue = await this.variantRepo.findOrCreateOptionValue(definition.id, val, i);

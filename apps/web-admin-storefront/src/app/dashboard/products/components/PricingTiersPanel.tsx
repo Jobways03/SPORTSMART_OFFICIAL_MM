@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useModal } from '@sportsmart/ui';
 import {
   adminPricingTiersService,
   PricingTier,
@@ -39,6 +40,7 @@ const EMPTY_DRAFT: DraftTier = {
  * friendly error banner.
  */
 export function PricingTiersPanel({ productId, variants }: Props) {
+  const { confirmDialog } = useModal();
   const [rows, setRows] = useState<PricingTier[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -113,7 +115,14 @@ export function PricingTiersPanel({ productId, variants }: Props) {
   };
 
   const handleDelete = async (tier: PricingTier) => {
-    if (!window.confirm(`Delete tier "${tier.displayLabel}"? This cannot be undone.`)) return;
+    const ok = await confirmDialog({
+      title: `Delete tier "${tier.displayLabel}"?`,
+      message: 'This cannot be undone.',
+      confirmText: 'Delete tier',
+      cancelText: 'Keep',
+      danger: true,
+    });
+    if (!ok) return;
     setBusyRow((prev) => new Set(prev).add(tier.id));
     setErr(null);
     try {

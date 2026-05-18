@@ -26,6 +26,17 @@ const SMOKE_CUSTOMER = {
 const prisma = new PrismaClient();
 
 async function main() {
+  // Phase 9 (2026-05-16) — refuse to seed the smoke customer when
+  // NODE_ENV=production. The credentials are deterministic + checked
+  // into git (so smoke tests can hardcode them) — running this in
+  // prod would create a known-password user that anyone with the
+  // repo could log in as.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'seed-smoke-actors must not run in production (NODE_ENV=production). The hardcoded password would create a publicly-known login.',
+    );
+  }
+
   const passwordHash = await bcrypt.hash(SMOKE_CUSTOMER.password, 12);
 
   const user = await prisma.user.upsert({

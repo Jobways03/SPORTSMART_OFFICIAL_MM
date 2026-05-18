@@ -70,6 +70,59 @@ export class SellerInventoryController {
   }
 
   /**
+   * GET /seller/catalog/inventory-overview
+   * Seller-scoped totals: total products, total stock, low/out-of-stock counts.
+   * Mirrors the Super Admin overview but limited to this seller's mappings.
+   */
+  @Get('inventory-overview')
+  @HttpCode(HttpStatus.OK)
+  async getInventoryOverview(@Req() req: Request) {
+    const sellerId = (req as any).sellerId;
+    const result = await this.inventoryService.getSellerOverview(sellerId);
+    return {
+      success: true,
+      message: 'Inventory overview retrieved',
+      data: result,
+    };
+  }
+
+  /**
+   * GET /seller/catalog/out-of-stock
+   * Returns this seller's mappings with available stock <= 0.
+   */
+  @Get('out-of-stock')
+  @HttpCode(HttpStatus.OK)
+  async getOutOfStock(
+    @Req() req: Request,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const sellerId = (req as any).sellerId;
+    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
+
+    const result = await this.inventoryService.getSellerOutOfStock(
+      sellerId,
+      pageNum,
+      limitNum,
+    );
+
+    return {
+      success: true,
+      message: 'Out of stock items retrieved',
+      data: {
+        items: result.items,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: result.total,
+          totalPages: Math.ceil(result.total / limitNum),
+        },
+      },
+    };
+  }
+
+  /**
    * GET /seller/catalog/low-stock
    * Returns mappings where available stock <= lowStockThreshold.
    */

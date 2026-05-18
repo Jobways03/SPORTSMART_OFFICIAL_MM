@@ -12,10 +12,10 @@ import { MenuLinkType } from '@prisma/client';
 
 export class CreateMenuDto {
   @IsString()
-  handle: string;
+  handle!: string;
 
   @IsString()
-  name: string;
+  name!: string;
 }
 
 export class UpdateMenuDto {
@@ -30,7 +30,7 @@ export class UpdateMenuDto {
 
 export class CreateItemDto {
   @IsString()
-  label: string;
+  label!: string;
 
   @IsOptional()
   @IsEnum(MenuLinkType)
@@ -85,20 +85,20 @@ export class UpdateItemDto {
 
 export class ReorderMoveDto {
   @IsString()
-  id: string;
+  id!: string;
 
   @IsOptional()
   @IsString()
-  parentId: string | null;
+  parentId!: string | null;
 
   @IsInt()
   @Min(0)
-  position: number;
+  position!: number;
 }
 
 export class ReorderItemsDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ReorderMoveDto)
-  moves: ReorderMoveDto[];
+  moves!: ReorderMoveDto[];
 }

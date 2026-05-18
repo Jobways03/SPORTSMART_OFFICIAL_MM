@@ -18,10 +18,11 @@ import { FranchiseAuthGuard } from '../../../../core/guards';
 import { FranchiseCatalogService } from '../../application/services/franchise-catalog.service';
 import { FranchiseAddCatalogMappingDto } from '../dtos/franchise-add-catalog-mapping.dto';
 import { FranchiseUpdateCatalogMappingDto } from '../dtos/franchise-update-catalog-mapping.dto';
+import { FranchiseActiveGuard } from '../../../../core/guards';
 
 @ApiTags('Franchise Catalog')
 @Controller('franchise/catalog')
-@UseGuards(FranchiseAuthGuard)
+@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
 export class FranchiseCatalogController {
   constructor(
     private readonly catalogService: FranchiseCatalogService,

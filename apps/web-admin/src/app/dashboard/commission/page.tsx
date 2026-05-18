@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 
 /* ── Types ── */
@@ -125,6 +126,7 @@ function Th({
 type TabType = 'records' | 'sellers' | 'cycles' | 'reconciliation';
 
 export default function AdminCommissionPage() {
+  const { notify } = useModal();
   const [activeTab, setActiveTab] = useState<TabType>('records');
   const [marginSummary, setMarginSummary] = useState<MarginSummary | null>(null);
 
@@ -158,12 +160,16 @@ export default function AdminCommissionPage() {
   const [payingId, setPayingId] = useState<string | null>(null);
   const [utrInput, setUtrInput] = useState('');
 
-  // Fetch margin summary
+  // Fetch margin summary. Errors surface via toast — previously
+  // silent .catch(()=>{}) hid auth failures and 500s, leaving stale
+  // numbers on the dashboard with no indication anything was wrong.
   useEffect(() => {
     apiClient<MarginSummary>('/admin/settlements/margin-summary')
       .then((res) => { if (res.data) setMarginSummary(res.data); })
-      .catch(() => {});
-  }, []);
+      .catch((err) => {
+        notify({ kind: 'error', message: `Margin summary failed to load: ${err?.message ?? 'unknown error'}` });
+      });
+  }, [notify]);
 
   // Fetch commission records
   const fetchData = useCallback((p: number) => {
@@ -176,32 +182,40 @@ export default function AdminCommissionPage() {
 
     apiClient<CommissionResponse>(`/admin/commission?${params}`)
       .then((res) => { if (res.data) setData(res.data); })
-      .catch(() => {})
+      .catch((err) => {
+        notify({ kind: 'error', message: `Commission records failed to load: ${err?.message ?? 'unknown error'}` });
+      })
       .finally(() => setLoading(false));
-  }, [search, dateFrom, dateTo, statusFilter]);
+  }, [search, dateFrom, dateTo, statusFilter, notify]);
 
   // Fetch seller breakdown
   const fetchSellers = useCallback((p: number) => {
     const params = new URLSearchParams({ page: String(p), limit: '20' });
     apiClient<SellerBreakdownResponse>(`/admin/settlements/seller-breakdown?${params}`)
       .then((res) => { if (res.data) setSellerData(res.data); })
-      .catch(() => {});
-  }, []);
+      .catch((err) => {
+        notify({ kind: 'error', message: `Seller breakdown failed: ${err?.message ?? 'unknown error'}` });
+      });
+  }, [notify]);
 
   // Fetch settlement cycles
   const fetchCycles = useCallback((p: number) => {
     const params = new URLSearchParams({ page: String(p), limit: '20' });
     apiClient<CycleListResponse>(`/admin/settlements/cycles?${params}`)
       .then((res) => { if (res.data) setCycles(res.data); })
-      .catch(() => {});
-  }, []);
+      .catch((err) => {
+        notify({ kind: 'error', message: `Settlement cycles failed: ${err?.message ?? 'unknown error'}` });
+      });
+  }, [notify]);
 
   // Fetch reconciliation
   const fetchReconciliation = useCallback(() => {
     apiClient<Reconciliation>('/admin/settlements/reconciliation')
       .then((res) => { if (res.data) setReconciliation(res.data); })
-      .catch(() => {});
-  }, []);
+      .catch((err) => {
+        notify({ kind: 'error', message: `Reconciliation failed: ${err?.message ?? 'unknown error'}` });
+      });
+  }, [notify]);
 
   useEffect(() => { fetchData(page); }, [page, fetchData]);
   useEffect(() => {
@@ -276,10 +290,14 @@ export default function AdminCommissionPage() {
       setCreateStart('');
       setCreateEnd('');
       fetchCycles(1);
-      // Refresh summary
+      // Refresh summary — silent on failure here since the main
+      // action (create cycle) succeeded; the user just gets a stale
+      // header until the next mount.
       apiClient<MarginSummary>('/admin/settlements/margin-summary')
         .then((res) => { if (res.data) setMarginSummary(res.data); })
-        .catch(() => {});
+        .catch((err) => {
+          notify({ kind: 'warning', message: `Margin summary refresh failed: ${err?.message ?? 'unknown error'}` });
+        });
     } catch {
       // error handled by apiClient
     } finally {

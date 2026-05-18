@@ -81,7 +81,7 @@ export class StorefrontProductsController {
     }
     for (const [k, v] of Object.entries(rawQuery)) {
       const m = k.match(/^filter\[(\w+)\]$/);
-      if (m && v) filterObj[m[1]] = String(v);
+      if (m && v) filterObj[m[1]!] = String(v);
     }
 
     const result = await this.cache.getOrSetProductList(

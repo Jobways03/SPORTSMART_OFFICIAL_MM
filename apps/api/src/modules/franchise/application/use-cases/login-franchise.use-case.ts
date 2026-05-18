@@ -6,6 +6,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { FranchiseLoginResponseData } from '../../presentation/dtos/franchise-auth-response.dto';
 import {
@@ -55,8 +56,11 @@ export class LoginFranchiseUseCase {
       throw new UnauthorizedAppException('Invalid credentials');
     }
 
-    // Check account status — PENDING partners can log in to complete their profile
-    // Only SUSPENDED and DEACTIVATED are blocked
+    // Check account status — PENDING partners can log in to complete
+    // their profile and submit KYC; the FranchiseActiveGuard then gates
+    // every business-action route so PENDING partners can't accept
+    // orders, sell via POS, or request payouts before they're approved.
+    // Only SUSPENDED and DEACTIVATED are blocked at login.
     if (['SUSPENDED', 'DEACTIVATED'].includes(franchise.status)) {
       throw new ForbiddenAppException('Account has been suspended or deactivated. Please contact support.');
     }
@@ -115,6 +119,21 @@ export class LoginFranchiseUseCase {
       lockUntil: null,
       lastLoginAt: new Date(),
     });
+
+    // Phase 13 (2026-05-16) — opportunistic rehash.
+    if (shouldRehash(franchise.passwordHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        await this.franchiseRepo.updateFranchise(franchise.id, {
+          passwordHash: upgraded,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to rehash franchise ${franchise.id} on login: ${(err as Error).message}`,
+          'LoginFranchiseUseCase',
+        );
+      }
+    }
 
     // Create session
     const refreshToken = randomUUID();
@@ -177,8 +196,8 @@ export class LoginFranchiseUseCase {
   private parseTimeToMs(time: string): number {
     const match = time.match(/^(\d+)(s|m|h|d)$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000;
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
     const multipliers: Record<string, number> = {
       s: 1000,
       m: 60 * 1000,

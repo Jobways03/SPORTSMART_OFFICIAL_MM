@@ -31,6 +31,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { TaxConfigService } from './tax-config.service';
 
 export type TaxMode = 'OFF' | 'AUDIT' | 'STRICT';
@@ -58,6 +59,7 @@ export class TaxModeService {
   constructor(
     private readonly env: EnvService,
     private readonly taxConfig: TaxConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -80,6 +82,47 @@ export class TaxModeService {
     if (strict) return 'STRICT';
     if (audit) return 'AUDIT';
     return 'OFF';
+  }
+
+  /**
+   * Flip the mode. Writes both flags atomically (STRICT implies AUDIT
+   * per the boot semantics) and invalidates the TaxConfigService cache
+   * so the new mode is picked up immediately rather than after the 60s
+   * TTL. The actorId is logged for the audit trail; the change shows up
+   * in the next mode-read.
+   *
+   * Persistence model: two rows in `tax_config` — `tax_audit_mode` and
+   * `tax_strict_mode` — boolean strings ('true' / 'false'). Mode → flags
+   * mapping:
+   *   OFF    → audit=false, strict=false
+   *   AUDIT  → audit=true,  strict=false
+   *   STRICT → audit=true,  strict=true   (strict implies audit)
+   */
+  async setMode(mode: TaxMode, actorId?: string | null): Promise<void> {
+    const auditFlag = mode === 'AUDIT' || mode === 'STRICT';
+    const strictFlag = mode === 'STRICT';
+    const description = `Tax mode (managed via admin UI)`;
+    const updatedBy = actorId ?? null;
+
+    await this.prisma.$transaction([
+      this.prisma.taxConfig.upsert({
+        where: { key: 'tax_audit_mode' },
+        update: { value: auditFlag, description, updatedBy },
+        create: { key: 'tax_audit_mode', value: auditFlag, description, updatedBy },
+      }),
+      this.prisma.taxConfig.upsert({
+        where: { key: 'tax_strict_mode' },
+        update: { value: strictFlag, description, updatedBy },
+        create: { key: 'tax_strict_mode', value: strictFlag, description, updatedBy },
+      }),
+    ]);
+
+    this.taxConfig.invalidate('tax_audit_mode');
+    this.taxConfig.invalidate('tax_strict_mode');
+
+    this.logger.log(
+      `Tax mode set to ${mode} (audit=${auditFlag}, strict=${strictFlag}) by ${actorId ?? 'unknown'}`,
+    );
   }
 
   async isStrict(): Promise<boolean> {

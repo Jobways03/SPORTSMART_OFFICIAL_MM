@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, Logger } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
+import { AdminRole } from '@prisma/client';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
@@ -13,13 +14,11 @@ export interface AdminTokenPayload {
   sessionId: string;
 }
 
-const ADMIN_ROLES = [
-  'SUPER_ADMIN',
-  'SELLER_ADMIN',
-  'SELLER_SUPPORT',
-  'SELLER_OPERATIONS',
-  'AFFILIATE_ADMIN',
-];
+// Source the allowed admin roles from the Prisma-generated enum at
+// runtime so the list cannot drift from the schema. Previously this
+// was a hardcoded array which silently went stale every time someone
+// added or renamed an AdminRole value in admin.prisma.
+const ADMIN_ROLES: readonly string[] = Object.values(AdminRole);
 
 @Injectable()
 export class AdminAuthGuard implements CanActivate {

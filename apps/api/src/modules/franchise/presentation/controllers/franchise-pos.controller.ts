@@ -12,15 +12,16 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { FranchiseAuthGuard } from '../../../../core/guards';
+import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
 import { FranchisePosService } from '../../application/services/franchise-pos.service';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PosRecordSaleDto } from '../dtos/pos-record-sale.dto';
 import { PosVoidSaleDto } from '../dtos/pos-void-sale.dto';
 import { PosReturnSaleDto } from '../dtos/pos-return-sale.dto';
 
 @ApiTags('Franchise POS')
 @Controller('franchise/pos')
-@UseGuards(FranchiseAuthGuard)
+@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
 export class FranchisePosController {
   constructor(private readonly posService: FranchisePosService) {}
 
@@ -140,6 +141,12 @@ export class FranchisePosController {
 
   @Post('sales/:saleId/void')
   @HttpCode(HttpStatus.OK)
+  // Phase 7 (2026-05-16) — header-level dedup via the
+  // `X-Idempotency-Key` header. Service-level CAS in
+  // FranchisePosService.voidSale closes the race even when the header
+  // is absent (legacy clients); the decorator adds belt + braces for
+  // POS terminals that re-fire on slow network.
+  @Idempotent()
   async voidSale(
     @Req() req: Request,
     @Param('saleId') saleId: string,

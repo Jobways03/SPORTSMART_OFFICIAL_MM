@@ -52,13 +52,12 @@ interface AdminMfaChallengeClaims {
  * being mis-used as a challenge. Defence-in-depth on top of the
  * different `exp` windows.
  *
- * Anti-replay deferred to PR 10.7: a TOTP code reused within its
- * 30s window is currently accepted. The follow-up adds a
- * `mfaLastUsedStep` column on the Admin model and rejects codes
- * for `step <= mfaLastUsedStep`. The narrow window + the requirement
- * that an attacker already has a valid challenge token bounds the
- * exposure tightly for now, but it's a real gap, called out
- * explicitly here so a future PR closes it.
+ * Anti-replay (closed 2026-05-16): TOTP codes carry a monotonic
+ * `step` counter (unix_seconds / period). The verify path below
+ * rejects codes for `step <= mfaLastUsedStep` (line ~156) and
+ * advances the baseline on success (line ~182). Backup-code path
+ * is single-use by construction (hash spliced on consume), so
+ * mfaLastUsedStep is left untouched there.
  */
 @Injectable()
 export class AdminMfaVerifyChallengeUseCase {
@@ -227,8 +226,8 @@ export class AdminMfaVerifyChallengeUseCase {
   private parseTimeToMs(time: string): number {
     const match = time.match(/^(\d+)(s|m|h|d)$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000;
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
     const multipliers: Record<string, number> = {
       s: 1000,
       m: 60 * 1000,

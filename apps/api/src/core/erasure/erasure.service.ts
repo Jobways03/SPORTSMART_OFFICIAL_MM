@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -48,6 +49,12 @@ export class ErasureService {
     // outcome so the admin compliance UI can show "N tax documents
     // preserved under Section 36" without re-deriving from the DB.
     private readonly taxRetention: TaxDocumentRetentionService,
+    // Phase 14 (2026-05-16) — emits identity.user.erased once the
+    // User row's PII has been redacted. Downstream subscribers
+    // (Cloudinary cleanup, mailing-list opt-out, partner webhook
+    // delivery) can react asynchronously without coupling them to
+    // the erasure cron.
+    private readonly eventBus: EventBusService,
   ) {}
 
   async requestErasure(input: {
@@ -165,6 +172,33 @@ export class ErasureService {
         outcome: outcome as Prisma.InputJsonValue,
       },
     });
+
+    // Phase 14 (2026-05-16) — broadcast erasure completion so
+    // downstream integrations (Cloudinary asset deletion, email
+    // list opt-out, partner webhook delivery) can react. Audit
+    // requirement: a row in `domain_event_log` ties the in-DB
+    // redaction to the side effects that followed it. Fire-and-
+    // forget — a publish failure mustn't roll back the redaction.
+    if (finalStatus === 'COMPLETED' && row.subjectType === 'USER') {
+      await this.eventBus
+        .publish({
+          eventName: 'identity.user.erased',
+          aggregate: 'User',
+          aggregateId: row.subjectId,
+          occurredAt: new Date(),
+          payload: {
+            requestId,
+            redactedFields:
+              (outcome.redacted as string[] | undefined) ?? [],
+            statutoryHold: outcome.statutoryHold ?? null,
+          },
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(
+            `Failed to publish identity.user.erased for ${row.subjectId}: ${(err as Error).message}`,
+          );
+        });
+    }
   }
 
   /**

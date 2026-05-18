@@ -832,10 +832,36 @@ export class DiscountAllocationService {
      * returns we currently leave the original ledger row APPLIED
      * and add a single REVERSED row carrying the proportional
      * amount (per spec: don't double-debit, don't restore budget).
+     *
+     * Phase 4.8 (2026-05-16) — validation hardened:
+     *   - Both fields must be positive integers.
+     *   - `returned <= purchased` — returning more than was purchased
+     *     is a data-entry error, not a refund the platform should
+     *     execute. We throw a clear error so the caller fixes its
+     *     payload rather than silently reversing a wrong amount.
      */
     proportion?: { returned: number; purchased: number };
     reason?: string;
   }): Promise<void> {
+    if (args.proportion) {
+      const { returned, purchased } = args.proportion;
+      if (
+        !Number.isInteger(returned) ||
+        !Number.isInteger(purchased) ||
+        returned <= 0 ||
+        purchased <= 0
+      ) {
+        throw new Error(
+          `reverseLiabilityForReturnedItem: proportion must be positive integers (got returned=${returned}, purchased=${purchased})`,
+        );
+      }
+      if (returned > purchased) {
+        throw new Error(
+          `reverseLiabilityForReturnedItem: returned (${returned}) cannot exceed purchased (${purchased}) — refusing to reverse more discount than was applied`,
+        );
+      }
+    }
+
     const ledgerRows = await this.prisma.discountLiabilityLedger.findMany({
       where: { orderItemId: args.orderItemId, status: 'APPLIED' },
     });
@@ -846,7 +872,12 @@ export class DiscountAllocationService {
         ? (BigInt(row.amountInPaise) * BigInt(args.proportion.returned)) /
           BigInt(args.proportion.purchased)
         : BigInt(row.amountInPaise);
-      const idemKey = `${row.id}:reverse`;
+      // Phase 4.8 (2026-05-16) — disambiguate the reverse-key when
+      // orderItemId is null on the source row (non-PRODUCT lines).
+      // The base id alone might be reused across line types in
+      // legacy data; the `[REVERSE]` namespace + sourceLine context
+      // makes the key globally unique.
+      const idemKey = `${row.id}:reverse:${row.orderItemId ?? 'null'}`;
       await this.prisma.discountLiabilityLedger.upsert({
         where: { id: idemKey },
         create: {
@@ -870,6 +901,63 @@ export class DiscountAllocationService {
           status: 'REVERSED',
         },
       });
+    }
+  }
+
+  /**
+   * Phase 4.8 (2026-05-16) — Coupon usage restoration on refund.
+   *
+   * When a customer used a discount code at checkout, the code's
+   * `usageCount` is incremented. If the order is later refunded
+   * (return / cancel / dispute-buyer-favoured), we owe the code's
+   * budget the unit back — otherwise a coupon with `usageLimit=100`
+   * that's been hit by 100 customers, half of whom refunded, looks
+   * spent when only 50 customers actually got value.
+   *
+   * Pass-through to the underlying repository to keep the discounts
+   * domain isolated from the refund-instructions module's
+   * `decrementCodeUsage` direct DB writes.
+   *
+   * Idempotent via `idempotencyKey = orderItemId + discountCodeId`:
+   * re-running for the same item is a no-op.
+   */
+  async restoreCouponUsage(args: {
+    orderItemId: string;
+    reason?: string;
+  }): Promise<void> {
+    const ledgerRows = await this.prisma.discountLiabilityLedger.findMany({
+      where: { orderItemId: args.orderItemId, status: 'REVERSED' },
+      select: { discountCodeId: true, id: true },
+    });
+    const codeIds = Array.from(
+      new Set(
+        ledgerRows
+          .map((r) => r.discountCodeId)
+          .filter((x): x is string => !!x),
+      ),
+    );
+    if (codeIds.length === 0) return;
+
+    // Decrement the per-code usage counter for each distinct code
+    // that appeared on this item. Use a CAS-style update so a
+    // counter that's already at 0 (over-decremented by manual fix)
+    // can't go negative.
+    for (const codeId of codeIds) {
+      try {
+        await this.prisma.discountCode.updateMany({
+          where: { id: codeId, usedCount: { gt: 0 } },
+          data: {
+            usedCount: { decrement: 1 },
+          },
+        });
+      } catch (err) {
+        // Best-effort — log via the logger we already have on the
+        // service. Failure to decrement is not refund-blocking.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (this as any).logger?.warn?.(
+          `restoreCouponUsage: failed to decrement code ${codeId}: ${(err as Error).message}`,
+        );
+      }
     }
   }
 

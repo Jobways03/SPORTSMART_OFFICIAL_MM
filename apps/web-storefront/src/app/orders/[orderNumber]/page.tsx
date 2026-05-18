@@ -8,6 +8,7 @@ import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import { useModal } from '@sportsmart/ui';
 import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
+import { InvoiceDownloadCard } from '@/components/tax/InvoiceDownloadCard';
 import type {
   OrderDetail,
   SubOrder,
@@ -617,6 +618,12 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
             <OrderTimeline events={order.timeline} />
           </div>
         )}
+
+        {/* Phase 25 — Tax invoice download (Phase 19 PDF + Phase 20 signed URL).
+            Self-contained card that lists every tax_documents row for this
+            masterOrderId; renders a Download button per row that opens the
+            stub-provider's file:// URL (or the real cloud signed URL in prod). */}
+        <InvoiceDownloadCard orderId={order.id} />
 
         {/* Shipping Address */}
         <div style={{ background: '#f9fafb', borderRadius: 10, padding: 16, marginBottom: 20 }}>

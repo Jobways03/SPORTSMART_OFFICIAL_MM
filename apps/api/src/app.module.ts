@@ -8,9 +8,11 @@ import { EventsModule } from './bootstrap/events/events.module';
 import { SecurityModule } from './bootstrap/security/security.module';
 import { EmailModule } from './integrations/email/email.module';
 import { IThinkModule } from './integrations/ithink/ithink.module';
+import { WhatsAppModule } from './integrations/whatsapp/whatsapp.module';
 
 // core
 import { HealthController } from './core/health/health.controller';
+import { ExternalDepsProbeService } from './core/health/external-deps-probe.service';
 
 // business modules
 import { IdentityModule } from './modules/identity/module';
@@ -86,6 +88,7 @@ import { TaxModule } from './modules/tax/module';
     EventsModule,
     EmailModule,
     IThinkModule,
+    WhatsAppModule,
     IdempotencyModule,
     GuardsModule,
     CaseDuplicateModule,
@@ -151,5 +154,12 @@ import { TaxModule } from './modules/tax/module';
     SchedulerModule,
   ],
   controllers: [HealthController],
+  providers: [
+    // Phase 11 (2026-05-16) — external-dependency probe used by
+    // HealthController. Lives at the app level rather than in a
+    // dedicated module since it has no own state and is only used
+    // by the one controller above it.
+    ExternalDepsProbeService,
+  ],
 })
 export class AppModule {}

@@ -3,7 +3,7 @@ import { IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-valid
 export class SellerChangePasswordDto {
   @IsNotEmpty({ message: 'Current password is required' })
   @IsString()
-  currentPassword: string;
+  currentPassword!: string;
 
   @IsNotEmpty({ message: 'New password is required' })
   @IsString()
@@ -13,9 +13,9 @@ export class SellerChangePasswordDto {
   @Matches(/(?=.*[A-Z])/, { message: 'Password must include an uppercase letter' })
   @Matches(/(?=.*\d)/, { message: 'Password must include a number' })
   @Matches(/(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])/, { message: 'Password must include a special character' })
-  newPassword: string;
+  newPassword!: string;
 
   @IsNotEmpty({ message: 'Please confirm your password' })
   @IsString()
-  confirmPassword: string;
+  confirmPassword!: string;
 }

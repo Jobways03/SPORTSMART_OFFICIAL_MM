@@ -12,6 +12,7 @@ import { VariantGeneratorService } from './application/services/variant-generato
 import { ReApprovalService } from './application/services/re-approval.service';
 import { ServiceabilityService } from './application/services/serviceability.service';
 import { SellerAllocationService } from './application/services/seller-allocation.service';
+import { PostOfficeCacheService } from './application/services/post-office-cache.service';
 import { DuplicateDetectionService } from './application/services/duplicate-detection.service';
 import { CatalogCacheService } from './application/services/catalog-cache.service';
 import { StockSyncService } from './application/services/stock-sync.service';
@@ -23,6 +24,7 @@ import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
 
 // Integration adapters
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
+import { CloudinaryOrphanSweepCron } from './application/jobs/cloudinary-orphan-sweep.cron';
 
 // ── Repository interfaces (Symbols) ─────────────────────────────────────
 import { PRODUCT_REPOSITORY } from './domain/repositories/product.repository.interface';
@@ -139,6 +141,10 @@ import { CartModule } from '../cart/module';
     VariantGeneratorService,
     ReApprovalService,
     ServiceabilityService,
+    // Phase 4 follow-up (2026-05-16) — Redis-backed PostOffice
+    // cache. Eliminates 50+ table scans per allocation across the
+    // 165K-row post_offices reference dataset.
+    PostOfficeCacheService,
     SellerAllocationService,
     DuplicateDetectionService,
     CatalogCacheService,
@@ -149,6 +155,10 @@ import { CartModule } from '../cart/module';
     SellerAuthGuard,
     AdminAuthGuard,
     CloudinaryAdapter,
+    // Phase 14 (2026-05-16) — Cloudinary orphan sweep cron. Daily
+    // 04:00 UTC; deletes Cloudinary assets whose owning Product has
+    // been soft-deleted beyond the retention window.
+    CloudinaryOrphanSweepCron,
   ],
   exports: [CatalogPublicFacade],
 })

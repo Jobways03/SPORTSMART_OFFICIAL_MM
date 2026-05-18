@@ -1,12 +1,14 @@
 import {
   Controller,
   Get,
+  Header,
   Post,
   Patch,
   Body,
   Param,
   Query,
   Req,
+  Res,
   UseGuards,
   BadRequestException,
   NotFoundException,
@@ -152,6 +154,42 @@ export class AdminSettlementController {
     return {
       success: true,
       message: 'Admin margin summary retrieved',
+      data,
+    };
+  }
+
+  /* ── GET /admin/settlements/cycles/:cycleId/export.csv ──
+   * Phase 3.5 (2026-05-16) — Tally / accounting-package CSV export.
+   * Generates a Tally Prime-compatible voucher import file for the
+   * cycle's seller settlements. Finance hands this to their bookkeeper
+   * at monthly close. */
+  @Get('cycles/:cycleId/export.csv')
+  @Permissions('settlements.read')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportCycleToTallyCsv(
+    @Param('cycleId') cycleId: string,
+    @Res() res: any,
+  ) {
+    const csv = await this.settlementService.exportCycleToTallyCsv(cycleId);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="settlement-cycle-${cycleId.slice(0, 8)}.csv"`,
+    );
+    res.send(csv);
+  }
+
+  /* ── GET /admin/settlements/cycles/:cycleId/balances ──
+   * Phase 3.5 — opening / closing balance per seller for a cycle.
+   * Used by finance for monthly reconciliation. */
+  @Get('cycles/:cycleId/balances')
+  @Permissions('settlements.read')
+  async getCycleBalances(@Param('cycleId') cycleId: string) {
+    const data = await this.settlementService.computeOpeningClosingBalance(
+      cycleId,
+    );
+    return {
+      success: true,
+      message: 'Opening / closing balances computed',
       data,
     };
   }

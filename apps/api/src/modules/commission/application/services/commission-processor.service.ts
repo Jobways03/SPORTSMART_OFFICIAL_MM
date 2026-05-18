@@ -1,7 +1,14 @@
-import { Inject, Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+  Logger,
+} from '@nestjs/common';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -20,8 +27,9 @@ const LOCK_KEY = 'lock:commission-processor';
 const LOCK_TTL = 30; // 30 seconds lock
 
 @Injectable()
-export class CommissionProcessorService implements OnModuleInit {
+export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(CommissionProcessorService.name);
+  private tickTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @Inject(COMMISSION_REPOSITORY)
@@ -34,12 +42,44 @@ export class CommissionProcessorService implements OnModuleInit {
     // commission-record adjustment path (admin overrides the
     // algorithm-produced earning + margin).
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    private readonly env: EnvService,
   ) {}
 
   onModuleInit() {
-    // Check every 15 seconds for sub-orders past return window
-    setInterval(() => this.processCommissions(), 15_000);
-    this.logger.log('Commission processor started (15s interval) — Model 1 margin-based');
+    // Phase 3.6 (2026-05-16) — feature-flag gate. Default ON so we
+    // don't change production behaviour, but the team can pause the
+    // processor without a code change when needed (e.g. during a
+    // commission-rule migration, or to investigate a runaway
+    // commission row). The interval is env-tunable as well — for
+    // load tests we may want to slow it down.
+    if (!this.env.getBoolean('COMMISSION_PROCESSOR_ENABLED', true)) {
+      this.logger.warn(
+        'CommissionProcessorService disabled via COMMISSION_PROCESSOR_ENABLED=false — sub-orders past return-window will NOT auto-lock commission.',
+      );
+      return;
+    }
+    const intervalMs = this.env.getNumber(
+      'COMMISSION_PROCESSOR_INTERVAL_MS',
+      15_000,
+    );
+    this.tickTimer = setInterval(() => this.processCommissions(), intervalMs);
+    this.logger.log(
+      `Commission processor started (${intervalMs}ms interval) — Model 1 margin-based`,
+    );
+  }
+
+  /**
+   * Clean up the setInterval on SIGTERM. Without this, the worker
+   * holds the event loop open until the next tick fires, delaying
+   * pod eviction and accumulating zombie tasks across rolling
+   * deploys.
+   */
+  onModuleDestroy() {
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+      this.logger.log('Commission processor stopped on module destroy');
+    }
   }
 
   /* ── Background job: process delivered sub-orders ───────────────── */

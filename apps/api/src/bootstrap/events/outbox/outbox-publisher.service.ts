@@ -93,11 +93,30 @@ export class OutboxPublisherService
   async tick(): Promise<number> {
     if (!this.enabled()) return 0;
 
-    const lockAcquired = await this.redis.acquireLock(
+    // Phase 10 (2026-05-16) — switched from the unfenced acquireLock to
+    // the fenced acquireLockWithToken variant. Two problems the fenced
+    // version closes:
+    //
+    //   1. Long-running tick survives a TTL miss: if the batch handlers
+    //      take longer than LOCK_TTL_SECONDS, the unfenced release
+    //      would delete a successor's lock by name, double-publishing
+    //      everything that successor was processing.
+    //   2. Mid-tick crash hole: the process can't release a token it
+    //      no longer owns, so a successor that acquires after TTL
+    //      expiry can't be cleared by a zombie release. The token is
+    //      part of the lock value; releaseLockWithToken's Lua script
+    //      only deletes when the value matches.
+    //
+    // Process-crash recovery is still TTL-based: a hard kill leaves
+    // the lock keyed for LOCK_TTL_SECONDS. The claim CTE already
+    // bumps next_attempt_at by the same TTL so no row is re-claimed
+    // before the lock would have expired — meaning a crashed-tick
+    // recovers cleanly without duplicate emits.
+    const { acquired, token } = await this.redis.acquireLockWithToken(
       OutboxPublisherService.LOCK_KEY,
       OutboxPublisherService.LOCK_TTL_SECONDS,
     );
-    if (!lockAcquired) return 0;
+    if (!acquired || !token) return 0;
 
     try {
       const rows = await this.claimBatch();
@@ -119,7 +138,20 @@ export class OutboxPublisherService
       );
       return rows.length;
     } finally {
-      await this.redis.releaseLock(OutboxPublisherService.LOCK_KEY);
+      // Fenced release: the Lua script atomically deletes ONLY if
+      // the lock value still matches our token. If the TTL expired
+      // mid-tick and a successor grabbed the lock, this call returns
+      // false without touching the successor's lock.
+      const released = await this.redis.releaseLockWithToken(
+        OutboxPublisherService.LOCK_KEY,
+        token,
+      );
+      if (!released) {
+        this.logger.warn(
+          'Outbox publisher lock expired before tick finished — a successor may have re-claimed in parallel. ' +
+            'Increase OUTBOX_BATCH_SIZE or OUTBOX_POLL_INTERVAL_MS if this happens often.',
+        );
+      }
     }
   }
 

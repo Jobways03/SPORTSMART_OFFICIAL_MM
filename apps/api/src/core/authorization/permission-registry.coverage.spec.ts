@@ -55,10 +55,10 @@ function extractPermissionKeys(source: string): string[] {
   const literalRe = /['"]([^'"]+)['"]/g;
   let m: RegExpExecArray | null;
   while ((m = decoratorRe.exec(source)) !== null) {
-    const args = m[1];
+    const args = m[1]!;
     let lm: RegExpExecArray | null;
     while ((lm = literalRe.exec(args)) !== null) {
-      out.push(lm[1]);
+      out.push(lm[1]!);
     }
     literalRe.lastIndex = 0;
   }

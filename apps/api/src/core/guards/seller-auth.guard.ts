@@ -4,6 +4,7 @@ import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
 import { UnauthorizedAppException } from '../exceptions';
+import { canLogin } from '../../modules/seller/domain/policies/seller-access.policy';
 
 export interface SellerTokenPayload {
   sub: string;
@@ -74,8 +75,10 @@ export class SellerAuthGuard implements CanActivate {
       }
     }
 
-    // Verify the seller account is still ACTIVE (or PENDING_APPROVAL, which
-    // is the legacy state allowed by login-seller.use-case.ts).
+    // Verify the seller account is still allowed to hold an active
+    // session. Rule lives in `seller-access.policy.ts` — keep this
+    // check aligned with the login-time check by routing through the
+    // same `canLogin()` helper instead of duplicating the status list.
     const seller = await this.prisma.seller.findUnique({
       where: { id: payload.sub },
       select: { id: true, status: true, email: true, isDeleted: true },
@@ -83,7 +86,7 @@ export class SellerAuthGuard implements CanActivate {
     if (!seller || seller.isDeleted) {
       throw new UnauthorizedAppException('Seller not found');
     }
-    if (!['ACTIVE', 'PENDING_APPROVAL'].includes(seller.status)) {
+    if (!canLogin(seller.status)) {
       throw new UnauthorizedAppException('Seller account is not active');
     }
 

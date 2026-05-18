@@ -228,4 +228,46 @@ export class PrismaCartRepository implements CartRepository {
       data: { savedForLater: value },
     });
   }
+
+  /**
+   * Phase 4.1 (2026-05-16) — atomic move-to-cart with stock check.
+   * The aggregated-stock read and the savedForLater flip run inside
+   * a single transaction so a concurrent reservation can't claim
+   * inventory between the two operations.
+   *
+   * Returns `{ moved: true }` when the flip went through, or
+   * `{ moved: false, availableStock }` when stock was insufficient
+   * (caller surfaces a clean 400 to the customer).
+   */
+  async moveToCartIfStockAvailable(
+    itemId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+  ): Promise<{ moved: boolean; availableStock: number }> {
+    return this.prisma.$transaction(async (tx) => {
+      const where: any = {
+        productId,
+        isActive: true,
+        approvalStatus: 'APPROVED',
+      };
+      if (variantId) where.variantId = variantId;
+      const agg = await tx.sellerProductMapping.aggregate({
+        where,
+        _sum: { stockQty: true, reservedQty: true },
+      });
+      const totalStock = agg._sum.stockQty ?? 0;
+      const totalReserved = agg._sum.reservedQty ?? 0;
+      const availableStock = Math.max(0, totalStock - totalReserved);
+
+      if (availableStock < quantity) {
+        return { moved: false, availableStock };
+      }
+      await tx.cartItem.update({
+        where: { id: itemId },
+        data: { savedForLater: false },
+      });
+      return { moved: true, availableStock };
+    });
+  }
 }

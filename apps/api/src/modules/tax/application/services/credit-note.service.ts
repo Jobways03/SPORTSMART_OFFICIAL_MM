@@ -20,9 +20,16 @@
 //      to PARTIALLY_REVERSED or FULLY_REVERSED based on cumulative
 //      reversal.
 //
-// Idempotency: re-running for the same returnId returns the existing
-// credit note (one credit note per return — partial QC re-approvals
-// are deferred to a future enhancement).
+// Idempotency (Phase 30 — multi-cycle): re-running for the same return
+// computes the DELTA between the cumulative reversal already credited
+// across prior credit notes and the reversal the current QC-approved
+// state implies. If the delta is zero (re-call with no new approvals
+// since last CN), the most recent CN is returned. If the delta is non-
+// zero (a QC re-approval added more reversible quantity, or a previously
+// pending line was cleared), a NEW credit note is generated covering
+// only that delta. This supports the realistic flow where a return
+// gets QC'd in stages — e.g. 2 of 3 returned units approved on day 1,
+// the third approved on day 5 after re-inspection.
 //
 // See:
 //   - docs/tax/CREDIT_NOTE_TIME_BAR_POLICY.md
@@ -157,36 +164,76 @@ export class CreditNoteService {
       );
     }
 
-    // 5. Idempotency — return existing credit note for this return,
-    //    if any.
-    const existing = await this.prisma.taxDocument.findFirst({
+    // 5. Find all prior credit notes for this return so we can compute
+    //    per-snapshot deltas. The discriminator is
+    //    `originalDocumentId + reason contains returnNumber` — the same
+    //    filter used for the no-change idempotency check at the end.
+    const priorCreditNotes = await this.prisma.taxDocument.findMany({
       where: {
         documentType: 'CREDIT_NOTE',
-        // Cross-reference the source invoice.
         originalDocumentId: sourceInvoice.id,
         reason: { contains: returnRow.returnNumber },
         status: { notIn: ['VOIDED_DRAFT'] },
       },
+      orderBy: { generatedAt: 'desc' },
+      include: {
+        // Lines carry sourceSnapshotId — that's how we attribute
+        // already-credited amounts back to the original order items.
+        // (the include shape is the public delegate name; if Prisma
+        // refuses the literal, the manual two-step at line ~210
+        // re-fetches by documentId.)
+      },
     });
-    if (existing) {
-      return {
-        creditNote: {
-          id: existing.id,
-          documentNumber: existing.documentNumber,
-          documentTotalInPaise: existing.documentTotalInPaise,
-          taxableReversalInPaise: existing.taxableAmountInPaise,
-          totalTaxReversalInPaise: existing.totalTaxAmountInPaise,
-        },
-        sourceInvoice: {
-          id: sourceInvoice.id,
-          documentNumber: sourceInvoice.documentNumber,
-          statusAfter: sourceInvoice.status,
-        },
-        isNew: false,
-      };
+
+    // Sum already-credited reversal per source snapshot ID. Snapshots
+    // map 1:1 to order items, so this gives us "how much taxable +
+    // tax + quantity has already been reversed for each line".
+    const priorReversalsBySnapshot = new Map<
+      string,
+      {
+        taxable: bigint;
+        cgst: bigint;
+        sgst: bigint;
+        igst: bigint;
+        totalTax: bigint;
+        gross: bigint;
+        discount: bigint;
+        creditTotal: bigint;
+        quantity: number;
+      }
+    >();
+    if (priorCreditNotes.length > 0) {
+      const priorIds = priorCreditNotes.map((cn) => cn.id);
+      const priorLines = await this.prisma.taxDocumentLine.findMany({
+        where: { documentId: { in: priorIds } },
+      });
+      for (const line of priorLines) {
+        if (!line.sourceSnapshotId) continue;
+        const agg = priorReversalsBySnapshot.get(line.sourceSnapshotId) ?? {
+          taxable: 0n,
+          cgst: 0n,
+          sgst: 0n,
+          igst: 0n,
+          totalTax: 0n,
+          gross: 0n,
+          discount: 0n,
+          creditTotal: 0n,
+          quantity: 0,
+        };
+        agg.taxable += line.taxableAmountInPaise;
+        agg.cgst += line.cgstAmountInPaise;
+        agg.sgst += line.sgstAmountInPaise;
+        agg.igst += line.igstAmountInPaise;
+        agg.totalTax += line.totalTaxAmountInPaise;
+        agg.gross += line.grossAmountInPaise;
+        agg.discount += line.discountAmountInPaise;
+        agg.creditTotal += line.lineTotalInPaise;
+        agg.quantity += Number(line.quantity);
+        priorReversalsBySnapshot.set(line.sourceSnapshotId, agg);
+      }
     }
 
-    // 6. Per-line proportional reversal.
+    // 6. Per-line proportional reversal — DELTA computation.
     interface LineReversal {
       orderItemId: string;
       sourceLineId: string;
@@ -253,7 +300,8 @@ export class CreditNoteService {
         continue;
       }
 
-      const r = calculateGstReversal({
+      // Cumulative reversal implied by the CURRENT QC-approved state.
+      const cumulative = calculateGstReversal({
         originalGrossInPaise: snapshot.grossLineAmountInPaise,
         originalDiscountInPaise: snapshot.discountAmountInPaise,
         originalCgstInPaise: snapshot.cgstAmountInPaise,
@@ -262,6 +310,39 @@ export class CreditNoteService {
         purchasedQuantity: purchasedQty,
         returnedQuantity: returnedQty,
       });
+
+      // Subtract whatever's already been credited across prior CNs for
+      // this snapshot. Result is the delta this new CN should carry.
+      const prior = priorReversalsBySnapshot.get(snapshot.id);
+      const deltaQty = returnedQty - (prior?.quantity ?? 0);
+      if (deltaQty <= 0) {
+        // This line was fully (or over-) credited already — skip it.
+        continue;
+      }
+      const deltaGross = cumulative.grossReturnedInPaise - (prior?.gross ?? 0n);
+      const deltaDiscount =
+        cumulative.discountReversalInPaise - (prior?.discount ?? 0n);
+      const deltaTaxable =
+        cumulative.taxableReversalInPaise - (prior?.taxable ?? 0n);
+      const deltaCgst = cumulative.cgstReversalInPaise - (prior?.cgst ?? 0n);
+      const deltaSgst = cumulative.sgstReversalInPaise - (prior?.sgst ?? 0n);
+      const deltaIgst = cumulative.igstReversalInPaise - (prior?.igst ?? 0n);
+      const deltaTotalTax =
+        cumulative.totalTaxReversalInPaise - (prior?.totalTax ?? 0n);
+      const deltaCredit =
+        cumulative.totalCreditNoteInPaise - (prior?.creditTotal ?? 0n);
+
+      // Defensive: skip lines where every monetary delta is zero
+      // (quantity bumped but value didn't — shouldn't happen but cheap
+      // to guard).
+      if (
+        deltaGross === 0n &&
+        deltaTaxable === 0n &&
+        deltaTotalTax === 0n &&
+        deltaCredit === 0n
+      ) {
+        continue;
+      }
 
       reversals.push({
         orderItemId: item.orderItemId,
@@ -273,16 +354,39 @@ export class CreditNoteService {
         hsnOrSacCode: snapshot.hsnCode,
         uqcCode: snapshot.uqcCode,
         gstRateBps: snapshot.gstRateBps,
-        returnedQuantity: returnedQty,
-        grossReversal: r.grossReturnedInPaise,
-        discountReversal: r.discountReversalInPaise,
-        taxableReversal: r.taxableReversalInPaise,
-        cgstReversal: r.cgstReversalInPaise,
-        sgstReversal: r.sgstReversalInPaise,
-        igstReversal: r.igstReversalInPaise,
-        totalTaxReversal: r.totalTaxReversalInPaise,
-        totalCreditLine: r.totalCreditNoteInPaise,
+        returnedQuantity: deltaQty,
+        grossReversal: deltaGross,
+        discountReversal: deltaDiscount,
+        taxableReversal: deltaTaxable,
+        cgstReversal: deltaCgst,
+        sgstReversal: deltaSgst,
+        igstReversal: deltaIgst,
+        totalTaxReversal: deltaTotalTax,
+        totalCreditLine: deltaCredit,
       });
+    }
+
+    // If no per-line delta survived, the caller is re-running the
+    // generator with no new QC-approved quantity since the last credit
+    // note. Idempotent: return the most-recent CN.
+    if (reversals.length === 0 && priorCreditNotes.length > 0) {
+      const latest = priorCreditNotes[0]!;
+
+      return {
+        creditNote: {
+          id: latest.id,
+          documentNumber: latest.documentNumber,
+          documentTotalInPaise: latest.documentTotalInPaise,
+          taxableReversalInPaise: latest.taxableAmountInPaise,
+          totalTaxReversalInPaise: latest.totalTaxAmountInPaise,
+        },
+        sourceInvoice: {
+          id: sourceInvoice.id,
+          documentNumber: sourceInvoice.documentNumber,
+          statusAfter: sourceInvoice.status,
+        },
+        isNew: false,
+      };
     }
 
     if (reversals.length === 0) {
@@ -383,7 +487,8 @@ export class CreditNoteService {
 
       // Lines mirror source line numbering structure but renumber from 1.
       for (let i = 0; i < reversals.length; i++) {
-        const r = reversals[i];
+        const r = reversals[i]!;
+
         await tx.taxDocumentLine.create({
           data: {
             documentId: cn.id,
@@ -396,6 +501,13 @@ export class CreditNoteService {
             hsnOrSacCode: r.hsnOrSacCode,
             uqcCode: r.uqcCode,
             quantity: new Prisma.Decimal(r.returnedQuantity),
+            // `grossAmountInPaise` IS THE CANONICAL VALUE on a credit-
+            // note line. `unitPriceInPaise` is a presentation
+            // convenience computed by BigInt floor-division and may
+            // drift up to (returnedQuantity − 1) paise from the gross
+            // due to rounding. Auditors reconciling line totals MUST
+            // sum grossAmountInPaise — reconstructing via unitPrice ×
+            // quantity is informational only.
             unitPriceInPaise:
               r.returnedQuantity > 0
                 ? r.grossReversal / BigInt(r.returnedQuantity)

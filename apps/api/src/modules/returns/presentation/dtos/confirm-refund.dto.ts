@@ -12,7 +12,7 @@ export class ConfirmRefundDto {
   @IsString()
   @MinLength(3)
   @MaxLength(200)
-  refundReference: string;
+  refundReference!: string;
 
   @IsOptional()
   @IsIn(['ORIGINAL_PAYMENT', 'WALLET', 'BANK_TRANSFER', 'CASH'])

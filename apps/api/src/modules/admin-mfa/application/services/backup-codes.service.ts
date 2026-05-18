@@ -93,7 +93,7 @@ export class BackupCodesService {
       // which doesn't help an attacker who doesn't already have
       // a code. Acceptable.
       // eslint-disable-next-line no-await-in-loop
-      if (await bcrypt.compare(normalised, hashes[i])) {
+      if (await bcrypt.compare(normalised, hashes[i]!)) {
         matchIdx = i;
         break;
       }

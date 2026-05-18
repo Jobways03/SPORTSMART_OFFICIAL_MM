@@ -38,6 +38,7 @@ export interface ProductDetail {
   id: string;
   title: string;
   slug: string;
+  productCode: string | null;
   shortDescription: string | null;
   description: string | null;
   categoryId: string | null;
@@ -75,6 +76,7 @@ export interface ProductVariant {
   id: string;
   title: string | null;
   sku: string | null;
+  masterSku: string | null;
   barcode: string | null;
   price: string;
   compareAtPrice: string | null;

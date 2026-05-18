@@ -174,7 +174,7 @@ export class TaxAuditReadinessService {
   private async scanEinvoiceUnresolved(): Promise<BlockerSummary> {
     // Documents where einvoice_status is PENDING / FAILED past the
     // retry cap. PENDING within the cap is in-flight — we don't flag.
-    const cap = this.env.getNumber('TAX_EINVOICE_RETRY_CAP' as any, 5);
+    const cap = this.env.getNumber('TAX_EINVOICE_RETRY_CAP', 5);
     const where: any = {
       einvoiceStatus: { in: ['PENDING', 'FAILED'] },
       einvoiceRetryCount: { gte: cap },
@@ -195,7 +195,7 @@ export class TaxAuditReadinessService {
   }
 
   private async scanPdfUnresolved(): Promise<BlockerSummary> {
-    const cap = this.env.getNumber('TAX_PDF_RETRY_CAP' as any, 5);
+    const cap = this.env.getNumber('TAX_PDF_RETRY_CAP', 5);
     const where: any = {
       status: { in: ['PDF_PENDING', 'PDF_FAILED'] },
       pdfRetryCount: { gte: cap },
@@ -265,8 +265,8 @@ export class TaxAuditReadinessService {
 function isFilingDeadlinePassed(filingPeriod: string, now: Date): boolean {
   const match = /^(\d{4})-(\d{2})$/.exec(filingPeriod);
   if (!match) return false;
-  const y = parseInt(match[1], 10);
-  const m = parseInt(match[2], 10);
+  const y = parseInt(match[1]!, 10);
+  const m = parseInt(match[2]!, 10);
   const nextY = m === 12 ? y + 1 : y;
   const nextM = m === 12 ? 1 : m + 1;
   // 10th of next month, 23:59:59.999 IST = 10th 18:29:59.999 UTC.

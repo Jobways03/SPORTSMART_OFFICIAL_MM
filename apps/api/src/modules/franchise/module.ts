@@ -21,7 +21,7 @@
  * even if a route were misconfigured.
  */
 import { Module } from '@nestjs/common';
-import { FranchiseAuthGuard, AdminAuthGuard } from '../../core/guards';
+import { FranchiseAuthGuard, AdminAuthGuard, FranchiseActiveGuard } from '../../core/guards';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
 import { PrismaFranchiseRepository } from './infrastructure/repositories/prisma-franchise.repository';
@@ -100,6 +100,7 @@ import { VerifyResetOtpFranchiseUseCase } from './application/use-cases/verify-r
 import { ResendResetOtpFranchiseUseCase } from './application/use-cases/resend-reset-otp-franchise.use-case';
 import { ResetPasswordFranchiseUseCase } from './application/use-cases/reset-password-franchise.use-case';
 import { ChangePasswordFranchiseUseCase } from './application/use-cases/change-password-franchise.use-case';
+import { LogoutFranchiseUseCase } from './application/use-cases/logout-franchise.use-case';
 
 // Profile use-cases
 import { GetFranchiseProfileUseCase } from './application/use-cases/get-franchise-profile.use-case';
@@ -197,6 +198,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     ResendResetOtpFranchiseUseCase,
     ResetPasswordFranchiseUseCase,
     ChangePasswordFranchiseUseCase,
+    LogoutFranchiseUseCase,
     GetFranchiseProfileUseCase,
     UpdateFranchiseProfileUseCase,
     AdminListFranchisesUseCase,
@@ -215,6 +217,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     DeleteFranchiseMediaUseCase,
     FranchiseStaffService,
     FranchiseAuthGuard,
+    FranchiseActiveGuard,
     AdminAuthGuard,
     EmailOtpAdapter,
     CloudinaryAdapter,

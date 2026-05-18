@@ -80,6 +80,25 @@ export interface CartRepository {
    *  Idempotent. Caller is responsible for verifying the item belongs
    *  to the requesting customer. */
   setSavedForLater(itemId: string, value: boolean): Promise<void>;
+
+  /**
+   * Phase 4.1 (2026-05-16) — atomic move-to-cart with stock check.
+   *
+   * Inside a single transaction:
+   *   1. Read aggregated available stock for (productId, variantId).
+   *   2. If stock < quantity → return { moved: false, availableStock }.
+   *   3. Else flip savedForLater=false and return { moved: true }.
+   *
+   * Concurrency: by serialising the check+flip the repo guarantees a
+   * parallel reservation cannot consume stock between the two
+   * operations. The service layer surfaces a clean 400 when moved=false.
+   */
+  moveToCartIfStockAvailable(
+    itemId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+  ): Promise<{ moved: boolean; availableStock: number }>;
 }
 
 export const CART_REPOSITORY = Symbol('CartRepository');

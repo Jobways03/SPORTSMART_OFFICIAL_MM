@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../bootstrap/database/prisma.service';
 import { MenuLinkType, StorefrontMenuItem } from '@prisma/client';
-import { NotFoundAppException } from '../../../core/exceptions';
+import {
+  BadRequestAppException,
+  NotFoundAppException,
+} from '../../../core/exceptions';
 
 export interface MenuTreeNode {
   id: string;
@@ -146,19 +149,72 @@ export class StorefrontMenuService {
     await this.prisma.storefrontMenuItem.delete({ where: { id: itemId } });
   }
 
-  /** Bulk reorder. Each entry assigns a new (parentId, position). */
+  /**
+   * Bulk reorder. Each entry assigns a new (parentId, position).
+   *
+   * Phase 4.10 (2026-05-16) — validation hardened inside the
+   * transaction:
+   *   1. All `moves` ids must belong to this menu (defence against
+   *      a payload that references items from a different menu).
+   *   2. Per (parentId, position) we reject collisions in the request
+   *      payload itself — two moves cannot land on the same slot.
+   *   3. The actual update batch runs inside the transaction so an
+   *      interrupted reorder either fully applies or fully rolls back.
+   *
+   * The previous version executed updates in a transaction but did
+   * not validate cross-row collisions; a stale UI could submit moves
+   * that left two items at (parent=null, position=3), invisible until
+   * the next render diff.
+   */
   async reorderItems(
     menuId: string,
     moves: Array<{ id: string; parentId: string | null; position: number }>,
   ) {
-    await this.prisma.$transaction(
-      moves.map((m) =>
-        this.prisma.storefrontMenuItem.update({
+    if (moves.length === 0) return this.getMenuById(menuId);
+
+    // (1) detect in-payload collisions before touching the DB
+    const slotKey = (parentId: string | null, position: number) =>
+      `${parentId ?? 'ROOT'}:${position}`;
+    const slots = new Map<string, string>();
+    for (const m of moves) {
+      const key = slotKey(m.parentId, m.position);
+      const existing = slots.get(key);
+      if (existing) {
+        throw new BadRequestAppException(
+          `Reorder collision: items ${existing} and ${m.id} both target (parent=${m.parentId ?? 'ROOT'}, position=${m.position})`,
+        );
+      }
+      slots.set(key, m.id);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // (2) verify every move targets an item in this menu
+      const ids = moves.map((m) => m.id);
+      const existing = await tx.storefrontMenuItem.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, menuId: true },
+      });
+      if (existing.length !== ids.length) {
+        throw new BadRequestAppException(
+          `Reorder references ${ids.length - existing.length} unknown menu item(s)`,
+        );
+      }
+      const foreign = existing.find((e) => e.menuId !== menuId);
+      if (foreign) {
+        throw new BadRequestAppException(
+          `Menu item ${foreign.id} does not belong to menu ${menuId}`,
+        );
+      }
+
+      // (3) apply the moves
+      for (const m of moves) {
+        await tx.storefrontMenuItem.update({
           where: { id: m.id },
           data: { parentId: m.parentId, position: m.position },
-        }),
-      ),
-    );
+        });
+      }
+    });
+
     return this.getMenuById(menuId);
   }
 

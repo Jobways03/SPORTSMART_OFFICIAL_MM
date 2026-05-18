@@ -9,6 +9,7 @@ import {
   CatalogPublicFacade,
 } from '../../../catalog/application/facades/catalog-public.facade';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
+import { TaxPublicFacade } from '../../../tax/application/facades/tax-public.facade';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import {
@@ -74,6 +75,7 @@ export class OrdersService {
     // the symmetric contract.
     private readonly stockRestore: StockRestoreService,
     private readonly env: EnvService,
+    private readonly taxFacade: TaxPublicFacade,
   ) {
     const days = this.env.getNumber('RETURN_WINDOW_DAYS', 14);
     this.returnWindowMs = Math.round(days * 24 * 60 * 60 * 1000);
@@ -1482,6 +1484,15 @@ export class OrdersService {
       orderStatus: 'SELLER_ACCEPTED',
     });
 
+    // Fire-and-forget invoice generation. Tax mode (OFF/AUDIT/STRICT) is
+    // enforced inside the facade/service — in OFF the call no-ops, in
+    // AUDIT/STRICT it issues a TAX_INVOICE (or BILL_OF_SUPPLY for unreg
+    // suppliers) plus, downstream, an e_way_bills row when consignment
+    // crosses the threshold. Errors are logged but never block the
+    // seller's accept response. Idempotent — duplicate calls return the
+    // existing invoice.
+    await this.taxFacade.generateInvoiceForSubOrder(id);
+
     return updated;
   }
 
@@ -1571,26 +1582,31 @@ export class OrdersService {
 
         // Group items by productId/variantId for reallocation
         for (const item of subOrder.items) {
-          const reallocation = await this.catalogFacade.allocate({
-            productId: item.productId,
-            variantId: item.variantId ?? undefined,
-            customerPincode,
-            quantity: item.quantity,
-            excludeMappingIds: rejectedMappingIds,
-          });
-
-          if (
-            reallocation.serviceable &&
-            reallocation.primary
-          ) {
-            // Reserve stock for new seller
-            const reservation =
-              await this.catalogFacade.reserveStock({
-                mappingId: reallocation.primary.mappingId,
+          // Use the combined allocate+reserve so primary→secondary→tertiary
+          // fallback kicks in if a higher-ranked candidate loses a
+          // concurrent reservation race. The reassign path is exactly the
+          // case where stale `available` snapshots burn customers.
+          let allocateReserve;
+          try {
+            allocateReserve =
+              await this.catalogFacade.allocateAndReserve({
+                productId: item.productId,
+                variantId: item.variantId ?? undefined,
+                customerPincode,
                 quantity: item.quantity,
+                excludeMappingIds: rejectedMappingIds,
                 orderId: subOrder.masterOrder.id,
                 expiresInMinutes: 60,
               });
+          } catch {
+            // No candidate could satisfy this item — leave reassignment
+            // failed so the outer loop falls through to the manual queue.
+            allocateReserve = null;
+          }
+
+          if (allocateReserve) {
+            const reservation = allocateReserve.reservation;
+            const chosen = allocateReserve.chosenCandidate;
 
             // Confirm reservation immediately since order already exists
             await this.catalogFacade.confirmReservation(
@@ -1605,7 +1621,7 @@ export class OrdersService {
             const newSubOrder =
               await this.orderRepo.createSubOrder({
                 masterOrderId: subOrder.masterOrder.id,
-                sellerId: reallocation.primary.sellerId,
+                sellerId: chosen.sellerId,
                 subTotal: Number(item.totalPrice),
                 paymentStatus: subOrder.paymentStatus,
                 fulfillmentStatus: 'UNFULFILLED',
@@ -1630,7 +1646,7 @@ export class OrdersService {
 
             reassignmentSuccessful = true;
             newSubOrderId = newSubOrder.id;
-            newSellerId = reallocation.primary.sellerId;
+            newSellerId = chosen.sellerId;
 
             // Publish event for new seller notification
             await this.eventBus.publish({
@@ -1642,8 +1658,8 @@ export class OrdersService {
                 subOrderId: newSubOrder.id,
                 masterOrderId: subOrder.masterOrder.id,
                 orderNumber: subOrder.masterOrder.orderNumber,
-                sellerId: reallocation.primary.sellerId,
-                sellerName: reallocation.primary.sellerName,
+                sellerId: chosen.sellerId,
+                sellerName: chosen.sellerName,
                 subTotal: Number(item.totalPrice),
                 itemCount: item.quantity,
                 isReassignment: true,
@@ -1693,6 +1709,42 @@ export class OrdersService {
         newSubOrderId,
       })
       .catch(() => {});
+
+    // Phase 4.3 (2026-05-16) — discount reversal trigger.
+    //
+    // The rejected sub-order's items either move to a new seller
+    // (reassignmentSuccessful) or get held in EXCEPTION_QUEUE for
+    // manual handling. In BOTH cases the discount that was originally
+    // allocated to those items must be recomputed: the new seller's
+    // settlement should carry the right discount share, OR — if no
+    // reassignment — the customer must be partially refunded for the
+    // discount-bearing items that won't fulfil.
+    //
+    // We emit a dedicated event so the discounts module owns the
+    // recalc logic and we don't couple orders.service to the
+    // discount allocation internals. A handler in the discounts
+    // module listens, walks OrderItemDiscounts for the rejected
+    // sub-order, and either transfers the allocation (reassignment)
+    // or reverses it (exception queue).
+    await this.eventBus
+      .publish({
+        eventName: 'orders.sub_order.rejected_needs_discount_recalc',
+        aggregate: 'SubOrder',
+        aggregateId: id,
+        occurredAt: new Date(),
+        payload: {
+          rejectedSubOrderId: id,
+          masterOrderId: subOrder.masterOrder.id,
+          fromSellerId: sellerId,
+          reassigned: reassignmentSuccessful,
+          newSubOrderId,
+          newSellerId,
+          itemIds: subOrder.items.map((it: any) => it.id),
+        },
+      })
+      .catch(() => {
+        /* best-effort — event handler will pick up via the audit log fallback */
+      });
 
     return {
       rejected: true,
@@ -1799,6 +1851,13 @@ export class OrdersService {
       await this.orderRepo.updateMasterOrder(subOrder.masterOrderId, {
         orderStatus: 'DISPATCHED',
       });
+
+      // Tax invoice / EWB trigger at dispatch — under Indian GST Section 31,
+      // the invoice for movement of goods should be issued at or before the
+      // time of supply (typically dispatch). Idempotent: returns the
+      // existing invoice if `sellerAcceptOrder` already generated one
+      // earlier. Tax mode gating happens inside the facade — no-op in OFF.
+      await this.taxFacade.generateInvoiceForSubOrder(id);
     }
 
     // Publish fulfillment status change event

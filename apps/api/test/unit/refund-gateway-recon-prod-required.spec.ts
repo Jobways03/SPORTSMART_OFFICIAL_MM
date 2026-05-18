@@ -53,6 +53,7 @@ const baseProdEnv = {
   S3_ACCESS_KEY: 'x',
   S3_SECRET_KEY: 'x',
   ADMIN_MFA_ENCRYPTION_KEY: 'k'.repeat(32),
+  APP_URL: 'https://api.example.com',
   CORS_ORIGINS: 'https://app.example.com',
   // Sibling required-on flags (PR 6.1 – 6.10, 6.12 – 6.15).
   CRON_HEARTBEAT_ENABLED: 'true',
@@ -73,13 +74,13 @@ const baseProdEnv = {
 };
 
 describe('REFUND_GATEWAY_RECON_ENABLED prod policy (PR 6.11)', () => {
-  describe('dev / staging — flag stays default-off', () => {
-    it('dev parses cleanly with the flag absent', () => {
+  describe('dev / staging — flag default-on (Phase 9 — promoted from off in 2026-05-16)', () => {
+    it('dev parses cleanly with the flag absent and inherits the default-on', () => {
       const parsed = envSchema.parse(baseDevEnv);
-      expect(parsed.REFUND_GATEWAY_RECON_ENABLED).toBe('false');
+      expect(parsed.REFUND_GATEWAY_RECON_ENABLED).toBe('true');
     });
 
-    it('staging accepts the flag off', () => {
+    it('staging accepts the flag explicitly off', () => {
       const result = envSchema.safeParse({
         ...baseDevEnv,
         NODE_ENV: 'staging',
@@ -90,13 +91,9 @@ describe('REFUND_GATEWAY_RECON_ENABLED prod policy (PR 6.11)', () => {
   });
 
   describe('production — flag must be true', () => {
-    it('rejects a prod env where REFUND_GATEWAY_RECON_ENABLED is missing', () => {
+    it('accepts a prod env where REFUND_GATEWAY_RECON_ENABLED is missing (inherits default-on)', () => {
       const result = envSchema.safeParse(baseProdEnv);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        const messages = result.error.issues.map((i) => i.message).join('\n');
-        expect(messages).toMatch(/REFUND_GATEWAY_RECON_ENABLED.*production/i);
-      }
+      expect(result.success).toBe(true);
     });
 
     it('rejects a prod env where the flag is explicitly false', () => {
@@ -116,7 +113,10 @@ describe('REFUND_GATEWAY_RECON_ENABLED prod policy (PR 6.11)', () => {
     });
 
     it('error payload mentions the webhook-drop / stuck-refund framing so the boot trace explains the safety-net intent', () => {
-      const result = envSchema.safeParse(baseProdEnv);
+      const result = envSchema.safeParse({
+        ...baseProdEnv,
+        REFUND_GATEWAY_RECON_ENABLED: 'false',
+      });
       expect(result.success).toBe(false);
       if (!result.success) {
         const messages = result.error.issues.map((i) => i.message).join('\n');

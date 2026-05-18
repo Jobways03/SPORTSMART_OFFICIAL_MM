@@ -85,4 +85,16 @@ export const sellerAuthService = {
       body: JSON.stringify({ resetToken, newPassword, confirmPassword }),
     });
   },
+
+  /**
+   * Server-side logout — revokes every active SellerSession server-side
+   * so a stolen refresh token can't be replayed after the click. The
+   * caller still needs to clear local sessionStorage afterwards (the
+   * shared logout helper does both).
+   */
+  logout(): Promise<ApiResponse> {
+    return apiClient('/seller/auth/logout', {
+      method: 'POST',
+    });
+  },
 };

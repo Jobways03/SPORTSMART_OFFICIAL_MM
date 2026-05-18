@@ -104,8 +104,12 @@ export class PaymentsPublicFacade {
             masterOrderId: order.id,
             orderNumber: order.orderNumber,
             providerPaymentId: params.paymentReference ?? null,
-            expectedInPaise: Number(order.totalAmountInPaise),
-            actualInPaise: Number(BigInt(params.gatewaySnapshot.amount)),
+            // Pass paise as BigInt directly — the facade now accepts
+            // number | bigint | string, so we avoid the lossy Number()
+            // coercion that previously masked the last digits of any
+            // amount > ₹9 lakh.
+            expectedInPaise: order.totalAmountInPaise,
+            actualInPaise: BigInt(params.gatewaySnapshot.amount),
             severity: 95, // top of the queue — money safety
             description:
               `Gateway payment rejected for order ${order.orderNumber}: ${err.message}. ` +

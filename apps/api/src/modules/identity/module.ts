@@ -10,7 +10,10 @@ import { RefreshSessionUseCase } from './application/use-cases/refresh-session.u
 import { GetCustomerProfileUseCase } from './application/use-cases/get-customer-profile.use-case';
 import { UpdateCustomerProfileUseCase } from './application/use-cases/update-customer-profile.use-case';
 import { ChangeCustomerPasswordUseCase } from './application/use-cases/change-customer-password.use-case';
+import { LogoutUserUseCase } from './application/use-cases/logout-user.use-case';
 import { PermissionCheckService } from './application/services/permission-check.service';
+import { ConsentService } from './application/services/consent.service';
+import { CustomerDataExportService } from './application/services/customer-data-export.service';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { USER_REPOSITORY } from './domain/repositories/user.repository';
 import { SESSION_REPOSITORY } from './domain/repositories/session.repository';
@@ -18,6 +21,9 @@ import { PrismaUserRepository } from './infrastructure/repositories/prisma-user.
 import { PrismaSessionRepository } from './infrastructure/repositories/prisma-session.prisma-repository';
 import { RegisterController } from './presentation/controllers/register.controller';
 import { LoginController } from './presentation/controllers/login.controller';
+import { LogoutController } from './presentation/controllers/logout.controller';
+import { ConsentController } from './presentation/controllers/consent.controller';
+import { CustomerDataExportController } from './presentation/controllers/customer-data-export.controller';
 import { ForgotPasswordController } from './presentation/controllers/forgot-password.controller';
 import { ResetPasswordController } from './presentation/controllers/reset-password.controller';
 import { RefreshSessionController } from './presentation/controllers/refresh-session.controller';
@@ -28,16 +34,20 @@ import { UserAuthGuard } from '../../core/guards';
   controllers: [
     RegisterController,
     LoginController,
+    LogoutController,
     ForgotPasswordController,
     ResetPasswordController,
     RefreshSessionController,
     CustomerProfileController,
+    ConsentController,
+    CustomerDataExportController,
   ],
   providers: [
     UserAuthGuard,
     IdentityPublicFacade,
     RegisterUserUseCase,
     LoginUserUseCase,
+    LogoutUserUseCase,
     ForgotPasswordUseCase,
     VerifyResetOtpUseCase,
     ResendResetOtpUseCase,
@@ -47,6 +57,8 @@ import { UserAuthGuard } from '../../core/guards';
     UpdateCustomerProfileUseCase,
     ChangeCustomerPasswordUseCase,
     PermissionCheckService,
+    ConsentService,
+    CustomerDataExportService,
     EmailOtpAdapter,
     {
       provide: USER_REPOSITORY,

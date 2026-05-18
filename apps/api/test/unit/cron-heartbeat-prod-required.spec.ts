@@ -56,6 +56,7 @@ const baseProdEnv = {
   S3_ACCESS_KEY: 'x',
   S3_SECRET_KEY: 'x',
   ADMIN_MFA_ENCRYPTION_KEY: 'k'.repeat(32),
+  APP_URL: 'https://api.example.com',
   CORS_ORIGINS: 'https://app.example.com',
   // Phase 6 — sibling prod-flag gates; this spec tests the
   // cron-heartbeat policy in isolation, so pre-satisfy the others.

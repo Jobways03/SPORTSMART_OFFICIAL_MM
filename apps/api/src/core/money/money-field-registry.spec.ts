@@ -37,7 +37,7 @@ function decimal(s: string) {
       const u = neg ? obj._s.slice(1) : obj._s;
       const [i, f = ''] = u.split('.');
       const roundDigit = f.charCodeAt(0) - 48;
-      let n = BigInt(i.replace(/^0+(?=\d)/, '') || '0');
+      let n = BigInt((i ?? '').replace(/^0+(?=\d)/, '') || '0');
       if (roundDigit >= 5) n += 1n;
       return (neg ? '-' : '') + n.toString();
     },

@@ -3,6 +3,11 @@ import { z } from 'zod';
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.coerce.number().default(8000),
+  // Phase 10 (2026-05-16) — graceful-shutdown grace period in ms.
+  // Time the process has to finish in-flight HTTP requests, flush
+  // the outbox publisher, and tear down crons before SIGKILL fires.
+  // Default 30s matches the Kubernetes default `terminationGracePeriodSeconds`.
+  SHUTDOWN_GRACE_MS: z.coerce.number().default(30_000),
 
   APP_NAME: z.string().default('sportsmart-api'),
   APP_URL: z.string().default('http://localhost:8000'),
@@ -26,6 +31,14 @@ export const envSchema = z.object({
   // account numbers at rest. 32 bytes (64 hex chars or 44 base64
   // chars) for AES-256. Generate with `openssl rand -hex 32`.
   AFFILIATE_ENCRYPTION_KEY: z.string().min(32),
+  // Optional multi-key map for rotation. Format: "v1=<64hex>,v2=<64hex>".
+  // The encryption service writes new rows tagged with
+  // AFFILIATE_ENCRYPTION_ACTIVE_VERSION; old rows (no tag) fall back
+  // to AFFILIATE_ENCRYPTION_KEY. During rotation, declare both keys
+  // in the map, flip the active version, and slowly re-encrypt as
+  // ops can.
+  AFFILIATE_ENCRYPTION_KEYS: z.string().optional(),
+  AFFILIATE_ENCRYPTION_ACTIVE_VERSION: z.string().optional(),
   // Phase 10 — App-layer key for encrypting admin TOTP secrets at
   // rest. Same 32-byte / AES-256 shape as the affiliate key. Now
   // listed in requiredInProd (PR 10.8) so prod refuses to boot
@@ -110,9 +123,26 @@ export const envSchema = z.object({
   WHATSAPP_API_URL: z.string().optional(),
   WHATSAPP_API_TOKEN: z.string().optional(),
   WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+  // Meta Cloud webhook verification + app-secret HMAC. Verify-token is
+  // the static string Meta echoes back during webhook subscription
+  // setup; app-secret is used for SHA-256 HMAC on every inbound payload.
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+  WHATSAPP_APP_SECRET: z.string().optional(),
 
-  // Gemini AI - optional
+  // AI providers — optional. At least one must be configured for AI
+  // endpoints to work. The provider order in AI_PROVIDER_ORDER (comma
+  // separated) determines fallback sequence; default is "gemini,anthropic".
   GEMINI_API_KEY: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  AI_PROVIDER_ORDER: z.string().default('gemini,anthropic'),
+  AI_REQUEST_TIMEOUT_MS: z.coerce.number().default(20_000),
+  // Per-tenant daily quota. Applied as `AiUsageQuota` rows keyed by
+  // (subject, day) — subject is the seller/admin/user id depending on
+  // which guard let the request through.
+  AI_DAILY_QUOTA_PER_TENANT: z.coerce.number().default(100),
+  // Gemini + Claude model overrides; defaults are the cheapest fast models.
+  AI_GEMINI_MODEL: z.string().default('gemini-2.0-flash'),
+  AI_ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 
   // Mail (Nodemailer)
   MAIL_HOST: z.string().default('smtp.gmail.com'),
@@ -218,7 +248,12 @@ export const envSchema = z.object({
   // EVENT_DEDUP_ENABLED: handlers wrapped with @IdempotentHandler() do an
   //   atomic INSERT into event_deduplication; P2002 = already-consumed,
   //   silently skip. Effective exactly-once at the handler boundary.
-  OUTBOX_ENABLED: z.string().default('false'),
+  // Phase 10 (2026-05-16) — promoted from default-off. The publisher is
+  // listed in requiredOnInProd anyway, so a prod boot without an
+  // explicit setting blew up; flipping the default to 'true' means
+  // staging soak runs with the outbox draining by default, matching
+  // the prod-required posture and catching configuration drift earlier.
+  OUTBOX_ENABLED: z.string().default('true'),
   OUTBOX_DUAL_WRITE: z.string().default('false'),
   OUTBOX_AUTHORITATIVE: z.string().default('false'),
   EVENT_DEDUP_ENABLED: z.string().default('false'),
@@ -240,8 +275,11 @@ export const envSchema = z.object({
   //   directly. Off → legacy DisputeRefundHandler / ReturnService paths.
   // Both flags together drive the migration to "all refunds go through
   // the saga, all wallet credits trace to an instruction id".
-  REFUND_SAGA_ENABLED: z.string().default('false'),
-  REFUND_INSTRUCTION_REQUIRED: z.string().default('false'),
+  // Defaults flipped to 'true' 2026-05-16 — soak window complete, the
+  // saga is the production refund path. Set to 'false' explicitly to
+  // pin the legacy direct-wallet path in a debug deployment.
+  REFUND_SAGA_ENABLED: z.string().default('true'),
+  REFUND_INSTRUCTION_REQUIRED: z.string().default('true'),
 
   // Saga retry budget for transient failures inside a single step
   // (gateway timeout, etc.). DLQ-equivalent doesn't exist for sagas —
@@ -264,11 +302,15 @@ export const envSchema = z.object({
 
   // Phase 3 (PR 3.5) — reconciliation crons. Each independently flagged
   // so a noisy job can be paused without disabling the others.
-  WALLET_LEDGER_RECON_ENABLED: z.string().default('false'),
+  // Defaults flipped to 'true' 2026-05-16 — wallet drift, stuck refunds,
+  // and aged COD refunds were invisible to engineering when these were
+  // off. The crons are read-mostly and idempotent; the marginal cost of
+  // running them is essentially nil compared to silent money loss.
+  WALLET_LEDGER_RECON_ENABLED: z.string().default('true'),
   WALLET_LEDGER_RECON_INTERVAL_MINUTES: z.coerce.number().default(24 * 60),
-  REFUND_GATEWAY_RECON_ENABLED: z.string().default('false'),
+  REFUND_GATEWAY_RECON_ENABLED: z.string().default('true'),
   REFUND_GATEWAY_RECON_INTERVAL_MINUTES: z.coerce.number().default(60),
-  COD_REFUND_PENDING_ENABLED: z.string().default('false'),
+  COD_REFUND_PENDING_ENABLED: z.string().default('true'),
   COD_REFUND_PENDING_INTERVAL_MINUTES: z.coerce.number().default(4 * 60),
   COD_REFUND_PENDING_STUCK_HOURS: z.coerce.number().default(48),
 
@@ -338,8 +380,15 @@ export const envSchema = z.object({
   //     actor would fail a permission check, but lets the request through).
   //   true:  enforce — failed permission checks return 403 with the
   //     `permission-denied` problem-type.
-  // Plan: ship false, soak for 2 weeks while logs are reviewed, flip true.
-  PERMISSIONS_GUARD_STRICT: z.string().default('false'),
+  // Default flipped to 'true' on 2026-05-16 after the soak window closed.
+  // Set explicitly to 'false' in non-prod debug runs only.
+  PERMISSIONS_GUARD_STRICT: z.string().default('true'),
+  // Daily RBAC drift detector: scans admin_custom_role_permissions for
+  // permission keys that no longer exist in the code-side PERMISSIONS
+  // registry, emits rbac.orphan_permission_detected for each. Read-only,
+  // alert-only — does NOT auto-delete. Default ON; flip false only for
+  // local dev when the registry is in flux.
+  RBAC_ORPHAN_SWEEP_ENABLED: z.string().default('true'),
   // Phase 4 (PR 4.3) — ABAC resource-policy evaluator runs after
   // PermissionsGuard. Off by default; flips on with PR 4.5.
   ABAC_ENABLED: z.string().default('false'),
@@ -368,10 +417,120 @@ export const envSchema = z.object({
   CUSTOMER_ABUSE_RATE_THRESHOLD_BPS:
     z.coerce.number().int().min(0).max(10000).default(0),
 
-  // Phase 6 (PR 6.2) — SLA breach detector cron. Off by default. Flip
-  // on after seeding the example policies (see PR 6.5 + the Phase 6
-  // runbook). Crons are no-ops when disabled.
-  SLA_BREACH_DETECTOR_ENABLED: z.string().default('false'),
+  // Phase 6 (PR 6.2) — SLA breach detector cron. Default flipped to
+  // 'true' 2026-05-16 — example policies have been seeded and the
+  // cron is a read-only scan + alert path with no money side effects.
+  SLA_BREACH_DETECTOR_ENABLED: z.string().default('true'),
+
+  // Phase 3.6 (2026-05-16) — Commission processor gate.
+  // Default ON. Set to 'false' to pause the setInterval loop without
+  // a code change (commission-rule migration window, runaway
+  // investigation, etc.). Interval also tunable.
+  COMMISSION_PROCESSOR_ENABLED: z.string().default('true'),
+  COMMISSION_PROCESSOR_INTERVAL_MS: z.coerce.number().default(15_000),
+
+  // Phase 3.8 (2026-05-16) — Double-entry invariant validator.
+  // Daily cron at 04:00 IST sums the day's wallet + payout + refund
+  // + commission + tax movements and asserts they balance to ±1 paise.
+  // Read-only; emits accounts.imbalance_detected on breach.
+  DOUBLE_ENTRY_VALIDATOR_ENABLED: z.string().default('true'),
+
+  // Phase 4.4 (2026-05-16) — Stock reservation expiry sweep.
+  // Runs every minute on the leader replica; flips reservations past
+  // their 15-min TTL from RESERVED → EXPIRED and decrements the
+  // mapping's reservedQty atomically. Without this, abandoned
+  // checkouts permanently block stock from being resold.
+  RESERVATION_EXPIRY_SWEEP_ENABLED: z.string().default('true'),
+  RESERVATION_EXPIRY_BATCH_SIZE: z.coerce.number().default(500),
+
+  // Phase 10 (2026-05-16) — stuck-job detector cron. Sweeps known
+  // transient cohorts (tax_documents in PDF_PENDING, einvoice PENDING,
+  // settlement cycles in PREVIEWED) past their tolerance window and
+  // emits ops.stuck_job_detected. OpsAlertHandler turns the events
+  // into emails. Tolerances tunable per cohort.
+  STUCK_JOB_DETECTOR_ENABLED: z.string().default('true'),
+  STUCK_TAX_PDF_HOURS: z.coerce.number().default(2),
+  STUCK_EINVOICE_HOURS: z.coerce.number().default(2),
+  STUCK_SETTLEMENT_CYCLE_HOURS: z.coerce.number().default(24),
+
+  // Phase 10 (2026-05-16) — webhook DLQ sweeper. Watches
+  // webhook_deliveries.status = FAILED_DEAD rows that landed in the
+  // last sweep window and emits webhook.dlq_growing per endpoint
+  // when its FAILED_DEAD count exceeds the threshold.
+  WEBHOOK_DLQ_SWEEPER_ENABLED: z.string().default('true'),
+  WEBHOOK_DLQ_SWEEP_WINDOW_HOURS: z.coerce.number().default(2),
+  WEBHOOK_DLQ_ALERT_THRESHOLD: z.coerce.number().default(5),
+
+  // Phase 11 (2026-05-16) — external-dependency health probes.
+  // `HEALTH_EXTERNAL_PROBES_DEFAULT=true` makes /health include
+  // Razorpay / S3 / Cloudinary checks by default (still overridable
+  // per-request via ?external=0). The dedicated /health/deps route
+  // always runs them. Per-probe timeout shared across all three.
+  HEALTH_EXTERNAL_PROBES_DEFAULT: z.string().default('false'),
+  HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().default(3_000),
+
+  // Phase 11 (2026-05-16) — OpenTelemetry bootstrap (lazy-required;
+  // see src/bootstrap/tracing/tracing.ts). Off by default; flip to
+  // true after `pnpm add @opentelemetry/sdk-node @opentelemetry/
+  // auto-instrumentations-node @opentelemetry/exporter-trace-otlp-http
+  // @opentelemetry/resources @opentelemetry/semantic-conventions
+  // @opentelemetry/api` lands. Sampler ratio 0.1 keeps the trace
+  // backend volume reasonable while still surfacing every error
+  // (parent-based sampler honours upstream sampled-true).
+  OTEL_ENABLED: z.string().default('false'),
+  OTEL_SERVICE_NAME: z.string().default('sportsmart-api'),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z
+    .string()
+    .default('http://localhost:4318/v1/traces'),
+  OTEL_TRACES_SAMPLER_RATIO: z.coerce.number().min(0).max(1).default(0.1),
+
+  // Phase 14 (2026-05-16) — Cloudinary orphan sweep cron. Daily
+  // cron that deletes Cloudinary assets whose owning Product was
+  // soft-deleted more than CLOUDINARY_ORPHAN_RETENTION_DAYS ago.
+  // 30 days gives ops a recovery window before the asset is gone.
+  CLOUDINARY_ORPHAN_SWEEPER_ENABLED: z.string().default('true'),
+  CLOUDINARY_ORPHAN_RETENTION_DAYS: z.coerce.number().default(30),
+  CLOUDINARY_ORPHAN_BATCH_SIZE: z.coerce.number().default(200),
+
+  // Phase 7 (2026-05-16) — Procurement approval SLA. When a franchise
+  // submits a procurement request, the admin gets `PROCUREMENT_APPROVAL_SLA_HOURS`
+  // to approve/reject before the breach cron fires `procurement.sla_breached`
+  // for ops escalation. Set the cron flag false to silence breach
+  // notifications during planned maintenance windows.
+  PROCUREMENT_APPROVAL_SLA_HOURS: z.coerce.number().default(48),
+  PROCUREMENT_SLA_BREACH_CRON_ENABLED: z.string().default('true'),
+
+  // Phase 4.8 (2026-05-16) — Coupon attempts cleanup. Daily purge of
+  // coupon_attempts older than the retention horizon. Without this
+  // the table grows unbounded and the windowed fraud-check query
+  // (which scans recent attempts per customer) gradually slows.
+  COUPON_ATTEMPTS_CLEANUP_ENABLED: z.string().default('true'),
+  COUPON_ATTEMPTS_RETENTION_DAYS: z.coerce.number().default(30),
+
+  // Phase 5.3 (2026-05-16) — Escalation email for return + support
+  // stale-state alerts. Previously hardcoded to admin@sportsmart.com
+  // in 2 places. Pointing this at an ops distribution list / PagerDuty
+  // inbox means alerts survive admin departures without code changes.
+  ADMIN_ESCALATION_EMAIL: z.string().optional(),
+
+  // Phase 5.2 (2026-05-16) — iThink webhook signature secret. Pre-shared
+  // HMAC secret used to verify the X-Ithink-Signature header on any
+  // inbound webhook from iThink. Empty means signature verification is
+  // SKIPPED (dev mode only). Required in production.
+  ITHINK_WEBHOOK_SECRET: z.string().optional(),
+
+  // Phase 5.5 (2026-05-16) — Support SLA business-hours mode.
+  // When 'true', SLA timers pause outside 09:00-19:00 IST on weekdays
+  // and pause entirely on Saturday + Sunday. Default 'false' preserves
+  // the legacy wall-clock behaviour.
+  SUPPORT_SLA_BUSINESS_HOURS_ENABLED: z.string().default('false'),
+  SUPPORT_SLA_BUSINESS_HOUR_START: z.coerce.number().min(0).max(23).default(9),
+  SUPPORT_SLA_BUSINESS_HOUR_END: z.coerce.number().min(1).max(24).default(19),
+
+  // Phase 5.5 (2026-05-16) — Auto-assignment for new support tickets.
+  // Round-robin across on-shift agents (admins with permission
+  // `support.reply`). Default 'false' to preserve manual triage flow.
+  SUPPORT_AUTO_ASSIGN_ENABLED: z.string().default('false'),
 
   // Phase 0 (PR 0.14) — admin-task SLA-breach detector. ON by default
   // so refund-instruction failures escalate within 24h of the dispute
@@ -426,12 +585,13 @@ export const envSchema = z.object({
     z.coerce.number().int().min(0).default(500_000),
   // When true, small TIME_BARRED_CREDIT_NOTE adjustments below the
   // dual-approval threshold auto-approve at creation (one-shot
-  // request-then-post). When false, even small TIME_BARRED rows
-  // sit in PENDING_APPROVAL — finance reviews every single one.
-  // Default true matches the dev-permissive mode; CA should flip
-  // this off in prod once the audit shape settles.
+  // request-then-post). When false (default), even small TIME_BARRED
+  // rows sit in PENDING_APPROVAL — finance reviews every single one.
+  // Default flipped to false on 2026-05-14 so audits see a named
+  // approver on every wallet row. Set to 'true' to opt back into
+  // the old behaviour for low-trust ops.
   WALLET_ADJUSTMENT_AUTO_APPROVE_BELOW_THRESHOLD:
-    z.string().default('true'),
+    z.string().default('false'),
 
   // Phase 15 GST — E-way bill provider selector. 'stub' produces
   // placeholder EWB numbers + logs the would-be NIC payload to
@@ -514,9 +674,11 @@ export const envSchema = z.object({
     z.coerce.number().int().min(1).default(30),
 
   // Phase 8 (PR 8.1) — periodic Merkle anchor of the audit hash chain.
-  // Off by default; flip on once the verify-chain-fast endpoint has
-  // been smoke-tested with the seeded anchor.
-  AUDIT_CHAIN_ANCHOR_ENABLED: z.string().default('false'),
+  // Phase 10 (2026-05-16) — promoted from default-off. The anchor cron
+  // is listed in requiredOnInProd; flipping the default to 'true'
+  // means staging runs the anchor on its own cadence and a missed
+  // anchor surfaces in cron metrics before the prod cutover.
+  AUDIT_CHAIN_ANCHOR_ENABLED: z.string().default('true'),
 
   // Phase 8 (PR 8.3) — heartbeat-of-crons. Walks cron_heartbeat_targets,
   // emits `cron.silent` events for jobs that haven't succeeded within
@@ -555,13 +717,14 @@ export const envSchema = z.object({
   const parseDurationSeconds = (value: string | undefined): number | null => {
     if (!value) return null;
     const m = /^(\d+)(s|m|h|d)$/.exec(value);
-    if (!m) return null;
+    if (!m || m[1] === undefined || m[2] === undefined) return null;
     const n = parseInt(m[1], 10);
     if (n <= 0) return null;
     const unitToSec: Record<string, number> = {
       s: 1, m: 60, h: 3600, d: 86400,
     };
-    return n * unitToSec[m[2]];
+    const unit = unitToSec[m[2]];
+    return unit === undefined ? null : n * unit;
   };
 
   const accessSec = parseDurationSeconds(env.JWT_ACCESS_TTL);
@@ -612,6 +775,7 @@ export const envSchema = z.object({
     for (let j = i + 1; j < jwtSecretKeys.length; j++) {
       const a = jwtSecretKeys[i];
       const b = jwtSecretKeys[j];
+      if (!a || !b) continue;
       const va = env[a];
       const vb = env[b];
       if (typeof va !== 'string' || typeof vb !== 'string') continue;
@@ -680,6 +844,49 @@ export const envSchema = z.object({
       path: ['JWT_ACCESS_TTL'],
       message: `JWT_ACCESS_TTL must be <= 24h in production (got '${env.JWT_ACCESS_TTL}'). Use refresh-token rotation for longer sessions.`,
     });
+  }
+
+  // Phase 9 (2026-05-16) — APP_URL prod guard. The default in this
+  // schema is `http://localhost:8000` for developer ergonomics, but
+  // shipping that default in production is a CORS / OAuth-redirect /
+  // email-link disaster — every absolute URL the API embeds in an
+  // outbound email or webhook payload would point at localhost. Fail
+  // the boot when the value either is empty, points at localhost /
+  // 127.0.0.1, or uses http:// in prod.
+  const appUrlRaw = env.APP_URL;
+  if (typeof appUrlRaw === 'string') {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(appUrlRaw);
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['APP_URL'],
+        message: `APP_URL must be a valid URL in production (got '${appUrlRaw}').`,
+      });
+    }
+    if (parsed) {
+      if (parsed.protocol !== 'https:') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['APP_URL'],
+          message: `APP_URL must use https:// in production (got '${parsed.protocol}').`,
+        });
+      }
+      const host = parsed.hostname;
+      if (
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '0.0.0.0' ||
+        host.endsWith('.local')
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['APP_URL'],
+          message: `APP_URL points at a local host ('${host}') in production — set the real public URL via env before boot.`,
+        });
+      }
+    }
   }
 
   // Phase 3 (PR 3.7) — strict CORS-origins policy in production.

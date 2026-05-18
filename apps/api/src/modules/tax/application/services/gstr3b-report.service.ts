@@ -250,8 +250,8 @@ function monthRangeUtc(filingPeriod: string): {
   if (!match) {
     throw new Error(`Invalid filing period: ${filingPeriod} (want YYYY-MM)`);
   }
-  const y = parseInt(match[1], 10);
-  const m = parseInt(match[2], 10);
+  const y = parseInt(match[1]!, 10);
+  const m = parseInt(match[2]!, 10);
   const startUtc = new Date(Date.UTC(y, m - 1, 1) - 5.5 * 60 * 60 * 1000);
   const nextY = m === 12 ? y + 1 : y;
   const nextM = m === 12 ? 0 : m;

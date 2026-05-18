@@ -250,7 +250,8 @@ export class LegacyReceiptService {
       // Lines mirror the order items 1:1 but with all tax columns
       // zero. The HSN / rate columns stay null — we don't know them.
       for (let i = 0; i < subOrder.items.length; i++) {
-        const it = subOrder.items[i];
+        const it = subOrder.items[i]!;
+
         await tx.taxDocumentLine.create({
           data: {
             documentId: doc.id,

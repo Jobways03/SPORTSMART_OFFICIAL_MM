@@ -81,15 +81,15 @@ export class TaxDocumentDownloadService {
   ) {}
 
   private rateLimitCap(): number {
-    return this.env.getNumber('TAX_DOWNLOAD_RATE_LIMIT_PER_WINDOW' as any, 20);
+    return this.env.getNumber('TAX_DOWNLOAD_RATE_LIMIT_PER_WINDOW', 20);
   }
 
   private rateLimitWindowMinutes(): number {
-    return this.env.getNumber('TAX_DOWNLOAD_RATE_LIMIT_WINDOW_MINUTES' as any, 5);
+    return this.env.getNumber('TAX_DOWNLOAD_RATE_LIMIT_WINDOW_MINUTES', 5);
   }
 
   private defaultTtlSeconds(): number {
-    return this.env.getNumber('TAX_DOWNLOAD_SIGNED_URL_TTL_SECONDS' as any, 300);
+    return this.env.getNumber('TAX_DOWNLOAD_SIGNED_URL_TTL_SECONDS', 300);
   }
 
   /**

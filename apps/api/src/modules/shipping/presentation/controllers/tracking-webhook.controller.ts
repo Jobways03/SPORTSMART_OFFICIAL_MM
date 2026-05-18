@@ -19,6 +19,9 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import { verifyPayload } from '../../../../core/webhooks/webhook-signer';
+import * as crypto from 'crypto';
+import { IngestTrackingUpdateUseCase } from '../../application/use-cases/ingest-tracking-update.use-case';
+import type { TrackingSnapshot } from '../../application/ports/outbound/courier-gateway.port';
 
 /**
  * Shiprocket sends tracking events as JSON POSTs. The relevant fields are
@@ -80,6 +83,63 @@ export function parseEventTimestamp(payload: ShiprocketWebhookPayload): Date {
 
 const WEBHOOK_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 
+/**
+ * iThink webhook payload — shape derived from their integration
+ * documentation. Fields are all optional so a partial payload
+ * doesn't crash the parser; the controller validates presence at
+ * the boundary.
+ */
+interface IThinkWebhookPayload {
+  awb_number?: string;
+  status?: string;
+  status_code?: number | string;
+  status_date?: string;
+  status_location?: string;
+  remarks?: string;
+  order_id?: string;
+}
+
+/**
+ * Map iThink's status strings onto the carrier-neutral
+ * ShipmentStatusInternal labels used by IngestTrackingUpdateUseCase.
+ * Returns null for unknown values — the caller acknowledges + logs
+ * rather than guessing.
+ *
+ * The list mirrors iThink's documented status codes; new ones get
+ * added here as the integration evolves. The match is case-insensitive
+ * + tolerant of underscores/spaces because iThink isn't consistent
+ * between dashboard exports and webhook payloads.
+ */
+function mapIThinkStatus(status: string): string | null {
+  const norm = status.toLowerCase().replace(/[_\s]+/g, ' ').trim();
+  if (!norm) return null;
+  if (norm.includes('delivered') && !norm.includes('rto')) return 'DELIVERED';
+  if (norm.includes('rto delivered') || norm === 'rto') return 'RTO_DELIVERED';
+  if (norm.includes('out for delivery')) return 'OUT_FOR_DELIVERY';
+  if (norm.includes('in transit')) return 'IN_TRANSIT';
+  if (norm.includes('picked up') || norm.includes('pickup done')) {
+    return 'PICKED_UP';
+  }
+  if (norm.includes('manifested') || norm.includes('shipment booked')) {
+    return 'MANIFESTED';
+  }
+  if (norm.includes('cancelled')) return 'CANCELLED';
+  if (norm.includes('undelivered') || norm.includes('ndr')) return 'UNDELIVERED';
+  return null;
+}
+
+/**
+ * Parse iThink's status_date into a Date. Accepts ISO-8601 + a
+ * fallback to `new Date()` so a malformed timestamp doesn't strand
+ * the event — the application layer's CAS-style timestamp check
+ * still defends ordering.
+ */
+function parseIThinkTimestamp(raw: string | undefined): Date {
+  if (!raw) return new Date();
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 // Statuses that map to a delivered sub-order. Shiprocket uses different
 // strings depending on integration; treat anything containing "deliver"
 // case-insensitively as a delivery confirmation.
@@ -94,6 +154,11 @@ export class TrackingWebhookController {
     private readonly envService: EnvService,
     private readonly redis: RedisService,
     private readonly ordersFacade: OrdersPublicFacade,
+    // Phase 5 follow-up (2026-05-16) — iThink webhook needs to feed
+    // the same ingest path the polling cron uses, so we share the
+    // application use-case rather than re-implementing the
+    // snapshot→SubOrder mapping in the controller.
+    private readonly ingestTracking: IngestTrackingUpdateUseCase,
   ) {}
 
   /**
@@ -186,6 +251,152 @@ export class TrackingWebhookController {
       `webhook:shiprocket:${eventKey}`,
       WEBHOOK_IDEMPOTENCY_TTL_SECONDS,
     );
+  }
+
+  /**
+   * Phase 5 follow-up (2026-05-16) — iThink webhook signature check.
+   *
+   * iThink signs the raw request body with HMAC-SHA256 and sends the
+   * hex digest in `X-Ithink-Signature`. We compute the same digest
+   * locally with the pre-shared `ITHINK_WEBHOOK_SECRET` and compare
+   * in constant time. The verification fails closed: a missing secret
+   * (configuration drift) AND a missing signature both 401.
+   *
+   * Replay protection: the per-event Redis idempotency key (AWB +
+   * status + carrier timestamp) blocks duplicate events even without
+   * a Stripe-style timestamp window. iThink's payload doesn't carry
+   * a stable signing timestamp today, so a separate replay-window
+   * gate is deferred to a future iteration if the integration
+   * exposes one.
+   */
+  private verifyIThinkRequest(args: {
+    rawBody: Buffer | undefined;
+    signatureHeader: string | undefined;
+  }): void {
+    const secret = this.envService.getOptional('ITHINK_WEBHOOK_SECRET');
+    if (!secret) {
+      // Fail closed — missing secret in production is a misconfiguration
+      // that should surface as 401, not as silent acceptance of unsigned
+      // webhooks. In dev the operator sets the env var.
+      throw new UnauthorizedAppException(
+        'iThink webhook auth not configured (ITHINK_WEBHOOK_SECRET unset)',
+      );
+    }
+    if (!args.rawBody) {
+      throw new BadRequestAppException('Missing raw request body');
+    }
+    if (!args.signatureHeader) {
+      throw new UnauthorizedAppException('Missing X-Ithink-Signature header');
+    }
+    const expected = crypto
+      .createHmac('sha256', secret)
+      .update(args.rawBody)
+      .digest('hex');
+    const sigBuf = Buffer.from(args.signatureHeader.trim().toLowerCase(), 'utf8');
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    if (sigBuf.length !== expectedBuf.length) {
+      throw new UnauthorizedAppException('Invalid iThink webhook signature');
+    }
+    if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      throw new UnauthorizedAppException('Invalid iThink webhook signature');
+    }
+  }
+
+  /**
+   * Phase 5 follow-up (2026-05-16) — iThink webhook receiver.
+   *
+   * iThink (when their delivery dashboard pushes status events to us)
+   * POSTs a payload of the rough shape:
+   *
+   *   {
+   *     awb_number: "AWB123",
+   *     status: "Delivered" | "In Transit" | "Out for Delivery" | ...,
+   *     status_code: number,
+   *     status_date: "2026-05-16T10:30:00+05:30",
+   *     status_location: "Mumbai Hub",
+   *     remarks: "Free-form notes",
+   *     // optionally:
+   *     order_id: "<our_sub_order_ref>",
+   *   }
+   *
+   * We map status → carrier-neutral `ShipmentStatusInternal` and feed
+   * the standard `IngestTrackingUpdateUseCase.ingestSingleSnapshot`
+   * path — same logic the polling cron uses, so a SubOrder ends up in
+   * exactly the same state regardless of whether the event arrived
+   * via push or pull.
+   *
+   * Always returns HTTP 200 once the signature passes; iThink retries
+   * any non-2xx aggressively, and a malformed payload is more useful
+   * surfaced as a logged warning than as a retry storm.
+   */
+  @Post('ithink')
+  @HttpCode(HttpStatus.OK)
+  async handleIThinkWebhook(
+    @Headers('x-ithink-signature') signatureHeader: string | undefined,
+    @Req() req: RawBodyRequest<Request>,
+    @Body() payload: IThinkWebhookPayload,
+  ) {
+    this.verifyIThinkRequest({
+      rawBody: req.rawBody,
+      signatureHeader,
+    });
+
+    const awb = payload.awb_number?.trim();
+    const status = payload.status?.trim() ?? '';
+    if (!awb) {
+      this.logger.warn('iThink webhook received without awb_number');
+      return { success: true, message: 'Webhook acknowledged (no AWB)' };
+    }
+    this.logger.log(`iThink webhook: awb=${awb}, status=${status}`);
+
+    // Idempotency key: AWB + status + carrier timestamp. A duplicate
+    // delivery of the same event is dropped; a genuine status change
+    // (e.g. IN_TRANSIT → DELIVERED) gets its own key.
+    const eventKey = `${awb}:${status.toLowerCase()}:${payload.status_date ?? 'no-ts'}`;
+    const claimed = await this.redis.acquireLock(
+      `webhook:ithink:${eventKey}`,
+      WEBHOOK_IDEMPOTENCY_TTL_SECONDS,
+    );
+    if (!claimed) {
+      this.logger.log(`Duplicate iThink event ${eventKey} ignored`);
+      return { success: true, message: 'Duplicate event ignored' };
+    }
+
+    const carrierStatus = mapIThinkStatus(status);
+    if (!carrierStatus) {
+      // We acknowledge unknown statuses but don't try to map them —
+      // future iThink scan types should land in this branch first
+      // (log + ack) so engineering sees them surface in production.
+      this.logger.warn(`Unmapped iThink status "${status}" for awb=${awb}`);
+      return { success: true, message: `Status "${status}" acknowledged (unmapped)` };
+    }
+
+    const scanAt = parseIThinkTimestamp(payload.status_date);
+    const snapshot: TrackingSnapshot = {
+      awb,
+      carrier: 'iThink',
+      direction: 'forward',
+      currentStatus: carrierStatus,
+      rawCurrentStatus: status,
+      scans: [
+        {
+          status: carrierStatus,
+          rawStatus: status,
+          rawStatusCode: String(payload.status_code ?? ''),
+          scanLocation: payload.status_location ?? '',
+          remark: payload.remarks ?? '',
+          scanAt,
+        },
+      ],
+    };
+
+    const result = await this.ingestTracking.ingestSingleSnapshot(awb, snapshot);
+    if (!result.applied) {
+      // Orphan AWB — return 200 so iThink doesn't retry. The original
+      // log line already surfaced "unknown AWB".
+      return { success: false, message: 'No matching sub-order for AWB' };
+    }
+    return { success: true, message: 'Tracking update applied' };
   }
 
   @Post('shiprocket')

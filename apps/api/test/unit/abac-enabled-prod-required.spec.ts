@@ -69,6 +69,7 @@ const baseProdEnv = {
   S3_ACCESS_KEY: 'x',
   S3_SECRET_KEY: 'x',
   ADMIN_MFA_ENCRYPTION_KEY: 'k'.repeat(32),
+  APP_URL: 'https://api.example.com',
   CORS_ORIGINS: 'https://app.example.com',
   // Sibling required-on flags (PR 6.1 – 6.12, 6.14, 6.15).
   CRON_HEARTBEAT_ENABLED: 'true',

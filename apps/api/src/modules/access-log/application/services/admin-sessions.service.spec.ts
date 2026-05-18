@@ -392,8 +392,8 @@ describe('AdminSessionsService', () => {
       // Two rows merged, newer first.
       expect(res.items.length).toBeGreaterThanOrEqual(2);
       const [first, second] = res.items;
-      expect(new Date(first.createdAt).getTime()).toBeGreaterThanOrEqual(
-        new Date(second.createdAt).getTime(),
+      expect(new Date(first!.createdAt).getTime()).toBeGreaterThanOrEqual(
+        new Date(second!.createdAt).getTime(),
       );
     });
   });

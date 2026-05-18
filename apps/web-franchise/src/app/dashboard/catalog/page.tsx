@@ -13,7 +13,11 @@ import { ApiError } from '@/lib/api-client';
 
 type TabKey = 'mine' | 'browse';
 
-const PAGE_LIMIT = 12;
+// Page size is generous on purpose — the grid is 6 cards wide on
+// desktop, so 48 fills up to 8 rows before the user needs to paginate.
+// At catalog scale (hundreds of products) the Pagination control still
+// kicks in; small franchises (≤48 products) see everything on one page.
+const PAGE_LIMIT = 48;
 
 function formatPrice(value: number | null | undefined): string {
   if (value == null) return '—';
@@ -143,9 +147,14 @@ export default function CatalogPage() {
         approvalStatus: mineApproval || undefined,
       });
       if (res.data) {
+        const total = res.data.total || 0;
         setMappings(res.data.mappings || []);
-        setMappingsTotal(res.data.total || 0);
-        setMappingsTotalPages(res.data.totalPages || 1);
+        setMappingsTotal(total);
+        // Backend returns { mappings, total } without a totalPages field —
+        // derive it client-side so the Pagination component actually renders.
+        setMappingsTotalPages(
+          res.data.totalPages || Math.max(1, Math.ceil(total / PAGE_LIMIT)),
+        );
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -168,9 +177,14 @@ export default function CatalogPage() {
         search: browseSearch || undefined,
       });
       if (res.data) {
+        const total = res.data.total || 0;
         setProducts(res.data.products || []);
-        setProductsTotal(res.data.total || 0);
-        setProductsTotalPages(res.data.totalPages || 1);
+        setProductsTotal(total);
+        // Same derivation as mappings — the backend doesn't compute
+        // totalPages, so we compute it here from the total count.
+        setProductsTotalPages(
+          res.data.totalPages || Math.max(1, Math.ceil(total / PAGE_LIMIT)),
+        );
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -566,28 +580,6 @@ export default function CatalogPage() {
               </div>
 
               <div style={{ marginBottom: 14 }}>
-                <label style={modalLabelStyle}>
-                  Franchise SKU
-                  <span style={{ fontWeight: 500, color: '#9ca3af', marginLeft: 6, fontSize: 11 }}>
-                    (optional)
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  value={editForm.franchiseSku || ''}
-                  onChange={(e) =>
-                    setEditForm((p) => ({ ...p, franchiseSku: e.target.value }))
-                  }
-                  placeholder={editMapping.globalSku || 'Same as Master SKU'}
-                  disabled={editSaving}
-                  style={modalInputStyle}
-                />
-                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
-                  Leave blank to use the Master SKU ({editMapping.globalSku || '—'}). Only set this if your warehouse / POS system uses its own internal codes.
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 14 }}>
                 <label style={modalLabelStyle}>Barcode</label>
                 <input
                   type="text"
@@ -813,34 +805,6 @@ export default function CatalogPage() {
                     ) : 'Catalog details'}
                   </label>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <button
-                      type="button"
-                      disabled={addSaving}
-                      onClick={() => {
-                        // Copy each variant's master SKU into the
-                        // franchise SKU input as a starting value. The
-                        // franchise can edit afterwards if they want a
-                        // different internal code, otherwise leaving
-                        // the master SKU is the right default — every
-                        // place that displays / scans the SKU falls
-                        // back to globalSku when franchiseSku is blank,
-                        // so this is purely a convenience to make the
-                        // value visible / editable in the input.
-                        setAddRows((prev) =>
-                          prev.map((r) => {
-                            if (r.alreadyMapped) return r;
-                            if (!r.included) return r;
-                            if (r.franchiseSku.trim()) return r;
-                            const seed = (r.masterSku && r.masterSku.trim()) || '';
-                            return seed ? { ...r, franchiseSku: seed } : r;
-                          }),
-                        );
-                      }}
-                      style={{ ...bulkBtnStyle, color: '#1d4ed8', borderColor: '#bfdbfe' }}
-                      title="Pre-fill empty fields with the Master SKU. You can still edit each one or leave blank to use the Master SKU automatically."
-                    >
-                      Copy from Master SKU
-                    </button>
                     {addRows.length > 1 && (
                       <>
                         <button
@@ -884,7 +848,7 @@ export default function CatalogPage() {
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '32px minmax(180px, 1.4fr) 1.2fr 1.1fr 92px',
+                      gridTemplateColumns: '32px minmax(180px, 1.4fr) 1.1fr 92px',
                       gap: 8,
                       padding: '8px 12px',
                       background: '#f9fafb',
@@ -901,21 +865,6 @@ export default function CatalogPage() {
                   >
                     <div></div>
                     <div>Variant</div>
-                    <div title="Optional — leave blank to use the Master SKU">
-                      Franchise SKU
-                      <span
-                        style={{
-                          fontWeight: 500,
-                          color: '#9ca3af',
-                          marginLeft: 4,
-                          fontSize: 10,
-                          textTransform: 'none',
-                          letterSpacing: 0,
-                        }}
-                      >
-                        (optional)
-                      </span>
-                    </div>
                     <div>Barcode</div>
                     <div style={{ textAlign: 'center' }}>Listed</div>
                   </div>
@@ -947,7 +896,7 @@ export default function CatalogPage() {
                           key={row.variantId ?? 'product-level'}
                           style={{
                             display: 'grid',
-                            gridTemplateColumns: '32px minmax(180px, 1.4fr) 1.2fr 1.1fr 92px',
+                            gridTemplateColumns: '32px minmax(180px, 1.4fr) 1.1fr 92px',
                             gap: 8,
                             alignItems: 'center',
                             padding: '8px 12px',
@@ -1002,12 +951,12 @@ export default function CatalogPage() {
                             )}
                           </div>
                           {row.alreadyMapped ? (
-                            // Locked preview — span the SKU + Barcode + Listed
+                            // Locked preview — span the Barcode + Listed
                             // cells so the row reads as one clear "already in
-                            // catalog" tag, not three empty inputs.
+                            // catalog" tag, not two empty inputs.
                             <div
                               style={{
-                                gridColumn: 'span 3',
+                                gridColumn: 'span 2',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'flex-end',
@@ -1045,15 +994,6 @@ export default function CatalogPage() {
                             </div>
                           ) : (
                             <>
-                          <input
-                            type="text"
-                            value={row.franchiseSku}
-                            onChange={(e) => updateRow({ franchiseSku: e.target.value })}
-                            placeholder={row.masterSku || 'Same as Master SKU'}
-                            title="Optional — leave blank to use the Master SKU"
-                            disabled={addSaving || dim}
-                            style={inlineInputStyle}
-                          />
                           <input
                             type="text"
                             value={row.barcode}
@@ -1307,8 +1247,7 @@ function MyCatalogTab(props: {
               <thead>
                 <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
                   <th style={thStyle}>PRODUCT</th>
-                  <th style={thStyle}>GLOBAL SKU</th>
-                  <th style={thStyle}>FRANCHISE SKU</th>
+                  <th style={thStyle}>MASTER SKU</th>
                   <th style={thStyle}>BARCODE</th>
                   <th style={thStyle}>LISTED</th>
                   <th style={thStyle}>APPROVAL</th>
@@ -1379,28 +1318,6 @@ function MyCatalogTab(props: {
                         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
                           {mapping.globalSku || '—'}
                         </span>
-                      </td>
-                      <td style={tdStyle}>
-                        {mapping.franchiseSku ? (
-                          <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                            {mapping.franchiseSku}
-                          </span>
-                        ) : (
-                          // No override set — fall back to the master/global
-                          // SKU and label it muted so the franchise knows
-                          // it's the platform default, not a value they
-                          // typed in.
-                          <span
-                            style={{
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              color: '#9ca3af',
-                            }}
-                            title="Uses Master SKU (no override set)"
-                          >
-                            {mapping.globalSku || '—'}
-                          </span>
-                        )}
                       </td>
                       <td style={tdStyle}>
                         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>

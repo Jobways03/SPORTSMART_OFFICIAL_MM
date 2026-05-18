@@ -66,6 +66,11 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   // Liability Ledger is finance ops — `refunds.approve` already gates the
   // backend list endpoint, mirror that here.
   { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: '📒', anyOf: ['refunds.approve'], section: 'finance' },
+  // Phase 25 GST — admin tax dashboard (mode badge + audit readiness +
+  // GSTR-1/3B/8 exports + TCS lifecycle transitions). Gated on the
+  // broadest tax.* read key so any finance / tax-ops admin can land
+  // on it; per-endpoint gating happens at the backend.
+  { label: 'Tax / GST', href: '/dashboard/tax', icon: '🧾', anyOf: ['tax.reports.read', 'tax.tcs.read'], section: 'finance' },
 
   // Risk — fraud / abuse review, occasional but high-stakes.
   { label: 'Risk Review', href: '/dashboard/risk-review', icon: '⚠️', anyOf: ['risk.review'], section: 'risk' },

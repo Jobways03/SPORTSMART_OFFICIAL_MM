@@ -55,7 +55,8 @@ describe('AdminPermissionResolver', () => {
     const result = await resolver.resolve('admin-2', 'SELLER_OPERATIONS');
 
     expect(result.fullyResolved).toBe(true);
-    const expected = SYSTEM_ROLE_PERMISSIONS['SELLER_OPERATIONS'];
+    const expected = SYSTEM_ROLE_PERMISSIONS['SELLER_OPERATIONS']!;
+
     for (const key of expected) {
       expect(result.permissions).toContain(key);
     }

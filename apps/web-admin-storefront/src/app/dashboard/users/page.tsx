@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useModal } from '@sportsmart/ui';
 import { RequirePermission, usePermissions } from '@/lib/permissions';
 import {
   adminUsersService,
@@ -22,6 +23,7 @@ export default function AdminUsersPage() {
 
 function UsersInner() {
   const { me } = usePermissions();
+  const { confirmDialog, notify } = useModal();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,22 +56,39 @@ function UsersInner() {
 
   const toggleStatus = async (u: AdminUser) => {
     const next: AdminAccountStatus = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    if (!confirm(`${next === 'ACTIVE' ? 'Reactivate' : 'Suspend'} ${u.name}?`)) return;
+    const ok = await confirmDialog({
+      title: `${next === 'ACTIVE' ? 'Reactivate' : 'Suspend'} ${u.name}?`,
+      message:
+        next === 'ACTIVE'
+          ? 'They will be able to sign in again immediately.'
+          : 'They will be signed out of all sessions and blocked from new logins until reactivated.',
+      confirmText: next === 'ACTIVE' ? 'Reactivate' : 'Suspend',
+      cancelText: 'Cancel',
+      danger: next === 'SUSPENDED',
+    });
+    if (!ok) return;
     try {
       await adminUsersService.update(u.id, { status: next });
       await refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update status');
+      await notify({ kind: 'error', message: err instanceof Error ? err.message : 'Failed to update status' });
     }
   };
 
   const remove = async (u: AdminUser) => {
-    if (!confirm(`Deactivate ${u.name}? They will no longer be able to log in.`)) return;
+    const ok = await confirmDialog({
+      title: `Deactivate ${u.name}?`,
+      message: 'They will no longer be able to log in. Their audit history is preserved.',
+      confirmText: 'Deactivate',
+      cancelText: 'Keep active',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await adminUsersService.remove(u.id);
       await refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to deactivate');
+      await notify({ kind: 'error', message: err instanceof Error ? err.message : 'Failed to deactivate' });
     }
   };
 

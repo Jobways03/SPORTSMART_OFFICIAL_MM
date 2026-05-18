@@ -168,10 +168,17 @@ export default function NotificationPreferencesPage() {
           </button>
         </div>
 
-        <p className="mt-4 text-caption text-ink-500">
-          Note: SMS and WhatsApp delivery are coming soon — toggles save now and will
-          activate when those channels go live.
-        </p>
+        <div className="mt-4 space-y-2 text-caption text-ink-500">
+          <p>
+            <span className="font-semibold text-ink-700">WhatsApp:</span> you can also
+            stop receiving messages instantly by replying <span className="font-mono">STOP</span> to any
+            SPORTSMART WhatsApp message. Reply <span className="font-mono">START</span> to opt back in.
+          </p>
+          <p>
+            Transactional alerts (payment confirmations, OTPs, refunds) are always
+            sent for security and compliance, even if the channel toggle is off.
+          </p>
+        </div>
       </div>
     </StorefrontShell>
   );

@@ -1087,9 +1087,18 @@ export default function CheckoutPage() {
                     <div className="size-16 bg-ink-100 grid place-items-center overflow-hidden shrink-0">
                       {item.imageUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.imageUrl} alt="" loading="lazy" className="size-full object-contain p-1" />
+                        <img
+                          src={item.imageUrl}
+                          alt={item.productTitle}
+                          loading="lazy"
+                          className="size-full object-contain p-1"
+                        />
                       ) : (
-                        <ImageIcon className="size-5 text-ink-400" strokeWidth={1.5} />
+                        <ImageIcon
+                          className="size-5 text-ink-400"
+                          strokeWidth={1.5}
+                          aria-label={`${item.productTitle} — no image`}
+                        />
                       )}
                     </div>
                     <div className="flex-1 min-w-0">

@@ -6,7 +6,7 @@ export class AdminUpdateFranchiseStatusDto {
   @IsIn(['PENDING', 'APPROVED', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED'], {
     message: 'Status must be one of: PENDING, APPROVED, ACTIVE, SUSPENDED, DEACTIVATED',
   })
-  status: string;
+  status!: string;
 
   @IsOptional()
   @IsString()

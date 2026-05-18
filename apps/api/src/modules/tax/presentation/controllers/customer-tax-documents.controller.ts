@@ -44,17 +44,25 @@ export class CustomerTaxDocumentsController {
     @Req() req: any,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('orderId') orderId?: string,
+    @Query('subOrderId') subOrderId?: string,
   ) {
     const safePage = Math.max(1, parseInt(page ?? '1', 10) || 1);
     const safeLimit = Math.min(50, Math.max(1, parseInt(limit ?? '20', 10) || 20));
     const skip = (safePage - 1) * safeLimit;
 
+    // Optional order filter for "show me the invoice for this order"
+    // surface on the customer order-detail page.
+    const where: any = {
+      customerId: req.userId,
+      status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+    };
+    if (subOrderId) where.subOrderId = subOrderId;
+    if (orderId) where.masterOrderId = orderId;
+
     const [items, total] = await Promise.all([
       this.prisma.taxDocument.findMany({
-        where: {
-          customerId: req.userId,
-          status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
-        },
+        where,
         select: {
           id: true,
           documentNumber: true,
@@ -69,12 +77,7 @@ export class CustomerTaxDocumentsController {
         skip,
         take: safeLimit,
       }),
-      this.prisma.taxDocument.count({
-        where: {
-          customerId: req.userId,
-          status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
-        },
-      }),
+      this.prisma.taxDocument.count({ where }),
     ]);
 
     return {

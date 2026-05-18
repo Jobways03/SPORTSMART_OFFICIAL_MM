@@ -382,8 +382,8 @@ export class TcsService {
 function previousFilingPeriod(filingPeriod: string): string | null {
   const match = /^(\d{4})-(\d{2})$/.exec(filingPeriod);
   if (!match) return null;
-  let y = parseInt(match[1], 10);
-  let m = parseInt(match[2], 10) - 1;
+  let y = parseInt(match[1]!, 10);
+  let m = parseInt(match[2]!, 10) - 1;
   if (m === 0) {
     m = 12;
     y -= 1;
@@ -405,8 +405,8 @@ function monthRangeUtc(filingPeriod: string): {
   if (!match) {
     throw new Error(`Invalid filing period: ${filingPeriod} (want YYYY-MM)`);
   }
-  const y = parseInt(match[1], 10);
-  const m = parseInt(match[2], 10);
+  const y = parseInt(match[1]!, 10);
+  const m = parseInt(match[2]!, 10);
   // IST midnight = UTC midnight minus 5h30m.
   const startUtc = new Date(Date.UTC(y, m - 1, 1) - 5.5 * 60 * 60 * 1000);
   // Next month's IST midnight.

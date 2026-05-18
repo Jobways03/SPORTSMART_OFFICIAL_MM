@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import type { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
+import { escapeHtml, safeHtml } from '../../../../core/util/escape-html';
 
 interface FiledPayload {
   disputeId: string;
@@ -64,12 +65,15 @@ export class DisputeNotificationHandler {
     // Notify the affected seller when buyer files; notify a fallback
     // (no specific buyer notification needed — they just filed it).
     if (p.filedByType === 'CUSTOMER' && sellerId) {
+      // Phase 5.4 (2026-05-16) — every user-controlled interpolation
+      // (filer name, dispute number, summary text) now goes through
+      // safeHtml so customer-supplied content can't inject markup into
+      // the seller's notification email. The kind label is platform-
+      // controlled (enum) and reformatted in JS, so it's safe.
+      const kindLabel = p.kind.replace(/_/g, ' ').toLowerCase();
       await this.send(sellerId, {
         subject: `New dispute against your order — ${p.disputeNumber}`,
-        body:
-          `<p>${p.filedByName} has opened a dispute (${p.kind.replace(/_/g, ' ').toLowerCase()}) ` +
-          `on order ${p.disputeNumber}.</p><blockquote>${escape(p.summary)}</blockquote>` +
-          `<p>Please respond in your seller dashboard.</p>`,
+        body: safeHtml`<p>${p.filedByName} has opened a dispute (${kindLabel}) on order ${p.disputeNumber}.</p><blockquote>${p.summary}</blockquote><p>Please respond in your seller dashboard.</p>`,
       });
     }
   }
@@ -94,9 +98,7 @@ export class DisputeNotificationHandler {
     for (const recipientId of new Set(targets)) {
       await this.send(recipientId, {
         subject: `New reply on dispute ${p.disputeNumber}`,
-        body:
-          `<p>${escape(p.senderName)} replied:</p>` +
-          `<blockquote>${escape(p.messagePreview)}</blockquote>`,
+        body: safeHtml`<p>${p.senderName} replied:</p><blockquote>${p.messagePreview}</blockquote>`,
       });
     }
   }
@@ -104,19 +106,24 @@ export class DisputeNotificationHandler {
   @OnEvent('disputes.decided')
   async onDecided(event: DomainEvent<DecidedPayload>) {
     const p = event.payload;
+    // outcomeLabel is platform-controlled (enum derived); kept inside
+    // safeHtml's auto-escape anyway as defence-in-depth.
     const outcomeLabel = p.outcome
       .replace('RESOLVED_', '')
       .toLowerCase();
-    const amountLine =
+    // The amount line is fully platform-controlled but using safeHtml
+    // keeps the auto-escape habit uniform across this handler.
+    const amountInRupees =
       p.amountInPaise != null
-        ? `<p><strong>Refund amount:</strong> ₹${(p.amountInPaise / 100).toFixed(2)}</p>`
-        : '';
+        ? `₹${(p.amountInPaise / 100).toFixed(2)}`
+        : null;
     await this.send(p.filedById, {
       subject: `Dispute ${p.disputeNumber} — decision: ${outcomeLabel}`,
-      body:
-        `<p>The Sportsmart team has decided your dispute in favour of the <strong>${outcomeLabel}</strong>.</p>` +
-        amountLine +
-        `<blockquote>${escape(p.rationale)}</blockquote>`,
+      body: safeHtml`<p>The Sportsmart team has decided your dispute in favour of the <strong>${outcomeLabel}</strong>.</p>${
+        amountInRupees
+          ? safeHtml`<p><strong>Refund amount:</strong> ${amountInRupees}</p>`
+          : ''
+      }<blockquote>${p.rationale}</blockquote>`,
     });
   }
 

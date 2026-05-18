@@ -8,14 +8,14 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { FranchiseAuthGuard } from '../../../../core/guards';
+import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { FranchiseCommissionService } from '../../application/services/franchise-commission.service';
 import { FranchiseSettlementService } from '../../application/services/franchise-settlement.service';
 
 @ApiTags('Franchise Earnings')
 @Controller('franchise/earnings')
-@UseGuards(FranchiseAuthGuard)
+@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
 export class FranchiseEarningsController {
   constructor(
     private readonly commissionService: FranchiseCommissionService,

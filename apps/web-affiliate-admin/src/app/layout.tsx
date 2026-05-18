@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { ModalProvider } from '@sportsmart/ui';
 
 export const metadata: Metadata = {
   title: 'SportsMart — Affiliate Admin',
@@ -23,7 +24,11 @@ export default function RootLayout({
           minHeight: '100vh',
         }}
       >
-        {children}
+        {/* Phase 8 (2026-05-16) — ModalProvider exposes useModal().confirmDialog
+            so destructive admin actions use the shared in-app prompt
+            rather than window.confirm(), which mobile browsers render
+            inconsistently. */}
+        <ModalProvider>{children}</ModalProvider>
       </body>
     </html>
   );
