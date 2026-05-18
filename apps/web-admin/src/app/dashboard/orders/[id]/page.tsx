@@ -4,8 +4,59 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { DiscountGstBreakdownCard } from './_components/DiscountGstBreakdownCard';
 
 /* -- types -- */
+
+interface OrderDiscountRow {
+  id: string;
+  discountId: string;
+  discountCode: string | null;
+  discountType: string;
+  discountMethod: string;
+  discountNature: string;
+  source: string;
+  discountAmountInPaise: string;
+  fundingType: string;
+}
+interface OrderItemDiscountRow {
+  id: string;
+  orderItemId: string;
+  subOrderId: string;
+  sellerId: string | null;
+  productId: string;
+  discountId: string;
+  discountCode: string | null;
+  discountAmountInPaise: string;
+  fundingType: string;
+}
+interface OrderItemTaxSnapshotRow {
+  orderItemId: string;
+  grossLineAmountInPaise: string;
+  discountAmountInPaise: string;
+  taxableAmountInPaise: string;
+  gstRateBps: number;
+  cgstAmountInPaise: string;
+  sgstAmountInPaise: string;
+  igstAmountInPaise: string;
+  totalTaxAmountInPaise: string;
+  lineTotalAfterDiscountAndTaxInPaise: string;
+}
+interface DiscountLiabilityLedgerRow {
+  id: string;
+  orderItemId: string | null;
+  sellerId: string | null;
+  fundingType: string;
+  liabilityParty: string;
+  amountInPaise: string;
+  status: string;
+}
+interface DiscountBreakdown {
+  orderDiscounts: OrderDiscountRow[];
+  orderItemDiscounts: OrderItemDiscountRow[];
+  taxSnapshots: OrderItemTaxSnapshotRow[];
+  liabilityLedger: DiscountLiabilityLedgerRow[];
+}
 interface OrderItem {
   id: string;
   productId: string;
@@ -83,6 +134,10 @@ interface OrderDetail {
     phone: string | null;
   };
   subOrders: SubOrder[];
+  // Phase B (P0.1, P0.5) — discount allocation + GST + liability ledger
+  // snapshot returned by the admin orders API. Empty arrays for legacy
+  // orders placed before allocation went live; the card hides itself.
+  discountBreakdown?: DiscountBreakdown;
 }
 
 /* -- helpers -- */
@@ -726,6 +781,28 @@ export default function OrderDetailPage() {
                 </div>
               ),
           )}
+
+          {/* -- DISCOUNT & GST BREAKDOWN --
+              Mounts only when the order has at least one tax snapshot row.
+              Legacy orders (placed before allocation went live) get empty
+              arrays from the API and the card stays hidden. */}
+          {order.discountBreakdown &&
+            (order.discountBreakdown.taxSnapshots.length > 0 ||
+              order.discountBreakdown.orderDiscounts.length > 0 ||
+              order.discountBreakdown.orderItemDiscounts.length > 0) && (
+              <DiscountGstBreakdownCard
+                breakdown={order.discountBreakdown}
+                orderItems={order.subOrders.flatMap((so) =>
+                  so.items.map((it) => ({
+                    id: it.id,
+                    productTitle: it.productTitle,
+                    sku: it.sku ?? null,
+                    unitPrice: it.unitPrice,
+                    quantity: it.quantity,
+                  })),
+                )}
+              />
+            )}
 
           {/* -- CUSTOMER DETAILS -- */}
           <div style={cardStyle}>

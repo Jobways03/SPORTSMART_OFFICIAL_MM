@@ -30,6 +30,21 @@ interface Seller {
   isProfileCompleted: boolean;
   lastLoginAt: string | null;
   createdAt: string;
+  // Phase 26 GST (2026-05-18) — tax identity. Surfaced on the admin
+  // detail page so Super Admin can audit GSTIN/PAN, verify, and (with
+  // the upcoming verify endpoint) flip isGstVerified without opening
+  // a fresh approval queue entry.
+  gstin?: string | null;
+  gstStateCode?: string | null;
+  gstRegistrationType?: string | null;
+  legalBusinessName?: string | null;
+  panNumber?: string | null;
+  panLast4?: string | null;
+  isGstVerified?: boolean;
+  gstVerifiedAt?: string | null;
+  gstVerifiedBy?: string | null;
+  gstVerificationNotes?: string | null;
+  panVerified?: boolean;
 }
 
 interface CommissionRecord {
@@ -326,6 +341,53 @@ export default function SellerDetailPage() {
         />
       </div>
 
+      {/* ── Tax / GST identity ─────────────────────────────── */}
+      {/* Phase 26 GST — Super-admin tax audit card. Shows GSTIN, PAN
+          (masked), legal name + registration type, and verification
+          status. The seller submits these on onboarding; admin verifies
+          on approval (now mandatory under the 2026-05-18 policy). */}
+      <Section title="Tax / GST identity">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+          <TaxField label="Legal business name" value={seller.legalBusinessName || '—'} />
+          <TaxField label="GST registration type" value={seller.gstRegistrationType || '—'} />
+          <TaxField
+            label="GSTIN"
+            value={seller.gstin || 'Missing'}
+            mono
+            warn={!seller.gstin}
+            badge={seller.isGstVerified ? { text: 'Verified', tone: 'success' } : seller.gstin ? { text: 'Pending', tone: 'warning' } : undefined}
+          />
+          <TaxField
+            label="GST state code"
+            value={seller.gstStateCode || '—'}
+            mono
+          />
+          <TaxField
+            label="PAN"
+            value={seller.panLast4 ? `XXXXX${seller.panLast4}` : seller.panNumber ? `XXXXX${seller.panNumber.slice(-4)}` : 'Missing'}
+            mono
+            warn={!seller.panNumber}
+            badge={seller.panVerified ? { text: 'Verified', tone: 'success' } : seller.panNumber ? { text: 'Pending', tone: 'warning' } : undefined}
+          />
+          {seller.gstVerifiedAt && (
+            <TaxField
+              label="Verified on"
+              value={new Date(seller.gstVerifiedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            />
+          )}
+        </div>
+        {seller.gstVerificationNotes && (
+          <p style={{ marginTop: 12, padding: 10, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: 13, color: '#374151' }}>
+            <strong style={{ color: '#111827' }}>Verification notes:</strong> {seller.gstVerificationNotes}
+          </p>
+        )}
+        {(!seller.gstin || !seller.panNumber) && (
+          <p style={{ marginTop: 12, padding: 10, background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, fontSize: 13, color: '#92400e' }}>
+            <strong>Policy gap:</strong> Under the 2026-05-18 policy, GSTIN + PAN are mandatory for seller approval. This seller is missing one or both — the approval endpoint will refuse to activate them. Ask the seller to resubmit onboarding with both fields.
+          </p>
+        )}
+      </Section>
+
       {/* ── Commission / orders table ──────────────────────── */}
       <Section
         title="Orders & commission"
@@ -546,6 +608,60 @@ function Pill({ label, tone }: { label: string; tone: PillTone }) {
       <span style={{ ...styles.pillDot, background: toneStyles.dot }} />
       {label}
     </span>
+  );
+}
+
+// One field on the Tax/GST identity card. Renders label + value, with
+// optional mono-font formatting (for IDs), warning background (for
+// missing required fields), and verification badge.
+function TaxField({
+  label,
+  value,
+  mono,
+  warn,
+  badge,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  warn?: boolean;
+  badge?: { text: string; tone: 'success' | 'warning' };
+}) {
+  const badgeStyle = badge
+    ? badge.tone === 'success'
+      ? { background: '#dcfce7', color: '#166534' }
+      : { background: '#fef3c7', color: '#92400e' }
+    : null;
+  return (
+    <div
+      style={{
+        padding: '10px 12px',
+        borderRadius: 8,
+        background: warn ? '#fef3c7' : '#f8fafc',
+        border: `1px solid ${warn ? '#fde68a' : '#e2e8f0'}`,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <div style={{ fontSize: 10, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          {label}
+        </div>
+        {badge && (
+          <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, ...badgeStyle }}>
+            {badge.text}
+          </span>
+        )}
+      </div>
+      <div
+        style={{
+          fontSize: 13,
+          fontWeight: 600,
+          color: warn ? '#92400e' : '#0f172a',
+          fontFamily: mono ? 'monospace' : 'inherit',
+        }}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
 

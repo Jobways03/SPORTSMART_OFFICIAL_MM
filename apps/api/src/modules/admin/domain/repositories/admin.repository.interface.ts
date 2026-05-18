@@ -138,6 +138,25 @@ export interface AdminRepository {
     expiresAt: Date;
   }): Promise<AdminSessionRecord>;
   revokeAdminSessions(adminId: string): Promise<void>;
+  /**
+   * Look up a session by the RAW refresh token (caller never sees the hash).
+   * Returns null on miss. Caller validates `revokedAt` / `expiresAt` itself.
+   */
+  findAdminSessionByRefreshToken(rawToken: string): Promise<{
+    id: string;
+    adminId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+  } | null>;
+  /**
+   * Rotate the refresh token on an existing session (and bump expiresAt).
+   * Caller passes the new RAW token; the impl hashes it before persist.
+   */
+  rotateAdminSession(
+    sessionId: string,
+    newRawRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<void>;
   // PR 10.10 — step-up auth. Stamps `stepUpVerifiedAt = now` on the
   // specified session row so subsequent destructive-route requests
   // pass the @RequiresStepUp guard. Caller verifies the TOTP / backup

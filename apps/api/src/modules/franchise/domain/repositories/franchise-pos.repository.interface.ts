@@ -25,6 +25,11 @@ export interface FranchisePosRepository {
     grossAmount: number;
     discountAmount: number;
     taxAmount: number;
+    // Phase 26 GST (POS) — sale-level breakdown + per-item snapshot.
+    cgstAmount?: number;
+    sgstAmount?: number;
+    igstAmount?: number;
+    placeOfSupplyState?: string | null;
     netAmount: number;
     paymentMethod: string;
     createdByStaffId?: string;
@@ -39,6 +44,12 @@ export interface FranchisePosRepository {
       unitPrice: number;
       lineDiscount: number;
       lineTotal: number;
+      hsnCode?: string | null;
+      gstRateBps?: number;
+      taxableAmount?: number;
+      cgstAmount?: number;
+      sgstAmount?: number;
+      igstAmount?: number;
     }>;
   }): Promise<any>;
 

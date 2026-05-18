@@ -21,6 +21,7 @@ import {
   ForbiddenAppException,
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { calculateLineTax } from '../../../tax/domain/tax-engine';
 
 @Injectable()
 export class FranchisePosService {
@@ -95,6 +96,18 @@ export class FranchisePosService {
       unitPrice: number;
       lineDiscount: number;
       lineTotal: number;
+      // Phase 26 GST — per-item tax snapshot. Computed from the
+      // catalog HSN + rate using the same tax-engine the marketplace
+      // checkout uses. Pricing mode is INCLUSIVE (POS quotes retail
+      // prices that already include GST). All POS sales are intra-state
+      // today (walk-in customer at franchise location) so CGST+SGST
+      // always, IGST always 0. Numbers carried as integer paise.
+      hsnCode: string | null;
+      gstRateBps: number;
+      taxableAmount: number;
+      cgstAmount: number;
+      sgstAmount: number;
+      igstAmount: number;
     }> = [];
 
     for (const item of input.items) {
@@ -110,19 +123,27 @@ export class FranchisePosService {
         );
       }
 
-      // Resolve product/variant titles
+      // Resolve product/variant titles + HSN + GST rate. Variant overrides
+      // win when present (a single-variant override pattern matches the
+      // marketplace checkout's tax-snapshot resolution).
       const product = await this.prisma.product.findUnique({
         where: { id: item.productId },
-        select: { title: true },
+        select: { title: true, hsnCode: true, gstRateBps: true },
       });
       let variantTitle: string | undefined;
+      let hsnOverride: string | null = null;
+      let gstRateBpsOverride: number | null = null;
       if (item.variantId) {
         const variant = await this.prisma.productVariant.findUnique({
           where: { id: item.variantId },
-          select: { title: true },
+          select: { title: true, hsnCodeOverride: true, gstRateBpsOverride: true },
         });
         variantTitle = variant?.title ?? undefined;
+        hsnOverride = variant?.hsnCodeOverride ?? null;
+        gstRateBpsOverride = variant?.gstRateBpsOverride ?? null;
       }
+      const hsnCode = hsnOverride ?? product?.hsnCode ?? null;
+      const gstRateBps = gstRateBpsOverride ?? product?.gstRateBps ?? 0;
 
       // Check available stock
       const stock = await this.inventoryService.getStockDetail(
@@ -140,6 +161,19 @@ export class FranchisePosService {
       const lineDiscount = item.lineDiscount ?? 0;
       const lineTotal = item.unitPrice * item.quantity - lineDiscount;
 
+      // Tax computation. The engine works in paise (BigInt) so we
+      // convert rupees → paise on the way in and back on the way out.
+      // POS pricing is INCLUSIVE (retail price already includes GST);
+      // intra-state (CGST+SGST) for every POS sale today.
+      const tax = calculateLineTax({
+        grossInPaise: BigInt(Math.round(item.unitPrice * item.quantity * 100)),
+        discountInPaise: BigInt(Math.round(lineDiscount * 100)),
+        gstRateBps,
+        priceIncludesTax: true,
+        isIntraState: true,
+        supplyTaxability: 'TAXABLE',
+      });
+
       enrichedItems.push({
         productId: item.productId,
         variantId: item.variantId,
@@ -151,16 +185,31 @@ export class FranchisePosService {
         unitPrice: item.unitPrice,
         lineDiscount,
         lineTotal,
+        hsnCode,
+        gstRateBps,
+        taxableAmount: Number(tax.taxableInPaise) / 100,
+        cgstAmount: Number(tax.cgstInPaise) / 100,
+        sgstAmount: Number(tax.sgstInPaise) / 100,
+        igstAmount: Number(tax.igstInPaise) / 100,
       });
     }
 
-    // 3. Calculate totals
+    // 3. Calculate totals (including sale-level tax rollup).
     let grossAmount = 0;
     let discountAmount = 0;
+    let cgstAmount = 0;
+    let sgstAmount = 0;
+    let igstAmount = 0;
     for (const item of enrichedItems) {
       grossAmount += item.unitPrice * item.quantity;
       discountAmount += item.lineDiscount;
+      cgstAmount += item.cgstAmount;
+      sgstAmount += item.sgstAmount;
+      igstAmount += item.igstAmount;
     }
+    const taxAmount = cgstAmount + sgstAmount + igstAmount;
+    // Retail prices are inclusive of tax — net = gross − discount.
+    // (Tax is *carved out* of the net for reporting, not added on top.)
     const netAmount = grossAmount - discountAmount;
 
     // 4. Generate sale number
@@ -177,7 +226,11 @@ export class FranchisePosService {
       customerPhone: input.customerPhone,
       grossAmount,
       discountAmount,
-      taxAmount: 0,
+      taxAmount,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      placeOfSupplyState: franchise.state ?? null,
       netAmount,
       paymentMethod: input.paymentMethod ?? 'CASH',
       createdByStaffId: actorId,

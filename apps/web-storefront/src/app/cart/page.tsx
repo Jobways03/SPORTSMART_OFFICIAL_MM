@@ -461,8 +461,8 @@ export default function CartPage() {
                     </dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-ink-600">Estimated tax</dt>
-                    <dd className="text-ink-600 text-caption">Calculated at checkout</dd>
+                    <dt className="text-ink-600">GST</dt>
+                    <dd className="text-ink-600 text-caption">Included in price</dd>
                   </div>
                 </dl>
 

@@ -44,6 +44,21 @@ export class AdminGetSellerUseCase {
       lockUntil: true,
       createdAt: true,
       updatedAt: true,
+      // Phase 26 GST (2026-05-18) — tax identity. Surfaced to admin
+      // detail page so the Super Admin can audit + verify GSTIN/PAN
+      // without leaving the seller record. Returned to the client via
+      // the same `seller` spread the controller already does.
+      gstin: true,
+      gstStateCode: true,
+      gstRegistrationType: true,
+      legalBusinessName: true,
+      panNumber: true,
+      panLast4: true,
+      isGstVerified: true,
+      gstVerifiedAt: true,
+      gstVerifiedBy: true,
+      gstVerificationNotes: true,
+      panVerified: true,
     });
 
     if (!seller || seller.isDeleted) {
@@ -79,6 +94,18 @@ export class AdminGetSellerUseCase {
       lockUntil: seller.lockUntil,
       createdAt: seller.createdAt,
       updatedAt: seller.updatedAt,
+      // Phase 26 GST — tax identity for admin audit/verification UI.
+      gstin: (seller as any).gstin ?? null,
+      gstStateCode: (seller as any).gstStateCode ?? null,
+      gstRegistrationType: (seller as any).gstRegistrationType ?? null,
+      legalBusinessName: (seller as any).legalBusinessName ?? null,
+      panNumber: (seller as any).panNumber ?? null,
+      panLast4: (seller as any).panLast4 ?? null,
+      isGstVerified: (seller as any).isGstVerified ?? false,
+      gstVerifiedAt: (seller as any).gstVerifiedAt ?? null,
+      gstVerifiedBy: (seller as any).gstVerifiedBy ?? null,
+      gstVerificationNotes: (seller as any).gstVerificationNotes ?? null,
+      panVerified: (seller as any).panVerified ?? false,
     };
   }
 }

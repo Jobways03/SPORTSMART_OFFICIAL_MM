@@ -38,6 +38,19 @@ export class GetSellerProfileUseCase {
       isProfileCompleted: true,
       lastProfileUpdatedAt: true,
       createdAt: true,
+      // Phase 26 GST (2026-05-18) — surface tax identity to the seller
+      // profile screen. Read-only on the seller side; admin owns
+      // verification. Without this the seller could never see their
+      // own GSTIN after onboarding.
+      gstin: true,
+      gstStateCode: true,
+      gstRegistrationType: true,
+      legalBusinessName: true,
+      panNumber: true,
+      panLast4: true,
+      isGstVerified: true,
+      gstVerifiedAt: true,
+      panVerified: true,
     });
 
     if (!seller) {
@@ -69,6 +82,19 @@ export class GetSellerProfileUseCase {
       isProfileCompleted: seller.isProfileCompleted,
       lastProfileUpdatedAt: seller.lastProfileUpdatedAt,
       createdAt: seller.createdAt,
+      // Phase 26 GST — read-only tax identity block. PAN is masked
+      // (panLast4) for display; the full panNumber stays in the
+      // response so power-users can copy-paste for filing, but the
+      // UI defaults to masked rendering.
+      gstin: (seller as any).gstin ?? null,
+      gstStateCode: (seller as any).gstStateCode ?? null,
+      gstRegistrationType: (seller as any).gstRegistrationType ?? null,
+      legalBusinessName: (seller as any).legalBusinessName ?? null,
+      panNumber: (seller as any).panNumber ?? null,
+      panLast4: (seller as any).panLast4 ?? null,
+      isGstVerified: (seller as any).isGstVerified ?? false,
+      gstVerifiedAt: (seller as any).gstVerifiedAt ?? null,
+      panVerified: (seller as any).panVerified ?? false,
     };
   }
 }

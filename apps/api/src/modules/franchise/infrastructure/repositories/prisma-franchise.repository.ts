@@ -101,6 +101,37 @@ export class PrismaFranchiseRepository implements FranchisePartnerRepository {
     });
   }
 
+  async findSessionByRefreshToken(rawToken: string): Promise<{
+    id: string;
+    franchisePartnerId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+  } | null> {
+    return this.prisma.franchiseSession.findFirst({
+      where: { refreshToken: hashRefreshToken(rawToken) },
+      select: {
+        id: true,
+        franchisePartnerId: true,
+        expiresAt: true,
+        revokedAt: true,
+      },
+    });
+  }
+
+  async rotateSession(
+    sessionId: string,
+    newRawRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<void> {
+    await this.prisma.franchiseSession.update({
+      where: { id: sessionId },
+      data: {
+        refreshToken: hashRefreshToken(newRawRefreshToken),
+        expiresAt: newExpiresAt,
+      },
+    });
+  }
+
   // ── OTP operations ──────────────────────────────────────────
 
   async findRecentOtp(params: {

@@ -1254,6 +1254,95 @@ export default function SellerProfilePage() {
           </div>
         </div>
 
+        {/* Phase 26 GST — Tax identity card. Read-only here; the seller
+            submits these once on onboarding and admin verifies. Showing
+            them here closes the "I onboarded with GSTIN but can never
+            see it again" gap. PAN is masked by default (last 4 visible);
+            full PAN is rendered behind a "Show" toggle for accountants
+            who need to copy-paste it. */}
+        <div className="profile-card">
+          <div className="profile-card-header">
+            <h2>Tax / GST</h2>
+            <p>
+              GSTIN and PAN you submitted during onboarding. These are the
+              source-of-truth for every tax invoice issued under your shop.
+              Need to update? Contact SportSmart admin — GSTIN changes
+              after verification require a re-verification cycle.
+            </p>
+          </div>
+
+          <div className="form-grid-2">
+            <div className="profile-form-group">
+              <label>Legal business name</label>
+              <div className="readonly-field" aria-label="Legal business name (read-only)">
+                <span className="lock-icon">&#128274;</span>
+                {profile.legalBusinessName || <span style={{ color: '#9ca3af' }}>Not submitted</span>}
+              </div>
+            </div>
+            <div className="profile-form-group">
+              <label>GST registration type</label>
+              <div className="readonly-field" aria-label="GST registration type (read-only)">
+                <span className="lock-icon">&#128274;</span>
+                {profile.gstRegistrationType || <span style={{ color: '#9ca3af' }}>Not submitted</span>}
+              </div>
+            </div>
+          </div>
+
+          <div className="form-grid-2">
+            <div className="profile-form-group">
+              <label>
+                GSTIN
+                {profile.isGstVerified && (
+                  <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#dcfce7', color: '#166534' }}>
+                    Verified
+                  </span>
+                )}
+                {!profile.isGstVerified && profile.gstin && (
+                  <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#fef3c7', color: '#92400e' }}>
+                    Pending admin verification
+                  </span>
+                )}
+              </label>
+              <div className="readonly-field" aria-label="GSTIN (read-only)" style={{ fontFamily: 'monospace' }}>
+                <span className="lock-icon">&#128274;</span>
+                {profile.gstin || <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted — required to sell</span>}
+              </div>
+            </div>
+            <div className="profile-form-group">
+              <label>GST state code</label>
+              <div className="readonly-field" aria-label="GST state code (read-only)" style={{ fontFamily: 'monospace' }}>
+                <span className="lock-icon">&#128274;</span>
+                {profile.gstStateCode || <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted</span>}
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-form-group">
+            <label>
+              PAN
+              {profile.panVerified && (
+                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#dcfce7', color: '#166534' }}>
+                  Verified
+                </span>
+              )}
+            </label>
+            <div className="readonly-field" aria-label="PAN (read-only, masked)" style={{ fontFamily: 'monospace' }}>
+              <span className="lock-icon">&#128274;</span>
+              {profile.panLast4
+                ? `XXXXX${profile.panLast4}`
+                : profile.panNumber
+                  ? `XXXXX${profile.panNumber.slice(-4)}`
+                  : <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted — required to sell</span>}
+            </div>
+          </div>
+
+          {profile.gstVerifiedAt && (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+              GSTIN verified on {new Date(profile.gstVerifiedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </div>
+          )}
+        </div>
+
         {/* Store Address */}
         <div className="profile-card">
           <div className="profile-card-header">

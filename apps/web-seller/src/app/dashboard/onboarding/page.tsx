@@ -23,6 +23,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 
+// Phase 26 GST — policy change (2026-05-18): UNREGISTERED is no longer
+// a valid GST registration type for new sellers. The type union still
+// permits it so legacy profiles loaded from the API don't crash the
+// page, but the form prevents new submissions in that state.
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL' | 'UNREGISTERED';
 
 interface SellerProfile {
@@ -195,14 +199,20 @@ export default function SellerOnboardingPage() {
     const errs: string[] = [];
     if (form.legalBusinessName.trim().length < 2)
       errs.push('Legal business name is required.');
-    if (form.gstRegistrationType !== 'UNREGISTERED') {
-      if (!GSTIN_RE.test(form.gstin))
-        errs.push('GSTIN must be 15 chars (format: 2-digit state + PAN + entity + Z + checksum).');
-      if (!STATE_CODE_RE.test(form.gstStateCode))
-        errs.push('GST state code must be 2 digits.');
-      if (form.gstin && form.gstin.substring(2, 12) !== form.panNumber)
-        errs.push('GSTIN positions 3-12 must equal PAN.');
+    // Phase 26 GST — GSTIN + GST state code are mandatory for every
+    // seller now. UNREGISTERED was previously the escape hatch; the
+    // dropdown no longer offers it, but if a legacy profile still has
+    // that value loaded the form blocks submission and asks the seller
+    // to pick REGULAR or COMPOSITION.
+    if (form.gstRegistrationType === 'UNREGISTERED') {
+      errs.push('GST registration is now mandatory. Pick REGULAR or COMPOSITION and enter your GSTIN.');
     }
+    if (!GSTIN_RE.test(form.gstin))
+      errs.push('GSTIN must be 15 chars (format: 2-digit state + PAN + entity + Z + checksum).');
+    if (!STATE_CODE_RE.test(form.gstStateCode))
+      errs.push('GST state code must be 2 digits.');
+    if (form.gstin && form.gstin.substring(2, 12) !== form.panNumber)
+      errs.push('GSTIN positions 3-12 must equal PAN.');
     if (!PAN_RE.test(form.panNumber))
       errs.push('PAN must be 5 letters + 4 digits + 1 letter (uppercase).');
     if (form.registeredAddress.line1.trim().length < 3)
@@ -228,15 +238,12 @@ export default function SellerOnboardingPage() {
         method: 'POST',
         body: JSON.stringify({
           legalBusinessName: form.legalBusinessName.trim(),
+          // Phase 26 GST — GSTIN + state code are mandatory; no more
+          // conditional skipping for UNREGISTERED. Validation above
+          // already blocks submission if either is missing.
           gstRegistrationType: form.gstRegistrationType,
-          gstin:
-            form.gstRegistrationType === 'UNREGISTERED'
-              ? undefined
-              : form.gstin.toUpperCase(),
-          gstStateCode:
-            form.gstRegistrationType === 'UNREGISTERED'
-              ? undefined
-              : form.gstStateCode,
+          gstin: form.gstin.toUpperCase(),
+          gstStateCode: form.gstStateCode,
           panNumber: form.panNumber.toUpperCase(),
           registeredBusinessAddress: form.registeredAddress,
           storeAddress: form.storeAddress.trim(),
@@ -392,36 +399,34 @@ export default function SellerOnboardingPage() {
               <option value="REGULAR">Regular</option>
               <option value="COMPOSITION">Composition</option>
               <option value="CASUAL">Casual</option>
-              <option value="UNREGISTERED">Unregistered (below threshold)</option>
+              {/* Phase 26 GST — UNREGISTERED removed from new submissions.
+                  GSTIN is mandatory for every active seller. Sub-threshold
+                  sellers must register for GSTIN before listing. */}
             </select>
 
-            {form.gstRegistrationType !== 'UNREGISTERED' && (
-              <>
-                <label htmlFor="gstin">GSTIN *</label>
-                <input
-                  id="gstin"
-                  value={form.gstin}
-                  onChange={(e) =>
-                    setForm({ ...form, gstin: e.target.value.toUpperCase() })
-                  }
-                  maxLength={15}
-                  required
-                  placeholder="e.g. 27ABCDE1234F1Z5"
-                />
+            <label htmlFor="gstin">GSTIN *</label>
+            <input
+              id="gstin"
+              value={form.gstin}
+              onChange={(e) =>
+                setForm({ ...form, gstin: e.target.value.toUpperCase() })
+              }
+              maxLength={15}
+              required
+              placeholder="e.g. 27ABCDE1234F1Z5"
+            />
 
-                <label htmlFor="gstStateCode">GST state code *</label>
-                <input
-                  id="gstStateCode"
-                  value={form.gstStateCode}
-                  onChange={(e) =>
-                    setForm({ ...form, gstStateCode: e.target.value.replace(/\D/g, '') })
-                  }
-                  maxLength={2}
-                  required
-                  placeholder="e.g. 27 for Maharashtra"
-                />
-              </>
-            )}
+            <label htmlFor="gstStateCode">GST state code *</label>
+            <input
+              id="gstStateCode"
+              value={form.gstStateCode}
+              onChange={(e) =>
+                setForm({ ...form, gstStateCode: e.target.value.replace(/\D/g, '') })
+              }
+              maxLength={2}
+              required
+              placeholder="e.g. 27 for Maharashtra"
+            />
 
             <label htmlFor="panNumber">PAN number *</label>
             <input

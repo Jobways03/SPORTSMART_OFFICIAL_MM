@@ -1947,6 +1947,42 @@ export class OrdersService {
 
     if (!order) throw new NotFoundAppException('Order not found');
 
+    // Phase 26 GST — customer-facing per-item tax snapshot + roll-up.
+    // The internal admin response carries the full discount/liability
+    // breakdown; the customer sees just the tax bits (no funding split).
+    // Empty array for legacy orders without an allocation snapshot.
+    const taxSnapshots = await this.prisma.orderItemTaxSnapshot.findMany({
+      where: { masterOrderId: order.id },
+      select: {
+        orderItemId: true,
+        grossLineAmountInPaise: true,
+        discountAmountInPaise: true,
+        taxableAmountInPaise: true,
+        gstRateBps: true,
+        cgstAmountInPaise: true,
+        sgstAmountInPaise: true,
+        igstAmountInPaise: true,
+        totalTaxAmountInPaise: true,
+      },
+    });
+    const taxSummary = taxSnapshots.reduce(
+      (acc, t) => {
+        acc.taxableInPaise += BigInt(t.taxableAmountInPaise);
+        acc.cgstInPaise += BigInt(t.cgstAmountInPaise);
+        acc.sgstInPaise += BigInt(t.sgstAmountInPaise);
+        acc.igstInPaise += BigInt(t.igstAmountInPaise);
+        acc.totalTaxInPaise += BigInt(t.totalTaxAmountInPaise);
+        return acc;
+      },
+      {
+        taxableInPaise: 0n,
+        cgstInPaise: 0n,
+        sgstInPaise: 0n,
+        igstInPaise: 0n,
+        totalTaxInPaise: 0n,
+      },
+    );
+
     // Phase D — surface the applied coupon to the customer detail page
     // (code + savings). Pull the REDEEMED redemption row for this order;
     // legacy orders without a redemption fall through with a null
@@ -2075,6 +2111,28 @@ export class OrdersService {
       appliedDiscount,
       shipping,
       timeline,
+      // Phase 26 GST — per-item snapshots (BigInt → string for JSON
+      // safety) + roll-up totals. Frontend renders these on the order
+      // detail page so the customer sees a clear GST breakdown without
+      // having to download the PDF invoice.
+      taxSnapshots: taxSnapshots.map((t) => ({
+        orderItemId: t.orderItemId,
+        grossLineAmountInPaise: t.grossLineAmountInPaise.toString(),
+        discountAmountInPaise: t.discountAmountInPaise.toString(),
+        taxableAmountInPaise: t.taxableAmountInPaise.toString(),
+        gstRateBps: t.gstRateBps,
+        cgstAmountInPaise: t.cgstAmountInPaise.toString(),
+        sgstAmountInPaise: t.sgstAmountInPaise.toString(),
+        igstAmountInPaise: t.igstAmountInPaise.toString(),
+        totalTaxAmountInPaise: t.totalTaxAmountInPaise.toString(),
+      })),
+      taxSummary: {
+        taxableInPaise: taxSummary.taxableInPaise.toString(),
+        cgstInPaise: taxSummary.cgstInPaise.toString(),
+        sgstInPaise: taxSummary.sgstInPaise.toString(),
+        igstInPaise: taxSummary.igstInPaise.toString(),
+        totalTaxInPaise: taxSummary.totalTaxInPaise.toString(),
+      },
       subOrders: order.subOrders.map((so: any) => ({
         id: so.id,
         subTotal: so.subTotal,

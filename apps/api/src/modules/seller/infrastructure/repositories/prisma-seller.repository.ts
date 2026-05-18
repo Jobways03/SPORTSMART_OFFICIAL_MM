@@ -94,6 +94,32 @@ export class PrismaSellerRepository implements SellerRepository {
     });
   }
 
+  async findSessionByRefreshToken(rawToken: string): Promise<{
+    id: string;
+    sellerId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+  } | null> {
+    return this.prisma.sellerSession.findFirst({
+      where: { refreshToken: hashRefreshToken(rawToken) },
+      select: { id: true, sellerId: true, expiresAt: true, revokedAt: true },
+    });
+  }
+
+  async rotateSession(
+    sessionId: string,
+    newRawRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<void> {
+    await this.prisma.sellerSession.update({
+      where: { id: sessionId },
+      data: {
+        refreshToken: hashRefreshToken(newRawRefreshToken),
+        expiresAt: newExpiresAt,
+      },
+    });
+  }
+
   // ── OTP operations ──────────────────────────────────────────
 
   async findRecentOtp(params: {

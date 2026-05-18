@@ -99,10 +99,26 @@ export class SubmitSellerOnboardingUseCase {
       );
     }
 
+    // Phase 26 GST — policy change (2026-05-18): GSTIN is mandatory for
+    // every seller, regardless of declared GstRegistrationType. The
+    // UNREGISTERED escape hatch is removed (frontend dropdown also
+    // dropped). Existing UNREGISTERED sellers in the DB are
+    // grandfathered until they next submit profile changes.
+    if (!input.gstin || input.gstin.trim().length === 0) {
+      throw new BadRequestAppException(
+        'GSTIN is required. Sub-threshold sellers must register for GSTIN before listing on SportSmart.',
+      );
+    }
+    if (input.gstRegistrationType === 'UNREGISTERED') {
+      throw new BadRequestAppException(
+        'UNREGISTERED is no longer an accepted GST registration type. Pick REGULAR or COMPOSITION.',
+      );
+    }
+
     // PAN ↔ GSTIN cross-check: GSTIN embeds the PAN at positions 3-12
     // per CBIC spec. Catch data-entry errors before they reach admin
     // review.
-    if (input.gstin && input.gstin.substring(2, 12) !== input.panNumber) {
+    if (input.gstin.substring(2, 12) !== input.panNumber) {
       throw new BadRequestAppException(
         'GSTIN does not embed the provided PAN. Check both fields — GSTIN positions 3-12 must equal the PAN.',
       );

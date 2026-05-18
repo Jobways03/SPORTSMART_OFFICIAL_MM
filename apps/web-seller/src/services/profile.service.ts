@@ -25,6 +25,19 @@ export interface SellerProfileData {
   isProfileCompleted: boolean;
   lastProfileUpdatedAt: string | null;
   createdAt: string;
+  // Phase 26 GST — read-only tax identity. Surfaced on the profile
+  // page so sellers can see their submitted GSTIN/PAN after onboarding
+  // without re-doing the onboarding form. Editing flows through admin
+  // (post-verification, GSTIN is the source-of-truth for tax filings).
+  gstin?: string | null;
+  gstStateCode?: string | null;
+  gstRegistrationType?: 'REGULAR' | 'COMPOSITION' | 'CASUAL' | 'UNREGISTERED' | string | null;
+  legalBusinessName?: string | null;
+  panNumber?: string | null;
+  panLast4?: string | null;
+  isGstVerified?: boolean;
+  gstVerifiedAt?: string | null;
+  panVerified?: boolean;
 }
 
 export interface UpdateProfilePayload {

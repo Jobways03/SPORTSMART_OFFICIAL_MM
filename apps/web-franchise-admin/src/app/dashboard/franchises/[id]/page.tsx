@@ -24,7 +24,38 @@ import DeleteFranchiseModal from '../components/delete-franchise-modal';
 import '../franchises.css';
 
 type ModalType = 'status' | 'verification' | 'commission' | 'approve-mapping' | 'stop-mapping' | 'message' | 'password' | 'impersonate' | 'delete' | null;
-type TabKey = 'profile' | 'location' | 'catalog' | 'inventory' | 'orders' | 'commission' | 'finance' | 'settlements' | 'pos';
+type TabKey = 'profile' | 'location' | 'catalog' | 'inventory' | 'orders' | 'commission' | 'finance' | 'settlements' | 'pos' | 'tax';
+
+interface FranchiseTaxSummary {
+  franchise: {
+    id: string;
+    franchiseCode: string;
+    businessName: string;
+    gstNumber: string | null;
+    panNumber: string | null;
+    state: string | null;
+  };
+  totals: {
+    documentCount: number;
+    taxableAmountInPaise: string;
+    cgstAmountInPaise: string;
+    sgstAmountInPaise: string;
+    igstAmountInPaise: string;
+    totalTaxAmountInPaise: string;
+    documentTotalInPaise: string;
+  };
+  recentDocuments: Array<{
+    id: string;
+    documentNumber: string;
+    documentType: string;
+    financialYear: string;
+    generatedAt: string;
+    status: string;
+    documentTotalInPaise: string;
+    totalTaxAmountInPaise: string;
+    buyerLegalName: string | null;
+  }>;
+}
 
 function getStatusBadgeClass(status: string): string {
   switch (status) {
@@ -106,6 +137,28 @@ export default function AdminFranchiseDetailPage() {
   // POS Sales
   const [posSales, setPosSales] = useState<any[]>([]);
   const [posLoading, setPosLoading] = useState(false);
+
+  // Tax oversight
+  const [taxSummary, setTaxSummary] = useState<FranchiseTaxSummary | null>(null);
+  const [taxLoading, setTaxLoading] = useState(false);
+  const [taxError, setTaxError] = useState<string | null>(null);
+
+  const fetchTaxSummary = useCallback(async () => {
+    setTaxLoading(true);
+    setTaxError(null);
+    try {
+      const res = await apiClient<FranchiseTaxSummary>(
+        `/admin/franchises/${franchiseId}/tax-summary`,
+      );
+      if (res.data) setTaxSummary(res.data);
+    } catch (err) {
+      setTaxError(
+        err instanceof ApiError ? err.message : 'Failed to load tax summary',
+      );
+    } finally {
+      setTaxLoading(false);
+    }
+  }, [franchiseId]);
 
   // Profile edit state
   const [editMode, setEditMode] = useState(false);
@@ -327,7 +380,8 @@ export default function AdminFranchiseDetailPage() {
     if (activeTab === 'finance') fetchFinanceLedger();
     if (activeTab === 'settlements') fetchSettlements();
     if (activeTab === 'pos') fetchPosSales();
-  }, [activeTab, franchiseId, fetchCatalog, fetchInventory, fetchOrders, fetchFinanceLedger, fetchSettlements, fetchPosSales]);
+    if (activeTab === 'tax') fetchTaxSummary();
+  }, [activeTab, franchiseId, fetchCatalog, fetchInventory, fetchOrders, fetchFinanceLedger, fetchSettlements, fetchPosSales, fetchTaxSummary]);
 
   const closeModal = () => {
     setActiveModal(null);
@@ -448,6 +502,7 @@ export default function AdminFranchiseDetailPage() {
             <TabBtn label="Finance" tab="finance" active={activeTab} setActive={setActiveTab} />
             <TabBtn label="Settlements" tab="settlements" active={activeTab} setActive={setActiveTab} />
             <TabBtn label="POS" tab="pos" active={activeTab} setActive={setActiveTab} />
+            <TabBtn label="Tax / GST" tab="tax" active={activeTab} setActive={setActiveTab} />
           </div>
 
           {/* Profile Tab */}
@@ -1202,6 +1257,92 @@ export default function AdminFranchiseDetailPage() {
           )}
 
           {/* POS Sales Tab */}
+          {activeTab === 'tax' && (
+            <div className="franchise-card">
+              <div className="franchise-card-header">
+                <div>
+                  <h2>Tax / GST</h2>
+                  <p>Per-franchise GSTIN, aggregate tax liability, and recent tax documents (invoices, credit notes, etc).</p>
+                </div>
+              </div>
+              {taxLoading ? (
+                <div style={{ padding: 32, textAlign: 'center', color: '#6b7280' }}>Loading tax summary…</div>
+              ) : taxError ? (
+                <div style={{ padding: 16, background: '#fee2e2', color: '#991b1b', borderRadius: 6, fontSize: 13 }}>{taxError}</div>
+              ) : !taxSummary ? (
+                <div style={{ padding: 32, textAlign: 'center', color: '#6b7280' }}>No tax data available.</div>
+              ) : (
+                <>
+                  {/* Identity strip — collected on the franchise profile.
+                      Surfaced here too so finance ops doesn't have to
+                      switch tabs to check the GSTIN before downloading. */}
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+                    <TaxIdChip label="GSTIN" value={taxSummary.franchise.gstNumber} warn={!taxSummary.franchise.gstNumber} />
+                    <TaxIdChip label="PAN" value={taxSummary.franchise.panNumber} warn={!taxSummary.franchise.panNumber} />
+                    <TaxIdChip label="State" value={taxSummary.franchise.state} warn={!taxSummary.franchise.state} />
+                    <TaxIdChip label="Franchise Code" value={taxSummary.franchise.franchiseCode} />
+                  </div>
+
+                  {/* Aggregate totals across all tax documents issued for
+                      this franchise (sales via marketplace fulfilment).
+                      POS-only sales don't currently produce TaxDocument
+                      rows — that gap is tracked separately. */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginBottom: 18 }}>
+                    <TaxStat label="Documents" value={String(taxSummary.totals.documentCount)} />
+                    <TaxStat label="Taxable value" value={formatPaise(taxSummary.totals.taxableAmountInPaise)} />
+                    <TaxStat label="CGST" value={formatPaise(taxSummary.totals.cgstAmountInPaise)} />
+                    <TaxStat label="SGST" value={formatPaise(taxSummary.totals.sgstAmountInPaise)} />
+                    <TaxStat label="IGST" value={formatPaise(taxSummary.totals.igstAmountInPaise)} />
+                    <TaxStat label="Total tax" value={formatPaise(taxSummary.totals.totalTaxAmountInPaise)} highlight />
+                    <TaxStat label="Doc total" value={formatPaise(taxSummary.totals.documentTotalInPaise)} />
+                  </div>
+
+                  <h3 style={{ fontSize: 14, fontWeight: 700, margin: '20px 0 10px' }}>Recent documents</h3>
+                  {taxSummary.recentDocuments.length === 0 ? (
+                    <div style={{ padding: 24, textAlign: 'center', color: '#6b7280', fontSize: 13, background: '#f9fafb', borderRadius: 6 }}>
+                      No tax documents issued yet for this franchise.
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
+                            <th style={taxTh}>Document #</th>
+                            <th style={taxTh}>Type</th>
+                            <th style={taxTh}>FY</th>
+                            <th style={taxTh}>Buyer</th>
+                            <th style={taxTh}>Generated</th>
+                            <th style={{ ...taxTh, textAlign: 'right' }}>Tax</th>
+                            <th style={{ ...taxTh, textAlign: 'right' }}>Total</th>
+                            <th style={taxTh}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {taxSummary.recentDocuments.map((d) => (
+                            <tr key={d.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                              <td style={{ ...taxTd, fontFamily: 'monospace', fontSize: 12 }}>{d.documentNumber}</td>
+                              <td style={taxTd}>{d.documentType.replace(/_/g, ' ')}</td>
+                              <td style={taxTd}>{d.financialYear}</td>
+                              <td style={taxTd}>{d.buyerLegalName ?? <span style={{ color: '#9ca3af' }}>—</span>}</td>
+                              <td style={{ ...taxTd, fontSize: 12, color: '#6b7280' }}>{formatDateTime(d.generatedAt)}</td>
+                              <td style={{ ...taxTd, textAlign: 'right' }}>{formatPaise(d.totalTaxAmountInPaise)}</td>
+                              <td style={{ ...taxTd, textAlign: 'right', fontWeight: 600 }}>{formatPaise(d.documentTotalInPaise)}</td>
+                              <td style={taxTd}>
+                                <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: '#f3f4f6', color: '#374151' }}>
+                                  {d.status.replace(/_/g, ' ')}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           {activeTab === 'pos' && (
             <div className="franchise-card">
               <div className="franchise-card-header">
@@ -1413,3 +1554,63 @@ function InfoItem({ label, value }: { label: string; value: string | null | unde
     </div>
   );
 }
+
+// ── Tax-tab helpers ──────────────────────────────────────────────
+
+function TaxIdChip({ label, value, warn }: { label: string; value: string | null; warn?: boolean }) {
+  return (
+    <div style={{
+      padding: '8px 14px',
+      borderRadius: 8,
+      background: warn ? '#fef3c7' : '#f8fafc',
+      border: `1px solid ${warn ? '#fde68a' : '#e2e8f0'}`,
+      minWidth: 140,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, fontFamily: 'monospace', color: warn ? '#92400e' : '#111827' }}>
+        {value ?? 'Missing'}
+      </div>
+    </div>
+  );
+}
+
+function TaxStat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div style={{
+      padding: '12px 14px',
+      borderRadius: 8,
+      background: highlight ? '#eff6ff' : '#fafbfc',
+      border: `1px solid ${highlight ? '#bfdbfe' : '#e5e7eb'}`,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: highlight ? '#1e40af' : '#111827', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+    </div>
+  );
+}
+
+function formatPaise(paise: string | undefined): string {
+  if (!paise) return '₹0.00';
+  try {
+    const n = BigInt(paise);
+    const rupees = Number(n) / 100;
+    return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  } catch {
+    return `₹${paise}`;
+  }
+}
+
+const taxTh: React.CSSProperties = {
+  textAlign: 'left',
+  padding: '10px 14px',
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#6b7280',
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  whiteSpace: 'nowrap',
+};
+
+const taxTd: React.CSSProperties = {
+  padding: '10px 14px',
+  verticalAlign: 'middle',
+};

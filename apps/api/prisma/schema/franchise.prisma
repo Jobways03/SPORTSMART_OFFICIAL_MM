@@ -358,6 +358,18 @@ model FranchisePosSale {
   taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(10, 2)
   netAmount      Decimal @map("net_amount") @db.Decimal(10, 2)
 
+  // Phase 26 GST (POS) — sale-level CGST/SGST snapshot. POS sales are
+  // always intra-state (walk-in customer at franchise location) so IGST
+  // is always 0 today; the column is kept for shape parity with
+  // tax_documents.cgst/sgst/igst in case of future PHONE_ORDER cross-
+  // state delivery. Sum across items equals these.
+  cgstAmount               Decimal @default(0) @map("cgst_amount") @db.Decimal(10, 2)
+  sgstAmount               Decimal @default(0) @map("sgst_amount") @db.Decimal(10, 2)
+  igstAmount               Decimal @default(0) @map("igst_amount") @db.Decimal(10, 2)
+  // 2-digit GSTIN state code at the time of sale (e.g. 36 = Telangana).
+  // Snapshotted so a later franchise relocation doesn't rewrite history.
+  placeOfSupplyState       String? @map("place_of_supply_state")
+
   paymentMethod String        @default("CASH") @map("payment_method") // CASH, UPI, CARD
   status        PosSaleStatus @default(COMPLETED)
 
@@ -389,6 +401,19 @@ model FranchisePosSaleItem {
   unitPrice    Decimal  @map("unit_price") @db.Decimal(10, 2)
   lineDiscount Decimal  @default(0) @map("line_discount") @db.Decimal(10, 2)
   lineTotal    Decimal  @map("line_total") @db.Decimal(10, 2)
+
+  // Phase 26 GST (POS) — per-item tax snapshot. Snapshotted at sale time
+  // so later catalog HSN / rate changes don't rewrite history. Pricing
+  // mode for POS is always INCLUSIVE (retail price quotes include GST).
+  // gstRateBps stored as basis points (1800 = 18%) for arithmetic
+  // precision; matches OrderItemTaxSnapshot convention.
+  hsnCode       String?  @map("hsn_code")
+  gstRateBps    Int      @default(0) @map("gst_rate_bps")
+  taxableAmount Decimal  @default(0) @map("taxable_amount") @db.Decimal(10, 2)
+  cgstAmount    Decimal  @default(0) @map("cgst_amount") @db.Decimal(10, 2)
+  sgstAmount    Decimal  @default(0) @map("sgst_amount") @db.Decimal(10, 2)
+  igstAmount    Decimal  @default(0) @map("igst_amount") @db.Decimal(10, 2)
+
   createdAt    DateTime @default(now()) @map("created_at")
 
   sale FranchisePosSale @relation(fields: [saleId], references: [id], onDelete: Cascade)

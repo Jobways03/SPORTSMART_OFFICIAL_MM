@@ -97,6 +97,29 @@ export interface OrderDetail {
   } | null;
   // Sprint 3 Story 2.5 — synthesized event list, oldest first.
   timeline?: OrderTimelineEvent[];
+  // Phase 26 GST — per-item tax snapshot + roll-up totals. Empty
+  // taxSnapshots for legacy orders without allocation; the UI hides
+  // the breakdown card when the array is empty.
+  taxSnapshots?: OrderItemTaxSnapshot[];
+  taxSummary?: {
+    taxableInPaise: string;
+    cgstInPaise: string;
+    sgstInPaise: string;
+    igstInPaise: string;
+    totalTaxInPaise: string;
+  };
+}
+
+export interface OrderItemTaxSnapshot {
+  orderItemId: string;
+  grossLineAmountInPaise: string;
+  discountAmountInPaise: string;
+  taxableAmountInPaise: string;
+  gstRateBps: number;
+  cgstAmountInPaise: string;
+  sgstAmountInPaise: string;
+  igstAmountInPaise: string;
+  totalTaxAmountInPaise: string;
 }
 
 export interface ReturnEligibilityItem {
