@@ -82,7 +82,7 @@ jobs:
       # the build on HIGH/CRITICAL; lower-severity reports surface
       # as workflow annotations but don't block.
       - name: SCA scan (osv-scanner)
-        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
         with:
           scan-args: |-
             --lockfile=pnpm-lock.yaml
