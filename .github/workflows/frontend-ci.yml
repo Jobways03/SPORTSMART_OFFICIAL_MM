@@ -64,7 +64,7 @@ jobs:
           comment-summary-in-pr: on-failure
 
       - name: SCA scan (osv-scanner)
-        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
         with:
           scan-args: |-
             --lockfile=pnpm-lock.yaml
