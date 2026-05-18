@@ -42,7 +42,7 @@ jobs:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Full history so gitleaks can scan every commit in the PR
           # range, not just the merge commit. Cost is small for a
@@ -93,7 +93,7 @@ jobs:
       NODE_VERSION: "22"
       PNPM_VERSION: "10.0.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Enable pnpm
         uses: pnpm/action-setup@v4
