@@ -19,6 +19,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AffiliateAuthGuard } from '../../../../core/guards';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AffiliateRegistrationService } from '../../application/services/affiliate-registration.service';
 import { AffiliateCommissionService } from '../../application/services/affiliate-commission.service';
 import { AffiliateKycService } from '../../application/services/affiliate-kyc.service';
@@ -53,7 +54,37 @@ export class AffiliateSelfController {
     private readonly kycService: AffiliateKycService,
     private readonly payoutService: AffiliatePayoutService,
     private readonly cloudinary: CloudinaryAdapter,
+    private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Affiliate-facing view of their own TDS records (Section 194H — 5%
+   * deducted on commission once cumulative payouts cross the per-FY
+   * threshold). One row per financial year. Mirrors the admin endpoint
+   * at `/admin/affiliates/reports/tds` but locked to the requester's
+   * own affiliateId so the affiliate can never see another affiliate's
+   * deductions.
+   *
+   * Cumulative gross / TDS / net are stored in paise; we let the
+   * frontend format (BigInt-safe).
+   */
+  @Get('tds')
+  async myTds(@Req() req: Request, @Query('financialYear') financialYear?: string) {
+    const affiliateId = (req as any).affiliateId;
+    const where: any = { affiliateId };
+    if (financialYear) where.financialYear = financialYear;
+
+    const records = await this.prisma.affiliateTdsRecord.findMany({
+      where,
+      orderBy: [{ financialYear: 'desc' }],
+    });
+
+    return {
+      success: true,
+      message: 'TDS records fetched',
+      data: { records },
+    };
+  }
 
   @Get()
   async getProfile(@Req() req: Request) {

@@ -11,6 +11,7 @@ import { FranchiseResetPasswordDto } from '../dtos/franchise-reset-password.dto'
 import { FranchiseChangePasswordDto } from '../dtos/franchise-change-password.dto';
 import { RegisterFranchiseUseCase } from '../../application/use-cases/register-franchise.use-case';
 import { LoginFranchiseUseCase } from '../../application/use-cases/login-franchise.use-case';
+import { RefreshFranchiseSessionUseCase } from '../../application/use-cases/refresh-franchise-session.use-case';
 import { ForgotPasswordFranchiseUseCase } from '../../application/use-cases/forgot-password-franchise.use-case';
 import { VerifyResetOtpFranchiseUseCase } from '../../application/use-cases/verify-reset-otp-franchise.use-case';
 import { ResendResetOtpFranchiseUseCase } from '../../application/use-cases/resend-reset-otp-franchise.use-case';
@@ -27,6 +28,7 @@ export class FranchiseAuthController {
   constructor(
     private readonly registerFranchiseUseCase: RegisterFranchiseUseCase,
     private readonly loginFranchiseUseCase: LoginFranchiseUseCase,
+    private readonly refreshFranchiseSessionUseCase: RefreshFranchiseSessionUseCase,
     private readonly forgotPasswordFranchiseUseCase: ForgotPasswordFranchiseUseCase,
     private readonly verifyResetOtpFranchiseUseCase: VerifyResetOtpFranchiseUseCase,
     private readonly resendResetOtpFranchiseUseCase: ResendResetOtpFranchiseUseCase,
@@ -101,6 +103,41 @@ export class FranchiseAuthController {
         .catch(() => undefined);
       throw err;
     }
+  }
+
+  // Public route — authentication is implicit in the refresh token itself.
+  // Cap is higher than login because legitimate clients may burst on page
+  // load (multiple requests racing a freshly-expired access token); the
+  // single-flight refresh in the shared apiClient keeps actual call rate low.
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async refresh(
+    @Body() body: { refreshToken: string },
+    @Req() req: Request,
+  ) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+
+    const data = await this.refreshFranchiseSessionUseCase.execute({
+      refreshToken: body?.refreshToken,
+    });
+
+    this.accessLog
+      .record({
+        actorType: 'FRANCHISE',
+        actorId: data.franchisePartnerId,
+        kind: 'TOKEN_REFRESH',
+        ipAddress,
+        userAgent,
+      })
+      .catch(() => undefined);
+
+    return {
+      success: true,
+      message: 'Session refreshed',
+      data,
+    };
   }
 
   @Post('forgot-password')

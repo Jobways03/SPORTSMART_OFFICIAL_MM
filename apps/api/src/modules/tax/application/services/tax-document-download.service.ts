@@ -112,6 +112,10 @@ export class TaxDocumentDownloadService {
         status: true,
         customerId: true,
         sellerId: true,
+        // Franchise-fulfilled invoices are written with sellerId=null;
+        // the franchise lives on the linked SubOrder. We need this for
+        // the FRANCHISE-actor scope check (see scopeViolation below).
+        subOrderId: true,
       },
     });
     if (!doc) throw new PdfDocumentNotFoundError(args.documentId);
@@ -135,7 +139,7 @@ export class TaxDocumentDownloadService {
     }
 
     // 2. Scope guard.
-    const scopeReason = this.scopeViolation(doc, args.actor);
+    const scopeReason = await this.scopeViolation(doc, args.actor);
     if (scopeReason) {
       await this.writeAudit({
         documentId: doc.id,
@@ -214,20 +218,36 @@ export class TaxDocumentDownloadService {
 
   // ── Internals ───────────────────────────────────────────────────
 
-  private scopeViolation(
-    doc: { customerId: string; sellerId: string | null },
+  private async scopeViolation(
+    doc: { customerId: string; sellerId: string | null; subOrderId: string | null },
     actor: DownloadActor,
-  ): string | null {
+  ): Promise<string | null> {
     switch (actor.type) {
       case 'CUSTOMER':
         return doc.customerId === actor.id
           ? null
           : `Customer ${actor.id} cannot access invoice of customer ${doc.customerId}`;
       case 'SELLER':
-      case 'FRANCHISE':
         return doc.sellerId === actor.id
           ? null
-          : `${actor.type} ${actor.id} cannot access invoice with sellerId ${doc.sellerId ?? '(null)'}`;
+          : `SELLER ${actor.id} cannot access invoice with sellerId ${doc.sellerId ?? '(null)'}`;
+      case 'FRANCHISE': {
+        // Franchise-fulfilled invoices write sellerId=null and keep the
+        // franchise on the linked SubOrder. Accept either path so future
+        // backfills that populate sellerId for FRANCHISE supplier docs
+        // also work without a code change.
+        if (doc.sellerId === actor.id) return null;
+        if (!doc.subOrderId) {
+          return `FRANCHISE ${actor.id} cannot access invoice with sellerId ${doc.sellerId ?? '(null)'} (no subOrder link)`;
+        }
+        const subOrder = await this.prisma.subOrder.findUnique({
+          where: { id: doc.subOrderId },
+          select: { franchiseId: true },
+        });
+        return subOrder?.franchiseId === actor.id
+          ? null
+          : `FRANCHISE ${actor.id} cannot access invoice owned by franchise ${subOrder?.franchiseId ?? '(unset)'}`;
+      }
       case 'ADMIN':
       case 'SYSTEM':
         return null;

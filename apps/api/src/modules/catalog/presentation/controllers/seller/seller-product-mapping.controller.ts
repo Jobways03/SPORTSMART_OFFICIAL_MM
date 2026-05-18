@@ -304,6 +304,14 @@ export class SellerProductMappingController {
       categoryName: p.category?.name ?? null,
       brandName: p.brand?.name ?? null,
       primaryImageUrl: p.images?.[0]?.url ?? null,
+      // Tax data trio — surfaced so sellers can see HSN + GST rate per
+      // listing (the same values that get snapshotted into every order's
+      // OrderItemTaxSnapshot at checkout). Null/0 means the master-catalog
+      // hasn't filled it in yet — the admin moderation queue flags those
+      // as TAX_DATA_MISSING.
+      hsnCode: p.hsnCode ?? null,
+      gstRateBps: p.gstRateBps ?? 0,
+      defaultUqcCode: p.defaultUqcCode ?? null,
       mappings: p.sellerMappings.map((m: any) => ({
         id: m.id,
         variantId: m.variantId,

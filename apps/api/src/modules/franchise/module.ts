@@ -95,6 +95,7 @@ import { FranchiseStaffController } from './presentation/controllers/franchise-s
 // Auth use-cases
 import { RegisterFranchiseUseCase } from './application/use-cases/register-franchise.use-case';
 import { LoginFranchiseUseCase } from './application/use-cases/login-franchise.use-case';
+import { RefreshFranchiseSessionUseCase } from './application/use-cases/refresh-franchise-session.use-case';
 import { ForgotPasswordFranchiseUseCase } from './application/use-cases/forgot-password-franchise.use-case';
 import { VerifyResetOtpFranchiseUseCase } from './application/use-cases/verify-reset-otp-franchise.use-case';
 import { ResendResetOtpFranchiseUseCase } from './application/use-cases/resend-reset-otp-franchise.use-case';
@@ -193,6 +194,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     VariantSoftDeleteCleanupHandler,
     RegisterFranchiseUseCase,
     LoginFranchiseUseCase,
+    RefreshFranchiseSessionUseCase,
     ForgotPasswordFranchiseUseCase,
     VerifyResetOtpFranchiseUseCase,
     ResendResetOtpFranchiseUseCase,

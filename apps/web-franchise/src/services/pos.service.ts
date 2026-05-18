@@ -21,6 +21,16 @@ export interface PosSaleItem {
   unitPrice: number | string;
   lineDiscount: number | string;
   lineTotal: number | string;
+  // Phase 26 GST (POS) — per-item tax snapshot. Stored as Decimal on
+  // the backend so the wire format is `number | string`. Bills printed
+  // off a POS sale must show HSN + CGST/SGST/IGST per Section 31 CGST
+  // Act; these fields supply that data without a separate fetch.
+  hsnCode?: string | null;
+  gstRateBps?: number;
+  taxableAmount?: number | string;
+  cgstAmount?: number | string;
+  sgstAmount?: number | string;
+  igstAmount?: number | string;
   createdAt: string;
 }
 
@@ -34,6 +44,12 @@ export interface PosSale {
   grossAmount: number | string;
   discountAmount: number | string;
   taxAmount: number | string;
+  // Phase 26 GST (POS) — sale-level breakdown. POS sales are always
+  // intra-state today so cgst+sgst will be populated and igst=0.
+  cgstAmount?: number | string;
+  sgstAmount?: number | string;
+  igstAmount?: number | string;
+  placeOfSupplyState?: string | null;
   netAmount: number | string;
   paymentMethod: PosPaymentMethod | string;
   status: PosSaleStatus | string;

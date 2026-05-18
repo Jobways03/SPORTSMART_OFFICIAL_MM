@@ -19,6 +19,7 @@ import { AdminDeliveryMethodsService } from './application/services/admin-delive
 import { AdminLoginUseCase } from './application/use-cases/admin-login.use-case';
 import { AdminLogoutUseCase } from './application/use-cases/admin-logout.use-case';
 import { AdminGetMeUseCase } from './application/use-cases/admin-get-me.use-case';
+import { RefreshAdminSessionUseCase } from './application/use-cases/refresh-admin-session.use-case';
 import { AdminListSellersUseCase } from './application/use-cases/admin-list-sellers.use-case';
 import { AdminGetSellerUseCase } from './application/use-cases/admin-get-seller.use-case';
 import { AdminEditSellerUseCase } from './application/use-cases/admin-edit-seller.use-case';
@@ -79,6 +80,7 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     AdminLoginUseCase,
     AdminLogoutUseCase,
     AdminGetMeUseCase,
+    RefreshAdminSessionUseCase,
     AdminListSellersUseCase,
     AdminGetSellerUseCase,
     AdminEditSellerUseCase,

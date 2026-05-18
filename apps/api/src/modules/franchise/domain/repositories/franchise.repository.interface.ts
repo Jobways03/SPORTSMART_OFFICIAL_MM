@@ -69,6 +69,27 @@ export interface FranchisePartnerRepository {
   /** Revoke all active sessions for a franchise partner. */
   revokeAllSessions(franchisePartnerId: string): Promise<void>;
 
+  /**
+   * Look up a session by the RAW refresh token. Returns null on miss.
+   * Caller checks `revokedAt` / `expiresAt` themselves.
+   */
+  findSessionByRefreshToken(rawToken: string): Promise<{
+    id: string;
+    franchisePartnerId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+  } | null>;
+
+  /**
+   * Rotate the refresh token on an existing session (and bump expiresAt).
+   * Caller passes the new RAW token; impl hashes it before persist.
+   */
+  rotateSession(
+    sessionId: string,
+    newRawRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<void>;
+
   // ── OTP operations ──────────────────────────────────────────
 
   /** Find the most recent OTP matching the given criteria. */

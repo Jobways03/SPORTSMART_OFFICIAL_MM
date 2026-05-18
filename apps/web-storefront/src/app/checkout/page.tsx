@@ -1358,6 +1358,15 @@ export default function CheckoutPage() {
                   <span className="tabular">-{formatPrice(walletApplyAmount)}</span>
                 </div>
               )}
+              {/* Phase 26 GST — make it explicit that prices are
+                  inclusive so the customer isn't surprised by tax at
+                  the total. The per-line CGST/SGST/IGST breakdown is
+                  surfaced post-placement on the order detail page and
+                  in the downloadable invoice. */}
+              <div className="flex justify-between text-ink-500 text-caption">
+                <span>GST</span>
+                <span>Included in price</span>
+              </div>
             </div>
 
             <div className="flex justify-between items-baseline pt-4 mb-5">

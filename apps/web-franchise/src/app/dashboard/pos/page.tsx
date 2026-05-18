@@ -890,6 +890,49 @@ if (cart.length === 0) {
             <p style={{ fontSize: 22, fontWeight: 700, marginTop: 16 }}>
               {formatInr(successSale.netAmount)}
             </p>
+            {/* GST breakdown on the confirmation modal — the staff
+                shows this screen to the customer or prints it. CGST
+                Act §31 requires the breakdown to be visible. */}
+            {toNumber(successSale.taxAmount) > 0 && (
+              <div
+                style={{
+                  margin: '16px auto 0',
+                  maxWidth: 280,
+                  padding: 12,
+                  background: '#f9fafb',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ color: '#6b7280' }}>Taxable value</span>
+                  <span>{formatInr(toNumber(successSale.netAmount) - toNumber(successSale.taxAmount))}</span>
+                </div>
+                {toNumber(successSale.cgstAmount) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ color: '#6b7280' }}>CGST</span>
+                    <span>{formatInr(successSale.cgstAmount)}</span>
+                  </div>
+                )}
+                {toNumber(successSale.sgstAmount) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ color: '#6b7280' }}>SGST</span>
+                    <span>{formatInr(successSale.sgstAmount)}</span>
+                  </div>
+                )}
+                {toNumber(successSale.igstAmount) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ color: '#6b7280' }}>IGST</span>
+                    <span>{formatInr(successSale.igstAmount)}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, paddingTop: 6, borderTop: '1px solid #e5e7eb' }}>
+                  <span>Total GST</span>
+                  <span>{formatInr(successSale.taxAmount)}</span>
+                </div>
+              </div>
+            )}
             <div
               style={{
                 display: 'flex',
@@ -1607,36 +1650,55 @@ function ViewSaleModal({
           <thead>
             <tr>
               <th style={thStyle}>Product</th>
+              <th style={thStyle}>HSN</th>
               <th style={thStyle}>SKU</th>
               <th style={thStyle}>Qty</th>
               <th style={thStyle}>Unit Price</th>
               <th style={thStyle}>Discount</th>
+              <th style={thStyle}>Taxable</th>
+              <th style={thStyle}>GST</th>
               <th style={thStyle}>Total</th>
             </tr>
           </thead>
           <tbody>
-            {(sale.items ?? []).map((item) => (
-              <tr
-                key={item.id}
-                style={{ borderTop: '1px solid #f3f4f6' }}
-              >
-                <td style={tdStyle}>
-                  {item.productTitle}
-                  {item.variantTitle && (
-                    <div style={{ fontSize: 11, color: '#6b7280' }}>
-                      {item.variantTitle}
-                    </div>
-                  )}
-                </td>
-                <td style={tdStyle}>{item.globalSku}</td>
-                <td style={tdStyle}>{item.quantity}</td>
-                <td style={tdStyle}>{formatInr(item.unitPrice)}</td>
-                <td style={tdStyle}>{formatInr(item.lineDiscount)}</td>
-                <td style={tdStyle}>
-                  <strong>{formatInr(item.lineTotal)}</strong>
-                </td>
-              </tr>
-            ))}
+            {(sale.items ?? []).map((item) => {
+              const rate = (item.gstRateBps ?? 0) / 100;
+              const cgst = toNumber(item.cgstAmount);
+              const sgst = toNumber(item.sgstAmount);
+              const igst = toNumber(item.igstAmount);
+              const totalTax = cgst + sgst + igst;
+              return (
+                <tr key={item.id} style={{ borderTop: '1px solid #f3f4f6' }}>
+                  <td style={tdStyle}>
+                    {item.productTitle}
+                    {item.variantTitle && (
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>
+                        {item.variantTitle}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 12 }}>
+                    {item.hsnCode ?? <span style={{ color: '#9ca3af' }}>—</span>}
+                  </td>
+                  <td style={tdStyle}>{item.globalSku}</td>
+                  <td style={tdStyle}>{item.quantity}</td>
+                  <td style={tdStyle}>{formatInr(item.unitPrice)}</td>
+                  <td style={tdStyle}>{formatInr(item.lineDiscount)}</td>
+                  <td style={tdStyle}>{formatInr(item.taxableAmount ?? 0)}</td>
+                  <td style={tdStyle}>
+                    <div style={{ fontSize: 12 }}>{rate > 0 ? `${rate}%` : '—'}</div>
+                    {totalTax > 0 && (
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>
+                        {formatInr(totalTax)}
+                      </div>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    <strong>{formatInr(item.lineTotal)}</strong>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1645,33 +1707,31 @@ function ViewSaleModal({
         style={{
           borderTop: '1px solid #e5e7eb',
           paddingTop: 12,
-          maxWidth: 280,
+          maxWidth: 320,
           marginLeft: 'auto',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            fontSize: 13,
-            marginBottom: 4,
-          }}
-        >
-          <span>Gross</span>
-          <span>{formatInr(sale.grossAmount)}</span>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            fontSize: 13,
-            color: '#6b7280',
-            marginBottom: 4,
-          }}
-        >
-          <span>Discount</span>
-          <span>− {formatInr(sale.discountAmount)}</span>
-        </div>
+        <Totals label="Gross" value={formatInr(sale.grossAmount)} />
+        {toNumber(sale.discountAmount) > 0 && (
+          <Totals label="Discount" value={`− ${formatInr(sale.discountAmount)}`} muted />
+        )}
+        {/* Phase 26 GST (POS) — Section 31 CGST Act requires every tax
+            invoice to display the breakdown. We show taxable + CGST/SGST/
+            IGST (only when non-zero) above the net. POS sales are
+            inclusive-priced — the net already contains the tax. */}
+        <Totals label="Taxable value" value={formatInr(toNumber(sale.netAmount) - toNumber(sale.taxAmount))} />
+        {toNumber(sale.cgstAmount) > 0 && (
+          <Totals label="CGST" value={formatInr(sale.cgstAmount)} />
+        )}
+        {toNumber(sale.sgstAmount) > 0 && (
+          <Totals label="SGST" value={formatInr(sale.sgstAmount)} />
+        )}
+        {toNumber(sale.igstAmount) > 0 && (
+          <Totals label="IGST" value={formatInr(sale.igstAmount)} />
+        )}
+        {toNumber(sale.taxAmount) > 0 && (
+          <Totals label="Total GST" value={formatInr(sale.taxAmount)} bold />
+        )}
         <div
           style={{
             display: 'flex',
@@ -1679,12 +1739,18 @@ function ViewSaleModal({
             fontSize: 16,
             fontWeight: 700,
             paddingTop: 6,
+            marginTop: 4,
             borderTop: '1px solid #f3f4f6',
           }}
         >
-          <span>Net</span>
+          <span>Net payable</span>
           <span>{formatInr(sale.netAmount)}</span>
         </div>
+        {sale.placeOfSupplyState && (
+          <div style={{ fontSize: 10, color: '#6b7280', textAlign: 'right', marginTop: 4 }}>
+            Place of supply: state code {sale.placeOfSupplyState}
+          </div>
+        )}
       </div>
 
       {sale.voidReason && (
@@ -2083,6 +2149,36 @@ function KpiCard({
       >
         {value}
       </div>
+    </div>
+  );
+}
+
+// One row of the totals strip shown on the ViewSaleModal. Keeps the
+// JSX above readable by hiding the inline-style boilerplate.
+function Totals({
+  label,
+  value,
+  muted,
+  bold,
+}: {
+  label: string;
+  value: string;
+  muted?: boolean;
+  bold?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        fontSize: 13,
+        marginBottom: 4,
+        color: muted ? '#6b7280' : '#111827',
+        fontWeight: bold ? 600 : 400,
+      }}
+    >
+      <span>{label}</span>
+      <span>{value}</span>
     </div>
   );
 }

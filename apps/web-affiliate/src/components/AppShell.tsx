@@ -19,6 +19,7 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard/coupons', label: 'Coupons & Links' },
   { href: '/dashboard/kyc', label: 'KYC' },
   { href: '/dashboard/payouts', label: 'Payouts' },
+  { href: '/dashboard/tds', label: 'TDS' },
   { href: '/dashboard/profile', label: 'Profile' },
   { href: '/dashboard/support', label: 'Support' },
 ];

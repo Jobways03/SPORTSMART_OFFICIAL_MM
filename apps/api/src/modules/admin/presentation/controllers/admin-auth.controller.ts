@@ -15,6 +15,7 @@ import { AdminLoginDto } from '../dtos/admin-login.dto';
 import { AdminLoginUseCase } from '../../application/use-cases/admin-login.use-case';
 import { AdminLogoutUseCase } from '../../application/use-cases/admin-logout.use-case';
 import { AdminGetMeUseCase } from '../../application/use-cases/admin-get-me.use-case';
+import { RefreshAdminSessionUseCase } from '../../application/use-cases/refresh-admin-session.use-case';
 import { ForgotAdminPasswordUseCase } from '../../application/use-cases/forgot-admin-password.use-case';
 import { VerifyAdminResetOtpUseCase } from '../../application/use-cases/verify-admin-reset-otp.use-case';
 import { ResendAdminResetOtpUseCase } from '../../application/use-cases/resend-admin-reset-otp.use-case';
@@ -29,6 +30,7 @@ export class AdminAuthController {
     private readonly loginUseCase: AdminLoginUseCase,
     private readonly logoutUseCase: AdminLogoutUseCase,
     private readonly getMeUseCase: AdminGetMeUseCase,
+    private readonly refreshSessionUseCase: RefreshAdminSessionUseCase,
     private readonly forgotPasswordUseCase: ForgotAdminPasswordUseCase,
     private readonly verifyResetOtpUseCase: VerifyAdminResetOtpUseCase,
     private readonly resendResetOtpUseCase: ResendAdminResetOtpUseCase,
@@ -87,6 +89,41 @@ export class AdminAuthController {
         .catch(() => undefined);
       throw err;
     }
+  }
+
+  // Public route — the access token is already expired by the time the
+  // client hits this. Authentication is implicit: only a valid refresh
+  // token whose session row is alive can produce a new access token.
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async refresh(
+    @Body() body: { refreshToken: string },
+    @Req() req: Request,
+  ) {
+    const ipAddress = req.ip;
+    const userAgent = req.headers['user-agent'];
+
+    const data = await this.refreshSessionUseCase.execute({
+      refreshToken: body?.refreshToken,
+    });
+
+    this.accessLog
+      .record({
+        actorType: 'ADMIN',
+        actorId: data.adminId,
+        actorRole: data.role,
+        kind: 'TOKEN_REFRESH',
+        ipAddress,
+        userAgent,
+      })
+      .catch(() => undefined);
+
+    return {
+      success: true,
+      message: 'Session refreshed',
+      data,
+    };
   }
 
   @Post('logout')

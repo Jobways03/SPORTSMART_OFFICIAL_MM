@@ -61,6 +61,32 @@ export class PrismaAdminRepository implements AdminRepository {
     });
   }
 
+  async findAdminSessionByRefreshToken(rawToken: string): Promise<{
+    id: string;
+    adminId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+  } | null> {
+    return this.prisma.adminSession.findFirst({
+      where: { refreshToken: hashRefreshToken(rawToken) },
+      select: { id: true, adminId: true, expiresAt: true, revokedAt: true },
+    });
+  }
+
+  async rotateAdminSession(
+    sessionId: string,
+    newRawRefreshToken: string,
+    newExpiresAt: Date,
+  ): Promise<void> {
+    await this.prisma.adminSession.update({
+      where: { id: sessionId },
+      data: {
+        refreshToken: hashRefreshToken(newRawRefreshToken),
+        expiresAt: newExpiresAt,
+      },
+    });
+  }
+
   // PR 10.10 — step-up auth. Stamp the session as freshly step-up-
   // verified so subsequent destructive-route requests in the
   // configured window pass the @RequiresStepUp guard. The `data`

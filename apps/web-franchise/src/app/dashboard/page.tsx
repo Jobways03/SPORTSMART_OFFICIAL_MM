@@ -80,7 +80,7 @@ export default function DashboardHomePage() {
       const [inv, orders, proc, earn] = await Promise.all([
         settle(franchiseInventoryService.listStock({ page: 1, limit: 1 })),
         settle(franchiseOrdersService.list({ page: 1, limit: 1, acceptStatus: 'OPEN' })),
-        settle(franchiseProcurementService.list({ page: 1, limit: 1, status: 'PENDING' })),
+        settle(franchiseProcurementService.list({ page: 1, limit: 1, status: 'SUBMITTED' })),
         settle(franchiseEarningsService.getSummary()),
       ]);
 

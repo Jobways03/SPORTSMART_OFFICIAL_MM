@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SellerPublicFacade } from './application/facades/seller-public.facade';
 import { RegisterSellerUseCase } from './application/use-cases/register-seller.use-case';
 import { LoginSellerUseCase } from './application/use-cases/login-seller.use-case';
+import { RefreshSellerSessionUseCase } from './application/use-cases/refresh-seller-session.use-case';
 import { ForgotPasswordSellerUseCase } from './application/use-cases/forgot-password-seller.use-case';
 import { VerifyResetOtpSellerUseCase } from './application/use-cases/verify-reset-otp-seller.use-case';
 import { ResendResetOtpSellerUseCase } from './application/use-cases/resend-reset-otp-seller.use-case';
@@ -22,6 +23,7 @@ import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adap
 import { SellerAuthGuard, AdminAuthGuard, PermissionsGuard } from '../../core/guards';
 import { SellerRegisterController } from './presentation/controllers/seller-register.controller';
 import { SellerLoginController } from './presentation/controllers/seller-login.controller';
+import { SellerRefreshController } from './presentation/controllers/seller-refresh.controller';
 import { SellerLogoutController } from './presentation/controllers/seller-logout.controller';
 import { SellerForgotPasswordController } from './presentation/controllers/seller-forgot-password.controller';
 import { SellerResetPasswordController } from './presentation/controllers/seller-reset-password.controller';
@@ -41,6 +43,7 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
   controllers: [
     SellerRegisterController,
     SellerLoginController,
+    SellerRefreshController,
     SellerLogoutController,
     SellerForgotPasswordController,
     SellerResetPasswordController,
@@ -61,6 +64,7 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
     SellerPublicFacade,
     RegisterSellerUseCase,
     LoginSellerUseCase,
+    RefreshSellerSessionUseCase,
     LogoutSellerUseCase,
     ForgotPasswordSellerUseCase,
     VerifyResetOtpSellerUseCase,

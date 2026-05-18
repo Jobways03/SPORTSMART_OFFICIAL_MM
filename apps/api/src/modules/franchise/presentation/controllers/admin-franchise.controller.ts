@@ -16,6 +16,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AdminListFranchisesUseCase } from '../../application/use-cases/admin-list-franchises.use-case';
 import { AdminGetFranchiseUseCase } from '../../application/use-cases/admin-get-franchise.use-case';
 import { AdminUpdateFranchiseStatusUseCase } from '../../application/use-cases/admin-update-franchise-status.use-case';
@@ -48,7 +49,120 @@ export class AdminFranchiseController {
     private readonly adminChangeFranchisePasswordUseCase: AdminChangeFranchisePasswordUseCase,
     private readonly adminImpersonateFranchiseUseCase: AdminImpersonateFranchiseUseCase,
     private readonly adminDeleteFranchiseUseCase: AdminDeleteFranchiseUseCase,
+    private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Per-franchise tax oversight — surfaces GSTIN + state code (collected
+   * on the franchise profile) alongside aggregated tax document totals
+   * and the 10 most recent documents. Powers the "Tax" section on the
+   * franchise detail page in web-franchise-admin.
+   *
+   * Like the franchise-self list endpoint, the filter hops via
+   * `subOrder.franchiseId` because franchise tax docs are written with
+   * `sellerId=null` today.
+   */
+  @Get(':franchiseId/tax-summary')
+  async taxSummary(@Param('franchiseId') franchiseId: string) {
+    const franchise = await this.prisma.franchisePartner.findUnique({
+      where: { id: franchiseId },
+      select: {
+        id: true,
+        gstNumber: true,
+        panNumber: true,
+        state: true,
+        businessName: true,
+        franchiseCode: true,
+      },
+    });
+    if (!franchise) {
+      return {
+        success: false,
+        message: 'Franchise not found',
+        data: null,
+      };
+    }
+
+    const subOrders = await this.prisma.subOrder.findMany({
+      where: { franchiseId },
+      select: { id: true },
+    });
+    const subOrderIds = subOrders.map((s) => s.id);
+
+    const where: any = {
+      OR: [
+        { sellerId: franchiseId },
+        { subOrderId: { in: subOrderIds } },
+      ],
+      status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+    };
+
+    const [agg, recent, count] = await Promise.all([
+      this.prisma.taxDocument.aggregate({
+        where,
+        _sum: {
+          taxableAmountInPaise: true,
+          cgstAmountInPaise: true,
+          sgstAmountInPaise: true,
+          igstAmountInPaise: true,
+          totalTaxAmountInPaise: true,
+          documentTotalInPaise: true,
+        },
+      }),
+      this.prisma.taxDocument.findMany({
+        where,
+        select: {
+          id: true,
+          documentNumber: true,
+          documentType: true,
+          financialYear: true,
+          generatedAt: true,
+          status: true,
+          documentTotalInPaise: true,
+          totalTaxAmountInPaise: true,
+          buyerLegalName: true,
+        },
+        orderBy: { generatedAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.taxDocument.count({ where }),
+    ]);
+
+    return {
+      success: true,
+      message: 'Franchise tax summary fetched',
+      data: {
+        franchise: {
+          id: franchise.id,
+          franchiseCode: franchise.franchiseCode,
+          businessName: franchise.businessName,
+          gstNumber: franchise.gstNumber,
+          panNumber: franchise.panNumber,
+          state: franchise.state,
+        },
+        totals: {
+          documentCount: count,
+          taxableAmountInPaise: agg._sum.taxableAmountInPaise?.toString() ?? '0',
+          cgstAmountInPaise: agg._sum.cgstAmountInPaise?.toString() ?? '0',
+          sgstAmountInPaise: agg._sum.sgstAmountInPaise?.toString() ?? '0',
+          igstAmountInPaise: agg._sum.igstAmountInPaise?.toString() ?? '0',
+          totalTaxAmountInPaise: agg._sum.totalTaxAmountInPaise?.toString() ?? '0',
+          documentTotalInPaise: agg._sum.documentTotalInPaise?.toString() ?? '0',
+        },
+        recentDocuments: recent.map((d) => ({
+          id: d.id,
+          documentNumber: d.documentNumber,
+          documentType: d.documentType,
+          financialYear: d.financialYear,
+          generatedAt: d.generatedAt,
+          status: d.status,
+          documentTotalInPaise: d.documentTotalInPaise?.toString() ?? '0',
+          totalTaxAmountInPaise: d.totalTaxAmountInPaise?.toString() ?? '0',
+          buyerLegalName: d.buyerLegalName,
+        })),
+      },
+    };
+  }
 
   @Get()
   async listFranchises(

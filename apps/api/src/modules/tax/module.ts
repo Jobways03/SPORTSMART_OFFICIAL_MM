@@ -46,6 +46,7 @@ import { TaxCompatibilityService } from './application/services/tax-compatibilit
 import { TaxPublicFacade } from './application/facades/tax-public.facade';
 import { CustomerTaxDocumentsController } from './presentation/controllers/customer-tax-documents.controller';
 import { SellerTaxDocumentsController } from './presentation/controllers/seller-tax-documents.controller';
+import { FranchiseTaxDocumentsController } from './presentation/controllers/franchise-tax-documents.controller';
 import { AdminTaxReportsController } from './presentation/controllers/admin-tax-reports.controller';
 import { AdminTaxOperationsController } from './presentation/controllers/admin-tax-operations.controller';
 import { TaxCreditNoteTimeBarCron } from './application/jobs/tax-credit-note-timebar.cron';
@@ -142,6 +143,7 @@ const taxPdfStorageProvider = {
   controllers: [
     CustomerTaxDocumentsController,
     SellerTaxDocumentsController,
+    FranchiseTaxDocumentsController,
     AdminTaxReportsController,
     AdminTaxOperationsController,
   ],

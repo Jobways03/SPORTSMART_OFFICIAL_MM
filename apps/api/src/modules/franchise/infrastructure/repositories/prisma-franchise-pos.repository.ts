@@ -99,6 +99,10 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
     grossAmount: number;
     discountAmount: number;
     taxAmount: number;
+    cgstAmount?: number;
+    sgstAmount?: number;
+    igstAmount?: number;
+    placeOfSupplyState?: string | null;
     netAmount: number;
     paymentMethod: string;
     createdByStaffId?: string;
@@ -113,6 +117,12 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
       unitPrice: number;
       lineDiscount: number;
       lineTotal: number;
+      hsnCode?: string | null;
+      gstRateBps?: number;
+      taxableAmount?: number;
+      cgstAmount?: number;
+      sgstAmount?: number;
+      igstAmount?: number;
     }>;
   }): Promise<any> {
     const { items, ...saleData } = data;
@@ -133,6 +143,13 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
             unitPrice: item.unitPrice,
             lineDiscount: item.lineDiscount,
             lineTotal: item.lineTotal,
+            // Phase 26 GST (POS) — per-item tax snapshot.
+            hsnCode: item.hsnCode ?? null,
+            gstRateBps: item.gstRateBps ?? 0,
+            taxableAmount: item.taxableAmount ?? 0,
+            cgstAmount: item.cgstAmount ?? 0,
+            sgstAmount: item.sgstAmount ?? 0,
+            igstAmount: item.igstAmount ?? 0,
           })),
         },
       },

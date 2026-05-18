@@ -640,6 +640,19 @@ export default function ProcurementDetailPage() {
                 <span className="procurement-info-value">{formatCurrency(request.finalPayableAmount)}</span>
               </div>
             </div>
+            {/* Phase 26 GST — context note for seller-admin oversight.
+                Per-line tax for procurement isn't snapshotted in the
+                procurement_request_items table; the tax invoice issued
+                to the franchise post-dispatch carries the CGST/SGST
+                split. The Super Admin tax dashboard shows aggregate
+                figures across all franchise procurement invoices. */}
+            <div style={{ marginTop: 16, padding: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, fontSize: 12, color: '#1e3a8a' }}>
+              <strong>GST:</strong> Unit costs are GST-inclusive. The legal
+              tax invoice (with CGST/SGST/IGST breakdown) is generated on
+              dispatch and lives in the platform&apos;s tax-documents store.
+              Per-line tax snapshots aren&apos;t persisted on procurement
+              items today — that&apos;s a separate work item.
+            </div>
           </div>
         </div>
       </div>

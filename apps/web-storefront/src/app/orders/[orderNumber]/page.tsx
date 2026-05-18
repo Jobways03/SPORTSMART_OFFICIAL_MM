@@ -619,6 +619,59 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
         )}
 
+        {/* Phase 26 GST — per-order tax breakdown. Renders only when
+            the order has a non-zero tax snapshot (Phase B allocation
+            ran). Customers see CGST/SGST/IGST without needing to
+            download the PDF — the inclusive-price model means there
+            are no surprises here, this is purely informational. */}
+        {order.taxSummary && Number(order.taxSummary.totalTaxInPaise) > 0 && (
+          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#111827' }}>
+              GST Breakdown
+            </h3>
+            <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 12px' }}>
+              GST is included in the prices shown. The breakdown is
+              snapshotted from the tax engine at order time.
+            </p>
+            <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 16, rowGap: 6, margin: 0, fontSize: 14 }}>
+              <dt style={{ color: '#6b7280' }}>Taxable value</dt>
+              <dd style={{ textAlign: 'right', margin: 0 }}>
+                ₹{(Number(order.taxSummary.taxableInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </dd>
+              {Number(order.taxSummary.cgstInPaise) > 0 && (
+                <>
+                  <dt style={{ color: '#6b7280' }}>CGST</dt>
+                  <dd style={{ textAlign: 'right', margin: 0 }}>
+                    ₹{(Number(order.taxSummary.cgstInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+                </>
+              )}
+              {Number(order.taxSummary.sgstInPaise) > 0 && (
+                <>
+                  <dt style={{ color: '#6b7280' }}>SGST</dt>
+                  <dd style={{ textAlign: 'right', margin: 0 }}>
+                    ₹{(Number(order.taxSummary.sgstInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+                </>
+              )}
+              {Number(order.taxSummary.igstInPaise) > 0 && (
+                <>
+                  <dt style={{ color: '#6b7280' }}>IGST</dt>
+                  <dd style={{ textAlign: 'right', margin: 0 }}>
+                    ₹{(Number(order.taxSummary.igstInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+                </>
+              )}
+              <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#111827', fontWeight: 600 }}>
+                Total GST
+              </dt>
+              <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0, fontWeight: 600 }}>
+                ₹{(Number(order.taxSummary.totalTaxInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </dd>
+            </dl>
+          </div>
+        )}
+
         {/* Phase 25 — Tax invoice download (Phase 19 PDF + Phase 20 signed URL).
             Self-contained card that lists every tax_documents row for this
             masterOrderId; renders a Download button per row that opens the

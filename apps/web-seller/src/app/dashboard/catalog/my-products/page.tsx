@@ -34,6 +34,13 @@ interface MappedProduct {
   productCode: string;
   title: string;
   primaryImageUrl: string | null;
+  // Tax data trio surfaced from the master catalog. Null/0 means the
+  // master record hasn't been filled in — admin moderation flags those
+  // as TAX_DATA_MISSING and your invoices will fall back to the catalog
+  // default (currently 0%/HSN-unknown) until they're corrected.
+  hsnCode?: string | null;
+  gstRateBps?: number;
+  defaultUqcCode?: string | null;
   mappings: MappingRow[];
 }
 
@@ -515,6 +522,35 @@ export default function MyProductsPage() {
                           )}
                           <div className="product-name-text">
                             <span className="product-name-primary">{product.title}</span>
+                            {/* Tax metadata chips — surfaced so sellers can spot listings
+                                with missing HSN / GST rate without drilling into each
+                                product. These are the values your invoices will use; if
+                                "HSN missing" shows, admin moderation will flag the listing. */}
+                            <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {product.hsnCode ? (
+                                <span style={{ display: 'inline-block', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#eef2ff', color: '#3730a3', fontFamily: 'monospace' }}>
+                                  HSN {product.hsnCode}
+                                </span>
+                              ) : (
+                                <span title="Master catalog has no HSN code yet — invoices will default to UNKNOWN. Admin moderation flags these." style={{ display: 'inline-block', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#fef3c7', color: '#92400e' }}>
+                                  HSN missing
+                                </span>
+                              )}
+                              {(product.gstRateBps ?? 0) > 0 ? (
+                                <span style={{ display: 'inline-block', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#ecfdf5', color: '#065f46' }}>
+                                  GST {((product.gstRateBps ?? 0) / 100).toFixed(0)}%
+                                </span>
+                              ) : (
+                                <span title="GST rate not set — invoices will default to 0%. Admin moderation flags these." style={{ display: 'inline-block', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#fef3c7', color: '#92400e' }}>
+                                  GST 0%
+                                </span>
+                              )}
+                              {product.defaultUqcCode && (
+                                <span title="Unit Quantity Code — GSTR-1 unit-of-measure (NOS=numbers, PRS=pairs, KGS=kilograms, MTR=metres)." style={{ display: 'inline-block', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 4, background: '#f3f4f6', color: '#374151', fontFamily: 'monospace' }}>
+                                  {product.defaultUqcCode}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>

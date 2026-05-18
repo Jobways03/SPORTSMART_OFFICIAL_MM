@@ -59,17 +59,35 @@ export class ApproveSellerUseCase {
       );
     }
 
+    // Phase 26 GST — policy change (2026-05-18): GSTIN + PAN are both
+    // mandatory before activation. Sellers cannot go live without them
+    // — the platform issues GST-compliant tax invoices on their behalf
+    // and needs both fields populated. PAN was already always required
+    // (TDS 194-O); this adds the equivalent GSTIN guard.
+    if (!(seller as any).gstin) {
+      throw new BadRequestAppException(
+        'Cannot approve a seller without a GSTIN. Ask the seller to submit GSTIN via onboarding before approval.',
+      );
+    }
+    if (!(seller as any).panNumber) {
+      throw new BadRequestAppException(
+        'Cannot approve a seller without a PAN. PAN is required for TDS reporting (Section 194-O).',
+      );
+    }
+
     const now = new Date();
     const updated = await this.sellerRepo.updateSellerSelect(
       sellerId,
       {
         status: 'ACTIVE',
         verificationStatus: 'VERIFIED',
-        isGstVerified: !!(seller as any).gstin,
-        gstVerifiedAt: (seller as any).gstin ? now : null,
-        gstVerifiedBy: (seller as any).gstin ? adminId : null,
+        // GSTIN + PAN now mandatory by the guards above, so both
+        // verification flags always flip to true on approval.
+        isGstVerified: true,
+        gstVerifiedAt: now,
+        gstVerifiedBy: adminId,
         gstVerificationNotes: notes ?? null,
-        panVerified: !!(seller as any).panNumber,
+        panVerified: true,
       },
       { id: true, status: true, verificationStatus: true },
     );

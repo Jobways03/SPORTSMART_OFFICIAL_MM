@@ -697,6 +697,22 @@ const router = useRouter();
                 highlight
               />
             </div>
+
+            {/* Phase 26 GST — context note. Per-line CGST/SGST/IGST for
+                procurement isn't snapshotted into the procurement_request_items
+                table yet (different from POS / orders, which do snapshot per
+                line). The legal tax invoice for this procurement is issued
+                separately by the admin and lives in the Tax Invoices page. */}
+            <div style={{ marginTop: 16, padding: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, fontSize: 12, color: '#1e3a8a' }}>
+              <strong>GST:</strong> Unit costs above are GST-inclusive.
+              The CGST/SGST/IGST breakdown for this procurement appears on
+              the tax invoice issued by SportSmart — find it in{' '}
+              <a href="/dashboard/tax/invoices" style={{ color: '#1d4ed8', fontWeight: 600, textDecoration: 'underline' }}>
+                Tax Invoices
+              </a>{' '}
+              once the procurement is dispatched. Share that invoice with
+              your CA for input-tax-credit claims.
+            </div>
           </div>
 
           {/* Notes */}
