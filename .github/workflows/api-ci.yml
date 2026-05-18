@@ -70,7 +70,7 @@ jobs:
       # main coverage we lean on Dependabot's daily scan instead.
       - name: Dependency review (PR diff)
         if: github.event_name == 'pull_request'
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
