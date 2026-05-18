@@ -819,4 +819,161 @@ export class SettlementService {
       orderBy: { createdAt: 'asc' },
     });
   }
+
+  /**
+   * Phase 3.5 (2026-05-16) — Tally / accounting-package CSV export.
+   *
+   * Generates a CSV in the format Tally Prime expects for the "Import
+   * Vouchers" workflow. One row per SellerSettlement in the cycle.
+   * Columns:
+   *   - Voucher Date         (cycle.periodEnd in DD/MM/YYYY)
+   *   - Voucher No           (auto: SM/<cycleId-short>/<index>)
+   *   - Voucher Type         (always "Payment" — Tally's standard for
+   *                          marketplace-to-seller settlements)
+   *   - Particulars (DR)     (the seller's name — Tally maps this to
+   *                          their pre-created ledger account)
+   *   - Particulars (CR)     ("SportSmart Bank" — our payout bank ledger)
+   *   - Amount               (Rupees with 2 decimal places)
+   *   - Narration            (seller-readable description with cycle
+   *                          + period + commission summary)
+   *
+   * The exported file is what finance hands to their book-keeper for
+   * monthly close. Once Tally / QuickBooks / Zoho all accept the same
+   * shape (with minor header tweaks), this becomes the single source
+   * for any accounting-package export. Future task: refactor into a
+   * pluggable formatter (`TallyAccountingExporter`,
+   * `QuickBooksAccountingExporter`) once we have a second consumer.
+   */
+  async exportCycleToTallyCsv(cycleId: string): Promise<string> {
+    const cycle = await this.prisma.settlementCycle.findUnique({
+      where: { id: cycleId },
+      include: {
+        sellerSettlements: {
+          include: {
+            seller: { select: { sellerShopName: true, sellerName: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+    if (!cycle) throw new Error(`SettlementCycle ${cycleId} not found`);
+
+    const dateStr = formatDDMMYYYY(cycle.periodEnd ?? new Date());
+    const cycleShort = cycle.id.slice(0, 8).toUpperCase();
+    const periodStr =
+      cycle.periodStart && cycle.periodEnd
+        ? `${formatDDMMYYYY(cycle.periodStart)} to ${formatDDMMYYYY(cycle.periodEnd)}`
+        : 'unknown period';
+
+    const rows = cycle.sellerSettlements.map((s, idx) => {
+      const sellerLabel =
+        s.seller?.sellerShopName?.trim() ||
+        s.seller?.sellerName?.trim() ||
+        `Seller ${s.sellerId.slice(0, 8)}`;
+      const amount = Number(s.totalSettlementAmount).toFixed(2);
+      const margin = Number(s.totalPlatformMargin ?? 0).toFixed(2);
+      const narration =
+        `Settlement ${cycleShort} for ${sellerLabel} — ` +
+        `${periodStr}, items=${s.totalItems ?? 0}, ` +
+        `platform margin Rs ${margin}`;
+      const voucherNo = `SM/${cycleShort}/${(idx + 1).toString().padStart(4, '0')}`;
+      // CSV quoting: wrap any field containing comma / quote / newline.
+      return [
+        dateStr,
+        voucherNo,
+        'Payment',
+        csvQuote(sellerLabel),
+        '"SportSmart Bank"',
+        amount,
+        csvQuote(narration),
+      ].join(',');
+    });
+
+    const header =
+      'Voucher Date,Voucher No,Voucher Type,Particulars (DR),Particulars (CR),Amount,Narration';
+    return [header, ...rows].join('\n');
+  }
+
+  /**
+   * Phase 3.5 — opening / closing balance per seller for a cycle.
+   *
+   * Opening balance = sum of every PAID settlement amount for this
+   * seller BEFORE the cycle start. Closing balance = opening + this
+   * cycle's settlement. Used by finance for monthly close
+   * reconciliation alongside the Tally CSV export.
+   *
+   * Read-only — no writes, no side effects.
+   */
+  async computeOpeningClosingBalance(
+    cycleId: string,
+  ): Promise<
+    Array<{
+      sellerId: string;
+      sellerName: string;
+      openingBalanceInPaise: string;
+      cycleAmountInPaise: string;
+      closingBalanceInPaise: string;
+    }>
+  > {
+    const cycle = await this.prisma.settlementCycle.findUnique({
+      where: { id: cycleId },
+      include: {
+        sellerSettlements: {
+          include: { seller: { select: { sellerShopName: true } } },
+        },
+      },
+    });
+    if (!cycle || !cycle.periodStart) {
+      throw new Error(`SettlementCycle ${cycleId} not found or has no periodStart`);
+    }
+    const out: Array<{
+      sellerId: string;
+      sellerName: string;
+      openingBalanceInPaise: string;
+      cycleAmountInPaise: string;
+      closingBalanceInPaise: string;
+    }> = [];
+
+    for (const s of cycle.sellerSettlements) {
+      // Sum every PAID settlement (paise sibling) for this seller
+      // BEFORE the cycle start.
+      const prior = await this.prisma.sellerSettlement.findMany({
+        where: {
+          sellerId: s.sellerId,
+          status: 'PAID',
+          createdAt: { lt: cycle.periodStart },
+        },
+        select: { totalSettlementAmountInPaise: true },
+      });
+      const openingInPaise = prior.reduce(
+        (sum, r) => sum + (r.totalSettlementAmountInPaise ?? 0n),
+        0n,
+      );
+      const cycleAmountInPaise = s.totalSettlementAmountInPaise ?? 0n;
+      const closingInPaise = openingInPaise + cycleAmountInPaise;
+      out.push({
+        sellerId: s.sellerId,
+        sellerName:
+          s.seller?.sellerShopName?.trim() ?? `Seller ${s.sellerId.slice(0, 8)}`,
+        openingBalanceInPaise: openingInPaise.toString(),
+        cycleAmountInPaise: cycleAmountInPaise.toString(),
+        closingBalanceInPaise: closingInPaise.toString(),
+      });
+    }
+    return out;
+  }
+}
+
+function formatDDMMYYYY(d: Date): string {
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function csvQuote(s: string): string {
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
 }

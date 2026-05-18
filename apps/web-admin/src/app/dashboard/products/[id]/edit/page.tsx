@@ -1075,6 +1075,36 @@ export default function EditProductPage() {
             {errors.title && <span className="form-error">{errors.title}</span>}
           </div>
 
+          {/* Master Code — auto-generated platform identifier. Always shown,
+              regardless of whether the product has variants. Read-only. */}
+          <div className="form-group">
+            <label className="form-label">Master Code</label>
+            <input
+              type="text"
+              className="form-input"
+              value={product?.productCode || ''}
+              readOnly
+              placeholder="Auto-generated"
+              style={{ background: '#f3f4f6', cursor: 'not-allowed', fontFamily: 'monospace' }}
+            />
+            <span className="form-hint">Auto-generated platform code. Stable across renames.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Base SKU</label>
+            <input
+              type="text"
+              className="form-input"
+              value={form.baseSku}
+              onChange={e => updateField('baseSku', e.target.value)}
+              placeholder="e.g. BAT-MRF-PRO"
+              maxLength={100}
+              disabled={!isEditable}
+              style={{ fontFamily: 'monospace' }}
+            />
+            <span className="form-hint">Seller&apos;s product-level SKU (optional). Useful for simple products without variants.</span>
+          </div>
+
           <div className="form-group">
             <label className="form-label">Category</label>
             <input
@@ -1573,6 +1603,7 @@ export default function EditProductPage() {
                   <th>Image</th>
                   <th>Option Values</th>
                   <th>Weight</th>
+                  <th>Master SKU</th>
                   <th>SKU</th>
                   <th>Price</th>
                   <th>Quantity</th>
@@ -1600,6 +1631,7 @@ export default function EditProductPage() {
                       </td>
                       <td style={{ fontWeight: 500, fontSize: 13 }}>{variantLabel}</td>
                       <td style={{ fontSize: 13, color: variant.weight ? 'var(--color-text)' : '#9ca3af' }}>{weightDisplay}</td>
+                      <td style={{ fontSize: 13, fontFamily: 'monospace', color: variant.masterSku ? 'var(--color-text)' : '#9ca3af' }}>{variant.masterSku || '\u2014'}</td>
                       <td style={{ fontSize: 13, color: variant.sku ? 'var(--color-text)' : '#9ca3af' }}>{variant.sku || '\u2014'}</td>
                       <td style={{ fontSize: 13, fontWeight: 500 }}>&#8377; {variant.price}</td>
                       <td style={{ fontSize: 13 }}>{variant.stock}</td>
@@ -1858,8 +1890,8 @@ export default function EditProductPage() {
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '8px 10px', color: (m.sellerInternalSku || m.variant?.sku) ? '#374151' : '#9ca3af', fontFamily: (m.sellerInternalSku || m.variant?.sku) ? 'monospace' : 'inherit', fontSize: 12 }}>
-                        {m.sellerInternalSku || m.variant?.sku || '\u2014'}
+                      <td style={{ padding: '8px 10px', color: (m.sellerInternalSku || m.variant?.sku || product?.baseSku || product?.productCode) ? '#374151' : '#9ca3af', fontFamily: (m.sellerInternalSku || m.variant?.sku || product?.baseSku || product?.productCode) ? 'monospace' : 'inherit', fontSize: 12 }}>
+                        {m.sellerInternalSku || m.variant?.sku || product?.baseSku || product?.productCode || '\u2014'}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>{m.stockQty}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'center' }}>

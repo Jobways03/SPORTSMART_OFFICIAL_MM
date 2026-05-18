@@ -37,7 +37,8 @@ function pickIndex(): number {
   const maxFair = Math.floor(256 / ALPHABET.length) * ALPHABET.length;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const b = randomBytes(1)[0];
+    const b = randomBytes(1)[0]!;
+
     if (b < maxFair) return b % ALPHABET.length;
   }
 }

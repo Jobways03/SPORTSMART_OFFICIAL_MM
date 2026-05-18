@@ -144,6 +144,86 @@ export class InventoryManagementService {
 
   // ── T3: Low stock queries ───────────────────────────────────────────
 
+  /**
+   * Seller-scoped overview — same shape as `getInventoryOverview` but
+   * scoped to one seller's mappings only. Powers the inventory dashboard
+   * on the seller portal (web-seller).
+   */
+  async getSellerOverview(sellerId: string): Promise<InventoryOverview> {
+    const mappings = await this.repo.findActiveMappingsForSeller(sellerId);
+
+    const distinctProducts = new Set(mappings.map((m) => m.productId)).size;
+    const distinctVariants = new Set(
+      mappings.filter((m) => m.variantId).map((m) => m.variantId as string),
+    ).size;
+
+    let totalStock = 0;
+    let totalReserved = 0;
+    let lowStockCount = 0;
+    let outOfStockCount = 0;
+    for (const m of mappings) {
+      totalStock += m.stockQty;
+      totalReserved += m.reservedQty;
+      const available = m.stockQty - m.reservedQty;
+      if (available <= 0) outOfStockCount++;
+      else if (available <= m.lowStockThreshold) lowStockCount++;
+    }
+
+    return {
+      totalMappedProducts: distinctProducts,
+      totalMappedVariants: distinctVariants,
+      totalStock,
+      totalReserved,
+      totalAvailable: totalStock - totalReserved,
+      lowStockCount,
+      outOfStockCount,
+    };
+  }
+
+  /**
+   * Seller-scoped out-of-stock list — mappings where available stock <= 0.
+   * Mirrors `getSellerLowStock` shape so the seller portal can reuse the
+   * same item renderer.
+   */
+  async getSellerOutOfStock(
+    sellerId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ items: LowStockItem[]; total: number }> {
+    const allMappings = await this.repo.findActiveMappingsForSeller(sellerId);
+
+    const outOfStock = allMappings.filter(
+      (m) => m.stockQty - m.reservedQty <= 0,
+    );
+
+    const total = outOfStock.length;
+    const offset = (page - 1) * limit;
+    const paged = outOfStock.slice(offset, offset + limit);
+
+    const items: LowStockItem[] = paged.map((m) => ({
+      id: m.id,
+      sellerId: m.sellerId,
+      sellerName: m.seller.sellerShopName || m.seller.sellerName,
+      node: {
+        type: 'SELLER' as const,
+        id: m.sellerId,
+        name: m.seller.sellerShopName || m.seller.sellerName,
+      },
+      productId: m.productId,
+      productTitle: m.product.title,
+      variantId: m.variantId,
+      variantSku: m.variant?.sku ?? null,
+      masterSku: m.variant?.masterSku ?? null,
+      stockQty: m.stockQty,
+      reservedQty: m.reservedQty,
+      availableStock: m.stockQty - m.reservedQty,
+      lowStockThreshold: m.lowStockThreshold,
+      isActive: m.isActive,
+    }));
+
+    return { items, total };
+  }
+
   async getSellerLowStock(
     sellerId: string,
     page: number,

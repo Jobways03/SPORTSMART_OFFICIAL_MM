@@ -86,7 +86,7 @@ describe('RazorpayClient — idempotency-key plumbing on writes (PR 4.2)', () =>
         }),
       );
 
-      const [, init] = fetchSpy.mock.calls[0];
+      const [, init] = fetchSpy.mock.calls[0]!;
       const headers = init?.headers as Record<string, string>;
       expect(headers['X-Razorpay-Idempotency-Key']).toBe('refund-instruction-42');
     });
@@ -105,7 +105,7 @@ describe('RazorpayClient — idempotency-key plumbing on writes (PR 4.2)', () =>
         }),
       );
 
-      const [, init] = fetchSpy.mock.calls[0];
+      const [, init] = fetchSpy.mock.calls[0]!;
       const headers = init?.headers as Record<string, string>;
       expect(headers['X-Razorpay-Idempotency-Key']).toBe('checkout-order-master-99');
     });
@@ -120,7 +120,7 @@ describe('RazorpayClient — idempotency-key plumbing on writes (PR 4.2)', () =>
         client.capturePayment('pay_1', 1000, 'INR', { idempotencyKey: 'capture-pay-1' }),
       );
 
-      const [, init] = fetchSpy.mock.calls[0];
+      const [, init] = fetchSpy.mock.calls[0]!;
       const headers = init?.headers as Record<string, string>;
       expect(headers['X-Razorpay-Idempotency-Key']).toBe('capture-pay-1');
     });
@@ -131,7 +131,7 @@ describe('RazorpayClient — idempotency-key plumbing on writes (PR 4.2)', () =>
       const client = buildClient();
       await settle(client.createRefund('pay_1', { amount: 100 }));
 
-      const [, init] = fetchSpy.mock.calls[0];
+      const [, init] = fetchSpy.mock.calls[0]!;
       const headers = init?.headers as Record<string, string>;
       expect(headers['X-Razorpay-Idempotency-Key']).toBeUndefined();
     });

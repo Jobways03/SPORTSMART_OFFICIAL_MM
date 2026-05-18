@@ -167,7 +167,8 @@ export class DiscountReservationService {
       if (lockedRows.length === 0) {
         throw new DiscountUnavailableError('NOT_FOUND', 'Discount not found');
       }
-      const discount = lockedRows[0];
+      const discount = lockedRows[0]!;
+
 
       // Lifecycle gate. Status DRAFT or EXPIRED must reject
       // immediately; this is a defense-in-depth check (the

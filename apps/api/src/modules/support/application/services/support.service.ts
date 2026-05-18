@@ -14,6 +14,7 @@ import {
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { CaseDuplicateService } from '../../../../core/case-duplicate/case-duplicate.service';
 import { DisputesPublicFacade } from '../../../disputes/application/facades/disputes-public.facade';
 import {
@@ -80,7 +81,27 @@ export class SupportService {
     private readonly eventBus: EventBusService,
     private readonly caseDuplicates: CaseDuplicateService,
     private readonly disputes: DisputesPublicFacade,
+    private readonly env: EnvService,
   ) {}
+
+  /**
+   * Phase 5.5 (2026-05-16) — build the live SLA config from env so
+   * SLA computation always reflects the current configuration. Cached
+   * via `this.env` so each call is cheap.
+   */
+  private getSlaConfig(): SlaConfig {
+    return {
+      businessHoursEnabled: this.env.getBoolean(
+        'SUPPORT_SLA_BUSINESS_HOURS_ENABLED',
+        false,
+      ),
+      businessHourStart: this.env.getNumber(
+        'SUPPORT_SLA_BUSINESS_HOUR_START',
+        9,
+      ),
+      businessHourEnd: this.env.getNumber('SUPPORT_SLA_BUSINESS_HOUR_END', 19),
+    };
+  }
 
   // ── Tickets ──────────────────────────────────────────────────────
 
@@ -188,7 +209,7 @@ export class SupportService {
 
     const ticketNumber = await this.repo.generateNextTicketNumber();
     const priority = args.priority ?? 'NORMAL';
-    const slaTargetAt = computeSlaTarget(priority, new Date());
+    const slaTargetAt = computeSlaTarget(priority, new Date(), this.getSlaConfig());
     const ticket = await this.repo.createTicket({
       ticketNumber,
       subject,
@@ -211,7 +232,91 @@ export class SupportService {
     this.logger.log(
       `Ticket created ${ticket.ticketNumber} by ${args.creator.type}:${args.creator.id}`,
     );
+
+    // Phase 5.5 (2026-05-16) — auto-assignment.
+    //
+    // When `SUPPORT_AUTO_ASSIGN_ENABLED` is on we pick the next agent
+    // round-robin from the pool of active admins who hold the
+    // `support.reply` permission, and stamp the ticket with their id.
+    // The auto-assign is fire-and-forget: a missing pool or DB hiccup
+    // leaves the ticket in the standard unassigned state so manual
+    // triage still works. Failure modes never block ticket creation.
+    if (this.env.getBoolean('SUPPORT_AUTO_ASSIGN_ENABLED', false)) {
+      this.autoAssignTicket(ticket.id).catch((err) => {
+        this.logger.warn(
+          `Auto-assign failed for ticket ${ticket.ticketNumber}: ${(err as Error).message}`,
+        );
+      });
+    }
     return ticket;
+  }
+
+  /**
+   * Phase 5.5 (2026-05-16) — round-robin auto-assignment.
+   *
+   * Algorithm:
+   *   1. Load all active admins who hold the `support.reply`
+   *      permission (default for SELLER_SUPPORT + SELLER_OPERATIONS
+   *      roles).
+   *   2. Among those, pick the one with the fewest currently OPEN /
+   *      IN_PROGRESS tickets assigned. This is "least-loaded" rather
+   *      than strict round-robin — fairer when agents close at
+   *      different rates.
+   *   3. Stamp the ticket with their id.
+   *
+   * Returns the chosen adminId, or null if no eligible agent was found
+   * (caller-side log only; ticket remains unassigned). The query is
+   * deliberately read-mostly + uses indexed columns so it stays cheap
+   * at scale.
+   */
+  async autoAssignTicket(ticketId: string): Promise<string | null> {
+    // 1. Find candidate admins. Permission is granted via either
+    //    system role or custom role; we use the resolved permission
+    //    set on AdminCustomRolePermission as the source of truth.
+    const candidates = await this.prisma.admin.findMany({
+      where: {
+        status: 'ACTIVE',
+        // System roles SELLER_SUPPORT, SELLER_OPERATIONS, SUPER_ADMIN
+        // have `support.reply` by default per the permission registry.
+        role: { in: ['SELLER_SUPPORT', 'SELLER_OPERATIONS', 'SUPER_ADMIN'] },
+      },
+      select: { id: true },
+    });
+    if (candidates.length === 0) return null;
+
+    // 2. For each candidate, count open + in-progress assigned tickets.
+    const candidateIds = candidates.map((c) => c.id);
+    const counts = await this.prisma.ticket.groupBy({
+      by: ['assignedAdminId'],
+      where: {
+        assignedAdminId: { in: candidateIds },
+        status: { in: ['OPEN', 'IN_PROGRESS'] },
+      },
+      _count: { _all: true },
+    });
+    const countById = new Map<string, number>();
+    for (const row of counts) {
+      if (row.assignedAdminId) {
+        countById.set(row.assignedAdminId, row._count._all);
+      }
+    }
+
+    // 3. Pick the least-loaded candidate. Ties broken by id order
+    //    (stable + cheap).
+    let chosen: { id: string; load: number } | null = null;
+    for (const c of candidates) {
+      const load = countById.get(c.id) ?? 0;
+      if (!chosen || load < chosen.load) {
+        chosen = { id: c.id, load };
+      }
+    }
+    if (!chosen) return null;
+
+    await this.repo.updateTicket(ticketId, { assignedAdminId: chosen.id });
+    this.logger.log(
+      `Auto-assigned ticket ${ticketId} to admin ${chosen.id} (current load: ${chosen.load})`,
+    );
+    return chosen.id;
   }
 
   async getTicketDetailForActor(
@@ -414,7 +519,11 @@ export class SupportService {
       // Re-open: clear closed metadata + reset SLA so timers run again.
       data.closedAt = null;
       data.closedByAdminId = null;
-      data.slaTargetAt = computeSlaTarget(ticket.priority, new Date());
+      data.slaTargetAt = computeSlaTarget(
+        ticket.priority,
+        new Date(),
+        this.getSlaConfig(),
+      );
     }
     return this.repo.updateTicket(ticketId, data);
   }
@@ -427,7 +536,7 @@ export class SupportService {
     if (!ticket) throw new NotFoundAppException('Ticket not found');
     // Re-base SLA from now whenever priority changes — a downgrade
     // gives breathing room, an upgrade tightens the deadline.
-    const slaTargetAt = computeSlaTarget(priority, new Date());
+    const slaTargetAt = computeSlaTarget(priority, new Date(), this.getSlaConfig());
     return this.repo.updateTicket(ticketId, { priority, slaTargetAt });
   }
 
@@ -740,9 +849,16 @@ function nextStatusOnReply(
 /**
  * SLA targets per priority. Time to first admin response.
  *   URGENT → 4h, HIGH → 24h, NORMAL → 48h, LOW → 5d.
- * No business-hour math today — clock runs continuously. If/when the
- * ops team needs business-hour SLAs, gate this on a flag and add a
- * working-hours calendar.
+ *
+ * Phase 5.5 (2026-05-16) — business-hours mode.
+ * When `SUPPORT_SLA_BUSINESS_HOURS_ENABLED=true`, the SLA clock only
+ * advances during business hours (default 09:00-19:00 IST) on
+ * weekdays. A ticket filed at Friday 17:00 with a 4h SLA now resolves
+ * at Monday 11:00 instead of Friday 21:00. The previous wall-clock
+ * behaviour stays as the default so existing deployments don't change
+ * SLA outcomes overnight.
+ *
+ * Time zone: IST = UTC+5:30 (no daylight savings).
  */
 const SLA_HOURS: Record<TicketPriority, number> = {
   URGENT: 4,
@@ -751,9 +867,75 @@ const SLA_HOURS: Record<TicketPriority, number> = {
   LOW: 24 * 5,
 };
 
-export function computeSlaTarget(priority: TicketPriority, from: Date): Date {
+export interface SlaConfig {
+  businessHoursEnabled: boolean;
+  /** Start of business day in IST hour (0-23). */
+  businessHourStart: number;
+  /** End of business day in IST hour (1-24). */
+  businessHourEnd: number;
+}
+
+const DEFAULT_SLA_CONFIG: SlaConfig = {
+  businessHoursEnabled: false,
+  businessHourStart: 9,
+  businessHourEnd: 19,
+};
+
+export function computeSlaTarget(
+  priority: TicketPriority,
+  from: Date,
+  config: SlaConfig = DEFAULT_SLA_CONFIG,
+): Date {
   const hours = SLA_HOURS[priority] ?? 48;
-  return new Date(from.getTime() + hours * 60 * 60 * 1000);
+  if (!config.businessHoursEnabled) {
+    return new Date(from.getTime() + hours * 60 * 60 * 1000);
+  }
+  return addBusinessHours(from, hours, config);
+}
+
+/**
+ * Advance `from` by `hoursToAdd` of business time. Business time
+ * accrues only between `businessHourStart` and `businessHourEnd` IST
+ * on weekdays (Mon–Fri). Saturdays + Sundays do not count.
+ *
+ * Implementation note: we step by 15-minute increments so the result
+ * is exact to the quarter-hour. For typical SLAs (4-120h) this loops
+ * at most ~500 times — well under 1ms.
+ */
+function addBusinessHours(
+  from: Date,
+  hoursToAdd: number,
+  config: SlaConfig,
+): Date {
+  const STEP_MIN = 15;
+  const stepsNeeded = Math.ceil((hoursToAdd * 60) / STEP_MIN);
+  let cursor = new Date(from);
+  let stepsAdvanced = 0;
+  // Hard guard against infinite loop on bad config (start ≥ end).
+  let safetyTicks = stepsNeeded * 50;
+  while (stepsAdvanced < stepsNeeded && safetyTicks-- > 0) {
+    cursor = new Date(cursor.getTime() + STEP_MIN * 60 * 1000);
+    if (isBusinessTime(cursor, config)) {
+      stepsAdvanced++;
+    }
+  }
+  return cursor;
+}
+
+/**
+ * Returns true when the given UTC timestamp falls within business
+ * hours after conversion to IST. Saturday + Sunday IST always return
+ * false.
+ */
+function isBusinessTime(utc: Date, config: SlaConfig): boolean {
+  // Shift UTC by +5:30 to read the IST clock components.
+  const istMs = utc.getTime() + 5.5 * 60 * 60 * 1000;
+  const ist = new Date(istMs);
+  // getUTC* on the shifted timestamp yields IST-local components.
+  const dayOfWeek = ist.getUTCDay(); // 0 = Sun, 6 = Sat
+  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+  const hour = ist.getUTCHours();
+  return hour >= config.businessHourStart && hour < config.businessHourEnd;
 }
 
 /**

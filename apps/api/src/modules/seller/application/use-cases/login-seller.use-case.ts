@@ -6,12 +6,14 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { SellerLoginResponseData } from '../../presentation/dtos/seller-auth-response.dto';
 import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
+import { canLogin } from '../../domain/policies/seller-access.policy';
 
 // Pre-hash a dummy password for timing attack prevention
 const DUMMY_HASH = '$2a$12$LJ3m4ys3Lg7VhMQdxlGC7.BQJ1HFpR9PQXHs1GKTTl1C5KVhJvtNi';
@@ -55,8 +57,12 @@ export class LoginSellerUseCase {
       throw new UnauthorizedAppException('Invalid credentials');
     }
 
-    // Check account status — allow ACTIVE and PENDING_APPROVAL sellers to login
-    if (!['ACTIVE', 'PENDING_APPROVAL'].includes(seller.status)) {
+    // Account-status gate — see `seller-access.policy.ts` for the
+    // canonical rule and rationale. PENDING_APPROVAL sellers are
+    // intentionally allowed to authenticate so they can complete
+    // their profile while waiting for admin review; downstream
+    // services (allocation, payouts) gate on ACTIVE separately.
+    if (!canLogin(seller.status)) {
       throw new ForbiddenAppException('Account is not active. Please contact support.');
     }
 
@@ -114,6 +120,20 @@ export class LoginSellerUseCase {
       lockUntil: null,
       lastLoginAt: new Date(),
     });
+
+    // Phase 13 (2026-05-16) — opportunistic rehash. Legacy hashes
+    // below the target cost get re-hashed silently on next sign-in.
+    if (shouldRehash(seller.passwordHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        await this.sellerRepo.updateSeller(seller.id, { passwordHash: upgraded });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to rehash seller ${seller.id} on login: ${(err as Error).message}`,
+          'LoginSellerUseCase',
+        );
+      }
+    }
 
     // Create session
     const refreshToken = randomUUID();
@@ -176,8 +196,8 @@ export class LoginSellerUseCase {
   private parseTimeToMs(time: string): number {
     const match = time.match(/^(\d+)(s|m|h|d)$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000;
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
     const multipliers: Record<string, number> = {
       s: 1000,
       m: 60 * 1000,

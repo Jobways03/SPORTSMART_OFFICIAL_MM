@@ -18,6 +18,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import { LinkPicker } from '../_components/LinkPicker';
 
@@ -53,6 +54,7 @@ const LINK_TYPES: { value: LinkType; label: string; hint: string }[] = [
 export default function MenuEditorPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { confirmDialog } = useModal();
   const menuId = params.id;
 
   const [tree, setTree] = useState<MenuTree | null>(null);
@@ -98,7 +100,14 @@ export default function MenuEditorPage() {
   };
 
   const onDelete = async (itemId: string) => {
-    if (!confirm('Delete this item and all its children?')) return;
+    const ok = await confirmDialog({
+      title: 'Delete this menu item?',
+      message: 'This deletes the item and all its children. This cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Keep',
+      danger: true,
+    });
+    if (!ok) return;
     await apiClient(`/admin/storefront/menus/${menuId}/items/${itemId}`, { method: 'DELETE' });
     load();
   };

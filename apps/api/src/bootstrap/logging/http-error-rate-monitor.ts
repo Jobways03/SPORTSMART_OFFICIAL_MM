@@ -77,7 +77,7 @@ export class HttpErrorRateMonitor {
     if (this.isInCooldown(now)) return;
 
     this.lastFiredAt = now;
-    const firstErrorAt = new Date(this.errorTimestamps[0]).toISOString();
+    const firstErrorAt = new Date(this.errorTimestamps[0]!).toISOString();
     const count = this.errorTimestamps.length;
     const windowSeconds = Math.floor(this.config.windowMs / 1000);
 
@@ -118,7 +118,7 @@ export class HttpErrorRateMonitor {
     let dropCount = 0;
     while (
       dropCount < this.errorTimestamps.length &&
-      this.errorTimestamps[dropCount] < cutoff
+      this.errorTimestamps[dropCount]! < cutoff
     ) {
       dropCount++;
     }

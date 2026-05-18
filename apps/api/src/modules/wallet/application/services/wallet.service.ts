@@ -124,7 +124,16 @@ export class WalletService {
     let result: ApplyMutationResult;
     try {
       result = await this.applyWithRetry(args.userId, async (wallet) => {
-        this.assertNotBlocked(wallet, args.bypassBlock);
+        await this.assertNotBlocked(wallet, args.bypassBlock, {
+          actorId: args.createdByAdminId ?? undefined,
+          actorRole: args.createdByAdminId ? 'ADMIN' : 'SYSTEM',
+          reason:
+            args.bypassBlock && wallet.isBlocked
+              ? `Wallet credit while blocked — ${args.description}`
+              : undefined,
+          referenceType: args.referenceType,
+          referenceId: args.referenceId,
+        });
         const newBalance = wallet.balanceInPaise + args.amountInPaise;
         return this.repo.applyMutation({
           walletId: wallet.id,
@@ -196,7 +205,16 @@ export class WalletService {
   async debit(args: DebitArgs): Promise<ApplyMutationResult> {
     this.assertPositive(args.amountInPaise, 'amountInPaise');
     return this.applyWithRetry(args.userId, async (wallet) => {
-      this.assertNotBlocked(wallet, args.bypassBlock);
+      await this.assertNotBlocked(wallet, args.bypassBlock, {
+        actorId: args.createdByAdminId ?? undefined,
+        actorRole: args.createdByAdminId ? 'ADMIN' : 'SYSTEM',
+        reason:
+          args.bypassBlock && wallet.isBlocked
+            ? `Wallet debit while blocked — ${args.description}`
+            : undefined,
+        referenceType: args.referenceType,
+        referenceId: args.referenceId,
+      });
       if (wallet.balanceInPaise < args.amountInPaise) {
         throw new BadRequestAppException(
           `Insufficient wallet balance. Available ₹${(wallet.balanceInPaise / 100).toFixed(2)}`,
@@ -360,7 +378,9 @@ export class WalletService {
             : 'SIGNATURE_INVALID',
           providerPaymentId: args.razorpayPaymentId,
           expectedInPaise: tx.amountInPaise,
-          actualInPaise: Number(BigInt(gatewayPayment.amount)),
+          // Pass BigInt directly — flagMismatch accepts bigint now,
+          // avoiding the precision loss of Number() on > ₹9 lakh.
+          actualInPaise: BigInt(gatewayPayment.amount),
           severity: 95, // money-safety — top of triage queue
           description:
             `Wallet top-up gateway verification rejected for user ${args.userId} ` +
@@ -395,8 +415,60 @@ export class WalletService {
     }
   }
 
-  private assertNotBlocked(wallet: WalletEntity, bypass?: boolean) {
-    if (bypass) return;
+  /**
+   * Block gate. Throws when the wallet is blocked unless the caller
+   * explicitly opts out via `bypass=true` (refund paths only — wallet
+   * credits during a fraud-hold are how the customer gets their money
+   * back from a refund). Every bypass writes an audit row so we have
+   * a tamper-evident record of who chose to override the block and
+   * why.
+   *
+   * `bypassContext` carries the reason + actor identification when
+   * provided; falls back to a minimal "REFUND_OVERRIDE" placeholder so
+   * the audit trail is never empty.
+   */
+  private async assertNotBlocked(
+    wallet: WalletEntity,
+    bypass?: boolean,
+    bypassContext?: {
+      actorId?: string;
+      actorRole?: string;
+      reason?: string;
+      referenceType?: string;
+      referenceId?: string;
+    },
+  ) {
+    if (bypass && wallet.isBlocked) {
+      // Bypass actually consumed — write an audit row. Fire-and-forget
+      // because audit-write failure shouldn't strand a customer's
+      // refund, but log loudly if it does.
+      this.audit
+        .writeAuditLog({
+          actorId: bypassContext?.actorId,
+          actorRole: bypassContext?.actorRole ?? 'SYSTEM',
+          action: 'WALLET_BLOCK_BYPASSED',
+          module: 'wallet',
+          resource: 'Wallet',
+          resourceId: wallet.id,
+          oldValue: { isBlocked: true, blockedReason: wallet.blockedReason },
+          newValue: { bypassApplied: true },
+          metadata: {
+            reason:
+              bypassContext?.reason ??
+              'REFUND_OVERRIDE (no explicit reason provided)',
+            referenceType: bypassContext?.referenceType,
+            referenceId: bypassContext?.referenceId,
+            walletUserId: wallet.userId,
+          },
+        })
+        .catch((err) => {
+          this.logger.error(
+            `Failed to audit wallet block bypass for wallet=${wallet.id} userId=${wallet.userId}: ${(err as Error).message}`,
+          );
+        });
+      return;
+    }
+    if (bypass) return; // Block wasn't on; bypass is a no-op.
     if (wallet.isBlocked) {
       throw new BadRequestAppException(
         `Wallet is blocked${wallet.blockedReason ? `: ${wallet.blockedReason}` : ''}. Contact support.`,

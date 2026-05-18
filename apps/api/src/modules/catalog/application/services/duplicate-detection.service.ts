@@ -107,6 +107,14 @@ export class DuplicateDetectionService {
       // Skip if less than 50% word overlap
       if (wordOverlap < 0.5) continue;
 
+      // Different brands = different products. If both sides have a known
+      // brand and they differ, this is a strong signal the items are not
+      // duplicates regardless of title similarity (e.g. an MRF cricket bat
+      // is not a duplicate of an SS cricket bat).
+      const bothBrandsKnown = !!input.brandId && !!candidate.brandId;
+      const brandsDiffer = bothBrandsKnown && candidate.brandId !== input.brandId;
+      if (brandsDiffer) continue;
+
       let score = wordOverlap * 50; // Base score from title similarity (0-50)
       const reasons: string[] = [];
 
@@ -117,25 +125,32 @@ export class DuplicateDetectionService {
         reasons.push('Partial title match');
       }
 
-      // Brand match boost
-      const brandMatch = input.brandId && candidate.brandId === input.brandId;
+      // Brand match boost (both must be set and equal)
+      const brandMatch = bothBrandsKnown && candidate.brandId === input.brandId;
       if (brandMatch) {
         score += 25;
         reasons.push('Brand');
       }
 
       // Category match boost
-      const categoryMatch = input.categoryId && candidate.categoryId === input.categoryId;
+      const categoryMatch = !!input.categoryId && candidate.categoryId === input.categoryId;
       if (categoryMatch) {
         score += 25;
         reasons.push('Category');
       }
 
+      // Require at least one strong signal beyond title+category. Title
+      // overlap alone (especially for generic product types like "Cricket
+      // Bat English Willow") is not enough — without a brand match we
+      // demand a higher overlap threshold to avoid noisy warnings.
+      const hasStrongSignal = brandMatch || wordOverlap >= 0.9;
+      if (!hasStrongSignal && categoryMatch && wordOverlap < 0.9) continue;
+
       // Determine confidence level
       let confidence: 'HIGH' | 'MEDIUM' | 'LOW';
       if (brandMatch && categoryMatch && wordOverlap >= 0.7) {
         confidence = 'HIGH';
-      } else if ((brandMatch || categoryMatch) && wordOverlap >= 0.6) {
+      } else if (brandMatch && wordOverlap >= 0.6) {
         confidence = 'MEDIUM';
       } else {
         confidence = 'LOW';

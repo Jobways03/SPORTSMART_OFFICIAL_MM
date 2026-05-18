@@ -10,6 +10,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { RefundSagaService } from '../../../payments-saga/application/services/refund-saga.service';
 import type { SagaStep } from '../../../payments-saga/domain/saga-step.types';
+import { RefundSplitCalculatorService } from './refund-split-calculator.service';
 
 export interface CreateInstructionForDisputeArgs {
   disputeId: string;
@@ -94,7 +95,126 @@ export class RefundInstructionService {
     private readonly env: EnvService,
     private readonly wallet: WalletPublicFacade,
     private readonly saga: RefundSagaService,
+    private readonly splitCalculator: RefundSplitCalculatorService,
   ) {}
+
+  /**
+   * Multi-payment refund split (2026-05-16). When an order was paid via
+   * wallet AND gateway, the refund must split proportionally back to
+   * each source. This helper centralises the split logic for both
+   * dispute and return refunds.
+   *
+   * Returns the list of RefundInstruction rows created (one per leg).
+   * Single-source orders get exactly one row, identical to the legacy
+   * behaviour.
+   *
+   * Idempotency: each leg's key is `<base>:<legSuffix>` (e.g.
+   * `return:R-1234:wallet`), so a re-emission of the source event
+   * finds existing legs via findUnique and short-circuits.
+   */
+  async createSplitForRefund(args: {
+    sourceType: RefundSourceType;
+    sourceId: string;
+    sourceLabel: string;
+    customerId: string;
+    masterOrderId: string | null;
+    amountInPaise: bigint;
+    baseIdempotencyKey: string;
+    customerPreferredMethod?: RefundMethod;
+  }): Promise<RefundInstruction[]> {
+    const legs = await this.splitCalculator.calculateSplit({
+      masterOrderId: args.masterOrderId,
+      totalRefundAmountInPaise: args.amountInPaise,
+      customerPreferredMethod: args.customerPreferredMethod,
+    });
+    if (legs.length === 0) {
+      this.logger.warn(
+        `createSplitForRefund: no legs for ${args.sourceType} ${args.sourceLabel}`,
+      );
+      return [];
+    }
+
+    const created: RefundInstruction[] = [];
+    for (const leg of legs) {
+      const legKey =
+        legs.length === 1
+          ? args.baseIdempotencyKey
+          : `${args.baseIdempotencyKey}:${leg.legSuffix}`;
+
+      const existing = await this.prisma.refundInstruction.findUnique({
+        where: { idempotencyKey: legKey },
+      });
+      if (existing) {
+        created.push(existing);
+        continue;
+      }
+
+      const requiresApproval = this.amountRequiresApproval(
+        Number(leg.amountInPaise),
+        leg.method,
+      );
+
+      try {
+        const row = await this.prisma.refundInstruction.create({
+          data: {
+            sourceType: args.sourceType,
+            sourceId: args.sourceId,
+            customerId: args.customerId,
+            orderId: args.masterOrderId,
+            amountInPaise: leg.amountInPaise,
+            refundMethod: leg.method,
+            status: requiresApproval ? 'PENDING_APPROVAL' : 'PROCESSING',
+            idempotencyKey: legKey,
+            // For multi-leg splits, surface the leg context via the
+            // failureReason column with a [SPLIT_LEG] prefix so it's
+            // distinguishable from a real failure. (A future migration
+            // can promote this to its own `legReason` column.)
+            failureReason:
+              legs.length > 1 ? `[SPLIT_LEG] ${leg.reason}` : null,
+          },
+        });
+        created.push(row);
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          const winner = await this.prisma.refundInstruction.findUnique({
+            where: { idempotencyKey: legKey },
+          });
+          if (winner) {
+            created.push(winner);
+            continue;
+          }
+        }
+        throw err;
+      }
+    }
+
+    // Kick off saga per leg in parallel. A failure in one leg must
+    // not strand the others.
+    for (const row of created) {
+      if (row.status !== 'PROCESSING') continue;
+      this.runSagaForInstruction(row, row.idempotencyKey ?? '', {
+        sourceType: args.sourceType,
+        sourceId: args.sourceId,
+        label: args.sourceLabel,
+        customerId: args.customerId,
+        amountInPaise: Number(row.amountInPaise),
+      }).catch((err) => {
+        this.logger.error(
+          `Saga for leg ${row.id} (${row.refundMethod}) failed: ${(err as Error).message}`,
+        );
+      });
+    }
+
+    this.logger.log(
+      `createSplitForRefund: ${created.length} leg(s) for ${args.sourceType} ${args.sourceLabel} ` +
+        `[${legs.map((l) => `${l.method}=₹${(l.amountInPaise / 100n).toString()}`).join(', ')}]`,
+    );
+
+    return created;
+  }
 
   /**
    * Build + execute a refund instruction triggered by a buyer-favoured
@@ -200,66 +320,42 @@ export class RefundInstructionService {
   async createForReturn(
     args: CreateInstructionForReturnArgs,
   ): Promise<RefundInstruction> {
-    const idempotencyKey =
+    const baseIdempotencyKey =
       args.idempotencyKey ?? `return:${args.returnId}`;
 
-    const existing = await this.prisma.refundInstruction.findUnique({
-      where: { idempotencyKey },
-    });
-    if (existing) {
-      this.logger.log(
-        `Reusing existing RefundInstruction ${existing.id} for ${idempotencyKey}`,
-      );
-      return existing;
-    }
-
-    const requiresApproval = this.amountRequiresApproval(
-      args.amountInPaise,
-      args.refundMethod ?? 'WALLET',
-    );
-
-    let instruction: RefundInstruction;
-    try {
-      instruction = await this.prisma.refundInstruction.create({
-        data: {
-          sourceType: 'RETURN' as RefundSourceType,
-          sourceId: args.returnId,
-          customerId: args.customerId,
-          orderId: args.masterOrderId,
-          amountInPaise: BigInt(args.amountInPaise),
-          refundMethod: args.refundMethod ?? 'WALLET',
-          status: requiresApproval ? 'PENDING_APPROVAL' : 'PROCESSING',
-          idempotencyKey,
-        },
-      });
-    } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        const winner = await this.prisma.refundInstruction.findUnique({
-          where: { idempotencyKey },
-        });
-        if (winner) return winner;
-      }
-      throw err;
-    }
-
-    if (requiresApproval) {
-      this.logger.log(
-        `RefundInstruction ${instruction.id} PENDING_APPROVAL ` +
-          `(return=${args.returnNumber}, amount=₹${(args.amountInPaise / 100).toFixed(2)}) — finance must approve`,
-      );
-      return instruction;
-    }
-
-    return this.runSagaForInstruction(instruction, idempotencyKey, {
-      sourceType: 'RETURN',
+    // Phase 3.2 (2026-05-16) — multi-payment refund split.
+    // If the original order had a wallet contribution alongside the
+    // gateway payment, the refund splits into a wallet leg + a gateway
+    // leg. Single-source orders produce one leg, identical to the
+    // legacy single-instruction behaviour.
+    //
+    // We keep the return signature of `createForReturn` as
+    // `Promise<RefundInstruction>` for backwards compatibility with the
+    // dozen-ish callers; in the split case we return the "primary"
+    // (gateway) leg if present, else the first leg. Callers that need
+    // all legs should switch to `createSplitForRefund` directly.
+    const legs = await this.createSplitForRefund({
+      sourceType: 'RETURN' as RefundSourceType,
       sourceId: args.returnId,
-      label: args.returnNumber,
+      sourceLabel: args.returnNumber,
       customerId: args.customerId,
-      amountInPaise: args.amountInPaise,
+      masterOrderId: args.masterOrderId,
+      amountInPaise: BigInt(args.amountInPaise),
+      baseIdempotencyKey,
+      customerPreferredMethod: args.refundMethod,
     });
+
+    if (legs.length === 0) {
+      throw new Error(
+        `createForReturn: split produced zero legs for return ${args.returnNumber}`,
+      );
+    }
+
+    // Pick the primary leg to return — gateway leg if present
+    // (typically the larger amount), else the first.
+    const primary =
+      legs.find((l) => l.refundMethod === 'ORIGINAL_PAYMENT') ?? legs[0]!;
+    return primary;
   }
 
   /**

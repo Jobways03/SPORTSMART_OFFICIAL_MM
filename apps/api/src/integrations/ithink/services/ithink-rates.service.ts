@@ -38,19 +38,39 @@ export class IThinkRatesService {
    * with every page view.
    */
   async checkPincode(pincode: string): Promise<PincodeCapability> {
-    const body: IThinkCheckPincodeRequest = { pincode };
+    // Phase 5.2 (2026-05-16) — input validation.
+    //
+    // Pre-2026-05-16 this method passed the raw `pincode` argument
+    // through to iThink. A caller bug (or a hostile customer payload)
+    // could send arbitrary strings; iThink would reject them but only
+    // after burning a network round-trip and surfacing a noisy error
+    // log. Validate here so we fail fast at the application boundary
+    // and never spend an iThink call on garbage input.
+    const normalized = String(pincode ?? '').trim();
+    if (!/^\d{6}$/.test(normalized)) {
+      throw new Error(
+        `iThink checkPincode: pincode must be 6 digits (got "${pincode}")`,
+      );
+    }
+    const body: IThinkCheckPincodeRequest = { pincode: normalized };
     const response = await this.client.post<IThinkCheckPincodeResponseData>(
       'CHECK_PINCODE',
       body as unknown as Record<string, unknown>,
     );
-    const data = response.data?.[pincode];
+    const data = response.data?.[normalized];
     if (!data) {
       // iThink returns an empty/missing entry when the pincode isn't
       // serviceable by any carrier. Surface as an explicit "no carriers"
       // capability so cart can gate accordingly.
-      return { pincode, prepaid: false, cod: false, pickup: false, carriers: [] };
+      return {
+        pincode: normalized,
+        prepaid: false,
+        cod: false,
+        pickup: false,
+        carriers: [],
+      };
     }
-    return normalisePincode(pincode, data);
+    return normalisePincode(normalized, data);
   }
 
   /**

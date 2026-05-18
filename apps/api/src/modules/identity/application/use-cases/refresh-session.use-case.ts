@@ -77,7 +77,14 @@ export class RefreshSessionUseCase {
     if (session.revokedAt) {
       throw new UnauthorizedAppException('Session has been revoked');
     }
-    if (session.expiresAt < new Date()) {
+    // Apply a small grace buffer (60s) to absorb client/server clock
+    // skew. Without this, a request issued ~1s before expiry can hit
+    // the server post-expiry and force the user to re-login despite
+    // having a "valid" token in hand. The theft-detection on the
+    // previous-token-hash slot still protects against stale-token
+    // replay even within the grace window.
+    const REFRESH_EXPIRY_GRACE_MS = 60_000;
+    if (session.expiresAt.getTime() + REFRESH_EXPIRY_GRACE_MS < Date.now()) {
       throw new UnauthorizedAppException('Refresh token expired');
     }
 
@@ -139,8 +146,8 @@ export class RefreshSessionUseCase {
   private parseTimeToMs(time: string): number {
     const match = time.match(/^(\d+)(s|m|h|d)$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000;
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
     const multipliers: Record<string, number> = {
       s: 1000,
       m: 60 * 1000,

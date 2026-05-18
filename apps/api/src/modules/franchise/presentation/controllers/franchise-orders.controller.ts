@@ -10,13 +10,13 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { FranchiseAuthGuard } from '../../../../core/guards';
+import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
 import { FranchiseOrdersService } from '../../application/services/franchise-orders.service';
 import { BadRequestAppException } from '../../../../core/exceptions';
 
 @ApiTags('Franchise Orders')
 @Controller('franchise/orders')
-@UseGuards(FranchiseAuthGuard)
+@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
 export class FranchiseOrdersController {
   constructor(
     private readonly franchiseOrdersService: FranchiseOrdersService,

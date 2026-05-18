@@ -34,7 +34,7 @@ import { GenerateManualVariantsDto } from '../../dtos/generate-manual-variants.d
 class GenerateVariantsDto {
   @IsArray()
   @ArrayNotEmpty()
-  optionValueIds: string[][];
+  optionValueIds!: string[][];
 }
 
 @ApiTags('Admin Products')
@@ -85,7 +85,7 @@ export class AdminProductVariantsController {
       const definition = await this.variantRepo.findOrCreateOptionDefinition(optName);
       const valueIds: string[] = [];
       for (let i = 0; i < opt.values.length; i++) {
-        const val = opt.values[i].trim();
+        const val = opt.values[i]!.trim();
         if (!val) continue;
         const optionValue = await this.variantRepo.findOrCreateOptionValue(definition.id, val, i);
         valueIds.push(optionValue.id);

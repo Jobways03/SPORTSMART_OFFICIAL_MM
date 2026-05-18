@@ -93,9 +93,15 @@ export class CartService {
 
   /**
    * Sprint 3 Story 2.3 — move a saved item back into the active cart.
-   * Re-validates stock — the item may have gone out of stock while
-   * parked, in which case we 400 with a clear message rather than
-   * silently moving a now-unfulfillable item back to the cart.
+   *
+   * Re-validates stock atomically inside the transaction (Phase 4.1,
+   * 2026-05-16) so a concurrent reservation can't snatch the inventory
+   * between our check and the flag flip. The repo's
+   * `moveToCartIfStockAvailable` does the check + flip in a single
+   * SQL statement (UPDATE ... WHERE saved_for_later=true AND
+   * available_stock >= quantity), returning the count of rows
+   * affected. Zero rows = lost the race; we surface a clean 400 to
+   * the caller.
    */
   async moveToCart(customerId: string, itemId: string) {
     const cart = await this.cartRepo.findCartByCustomerId(customerId);
@@ -103,16 +109,21 @@ export class CartService {
     const item = await this.cartRepo.findCartItemById(itemId, cart.id);
     if (!item) throw new NotFoundAppException('Cart item not found');
 
-    const availableStock = await this.cartRepo.getAggregatedStock(
+    // The repo owns transaction boundaries — we ask it to atomically
+    // re-check stock AND flip the savedForLater flag. If a concurrent
+    // checkout snatches the inventory between our check and flip, the
+    // repo returns moved=false and we surface a clean 400.
+    const result = await this.cartRepo.moveToCartIfStockAvailable(
+      itemId,
       item.productId,
       item.variantId,
+      item.quantity,
     );
-    if (availableStock < item.quantity) {
+    if (!result.moved) {
       throw new BadRequestAppException(
-        `Cannot move to cart — only ${availableStock} in stock, item has quantity ${item.quantity}`,
+        `Cannot move to cart — only ${result.availableStock} in stock, item has quantity ${item.quantity}`,
       );
     }
-    await this.cartRepo.setSavedForLater(itemId, false);
   }
 
   async addItem(

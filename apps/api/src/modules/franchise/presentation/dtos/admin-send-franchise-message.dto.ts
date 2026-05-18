@@ -4,12 +4,12 @@ export class AdminSendFranchiseMessageDto {
   @IsNotEmpty({ message: 'Subject is required' })
   @IsString()
   @MaxLength(255)
-  subject: string;
+  subject!: string;
 
   @IsNotEmpty({ message: 'Message is required' })
   @IsString()
   @MaxLength(5000)
-  message: string;
+  message!: string;
 
   @IsOptional()
   @IsString()

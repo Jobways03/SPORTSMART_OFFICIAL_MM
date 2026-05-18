@@ -218,6 +218,38 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'analytics.export',
     ],
   },
+  {
+    // Owns the full Tax/GST surface and the wallet-adjustments approval
+    // queue. Only this role (and Super Admin) carries wallet.adjustment.approve
+    // — Phase 13 dual-approval rows route through admins holding this role.
+    name: 'Tax & Compliance Manager',
+    description:
+      'Tax/GST module owner — invoices, credit notes, e-way bills, e-invoices, GSTR reports, TCS, and the wallet-adjustments approval queue.',
+    permissions: [
+      // Core tax surface
+      'tax.read', 'tax.configure', 'tax.gstin.verify',
+      'tax.invoice.read', 'tax.invoice.download', 'tax.invoice.regeneratePdf',
+      'tax.creditNote.read', 'tax.creditNote.download', 'tax.creditNote.create',
+      'tax.creditNote.timebarOverride', 'tax.creditNote.timebarReview',
+      'tax.debitNote.create',
+      'tax.reports.read', 'tax.reports.export',
+      'tax.tcs.read', 'tax.tcs.compute', 'tax.tcs.export',
+      'tax.tcs.markFiled', 'tax.tcs.markPaidToGovt',
+      'tax.ewayBill.read', 'tax.ewayBill.generate', 'tax.ewayBill.cancel', 'tax.ewayBill.override',
+      'tax.einvoice.manage', 'tax.einvoice.cancelWithinWindow',
+      'tax.override',
+      // Wallet-adjustments approval queue (Phase 13 dual approval lands here)
+      'wallet.adjustment.read', 'wallet.adjustment.create',
+      'wallet.adjustment.approve', 'wallet.adjustment.reject',
+      // Cross-context reads the queue needs to be useful
+      'wallets.read',
+      'recon.read',
+      'audit.read',
+      'orders.read',
+      'returns.read',
+      'customers.read',
+    ],
+  },
 ];
 
 async function main() {

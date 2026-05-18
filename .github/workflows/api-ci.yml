@@ -63,6 +63,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Phase 9 (2026-05-16) — SCA: compare the PR's dependency
+      # manifest against the base ref + the GitHub Advisory Database.
+      # Fails on any dep added in this PR with a known HIGH/CRITICAL
+      # advisory. PR-only (the action no-ops on push) — for push-to-
+      # main coverage we lean on Dependabot's daily scan instead.
+      - name: Dependency review (PR diff)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+      # Phase 9 (2026-05-16) — SCA: scan the full installed dep tree
+      # against the OSV database. Catches transitive vulns the
+      # advisory-database diff in `dependency-review` won't see (it
+      # only inspects direct manifest changes). Configured to fail
+      # the build on HIGH/CRITICAL; lower-severity reports surface
+      # as workflow annotations but don't block.
+      - name: SCA scan (osv-scanner)
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        with:
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
+            --fail-on-vuln-severity=HIGH
+
       - name: Enable pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -96,8 +121,23 @@ jobs:
         working-directory: apps/api
         run: pnpm exec tsc --noEmit
 
-      - name: Unit tests
-        run: pnpm --filter @sportsmart/api test
+      # Phase 9 (2026-05-16) — pass --coverage so jest writes
+      # coverage/lcov.info + coverage/coverage-summary.json. The
+      # threshold in jest.config.js fails the job if the floor is
+      # breached; ratchet that up over time, never down.
+      - name: Unit tests (with coverage)
+        run: pnpm --filter @sportsmart/api test -- --coverage
+
+      # Upload the lcov report as an artifact so the PR author can
+      # drill into uncovered lines without re-running locally.
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage-${{ github.run_id }}
+          path: apps/api/coverage/
+          retention-days: 14
+          if-no-files-found: warn
 
       # e2e stays as a separate job / workflow once DB-backed tests
       # land. Today's e2e suite uses in-memory fakes so it is cheap to

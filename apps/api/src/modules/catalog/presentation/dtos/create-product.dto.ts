@@ -32,7 +32,7 @@ export class ProductSeoDto {
 export class CreateVariantInlineDto {
   @IsNumber()
   @Min(0)
-  price: number;
+  price!: number;
 
   @IsOptional()
   @IsNumber()
@@ -66,7 +66,7 @@ export class CreateVariantInlineDto {
 
 export class CreateProductDto {
   @IsString()
-  title: string;
+  title!: string;
 
   @IsOptional()
   @IsUUID()
@@ -93,7 +93,7 @@ export class CreateProductDto {
   description?: string;
 
   @IsBoolean()
-  hasVariants: boolean;
+  hasVariants!: boolean;
 
   @IsOptional()
   @IsNumber()

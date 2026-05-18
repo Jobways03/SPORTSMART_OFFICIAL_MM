@@ -81,6 +81,7 @@ export class FranchiseAuthGuard implements CanActivate {
 
     request.franchiseId = payload.sub;
     request.franchiseEmail = franchise.email;
+    request.franchiseStatus = franchise.status;
     request.sessionId = session.id;
     return true;
   }

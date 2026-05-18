@@ -4,6 +4,7 @@ import { WalletModule } from '../wallet/module';
 import { LiabilityLedgerModule } from '../liability-ledger/module';
 import { RefundInstructionService } from './application/services/refund-instruction.service';
 import { RefundMethodSelector } from './application/services/refund-method-selector';
+import { RefundSplitCalculatorService } from './application/services/refund-split-calculator.service';
 import { AdminRefundApprovalsController } from './presentation/controllers/admin-refund-approvals.controller';
 
 /**
@@ -23,7 +24,16 @@ import { AdminRefundApprovalsController } from './presentation/controllers/admin
 @Module({
   imports: [WalletModule, LiabilityLedgerModule],
   controllers: [AdminRefundApprovalsController],
-  providers: [RefundInstructionService, RefundMethodSelector, AdminAuthGuard],
-  exports: [RefundInstructionService, RefundMethodSelector],
+  providers: [
+    RefundInstructionService,
+    RefundMethodSelector,
+    RefundSplitCalculatorService,
+    AdminAuthGuard,
+  ],
+  exports: [
+    RefundInstructionService,
+    RefundMethodSelector,
+    RefundSplitCalculatorService,
+  ],
 })
 export class RefundInstructionsModule {}

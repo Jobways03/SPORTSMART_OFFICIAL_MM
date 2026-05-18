@@ -90,19 +90,65 @@ export class CodPublicFacade {
       reasons.push('Pincode not serviceable by this seller');
     }
 
-    // Rule 4: Customer COD abuse counter — N cancellations in M days.
-    // Both N and M come from env so risk team can dial them per market.
-    const recentCodOrders = await this.prisma.masterOrder.count({
+    // Rule 4: Customer COD abuse counter — weighted by cancellation
+    // signal (Phase 3.4, 2026-05-16). Previously this just counted
+    // every CANCELLED COD order equally, which penalised customers
+    // for legitimate operational cancellations (e.g. seller out of
+    // stock) the same as fraud signals. The weighting:
+    //   - SELLER_CANCELLED / SYSTEM_CANCELLED:  weight 0 (no penalty)
+    //   - CUSTOMER_CANCELLED (within delivery): weight 1
+    //   - CUSTOMER_REFUSED_DELIVERY:            weight 3 (this is the
+    //                                            classic COD-abuse
+    //                                            signal — customer
+    //                                            orders, refuses at
+    //                                            doorstep, courier
+    //                                            returns to seller
+    //                                            at seller's cost)
+    // The threshold (`COD_ABUSE_RECENT_CANCEL_LIMIT`) is interpreted
+    // as the WEIGHTED SUM, so a customer with one refused delivery
+    // is treated the same as three plain customer cancellations.
+    const recentCodCancellations = await this.prisma.masterOrder.findMany({
       where: {
         customerId: params.customerId,
         paymentMethod: 'COD',
-        orderStatus: 'CANCELLED',
+        orderStatus: { in: ['CANCELLED', 'REFUSED_DELIVERY' as any] },
         createdAt: { gte: new Date(Date.now() - this.abuseLookbackMs) },
       },
+      select: {
+        id: true,
+        orderStatus: true,
+        verificationRemarks: true,
+      },
     });
-    if (recentCodOrders >= this.abuseRecentCancelLimit) {
+    let weightedScore = 0;
+    for (const order of recentCodCancellations) {
+      const remarks = (order.verificationRemarks ?? '').toUpperCase();
+      // Heuristic: remarks tag "REFUSED_DELIVERY" or status enum is
+      // the explicit refused-on-doorstep case → weight 3.
+      if (
+        (order.orderStatus as string) === 'REFUSED_DELIVERY' ||
+        remarks.includes('REFUSED_DELIVERY')
+      ) {
+        weightedScore += 3;
+        continue;
+      }
+      // Seller / system cancellations (out-of-stock, fulfillment
+      // failure) — not the customer's fault → weight 0.
+      if (
+        remarks.includes('SELLER_CANCELLED') ||
+        remarks.includes('SYSTEM_CANCELLED') ||
+        remarks.includes('STOCK_OUT')
+      ) {
+        continue;
+      }
+      // Customer-initiated cancellation → weight 1.
+      weightedScore += 1;
+    }
+    if (weightedScore >= this.abuseRecentCancelLimit) {
       const days = Math.round(this.abuseLookbackMs / (24 * 60 * 60 * 1000));
-      reasons.push(`Too many cancelled COD orders in the last ${days} days`);
+      reasons.push(
+        `Too many cancelled COD orders in the last ${days} days (weighted score ${weightedScore})`,
+      );
     }
 
     const allowed = reasons.length === 0;

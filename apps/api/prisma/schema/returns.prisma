@@ -79,8 +79,12 @@ model Return {
   // outcome is a refund (the common path). When QC picks REPLACEMENT
   // or EXCHANGE, the status moves through PENDING_STOCK_CHECK →
   // AWAITING_FULFILMENT (or AWAITING_PAYMENT for exchange-with-diff).
-  // The order_id columns are loose pointers (no FK constraint) until
-  // the order-creation follow-up lands.
+  //
+  // Phase 5 follow-up (2026-05-16) — replacementOrderId + exchangeOrderId
+  // are now real foreign keys onto MasterOrder via the named relations
+  // below. onDelete: SetNull preserves the return row when the
+  // replacement order is admin-deleted (rare; usually returns travel
+  // through the standard close path instead).
   replacementStatus       ReplacementRequestStatus? @map("replacement_status")
   replacementOrderId      String?                   @map("replacement_order_id")
   exchangeOrderId         String?                   @map("exchange_order_id")
@@ -138,7 +142,13 @@ model Return {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   subOrder           SubOrder              @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
-  masterOrder        MasterOrder           @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  masterOrder        MasterOrder           @relation("ReturnMasterOrder", fields: [masterOrderId], references: [id], onDelete: Cascade)
+  // Phase 5 (2026-05-16) — replacement / exchange order pointers
+  // promoted to real foreign keys. Named relations keep the
+  // back-relation on MasterOrder unambiguous since this table
+  // already references MasterOrder from masterOrderId.
+  replacementOrder   MasterOrder?          @relation("ReturnReplacementOrder", fields: [replacementOrderId], references: [id], onDelete: SetNull)
+  exchangeOrder      MasterOrder?          @relation("ReturnExchangeOrder", fields: [exchangeOrderId], references: [id], onDelete: SetNull)
   customer           User                  @relation(fields: [customerId], references: [id], onDelete: Cascade)
   items              ReturnItem[]
   evidence           ReturnEvidence[]

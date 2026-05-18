@@ -104,7 +104,7 @@ export class SlaTrackerService {
     const verdicts = await this.evaluate([snapshot], now);
     if (verdicts.length === 0) return null;
     verdicts.sort((a, b) => a.remainingMinutes - b.remainingMinutes);
-    return verdicts[0];
+    return verdicts[0]!;
   }
 
   private judge(

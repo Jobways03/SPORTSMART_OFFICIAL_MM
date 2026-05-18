@@ -5,5 +5,5 @@ export class PosVoidSaleDto {
   @IsString()
   @MinLength(3, { message: 'Reason must be at least 3 characters' })
   @MaxLength(500, { message: 'Reason must not exceed 500 characters' })
-  reason: string;
+  reason!: string;
 }

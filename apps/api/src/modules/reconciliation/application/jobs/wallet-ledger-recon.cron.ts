@@ -153,7 +153,7 @@ export class WalletLedgerReconCron
           }
         }
 
-        cursor = wallets[wallets.length - 1].id;
+        cursor = wallets[wallets.length - 1]!.id;
         if (wallets.length < WalletLedgerReconCron.BATCH_SIZE) break;
       }
     } finally {

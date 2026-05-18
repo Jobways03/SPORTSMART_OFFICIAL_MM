@@ -1,4 +1,5 @@
 import { apiClient, ApiResponse } from '@/lib/api-client';
+import { paiseToRupeesString, type PaiseValue } from '@sportsmart/shared-utils';
 
 export type WalletTransactionType =
   | 'TOPUP'
@@ -18,7 +19,11 @@ export interface AdminWalletListItem {
   userId: string;
   userEmail: string;
   userFullName: string;
-  balanceInPaise: number;
+  // Paise from the API arrives as `number` for values that fit in
+  // JS-safe-integer (anything up to ₹9 crore), or as `string` (BigInt
+  // serialised) for larger values. Frontend formatters MUST go through
+  // paiseToRupeesString (shared-utils) which handles both safely.
+  balanceInPaise: number | string;
   currency: string;
   updatedAt: string;
   isBlocked?: boolean;
@@ -38,8 +43,10 @@ export interface AdminWalletTransaction {
   userId: string;
   type: WalletTransactionType;
   status: WalletTransactionStatus;
-  amountInPaise: number;
-  balanceAfterInPaise: number;
+  // Signed paise (negative = debit). number | string per the BigInt
+  // boundary note on AdminWalletListItem.
+  amountInPaise: number | string;
+  balanceAfterInPaise: number | string;
   referenceType: string | null;
   referenceId: string | null;
   description: string;
@@ -128,20 +135,20 @@ export const adminWalletService = {
   },
 };
 
-export function formatPaise(paise: number): string {
-  const rupees = paise / 100;
-  const hasFractional = paise % 100 !== 0;
-  return (
-    '₹' +
-    rupees.toLocaleString('en-IN', {
-      minimumFractionDigits: hasFractional ? 2 : 0,
-      maximumFractionDigits: 2,
-    })
-  );
+/**
+ * Delegate to the shared BigInt-safe formatter. Keeps backwards-
+ * compatible signature for the dozen-ish call sites in this app.
+ */
+export function formatPaise(paise: PaiseValue): string {
+  return paiseToRupeesString(paise);
 }
 
 export function signedAmount(tx: AdminWalletTransaction): string {
-  const abs = Math.abs(tx.amountInPaise);
-  const sign = tx.amountInPaise >= 0 ? '+' : '−';
-  return `${sign} ${formatPaise(abs)}`;
+  const v = tx.amountInPaise;
+  // Coerce to BigInt for the sign check + abs without losing precision.
+  const bi = typeof v === 'bigint' ? v : BigInt(v);
+  const negative = bi < 0n;
+  const abs = negative ? -bi : bi;
+  const sign = negative ? '−' : '+';
+  return `${sign} ${paiseToRupeesString(abs)}`;
 }

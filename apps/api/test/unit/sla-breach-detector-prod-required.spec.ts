@@ -49,6 +49,7 @@ const baseProdEnv = {
   S3_ACCESS_KEY: 'x',
   S3_SECRET_KEY: 'x',
   ADMIN_MFA_ENCRYPTION_KEY: 'k'.repeat(32),
+  APP_URL: 'https://api.example.com',
   CORS_ORIGINS: 'https://app.example.com',
   // Sibling required-on flags (PR 6.1, 6.3 – 6.15).
   CRON_HEARTBEAT_ENABLED: 'true',
@@ -69,13 +70,13 @@ const baseProdEnv = {
 };
 
 describe('SLA_BREACH_DETECTOR_ENABLED prod policy (PR 6.2)', () => {
-  describe('dev / staging — flag stays default-off', () => {
-    it('dev parses cleanly with the flag absent', () => {
+  describe('dev / staging — flag default-on (Phase 9 — promoted from off in 2026-05-16)', () => {
+    it('dev parses cleanly with the flag absent and inherits the default-on', () => {
       const parsed = envSchema.parse(baseDevEnv);
-      expect(parsed.SLA_BREACH_DETECTOR_ENABLED).toBe('false');
+      expect(parsed.SLA_BREACH_DETECTOR_ENABLED).toBe('true');
     });
 
-    it('staging accepts the flag off', () => {
+    it('staging accepts the flag explicitly off', () => {
       const result = envSchema.safeParse({
         ...baseDevEnv,
         NODE_ENV: 'staging',
@@ -86,13 +87,9 @@ describe('SLA_BREACH_DETECTOR_ENABLED prod policy (PR 6.2)', () => {
   });
 
   describe('production — flag must be true', () => {
-    it('rejects a prod env where SLA_BREACH_DETECTOR_ENABLED is missing', () => {
+    it('accepts a prod env where SLA_BREACH_DETECTOR_ENABLED is missing (inherits default-on)', () => {
       const result = envSchema.safeParse(baseProdEnv);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        const messages = result.error.issues.map((i) => i.message).join('\n');
-        expect(messages).toMatch(/SLA_BREACH_DETECTOR_ENABLED.*production/i);
-      }
+      expect(result.success).toBe(true);
     });
 
     it('rejects a prod env where the flag is explicitly false', () => {

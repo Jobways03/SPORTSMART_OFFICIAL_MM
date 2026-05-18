@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { EmailService } from '../../../../integrations/email/email.service';
+import { safeHtml } from '../../../../core/util/escape-html';
 import {
   FranchisePartnerRepository,
   FRANCHISE_PARTNER_REPOSITORY,
@@ -34,10 +35,13 @@ export class AdminSendFranchiseMessageUseCase {
       throw new NotFoundAppException('Franchise not found');
     }
 
+    // Subject + message are admin-typed free-text. Escape every
+    // interpolation via safeHtml so a pasted <script> or
+    // attribute-break can't reach the franchise's inbox as live HTML.
     await this.emailService.send({
       to: franchise.email,
       subject,
-      html: `<div style="font-family:sans-serif;max-width:600px">
+      html: safeHtml`<div style="font-family:sans-serif;max-width:600px">
         <h2 style="color:#2563eb">Message from SPORTSMART Admin</h2>
         <p>Hi ${franchise.ownerName},</p>
         <div style="background:#f9fafb;padding:16px;border-radius:8px;margin:16px 0">${message}</div>

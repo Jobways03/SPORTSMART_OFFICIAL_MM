@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { PostOfficeCacheService } from './post-office-cache.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -39,6 +40,16 @@ export interface StockReservationResult {
   expiresAt: Date;
 }
 
+export interface AllocateAndReserveResult {
+  allocation: AllocationResult;
+  reservation: StockReservationResult;
+  chosenCandidate: AllocatedSeller;
+  /** Which slot in the ranked candidates list won the reservation. */
+  chosenRank: 'primary' | 'secondary' | 'tertiary' | 'fallback';
+  /** Mapping IDs that were attempted but lost the race. */
+  skippedMappingIds: string[];
+}
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -54,6 +65,11 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly envService: EnvService,
+    // Phase 4 follow-up (2026-05-16) — pincode coordinate lookup cache.
+    // Hot path: every allocation hits post_offices ~50 times under
+    // typical multi-seller routing. The cache moves all but the first
+    // lookup per pincode off the DB.
+    private readonly postOfficeCache: PostOfficeCacheService,
   ) {
     this.wDistance = this.envService.getNumber('ROUTING_DISTANCE_WEIGHT', 0.7);
     this.wStock = this.envService.getNumber('ROUTING_STOCK_WEIGHT', 0.2);
@@ -111,14 +127,12 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     if (!customerPincode) throw new BadRequestAppException('customerPincode is required');
     if (quantity < 1) throw new BadRequestAppException('quantity must be >= 1');
 
-    // 1. Get customer pincode coordinates from PostOffice table (165K+ entries)
-    const customerPostOffice = await this.prisma.postOffice.findFirst({
-      where: { pincode: customerPincode, latitude: { not: null } },
-      select: { latitude: true, longitude: true },
-    });
-
-    const customerLat = customerPostOffice?.latitude ? Number(customerPostOffice.latitude) : null;
-    const customerLon = customerPostOffice?.longitude ? Number(customerPostOffice.longitude) : null;
+    // 1. Customer pincode coordinates — Redis-cached (24h TTL) so the
+    //    165K-row post_offices table is touched at most once per
+    //    pincode per day (Phase 4 follow-up, 2026-05-16).
+    const customerCoords = await this.postOfficeCache.lookup(customerPincode);
+    const customerLat = customerCoords?.latitude ?? null;
+    const customerLon = customerCoords?.longitude ?? null;
 
     // 2. Find all active + approved seller mappings for this product/variant
     const mappingWhere: any = {
@@ -197,20 +211,34 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       distance: number;
     }[] = [];
 
+    // Phase 4 follow-up (2026-05-16) — batch-prefetch coordinates
+    // for every candidate seller mapping that lacks cached lat/lon
+    // but does have a pickupPincode. One round-trip through the
+    // cache (mostly hits) + at most one Postgres query for misses,
+    // instead of N sequential findFirst calls inside the scoring loop.
+    const pincodesToFetch = new Set<string>();
+    for (const m of eligible) {
+      if ((m.latitude == null || m.longitude == null) && m.pickupPincode) {
+        pincodesToFetch.add(m.pickupPincode);
+      }
+    }
+    const pincodeCoords =
+      pincodesToFetch.size > 0
+        ? await this.postOfficeCache.lookupMany(Array.from(pincodesToFetch))
+        : new Map();
+
     for (const mapping of eligible) {
       let distance: number | null = null;
       let sellerLat = mapping.latitude ? Number(mapping.latitude) : null;
       let sellerLon = mapping.longitude ? Number(mapping.longitude) : null;
 
-      // If mapping has no coordinates but has pickupPincode, look up from PostOffice
+      // If mapping has no coordinates but has pickupPincode, use the
+      // pre-fetched cache result populated above.
       if ((sellerLat == null || sellerLon == null) && mapping.pickupPincode) {
-        const sellerPO = await this.prisma.postOffice.findFirst({
-          where: { pincode: mapping.pickupPincode, latitude: { not: null } },
-          select: { latitude: true, longitude: true },
-        });
-        if (sellerPO?.latitude && sellerPO?.longitude) {
-          sellerLat = Number(sellerPO.latitude);
-          sellerLon = Number(sellerPO.longitude);
+        const sellerCoords = pincodeCoords.get(mapping.pickupPincode);
+        if (sellerCoords?.latitude != null && sellerCoords?.longitude != null) {
+          sellerLat = sellerCoords.latitude;
+          sellerLon = sellerCoords.longitude;
         }
       }
 
@@ -374,6 +402,134 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
         expiresAt: reservation.expiresAt,
       };
     });
+  }
+
+  // ── T4.5  Combined allocate + reserve with auto-fallback ───────────────
+
+  /**
+   * Allocate the best fulfillment candidate AND reserve stock against it in
+   * a single call, with automatic fallback through secondary → tertiary →
+   * remaining `allEligible` candidates if a higher-ranked one loses a
+   * concurrent reservation race.
+   *
+   * Why this exists: `allocate()` returns candidates with a snapshot of
+   * `available = stockQty - reservedQty`. Between the snapshot and the
+   * caller's `reserveStock()` call, another checkout can deplete the
+   * primary. Without retry the customer sees a hard "out of stock" even
+   * though a perfectly viable secondary candidate exists. With retry the
+   * checkout flow self-heals through the ranked list.
+   *
+   * Only SELLER candidates are attempted here — franchise stock lives in a
+   * different table (`FranchiseStock`) with a different reservation flow,
+   * so franchise candidates are returned in `allocation.allEligible` but
+   * skipped by this method's reservation loop. Callers that need to
+   * fulfill via a franchise should use `allocate()` directly and route
+   * through the franchise inventory path.
+   */
+  async allocateAndReserve(input: {
+    productId: string;
+    variantId?: string;
+    customerPincode: string;
+    quantity: number;
+    orderId?: string;
+    expiresInMinutes?: number;
+    excludeMappingIds?: string[];
+  }): Promise<AllocateAndReserveResult> {
+    const {
+      productId,
+      variantId,
+      customerPincode,
+      quantity,
+      orderId,
+      expiresInMinutes,
+      excludeMappingIds,
+    } = input;
+
+    const allocation = await this.allocate({
+      productId,
+      variantId,
+      customerPincode,
+      quantity,
+      excludeMappingIds,
+    });
+
+    if (!allocation.serviceable || allocation.allEligible.length === 0) {
+      throw new ConflictAppException(
+        `No serviceable candidates for product=${productId} pincode=${customerPincode} qty=${quantity}`,
+      );
+    }
+
+    // Build the attempt list: keep score order (primary first), drop
+    // franchise candidates (different reservation table), dedupe by
+    // mappingId in case allocate() ever returns duplicates.
+    const attemptList: Array<{
+      candidate: AllocatedSeller;
+      rank: 'primary' | 'secondary' | 'tertiary' | 'fallback';
+    }> = [];
+    const seen = new Set<string>();
+    const tag = (i: number): 'primary' | 'secondary' | 'tertiary' | 'fallback' =>
+      i === 0 ? 'primary' : i === 1 ? 'secondary' : i === 2 ? 'tertiary' : 'fallback';
+    for (let i = 0; i < allocation.allEligible.length; i++) {
+      const c = allocation.allEligible[i]!;
+
+      if (c.nodeType !== 'SELLER') continue;
+      if (seen.has(c.mappingId)) continue;
+      seen.add(c.mappingId);
+      attemptList.push({ candidate: c, rank: tag(i) });
+    }
+
+    if (attemptList.length === 0) {
+      throw new ConflictAppException(
+        `Allocation returned only franchise candidates — caller must use the franchise inventory path`,
+      );
+    }
+
+    const skippedMappingIds: string[] = [];
+    let lastError: Error | null = null;
+
+    for (const { candidate, rank } of attemptList) {
+      try {
+        const reservation = await this.reserveStock({
+          mappingId: candidate.mappingId,
+          quantity,
+          orderId,
+          expiresInMinutes,
+        });
+        if (skippedMappingIds.length > 0) {
+          this.logger.warn(
+            `allocateAndReserve fell back from ${skippedMappingIds.length} candidate(s) to mapping=${candidate.mappingId} for product=${productId} pincode=${customerPincode}`,
+          );
+        }
+        return {
+          allocation,
+          reservation,
+          chosenCandidate: candidate,
+          chosenRank: rank,
+          skippedMappingIds,
+        };
+      } catch (err) {
+        // Only ConflictAppException (insufficient stock from a concurrent
+        // race) and NotFoundAppException (mapping vanished) are retryable.
+        // Anything else — bad input, DB outage, etc. — propagates so we
+        // don't paper over real bugs by silently exhausting the list.
+        if (
+          err instanceof ConflictAppException ||
+          err instanceof NotFoundAppException
+        ) {
+          skippedMappingIds.push(candidate.mappingId);
+          lastError = err as Error;
+          this.logger.warn(
+            `allocateAndReserve: candidate mapping=${candidate.mappingId} (${rank}) lost reservation race: ${(err as Error).message}`,
+          );
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw new ConflictAppException(
+      `All ${attemptList.length} candidate(s) failed to reserve stock for product=${productId} pincode=${customerPincode} qty=${quantity}. Last error: ${lastError?.message ?? 'unknown'}`,
+    );
   }
 
   // ── T5  Reservation expiry ─────────────────────────────────────────────
@@ -682,16 +838,19 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       // 3. Calculate distance from franchise warehouse pincode to customer pincode
       let distance = 999;
       if (customerLat && customerLon && franchise.warehousePincode) {
-        const warehousePO = await this.prisma.postOffice.findFirst({
-          where: { pincode: franchise.warehousePincode, latitude: { not: null } },
-          select: { latitude: true, longitude: true },
-        });
-        if (warehousePO?.latitude && warehousePO?.longitude) {
+        // Phase 4 follow-up (2026-05-16) — cached lookup.
+        const warehouseCoords = await this.postOfficeCache.lookup(
+          franchise.warehousePincode,
+        );
+        if (
+          warehouseCoords?.latitude != null &&
+          warehouseCoords?.longitude != null
+        ) {
           distance = this.calculateDistance(
             customerLat,
             customerLon,
-            Number(warehousePO.latitude),
-            Number(warehousePO.longitude),
+            warehouseCoords.latitude,
+            warehouseCoords.longitude,
           );
         }
       }

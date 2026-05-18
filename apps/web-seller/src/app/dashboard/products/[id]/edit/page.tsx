@@ -864,6 +864,21 @@ const router = useRouter();
             {errors.title && <span className="form-error">{errors.title}</span>}
           </div>
 
+          {/* Master Code — auto-generated platform identifier. Always shown,
+              for variant and non-variant products alike. Read-only. */}
+          <div className="form-group">
+            <label className="form-label">Master Code</label>
+            <input
+              type="text"
+              className="form-input"
+              value={product?.productCode || ''}
+              readOnly
+              placeholder="Auto-generated"
+              style={{ background: '#f3f4f6', cursor: 'not-allowed', fontFamily: 'monospace' }}
+            />
+            <span className="form-hint">Auto-generated platform code. Stable across renames.</span>
+          </div>
+
           <div className="form-group">
             <label className="form-label">Category</label>
             <input
@@ -1278,6 +1293,7 @@ const router = useRouter();
                   <th>Image</th>
                   <th>Option Values</th>
                   <th>Weight</th>
+                  <th>Master SKU</th>
                   <th>SKU</th>
                   <th>Price</th>
                   <th>Quantity</th>
@@ -1306,6 +1322,7 @@ const router = useRouter();
                       </td>
                       <td style={{ fontWeight: 500, fontSize: 13 }}>{variantLabel}</td>
                       <td style={{ fontSize: 13, color: variant.weight ? 'var(--color-text)' : '#9ca3af' }}>{weightDisplay}</td>
+                      <td style={{ fontSize: 13, fontFamily: 'monospace', color: variant.masterSku ? 'var(--color-text)' : '#9ca3af' }}>{variant.masterSku || '\u2014'}</td>
                       <td style={{ fontSize: 13, color: variant.sku ? 'var(--color-text)' : '#9ca3af' }}>{variant.sku || '\u2014'}</td>
                       <td style={{ fontSize: 13, fontWeight: 500 }}>&#8377; {variant.price}</td>
                       <td style={{ fontSize: 13 }}>{variant.stock}</td>

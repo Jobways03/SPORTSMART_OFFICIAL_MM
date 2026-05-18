@@ -12,6 +12,7 @@ import { DiscountEligibilityService } from './application/services/discount-elig
 import { DiscountAffiliateUnificationService } from './application/services/discount-affiliate-unification.service';
 import { DiscountPublicFacade } from './application/facades/discount-public.facade';
 import { ReleaseExpiredRedemptionsCron } from './application/crons/release-expired-redemptions.cron';
+import { CouponAttemptsCleanupCron } from './application/crons/coupon-attempts-cleanup.cron';
 import { PrismaDiscountRepository } from './infrastructure/repositories/prisma-discount.repository';
 import { DISCOUNT_REPOSITORY } from './domain/repositories/discount.repository.interface';
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
@@ -36,6 +37,10 @@ import { TaxModule } from '../tax/module';
     DiscountAffiliateUnificationService,
     DiscountPublicFacade,
     ReleaseExpiredRedemptionsCron,
+    // Phase 4.8 (2026-05-16) — daily purge of coupon_attempts rows
+    // older than the cleanup horizon (default 30 days) so the
+    // windowed fraud-check query stays fast at scale.
+    CouponAttemptsCleanupCron,
     {
       provide: DISCOUNT_REPOSITORY,
       useClass: PrismaDiscountRepository,

@@ -53,7 +53,7 @@ export class VerificationQueueService {
         LIMIT 1
       `;
       if (candidates.length === 0) return null;
-      const id = candidates[0].id;
+      const id = candidates[0]!.id;
 
       await tx.$executeRawUnsafe(
         `UPDATE master_orders
@@ -601,12 +601,12 @@ export class VerificationQueueService {
       throw new NotFoundAppException('Order not found');
     }
     const [row] = rows;
-    if (!row.claim_held) {
+    if (!row!.claim_held) {
       throw new BadRequestAppException(
         'You do not hold the claim on this order',
       );
     }
-    if (!row.claim_live) {
+    if (!row!.claim_live) {
       throw new BadRequestAppException(
         'Your claim has expired — re-claim the order to continue',
       );

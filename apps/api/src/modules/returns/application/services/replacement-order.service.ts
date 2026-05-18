@@ -118,7 +118,7 @@ export class ReplacementOrderService {
     const isExchange = ret.customerRemedy === 'EXCHANGE';
     const targetVariantId = isExchange
       ? ret.exchangeTargetVariantId
-      : ret.items[0].orderItem.variantId;
+      : ret.items[0]!.orderItem.variantId;
     if (!targetVariantId) {
       throw new Error(
         isExchange
@@ -154,7 +154,7 @@ export class ReplacementOrderService {
     const priceDiff = isExchange
       ? classifyExchangePriceDiff({
           originalPaise: Math.round(
-            Number(ret.items[0].orderItem.unitPrice) * 100,
+            Number(ret.items[0]!.orderItem.unitPrice) * 100,
           ),
           replacementPaise: Math.round(Number(variant.price) * 100),
         })

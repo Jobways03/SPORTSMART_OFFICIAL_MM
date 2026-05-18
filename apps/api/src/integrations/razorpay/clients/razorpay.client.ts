@@ -41,8 +41,8 @@ function sleep(ms: number): Promise<void> {
 @Injectable()
 export class RazorpayClient implements OnModuleInit {
   private readonly logger = new Logger(RazorpayClient.name);
-  private keyId: string;
-  private keySecret: string;
+  private keyId!: string;
+  private keySecret!: string;
   private baseUrl = 'https://api.razorpay.com/v1';
 
   onModuleInit() {
@@ -205,6 +205,36 @@ export class RazorpayClient implements OnModuleInit {
     captured: boolean;
   }> {
     return this.request('fetchPayment', `/payments/${paymentId}`);
+  }
+
+  /**
+   * Phase 3.1 (2026-05-16) — orphan-payment recovery.
+   *
+   * Razorpay endpoint: GET /orders/:orderId/payments → list of every
+   * payment attempt made against the order. We use this when our
+   * MasterOrder has a `razorpayOrderId` but no `razorpayPaymentId` —
+   * which means the customer paid but their browser closed before our
+   * verify endpoint fired AND the webhook never arrived. The poller
+   * picks up these orphans and confirms via the API.
+   *
+   * Returns the array of payments wrapped in `items` (the same shape
+   * the Razorpay REST API returns). Empty array if no payments yet —
+   * legitimate when the customer abandoned without paying.
+   */
+  async fetchOrderPayments(orderId: string): Promise<{
+    count: number;
+    items: Array<{
+      id: string;
+      amount: number;
+      currency: string;
+      status: string;
+      order_id: string;
+      method: string;
+      captured: boolean;
+      created_at: number;
+    }>;
+  }> {
+    return this.request('fetchOrderPayments', `/orders/${orderId}/payments`);
   }
 
   async capturePayment(

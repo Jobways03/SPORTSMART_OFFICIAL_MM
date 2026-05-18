@@ -568,6 +568,7 @@ async function seedCategories(): Promise<Map<string, string>> {
 
   for (let i = 0; i < CATEGORY_TREE.length; i++) {
     const l0 = CATEGORY_TREE[i];
+    if (!l0) continue;
     const l0Id = await upsertCategory(l0.name, 0, i, null);
     slugToId.set(toSlug(l0.name), l0Id);
     console.log(`  L0: ${l0.name} (${toSlug(l0.name)})`);
@@ -575,6 +576,7 @@ async function seedCategories(): Promise<Map<string, string>> {
     if (l0.children) {
       for (let j = 0; j < l0.children.length; j++) {
         const l1 = l0.children[j];
+        if (!l1) continue;
         const l1Id = await upsertCategory(l1.name, 1, j, l0Id);
         slugToId.set(toSlug(l1.name), l1Id);
         console.log(`    L1: ${l1.name} (${toSlug(l1.name)})`);
@@ -617,6 +619,7 @@ async function seedOptionsAndValues(): Promise<Map<string, string>> {
 
     for (let i = 0; i < def.values.length; i++) {
       const val = def.values[i];
+      if (val === undefined) continue;
       await prisma.optionValue.upsert({
         where: {
           optionDefinitionId_value: {

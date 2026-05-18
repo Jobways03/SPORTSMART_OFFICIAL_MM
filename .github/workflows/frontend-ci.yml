@@ -53,6 +53,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Phase 9 (2026-05-16) — SCA on the PR's dependency diff.
+      # Same configuration as api-ci.yml; the matrix downstream of
+      # this job doesn't need to repeat the scan eight times.
+      - name: Dependency review (PR diff)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+      - name: SCA scan (osv-scanner)
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        with:
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
+            --fail-on-vuln-severity=HIGH
+
   build:
     name: ${{ matrix.app }} — Lint / Typecheck / Build
     runs-on: ubuntu-latest

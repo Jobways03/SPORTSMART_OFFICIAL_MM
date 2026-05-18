@@ -466,7 +466,7 @@ function parseFilterParams(query: Record<string, any>): Map<string, string[]> {
   for (const [rawKey, rawValue] of Object.entries(query)) {
     const match = rawKey.match(/^filter\[(\w+)\]$/);
     if (match && rawValue) {
-      const key = match[1];
+      const key = match[1]!;
       const values = String(rawValue).split(',').map((v) => v.trim()).filter(Boolean);
       if (values.length > 0) {
         filters.set(key, values);

@@ -33,7 +33,11 @@ export class AuditChainAnchorCron {
   ) {}
 
   enabled(): boolean {
-    return this.env.getBoolean('AUDIT_CHAIN_ANCHOR_ENABLED', false);
+    // Default flipped to true 2026-05-16. The anchor is read-only over
+    // the audit log + writes a single pinned (sequence, hash) row per
+    // hour — virtually zero overhead, but without it tamper-evidence
+    // verification has no checkpoint to compare against.
+    return this.env.getBoolean('AUDIT_CHAIN_ANCHOR_ENABLED', true);
   }
 
   @Cron(CronExpression.EVERY_HOUR)

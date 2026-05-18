@@ -81,7 +81,11 @@ function buildService(opts: {
       hasActiveStatutoryHold: false,
     }),
   };
-  const service = new ErasureService(prisma, taxRetentionStub);
+  // Phase 14 (2026-05-16) — erasure now emits identity.user.erased
+  // on COMPLETED. Inject a no-op event bus so spec doesn't need the
+  // full bus implementation.
+  const eventBusStub = { publish: jest.fn(async () => undefined) } as any;
+  const service = new ErasureService(prisma, taxRetentionStub, eventBusStub);
 
   // Inject the blockers via the private method's table lookups when
   // the test asks for them. The simplest path: replace the prototype

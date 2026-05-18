@@ -11,6 +11,7 @@ import { AccountsDashboardService } from './application/services/accounts-dashbo
 import { AccountsSettlementService } from './application/services/accounts-settlement.service';
 import { AccountsReportsService } from './application/services/accounts-reports.service';
 import { SettlementCycleProcessorService } from './application/services/settlement-cycle-processor.service';
+import { DoubleEntryValidatorService } from './application/services/double-entry-validator.service';
 
 // Facade
 import { AccountsPublicFacade } from './application/facades/accounts-public.facade';
@@ -36,6 +37,7 @@ import { AccountsReportsController } from './presentation/controllers/accounts-r
     AccountsSettlementService,
     AccountsReportsService,
     SettlementCycleProcessorService,
+    DoubleEntryValidatorService,
     AccountsPublicFacade,
     AdminAuthGuard,
   ],

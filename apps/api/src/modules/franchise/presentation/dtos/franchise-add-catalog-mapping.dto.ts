@@ -10,7 +10,7 @@ import {
 export class FranchiseAddCatalogMappingDto {
   @IsNotEmpty({ message: 'Product ID is required' })
   @IsUUID()
-  productId: string;
+  productId!: string;
 
   @IsOptional()
   @IsUUID()

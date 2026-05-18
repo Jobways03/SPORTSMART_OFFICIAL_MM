@@ -10,6 +10,34 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 
 /**
+ * Coerce a paise value (number | bigint | string | null) into a
+ * BigInt suitable for Prisma persistence, without going through
+ * Number() — which would silently lose precision on values larger
+ * than Number.MAX_SAFE_INTEGER (≈ 9 lakh rupees in paise).
+ */
+function coercePaise(
+  v: number | bigint | string | null | undefined,
+): bigint | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number') {
+    if (!Number.isInteger(v)) {
+      throw new RangeError(
+        `Paise value must be an integer (got ${v}). Convert rupees to paise upstream.`,
+      );
+    }
+    return BigInt(v);
+  }
+  if (typeof v === 'string') {
+    if (!/^-?\d+$/.test(v.trim())) {
+      throw new RangeError(`Paise string must be a plain integer (got "${v}")`);
+    }
+    return BigInt(v.trim());
+  }
+  throw new TypeError(`Unsupported paise type: ${typeof v}`);
+}
+
+/**
  * Records every gateway interaction + surfaces mismatches between what
  * we expected to receive vs what the gateway actually settled.
  */
@@ -65,24 +93,27 @@ export class PaymentOpsService {
     masterOrderId?: string | null;
     orderNumber?: string | null;
     providerPaymentId?: string | null;
-    expectedInPaise?: number | null;
-    actualInPaise?: number | null;
+    expectedInPaise?: number | bigint | string | null;
+    actualInPaise?: number | bigint | string | null;
     description: string;
     severity?: number;
   }) {
+    // Phase 2 (PR 2.3) — columns are BigInt; widened the facade signature
+    // 2026-05-16 to accept number | bigint | string so callers can pass
+    // raw BigInt values (settlement totals, large refunds) without
+    // first round-tripping through Number() and losing precision on
+    // values > Number.MAX_SAFE_INTEGER (≈ ₹9 lakh in paise). The
+    // coercion to BigInt happens at this single persistence boundary.
+    const expected = coercePaise(args.expectedInPaise);
+    const actual = coercePaise(args.actualInPaise);
     const alert = await this.prisma.paymentMismatchAlert.create({
       data: {
         kind: args.kind,
         masterOrderId: args.masterOrderId ?? null,
         orderNumber: args.orderNumber ?? null,
         providerPaymentId: args.providerPaymentId ?? null,
-        // Phase 2 (PR 2.3) — columns are BigInt; the facade signature
-        // stays `number` for caller convenience. Coerce at the boundary
-        // here so the Prisma client gets the right type.
-        expectedInPaise:
-          args.expectedInPaise != null ? BigInt(args.expectedInPaise) : null,
-        actualInPaise:
-          args.actualInPaise != null ? BigInt(args.actualInPaise) : null,
+        expectedInPaise: expected,
+        actualInPaise: actual,
         description: args.description,
         severity: args.severity ?? 50,
       },

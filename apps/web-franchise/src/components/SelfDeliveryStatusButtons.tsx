@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useModal } from '@sportsmart/ui';
 
 import {
   franchiseDeliveryMethodsService,
@@ -41,6 +42,7 @@ export function SelfDeliveryStatusButtons({
   currentStatus,
   onChanged,
 }: SelfDeliveryStatusButtonsProps) {
+  const { confirmDialog } = useModal();
   const [status, setStatus] = useState<SelfDeliveryStatus | null>(currentStatus);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,8 +167,15 @@ export function SelfDeliveryStatusButtons({
         {!terminal && (
           <button
             disabled={busy}
-            onClick={() => {
-              if (confirm('Cancel this self-delivery shipment?')) transition('CANCELLED');
+            onClick={async () => {
+              const ok = await confirmDialog({
+                title: 'Cancel this shipment?',
+                message: 'This will mark the self-delivery shipment as CANCELLED and notify the customer.',
+                confirmText: 'Cancel shipment',
+                cancelText: 'Keep',
+                danger: true,
+              });
+              if (ok) transition('CANCELLED');
             }}
             style={{
               padding: '8px 14px',

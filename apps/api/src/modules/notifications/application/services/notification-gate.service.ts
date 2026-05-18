@@ -71,6 +71,27 @@ export class NotificationGateService {
       }
     }
 
+    // 1b. WhatsApp opt-out — Meta TOS requires that once a user
+    // replies STOP, we stop sending. Even transactional sends are
+    // blocked (the suppression list above can store the same state,
+    // but it lives in a separate table populated by the WhatsApp
+    // inbound webhook). Phase 6 (2026-05-16).
+    if (input.channel === 'WHATSAPP') {
+      const phoneE164 = input.destination.replace(/[^\d]/g, '');
+      if (phoneE164) {
+        const session = await this.prisma.whatsappSession.findUnique({
+          where: { phoneE164 },
+          select: { optedOutAt: true, optOutReason: true },
+        });
+        if (session?.optedOutAt) {
+          return {
+            allowed: false,
+            reason: `whatsapp opted out: ${session.optOutReason ?? 'USER_STOP'}`,
+          };
+        }
+      }
+    }
+
     // 2. Transactional bypass for safety-critical sends.
     if (input.transactional) return { allowed: true };
 

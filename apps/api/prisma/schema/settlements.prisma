@@ -73,6 +73,8 @@ model SellerSettlement {
   seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   commissionRecords CommissionRecord[]
   tcsLedger         GstTcsSettlementLedger? @relation(fields: [tcsLedgerId], references: [id], onDelete: Restrict)
+  // Phase 12 (2026-05-16) — back-relation for the SettlementAdjustment FK.
+  adjustments       SettlementAdjustment[]
 
   @@unique([cycleId, sellerId])
   @@index([cycleId])
@@ -84,6 +86,17 @@ model SellerSettlement {
 // Manual adjustment entries on a SellerSettlement (post-preview, pre-PAID).
 // Lets ops correct for clawbacks, goodwill credits, missed line items.
 // Sign convention: positive = adds to seller payout; negative = deducts.
+//
+// Phase 12 (2026-05-16) — schema integrity hardening:
+//   • `settlementId` is now a proper FK onto SellerSettlement with
+//     ON DELETE CASCADE. Previously it was a bare string column, so a
+//     deleted settlement left orphaned adjustment rows that the
+//     reconciliation cron would later flag.
+//   • `idempotencyKey` (optional) plus a partial-unique constraint
+//     gives operators a deterministic dedup hook for retried
+//     adjustment posts. Setting the same key twice now collapses to
+//     a single row; the second insert raises a unique-violation that
+//     the admin service catches and translates to a 409.
 model SettlementAdjustment {
   id           String   @id @default(uuid())
   settlementId String   @map("settlement_id")
@@ -93,8 +106,19 @@ model SettlementAdjustment {
   reason        String
   notes        String?
   createdByAdminId String? @map("created_by_admin_id")
+  // Phase 12 (2026-05-16) — caller-supplied idempotency key. Optional
+  // for backward compatibility with rows seeded before the column
+  // existed; new code at the admin-adjustment endpoint MUST set it
+  // (typically `${settlementId}:${adminId}:${request-uuid}`).
+  idempotencyKey String? @map("idempotency_key")
   createdAt    DateTime @default(now()) @map("created_at")
 
+  settlement SellerSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  // Partial unique: only rows that supplied an idempotency key are
+  // covered. The partial form is created in the migration alongside
+  // the regular schema (Prisma can't express WHERE clauses in
+  // @@unique today — see migration.sql for the CREATE UNIQUE INDEX).
   @@index([settlementId])
   @@map("settlement_adjustments")
 }

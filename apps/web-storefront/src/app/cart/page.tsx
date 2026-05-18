@@ -91,7 +91,15 @@ export default function CartPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);
 
+  // Phase 4.12 (2026-05-16) — hammer-the-button guard.
+  //
+  // If the customer rapidly clicks +/- while a previous request is
+  // in-flight, multiple PATCH calls can reorder over the network and
+  // leave the cart in the wrong final quantity. We hold a click-block
+  // for the duration of the request via the `updating` state (it's
+  // already set per item; we just check it at the top of every action).
   const updateQuantity = async (itemId: string, quantity: number) => {
+    if (updating === itemId) return; // hammer-block
     if (quantity < 1) return removeItem(itemId);
     setUpdating(itemId);
     try {
@@ -107,6 +115,7 @@ export default function CartPage() {
   };
 
   const removeItem = async (itemId: string) => {
+    if (updating === itemId) return; // hammer-block
     setUpdating(itemId);
     try {
       await apiClient(`/customer/cart/items/${itemId}`, { method: 'DELETE' });
@@ -187,9 +196,23 @@ export default function CartPage() {
   // Re-validate the preview when the cart subtotal changes (qty change,
   // item add/remove). If the discount no longer applies (e.g. min-order
   // threshold), drop the preview silently so the summary stays accurate.
+  //
+  // Phase 4.12 (2026-05-16) — race-safe rewrite.
+  // Two protections layered:
+  //   1. AbortController — cancels the in-flight HTTP request when a
+  //      newer cart change supersedes it. The browser's fetch
+  //      implementation drops the cancelled response before it can
+  //      land in setState.
+  //   2. `cancelled` boolean — defensive belt-and-suspenders for any
+  //      response that did make it past the abort signal.
+  // Together they guarantee the LAST cart change always determines
+  // the final discount preview state, regardless of network reorder.
   useEffect(() => {
     if (!previewedCoupon || !cart || cart.totalAmount <= 0) return;
     let cancelled = false;
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+
     apiClient<PreviewedCoupon>('/customer/coupons/validate', {
       method: 'POST',
       body: JSON.stringify({
@@ -202,6 +225,7 @@ export default function CartPage() {
           unitPrice: Number(i.unitPrice),
         })),
       }),
+      signal: controller?.signal,
     })
       .then((res) => {
         if (cancelled) return;
@@ -221,6 +245,7 @@ export default function CartPage() {
       });
     return () => {
       cancelled = true;
+      controller?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart?.totalAmount, cart?.itemCount]);

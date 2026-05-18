@@ -125,19 +125,172 @@ export class SearchPublicFacade {
   }
 
   /**
-   * Rebuild search index. When OpenSearch is configured, this would
-   * re-index all active products. For now, this is a no-op placeholder.
+   * Rebuild search index — walks every ACTIVE product in the catalog
+   * and re-indexes its document. Idempotent (re-running is safe; the
+   * adapter's indexDocument is upsert-style).
+   *
+   * When OpenSearch isn't configured (`SEARCH_OPENSEARCH_ENABLED=false`),
+   * this is a deliberate no-op — the Prisma fallback path is the
+   * source of truth for searchProducts, so there's nothing to "rebuild".
+   *
+   * Returns a summary the admin UI surfaces post-trigger so the
+   * operator sees the scope of work.
    */
-  async rebuildSearchIndex(): Promise<void> {
-    this.logger.log('Search index rebuild requested (Prisma fallback — no-op)');
+  async rebuildSearchIndex(): Promise<{
+    indexed: number;
+    failed: number;
+    skipped: number;
+  }> {
+    if (!this.openSearch || !this.env.getBoolean('SEARCH_OPENSEARCH_ENABLED', false)) {
+      this.logger.log(
+        'Search index rebuild requested but OpenSearch is disabled — Prisma fallback in use, nothing to rebuild.',
+      );
+      return { indexed: 0, failed: 0, skipped: 0 };
+    }
+
+    // Stream the catalog in pages so we never load the full product
+    // set into memory. 500 per page is a good balance between memory
+    // pressure and number of round-trips for a typical 50K-product
+    // catalog (~100 pages, ~5 minutes end-to-end).
+    const pageSize = 500;
+    let cursor: string | undefined = undefined;
+    let indexed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    while (true) {
+      const findArgs: any = {
+        where: { status: 'ACTIVE', isDeleted: false },
+        include: {
+          category: { select: { id: true, name: true } },
+          brand: { select: { id: true, name: true } },
+          images: {
+            select: { url: true },
+            orderBy: { sortOrder: 'asc' },
+            take: 1,
+          },
+          tags: { select: { tag: true } },
+        },
+        orderBy: { id: 'asc' },
+        take: pageSize,
+      };
+      if (cursor) {
+        findArgs.cursor = { id: cursor };
+        findArgs.skip = 1;
+      }
+      const batch = await this.prisma.product.findMany(findArgs);
+      if (batch.length === 0) break;
+
+      for (const product of batch as any[]) {
+        try {
+          await this.openSearch.indexProduct({
+            id: product.id,
+            title: product.title,
+            description: product.description,
+            slug: product.slug,
+            baseSku: product.baseSku,
+            basePrice: Number(product.basePrice),
+            salePrice: product.compareAtPrice
+              ? Number(product.compareAtPrice)
+              : null,
+            categoryId: product.categoryId,
+            categoryName: product.category?.name ?? null,
+            brandId: product.brandId,
+            brandName: product.brand?.name ?? null,
+            status: product.status,
+            tags: product.tags.map((t: { tag: string }) => t.tag),
+            imageUrl: product.images[0]?.url ?? null,
+          });
+          indexed += 1;
+        } catch (err) {
+          failed += 1;
+          this.logger.warn(
+            `Failed to index product ${product.id}: ${(err as Error).message}`,
+          );
+        }
+      }
+      cursor = (batch as any[])[batch.length - 1].id;
+      if (batch.length < pageSize) break;
+    }
+
+    this.logger.log(
+      `Search index rebuild complete — indexed=${indexed} failed=${failed} skipped=${skipped}`,
+    );
+    return { indexed, failed, skipped };
   }
 
   /**
-   * Update a single product's search document.
-   * When OpenSearch is configured, this would update the index entry.
+   * Update a single product's search document. Called on product
+   * create / update / delete events so the index stays in sync without
+   * waiting for the daily rebuild.
    */
   async updateSearchDocument(productId: string): Promise<void> {
-    this.logger.log(`Search document update for product ${productId} (Prisma fallback — no-op)`);
+    if (!this.openSearch || !this.env.getBoolean('SEARCH_OPENSEARCH_ENABLED', false)) {
+      this.logger.debug(
+        `Search document update for product ${productId} — OpenSearch disabled, Prisma fallback handles it implicitly`,
+      );
+      return;
+    }
+    try {
+      const product = await this.prisma.product.findUnique({
+        where: { id: productId },
+        include: {
+          category: { select: { id: true, name: true } },
+          brand: { select: { id: true, name: true } },
+          images: {
+            select: { url: true },
+            orderBy: { sortOrder: 'asc' },
+            take: 1,
+          },
+          tags: { select: { tag: true } },
+        },
+      });
+      if (!product || product.isDeleted || product.status !== 'ACTIVE') {
+        // Soft-deleted / inactive products are removed from the index
+        // so search results never surface them.
+        await this.openSearch.removeProduct(productId);
+        return;
+      }
+      await this.openSearch.indexProduct({
+        id: product.id,
+        title: product.title,
+        description: product.description,
+        slug: product.slug,
+        baseSku: product.baseSku,
+        basePrice: Number(product.basePrice),
+        salePrice: product.compareAtPrice
+          ? Number(product.compareAtPrice)
+          : null,
+        categoryId: product.categoryId,
+        categoryName: product.category?.name ?? null,
+        brandId: product.brandId,
+        brandName: product.brand?.name ?? null,
+        status: product.status,
+        tags: product.tags.map((t: { tag: string }) => t.tag),
+        imageUrl: product.images[0]?.url ?? null,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Failed to update search index for product ${productId}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Remove a product from the search index — fired on soft-delete or
+   * status flip to INACTIVE.
+   */
+  async removeSearchDocument(productId: string): Promise<void> {
+    if (!this.openSearch || !this.env.getBoolean('SEARCH_OPENSEARCH_ENABLED', false)) {
+      return;
+    }
+    try {
+      await this.openSearch.removeProduct(productId);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to remove product ${productId} from search index: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**

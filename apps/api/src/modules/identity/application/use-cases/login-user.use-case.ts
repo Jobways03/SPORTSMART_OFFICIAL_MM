@@ -6,6 +6,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { LoginResponseData } from '../../presentation/dtos/auth-response.dto';
 import {
@@ -96,6 +97,23 @@ export class LoginUserUseCase {
       await this.userRepo.clearLoginLockout(user.id);
     }
 
+    // Phase 13 (2026-05-16) — opportunistic rehash. Legacy hashes
+    // stored at a cost below the current target get re-hashed and
+    // persisted silently on the user's next successful sign-in.
+    // Best-effort: failures here don't block login (the user already
+    // proved their password works against the stored hash).
+    if (shouldRehash(user.passwordHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        await this.userRepo.updatePassword(user.id, upgraded);
+      } catch (err) {
+        this.logger.warn(
+          `Failed to rehash user ${user.id} on login: ${(err as Error).message}`,
+          'LoginUserUseCase',
+        );
+      }
+    }
+
     // Extract roles
     const roles = user.roleAssignments.map((ra) => ra.role.name);
 
@@ -157,8 +175,8 @@ export class LoginUserUseCase {
   private parseTimeToMs(time: string): number {
     const match = time.match(/^(\d+)(s|m|h|d)$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000; // default 30 days
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
     const multipliers: Record<string, number> = {
       s: 1000,
       m: 60 * 1000,

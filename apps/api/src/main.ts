@@ -1,3 +1,11 @@
+// Phase 11 (2026-05-16) — OpenTelemetry MUST initialize before
+// any other import so the SDK can patch the Node module loader
+// before Express/Prisma/Redis get cached. No-op when
+// OTEL_ENABLED!=true or the packages aren't installed; see
+// tracing/tracing.ts for the lazy-require + install instructions.
+import { initTracing } from './bootstrap/tracing/tracing';
+initTracing();
+
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
@@ -31,6 +39,63 @@ async function bootstrap() {
 
   app.useLogger(logger);
 
+  // Phase 10 (2026-05-16) — Graceful shutdown.
+  //
+  // enableShutdownHooks() makes Nest call onModuleDestroy on every
+  // provider when the process receives SIGTERM/SIGINT. Without it,
+  // a pod eviction (kubectl rollout, autoscaler scale-down) hard-
+  // kills the process and:
+  //   • in-flight HTTP requests are dropped mid-response — paid
+  //     customers see a 502 with no idempotency guarantee
+  //   • the outbox tick that's mid-publish leaks its lock for TTL
+  //     and may double-emit when the next replica grabs the row
+  //   • setInterval-based crons are torn down without their
+  //     `onModuleDestroy` releasing handles
+  //
+  // Nest's app.close() under enableShutdownHooks:
+  //   1. Stops accepting new HTTP connections (the listener closes).
+  //   2. Calls every provider's onModuleDestroy in reverse-init order.
+  //   3. Drains in-flight handlers (the underlying http server has
+  //      its own grace period — see SHUTDOWN_GRACE_MS below).
+  //   4. Exits when the queue is empty.
+  app.enableShutdownHooks();
+
+  // Belt + braces: explicit handlers for SIGTERM/SIGINT that call
+  // app.close() with a hard deadline. Nest's hook usually fires
+  // first, but in some container runtimes the signal arrives before
+  // Nest is fully wired — these handlers cover that window.
+  const shutdownGraceMs = envService.getNumber('SHUTDOWN_GRACE_MS', 30_000);
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.log(`Received ${signal} — starting graceful shutdown (grace: ${shutdownGraceMs}ms)`, 'Bootstrap');
+    const deadline = setTimeout(() => {
+      logger.error(
+        `Shutdown grace period (${shutdownGraceMs}ms) elapsed — forcing exit. ` +
+          'In-flight requests may have been dropped; investigate which provider failed to release in onModuleDestroy.',
+        undefined,
+        'Bootstrap',
+      );
+      process.exit(1);
+    }, shutdownGraceMs);
+    deadline.unref();
+    try {
+      await app.close();
+      logger.log('Graceful shutdown complete', 'Bootstrap');
+      process.exit(0);
+    } catch (err) {
+      logger.error(
+        `app.close() failed during shutdown: ${(err as Error).message}`,
+        (err as Error).stack,
+        'Bootstrap',
+      );
+      process.exit(1);
+    }
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
   // Phase 4 (PR 4.6) — refuse to boot in production with placeholder
   // JWT secrets from .env.example. Cheap, surface-level safety net.
   envService.assertProductionSecretsSafe();
@@ -58,6 +123,7 @@ async function bootstrap() {
   // ── Security headers (helmet) ──
   // CSP is intentionally tight for an API; Swagger UI in non-prod relaxes it.
   const isProd = envService.isProduction();
+  const isStaging = envService.getString('NODE_ENV') === 'staging';
   app.use(
     helmet({
       crossOriginResourcePolicy: false,
@@ -67,7 +133,15 @@ async function bootstrap() {
             directives: {
               defaultSrc: ["'self'"],
               scriptSrc: ["'self'"],
-              styleSrc: ["'self'", "'unsafe-inline'"],
+              // Phase 13 (2026-05-16) — dropped 'unsafe-inline' from
+              // styleSrc. The API returns JSON, problem+json, and the
+              // small set of HTML error pages — none of which need
+              // inline `<style>` blocks. Keeping 'unsafe-inline' on a
+              // CSP that otherwise locks down scripts undermines the
+              // protection: a stylesheet injection can rewrite the
+              // visual hierarchy (button labels swapped on phishing
+              // pages, copy-paste of fake admin warnings).
+              styleSrc: ["'self'"],
               imgSrc: ["'self'", 'data:', 'https:'],
               connectSrc: ["'self'"],
               fontSrc: ["'self'", 'data:'],
@@ -79,7 +153,14 @@ async function bootstrap() {
             },
           }
         : false,
-      hsts: isProd
+      // Phase 13 (2026-05-16) — HSTS in production AND staging.
+      // Staging runs over HTTPS in our deployment topology, so a
+      // downgrade attack there is just as dangerous as in prod (a
+      // tester logging in over a stripped HTTP staging URL would
+      // leak their JWT). Dev keeps HSTS off because local dev runs
+      // HTTP on localhost and HSTS would pin the certificate for
+      // every developer's browser.
+      hsts: (isProd || isStaging)
         ? { maxAge: 60 * 60 * 24 * 365, includeSubDomains: true, preload: true }
         : false,
       referrerPolicy: { policy: 'strict-origin-when-cross-origin' },

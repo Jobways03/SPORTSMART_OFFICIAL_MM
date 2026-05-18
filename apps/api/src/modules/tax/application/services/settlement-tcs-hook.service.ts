@@ -40,6 +40,10 @@ export interface ApplyToCycleResult {
   cycleId: string;
   settlementsProcessed: number;
   settlementsSkipped: number;
+  settlementsFailed: number;
+  /** IDs of the settlements that raised; ops scrapes these from the
+   *  log + retries via the admin "re-run TCS for cycle" endpoint. */
+  failedSettlementIds: string[];
   totalTcsDeductedInPaise: bigint;
   filingPeriod: string;
 }
@@ -87,6 +91,7 @@ export class SettlementTcsHookService {
     let processed = 0;
     let skipped = 0;
     let total = 0n;
+    const failedSettlementIds: string[] = [];
     for (const s of settlements) {
       if (s.tcsLedgerId) {
         // Idempotent — already stamped on a prior run.
@@ -114,21 +119,38 @@ export class SettlementTcsHookService {
         total += ledger.totalTcsInPaise;
         processed++;
       } catch (err) {
-        this.logger.warn(
+        // Per-settlement failure is captured so the caller can see the
+        // gap. The cycle approval is NOT rolled back — the failed
+        // settlement just sits without a tcsLedgerId; finance can
+        // re-run targeted compute. The previous version silently
+        // swallowed this and the caller's processed+skipped didn't
+        // sum to settlements.length — ops never knew there was a gap.
+        failedSettlementIds.push(s.id);
+        this.logger.error(
           `TCS compute failed for settlement ${s.id} (seller ${s.sellerId}): ` +
-            `${(err as Error).message}`,
+            `${(err as Error).message} — settlement left WITHOUT tcsLedgerId; ` +
+            `finance must re-run via admin endpoint.`,
         );
       }
     }
 
+    if (failedSettlementIds.length > 0) {
+      this.logger.error(
+        `TCS apply-on-approve cycle ${args.cycleId} had ${failedSettlementIds.length} ` +
+          `failed settlement(s): ${failedSettlementIds.join(', ')}`,
+      );
+    }
     this.logger.log(
       `TCS applied to cycle ${args.cycleId}: processed=${processed} ` +
-        `skipped=${skipped} total=${total.toString()} period=${filingPeriod}`,
+        `skipped=${skipped} failed=${failedSettlementIds.length} ` +
+        `total=${total.toString()} period=${filingPeriod}`,
     );
     return {
       cycleId: args.cycleId,
       settlementsProcessed: processed,
       settlementsSkipped: skipped,
+      settlementsFailed: failedSettlementIds.length,
+      failedSettlementIds,
       totalTcsDeductedInPaise: total,
       filingPeriod,
     };

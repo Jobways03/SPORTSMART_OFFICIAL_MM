@@ -181,7 +181,8 @@ export class WebhookDeliveryService {
       return;
     }
 
-    const delaySeconds = schedule[attempts - 1];
+    const delaySeconds = schedule[attempts - 1]!;
+
     const nextRetryAt = new Date(Date.now() + delaySeconds * 1000);
     await this.prisma.webhookDelivery.update({
       where: { id: deliveryId },

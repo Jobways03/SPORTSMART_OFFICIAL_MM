@@ -198,8 +198,8 @@ export class HistogramHandle {
     h.sum += value;
     h.count += 1;
     for (let i = 0; i < this.entry.buckets.length; i++) {
-      if (value <= this.entry.buckets[i]) {
-        h.bucketCounts[i] += 1;
+      if (value <= this.entry.buckets[i]!) {
+        h.bucketCounts[i]! += 1;
       }
     }
   }
@@ -214,7 +214,7 @@ export class HistogramHandle {
 function labelKey(labels: Labels): string {
   const keys = Object.keys(labels).sort();
   if (keys.length === 0) return '';
-  const parts = keys.map((k) => `${k}="${escapeLabelValue(labels[k])}"`);
+  const parts = keys.map((k) => `${k}="${escapeLabelValue(labels[k]!)}"`);
   return `{${parts.join(',')}}`;
 }
 

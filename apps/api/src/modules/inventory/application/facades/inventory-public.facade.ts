@@ -88,6 +88,24 @@ export class InventoryPublicFacade {
 
   /**
    * Releases previously reserved stock (e.g. order cancelled, reservation expired).
+   *
+   * Phase 4.4 (2026-05-16) — race-safe rewrite. The previous version
+   * found the reservation by filter then updated it in a separate
+   * statement; two concurrent release calls could both find the same
+   * RESERVED row and both decrement the mapping's reservedQty,
+   * silently double-releasing. Now:
+   *   1. CAS-flip the reservation status RESERVED → RELEASED (only
+   *      one path succeeds; concurrent caller's updateMany returns 0).
+   *   2. Decrement `reservedQty` ONLY when the CAS succeeded, using
+   *      the persisted row's quantity (not the caller's, which may
+   *      diverge if there's been a partial release).
+   *   3. If no matching RESERVED row, this is a no-op — release is
+   *      idempotent end-to-end.
+   *
+   * `quantity` is now informational only when a reservation row is
+   * found (the row's stored quantity is the source of truth); we
+   * still accept it for callers that release without a reservation
+   * row (legacy paths), where it acts as the fallback decrement.
    */
   async releaseStock(
     mappingId: string,
@@ -95,28 +113,49 @@ export class InventoryPublicFacade {
     referenceId: string,
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
-      // Decrement reserved qty (floor at 0)
+      // Step 1: try to CAS-flip a matching reservation. Filter by
+      // (mappingId, orderId, status=RESERVED) — the same predicate
+      // that scoped the previous query. updateMany lets us own the
+      // race outcome via the `count` return value.
+      const reservation = await tx.stockReservation.findFirst({
+        where: { mappingId, orderId: referenceId, status: 'RESERVED' },
+        select: { id: true, quantity: true },
+      });
+
+      if (reservation) {
+        const flip = await tx.stockReservation.updateMany({
+          where: { id: reservation.id, status: 'RESERVED' },
+          data: { status: 'RELEASED' },
+        });
+        if (flip.count === 0) {
+          // Concurrent path already flipped it — skip the decrement.
+          return;
+        }
+        // Decrement by the persisted reservation's quantity, not the
+        // caller's argument. This guarantees consistency even when
+        // a release is fired with a stale qty value.
+        await tx.sellerProductMapping.update({
+          where: { id: mappingId },
+          data: {
+            reservedQty: { decrement: reservation.quantity },
+          },
+        });
+        return;
+      }
+
+      // Fallback: no reservation row exists (legacy path). Decrement
+      // by the caller-supplied quantity, capped at 0 to defend
+      // against under-tracked state.
       const mapping = await tx.sellerProductMapping.findUnique({
         where: { id: mappingId },
+        select: { reservedQty: true },
       });
       if (!mapping) return;
-
       const newReserved = Math.max(mapping.reservedQty - quantity, 0);
       await tx.sellerProductMapping.update({
         where: { id: mappingId },
         data: { reservedQty: newReserved },
       });
-
-      // Mark reservation as released
-      const reservation = await tx.stockReservation.findFirst({
-        where: { mappingId, orderId: referenceId, status: 'RESERVED' },
-      });
-      if (reservation) {
-        await tx.stockReservation.update({
-          where: { id: reservation.id },
-          data: { status: 'RELEASED' },
-        });
-      }
     });
 
     this.logger.log(

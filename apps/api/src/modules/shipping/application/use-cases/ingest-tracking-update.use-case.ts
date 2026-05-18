@@ -63,11 +63,40 @@ export class IngestTrackingUpdateUseCase {
   }
 
   /**
+   * Phase 5 follow-up (2026-05-16) — webhook entry point.
+   *
+   * Resolve an AWB to its SubOrder and apply the supplied snapshot.
+   * Returns the SubOrder id touched, or null when the AWB is orphan
+   * (no matching SubOrder — likely a re-shipment AWB the platform
+   * never minted, or a cross-tenant misdelivery).
+   */
+  async ingestSingleSnapshot(
+    awb: string,
+    snapshot: TrackingSnapshot,
+  ): Promise<{ subOrderId: string | null; applied: boolean }> {
+    const subOrder = await this.prisma.subOrder.findFirst({
+      where: { ithinkAwb: awb },
+      select: { id: true, fulfillmentStatus: true },
+    });
+    if (!subOrder) {
+      this.logger.warn(`Tracking update for unknown AWB ${awb} — orphan?`);
+      return { subOrderId: null, applied: false };
+    }
+    await this.applySnapshot(subOrder.id, snapshot);
+    return { subOrderId: subOrder.id, applied: true };
+  }
+
+  /**
    * Apply a snapshot to a SubOrder. Updates the courier-side fields
    * always; promotes `fulfillmentStatus` only on terminal transitions
    * so non-terminal scans don't churn the order state machine.
+   *
+   * Phase 5 follow-up (2026-05-16) — promoted to public so the iThink
+   * webhook controller can hand off pushed events using the same
+   * apply path as the polling cron. Keeps the state-machine logic in
+   * one place regardless of how the event arrived.
    */
-  private async applySnapshot(
+  async applySnapshot(
     subOrderId: string,
     snapshot: TrackingSnapshot,
   ): Promise<void> {

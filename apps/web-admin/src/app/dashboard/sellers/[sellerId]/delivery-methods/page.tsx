@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useModal } from '@sportsmart/ui';
 
 import {
   adminDeliveryMethodsService,
@@ -17,6 +18,7 @@ import {
  * ops approves (~24h).
  */
 export default function SellerDeliveryMethodsPage() {
+  const { confirmDialog } = useModal();
   const params = useParams();
   const router = useRouter();
   const sellerId = String(params?.sellerId ?? '');
@@ -139,13 +141,14 @@ export default function SellerDeliveryMethodsPage() {
   /** Re-register the pickup at the current address (STALE recovery). */
   const reregisterWithIThink = async () => {
     if (!settings) return;
-    if (
-      !confirm(
-        'Create a new iThink warehouse for the seller\'s current address?\nThe old iThink warehouse_id will be replaced — deactivate it manually in iThink\'s panel.',
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: 'Re-register iThink warehouse?',
+      message:
+        "Create a new iThink warehouse for the seller's current address?\n\nThe old iThink warehouse_id will be replaced — deactivate it manually in iThink's panel.",
+      confirmText: 'Re-register',
+      cancelText: 'Cancel',
+    });
+    if (!ok) return;
     setSaving(true);
     setActionError(null);
     try {

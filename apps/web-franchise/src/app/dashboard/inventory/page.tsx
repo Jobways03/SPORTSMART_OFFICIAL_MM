@@ -876,8 +876,7 @@ function StockTable({
       <thead>
         <tr style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb' }}>
           <Th>Product</Th>
-          <Th>Global SKU</Th>
-          <Th>Franchise SKU</Th>
+          <Th>Master SKU</Th>
           <Th align="right">On Hand</Th>
           <Th align="right">Reserved</Th>
           <Th align="right">Available</Th>
@@ -963,23 +962,6 @@ function StockTable({
                 >
                   {item.globalSku}
                 </code>
-              </Td>
-              <Td>
-                {item.franchiseSku ? (
-                  <code
-                    style={{
-                      fontSize: 11,
-                      background: '#f3f4f6',
-                      padding: '2px 6px',
-                      borderRadius: 4,
-                      color: '#374151',
-                    }}
-                  >
-                    {item.franchiseSku}
-                  </code>
-                ) : (
-                  <span style={{ color: '#9ca3af' }}>-</span>
-                )}
               </Td>
               <Td align="right">{formatQty(item.onHandQty)}</Td>
               <Td align="right">{formatQty(item.reservedQty)}</Td>

@@ -16,6 +16,7 @@ import { VerifyResetOtpFranchiseUseCase } from '../../application/use-cases/veri
 import { ResendResetOtpFranchiseUseCase } from '../../application/use-cases/resend-reset-otp-franchise.use-case';
 import { ResetPasswordFranchiseUseCase } from '../../application/use-cases/reset-password-franchise.use-case';
 import { ChangePasswordFranchiseUseCase } from '../../application/use-cases/change-password-franchise.use-case';
+import { LogoutFranchiseUseCase } from '../../application/use-cases/logout-franchise.use-case';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
 import { AccessLogService } from '../../../access-log/application/services/access-log.service';
@@ -31,6 +32,7 @@ export class FranchiseAuthController {
     private readonly resendResetOtpFranchiseUseCase: ResendResetOtpFranchiseUseCase,
     private readonly resetPasswordFranchiseUseCase: ResetPasswordFranchiseUseCase,
     private readonly changePasswordFranchiseUseCase: ChangePasswordFranchiseUseCase,
+    private readonly logoutFranchiseUseCase: LogoutFranchiseUseCase,
     private readonly accessLog: AccessLogService,
   ) {}
 
@@ -182,6 +184,26 @@ export class FranchiseAuthController {
     return {
       success: true,
       message: 'Password changed successfully.',
+    };
+  }
+
+  /**
+   * Server-side logout: revokes every active session for this franchise.
+   * The frontend separately clears its local tokens — this endpoint
+   * makes sure a stolen refresh token can't be replayed after logout.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(FranchiseAuthGuard)
+  async logout(@Req() req: Request) {
+    const franchiseId = (req as any).franchiseId;
+    if (!franchiseId) {
+      throw new UnauthorizedAppException('Franchise session not found');
+    }
+    await this.logoutFranchiseUseCase.execute(franchiseId);
+    return {
+      success: true,
+      message: 'Logged out. All active sessions for this franchise have been revoked.',
     };
   }
 }

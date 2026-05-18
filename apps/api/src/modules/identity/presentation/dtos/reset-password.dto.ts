@@ -3,7 +3,7 @@ import { IsNotEmpty, IsString, IsUUID, Matches, MaxLength, MinLength } from 'cla
 export class ResetPasswordDto {
   @IsNotEmpty({ message: 'Reset token is required' })
   @IsUUID('4', { message: 'Invalid reset token' })
-  resetToken: string;
+  resetToken!: string;
 
   @IsNotEmpty({ message: 'Password is required' })
   @IsString()
@@ -13,5 +13,5 @@ export class ResetPasswordDto {
   @Matches(/(?=.*[A-Z])/, { message: 'Password must include an uppercase letter' })
   @Matches(/(?=.*\d)/, { message: 'Password must include a number' })
   @Matches(/(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])/, { message: 'Password must include a special character' })
-  newPassword: string;
+  newPassword!: string;
 }

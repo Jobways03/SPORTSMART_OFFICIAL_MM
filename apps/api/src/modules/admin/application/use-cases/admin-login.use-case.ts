@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
@@ -192,6 +193,22 @@ export class AdminLoginUseCase {
       lockUntil: null,
     });
 
+    // Phase 13 (2026-05-16) — opportunistic rehash. Done BEFORE the
+    // MFA branch so an admin who's enrolled MFA but logged in last
+    // before the cost bump still gets their hash upgraded; MFA
+    // happens after this point and the new hash is already persisted.
+    if (shouldRehash(admin.passwordHash)) {
+      try {
+        const upgraded = await hashPassword(password);
+        await this.adminRepo.updateAdmin(admin.id, { passwordHash: upgraded });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to rehash admin ${admin.id} on login: ${(err as Error).message}`,
+          'AdminLoginUseCase',
+        );
+      }
+    }
+
     // Phase 10 (PR 10.6) — MFA challenge branch. If the admin has
     // enrolled MFA, pause here: issue a short-lived challenge token
     // and return the challenge shape. The caller posts the
@@ -292,8 +309,8 @@ export class AdminLoginUseCase {
   private parseTimeToMs(time: string): number {
     const match = time.match(/^(\d+)(s|m|h|d)$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000;
-    const value = parseInt(match[1], 10);
-    const unit = match[2];
+    const value = parseInt(match[1]!, 10);
+    const unit = match[2]!;
     const multipliers: Record<string, number> = {
       s: 1000, m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000,
     };

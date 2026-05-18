@@ -217,6 +217,67 @@ const DISPUTE_STATUS_TRANSITIONS: Record<DisputeStatus, readonly DisputeStatus[]
   CLOSED: [],
 };
 
+// ── ProductStatus (catalog product approval lifecycle) ────────────────────
+//
+// Phase 4.3 (2026-05-16). Previously the catalog code allowed
+// DRAFT → ACTIVE in one step, which let an unverified seller publish
+// a product that the catalog team had never approved. Tax data,
+// HSN code, GST rate — none of those would be validated. This FSM
+// makes the gateway explicit: every product must pass through
+// SUBMITTED + APPROVED before reaching ACTIVE.
+
+export type ProductStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'CHANGES_REQUESTED'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'ACTIVE'
+  | 'SUSPENDED'
+  | 'ARCHIVED';
+
+const PRODUCT_STATUS_TRANSITIONS: Record<
+  ProductStatus,
+  readonly ProductStatus[]
+> = {
+  // Initial state — the seller is still building the product. Can be
+  // submitted for catalog review or archived (abandoned draft cleanup).
+  DRAFT: ['SUBMITTED', 'ARCHIVED'],
+  // Awaiting catalog review.
+  SUBMITTED: ['APPROVED', 'CHANGES_REQUESTED', 'REJECTED', 'DRAFT'],
+  // Catalog asked for edits; seller revises and re-submits.
+  CHANGES_REQUESTED: ['SUBMITTED', 'ARCHIVED', 'REJECTED'],
+  // Approved by catalog — seller can now publish.
+  APPROVED: ['ACTIVE', 'SUSPENDED', 'ARCHIVED'],
+  // Catalog rejected. Seller can revise into DRAFT and resubmit.
+  REJECTED: ['DRAFT', 'ARCHIVED'],
+  // Customer-visible.
+  ACTIVE: ['SUSPENDED', 'ARCHIVED'],
+  // Admin-suspended (compliance / fraud). Can be reinstated to ACTIVE.
+  SUSPENDED: ['ACTIVE', 'ARCHIVED'],
+  // Terminal.
+  ARCHIVED: [],
+};
+
+// ── VariantStatus (per-variant lifecycle) ─────────────────────────────────
+
+export type VariantStatus = 'DRAFT' | 'ACTIVE' | 'OUT_OF_STOCK' | 'DISABLED' | 'ARCHIVED';
+
+const VARIANT_STATUS_TRANSITIONS: Record<
+  VariantStatus,
+  readonly VariantStatus[]
+> = {
+  // A variant can go live only after its parent product is ACTIVE.
+  // The FSM here doesn't encode the parent dependency — that's a
+  // service-layer guard — but it does prevent DRAFT → OUT_OF_STOCK
+  // jumps that skipped the ACTIVE state entirely.
+  DRAFT: ['ACTIVE', 'DISABLED', 'ARCHIVED'],
+  ACTIVE: ['OUT_OF_STOCK', 'DISABLED', 'ARCHIVED'],
+  OUT_OF_STOCK: ['ACTIVE', 'DISABLED', 'ARCHIVED'],
+  DISABLED: ['ACTIVE', 'ARCHIVED'],
+  ARCHIVED: [],
+};
+
 // ── OrderAcceptStatus (sub-order acceptance lifecycle) ─────────────────────
 
 export type OrderAcceptStatus = 'OPEN' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED';
@@ -264,6 +325,14 @@ const TABLES = {
     name: 'OrderAcceptStatus',
     transitions: ACCEPT_STATUS_TRANSITIONS,
   } as TransitionTable<OrderAcceptStatus>,
+  ProductStatus: {
+    name: 'ProductStatus',
+    transitions: PRODUCT_STATUS_TRANSITIONS,
+  } as TransitionTable<ProductStatus>,
+  VariantStatus: {
+    name: 'VariantStatus',
+    transitions: VARIANT_STATUS_TRANSITIONS,
+  } as TransitionTable<VariantStatus>,
 };
 
 export type StatusKind = keyof typeof TABLES;

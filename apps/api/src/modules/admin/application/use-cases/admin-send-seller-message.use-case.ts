@@ -4,6 +4,7 @@ import { redactEmail } from '../../../../bootstrap/logging/log-redact';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
 import { AdminAuditService } from '../services/admin-audit.service';
 import { EmailService } from '../../../../integrations/email/email.service';
+import { safeHtml } from '../../../../core/util/escape-html';
 import {
   AdminRepository,
   ADMIN_REPOSITORY,
@@ -68,8 +69,14 @@ export class AdminSendSellerMessageUseCase {
       status: 'SENT',
     });
 
-    // Send email to seller
-    const emailHtml = `
+    // Send email to seller. Subject and message bodies are admin-typed
+    // free-text — historically interpolated raw into the HTML, which
+    // would render any <script>, attribute-break, or HTML injection an
+    // admin pasted in. safeHtml escapes every ${} expression before it
+    // hits the rendered email; static markup around it is unchanged.
+    const trimmedSubject = subject.trim();
+    const trimmedMessage = message.trim();
+    const emailHtml = safeHtml`
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <div style="background: #1a56db; padding: 20px; text-align: center;">
           <h1 style="color: #fff; margin: 0; font-size: 22px;">SPORTSMART</h1>
@@ -79,8 +86,8 @@ export class AdminSendSellerMessageUseCase {
           <p style="margin: 0 0 8px; color: #374151;">Hi <strong>${seller.sellerName}</strong>,</p>
           <p style="margin: 0 0 16px; color: #374151;">You have a new message from the SPORTSMART admin team:</p>
           <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-            <p style="margin: 0 0 8px; font-weight: 600; color: #111827;">${subject.trim()}</p>
-            <p style="margin: 0; color: #374151; white-space: pre-wrap;">${message.trim()}</p>
+            <p style="margin: 0 0 8px; font-weight: 600; color: #111827;">${trimmedSubject}</p>
+            <p style="margin: 0; color: #374151; white-space: pre-wrap;">${trimmedMessage}</p>
           </div>
           <p style="margin: 0; font-size: 13px; color: #6b7280;">
             If you have questions, log in to your seller dashboard or reply to this email.
@@ -94,9 +101,9 @@ export class AdminSendSellerMessageUseCase {
 
     const emailSent = await this.emailService.send({
       to: seller.email,
-      subject: `SPORTSMART: ${subject.trim()}`,
+      subject: `SPORTSMART: ${trimmedSubject}`,
       html: emailHtml,
-      text: `Hi ${seller.sellerName},\n\nYou have a new message from the SPORTSMART admin team:\n\nSubject: ${subject.trim()}\n\n${message.trim()}\n\n— SPORTSMART Marketplace`,
+      text: `Hi ${seller.sellerName},\n\nYou have a new message from the SPORTSMART admin team:\n\nSubject: ${trimmedSubject}\n\n${trimmedMessage}\n\n— SPORTSMART Marketplace`,
     });
 
     if (!emailSent) {

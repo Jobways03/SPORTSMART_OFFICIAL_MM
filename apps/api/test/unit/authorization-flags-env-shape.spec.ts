@@ -24,9 +24,9 @@ describe('authorization env flags — schema shape', () => {
     JWT_REFRESH_SECRET: 'r'.repeat(32),
   };
 
-  it('PERMISSIONS_GUARD_STRICT defaults to "false"', () => {
+  it('PERMISSIONS_GUARD_STRICT defaults to "true" (Phase 9 — promoted from off in 2026-05-16)', () => {
     const env = envSchema.parse(baseEnv);
-    expect(env.PERMISSIONS_GUARD_STRICT).toBe('false');
+    expect(env.PERMISSIONS_GUARD_STRICT).toBe('true');
   });
 
   it('ABAC_ENABLED defaults to "false"', () => {

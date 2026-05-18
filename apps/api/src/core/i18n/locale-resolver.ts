@@ -60,7 +60,7 @@ export function resolveLocale(input: ResolveInput): ResolvedLocale {
     if (SUPPORTED.has(c)) {
       return { locale: c, fallbackChain: chainFor(c) };
     }
-    const base = c.split('-')[0];
+    const base = c.split('-')[0]!;
     if (SUPPORTED.has(base)) {
       return { locale: base, fallbackChain: chainFor(base) };
     }
@@ -71,7 +71,7 @@ export function resolveLocale(input: ResolveInput): ResolvedLocale {
 function chainFor(locale: string): string[] {
   const out: string[] = [locale];
   if (locale.includes('-')) {
-    const base = locale.split('-')[0];
+    const base = locale.split('-')[0]!;
     if (base !== locale) out.push(base);
   }
   if (!out.includes(DEFAULT_LOCALE)) out.push(DEFAULT_LOCALE);
@@ -83,7 +83,7 @@ function normalize(tag: string): string {
   // ("zh-Hant"). For the small set we support today, lowercasing the
   // language and uppercasing the region works.
   const m = /^([a-zA-Z]+)(?:-([a-zA-Z]+))?$/.exec(tag.trim());
-  if (!m) return tag;
+  if (!m || !m[1]) return tag;
   const lang = m[1].toLowerCase();
   const region = m[2]?.toUpperCase();
   return region ? `${lang}-${region}` : lang;
@@ -98,9 +98,9 @@ function parseAcceptLanguage(header: string): string[] {
       let q = 1;
       for (const p of params) {
         const [k, v] = p.trim().split('=');
-        if (k === 'q') q = parseFloat(v);
+        if (k === 'q' && v !== undefined) q = parseFloat(v);
       }
-      return { tag: tag.trim(), q };
+      return { tag: tag?.trim() ?? '', q };
     })
     .filter((x) => x.tag && !isNaN(x.q))
     .sort((a, b) => b.q - a.q)

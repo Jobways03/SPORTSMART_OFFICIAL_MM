@@ -9,7 +9,7 @@ import {
 export class AdminSchedulePickupDto {
   @IsNotEmpty()
   @IsDateString()
-  pickupScheduledAt: string;
+  pickupScheduledAt!: string;
 
   @IsOptional()
   pickupAddress?: any;

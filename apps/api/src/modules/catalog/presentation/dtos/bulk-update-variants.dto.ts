@@ -11,7 +11,7 @@ import { Type } from 'class-transformer';
 
 export class BulkVariantUpdateItemDto {
   @IsUUID()
-  id: string;
+  id!: string;
 
   @IsOptional()
   @IsNumber()
@@ -36,5 +36,5 @@ export class BulkUpdateVariantsDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => BulkVariantUpdateItemDto)
-  variants: BulkVariantUpdateItemDto[];
+  variants!: BulkVariantUpdateItemDto[];
 }

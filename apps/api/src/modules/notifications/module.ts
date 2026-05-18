@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { EmailModule } from '../../integrations/email/email.module';
+import { WhatsAppModule } from '../../integrations/whatsapp/whatsapp.module';
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
 import { NotificationsPublicFacade } from './application/facades/notifications-public.facade';
 import { NotificationRouter } from './application/services/notification-router.service';
@@ -27,7 +28,7 @@ import { AdminNotificationDispatchController } from './presentation/controllers/
 import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port';
 
 @Module({
-  imports: [EmailModule],
+  imports: [EmailModule, WhatsAppModule],
   controllers: [
     CustomerNotificationsController,
     AdminNotificationLogsController,

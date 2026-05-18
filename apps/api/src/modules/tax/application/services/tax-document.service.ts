@@ -27,6 +27,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EWayBillService } from './eway-bill.service';
 import {
   DocumentSequenceService,
 } from './document-sequence.service';
@@ -76,6 +77,7 @@ export class TaxDocumentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly docSequence: DocumentSequenceService,
+    private readonly ewayBill: EWayBillService,
   ) {}
 
   /**
@@ -180,7 +182,9 @@ export class TaxDocumentService {
     } else if (summary.supplierType === 'FRANCHISE' && subOrder.franchiseId) {
       // Franchise has gstNumber / panNumber but not the full new
       // supplier model yet. Read what's available.
-      const franchise = await this.prisma.franchise.findUnique({
+      // Prisma model is `FranchisePartner`; `prisma.franchise` does not
+      // exist (would runtime-crash any FRANCHISE supplier invoice).
+      const franchise = await this.prisma.franchisePartner.findUnique({
         where: { id: subOrder.franchiseId },
         select: {
           gstNumber: true,
@@ -341,7 +345,8 @@ export class TaxDocumentService {
 
       // Lines — one per snapshot. lineNumber follows snapshot order.
       for (let i = 0; i < snapshots.length; i++) {
-        const s = snapshots[i];
+        const s = snapshots[i]!;
+
         await tx.taxDocumentLine.create({
           data: {
             documentId: created.id,
@@ -380,6 +385,19 @@ export class TaxDocumentService {
     this.logger.log(
       `Generated ${documentType} ${doc.documentNumber} (FY ${fy}) for sub-order ${subOrderId}: ${typeDecision.reason}`,
     );
+
+    // Fire EWB classification post-commit so the e-way bill queue picks
+    // up the sub-order automatically. Best-effort: never block invoice
+    // generation on a classification failure — admins can still manually
+    // hit POST /admin/tax/eway-bills/sub-order/:id/generate, which classifies
+    // internally on its own.
+    try {
+      await this.ewayBill.classifyForSubOrder(subOrderId);
+    } catch (err) {
+      this.logger.warn(
+        `EWB classification failed for sub-order ${subOrderId} after invoice ${doc.documentNumber}: ${(err as Error).message}`,
+      );
+    }
 
     return {
       document: { id: doc.id, documentNumber: doc.documentNumber, documentType: doc.documentType },

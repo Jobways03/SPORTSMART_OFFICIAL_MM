@@ -8,6 +8,7 @@ import { useModal } from '@sportsmart/ui';
 import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 import { DeliveryMethodPicker } from '@/components/DeliveryMethodPicker';
 import { SelfDeliveryStatusButtons } from '@/components/SelfDeliveryStatusButtons';
+import { SellerInvoiceCard } from '@/components/tax/SellerInvoiceCard';
 
 /* -- types -- */
 interface OrderItem {
@@ -543,6 +544,10 @@ const { id } = useParams<{ id: string }>();
           if chosen. Rendered above the timeline so the seller's
           decision is the first thing they see after accept. */}
       <DeliverySection order={order} onChanged={() => fetchOrder()} />
+
+      {/* Phase 25 — Tax invoices for this sub-order. Self-contained
+          card; lists every tax_documents row + per-row Download button. */}
+      <SellerInvoiceCard subOrderId={order.id} />
 
       {/* -- Status timeline -- */}
       <StatusTimeline

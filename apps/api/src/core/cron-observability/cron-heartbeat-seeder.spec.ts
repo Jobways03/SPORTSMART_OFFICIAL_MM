@@ -107,7 +107,8 @@ describe('CronHeartbeatSeeder (PR 5.5)', () => {
     expect(result.created).toBe(1);
     expect(result.preserved).toBe(SEEDED_CRON_JOB_NAMES.length - 1);
     expect(prisma.cronHeartbeatTarget.create).toHaveBeenCalledTimes(1);
-    const created = (prisma._created as Array<{ jobName: string }>)[0];
+    const created = (prisma._created as Array<{ jobName: string }>)[0]!;
+
     expect(created.jobName).toBe(SEEDED_CRON_JOB_NAMES[0]);
   });
 

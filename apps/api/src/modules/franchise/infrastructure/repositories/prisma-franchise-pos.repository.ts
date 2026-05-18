@@ -152,6 +152,24 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
     });
   }
 
+  /**
+   * CAS-style claim: only flip the row if `status` is still `fromStatus`.
+   * `updateMany` returns the affected count; the caller short-circuits
+   * to 0 to skip side effects. Used by voidSale to prevent two
+   * concurrent retries from both reversing the inventory.
+   */
+  async claimSaleTransition(
+    id: string,
+    fromStatus: string,
+    patch: Record<string, unknown>,
+  ): Promise<number> {
+    const result = await this.prisma.franchisePosSale.updateMany({
+      where: { id, status: fromStatus as any },
+      data: patch,
+    });
+    return result.count;
+  }
+
   async generateNextSaleNumber(franchiseCode: string): Promise<string> {
     const sequence = await this.prisma.$transaction(async (tx) => {
       return tx.posSaleSequence.upsert({
@@ -217,15 +235,15 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
       if (!salesByPaymentMethod[sale.paymentMethod]) {
         salesByPaymentMethod[sale.paymentMethod] = { count: 0, amount: 0 };
       }
-      salesByPaymentMethod[sale.paymentMethod].count += 1;
-      salesByPaymentMethod[sale.paymentMethod].amount += net;
+      salesByPaymentMethod[sale.paymentMethod]!.count += 1;
+      salesByPaymentMethod[sale.paymentMethod]!.amount += net;
 
       // By sale type
       if (!salesByType[sale.saleType]) {
         salesByType[sale.saleType] = { count: 0, amount: 0 };
       }
-      salesByType[sale.saleType].count += 1;
-      salesByType[sale.saleType].amount += net;
+      salesByType[sale.saleType]!.count += 1;
+      salesByType[sale.saleType]!.amount += net;
     }
 
     return {

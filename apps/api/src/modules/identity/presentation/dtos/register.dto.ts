@@ -8,7 +8,7 @@ export class RegisterDto {
   @MinLength(2, { message: 'First name must be at least 2 characters' })
   @MaxLength(50, { message: 'First name must not exceed 50 characters' })
   @Matches(/^[a-zA-Z][a-zA-Z\s]*$/, { message: 'First name must contain only letters' })
-  firstName: string;
+  firstName!: string;
 
   @IsNotEmpty({ message: 'Last name is required' })
   @IsString()
@@ -16,13 +16,20 @@ export class RegisterDto {
   @MinLength(1, { message: 'Last name must be at least 1 character' })
   @MaxLength(50, { message: 'Last name must not exceed 50 characters' })
   @Matches(/^[a-zA-Z][a-zA-Z\s]*$/, { message: 'Last name must contain only letters' })
-  lastName: string;
+  lastName!: string;
 
   @IsNotEmpty({ message: 'Email is required' })
   @IsEmail({}, { message: 'Please enter a valid email address' })
   @MaxLength(255, { message: 'Email must not exceed 255 characters' })
+  // Belt-and-suspenders on top of @IsEmail: reject consecutive dots,
+  // leading/trailing dots, and pure-numeric local parts that some lax
+  // RFC validators allow. Keeps the registration funnel honest without
+  // blocking legitimate sub-addressed mail (e.g. "user+tag@gmail.com").
+  @Matches(/^[A-Za-z0-9](?:[A-Za-z0-9._%+\-]*[A-Za-z0-9])?@[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?(?:\.[A-Za-z]{2,})+$/, {
+    message: 'Email format is invalid (avoid consecutive dots and leading/trailing dots in the local part)',
+  })
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
-  email: string;
+  email!: string;
 
   @IsNotEmpty({ message: 'Password is required' })
   @IsString()
@@ -32,5 +39,5 @@ export class RegisterDto {
   @Matches(/(?=.*[A-Z])/, { message: 'Password must include an uppercase letter' })
   @Matches(/(?=.*\d)/, { message: 'Password must include a number' })
   @Matches(/(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])/, { message: 'Password must include a special character' })
-  password: string;
+  password!: string;
 }

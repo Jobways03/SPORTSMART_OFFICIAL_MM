@@ -1,0 +1,41 @@
+# Phase 9 (2026-05-16) — Dependabot keeps deps fresh.
+#
+# `osv-scanner` in CI flags vulnerable deps on every PR; Dependabot
+# proactively opens PRs to fix them. The pair gives us coverage on
+# both "you tried to add a bad dep" and "an existing dep just turned
+# bad" paths.
+#
+# Schedule is weekly to avoid PR-bot fatigue. Bumps that pin to a
+# security advisory open immediately regardless of schedule.
+
+version: 2
+updates:
+  # ── npm: workspace root + each app via the monorepo directory ──
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    groups:
+      # Group patch + minor non-security updates into one PR per
+      # ecosystem to cut review load. Security PRs always open
+      # individually so they're easy to expedite.
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ── GitHub Actions ──
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"

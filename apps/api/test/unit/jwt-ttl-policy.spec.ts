@@ -101,7 +101,8 @@ describe('JWT TTL policy (PR 3.3)', () => {
         S3_SECRET_KEY: 'x',
         ADMIN_MFA_ENCRYPTION_KEY: 'k'.repeat(32),
         // Phase 3 (PR 3.7) — explicit https origin required in prod.
-        CORS_ORIGINS: 'https://app.example.com',
+        APP_URL: 'https://api.example.com',
+  CORS_ORIGINS: 'https://app.example.com',
         // Phase 6 — required-on-in-prod flags.
         CRON_HEARTBEAT_ENABLED: 'true',
         SLA_BREACH_DETECTOR_ENABLED: 'true',
@@ -156,7 +157,8 @@ describe('JWT TTL policy (PR 3.3)', () => {
       COD_REFUND_PENDING_ENABLED: 'true',
       MONEY_DUAL_WRITE_ENABLED: 'true',
       // Phase 3 (PR 3.7) — explicit https origin required in prod.
-      CORS_ORIGINS: 'https://app.example.com',
+      APP_URL: 'https://api.example.com',
+  CORS_ORIGINS: 'https://app.example.com',
     };
 
     it('rejects a prod env with ACCESS_TTL > 24h', () => {

@@ -34,8 +34,27 @@ function buildService(opts: { leaderWins?: boolean } = {}) {
   const instr = {
     wrap: jest.fn(async (_n: string, fn: () => Promise<unknown>) => fn()),
   } as any;
-  const service = new CronJobsService(prisma, lowStock as any, recon as any, leader, instr);
-  return { service, prisma, lowStock, recon, leader, instr };
+  // Phase 7 (2026-05-16) — procurement-SLA cron depends on env (flag)
+  // and the event bus (breach notification). Stub both so the
+  // existing leader-election assertions stay focused on their original
+  // scope; per-test overrides go through these handles.
+  const env = {
+    getString: jest.fn((_key: string, def?: string) => def ?? ''),
+    getNumber: jest.fn((_key: string, def?: number) => def ?? 0),
+  } as any;
+  const eventBus = {
+    publish: jest.fn(async () => undefined),
+  } as any;
+  const service = new CronJobsService(
+    prisma,
+    lowStock as any,
+    recon as any,
+    leader,
+    instr,
+    env,
+    eventBus,
+  );
+  return { service, prisma, lowStock, recon, leader, instr, env, eventBus };
 }
 
 describe('CronJobsService — leader-election wrapping (PR 1.2)', () => {

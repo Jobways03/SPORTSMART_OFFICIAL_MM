@@ -37,18 +37,29 @@ function loadRazorpayScript(): Promise<void> {
         resolve();
         return;
       }
-      existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () =>
-        reject(new Error('Failed to load Razorpay script')),
-      );
-      return;
+      // A previous load attempt may have failed and left the <script>
+      // tag in the DOM. Remove it so the fresh attempt below starts
+      // clean — otherwise the stale tag can re-fire its `error` event
+      // during hydration and surface as "[object Event]" in the dev
+      // overlay.
+      existing.remove();
     }
     const script = document.createElement('script');
     script.src = RAZORPAY_SCRIPT_URL;
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () =>
-      reject(new Error('Failed to load Razorpay script'));
+    // `{ once: true }` guards against multiple resolutions if the
+    // browser fires `error` after `load` (rare but documented).
+    script.addEventListener('load', () => resolve(), { once: true });
+    script.addEventListener(
+      'error',
+      () => {
+        // Reset loaderPromise so a subsequent retry can attempt a
+        // fresh load instead of getting the cached failure.
+        loaderPromise = null;
+        reject(new Error('Failed to load Razorpay script'));
+      },
+      { once: true },
+    );
     document.head.appendChild(script);
   });
   return loaderPromise;

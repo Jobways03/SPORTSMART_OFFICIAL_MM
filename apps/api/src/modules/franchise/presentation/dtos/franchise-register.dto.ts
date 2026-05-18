@@ -8,7 +8,7 @@ export class FranchiseRegisterDto {
   @MinLength(2, { message: 'Owner name must be at least 2 characters' })
   @MaxLength(100, { message: 'Owner name must not exceed 100 characters' })
   @Matches(/^[a-zA-Z][a-zA-Z\s.\-]*$/, { message: 'Owner name must contain only letters, spaces, dots, or hyphens' })
-  ownerName: string;
+  ownerName!: string;
 
   @IsNotEmpty({ message: 'Business name is required' })
   @IsString()
@@ -16,19 +16,19 @@ export class FranchiseRegisterDto {
   @MinLength(2, { message: 'Business name must be at least 2 characters' })
   @MaxLength(150, { message: 'Business name must not exceed 150 characters' })
   @Matches(/^[a-zA-Z0-9][a-zA-Z0-9\s.\-&']*$/, { message: 'Business name contains invalid characters' })
-  businessName: string;
+  businessName!: string;
 
   @IsNotEmpty({ message: 'Email is required' })
   @IsEmail({}, { message: 'Please enter a valid email address' })
   @MaxLength(255, { message: 'Email must not exceed 255 characters' })
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
-  email: string;
+  email!: string;
 
   @IsNotEmpty({ message: 'Phone number is required' })
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim().replace(/\D/g, '') : value)
   @Matches(/^\d{10,15}$/, { message: 'Phone number must be 10-15 digits' })
-  phoneNumber: string;
+  phoneNumber!: string;
 
   @IsNotEmpty({ message: 'Password is required' })
   @IsString()
@@ -38,5 +38,5 @@ export class FranchiseRegisterDto {
   @Matches(/(?=.*[A-Z])/, { message: 'Password must include an uppercase letter' })
   @Matches(/(?=.*\d)/, { message: 'Password must include a number' })
   @Matches(/(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])/, { message: 'Password must include a special character' })
-  password: string;
+  password!: string;
 }

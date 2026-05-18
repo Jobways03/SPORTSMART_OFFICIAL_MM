@@ -103,26 +103,39 @@ export class CheckoutService {
       throw new BadRequestAppException('Cart is empty');
     }
 
-    // 3. Release any existing reservations from a previous checkout attempt
+    // 3. Release any existing reservations from a previous checkout attempt.
+    //
+    // Phase 4.2 (2026-05-16) — releases run in parallel via
+    // Promise.allSettled so we don't pay 10-item-cart × per-call
+    // latency sequentially. Each leg is best-effort: a reservation
+    // that's already expired is harmless to "release" again
+    // (idempotent at the facade level after the §4.4 race-safety
+    // rewrite), and one bad reservation must not strand the others.
     const existingSession = await this.sessionService.get(userId);
     if (existingSession) {
-      for (const item of existingSession.items) {
-        try {
-          if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
-            // Franchise reservations are released via the franchise facade
-            await this.franchiseFacade.unreserveStock(
+      const releasers = existingSession.items.map((item) => {
+        if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
+          return this.franchiseFacade
+            .unreserveStock(
               item.allocatedSellerId,
               item.productId,
               item.variantId,
               item.quantity,
-            );
-          } else if (item.reservationId) {
-            await this.catalogFacade.releaseReservation(item.reservationId);
-          }
-        } catch {
-          // Best-effort release — reservation may have expired already
+            )
+            .catch(() => {
+              /* already expired */
+            });
         }
-      }
+        if (item.reservationId) {
+          return this.catalogFacade
+            .releaseReservation(item.reservationId)
+            .catch(() => {
+              /* already expired */
+            });
+        }
+        return Promise.resolve();
+      });
+      await Promise.allSettled(releasers);
       await this.sessionService.delete(userId);
     }
 

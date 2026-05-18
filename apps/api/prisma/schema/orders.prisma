@@ -153,7 +153,14 @@ model MasterOrder {
   customer          User               @relation(fields: [customerId], references: [id], onDelete: Cascade)
   subOrders         SubOrder[]
   commissionRecords CommissionRecord[]
-  returns           Return[]
+  returns           Return[]           @relation("ReturnMasterOrder")
+  // Phase 5 (2026-05-16) — back-relations for the replacement and
+  // exchange order pointers on Return. A given MasterOrder can be
+  // referenced as a replacement / exchange target by at most one
+  // Return (the originating one), but using `Return[]` mirrors
+  // Prisma's expectation for the "many" side of an optional one-to-one.
+  returnsAsReplacement Return[]        @relation("ReturnReplacementOrder")
+  returnsAsExchange    Return[]        @relation("ReturnExchangeOrder")
   shippingOption    ShippingOption?    @relation(fields: [shippingOptionId], references: [id], onDelete: SetNull)
 
   // Phase B (P0) — discount allocation ledger relations.

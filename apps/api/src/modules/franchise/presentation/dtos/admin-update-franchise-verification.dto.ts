@@ -6,7 +6,7 @@ export class AdminUpdateFranchiseVerificationDto {
   @IsIn(['PENDING', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED'], {
     message: 'Verification status must be one of: PENDING, UNDER_REVIEW, VERIFIED, REJECTED',
   })
-  verificationStatus: string;
+  verificationStatus!: string;
 
   @IsOptional()
   @IsString()

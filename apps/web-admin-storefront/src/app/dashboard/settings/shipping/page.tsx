@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import ShippingOptionForm from './_components/ShippingOptionForm';
 
@@ -18,6 +19,7 @@ interface ShippingOption {
 }
 
 export default function ShippingSettingsPage() {
+  const { confirmDialog, notify } = useModal();
   const [items, setItems] = useState<ShippingOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ShippingOption | 'new' | null>(null);
@@ -35,12 +37,19 @@ export default function ShippingSettingsPage() {
   }, [load]);
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this shipping option?')) return;
+    const ok = await confirmDialog({
+      title: 'Delete shipping option?',
+      message: 'This cannot be undone. Customers will no longer see this option at checkout.',
+      confirmText: 'Delete',
+      cancelText: 'Keep',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await apiClient(`/admin/shipping-options/${id}`, { method: 'DELETE' });
       load();
     } catch (e: any) {
-      window.alert(e?.message ?? 'Delete failed');
+      notify({ kind: 'error', message: e?.message ?? 'Delete failed' });
     }
   };
 

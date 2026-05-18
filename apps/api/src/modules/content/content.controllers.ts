@@ -14,6 +14,13 @@ import { ApiTags } from '@nestjs/swagger';
 import type { BannerSlot } from '@prisma/client';
 import { AdminAuthGuard } from '../../core/guards';
 import { ContentService } from './content.service';
+import {
+  CreateBannerDto,
+  UpdateBannerDto,
+  UpsertStaticPageDto,
+  CreateFaqDto,
+  UpdateFaqDto,
+} from './dtos/banner.dto';
 
 @ApiTags('Storefront — Content')
 @Controller('storefront/content')
@@ -51,12 +58,12 @@ export class AdminContentController {
   }
 
   @Post('banners')
-  async createBanner(@Body() body: any) {
+  async createBanner(@Body() body: CreateBannerDto) {
     return { success: true, data: await this.service.createBanner(body) };
   }
 
   @Patch('banners/:id')
-  async updateBanner(@Param('id') id: string, @Body() body: any) {
+  async updateBanner(@Param('id') id: string, @Body() body: UpdateBannerDto) {
     return { success: true, data: await this.service.updateBanner(id, body) };
   }
 
@@ -72,7 +79,7 @@ export class AdminContentController {
   }
 
   @Put('pages/:slug')
-  async upsertPage(@Param('slug') slug: string, @Body() body: any) {
+  async upsertPage(@Param('slug') slug: string, @Body() body: UpsertStaticPageDto) {
     return { success: true, data: await this.service.upsertPage(slug, body) };
   }
 
@@ -88,12 +95,12 @@ export class AdminContentController {
   }
 
   @Post('faq')
-  async createFaq(@Body() body: any) {
+  async createFaq(@Body() body: CreateFaqDto) {
     return { success: true, data: await this.service.createFaq(body) };
   }
 
   @Patch('faq/:id')
-  async updateFaq(@Param('id') id: string, @Body() body: any) {
+  async updateFaq(@Param('id') id: string, @Body() body: UpdateFaqDto) {
     return { success: true, data: await this.service.updateFaq(id, body) };
   }
 

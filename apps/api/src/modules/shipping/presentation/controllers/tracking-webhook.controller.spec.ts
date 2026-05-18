@@ -58,7 +58,20 @@ function buildController(opts: {
     claimTrackingEvent: jest.fn().mockResolvedValue(true),
   } as any;
 
-  const controller = new TrackingWebhookController(env, redis, ordersFacade);
+  // Phase 5 follow-up (2026-05-16) — controller now also injects
+  // IngestTrackingUpdateUseCase for the iThink webhook path. Stubbing
+  // it as a no-op preserves all Shiprocket-side tests.
+  const ingestTracking = {
+    ingestSingleSnapshot: jest
+      .fn()
+      .mockResolvedValue({ subOrderId: 'so-1', applied: true }),
+  } as any;
+  const controller = new TrackingWebhookController(
+    env,
+    redis,
+    ordersFacade,
+    ingestTracking,
+  );
   return { controller, env, redis, ordersFacade };
 }
 
@@ -243,8 +256,18 @@ describe('TrackingWebhookController — event-order guard (PR 4.4)', () => {
       markSubOrderDelivered: jest.fn().mockResolvedValue(undefined),
       claimTrackingEvent: jest.fn().mockResolvedValue(opts.claimResult),
     } as any;
+    const ingestTracking = {
+      ingestSingleSnapshot: jest
+        .fn()
+        .mockResolvedValue({ subOrderId: 'so-1', applied: true }),
+    } as any;
     return {
-      controller: new TrackingWebhookController(env, redis, ordersFacade),
+      controller: new TrackingWebhookController(
+        env,
+        redis,
+        ordersFacade,
+        ingestTracking,
+      ),
       ordersFacade,
     };
   }

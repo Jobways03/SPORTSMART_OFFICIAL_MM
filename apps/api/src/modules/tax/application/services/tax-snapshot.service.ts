@@ -375,7 +375,7 @@ export class TaxSnapshotService {
         let allocatedSoFar = 0n;
 
         for (let i = 0; i < subOrderIds.length; i++) {
-          const subOrderId = subOrderIds[i];
+          const subOrderId = subOrderIds[i]!;
           const accum = subOrderAccums.get(subOrderId)!;
           const isLast = i === subOrderIds.length - 1;
 

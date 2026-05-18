@@ -42,7 +42,7 @@ export function rupeesStringToPaise(rupees: string | number | null | undefined):
   const cleaned = negative ? str.slice(1) : str;
   const [whole, fracRaw = ''] = cleaned.split('.');
   const frac = (fracRaw + '00').slice(0, 2);
-  const onlyDigits = /^\d*$/.test(whole) && /^\d*$/.test(frac);
+  const onlyDigits = /^\d*$/.test(whole ?? '') && /^\d*$/.test(frac);
   if (!onlyDigits) return 0n;
   const totalPaise = BigInt(whole || '0') * 100n + BigInt(frac);
   return negative ? -totalPaise : totalPaise;

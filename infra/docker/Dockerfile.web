@@ -1,0 +1,99 @@
+# syntax=docker/dockerfile:1.7
+
+# ─────────────────────────────────────────────────────────────────────
+# SPORTSMART web-* — shared production image for all 8 Next.js apps
+# ─────────────────────────────────────────────────────────────────────
+# Phase 9 (2026-05-16) — one Dockerfile, eight images. Each app is
+# built via the `APP` build-arg; the image tag identifies which one:
+#
+#   docker build -f infra/docker/Dockerfile.web \
+#                --build-arg APP=web-storefront \
+#                -t sportsmart-web-storefront:latest .
+#
+# The 8 apps live under apps/web-* and share the workspace's pnpm
+# packages — install scope is filtered to the requested app to keep
+# build time down (each cell rebuilds ~70 MB of node_modules instead
+# of the full ~250 MB graph).
+#
+# Build context MUST be the repo root, not apps/web-*/, because pnpm
+# needs the workspace root to resolve `@sportsmart/ui` and
+# `@sportsmart/shared-utils`.
+#
+# Base image: same pin policy as Dockerfile.api. See that file's
+# header for the rotation script (`infra/scripts/pin-base-image.sh`).
+# ─────────────────────────────────────────────────────────────────────
+
+FROM node:22-slim@sha256:689c11043dad91472750cd824c97dd5e2318e9dd6f954e492fe7af0135d33ceb AS base
+ENV PNPM_HOME="/pnpm" \
+    PATH="/pnpm:$PATH" \
+    CI=true
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+
+
+# ─── build: install scoped deps, run `next build` ───────────────────
+FROM base AS build
+ARG APP
+# Default to web-storefront so an unscoped `docker build` still
+# produces SOMETHING; CI always passes --build-arg APP=<name>.
+ENV APP=${APP:-web-storefront}
+WORKDIR /workspace
+
+# Copy manifests first for Docker layer caching — only re-runs install
+# when a package.json or the lockfile changes, not on every source edit.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/${APP}/package.json apps/${APP}/package.json
+COPY packages/shared-utils/package.json packages/shared-utils/package.json
+COPY packages/ui/package.json packages/ui/package.json
+
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile --filter @sportsmart/${APP}...
+
+# Now copy the app + shared packages. We don't copy other web-* apps
+# (would invalidate the layer cache across unrelated PRs).
+COPY apps/${APP} apps/${APP}
+COPY packages packages
+
+# Build via Next.js. The transpilePackages config in each app's
+# next.config.js handles the workspace packages.
+RUN pnpm --filter @sportsmart/${APP} run build
+
+
+# ─── runtime: lean image, non-root, served by `next start` ──────────
+FROM base AS runtime
+ARG APP
+ENV APP=${APP:-web-storefront} \
+    NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+WORKDIR /app
+
+# Copy the built artefacts. We deliberately don't use `next export` /
+# `output: standalone` — each app's next.config.js stays simple and
+# the runtime image carries the full node_modules. Trade: ~150MB
+# image vs zero per-app config divergence. Switch to standalone if
+# image size becomes a deploy constraint.
+COPY --from=build --chown=node:node /workspace/apps/${APP}/package.json ./package.json
+COPY --from=build --chown=node:node /workspace/apps/${APP}/.next ./.next
+COPY --from=build --chown=node:node /workspace/apps/${APP}/public ./public
+COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
+# Some apps have a next.config.js with runtime-relevant rewrites /
+# images config; copy it through so `next start` picks it up.
+COPY --from=build --chown=node:node /workspace/apps/${APP}/next.config.* ./
+
+USER node
+
+EXPOSE 3000
+
+# Healthcheck: hit the app root and treat any 2xx/3xx as healthy.
+# Avoid an `/api/health` assumption — not every Next.js app has one,
+# and a missing route would force a separate convention per app.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/').then(r => process.exit(r.status < 500 ? 0 : 1)).catch(() => process.exit(1))"
+
+# `next start` uses the runtime config, picks the port from PORT.
+# pnpm dlx is used so we don't need next as a global; the local
+# copy in node_modules/.bin/next is invoked.
+CMD ["node_modules/.bin/next", "start"]

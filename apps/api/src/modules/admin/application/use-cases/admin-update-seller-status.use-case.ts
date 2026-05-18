@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException, BadRequestAppException } from '../../../../core/exceptions';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AdminAuditService } from '../services/admin-audit.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { SellerStatusTransitionPolicy } from '../../../seller/application/policies/seller-status-transition.policy';
@@ -27,6 +28,7 @@ export class AdminUpdateSellerStatusUseCase {
     private readonly logger: AppLoggerService,
     private readonly audit: AuditPublicFacade,
     private readonly transitionPolicy: SellerStatusTransitionPolicy,
+    private readonly eventBus: EventBusService,
   ) {
     this.logger.setContext('AdminUpdateSellerStatusUseCase');
   }
@@ -91,6 +93,31 @@ export class AdminUpdateSellerStatusUseCase {
       })
       .catch((err) => {
         this.logger.error(`Audit write failed: ${(err as Error).message}`);
+      });
+
+    // Publish the status-changed event so downstream listeners
+    // (email handler, seller-side audit handler, etc.) can react.
+    // Fire-and-forget — audit + DB update are already committed; we
+    // don't want a downstream subscriber failure to bubble back into
+    // the admin's PATCH response.
+    this.eventBus
+      .publish({
+        eventName: 'seller.status.changed',
+        aggregate: 'seller',
+        aggregateId: sellerId,
+        occurredAt: new Date(),
+        payload: {
+          sellerId,
+          previousStatus: seller.status,
+          newStatus: status,
+          reason,
+          adminId,
+        },
+      })
+      .catch((err) => {
+        this.logger.error(
+          `Failed to publish seller.status.changed: ${(err as Error).message}`,
+        );
       });
 
     this.logger.log(`Admin ${adminId} changed seller ${sellerId} status: ${seller.status} -> ${status}`);

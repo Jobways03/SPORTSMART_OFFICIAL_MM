@@ -6,6 +6,67 @@ import { AppLoggerService } from '../../../bootstrap/logging/app-logger.service'
 import { EnvService } from '../../../bootstrap/env/env.service';
 import { EmailService } from '../email.service';
 
+/**
+ * HTML entity escaper — replaces the five characters that have special
+ * meaning in HTML body / attribute contexts. Same OWASP set used by
+ * `TemplateRenderer` so behaviour is consistent across both email
+ * paths (the templated facade and this direct-string handler).
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Branded marker for "this string is already trusted HTML, don't
+ * escape it again." Pass values through `rawHtml(...)` only for
+ * platform-controlled fragments (conditional spans, system links).
+ * Never wrap user-controlled data — that re-opens the XSS hole this
+ * helper exists to close.
+ */
+const RAW_HTML_TAG = Symbol('raw-html');
+type RawHtml = { readonly [RAW_HTML_TAG]: string };
+function rawHtml(s: string): RawHtml {
+  return { [RAW_HTML_TAG]: s };
+}
+function isRawHtml(v: unknown): v is RawHtml {
+  return typeof v === 'object' && v !== null && RAW_HTML_TAG in v;
+}
+
+/**
+ * Tagged-template helper for safely building HTML email bodies from
+ * runtime data. Every `${value}` interpolation is HTML-escaped so
+ * user-controlled strings (seller shop names, customer names, product
+ * titles, free-form reasons / notes) cannot inject `<script>` or
+ * attribute-breaking quotes into the rendered email.
+ *
+ * Usage:
+ *   safeHtml`<p>Hi ${seller.sellerName},</p>`
+ *
+ * If a value is genuinely platform-controlled HTML that must render as
+ * markup, wrap it with `rawHtml(...)` first — that marks it as
+ * pre-trusted and skips the escape. Use sparingly and never for
+ * user-controlled data.
+ */
+function safeHtml(strings: TemplateStringsArray, ...values: unknown[]): string {
+  let out = strings[0]!;
+
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (isRawHtml(v)) {
+      out += v[RAW_HTML_TAG];
+    } else {
+      out += escapeHtml(String(v ?? ''));
+    }
+    out += strings[i + 1];
+  }
+  return out;
+}
+
 @Injectable()
 export class EmailNotificationHandler {
   private readonly adminEmail: string;
@@ -51,7 +112,7 @@ export class EmailNotificationHandler {
     await this.emailService.send({
       to: seller.email,
       subject: 'Email Verified — SPORTSMART',
-      html: this.wrap(`
+      html: this.wrap(safeHtml`
         <h2 style="color: #15803d;">Email Verified Successfully!</h2>
         <p>Hi ${seller.sellerName},</p>
         <p>Your email address has been verified. ${
@@ -71,7 +132,7 @@ export class EmailNotificationHandler {
     await this.emailService.send({
       to: seller.email,
       subject: 'Account Temporarily Locked — SPORTSMART',
-      html: this.wrap(`
+      html: this.wrap(safeHtml`
         <h2 style="color: #dc2626;">Account Temporarily Locked</h2>
         <p>Hi ${seller.sellerName},</p>
         <p>Your seller account has been temporarily locked due to multiple failed login attempts.</p>
@@ -89,7 +150,7 @@ export class EmailNotificationHandler {
     await this.emailService.send({
       to: seller.email,
       subject: 'Password Reset Successful — SPORTSMART',
-      html: this.wrap(`
+      html: this.wrap(safeHtml`
         <h2 style="color: #1f2937;">Password Reset Successful</h2>
         <p>Hi ${seller.sellerName},</p>
         <p>Your password has been reset successfully. All existing sessions have been revoked for security.</p>
@@ -106,13 +167,158 @@ export class EmailNotificationHandler {
     await this.emailService.send({
       to: seller.email,
       subject: 'Password Changed — SPORTSMART',
-      html: this.wrap(`
+      html: this.wrap(safeHtml`
         <h2 style="color: #1f2937;">Password Changed</h2>
         <p>Hi ${seller.sellerName},</p>
         <p>Your seller account password was changed successfully.</p>
         <p>If you did not make this change, please reset your password immediately and contact support.</p>
       `),
       text: `Hi ${seller.sellerName}, your password has been changed successfully.`,
+    });
+  }
+
+  /**
+   * Admin changed the seller's status (approve / suspend / deactivate /
+   * reactivate). Sellers want to know when their account flips,
+   * especially "you can now start selling" after approval and "your
+   * account has been suspended" warnings. The event is published from
+   * `admin-update-seller-status.use-case.ts` so this handler only
+   * needs to render the right email per terminal state.
+   */
+  @OnEvent('seller.status.changed')
+  async onSellerStatusChanged(
+    event: DomainEvent<{
+      sellerId: string;
+      previousStatus: string;
+      newStatus: string;
+      reason?: string;
+      adminId?: string;
+    }>,
+  ) {
+    const { sellerId, previousStatus, newStatus, reason } = event.payload;
+    const seller = await this.findSeller(sellerId);
+    if (!seller) {
+      this.logger.warn(`seller.status.changed: seller ${sellerId} not found`);
+      return;
+    }
+
+    // Pick the message for the new state. INACTIVE is operator-initiated
+    // (rare) and uses the suspended template; PENDING_APPROVAL is the
+    // reset-to-review case (also rare).
+    const variant = (() => {
+      switch (newStatus) {
+        case 'ACTIVE':
+          return {
+            subject: 'Your seller account is now active — SPORTSMART',
+            heading: 'Account Approved',
+            color: '#15803d',
+            body: previousStatus === 'PENDING_APPROVAL'
+              ? 'Welcome! Your seller account has been approved. You can now list products and start fulfilling orders from your seller dashboard.'
+              : 'Your seller account has been reactivated. You can resume selling on the marketplace.',
+          };
+        case 'SUSPENDED':
+          return {
+            subject: 'Your seller account has been suspended — SPORTSMART',
+            heading: 'Account Suspended',
+            color: '#dc2626',
+            body: 'Your seller account has been temporarily suspended. While suspended, you cannot list new products or accept new orders. Existing orders remain active until fulfilled.',
+          };
+        case 'DEACTIVATED':
+          return {
+            subject: 'Your seller account has been deactivated — SPORTSMART',
+            heading: 'Account Deactivated',
+            color: '#dc2626',
+            body: 'Your seller account has been deactivated. You can no longer access seller features. If you believe this is an error, please contact support.',
+          };
+        case 'INACTIVE':
+          return {
+            subject: 'Your seller account is inactive — SPORTSMART',
+            heading: 'Account Inactive',
+            color: '#d97706',
+            body: 'Your seller account has been set to inactive. You can still view your data but cannot list new products or accept orders until the account is reactivated.',
+          };
+        case 'PENDING_APPROVAL':
+          return {
+            subject: 'Your seller account is back under review — SPORTSMART',
+            heading: 'Account Under Review',
+            color: '#d97706',
+            body: 'Your seller account has been placed back under review. Our team will contact you with next steps.',
+          };
+        default:
+          return null;
+      }
+    })();
+
+    if (!variant) {
+      this.logger.warn(
+        `seller.status.changed: no email template for status ${newStatus}`,
+      );
+      return;
+    }
+
+    // Reason block only renders when admin provided one. Wrapped in
+    // safeHtml so the admin-typed string can't break out of the panel.
+    const reasonBlock = reason
+      ? safeHtml`<div style="background: #f9fafb; border-left: 3px solid #d1d5db; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #374151;"><strong>Reason from admin:</strong> ${reason}</div>`
+      : '';
+
+    await this.emailService.send({
+      to: seller.email,
+      subject: variant.subject,
+      html: this.wrap(safeHtml`
+        <h2 style="color: ${variant.color};">${variant.heading}</h2>
+        <p>Hi ${seller.sellerName},</p>
+        <p>${variant.body}</p>
+        ${rawHtml(reasonBlock)}
+      `),
+      text: `Hi ${seller.sellerName}, your seller account status changed from ${previousStatus} to ${newStatus}.${reason ? ` Reason: ${reason}.` : ''}`,
+    });
+  }
+
+  /**
+   * Settlement (or franchise: see franchise-settlement.service.ts)
+   * has been marked paid by finance. The seller should get a
+   * confirmation with the UTR they can match against their bank
+   * statement. Amount comes through as a number from the event;
+   * format with the same INR-locale helper used elsewhere.
+   */
+  @OnEvent('seller.settlement.paid')
+  async onSellerSettlementPaid(
+    event: DomainEvent<{
+      settlementId: string;
+      sellerId: string;
+      utrReference: string;
+      amount: number;
+    }>,
+  ) {
+    const { settlementId, sellerId, utrReference, amount } = event.payload;
+    const seller = await this.findSeller(sellerId);
+    if (!seller) {
+      this.logger.warn(`seller.settlement.paid: seller ${sellerId} not found`);
+      return;
+    }
+    const formatted = `₹${Number(amount).toLocaleString('en-IN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+    await this.emailService.send({
+      to: seller.email,
+      subject: `Payout sent — ${formatted}`,
+      html: this.wrap(safeHtml`
+        <h2 style="color: #15803d;">Payout Sent</h2>
+        <p>Hi ${seller.sellerName},</p>
+        <p>Your settlement payout has been transferred to your registered bank account.</p>
+        <div style="background: #f0fdf4; border-radius: 8px; padding: 16px; margin: 16px 0; border: 1px solid #bbf7d0;">
+          <p style="margin: 0 0 6px 0; font-size: 13px; color: #374151;">Settlement ID</p>
+          <p style="margin: 0 0 12px 0; font-family: monospace; font-size: 13px; color: #111827;">${settlementId}</p>
+          <p style="margin: 0 0 6px 0; font-size: 13px; color: #374151;">UTR reference</p>
+          <p style="margin: 0 0 12px 0; font-family: monospace; font-size: 13px; color: #111827;">${utrReference}</p>
+          <p style="margin: 0 0 6px 0; font-size: 13px; color: #374151;">Amount</p>
+          <p style="margin: 0; font-size: 18px; font-weight: 700; color: #15803d;">${formatted}</p>
+        </div>
+        <p style="font-size: 13px; color: #6b7280;">It may take 1–2 business days for the credit to reflect in your account. Match the UTR with your bank statement to confirm.</p>
+      `),
+      text: `Hi ${seller.sellerName}, your settlement payout of ${formatted} has been sent. Settlement ID: ${settlementId}, UTR: ${utrReference}. Allow 1–2 business days for the credit to reflect.`,
     });
   }
 
@@ -128,7 +334,7 @@ export class EmailNotificationHandler {
     await this.emailService.send({
       to: user.email,
       subject: 'Password Reset Successful — SPORTSMART Admin',
-      html: this.wrap(`
+      html: this.wrap(safeHtml`
         <h2 style="color: #1f2937;">Password Reset Successful</h2>
         <p>Hi ${user.firstName},</p>
         <p>Your admin password has been reset successfully. All sessions have been revoked.</p>
@@ -160,7 +366,7 @@ export class EmailNotificationHandler {
       await this.emailService.send({
         to: this.adminEmail,
         subject: `New Order #${orderNumber} — Pending Verification`,
-        html: this.wrap(`
+        html: this.wrap(safeHtml`
           <h2 style="color: #d97706;">New Order Placed</h2>
           <p>A new order has been placed and requires verification.</p>
           <div style="background: #f9fafb; border-radius: 8px; padding: 16px; margin: 16px 0;">
@@ -202,14 +408,16 @@ export class EmailNotificationHandler {
     }
 
     const formattedAmount = `\u20B9${Number(subTotal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    // Platform-controlled markup — wrap in rawHtml so safeHtml leaves
+    // the <p> tag intact instead of entity-encoding it.
     const reassignmentNote = isReassignment
-      ? '<p style="color: #d97706; font-weight: 600;">This order was reassigned to you from another seller.</p>'
+      ? rawHtml('<p style="color: #d97706; font-weight: 600;">This order was reassigned to you from another seller.</p>')
       : '';
 
     await this.emailService.send({
       to: seller.email,
       subject: `New Order #${orderNumber} — SPORTSMART`,
-      html: this.wrap(`
+      html: this.wrap(safeHtml`
         <h2 style="color: #1f2937;">You have a new order!</h2>
         <p>Hi ${seller.sellerName},</p>
         ${reassignmentNote}
@@ -267,7 +475,7 @@ export class EmailNotificationHandler {
       await this.emailService.send({
         to: this.adminEmail,
         subject: `New Product for Review — ${productTitle}`,
-        html: this.wrap(`
+        html: this.wrap(safeHtml`
           <h2 style="color: #d97706;">New Product Submitted for Review</h2>
           <p>A seller has submitted a new product for your review.</p>
           <div style="background: #f9fafb; border-radius: 8px; padding: 16px; margin: 16px 0;">
@@ -308,7 +516,7 @@ export class EmailNotificationHandler {
       await this.emailService.send({
         to: seller.email,
         subject: `Product Approved — ${productTitle}`,
-        html: this.wrap(`
+        html: this.wrap(safeHtml`
           <h2 style="color: #15803d;">Product Approved!</h2>
           <p>Hi ${seller.sellerName},</p>
           <p>Great news! Your product has been approved and is now active on the marketplace.</p>
@@ -350,7 +558,7 @@ export class EmailNotificationHandler {
       await this.emailService.send({
         to: seller.email,
         subject: `Product Rejected — ${productTitle}`,
-        html: this.wrap(`
+        html: this.wrap(safeHtml`
           <h2 style="color: #dc2626;">Product Rejected</h2>
           <p>Hi ${seller.sellerName},</p>
           <p>Unfortunately, your product has been rejected during review.</p>
@@ -393,7 +601,7 @@ export class EmailNotificationHandler {
       await this.emailService.send({
         to: seller.email,
         subject: `Changes requested — ${productTitle}`,
-        html: this.wrap(`
+        html: this.wrap(safeHtml`
           <h2 style="color: #d97706;">Changes Requested</h2>
           <p>Hi ${seller.sellerName},</p>
           <p>Our review team needs a few changes before your product can go live.</p>
@@ -462,7 +670,7 @@ export class EmailNotificationHandler {
       await this.emailService.send({
         to: recipientEmail,
         subject: `Commission locked — Order #${orderNumber}`,
-        html: this.wrap(`
+        html: this.wrap(safeHtml`
           <h2 style="color: #15803d;">Commission Locked</h2>
           <p>Hi ${recipientName || partnerLabel},</p>
           <p>The return window has passed for your order and the commission for this sub-order is now locked.</p>

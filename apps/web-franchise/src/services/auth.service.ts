@@ -74,7 +74,21 @@ export const franchiseAuthService = {
     });
   },
 
-  logout() {
+  /**
+   * Server-side logout — POST /franchise/auth/logout revokes every
+   * active FranchiseSession, then we clear local sessionStorage.
+   * Server-side first so a stolen refresh token can't be replayed
+   * after the user clicks logout. Network failure is best-effort; the
+   * local clear still runs (the user expects to be logged out client-
+   * side regardless).
+   */
+  async logout(): Promise<void> {
+    try {
+      await apiClient('/franchise/auth/logout', { method: 'POST' });
+    } catch {
+      // 401 here usually just means the access token expired in-flight;
+      // we still want to clear the local session.
+    }
     try {
       sessionStorage.removeItem('accessToken');
       sessionStorage.removeItem('refreshToken');

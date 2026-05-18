@@ -1,0 +1,109 @@
+# SPORTSMART API — Kubernetes Deployment + Service.
+#
+# Phase 9 (2026-05-16) — sample manifest. The `image:` tag is a
+# placeholder; the deploy workflow (.github/workflows/deploy.yml)
+# overwrites it with the resolved `:<env>-<sha>` tag via
+# `kubectl set image` or `helm --set image.tag=...`.
+#
+# Probes wire to the API's existing /health endpoints:
+#   /api/v1/health/live   — process-up, NO downstream deps (DB/Redis).
+#                            Failure = restart the pod.
+#   /api/v1/health/ready  — process + downstream deps OK.
+#                            Failure = remove from Service endpoints
+#                            but do not restart (a DB blip should not
+#                            crash-loop every replica).
+#
+# Resource requests are starter values; tune from real prod metrics.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sportsmart-api
+  labels:
+    app.kubernetes.io/name: sportsmart-api
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sportsmart-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Surge by 1 pod, never go below the desired count — keeps
+      # capacity intact during a rolling upgrade.
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sportsmart-api
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: sportsmart-api
+      # 30s grace gives in-flight HTTP requests time to drain before
+      # the SIGKILL hammer drops — paired with the API's SIGTERM
+      # handler (apps/api/src/main.ts).
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: api
+          image: ghcr.io/sportsmart/api:staging-latest # ← deploy.yml rewrites this
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 4000
+          envFrom:
+            # The actual secrets/config live in a separately-managed
+            # Secret + ConfigMap; this just wires them in. Operators:
+            # populate sportsmart-api-secret + sportsmart-api-config
+            # via your secret-management tool (sealed-secrets, ESO,
+            # vault-agent injector, …) before applying this manifest.
+            - secretRef:
+                name: sportsmart-api-secret
+            - configMapRef:
+                name: sportsmart-api-config
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1500m"
+              memory: "1Gi"
+          securityContext:
+            # Image runs as `node` (uid 1000); enforce non-root here
+            # as a belt-and-braces check.
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sportsmart-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sportsmart-api
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http

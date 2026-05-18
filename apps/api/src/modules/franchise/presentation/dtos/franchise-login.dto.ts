@@ -5,9 +5,9 @@ export class FranchiseLoginDto {
   @IsNotEmpty({ message: 'Email or phone number is required' })
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  identifier: string;
+  identifier!: string;
 
   @IsNotEmpty({ message: 'Password is required' })
   @IsString()
-  password: string;
+  password!: string;
 }

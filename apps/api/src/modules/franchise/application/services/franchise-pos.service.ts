@@ -269,14 +269,37 @@ export class FranchisePosService {
       );
     }
 
-    // 2. Update status
-    const updated = await this.posRepo.updateSale(saleId, {
-      status: 'VOIDED',
-      voidedAt: new Date(),
-      voidReason: reason,
-    });
+    // 2. Atomic state transition — only proceed if the row is still
+    //    COMPLETED. Pre-Phase-7 the check above was decoupled from the
+    //    updateSale below, so two concurrent retries could both pass
+    //    the check and both fire the inventory reversal in step 3,
+    //    refunding stock twice. The CAS claim closes that race: only
+    //    the first request observes count=1 and continues; the loser
+    //    sees count=0 and short-circuits. Idempotent at the operation
+    //    level — a retried successful request now returns the
+    //    already-VOIDED row without any side effects.
+    const voidedAt = new Date();
+    const claimed = await this.posRepo.claimSaleTransition(
+      saleId,
+      'COMPLETED',
+      {
+        status: 'VOIDED',
+        voidedAt,
+        voidReason: reason,
+      },
+    );
+    if (claimed === 0) {
+      // Another writer beat us to it. Refetch and return the current
+      // state so retried clients see the same response as the winner.
+      const current = await this.posRepo.findByIdWithItems(saleId);
+      this.logger.log(
+        `POS void for sale ${sale.saleNumber} was a duplicate — returning current state without side effects`,
+      );
+      return current;
+    }
 
-    // 3. Return stock for each item
+    // 3. Return stock for each item — only reachable when we won the
+    //    claim, so concurrent retries cannot double-refund inventory.
     for (const item of sale.items) {
       await this.inventoryService.returnPosStock(
         franchiseId,
@@ -287,6 +310,10 @@ export class FranchisePosService {
         actorId,
       );
     }
+
+    // Re-fetch the updated row for the response — `claimSaleTransition`
+    // returns a count, not the row.
+    const updated = await this.posRepo.findByIdWithItems(saleId);
 
     // 4. Void the matching commission ledger entry so it does not settle.
     try {

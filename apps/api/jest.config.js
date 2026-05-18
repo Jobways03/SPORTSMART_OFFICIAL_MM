@@ -57,4 +57,39 @@ module.exports = {
   transformIgnorePatterns: ['/node_modules/'],
   // Quieter default output.
   verbose: false,
+
+  // Phase 9 (2026-05-16) — coverage settings.
+  //
+  // `collectCoverage` is FALSE by default so day-to-day `pnpm test`
+  // stays fast. CI flips it on via the `--coverage` flag, which
+  // overrides this value without needing a parallel config file.
+  //
+  // collectCoverageFrom enumerates the source files to consider —
+  // include all of src/ but exclude barrel files, NestJS modules
+  // (mostly DI wiring with no logic to cover), main.ts (boot only),
+  // and pure type declarations.
+  //
+  // coverageThreshold sets the floor. Starting point is conservative
+  // (50% lines / 40% branches) so existing PRs don't fail on legacy
+  // gaps; ratchet up as tests get added. NEVER ratchet down.
+  collectCoverage: false,
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/**/*.d.ts',
+    '!src/**/index.ts',
+    '!src/**/*.module.ts',
+    '!src/main.ts',
+    '!src/**/*.spec.ts',
+    '!src/**/*.test.ts',
+  ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text-summary', 'lcov', 'json-summary'],
+  coverageThreshold: {
+    global: {
+      lines: 50,
+      statements: 50,
+      functions: 50,
+      branches: 40,
+    },
+  },
 };

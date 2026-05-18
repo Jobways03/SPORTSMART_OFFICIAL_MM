@@ -76,8 +76,11 @@ export const adminInventoryService = {
     if (params?.page) query.set('page', String(params.page));
     if (params?.limit) query.set('limit', String(params.limit));
     if (params?.sellerId) query.set('sellerId', params.sellerId);
-    const qs = query.toString();
-    return apiClient(`/admin/inventory/low-stock${qs ? `?${qs}` : ''}`);
+    // Seller Admin panel scope: seller-mapped inventory only. Excludes
+    // franchise rows and catalog-level fallback rows (no seller_id), so
+    // the view matches the Super Admin panel's "Sellers" filter exactly.
+    query.set('nodeType', 'SELLER');
+    return apiClient(`/admin/inventory/low-stock?${query.toString()}`);
   },
 
   async getOutOfStock(params?: {
@@ -87,8 +90,8 @@ export const adminInventoryService = {
     const query = new URLSearchParams();
     if (params?.page) query.set('page', String(params.page));
     if (params?.limit) query.set('limit', String(params.limit));
-    const qs = query.toString();
-    return apiClient(`/admin/inventory/out-of-stock${qs ? `?${qs}` : ''}`);
+    query.set('nodeType', 'SELLER');
+    return apiClient(`/admin/inventory/out-of-stock?${query.toString()}`);
   },
 
   async getReservations(params?: {

@@ -53,16 +53,16 @@ const CUSTOMER_REMEDIES = [
 export class QcDecisionItemDto {
   @IsNotEmpty()
   @IsUUID()
-  returnItemId: string;
+  returnItemId!: string;
 
   @IsNotEmpty()
   @IsIn(QC_OUTCOMES as unknown as string[])
-  qcOutcome: 'APPROVED' | 'REJECTED' | 'PARTIAL' | 'DAMAGED';
+  qcOutcome!: 'APPROVED' | 'REJECTED' | 'PARTIAL' | 'DAMAGED';
 
   @IsNotEmpty()
   @IsNumber()
   @Min(0)
-  qcQuantityApproved: number;
+  qcQuantityApproved!: number;
 
   @IsOptional()
   @IsString()
@@ -87,7 +87,7 @@ export class SubmitQcDecisionDto {
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => QcDecisionItemDto)
-  decisions: QcDecisionItemDto[];
+  decisions!: QcDecisionItemDto[];
 
   @IsOptional()
   @IsString()

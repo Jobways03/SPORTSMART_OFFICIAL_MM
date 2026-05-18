@@ -68,6 +68,57 @@ export class WalletAdjustmentNotApprovableError extends Error {
   }
 }
 
+export class WalletAdjustmentSelfApprovalError extends Error {
+  constructor(
+    public readonly adjustmentId: string,
+    public readonly adminId: string,
+  ) {
+    super(
+      `WalletAdjustment ${adjustmentId} cannot be approved by admin ${adminId} — they requested it`,
+    );
+    this.name = 'WalletAdjustmentSelfApprovalError';
+  }
+}
+
+export class WalletAdjustmentDuplicateApproverError extends Error {
+  constructor(
+    public readonly adjustmentId: string,
+    public readonly adminId: string,
+  ) {
+    super(
+      `WalletAdjustment ${adjustmentId} cannot be approved by admin ${adminId} — they already provided the first approval`,
+    );
+    this.name = 'WalletAdjustmentDuplicateApproverError';
+  }
+}
+
+export class WalletAdjustmentFirstApproverRoleError extends Error {
+  constructor(
+    public readonly adjustmentId: string,
+    public readonly adminId: string,
+  ) {
+    super(
+      `WalletAdjustment ${adjustmentId} cannot be first-approved by admin ${adminId} — first approval on a dual-approval row requires the Tax & Compliance Manager role (Super Admin is reserved for the second approval)`,
+    );
+    this.name = 'WalletAdjustmentFirstApproverRoleError';
+  }
+}
+
+export class WalletAdjustmentSecondApproverRoleError extends Error {
+  constructor(
+    public readonly adjustmentId: string,
+    public readonly adminId: string,
+  ) {
+    super(
+      `WalletAdjustment ${adjustmentId} cannot be second-approved by admin ${adminId} — second approval requires Super Admin (or, when Super Admin is the requester, a different Tax & Compliance Manager)`,
+    );
+    this.name = 'WalletAdjustmentSecondApproverRoleError';
+  }
+}
+
+/** Custom role name seeded by `seed-admin-rbac.ts` — must match exactly. */
+const TAX_COMPLIANCE_MANAGER_ROLE_NAME = 'Tax & Compliance Manager';
+
 export interface RequestForTimeBarredReturnArgs {
   returnId: string;
   /** Reason to surface to the customer + audit trail. Defaults to
@@ -112,9 +163,14 @@ export class WalletAdjustmentService {
   }
 
   private autoApproveBelowThreshold(): boolean {
+    // Default OFF so every wallet adjustment requires an explicit admin
+    // approval click — Indian GST audits expect a named approver on
+    // every refund row, not `approvedByAdminId: null`. Set the env
+    // var to `true` to opt back into auto-approve for small refunds
+    // (the original behaviour, useful in low-trust ops scenarios).
     return this.env.getBoolean(
-      'WALLET_ADJUSTMENT_AUTO_APPROVE_BELOW_THRESHOLD' as any,
-      true,
+      'WALLET_ADJUSTMENT_AUTO_APPROVE_BELOW_THRESHOLD',
+      false,
     );
   }
 
@@ -313,8 +369,19 @@ export class WalletAdjustmentService {
     });
   }
 
-  /** Approve a pending adjustment + post to the wallet ledger.
-   *  Idempotent on adjustmentId. */
+  /** Approve a pending adjustment. State machine:
+   *
+   *    PENDING_APPROVAL (single approval) ──┐
+   *                                          ├──► APPROVED (posts to wallet)
+   *    PENDING_APPROVAL (dual) ──► FIRST_APPROVED ──► APPROVED
+   *
+   *  Rules:
+   *  - The requester (if non-null) cannot be either approver.
+   *  - For dual-approval rows, the second approver must differ from the
+   *    first approver.
+   *  - Idempotent on adjustmentId — re-calling on an APPROVED row returns
+   *    the existing state without re-posting.
+   */
   async approve(args: {
     adjustmentId: string;
     approvedByAdminId: string;
@@ -325,14 +392,123 @@ export class WalletAdjustmentService {
     if (!adj) throw new WalletAdjustmentNotFoundError(args.adjustmentId);
 
     if (adj.status === 'APPROVED') return adj; // idempotent
-    if (adj.status !== 'PENDING_APPROVAL') {
+    if (adj.status !== 'PENDING_APPROVAL' && adj.status !== 'FIRST_APPROVED') {
       throw new WalletAdjustmentNotApprovableError(args.adjustmentId, adj.status);
+    }
+
+    // The requester (when named) is barred from approving at any step —
+    // strict separation of duties. Time-barred refunds are system-initiated
+    // with `requestedByAdminId: null`, so this check no-ops there.
+    if (
+      adj.requestedByAdminId != null &&
+      adj.requestedByAdminId === args.approvedByAdminId
+    ) {
+      throw new WalletAdjustmentSelfApprovalError(
+        args.adjustmentId,
+        args.approvedByAdminId,
+      );
+    }
+
+    // Single-approval path: post immediately. No role restriction beyond
+    // wallet.adjustment.approve (which the controller already enforces).
+    if (!adj.requiresDualApproval) {
+      return this.postAdjustment(adj, args.approvedByAdminId);
+    }
+
+    // ── Dual-approval role gates ──────────────────────────────────
+    // Business rule: first approval must be by a Tax & Compliance Manager
+    // (NOT Super Admin); second approval must be by Super Admin. Fallback:
+    // when Super Admin is the requester (and therefore blocked from step 2),
+    // a different Tax & Compliance Manager can complete step 2 instead —
+    // otherwise the row would be permanently stuck.
+
+    const approverIsSuperAdmin = await this.isSuperAdmin(args.approvedByAdminId);
+    const approverIsTaxMgr = await this.hasTaxComplianceManagerRole(
+      args.approvedByAdminId,
+    );
+
+    // Dual-approval, first sign-off.
+    if (adj.status === 'PENDING_APPROVAL') {
+      if (approverIsSuperAdmin || !approverIsTaxMgr) {
+        throw new WalletAdjustmentFirstApproverRoleError(
+          args.adjustmentId,
+          args.approvedByAdminId,
+        );
+      }
+      const updated = await this.prisma.walletAdjustment.update({
+        where: { id: adj.id },
+        data: {
+          status: 'FIRST_APPROVED',
+          firstApprovedByAdminId: args.approvedByAdminId,
+          firstApprovedAt: new Date(),
+        },
+      });
+      this.logger.log(
+        `WalletAdjustment ${updated.id} FIRST_APPROVED by ${args.approvedByAdminId} ` +
+          `— awaiting second approval`,
+      );
+      return updated;
+    }
+
+    // Dual-approval, second sign-off (status === 'FIRST_APPROVED').
+    if (adj.firstApprovedByAdminId === args.approvedByAdminId) {
+      throw new WalletAdjustmentDuplicateApproverError(
+        args.adjustmentId,
+        args.approvedByAdminId,
+      );
+    }
+
+    // Primary path: Super Admin completes step 2.
+    // Fallback path: requester WAS Super Admin → a different TaxMgr can
+    // complete step 2 (the requester-blocked Super Admin is the only one
+    // who'd normally fit, so we widen the gate to keep the row clearable).
+    const requesterWasSuperAdmin =
+      adj.requestedByAdminId != null &&
+      (await this.isSuperAdmin(adj.requestedByAdminId));
+    const fallbackAllowed = requesterWasSuperAdmin && approverIsTaxMgr;
+    if (!approverIsSuperAdmin && !fallbackAllowed) {
+      throw new WalletAdjustmentSecondApproverRoleError(
+        args.adjustmentId,
+        args.approvedByAdminId,
+      );
     }
 
     return this.postAdjustment(adj, args.approvedByAdminId);
   }
 
-  /** Reject a pending adjustment. No money moves. */
+  /** True iff the admin's primary role is SUPER_ADMIN. */
+  private async isSuperAdmin(adminId: string): Promise<boolean> {
+    const admin = await this.prisma.admin.findUnique({
+      where: { id: adminId },
+      select: { role: true },
+    });
+    return admin?.role === 'SUPER_ADMIN';
+  }
+
+  /** True iff the admin holds the Tax & Compliance Manager custom role. */
+  private async hasTaxComplianceManagerRole(adminId: string): Promise<boolean> {
+    const assignment = await this.prisma.adminRoleAssignment.findFirst({
+      where: {
+        adminId,
+        role: { name: TAX_COMPLIANCE_MANAGER_ROLE_NAME },
+      },
+      select: { id: true },
+    });
+    return assignment !== null;
+  }
+
+  /** Reject a pending adjustment. No money moves.
+   *
+   *  Side-effects beyond the status flip:
+   *    1. The unique `idempotencyKey` is suffixed with `:rejected-<ts>`
+   *       so the canonical key (e.g. `TIME_BARRED_CREDIT_NOTE:<returnId>`)
+   *       is freed for a fresh retry. Otherwise the next `Route to wallet`
+   *       click on the same return would just return this rejected row.
+   *    2. For TIME_BARRED_CREDIT_NOTE kind, the linked Return's
+   *       `financeReviewedAt/By` are cleared so the timebar-review queue
+   *       UI treats the return as actionable again. Without this the
+   *       customer would be stuck — money owed, no path forward.
+   */
   async reject(args: {
     adjustmentId: string;
     rejectedByAdminId: string;
@@ -343,20 +519,33 @@ export class WalletAdjustmentService {
     });
     if (!adj) throw new WalletAdjustmentNotFoundError(args.adjustmentId);
     if (adj.status === 'REJECTED') return adj; // idempotent
-    if (adj.status !== 'PENDING_APPROVAL') {
+    if (adj.status !== 'PENDING_APPROVAL' && adj.status !== 'FIRST_APPROVED') {
       throw new Error(
         `WalletAdjustment ${args.adjustmentId} cannot be rejected from status ${adj.status}`,
       );
     }
 
-    return this.prisma.walletAdjustment.update({
-      where: { id: args.adjustmentId },
-      data: {
-        status: 'REJECTED',
-        rejectedByAdminId: args.rejectedByAdminId,
-        rejectedAt: new Date(),
-        rejectionReason: args.rejectionReason,
-      },
+    const rejectedAt = new Date();
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.walletAdjustment.update({
+        where: { id: args.adjustmentId },
+        data: {
+          status: 'REJECTED',
+          rejectedByAdminId: args.rejectedByAdminId,
+          rejectedAt,
+          rejectionReason: args.rejectionReason,
+          idempotencyKey: `${adj.idempotencyKey}:rejected-${rejectedAt.getTime()}`,
+        },
+      });
+
+      if (adj.kind === 'TIME_BARRED_CREDIT_NOTE' && adj.returnId) {
+        await tx.return.update({
+          where: { id: adj.returnId },
+          data: { financeReviewedAt: null, financeReviewedBy: null },
+        });
+      }
+
+      return updated;
     });
   }
 
@@ -443,11 +632,29 @@ export class WalletAdjustmentService {
 
     // Post to wallet ledger. Idempotency at the wallet layer means a
     // re-tried post returns the existing transaction.
+    //
+    // BigInt → Number coercion: `WalletPublicFacade.{credit,debit}Adjustment`
+    // currently accept `number`. We assert the BigInt fits in
+    // Number.MAX_SAFE_INTEGER (2^53 − 1 paise ≈ ₹90 trillion) before
+    // coercing. A single wallet adjustment that breaches this bar is
+    // a bug upstream — we throw rather than silently truncate. The
+    // long-term fix is widening the wallet facade to accept BigInt
+    // directly; until then this guard catches the loss-of-precision
+    // edge case at the boundary.
+    const safe = (v: bigint): number => {
+      if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < -BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(
+          `WalletAdjustment ${adj.id} amount ${v} exceeds Number.MAX_SAFE_INTEGER paise (~₹90T) — wallet facade cannot accept it without precision loss.`,
+        );
+      }
+      return Number(v);
+    };
+
     let txId: string;
     if (isCredit) {
       const result = await this.wallet.creditAdjustment({
         userId: adj.customerId,
-        amountInPaise: Number(adj.amountInPaise),
+        amountInPaise: safe(adj.amountInPaise),
         adjustmentId: adj.id,
         description: this.buildLedgerDescription(adj),
         internalNotes: adj.reason,
@@ -460,7 +667,7 @@ export class WalletAdjustmentService {
     } else {
       const result = await this.wallet.debitAdjustment({
         userId: adj.customerId,
-        amountInPaise: Number(-adj.amountInPaise),
+        amountInPaise: safe(-adj.amountInPaise),
         adjustmentId: adj.id,
         description: this.buildLedgerDescription(adj),
         internalNotes: adj.reason,

@@ -228,7 +228,7 @@ describe('PayoutService.ingestBankResponse — Phase 0 amount-check', () => {
     });
 
     expect(mismatches).toHaveLength(1);
-    expect(mismatches[0].settlementId).toBe(settlementB.id);
+    expect(mismatches[0]!.settlementId).toBe(settlementB.id);
 
     // A's payout is COMPLETED
     expect(payoutUpdate).toHaveBeenCalledWith(

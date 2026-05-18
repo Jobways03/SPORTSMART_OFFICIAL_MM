@@ -1,5 +1,11 @@
 import 'reflect-metadata';
-import { WalletAdjustmentService } from '../../src/modules/tax/application/services/wallet-adjustment.service';
+import {
+  WalletAdjustmentService,
+  WalletAdjustmentSelfApprovalError,
+  WalletAdjustmentDuplicateApproverError,
+  WalletAdjustmentFirstApproverRoleError,
+  WalletAdjustmentSecondApproverRoleError,
+} from '../../src/modules/tax/application/services/wallet-adjustment.service';
 
 // Phase 13 GST — WalletAdjustmentService tests.
 //
@@ -8,7 +14,7 @@ import { WalletAdjustmentService } from '../../src/modules/tax/application/servi
 // concurrent posts) is exercised by Phase 27 integration tests.
 
 interface MockPrisma {
-  return: { findUnique: jest.Mock };
+  return: { findUnique: jest.Mock; update: jest.Mock };
   taxDocument: { findFirst: jest.Mock };
   orderItemTaxSnapshot: { findMany: jest.Mock };
   orderItem: { findUnique: jest.Mock };
@@ -17,6 +23,9 @@ interface MockPrisma {
     create: jest.Mock;
     update: jest.Mock;
   };
+  admin: { findUnique: jest.Mock };
+  adminRoleAssignment: { findFirst: jest.Mock };
+  $transaction: jest.Mock;
 }
 
 interface MockWallet {
@@ -35,7 +44,7 @@ function makeService(
   wallet: MockWallet;
 } {
   const prisma: MockPrisma = {
-    return: { findUnique: jest.fn() },
+    return: { findUnique: jest.fn(), update: jest.fn() },
     taxDocument: { findFirst: jest.fn() },
     orderItemTaxSnapshot: { findMany: jest.fn() },
     orderItem: { findUnique: jest.fn() },
@@ -44,6 +53,16 @@ function makeService(
       create: jest.fn(),
       update: jest.fn(),
     },
+    // Default role lookups → "not a Super Admin, not a TaxMgr" so single-
+    // approval tests that don't care about roles pass through unchanged.
+    // Dual-approval tests override these per-case.
+    admin: { findUnique: jest.fn().mockResolvedValue({ role: 'SELLER_ADMIN' }) },
+    adminRoleAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
+    // Pass-through transaction — invokes the callback with `prisma`
+    // itself so per-table mocks (walletAdjustment.update, return.update)
+    // are reused. Sufficient for unit tests that only assert call shape;
+    // a real Prisma client gives stronger atomicity guarantees.
+    $transaction: jest.fn((cb: any) => cb(prisma)),
   };
   const wallet: MockWallet = {
     creditAdjustment: jest.fn(),
@@ -380,6 +399,275 @@ describe('WalletAdjustmentService.approve', () => {
       service.approve({ adjustmentId: 'adj-a6', approvedByAdminId: 'admin-1' }),
     ).rejects.toThrow(/zero amount/);
   });
+
+  it('blocks the requester from approving a dual-approval row at step 1', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a7',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-1',
+    });
+    await expect(
+      service.approve({
+        adjustmentId: 'adj-a7',
+        approvedByAdminId: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(WalletAdjustmentSelfApprovalError);
+    expect(wallet.creditAdjustment).not.toHaveBeenCalled();
+    expect(prisma.walletAdjustment.update).not.toHaveBeenCalled();
+  });
+
+  it('parks a dual-approval row in FIRST_APPROVED on first sign-off by a TaxMgr (no posting)', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a8',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-1',
+    });
+    // admin-2 = TaxMgr, not Super Admin → allowed to first-approve.
+    prisma.admin.findUnique.mockResolvedValue({ role: 'SELLER_ADMIN' });
+    prisma.adminRoleAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+    prisma.walletAdjustment.update.mockImplementation(async (args: any) => ({
+      id: 'adj-a8',
+      status: 'FIRST_APPROVED',
+      firstApprovedByAdminId: args.data.firstApprovedByAdminId,
+      firstApprovedAt: args.data.firstApprovedAt,
+    }));
+    const result = await service.approve({
+      adjustmentId: 'adj-a8',
+      approvedByAdminId: 'admin-2',
+    });
+    expect(result.status).toBe('FIRST_APPROVED');
+    expect(result.firstApprovedByAdminId).toBe('admin-2');
+    expect(wallet.creditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('records first approval for system-initiated dual-approval rows (requester null, TaxMgr signs)', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a9',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'TIME_BARRED_CREDIT_NOTE',
+      reason: 'sec34',
+      requiresDualApproval: true,
+      requestedByAdminId: null,
+    });
+    prisma.admin.findUnique.mockResolvedValue({ role: 'SELLER_ADMIN' });
+    prisma.adminRoleAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+    prisma.walletAdjustment.update.mockImplementation(async (args: any) => ({
+      id: 'adj-a9',
+      status: 'FIRST_APPROVED',
+      firstApprovedByAdminId: args.data.firstApprovedByAdminId,
+    }));
+    const result = await service.approve({
+      adjustmentId: 'adj-a9',
+      approvedByAdminId: 'admin-1',
+    });
+    expect(result.status).toBe('FIRST_APPROVED');
+    expect(wallet.creditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('posts to wallet on second sign-off by Super Admin', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a10',
+      status: 'FIRST_APPROVED',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-1',
+      firstApprovedByAdminId: 'admin-2',
+    });
+    // admin-3 = Super Admin (second-approver requirement). admin-1
+    // (requester) is a regular admin so the fallback path stays inactive.
+    prisma.admin.findUnique.mockImplementation(async ({ where }: any) =>
+      where.id === 'admin-3'
+        ? { role: 'SUPER_ADMIN' }
+        : { role: 'SELLER_ADMIN' },
+    );
+    wallet.creditAdjustment.mockResolvedValue({
+      transaction: { id: 'tx-final' },
+    });
+    prisma.walletAdjustment.update.mockResolvedValue({
+      id: 'adj-a10',
+      status: 'APPROVED',
+      walletTransactionId: 'tx-final',
+      approvedByAdminId: 'admin-3',
+    });
+    const result = await service.approve({
+      adjustmentId: 'adj-a10',
+      approvedByAdminId: 'admin-3',
+    });
+    expect(result.status).toBe('APPROVED');
+    expect(result.walletTransactionId).toBe('tx-final');
+    expect(wallet.creditAdjustment).toHaveBeenCalled();
+  });
+
+  it('blocks the same admin from signing off twice on a dual-approval row', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a11',
+      status: 'FIRST_APPROVED',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-1',
+      firstApprovedByAdminId: 'admin-2',
+    });
+    await expect(
+      service.approve({
+        adjustmentId: 'adj-a11',
+        approvedByAdminId: 'admin-2',
+      }),
+    ).rejects.toBeInstanceOf(WalletAdjustmentDuplicateApproverError);
+    expect(wallet.creditAdjustment).not.toHaveBeenCalled();
+    expect(prisma.walletAdjustment.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks the requester from providing the second approval', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a12',
+      status: 'FIRST_APPROVED',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-1',
+      firstApprovedByAdminId: 'admin-2',
+    });
+    await expect(
+      service.approve({
+        adjustmentId: 'adj-a12',
+        approvedByAdminId: 'admin-1',
+      }),
+    ).rejects.toBeInstanceOf(WalletAdjustmentSelfApprovalError);
+    expect(wallet.creditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('blocks Super Admin from doing the FIRST approval on a dual-approval row', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a13',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-x',
+    });
+    // approver is Super Admin → blocked from step 1.
+    prisma.admin.findUnique.mockResolvedValue({ role: 'SUPER_ADMIN' });
+    prisma.adminRoleAssignment.findFirst.mockResolvedValue(null);
+    await expect(
+      service.approve({
+        adjustmentId: 'adj-a13',
+        approvedByAdminId: 'super-admin-1',
+      }),
+    ).rejects.toBeInstanceOf(WalletAdjustmentFirstApproverRoleError);
+    expect(prisma.walletAdjustment.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks an admin without the TaxMgr role from doing the FIRST approval', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a14',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-x',
+    });
+    // approver is some other admin without TaxMgr (default mocks).
+    await expect(
+      service.approve({
+        adjustmentId: 'adj-a14',
+        approvedByAdminId: 'random-admin',
+      }),
+    ).rejects.toBeInstanceOf(WalletAdjustmentFirstApproverRoleError);
+  });
+
+  it('blocks a TaxMgr from doing the SECOND approval when requester is not Super Admin', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a15',
+      status: 'FIRST_APPROVED',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'GOODWILL',
+      reason: 'large goodwill',
+      requiresDualApproval: true,
+      requestedByAdminId: 'admin-1', // not Super Admin
+      firstApprovedByAdminId: 'taxmgr-1',
+    });
+    // approver is a different TaxMgr but requester wasn't Super Admin → no fallback.
+    prisma.admin.findUnique.mockResolvedValue({ role: 'SELLER_ADMIN' });
+    prisma.adminRoleAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+    await expect(
+      service.approve({
+        adjustmentId: 'adj-a15',
+        approvedByAdminId: 'taxmgr-2',
+      }),
+    ).rejects.toBeInstanceOf(WalletAdjustmentSecondApproverRoleError);
+    expect(wallet.creditAdjustment).not.toHaveBeenCalled();
+  });
+
+  it('FALLBACK: TaxMgr can do the SECOND approval when Super Admin was the requester', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-a16',
+      status: 'FIRST_APPROVED',
+      amountInPaise: 600_000n,
+      customerId: 'u-1',
+      kind: 'TIME_BARRED_CREDIT_NOTE',
+      reason: 'sec34 routed by SA',
+      requiresDualApproval: true,
+      requestedByAdminId: 'super-admin-1',
+      firstApprovedByAdminId: 'taxmgr-1',
+    });
+    // Approver (taxmgr-2) is a TaxMgr, not Super Admin.
+    // Requester (super-admin-1) IS Super Admin → fallback path activates.
+    prisma.admin.findUnique.mockImplementation(async ({ where }: any) =>
+      where.id === 'super-admin-1'
+        ? { role: 'SUPER_ADMIN' }
+        : { role: 'SELLER_ADMIN' },
+    );
+    prisma.adminRoleAssignment.findFirst.mockResolvedValue({ id: 'assignment-1' });
+    wallet.creditAdjustment.mockResolvedValue({
+      transaction: { id: 'tx-fallback' },
+    });
+    prisma.walletAdjustment.update.mockResolvedValue({
+      id: 'adj-a16',
+      status: 'APPROVED',
+      walletTransactionId: 'tx-fallback',
+    });
+    const result = await service.approve({
+      adjustmentId: 'adj-a16',
+      approvedByAdminId: 'taxmgr-2',
+    });
+    expect(result.status).toBe('APPROVED');
+    expect(wallet.creditAdjustment).toHaveBeenCalled();
+  });
 });
 
 describe('WalletAdjustmentService.reject', () => {
@@ -431,6 +719,9 @@ describe('WalletAdjustmentService.reject', () => {
     prisma.walletAdjustment.findUnique.mockResolvedValue({
       id: 'adj-r3',
       status: 'PENDING_APPROVAL',
+      idempotencyKey: 'GOODWILL:admin-1:u-1:1000:dup',
+      kind: 'GOODWILL',
+      returnId: null,
     });
     prisma.walletAdjustment.update.mockImplementation(async (args: any) => ({
       id: 'adj-r3',
@@ -445,6 +736,67 @@ describe('WalletAdjustmentService.reject', () => {
     expect(result.status).toBe('REJECTED');
     expect(result.rejectionReason).toBe('duplicate request');
     expect(result.rejectedByAdminId).toBe('admin-1');
+  });
+
+  it('frees idempotencyKey + clears return.financeReviewedAt on TIME_BARRED reject so admin can re-route', async () => {
+    const { service, prisma } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-tb-rej',
+      status: 'PENDING_APPROVAL',
+      kind: 'TIME_BARRED_CREDIT_NOTE',
+      returnId: 'ret-77',
+      idempotencyKey: 'TIME_BARRED_CREDIT_NOTE:ret-77',
+    });
+    prisma.walletAdjustment.update.mockImplementation(async (args: any) => ({
+      id: 'adj-tb-rej',
+      status: 'REJECTED',
+      ...args.data,
+    }));
+    prisma.return.update.mockResolvedValue({ id: 'ret-77' });
+
+    const result = await service.reject({
+      adjustmentId: 'adj-tb-rej',
+      rejectedByAdminId: 'admin-9',
+      rejectionReason: 'wrong return',
+    });
+
+    // The rejected row's key gets a :rejected-<ts> suffix so the
+    // canonical TIME_BARRED_CREDIT_NOTE:ret-77 is free for a retry.
+    expect(result.idempotencyKey).toMatch(
+      /^TIME_BARRED_CREDIT_NOTE:ret-77:rejected-\d+$/,
+    );
+    expect(result.status).toBe('REJECTED');
+
+    // The linked return's review-stamp is cleared so the timebar-review
+    // page UI shows it as actionable again.
+    expect(prisma.return.update).toHaveBeenCalledWith({
+      where: { id: 'ret-77' },
+      data: { financeReviewedAt: null, financeReviewedBy: null },
+    });
+  });
+
+  it('does NOT touch return.update when rejecting a non-TIME_BARRED kind', async () => {
+    const { service, prisma } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-gw-rej',
+      status: 'PENDING_APPROVAL',
+      kind: 'GOODWILL',
+      returnId: null,
+      idempotencyKey: 'GOODWILL:admin-1:u-1:5000:goodwill',
+    });
+    prisma.walletAdjustment.update.mockImplementation(async (args: any) => ({
+      id: 'adj-gw-rej',
+      status: 'REJECTED',
+      ...args.data,
+    }));
+
+    await service.reject({
+      adjustmentId: 'adj-gw-rej',
+      rejectedByAdminId: 'admin-1',
+      rejectionReason: 'no',
+    });
+
+    expect(prisma.return.update).not.toHaveBeenCalled();
   });
 });
 
