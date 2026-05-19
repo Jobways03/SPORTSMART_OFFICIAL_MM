@@ -17,7 +17,10 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/dashboard/earnings', label: 'Earnings' },
   { href: '/dashboard/coupons', label: 'Coupons & Links' },
-  { href: '/dashboard/kyc', label: 'KYC' },
+  // KYC temporarily disabled (commented out per product request).
+  // Re-enable by uncommenting the line below + the matching route + the
+  // KYC steps in dashboard/payouts checklists + the backend KYC routes.
+  // { href: '/dashboard/kyc', label: 'KYC' },
   { href: '/dashboard/payouts', label: 'Payouts' },
   { href: '/dashboard/tds', label: 'TDS' },
   { href: '/dashboard/profile', label: 'Profile' },
@@ -116,7 +119,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={statusPill(profile.status)}>{profile.status.replace(/_/g, ' ')}</span>
-          <span style={kycPill(profile.kycStatus)}>KYC: {profile.kycStatus.replace(/_/g, ' ')}</span>
+          {/* KYC pill hidden — see /dashboard/kyc disable note above */}
+          {/* <span style={kycPill(profile.kycStatus)}>KYC: {profile.kycStatus.replace(/_/g, ' ')}</span> */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', lineHeight: 1.2 }}>

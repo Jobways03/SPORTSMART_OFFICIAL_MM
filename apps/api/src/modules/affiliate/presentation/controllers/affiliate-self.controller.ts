@@ -145,7 +145,11 @@ export class AffiliateSelfController {
   }
 
   // ── KYC ─────────────────────────────────────────────────────
-
+  // KYC endpoints temporarily disabled (commented out per product
+  // request). Routes are removed from the controller; the service +
+  // DTOs remain available for re-enabling. Restore by uncommenting
+  // the block below and the matching frontend pieces.
+  /*
   @Get('kyc')
   async getKyc(@Req() req: Request) {
     const affiliateId = (req as any).affiliateId;
@@ -175,17 +179,6 @@ export class AffiliateSelfController {
     };
   }
 
-  /**
-   * Upload a KYC document image. Affiliate picks a JPG/PNG/WEBP scan
-   * of their PAN or Aadhaar card; we push it to Cloudinary in a
-   * folder scoped to this affiliate, and return the secure URL the
-   * caller then submits as `panDocumentUrl` / `aadhaarDocumentUrl`
-   * via POST /affiliate/me/kyc.
-   *
-   * Image-only by design — Cloudinary's upload pipeline rejects
-   * non-image MIME types up front (see CloudinaryAdapter), and we
-   * reinforce with magic-byte validation to defeat misnamed files.
-   */
   @Post('kyc/upload/:kind')
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(
@@ -233,6 +226,7 @@ export class AffiliateSelfController {
       },
     };
   }
+  */
 
   // ── Payout methods + requests ───────────────────────────────
 

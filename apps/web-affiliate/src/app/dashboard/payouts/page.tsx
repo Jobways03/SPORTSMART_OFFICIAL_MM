@@ -109,7 +109,8 @@ export default function PayoutsPage() {
 
   const checks = [
     { label: 'Account is ACTIVE', done: profile?.status === 'ACTIVE', body: profile?.status !== 'ACTIVE' ? 'Wait for admin approval.' : null },
-    { label: 'KYC verified', done: profile?.kycStatus === 'VERIFIED', body: profile?.kycStatus !== 'VERIFIED' ? 'Complete it on the KYC page.' : null, href: '/dashboard/kyc' },
+    // KYC check temporarily removed (KYC feature disabled).
+    // { label: 'KYC verified', done: profile?.kycStatus === 'VERIFIED', body: profile?.kycStatus !== 'VERIFIED' ? 'Complete it on the KYC page.' : null, href: '/dashboard/kyc' },
     { label: 'Primary payout method added', done: !!primaryMethod, body: !primaryMethod ? 'Add a bank account or UPI below.' : null },
     { label: `Balance ≥ ${formatINR(MIN_PAYOUT)}`, done: eligibleAmount >= MIN_PAYOUT, body: eligibleAmount < MIN_PAYOUT ? `You have ${formatINR(eligibleAmount)} eligible.` : null },
   ];

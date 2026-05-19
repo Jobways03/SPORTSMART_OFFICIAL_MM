@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { sanitizeRichHtml } from '@/lib/sanitize';
@@ -1269,6 +1270,51 @@ export default function SellerProfilePage() {
               Need to update? Contact SportSmart admin — GSTIN changes
               after verification require a re-verification cycle.
             </p>
+            {/* Empty-state CTA: when the seller hasn't completed onboarding yet,
+                every Tax/GST field reads "Not submitted". Surface a clear path
+                to the onboarding flow instead of leaving the user stranded on
+                read-only placeholders. Once any of the three core fields is set
+                we assume onboarding was completed and the banner hides. */}
+            {!profile.gstin && !profile.panNumber && !profile.legalBusinessName && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 14px',
+                  background: '#eff6ff',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ fontSize: 13, color: '#1e40af', lineHeight: 1.5 }}>
+                  <strong>You haven&apos;t completed onboarding yet.</strong>{' '}
+                  Submit your legal business name, GSTIN, GST state code, and
+                  PAN — without these you can&apos;t sell on the platform.
+                </div>
+                <Link
+                  href="/dashboard/onboarding"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    height: 32,
+                    padding: '0 14px',
+                    background: '#2563eb',
+                    color: '#fff',
+                    borderRadius: 6,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    textDecoration: 'none',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Open onboarding →
+                </Link>
+              </div>
+            )}
           </div>
 
           <div className="form-grid-2">

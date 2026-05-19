@@ -168,7 +168,10 @@ export class AdminAffiliateController {
   }
 
   // ── KYC ─────────────────────────────────────────────────────
-
+  // KYC review endpoints temporarily disabled (commented out per
+  // product request). Service + DTOs preserved — restore the block
+  // below to re-enable.
+  /*
   @Get(':affiliateId/kyc')
   @Permissions('affiliates.read')
   async getKyc(@Param('affiliateId') affiliateId: string) {
@@ -216,6 +219,7 @@ export class AdminAffiliateController {
       data,
     };
   }
+  */
 
   // ── Per-affiliate commission rate ──────────────────────────
 
