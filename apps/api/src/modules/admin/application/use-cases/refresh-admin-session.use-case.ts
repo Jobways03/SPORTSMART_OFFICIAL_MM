@@ -52,6 +52,26 @@ export class RefreshAdminSessionUseCase {
     const session =
       await this.adminRepo.findAdminSessionByRefreshToken(refreshToken);
     if (!session) {
+      // Phase 1 / C6 — refresh-token reuse detection. Primary slot
+      // missed; check the burned-hash slot. A hit means the caller
+      // presented a token that was already rotated out — i.e. the
+      // token was stolen at some prior moment, the legitimate client
+      // rotated it (creating the burned-hash entry), and the
+      // attacker is now replaying the original. Revoke every session
+      // for this admin and refuse.
+      const burned =
+        await this.adminRepo.findAdminSessionByPreviousRefreshToken(
+          refreshToken,
+        );
+      if (burned) {
+        await this.adminRepo.revokeAdminSessions(burned.adminId);
+        this.logger.warn(
+          `Refresh-token reuse detected for admin ${burned.adminId} — revoked all sessions`,
+        );
+        throw new UnauthorizedAppException(
+          'Session security check failed. Please sign in again.',
+        );
+      }
       throw new UnauthorizedAppException('Invalid refresh token');
     }
     if (session.revokedAt) {

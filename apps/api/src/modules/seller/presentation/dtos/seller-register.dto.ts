@@ -1,7 +1,16 @@
-import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class SellerRegisterDto {
+  // Phase 38 — D2C vs RETAIL discriminator. Set by the seller portal
+  // at registration time (each portal hard-codes its own value via
+  // an injected client constant + this DTO field). Optional on the
+  // wire so legacy clients still register as the schema default (D2C).
+  @IsOptional()
+  @IsIn(['D2C', 'RETAIL'], { message: 'sellerType must be D2C or RETAIL' })
+  sellerType?: 'D2C' | 'RETAIL';
+
+
   @IsNotEmpty({ message: 'Seller name is required' })
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)

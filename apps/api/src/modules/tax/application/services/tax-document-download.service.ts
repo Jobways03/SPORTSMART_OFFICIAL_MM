@@ -219,11 +219,17 @@ export class TaxDocumentDownloadService {
   // ── Internals ───────────────────────────────────────────────────
 
   private async scopeViolation(
-    doc: { customerId: string; sellerId: string | null; subOrderId: string | null },
+    doc: { customerId: string | null; sellerId: string | null; subOrderId: string | null },
     actor: DownloadActor,
   ): Promise<string | null> {
     switch (actor.type) {
       case 'CUSTOMER':
+        // Follow-up #133 — POS invoices have customerId=null (walk-in).
+        // A logged-in CUSTOMER can never be the scoped recipient of a
+        // walk-in POS invoice, so treat null customerId as a deny.
+        if (doc.customerId === null) {
+          return `Customer ${actor.id} cannot access POS / walk-in invoice (no scoped customer)`;
+        }
         return doc.customerId === actor.id
           ? null
           : `Customer ${actor.id} cannot access invoice of customer ${doc.customerId}`;

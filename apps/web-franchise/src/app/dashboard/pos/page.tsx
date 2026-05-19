@@ -15,6 +15,13 @@ import {
   CatalogMapping,
 } from '@/services/catalog.service';
 import { ApiError } from '@/lib/api-client';
+import {
+  mountBarcodeScanner,
+  openCashDrawer,
+  printReceipt,
+  requestUsbPrinterPairing,
+  type OpenDrawerResult,
+} from '@/lib/pos-hardware';
 
 type TabKey = 'new-sale' | 'history' | 'daily-report';
 
@@ -183,6 +190,14 @@ function NewSaleTab() {
     useState<PosPaymentMethod>('CASH');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successSale, setSuccessSale] = useState<PosSale | null>(null);
+  // Follow-up #H44 — POS hardware flags. Auto-print + auto-drawer
+  // default ON because that's the muscle memory at the counter; the
+  // cashier can toggle them off (e.g. customer doesn't want a receipt).
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(true);
+  const [autoOpenDrawer, setAutoOpenDrawer] = useState(true);
+  const [drawerStatus, setDrawerStatus] = useState<OpenDrawerResult | 'idle'>(
+    'idle',
+  );
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   const loadProducts = async (searchTerm: string) => {
@@ -219,6 +234,42 @@ setProductsLoading(true);
     return () => clearTimeout(h);
   }, [search]);
 
+  // Follow-up #H44 — mount the keystroke-buffer barcode scanner. A USB
+  // / HID scanner that emits `<digits><Enter>` at >20 chars/sec hits
+  // `onScan`; a human typing or single Enter keypress does not. The
+  // scanner is paused while the success modal is open so a stray
+  // scan doesn't try to add to a closed cart.
+  useEffect(() => {
+    const handle = mountBarcodeScanner({
+      enabled: !successSale,
+      onScan: async (code) => {
+        try {
+          const res = await franchiseCatalogService.listMappings({
+            page: 1,
+            limit: 1,
+            search: code,
+            isActive: true,
+            approvalStatus: 'APPROVED',
+          });
+          const mapping = res.data?.mappings?.find(
+            (m) => m.barcode === code || m.globalSku === code,
+          );
+          if (mapping) {
+            addToCart(mapping);
+          } else {
+            void notify(`No product found for barcode ${code}`);
+          }
+        } catch {
+          // Best-effort: a transient API failure during a scan
+          // shouldn't crash the POS page. The cashier can manually
+          // search instead.
+        }
+      },
+    });
+    return handle.cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [successSale]);
+
   const addToCart = (m: CatalogMapping) => {
     if (!m.product) return;
     const key = `${m.productId}::${m.variantId ?? ''}`;
@@ -248,8 +299,34 @@ setProductsLoading(true);
   };
 
   const updateLine = (key: string, patch: Partial<CartLine>) => {
+    // Phase 4 / H45 — clamp every patched field to a sane range
+    // before persisting to state. Cashiers can otherwise type a
+    // negative unit price (free goods accidentally) or a discount
+    // that exceeds line total (negative net amount → the backend
+    // throws but only after the cashier saw a misleading total in
+    // the UI). The server-side guard in franchise-pos.service is
+    // the authority; this is the customer-empathy layer.
     setCart((prev) =>
-      prev.map((c) => (c.key === key ? { ...c, ...patch } : c)),
+      prev.map((c) => {
+        if (c.key !== key) return c;
+        const merged: CartLine = { ...c, ...patch };
+        if (patch.unitPrice !== undefined && merged.unitPrice < 0) {
+          merged.unitPrice = 0;
+        }
+        if (patch.quantity !== undefined && merged.quantity < 1) {
+          merged.quantity = 1;
+        }
+        if (patch.lineDiscount !== undefined) {
+          const lineGross = merged.unitPrice * merged.quantity;
+          if (merged.lineDiscount < 0) {
+            merged.lineDiscount = 0;
+          } else if (merged.lineDiscount > lineGross) {
+            // Cap at line gross so net never goes negative.
+            merged.lineDiscount = lineGross;
+          }
+        }
+        return merged;
+      }),
     );
   };
 
@@ -314,6 +391,46 @@ if (cart.length === 0) {
 
       if (res.data) {
         setSuccessSale(res.data);
+
+        // Follow-up #H44 — auto-print receipt + auto-open cash drawer.
+        // Both run after the sale is committed so a hardware failure
+        // never blocks the sale itself. Errors are surfaced as a
+        // soft notify so the cashier knows to handle manually.
+        if (autoPrintReceipt) {
+          try {
+            await printReceipt({
+              saleNumber: res.data.saleNumber,
+              franchiseName: 'SportsMart',
+              customerName: customerName.trim() || null,
+              customerPhone: customerPhone.trim() || null,
+              items: cart.map((c) => ({
+                productTitle: c.title,
+                variantTitle: c.variantTitle,
+                quantity: c.quantity,
+                unitPrice: c.unitPrice,
+                lineDiscount: c.lineDiscount,
+              })),
+              subtotalInr: subtotal,
+              discountInr: totalDiscount,
+              netInr: netTotal,
+              paymentMethod,
+              soldAt: new Date(),
+            });
+          } catch {
+            void notify(
+              'Sale recorded but receipt print failed — print from history if needed',
+            );
+          }
+        }
+        if (autoOpenDrawer && paymentMethod === 'CASH') {
+          const result = await openCashDrawer();
+          setDrawerStatus(result);
+          if (result === 'no-printer' || result === 'error') {
+            void notify(
+              'Cash drawer did not open — pair the printer from POS settings or open manually',
+            );
+          }
+        }
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -830,6 +947,113 @@ if (cart.length === 0) {
                   ))}
                 </select>
               </div>
+            </div>
+
+            {/* Follow-up #H44 — POS hardware toggles + printer pairing */}
+            <div
+              style={{
+                marginBottom: 14,
+                padding: 12,
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                background: '#f9fafb',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                  color: '#6b7280',
+                  marginBottom: 8,
+                }}
+              >
+                Hardware
+              </div>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  marginBottom: 4,
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoPrintReceipt}
+                  onChange={(e) => setAutoPrintReceipt(e.target.checked)}
+                />
+                Auto-print receipt
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  marginBottom: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoOpenDrawer}
+                  onChange={(e) => setAutoOpenDrawer(e.target.checked)}
+                />
+                Auto-open cash drawer (CASH sales)
+              </label>
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await requestUsbPrinterPairing();
+                  if (ok) {
+                    void notify('Printer paired. Cash drawer is now ready.');
+                  } else {
+                    void notify(
+                      'Pairing cancelled or Web USB not supported in this browser.',
+                    );
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: '#fff',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  color: '#374151',
+                }}
+              >
+                Pair USB printer / drawer
+              </button>
+              {drawerStatus !== 'idle' && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 11,
+                    color:
+                      drawerStatus === 'ok'
+                        ? '#059669'
+                        : drawerStatus === 'unsupported'
+                        ? '#6b7280'
+                        : '#dc2626',
+                  }}
+                >
+                  Last drawer pulse:{' '}
+                  {drawerStatus === 'ok'
+                    ? 'sent successfully'
+                    : drawerStatus === 'no-printer'
+                    ? 'no paired printer'
+                    : drawerStatus === 'unsupported'
+                    ? 'Web USB not available in this browser'
+                    : 'failed (check printer connection)'}
+                </div>
+              )}
             </div>
 
             <button

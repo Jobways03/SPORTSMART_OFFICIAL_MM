@@ -32,13 +32,15 @@ import * as path from 'path';
  */
 
 const FRONTEND_APPS = [
-  'web-admin',
   'web-admin-storefront',
   'web-affiliate',
   'web-affiliate-admin',
+  'web-d2c-seller',
+  'web-d2c-seller-admin',
   'web-franchise',
   'web-franchise-admin',
-  'web-seller',
+  'web-retail-seller',
+  'web-retail-seller-admin',
   'web-storefront',
 ] as const;
 

@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { PermissionsGuard } from './permissions.guard';
 import { RolesGuard } from './roles.guard';
 import { PolicyGuard } from './policy.guard';
+import { D2cOnlyGuard, RetailOnlyGuard } from './seller-type.guard';
 import { PolicyEvaluatorService } from '../authorization/policy-evaluator.service';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
@@ -31,6 +32,8 @@ import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
     PermissionsGuard,
     RolesGuard,
     PolicyGuard,
+    D2cOnlyGuard,
+    RetailOnlyGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AdminPermissionResolver,
@@ -40,6 +43,8 @@ import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
     PermissionsGuard,
     RolesGuard,
     PolicyGuard,
+    D2cOnlyGuard,
+    RetailOnlyGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AdminPermissionResolver,

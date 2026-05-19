@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { EmailService } from '../../../../integrations/email/email.service';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import { safeHtml } from '../../../../core/util/escape-html';
 
@@ -12,9 +14,12 @@ export class PaymentNotificationHandler {
   constructor(
     private readonly ordersFacade: OrdersPublicFacade,
     private readonly emailService: EmailService,
+    // Phase 2 / M21-M32 — outbox-replay dedup. See wallet handler.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {}
 
   @OnEvent('payments.payment.captured')
+  @IdempotentHandler()
   async handlePaymentCaptured(event: DomainEvent): Promise<void> {
     try {
       const { masterOrderId, amount, orderNumber } = event.payload as any;
@@ -38,6 +43,7 @@ export class PaymentNotificationHandler {
   }
 
   @OnEvent('payments.payment.failed')
+  @IdempotentHandler()
   async handlePaymentFailed(event: DomainEvent): Promise<void> {
     try {
       const { masterOrderId } = event.payload as any;

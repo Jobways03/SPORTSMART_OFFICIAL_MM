@@ -252,7 +252,11 @@ export class ReturnService {
   // ── Phase-5 helpers ───────────────────────────────────────────────────
 
   private getQcMinEvidence(): number {
-    return this.env.getNumber('RETURN_QC_MIN_EVIDENCE', 0);
+    // Phase 0 (Gap audit) — env-schema default is now 2; the second
+    // argument here is the fallback if EnvService cannot resolve the
+    // key at all (which should never happen in a healthy boot). Keep
+    // it at 2 so the runtime fallback matches the schema default.
+    return this.env.getNumber('RETURN_QC_MIN_EVIDENCE', 2);
   }
 
   // ── Eligibility ────────────────────────────────────────────────────────

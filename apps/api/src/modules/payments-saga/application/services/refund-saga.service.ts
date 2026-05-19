@@ -89,13 +89,56 @@ export class RefundSagaService {
       stepRecords[i] = {
         ...stepRecords[i]!,
         status: 'IN_PROGRESS',
-        attempts: stepRecords[i]!.attempts + 1,
         startedAt: new Date().toISOString(),
       };
-      await this.persistSteps(saga.id, stepRecords, 'IN_PROGRESS');
 
-      try {
-        const out = await step.execute(context);
+      // Follow-up #C10 — retry the step inline before declaring it
+      // failed. Most stuck-saga escalations trace to transient PSP /
+      // network blips. Per-step `maxAttempts` defaults to 1 (no
+      // retry) so existing call sites preserve their behavior;
+      // call sites that want retry opt in via the step descriptor.
+      const maxAttempts = Math.max(1, step.maxAttempts ?? 1);
+      const baseBackoffMs = Math.max(0, step.backoffMs ?? 500);
+      let lastErr: unknown = null;
+      let succeeded = false;
+      let out: { result?: unknown; contextUpdate?: Partial<TContext> } | null = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        stepRecords[i] = {
+          ...stepRecords[i]!,
+          attempts: stepRecords[i]!.attempts + 1,
+        };
+        await this.persistSteps(saga.id, stepRecords, 'IN_PROGRESS');
+
+        try {
+          out = await step.execute(context);
+          succeeded = true;
+          break;
+        } catch (err) {
+          lastErr = err;
+          const isLastAttempt = attempt === maxAttempts;
+          const transient = step.isTransientError
+            ? step.isTransientError(err)
+            : true;
+          // Stop retrying on the first non-transient error (e.g. 4xx
+          // validation): the result is deterministic and waiting won't
+          // change it. Also stop on the last attempt to avoid an extra
+          // sleep before failing.
+          if (!transient || isLastAttempt) {
+            break;
+          }
+          this.logger.warn(
+            `Saga ${saga.id} step "${step.name}" attempt ${attempt}/${maxAttempts} failed (transient): ${
+              (err as Error).message ?? String(err)
+            } — retrying`,
+          );
+          // Exponential backoff: 500ms, 1s, 2s, …
+          const backoffMs = baseBackoffMs * Math.pow(2, attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
+      }
+
+      if (succeeded && out) {
         if (out.contextUpdate) {
           context = { ...context, ...out.contextUpdate };
         }
@@ -106,8 +149,8 @@ export class RefundSagaService {
           completedAt: new Date().toISOString(),
         };
         await this.persistSteps(saga.id, stepRecords, 'IN_PROGRESS');
-      } catch (err) {
-        const message = (err as Error).message ?? String(err);
+      } else {
+        const message = (lastErr as Error)?.message ?? String(lastErr);
         stepRecords[i] = {
           ...stepRecords[i]!,
           status: 'FAILED',

@@ -17,6 +17,8 @@ export class SellerRegisterController {
       email: dto.email,
       phoneNumber: dto.phoneNumber,
       password: dto.password,
+      // Phase 38 — D2C / RETAIL discriminator from the seller portal.
+      sellerType: dto.sellerType,
     });
 
     return {

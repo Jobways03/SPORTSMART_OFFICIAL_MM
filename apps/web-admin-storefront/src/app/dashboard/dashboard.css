@@ -617,9 +617,54 @@
   }
 }
 
+/* Follow-up #H41 — Hamburger button. Hidden by default (desktop has
+   the full sidebar visible) and revealed below 768px. Keeps the
+   navbar layout identical to before on wider screens. */
+.navbar-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: #111827;
+  padding: 4px 10px;
+  margin-right: 4px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.navbar-hamburger:hover {
+  background: #f3f4f6;
+}
+
+/* Follow-up #H41 — Mobile sidebar overlay. Hidden by default and on
+   desktop; only renders when sidebarOpen=true AND viewport is mobile.
+   Tapping the dim backdrop closes the drawer. */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 150;
+}
+
 @media (max-width: 768px) {
+  .navbar-hamburger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Slide-in drawer instead of display:none — the user can pull the
+     nav back via the hamburger. Keep the fixed-position width so
+     content reflows under it. */
   .admin-sidebar {
-    display: none;
+    transform: translateX(-100%);
+    transition: transform 200ms ease;
+  }
+  .admin-sidebar.mobile-open {
+    transform: translateX(0);
+  }
+  .sidebar-overlay.visible {
+    display: block;
   }
   .admin-content {
     margin-left: 0;

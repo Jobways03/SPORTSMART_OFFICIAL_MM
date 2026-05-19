@@ -75,7 +75,7 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
           setUrlHandle(b.slug);
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [brandId]);
 
@@ -121,7 +121,7 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
         setBrowseProducts(mapped);
         setBrowseSelected(new Set(mapped.filter((m: BrowseProduct) => existing.has(m.id)).map((m: BrowseProduct) => m.id)));
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setBrowseLoading(false));
   }, [browseSearch, products]);
 

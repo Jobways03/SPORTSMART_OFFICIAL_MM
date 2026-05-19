@@ -58,6 +58,7 @@ export class AdminSellersController {
       search: query.search,
       status: query.status,
       verificationStatus: query.verificationStatus,
+      sellerType: query.sellerType,
       sortBy: query.sortBy,
       sortOrder: query.sortOrder,
       fromDate: query.fromDate,

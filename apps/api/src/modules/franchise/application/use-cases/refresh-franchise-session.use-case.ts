@@ -55,6 +55,23 @@ export class RefreshFranchiseSessionUseCase {
     const session =
       await this.franchiseRepo.findSessionByRefreshToken(refreshToken);
     if (!session) {
+      // Phase 1 / C6 — refresh-token reuse detection. Primary miss;
+      // check the burned-hash slot. A hit means this token was
+      // already rotated out by the legitimate client → theft replay
+      // → revoke every session for the franchise partner.
+      const burned =
+        await this.franchiseRepo.findSessionByPreviousRefreshToken(
+          refreshToken,
+        );
+      if (burned) {
+        await this.franchiseRepo.revokeAllSessions(burned.franchisePartnerId);
+        this.logger.warn(
+          `Refresh-token reuse detected for franchise partner ${burned.franchisePartnerId} — revoked all sessions`,
+        );
+        throw new UnauthorizedAppException(
+          'Session security check failed. Please sign in again.',
+        );
+      }
       throw new UnauthorizedAppException('Invalid refresh token');
     }
     if (session.revokedAt) {

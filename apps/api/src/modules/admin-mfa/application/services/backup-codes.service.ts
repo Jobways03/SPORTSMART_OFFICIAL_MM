@@ -8,8 +8,13 @@ import {
   generateBackupCodes,
   normaliseBackupCode,
 } from '../../domain/backup-codes';
+import { RedisService } from '../../../../bootstrap/cache/redis.service';
 
 const BCRYPT_ROUNDS = 12;
+// Phase 1 / H2 — TTL for the per-admin consume lock. Long enough to
+// cover the 10× bcrypt.compare worst case (~1.5s) plus DB write,
+// short enough that a crashed lock-holder doesn't strand the admin.
+const CONSUME_LOCK_TTL_SECONDS = 15;
 
 /**
  * Phase 10 (PR 10.9) — Backup code lifecycle.
@@ -47,6 +52,7 @@ export class BackupCodesService {
   constructor(
     @Inject(ADMIN_REPOSITORY)
     private readonly adminRepo: AdminRepository,
+    private readonly redis: RedisService,
   ) {}
 
   /**
@@ -77,34 +83,54 @@ export class BackupCodesService {
    * brute-force resistance.
    */
   async consume(adminId: string, candidate: string): Promise<boolean> {
-    const admin = await this.adminRepo.findAdminById(adminId, {
-      mfaBackupCodesHashes: true,
-    });
-    if (!admin) return false;
-    const hashes = (admin.mfaBackupCodesHashes as string[] | null) ?? [];
-    if (hashes.length === 0) return false;
+    // Phase 1 / H2 — serialise per-admin consume via a Redis lock so
+    // two concurrent verifies presenting the same code can never both
+    // succeed. The prior read-then-bcrypt-then-update had a race window
+    // between findAdminById and updateAdmin; with a JSON column we
+    // can't express "remove this hash if still present" atomically in
+    // Prisma the way a String[] column would allow. The lock makes the
+    // whole find→compare→update sequence single-threaded per admin.
+    // If the lock can't be acquired (another consume in flight),
+    // refuse — the legitimate flow is a single interactive request.
+    const lockKey = `mfa:backup-code:consume:${adminId}`;
+    const acquired = await this.redis.acquireLock(
+      lockKey,
+      CONSUME_LOCK_TTL_SECONDS,
+    );
+    if (!acquired) return false;
 
-    const normalised = normaliseBackupCode(candidate);
-    let matchIdx = -1;
-    for (let i = 0; i < hashes.length; i++) {
-      // bcrypt.compare is constant-time per RFC, so a timing-leak
-      // across "which hash matched" is the only side channel —
-      // and that leak is only "code N is the one you got right",
-      // which doesn't help an attacker who doesn't already have
-      // a code. Acceptable.
-      // eslint-disable-next-line no-await-in-loop
-      if (await bcrypt.compare(normalised, hashes[i]!)) {
-        matchIdx = i;
-        break;
+    try {
+      const admin = await this.adminRepo.findAdminById(adminId, {
+        mfaBackupCodesHashes: true,
+      });
+      if (!admin) return false;
+      const hashes = (admin.mfaBackupCodesHashes as string[] | null) ?? [];
+      if (hashes.length === 0) return false;
+
+      const normalised = normaliseBackupCode(candidate);
+      let matchIdx = -1;
+      for (let i = 0; i < hashes.length; i++) {
+        // bcrypt.compare is constant-time per RFC, so a timing-leak
+        // across "which hash matched" is the only side channel —
+        // and that leak is only "code N is the one you got right",
+        // which doesn't help an attacker who doesn't already have
+        // a code. Acceptable.
+        // eslint-disable-next-line no-await-in-loop
+        if (await bcrypt.compare(normalised, hashes[i]!)) {
+          matchIdx = i;
+          break;
+        }
       }
-    }
-    if (matchIdx === -1) return false;
+      if (matchIdx === -1) return false;
 
-    const remaining = [...hashes.slice(0, matchIdx), ...hashes.slice(matchIdx + 1)];
-    await this.adminRepo.updateAdmin(adminId, {
-      mfaBackupCodesHashes: remaining,
-    });
-    return true;
+      const remaining = [...hashes.slice(0, matchIdx), ...hashes.slice(matchIdx + 1)];
+      await this.adminRepo.updateAdmin(adminId, {
+        mfaBackupCodesHashes: remaining,
+      });
+      return true;
+    } finally {
+      await this.redis.releaseLock(lockKey);
+    }
   }
 
   async remainingCount(adminId: string): Promise<number> {

@@ -195,7 +195,7 @@ export default function CustomerReturnHistoryPage() {
                       {r.items?.length ?? 0}
                     </td>
                     <td style={{ ...td, textAlign: 'right', fontFamily: 'ui-monospace, monospace' }}>
-                      ₹{Number(r.totalRefundAmount ?? 0).toFixed(2)}
+                      ₹{Number(r.refundAmount ?? 0).toFixed(2)}
                     </td>
                     <td style={td}>
                       <span

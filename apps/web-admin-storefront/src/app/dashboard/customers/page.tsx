@@ -84,9 +84,14 @@ export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
 
+  // Phase 4 / M59 — visible error state instead of silent catch.
+  // Same pattern as the orders page (C14).
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
   const fetchCustomers = useCallback(
     (p: number) => {
       setLoading(true);
+      setFetchError(null);
       const params = new URLSearchParams({ page: String(p), limit: '50' });
       if (search.trim()) params.set('search', search.trim());
 
@@ -94,7 +99,12 @@ export default function CustomersPage() {
         .then((res) => {
           if (res.data) setData(res.data);
         })
-        .catch(() => {})
+        .catch((err) => {
+          setFetchError(
+            err?.message ||
+              'Could not load customers. The API may be down — retry, or check the API logs.',
+          );
+        })
         .finally(() => setLoading(false));
     },
     [search],
@@ -199,7 +209,45 @@ export default function CustomersPage() {
       </div>
 
       {/* ── States ──────────────────────────────────────────── */}
-      {loading && !data ? (
+      {fetchError ? (
+        <div
+          role="alert"
+          style={{
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 12,
+            padding: 24,
+            color: '#991b1b',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 16,
+          }}
+        >
+          <div>
+            <strong style={{ display: 'block', marginBottom: 4 }}>
+              Couldn&apos;t load customers
+            </strong>
+            <span style={{ fontSize: 13 }}>{fetchError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => fetchCustomers(page)}
+            style={{
+              background: '#dc2626',
+              color: '#fff',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: 6,
+              fontWeight: 600,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : loading && !data ? (
         <SkeletonTable />
       ) : !data || visible.length === 0 ? (
         <EmptyState search={search} filter={filter} />

@@ -73,7 +73,13 @@ model TaxDocument {
   masterOrderId   String?      @map("master_order_id")
   subOrderId      String?      @map("sub_order_id")
   sellerId        String?      @map("seller_id")
-  customerId      String       @map("customer_id")
+  // Follow-up #133 — nullable for POS sales (walk-in customer, no User
+  // row). The e-commerce path still populates this. Either subOrderId
+  // OR posSaleId is set; never both.
+  customerId      String?      @map("customer_id")
+  // Follow-up #133 — link to FranchisePosSale for the POS invoice
+  // generation path. Mutually exclusive with subOrderId.
+  posSaleId       String?      @map("pos_sale_id")
   supplierType    SupplierType @map("supplier_type")
   invoiceType     InvoiceType? @map("invoice_type")          // null for non-invoice types
 
@@ -190,6 +196,7 @@ model TaxDocument {
 
   @@index([masterOrderId])
   @@index([subOrderId])
+  @@index([posSaleId])
   @@index([sellerId])
   @@index([customerId])
   @@index([documentType])

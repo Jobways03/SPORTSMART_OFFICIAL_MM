@@ -38,6 +38,14 @@ export interface ApiClientConfig {
   refreshPath: string;
   /** Where to redirect after session expiry. Defaults to `/login`. */
   loginPath?: string;
+  /**
+   * Phase 38 — default request headers baked into every call (e.g.
+   * `X-Seller-Type: D2C` for the D2C seller portal and admin, `RETAIL`
+   * for the retail pair). Per-call overrides via `options.headers`
+   * still win. Useful for hard-coding the seller discriminator so a
+   * frontend can't accidentally talk to the wrong scope.
+   */
+  defaultHeaders?: Record<string, string>;
 }
 
 export interface ApiClient {
@@ -175,6 +183,9 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // Phase 38 — bake-in headers (e.g. X-Seller-Type) from the
+      // app-level factory; per-call overrides still win.
+      ...(config.defaultHeaders ?? {}),
       ...(optionHeaders as Record<string, string>),
     };
 
@@ -185,6 +196,13 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         body: requestBody,
         headers,
         signal,
+        // Follow-up #H40 — send httpOnly auth cookies on every request.
+        // The Bearer header above stays as a transitional fallback so
+        // pre-migration call sites that still stash tokens in
+        // sessionStorage keep working. The end state is to drop
+        // sessionStorage usage entirely once every frontend has cut
+        // over and rely on the cookie alone.
+        credentials: 'include',
       });
       let body: ApiResponse<T>;
       try {

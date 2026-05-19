@@ -52,6 +52,10 @@ export const PERMISSIONS = {
 
   // Disputes — strict FSM in Phase 5; one permission per transition
   'disputes.read':          'View disputes',
+  // Phase 0 / H24 — distinct write scope. `disputes.read` was being
+  // re-used on POST /admin/disputes/:id/messages which let a
+  // read-only support analyst reply on the thread.
+  'disputes.reply':         'Reply to a dispute thread (incl. internal notes)',
   'disputes.assign':        'Assign disputes to reviewers',
   'disputes.statusUpdate':  'Move dispute through standard FSM steps',
   'disputes.decide':        'Issue dispute decisions (incl refund amount)',
@@ -195,7 +199,18 @@ export const PERMISSIONS = {
   // role-specific grants land in Phase 12 (RBAC + audit).
   'tax.read':                       'View tax config + HSN/UQC/state masters',
   'tax.configure':                  'Edit HSN / UQC / GST rates / shipping SAC / tax_config',
-  'tax.gstin.verify':               'Verify seller/customer GSTIN (mark isGstVerified)',
+  // Phase 37 (Round 12-15) — master-data admin pages
+  // (/admin/tax/{hsn,uqc,config,platform-gst}) declared these keys
+  // but the registry never carried them. In strict mode the guard
+  // would 403 every call. Phase 0 (Gap audit) added them.
+  'tax.master.read':                'View HSN / UQC / TaxConfig / Platform GST profile masters',
+  'tax.master.write':               'Edit HSN / UQC / TaxConfig / Platform GST profile masters',
+  // Phase 0 (Gap audit) — controller decorator uses `tax.gstn.verify`;
+  // the registry previously had `tax.gstin.verify` (extra "i") so
+  // every call to admin-tax-operations 403'd in strict mode. Renamed
+  // to match the controller. If any existing role row still has the
+  // old key, drop it via `pnpm seed:rbac --reseed`.
+  'tax.gstn.verify':                'Verify seller/customer GSTIN against the GSTN portal (mark isGstVerified)',
   'tax.invoice.read':               'View tax invoices + Bills of Supply',
   'tax.invoice.download':           'Download invoice PDFs',
   'tax.invoice.regeneratePdf':      'Regenerate invoice PDF after template change',
@@ -254,6 +269,10 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'disputes.decide':        'CRITICAL',
   'disputes.override':      'CRITICAL',
   'disputes.reopen':        'HIGH',
+  // Phase 0 / H24 — replies are customer-facing writes and can include
+  // internal notes that are audit-visible. Not money-mutating, so
+  // MEDIUM rather than HIGH.
+  'disputes.reply':         'MEDIUM',
   'returns.overrideQc':     'HIGH',
   'returns.qcDecide':       'HIGH',
   'returns.approve':        'MEDIUM',
@@ -309,7 +328,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
   SUPER_ADMIN: ALL_PERMISSION_KEYS,
   SELLER_OPERATIONS: [
     'wallets.read', 'wallets.adjust', 'wallets.block',
-    'disputes.read', 'disputes.assign', 'disputes.statusUpdate', 'disputes.decide',
+    'disputes.read', 'disputes.reply', 'disputes.assign', 'disputes.statusUpdate', 'disputes.decide',
     'settlements.read', 'settlements.approve', 'settlements.markPaid',
     'payouts.read', 'payouts.export', 'payouts.ingestResponse',
     'recon.read', 'recon.run', 'recon.transition',

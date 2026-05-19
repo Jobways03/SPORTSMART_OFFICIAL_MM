@@ -981,7 +981,7 @@ export default function AdminReturnDetailPage() {
           as-shipped baseline; compare them against the Customer Evidence
           card (the customer's claim photos) to spot fake "damaged in
           transit" claims at the REQUESTED stage, before paying for a
-          courier pickup. The seller's web-seller portal collects them
+          courier pickup. The seller's portal (web-d2c-seller / web-retail-seller) collects them
           on the order detail page. */}
       {shipmentEvidence.length > 0 && (
         <div style={{ ...cardStyleV2, marginBottom: 20, borderLeft: '4px solid #8b5cf6' }}>

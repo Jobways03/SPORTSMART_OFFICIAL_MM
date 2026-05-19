@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
+import { readAccessCookie } from '../auth/auth-cookie.helper';
 import { UnauthorizedAppException } from '../exceptions';
 
 export interface AffiliateTokenPayload {
@@ -28,13 +29,18 @@ export class AffiliateAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const authHeader = request.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // Follow-up #H40 — accept token from Bearer OR httpOnly cookie.
+    const authHeader = request.headers.authorization;
+    const bearer =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7)
+        : undefined;
+    const token = bearer ?? readAccessCookie(request, 'affiliate');
+
+    if (!token) {
       throw new UnauthorizedAppException('Authentication required');
     }
-
-    const token = authHeader.slice(7);
 
     let payload: AffiliateTokenPayload;
     try {

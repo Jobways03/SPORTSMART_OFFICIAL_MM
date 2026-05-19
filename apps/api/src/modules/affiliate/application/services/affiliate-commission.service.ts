@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -27,7 +28,10 @@ import {
 export class AffiliateCommissionService {
   private readonly logger = new Logger(AffiliateCommissionService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventBus: EventBusService,
+  ) {}
 
   /**
    * Create a PENDING commission for an affiliate-attributed order.
@@ -94,10 +98,36 @@ export class AffiliateCommissionService {
         `Cannot confirm a commission in ${c.status} state`,
       );
     }
-    return this.prisma.affiliateCommission.update({
+    const updated = await this.prisma.affiliateCommission.update({
       where: { id: commissionId },
       data: { status: 'CONFIRMED', confirmedAt: new Date() },
     });
+
+    // Phase 2 / C2 — broadcast the lock so settlements (queue this
+    // for payout), notifications (tell affiliate "your commission
+    // is now locked"), and audit can react. Best-effort: the state
+    // change is already persisted; a missed notification is
+    // recoverable via outbox replay.
+    await this.eventBus
+      .publish({
+        eventName: 'affiliate.commission.locked',
+        aggregate: 'AffiliateCommission',
+        aggregateId: commissionId,
+        occurredAt: new Date(),
+        payload: {
+          commissionId,
+          affiliateId: updated.affiliateId,
+          orderId: updated.orderId,
+          status: 'CONFIRMED',
+        },
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `Failed to publish affiliate.commission.locked for ${commissionId}: ${(err as Error).message}`,
+        );
+      });
+
+    return updated;
   }
 
   /**

@@ -110,10 +110,10 @@ const [filters, setFilters] = useState<FilterConfig[]>([]);
       function walk(nodes: any[]) { for (const n of nodes) { flat.push({ id: n.id, name: n.name, level: n.level ?? 0 }); if (n.children?.length) walk(n.children); } }
       walk(tree);
       setCategories(flat);
-    }).catch(() => {});
+    }).catch((err) => console.warn(err));
     apiClient('/admin/collections?limit=100').then((res: any) => {
       setCollections((res.data?.collections || []).map((c: any) => ({ id: c.id, name: c.name })));
-    }).catch(() => {});
+    }).catch((err) => console.warn(err));
   }, []);
 
   // Build auto-generated filter preview from metafield definitions

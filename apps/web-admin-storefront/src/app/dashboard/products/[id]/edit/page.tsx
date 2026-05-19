@@ -444,7 +444,7 @@ const router = useRouter();
           const opts = Array.isArray(res.data) ? res.data : [];
           setPredefinedOptions(opts);
         }
-      }).catch(() => {});
+      }).catch((err) => console.warn(err));
     }
 
     loadData();
@@ -497,7 +497,7 @@ const router = useRouter();
           });
           setMetafields(merged);
         })
-        .catch(() => {})
+        .catch((err) => console.warn(err))
         .finally(() => setMetafieldsLoading(false));
     } else {
       // Normal load: use the product's saved category
@@ -508,7 +508,7 @@ const router = useRouter();
             setMetafields(res.data.metafields);
           }
         })
-        .catch(() => {})
+        .catch((err) => console.warn(err))
         .finally(() => setMetafieldsLoading(false));
     }
   }, [productId, product?.categoryId, form.categoryId]);

@@ -30,7 +30,7 @@ Owner: payments -> orders
 1. Payment gateway webhook hits payments
 2. payments verifies signature + idempotency
 3. payments marks payment captured
-4. payments emits payments.captured
+4. payments emits payments.payment.captured
 5. orders confirms order payment state
 6. orders moves order/sub-orders to next state
 7. inventory gets confirm-deduct
@@ -68,7 +68,7 @@ Owner: returns
 4. returns checks return policy matrix
 5. If eligible, return request created
 6. returns may ask shipping for reverse pickup
-7. returns emits returns.requested
+7. returns emits returns.return.requested
 8. Seller/admin reviews per policy
 
 ## Flow G: QC + Refund/Adjustment Decision
@@ -78,7 +78,7 @@ Owner: returns -> payments + settlements
 3. returns records QC outcome
 4. If refund: returns calls payments.requestRefund()
 5. If seller adjustment: returns calls settlements.recordLedgerImpact()
-6. returns emits returns.qc.completed + refund/adjustment events
+6. returns emits returns.return.qc_completed + refund/adjustment events (returns.refund.initiated / .completed / .failed)
 7. affiliate/franchise reversal may trigger
 8. notifications sent
 

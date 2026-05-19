@@ -16,6 +16,11 @@ interface RegisterSellerInput {
   email: string;
   phoneNumber: string;
   password: string;
+  // Phase 38 — D2C vs RETAIL. The seller portal (web-d2c-seller /
+  // web-retail-seller) hard-codes this from a baked-in build
+  // constant; the API treats it as untrusted input and just stores
+  // it. Optional for backwards-compat with legacy clients.
+  sellerType?: 'D2C' | 'RETAIL';
 }
 
 @Injectable()
@@ -31,7 +36,7 @@ export class RegisterSellerUseCase {
   }
 
   async execute(input: RegisterSellerInput): Promise<SellerRegisterResponseData> {
-    const { sellerName, sellerShopName, email, phoneNumber, password } = input;
+    const { sellerName, sellerShopName, email, phoneNumber, password, sellerType } = input;
 
     // Application-level duplicate checks (for specific error messages)
     const existingByEmail = await this.sellerRepo.findByEmail(email);
@@ -54,6 +59,7 @@ export class RegisterSellerUseCase {
         email,
         phoneNumber,
         passwordHash,
+        sellerType,
       });
 
       // Emit domain event (fire and forget)

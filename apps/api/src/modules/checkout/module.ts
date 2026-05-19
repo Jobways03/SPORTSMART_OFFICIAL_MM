@@ -8,6 +8,7 @@ import { CheckoutController } from './controllers/checkout.controller';
 // Application – services
 import { CheckoutSessionService } from './application/services/checkout-session.service';
 import { CheckoutService } from './application/services/checkout.service';
+import { StockRestoreService } from '../orders/application/services/stock-restore.service';
 import { CustomerAddressService } from './application/services/customer-address.service';
 import { CustomerOrdersService } from './application/services/customer-orders.service';
 
@@ -33,6 +34,7 @@ import { MoneyModule } from '../../core/money/money.module';
 // Phase 6 GST — TaxSnapshotService runs after every order to write
 // snapshots + summaries even when no discount applies.
 import { TaxModule } from '../tax/module';
+import { forwardRef } from '@nestjs/common';
 import { CodModule } from '../cod/module';
 
 @Module({
@@ -45,7 +47,7 @@ import { CodModule } from '../cod/module';
     WalletModule,
     RazorpayModule,
     MoneyModule,
-    TaxModule,
+    forwardRef(() => TaxModule),
     CodModule,
   ],
   controllers: [
@@ -68,6 +70,14 @@ import { CodModule } from '../cod/module';
     CheckoutService,
     CustomerAddressService,
     CustomerOrdersService,
+
+    // Follow-up #H8 — stateless helper from the orders module, used by
+    // CheckoutService.placeOrder to undo a confirmed stock decrement
+    // when wallet debit fails after the order has been committed.
+    // Registered as a local provider rather than via OrdersModule
+    // import to avoid pulling the full orders surface into checkout
+    // (which would introduce a transitive cycle risk).
+    StockRestoreService,
 
     // Facade
     CheckoutPublicFacade,

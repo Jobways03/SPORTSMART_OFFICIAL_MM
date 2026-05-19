@@ -134,6 +134,9 @@ model FranchiseSession {
   id                 String    @id @default(uuid())
   franchisePartnerId String    @map("franchise_partner_id")
   refreshToken       String    @map("refresh_token")
+  // Phase 1 / C6 — refresh-token reuse detection. See AdminSession
+  // for the contract.
+  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
   userAgent          String?   @map("user_agent")
   ipAddress          String?   @map("ip_address")
   expiresAt          DateTime  @map("expires_at")
@@ -144,6 +147,7 @@ model FranchiseSession {
 
   @@index([franchisePartnerId])
   @@index([refreshToken])
+  @@index([previousRefreshTokenHash])
   @@map("franchise_sessions")
 }
 

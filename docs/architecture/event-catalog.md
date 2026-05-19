@@ -64,29 +64,36 @@
 | checkout.submitted | audit |
 
 ## Orders Events
-| Event | Consumers |
-|-------|-----------|
-| orders.master.created | payments, settlements, notifications, audit, affiliate, franchise |
-| orders.sub_order.created | shipping, notifications, audit |
-| orders.confirmed | notifications, audit, affiliate, franchise |
-| orders.failed | notifications, audit |
-| orders.cancelled | inventory, settlements, notifications, audit |
-| orders.sub_order.accepted | notifications, audit |
-| orders.sub_order.packed | notifications, audit |
-| orders.sub_order.shipped | notifications, audit |
-| orders.sub_order.delivered | returns (eligibility window), settlements, notifications, audit |
+Phase 0 (Gap audit 2026-05-19) — table rewritten to match the names actually emitted by `eventBus.publish` in `apps/api/src/modules/orders`. The pre-audit names (`orders.confirmed`, `orders.failed`, `orders.cancelled`, `orders.sub_order.{accepted,packed,shipped}`) were never wired and any handler subscribing to them was dead.
+
+| Event | Emitted | Consumers |
+|-------|---------|-----------|
+| orders.master.created | ✅ | payments, settlements, notifications, audit, affiliate, franchise |
+| orders.master.routed | ✅ | shipping, notifications, audit |
+| orders.master.exception | ✅ | admin-control-tower, notifications, audit |
+| orders.sub_order.created | ✅ | shipping, notifications, audit |
+| orders.sub_order.status_changed | ✅ | notifications, audit *(covers accept / pack / ship transitions until the dedicated names below land)* |
+| orders.sub_order.delivered | ✅ | returns (eligibility window), settlements, notifications, audit |
+| orders.sub_order.cancelled_by_admin | ✅ | inventory, settlements, notifications, audit |
+| orders.sub_order.rejected_needs_discount_recalc | ✅ | discounts, notifications, audit |
+| orders.sub_order.reassigned | ✅ | shipping, notifications, audit |
+| orders.sub_order.returned_by_seller | ✅ | returns, settlements, notifications, audit |
+| orders.sub_order.accepted | ✅ | notifications, audit — published from `sellerAcceptOrder` (Phase 2 / H6) |
 
 ## Payments Events
-| Event | Consumers |
-|-------|-----------|
-| payments.intent.created | audit |
-| payments.captured | orders, settlements, notifications, audit |
-| payments.failed | orders, notifications, audit |
-| payments.refund.requested | audit |
-| payments.refund.completed | returns, settlements, notifications, audit |
-| payments.refund.failed | returns, notifications, audit |
-| payments.webhook.received | audit |
-| payments.mismatch.detected | admin-control-tower, audit |
+| Event | Emitted | Consumers |
+|-------|---------|-----------|
+| payments.payment.captured | ✅ | orders, settlements, notifications, audit |
+| payments.payment.failed | ✅ | orders, notifications, audit |
+| payments.payment.expired | ✅ | orders, notifications, audit |
+| payments.orphan_recovered | ✅ | admin-control-tower, audit |
+| payments.saga.stuck_auto_escalated | ✅ | admin-control-tower, audit |
+| payments.intent.created | ⏳ planned | audit |
+| payments.refund.requested | ⏳ planned | audit (today, refund-flow events live under `returns.refund.*`) |
+| payments.webhook.received | ⏳ planned | audit |
+| payments.mismatch.detected | ⏳ planned | admin-control-tower, audit |
+
+Refund-flow events emitted today actually live under the `returns.refund.*` namespace — see Returns Events below. The split exists because every refund today is initiated from a return; if a non-return-bound refund channel lands later, the `payments.refund.*` names will be reserved for it.
 
 ## COD Events
 | Event | Consumers |
@@ -95,31 +102,48 @@
 | cod.rule.updated | audit |
 
 ## Shipping Events
-| Event | Consumers |
-|-------|-----------|
-| shipping.shipment.created | orders, notifications, audit |
-| shipping.awb.assigned | orders, notifications, audit |
-| shipping.label.generated | audit |
-| shipping.tracking.updated | orders, notifications, audit |
-| shipping.ndr.raised | orders, notifications, audit, admin-control-tower |
-| shipping.ndr.resolved | orders, notifications, audit |
-| shipping.rto.initiated | orders, returns, settlements, notifications, audit |
-| shipping.rto.delivered | orders, returns, settlements, notifications, audit |
+| Event | Emitted | Consumers |
+|-------|---------|-----------|
+| shipping.shipment.created | ✅ | orders, notifications, audit |
+| shipping.awb.assigned | ✅ | orders, notifications, audit |
+| shipping.label.generated | ✅ | audit |
+| shipping.tracking.updated | ✅ | orders, notifications, audit — published per snapshot from `IngestTrackingUpdateUseCase` (Phase 3 / C5) |
+| shipping.ndr.raised | ✅ | orders, notifications, audit, admin-control-tower — published when carrier reports UNDELIVERED (Phase 3 / C5) |
+| shipping.ndr.resolved | ⏳ planned | orders, notifications, audit |
+| shipping.rto.initiated | ⏳ planned | orders, returns, settlements, notifications, audit |
+| shipping.rto.delivered | ✅ | orders, returns, settlements, notifications, audit — published when courier reports RTO_DELIVERED; returns + payments must wire refund flow (Phase 3 / C5) |
 
 ## Returns Events
-| Event | Consumers |
-|-------|-----------|
-| returns.requested | notifications, audit |
-| returns.approved | notifications, audit |
-| returns.rejected | notifications, audit |
-| returns.pickup.created | shipping, notifications, audit |
-| returns.item.received | audit |
-| returns.qc.completed | audit |
-| returns.refund.approved | payments, settlements, notifications, audit |
-| returns.refund.rejected | notifications, audit |
-| returns.adjustment.requested | settlements, audit |
-| returns.dispute.opened | notifications, audit, admin-control-tower |
-| returns.dispute.closed | notifications, audit |
+Phase 0 (Gap audit 2026-05-19) — names re-aligned with `eventBus.publish` calls in `apps/api/src/modules/returns`. Return-lifecycle events sit under `returns.return.*`; refund-lifecycle events under `returns.refund.*`; dispute events have their own top-level `disputes.*` namespace (see Disputes Events below).
+
+| Event | Emitted | Consumers |
+|-------|---------|-----------|
+| returns.return.requested | ✅ | notifications, audit |
+| returns.return.approved | ✅ | notifications, audit |
+| returns.return.rejected | ✅ | notifications, audit |
+| returns.return.cancelled | ✅ | notifications, audit |
+| returns.return.pickup_scheduled | ✅ | shipping, notifications, audit |
+| returns.return.in_transit | ✅ | notifications, audit |
+| returns.return.received | ✅ | audit |
+| returns.return.qc_completed | ✅ | audit, settlements *(downstream of QC decision)* |
+| returns.return.closed | ✅ | notifications, audit |
+| returns.return.stale_escalation | ✅ | admin-control-tower, audit |
+| returns.refund.initiated | ✅ | payments, audit |
+| returns.refund.completed | ✅ | payments, settlements, notifications, audit |
+| returns.refund.failed | ✅ | notifications, audit |
+| returns.refund.exhausted_escalation | ✅ | admin-control-tower, audit |
+| returns.replacement.created | ✅ | orders, notifications, audit |
+| returns.adjustment.requested | ⏳ planned | settlements, audit |
+
+## Disputes Events
+| Event | Emitted | Consumers |
+|-------|---------|-----------|
+| disputes.filed | ✅ | notifications, audit, admin-control-tower |
+| disputes.message.added | ✅ | notifications, audit |
+| disputes.decided | ✅ | notifications, audit, settlements |
+| disputes.closed | ✅ | notifications, audit |
+| disputes.refund_failure.queued | ✅ | admin-control-tower, audit |
+| disputes.refund_failure.sla_breached | ✅ | admin-control-tower, audit |
 
 ## Settlements Events
 | Event | Consumers |

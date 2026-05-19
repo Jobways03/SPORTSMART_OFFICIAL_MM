@@ -78,7 +78,7 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
           setUrlHandle(res.data.slug);
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [collectionId]);
 
@@ -124,7 +124,7 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
         setBrowseProducts(mapped);
         setBrowseSelected(new Set(mapped.filter((m: BrowseProduct) => existing.has(m.id)).map((m: BrowseProduct) => m.id)));
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setBrowseLoading(false));
   }, [browseSearch, products]);
 

@@ -97,10 +97,26 @@ export class IThinkClient {
    * POST a `data`-wrapped body to an iThink endpoint and return the
    * parsed envelope. Credentials are injected here; callers must not
    * pass them in `body`.
+   *
+   * Phase 2 / C11 — optional `idempotencyKey` on writes. iThink
+   * doesn't natively honor an idempotency-key header per their
+   * current API contract (most regional logistics APIs don't), but
+   * we still send `X-Sportsmart-Idempotency-Key` so:
+   *   1. our outbound HTTP logs correlate retries to the original
+   *      attempt (incident-debug time-saver),
+   *   2. if/when iThink adds idempotency support, no caller change
+   *      is needed — they're already passing the key.
+   *
+   * Callers for state-mutating operations (Add Order, Cancel Order)
+   * MUST pass a stable key derived from a business identifier they
+   * own — e.g. `subOrder.id + ':add-order'` — so a transient-5xx
+   * retry doesn't burn a fresh key on each attempt. Read-only
+   * operations (Get Rates, Get City) can omit it.
    */
   async post<TResponse = unknown>(
     endpoint: IThinkEndpoint,
     body: Record<string, unknown>,
+    options?: { idempotencyKey?: string },
   ): Promise<IThinkResponseEnvelope<TResponse>> {
     if (!this.config.isConfigured) {
       throw new ServiceUnavailableException(
@@ -121,7 +137,13 @@ export class IThinkClient {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await this.attempt<TResponse>(endpoint, url, envelope, attempt);
+        return await this.attempt<TResponse>(
+          endpoint,
+          url,
+          envelope,
+          attempt,
+          options?.idempotencyKey,
+        );
       } catch (error) {
         lastError = error;
         // Don't retry application-level failures — those are deterministic
@@ -155,6 +177,7 @@ export class IThinkClient {
     url: string,
     envelope: IThinkRequestEnvelope<Record<string, unknown>>,
     attempt: number,
+    idempotencyKey?: string,
   ): Promise<IThinkResponseEnvelope<TResponse>> {
     const controller = new AbortController();
     const timer = setTimeout(
@@ -170,6 +193,13 @@ export class IThinkClient {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          // Phase 2 / C11 — stable key for state-mutating retries.
+          // Same key across the retry loop so a successful original
+          // request and a retried duplicate can be correlated in our
+          // outbound logs even though iThink doesn't honor it yet.
+          ...(idempotencyKey
+            ? { 'X-Sportsmart-Idempotency-Key': idempotencyKey }
+            : {}),
         },
         body: JSON.stringify(envelope),
         signal: controller.signal,

@@ -1,10 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
 import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
+import { hashRefreshToken } from '../../../../core/auth/refresh-token';
 import {
   ForbiddenAppException,
   UnauthorizedAppException,
@@ -107,18 +109,44 @@ export class AffiliateAuthService {
       }
     }
 
-    const token = jwt.sign(
+    // Follow-up #123 — short-lived access token + DB-backed refresh.
+    // Previously the affiliate received a 24h JWT with no rotation; a
+    // stolen token was good for a full day. Now access is 1h and a
+    // refresh round-trip rotates the refresh token, narrowing the
+    // window for a stolen access token to one hour. Refresh-token
+    // reuse is detected via the previous_refresh_token_hash slot.
+    const accessTtlSeconds = 60 * 60; // 1h
+    const refreshTtlMs = 30 * 24 * 60 * 60 * 1000; // 30d
+    const refreshToken = randomUUID();
+
+    const session = await this.prisma.affiliateSession.create({
+      data: {
+        affiliateId: affiliate.id,
+        refreshToken: hashRefreshToken(refreshToken),
+        expiresAt: new Date(Date.now() + refreshTtlMs),
+      },
+      select: { id: true },
+    });
+
+    const accessToken = jwt.sign(
       {
         sub: affiliate.id,
         email: affiliate.email,
         roles: ['AFFILIATE'],
+        sessionId: session.id,
       },
       this.envService.getString('JWT_AFFILIATE_SECRET'),
-      { expiresIn: '24h', algorithm: JWT_ALGORITHM },
+      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
     );
 
     return {
-      token,
+      // Kept for backwards-compat with the storefront-affiliate UI that
+      // reads `data.token` directly. Equivalent to `accessToken`. New
+      // callers should consume `accessToken` + `refreshToken`.
+      token: accessToken,
+      accessToken,
+      refreshToken,
+      expiresIn: accessTtlSeconds,
       affiliate: {
         id: affiliate.id,
         email: affiliate.email,

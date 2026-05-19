@@ -98,7 +98,7 @@ SPORTSMART uses a **strict modular monolith** architecture (per ADR-001). This m
 |                     SPORTSMART Platform                           |
 |                                                                   |
 |  +------------------+  +------------------+  +------------------+ |
-|  |  web-storefront  |  |   web-seller     |  |   web-admin      | |
+|  |  web-storefront  |  |   web-d2c-seller     |  |   web-d2c-seller-admin      | |
 |  |  (Next.js :3001) |  |  (Next.js :3002) |  |  (Next.js :3003) | |
 |  +--------+---------+  +--------+---------+  +--------+---------+ |
 |           |                      |                      |         |
@@ -238,9 +238,9 @@ SPORTSMART uses a **strict modular monolith** architecture (per ADR-001). This m
 | Persona | Application | Capabilities |
 |---------|------------|-------------|
 | **Customer** | web-storefront (:3001) | Browse, search, cart, checkout, track orders, manage returns |
-| **Seller** | web-seller (:3002) | Onboard, list products, manage inventory, accept/fulfill orders, view earnings |
+| **Seller** | web-d2c-seller (:3002) | Onboard, list products, manage inventory, accept/fulfill orders, view earnings |
 | **Super Admin** | web-admin-storefront (:4000) | Top-level platform admin — moderate catalog, verify orders, configure commissions, run settlements |
-| **Seller Admin** | web-admin (:4001) | Seller-facing admin — manage storefront products, collections, discounts, inventory |
+| **Seller Admin** | web-d2c-seller-admin (:4001) | Seller-facing admin — manage storefront products, collections, discounts, inventory |
 | **Franchise Admin** | web-franchise-admin (:4002) | Approve franchise partners, manage franchise catalog, settlements, fraud monitoring |
 | **Affiliate** | web-affiliate (:4007) | Generate referral links, track commissions (planned) |
 | **Franchise** | web-franchise (:3005) | Manage regional fulfillment, track earnings (future) |
@@ -266,8 +266,8 @@ sportsmart-mm/
 |   |       +-- main.ts                # Application entry point
 |   |
 |   +-- web-storefront/               # Customer app (Port 3001)
-|   +-- web-seller/                   # Seller portal (Port 3002)
-|   +-- web-admin/                    # Admin dashboard (Port 3003)
+|   +-- web-d2c-seller/                   # Seller portal (Port 3002)
+|   +-- web-d2c-seller-admin/                    # Admin dashboard (Port 3003)
 |   +-- web-admin-storefront/         # Admin storefront mgmt (Port 3006)
 |   +-- web-franchise-admin/          # Franchise admin panel (Port 4002)
 |   +-- web-affiliate/                # Affiliate portal (Port 4007) [scaffold]
@@ -1284,7 +1284,7 @@ Examples:
 - `orders.master.created`
 - `orders.sub_order.reassigned`
 - `catalog.listing.approved`
-- `payments.captured`
+- `payments.payment.captured`
 - `seller.onboarding.submitted`
 
 ### 14.3 Event Catalog (140+ Events)
@@ -1832,10 +1832,10 @@ Write Scaling (Future):
 | Port | Application |
 |------|------------|
 | 3001 | web-storefront (Customer) |
-| 3002 | web-seller (Seller portal) |
-| 3003 | web-admin (Admin dashboard) |
+| 3002 | web-d2c-seller (Seller portal) |
+| 3003 | web-d2c-seller-admin (Admin dashboard) |
 | 4002 | web-franchise-admin (Franchise admin panel) |
-| 4003 | web-seller (Seller portal) |
+| 4003 | web-d2c-seller (Seller portal) |
 | 4006 | web-affiliate-admin (Affiliate admin panel) |
 | 4007 | web-affiliate (Affiliate portal — planned) |
 | 3005 | web-franchise (Future) |

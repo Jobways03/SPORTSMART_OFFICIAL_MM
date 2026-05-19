@@ -17,6 +17,16 @@ import { NotificationsModule } from '../notifications/module';
 // Phase 36 — every GSTR-1 / GSTR-3B / GSTR-8 download is audited via
 // AuditPublicFacade so bulk-PII exports leave a trail.
 import { AuditModule } from '../audit/module';
+// Phase 37 — read-side facade access for the marketplace commission
+// GSTR-1 export (was reading SellerSettlement + Seller tables directly
+// from inside the tax module).
+import { SettlementsModule } from '../settlements/module';
+// Phase 37 — read-side facade access for the cart-side tax preview
+// (was reading cart + customer_addresses tables directly). Checkout
+// already imports Tax, so we use a forwardRef to break the cycle.
+import { CartModule } from '../cart/module';
+import { CheckoutModule } from '../checkout/module';
+import { forwardRef } from '@nestjs/common';
 import {
   AdminAuthGuard,
   PermissionsGuard,
@@ -43,6 +53,7 @@ import { SettlementTds194OHookService } from './application/services/settlement-
 import { Form26QReportService } from './application/services/form-26q-report.service';
 import { MarketplaceCommissionGstrService } from './application/services/marketplace-commission-gstr.service';
 import { CheckoutTaxPreviewService } from './application/services/checkout-tax-preview.service';
+import { CartTaxPreviewService } from './application/services/cart-tax-preview.service';
 import { TaxDocumentPdfService } from './application/services/tax-document-pdf.service';
 import { TaxDocumentDownloadService } from './application/services/tax-document-download.service';
 import { TaxDocumentRetentionService } from './application/services/tax-document-retention.service';
@@ -187,7 +198,14 @@ const taxPdfStorageProvider = {
 };
 
 @Module({
-  imports: [WalletModule, NotificationsModule, AuditModule],
+  imports: [
+    WalletModule,
+    NotificationsModule,
+    AuditModule,
+    SettlementsModule,
+    CartModule,
+    forwardRef(() => CheckoutModule),
+  ],
   controllers: [
     CustomerTaxDocumentsController,
     CustomerTaxProfilesController,
@@ -234,6 +252,7 @@ const taxPdfStorageProvider = {
     UqcMasterService,
     PlatformGstProfileService,
     CheckoutTaxPreviewService,
+    CartTaxPreviewService,
     TaxDocumentPdfService,
     TaxDocumentDownloadService,
     TaxDocumentRetentionService,
@@ -276,6 +295,7 @@ const taxPdfStorageProvider = {
     UqcMasterService,
     PlatformGstProfileService,
     CheckoutTaxPreviewService,
+    CartTaxPreviewService,
     GstnVerificationService,
     TaxDocumentPdfService,
     TaxDocumentDownloadService,

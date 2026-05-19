@@ -39,6 +39,27 @@ export class PrismaAdminRepository implements AdminRepository {
     await this.prisma.admin.update({ where: { id: adminId }, data });
   }
 
+  async advanceMfaLastUsedStepCas(
+    adminId: string,
+    step: number,
+  ): Promise<boolean> {
+    // updateMany with the CAS predicate in the WHERE clause: the row
+    // only matches when the column is still ahead of or equal to the
+    // previous step. Prisma returns `count` so the caller can detect
+    // a lost race.
+    const res = await this.prisma.admin.updateMany({
+      where: {
+        id: adminId,
+        OR: [
+          { mfaLastUsedStep: null },
+          { mfaLastUsedStep: { lt: step } },
+        ],
+      },
+      data: { mfaLastUsedStep: step },
+    });
+    return res.count === 1;
+  }
+
   async createAdminSession(data: {
     adminId: string;
     refreshToken: string;
@@ -73,17 +94,43 @@ export class PrismaAdminRepository implements AdminRepository {
     });
   }
 
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot. Hit on
+   * this path means the caller presented a refresh token that was
+   * already rotated out — i.e. the token was stolen at some point
+   * and the attacker is now trying to use it. Returns the adminId
+   * so the use-case can revoke every session for them.
+   */
+  async findAdminSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    adminId: string;
+  } | null> {
+    return this.prisma.adminSession.findFirst({
+      where: { previousRefreshTokenHash: hashRefreshToken(rawToken) } as any,
+      select: { id: true, adminId: true },
+    });
+  }
+
   async rotateAdminSession(
     sessionId: string,
     newRawRefreshToken: string,
     newExpiresAt: Date,
   ): Promise<void> {
+    // Phase 1 / C6 — capture the burned hash into
+    // `previousRefreshTokenHash` so a future refresh request
+    // presenting the old (now rotated) token can be detected as
+    // theft via findAdminSessionByPreviousRefreshToken.
+    const current = await this.prisma.adminSession.findUnique({
+      where: { id: sessionId },
+      select: { refreshToken: true },
+    });
     await this.prisma.adminSession.update({
       where: { id: sessionId },
       data: {
+        previousRefreshTokenHash: current?.refreshToken ?? null,
         refreshToken: hashRefreshToken(newRawRefreshToken),
         expiresAt: newExpiresAt,
-      },
+      } as any,
     });
   }
 

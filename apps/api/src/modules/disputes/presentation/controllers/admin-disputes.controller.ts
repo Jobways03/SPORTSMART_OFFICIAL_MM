@@ -91,7 +91,11 @@ export class AdminDisputesController {
   }
 
   @Post(':id/messages')
-  @Permissions('disputes.read')
+  // Phase 0 / H24 — distinct from `disputes.read` (which only lets an
+  // admin SEE the thread). Replying is a write, so a read-only support
+  // analyst should be blocked here. The new permission goes into the
+  // registry alongside `disputes.read` / `disputes.assign`.
+  @Permissions('disputes.reply')
   async reply(@Req() req: any, @Param('id') id: string, @Body() body: ReplyDto) {
     const admin = await this.prisma.admin.findUnique({
       where: { id: req.adminId }, select: { name: true, email: true },

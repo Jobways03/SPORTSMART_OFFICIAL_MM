@@ -59,7 +59,7 @@ export default function DiscountsPage() {
     if (tab !== 'All') p.set('status', tab.toUpperCase());
     apiClient<Resp>(`/admin/discounts?${p}`)
       .then((r) => { if (r.data) setData(r.data); })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [tab]);
 

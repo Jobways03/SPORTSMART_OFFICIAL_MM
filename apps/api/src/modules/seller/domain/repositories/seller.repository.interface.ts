@@ -33,6 +33,10 @@ export interface SellerRepository {
     email: string;
     phoneNumber: string;
     passwordHash: string;
+    // Phase 38 — D2C / RETAIL discriminator. Omit to take the DB
+    // default (D2C, per the migration). The seller-portal frontends
+    // hard-code this from a build constant.
+    sellerType?: 'D2C' | 'RETAIL';
   }): Promise<Seller>;
 
   /** Update a seller by ID and return the full record. */
@@ -68,6 +72,16 @@ export interface SellerRepository {
     sellerId: string;
     expiresAt: Date;
     revokedAt: Date | null;
+  } | null>;
+
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot. A hit
+   * means the caller presented a refresh token that was already
+   * rotated out → theft → revoke every session for the seller.
+   */
+  findSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    sellerId: string;
   } | null>;
 
   /**

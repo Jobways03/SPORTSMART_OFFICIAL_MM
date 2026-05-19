@@ -424,6 +424,254 @@ export class TaxDocumentService {
   }
 
   /**
+   * Follow-up #133 — generate (or return existing) tax invoice for a
+   * franchise POS sale. Mirrors generateForSubOrder but reads from
+   * FranchisePosSale + FranchisePosSaleItem (Decimal money fields)
+   * instead of SubOrderTaxSummary + OrderItemTaxSnapshot (BigInt
+   * paise). Walk-in B2C is the default; customerGstin capture at the
+   * register is a future enhancement.
+   *
+   * Idempotent: a non-cancelled document already linked to this saleId
+   * short-circuits and returns the existing row.
+   */
+  async generateForPosSale(
+    saleId: string,
+    options: GenerateForSubOrderOptions = {},
+  ): Promise<GenerateResult> {
+    // 1. Idempotency check on posSaleId.
+    if (!options.forceNew) {
+      const existing = await this.prisma.taxDocument.findFirst({
+        where: {
+          posSaleId: saleId,
+          status: {
+            notIn: ['VOIDED_DRAFT', 'SUPERSEDED', 'FULLY_REVERSED'],
+          },
+        },
+        select: { id: true, documentNumber: true, documentType: true },
+        orderBy: { generatedAt: 'desc' },
+      });
+      if (existing) {
+        return {
+          document: existing,
+          isNew: false,
+          reason: 'A non-cancelled document already exists for this POS sale.',
+        };
+      }
+    }
+
+    // 2. Load sale + items.
+    const sale = await this.prisma.franchisePosSale.findUnique({
+      where: { id: saleId },
+      include: { items: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!sale) throw new Error(`FranchisePosSale ${saleId} not found`);
+    if (sale.items.length === 0) {
+      throw new Error(`POS sale ${saleId} has no items — refusing to issue invoice`);
+    }
+    if (sale.status !== 'COMPLETED') {
+      throw new Error(
+        `Cannot issue invoice for POS sale ${saleId}: status=${sale.status}`,
+      );
+    }
+
+    // 3. Load franchise (supplier identity).
+    const franchise = await this.prisma.franchisePartner.findUnique({
+      where: { id: sale.franchiseId },
+      select: {
+        id: true,
+        gstNumber: true,
+        state: true,
+        franchiseCode: true,
+        ownerName: true,
+        businessName: true,
+      },
+    });
+    if (!franchise) {
+      throw new Error(`Franchise ${sale.franchiseId} not found for POS sale ${saleId}`);
+    }
+
+    const supplierGstin = franchise.gstNumber;
+    const sellerLegalName =
+      franchise.businessName ?? franchise.ownerName ?? franchise.franchiseCode;
+    const sellerStateCode = franchise.state ?? sale.placeOfSupplyState ?? null;
+
+    // 4. Compute totals in BigInt paise. POS persists Decimal(10,2) in
+    //    INR; multiply by 100 + round to integer paise.
+    const toPaise = (d: Prisma.Decimal | number | null | undefined): bigint => {
+      if (d === null || d === undefined) return 0n;
+      const num = typeof d === 'number' ? d : Number(d);
+      return BigInt(Math.round(num * 100));
+    };
+
+    let taxableAmountInPaise = 0n;
+    let cgstAmountInPaise = 0n;
+    let sgstAmountInPaise = 0n;
+    let igstAmountInPaise = 0n;
+    for (const item of sale.items) {
+      taxableAmountInPaise += toPaise(item.taxableAmount);
+      cgstAmountInPaise += toPaise(item.cgstAmount);
+      sgstAmountInPaise += toPaise(item.sgstAmount);
+      igstAmountInPaise += toPaise(item.igstAmount);
+    }
+    const totalTaxAmountInPaise =
+      cgstAmountInPaise + sgstAmountInPaise + igstAmountInPaise;
+
+    // 5. Pick document type — franchise is REGULAR registration, all
+    //    POS items are TAXABLE (POS doesn't sell exempt goods today),
+    //    so this resolves to TAX_INVOICE. Codify via the picker so any
+    //    future exempt-line handling lands here automatically.
+    const hasTaxableLines = sale.items.some((i) => Number(i.taxableAmount) > 0);
+    const typeDecision: DocumentTypePickerResult = pickDocumentType({
+      sellerRegistrationType: 'REGULAR' as GstRegistrationType,
+      hasTaxableLines,
+      hasExemptLines: false,
+    });
+    const documentType = typeDecision.documentType;
+
+    // 6. Allocate document number under the franchise's GSTIN sequence.
+    const fy = DocumentSequenceService.financialYearOf(new Date());
+    const numberAlloc = await this.docSequence.nextNumber({
+      supplierGstin,
+      financialYear: fy,
+      documentType,
+    });
+
+    // 7. Round-off + amount-in-words.
+    const rawTotalInPaise = taxableAmountInPaise + totalTaxAmountInPaise;
+    const roundOff = computeInvoiceRoundOff(rawTotalInPaise);
+    const amountInWords = paiseToInvoiceWords(
+      roundOff.roundedAmountInPaise < 0n
+        ? -roundOff.roundedAmountInPaise
+        : roundOff.roundedAmountInPaise,
+    );
+
+    // 8. Persist document + lines in one tx.
+    const doc = await this.prisma.$transaction(async (tx) => {
+      if (options.forceNew) {
+        await tx.taxDocument.updateMany({
+          where: {
+            posSaleId: saleId,
+            status: {
+              in: [
+                'GENERATED',
+                'PDF_PENDING',
+                'PDF_GENERATED',
+                'PDF_FAILED',
+                'PARTIALLY_REVERSED',
+              ],
+            },
+          },
+          data: { status: 'SUPERSEDED' },
+        });
+      }
+
+      const created = await tx.taxDocument.create({
+        data: {
+          documentNumber: numberAlloc.documentNumber,
+          documentType,
+          financialYear: fy,
+          // POS rows leave master/sub null and use posSaleId.
+          posSaleId: sale.id,
+          customerId: null,
+          supplierType: 'FRANCHISE' as SupplierType,
+          // Walk-in B2C is the default; B2B GSTIN capture at register
+          // is a future enhancement (sale.customerGstin column).
+          invoiceType: 'B2C' as InvoiceType,
+
+          supplierGstin,
+          sellerRegistrationType: 'REGULAR' as GstRegistrationType,
+          sellerLegalName,
+          sellerAddressJson: Prisma.JsonNull,
+          sellerStateCode,
+
+          buyerGstin: null,
+          buyerLegalName: sale.customerName ?? 'Walk-in customer',
+          billingAddressJson: Prisma.JsonNull,
+          shippingAddressJson: Prisma.JsonNull,
+          placeOfSupplyStateCode: sale.placeOfSupplyState ?? sellerStateCode,
+
+          reverseChargeApplicable: false,
+          reverseChargeReason: null,
+
+          taxableAmountInPaise,
+          cgstAmountInPaise,
+          sgstAmountInPaise,
+          igstAmountInPaise,
+          totalTaxAmountInPaise,
+          cessAmountInPaise: 0n,
+          roundOffAmountInPaise: roundOff.roundOffInPaise,
+          documentTotalInPaise: roundOff.roundedAmountInPaise,
+          amountInWords,
+          currencyCode: 'INR',
+          paymentMode: sale.paymentMethod,
+
+          status: 'PDF_PENDING',
+          einvoiceStatus: 'NOT_APPLICABLE',
+          generatedAt: new Date(),
+        },
+      });
+
+      for (let i = 0; i < sale.items.length; i++) {
+        const item = sale.items[i]!;
+        const lineTaxablePaise = toPaise(item.taxableAmount);
+        const lineCgstPaise = toPaise(item.cgstAmount);
+        const lineSgstPaise = toPaise(item.sgstAmount);
+        const lineIgstPaise = toPaise(item.igstAmount);
+        const lineTaxPaise = lineCgstPaise + lineSgstPaise + lineIgstPaise;
+        const lineGrossPaise = toPaise(item.lineTotal);
+        const lineDiscountPaise = toPaise(item.lineDiscount);
+        const unitPricePaise = toPaise(item.unitPrice);
+
+        await tx.taxDocumentLine.create({
+          data: {
+            documentId: created.id,
+            sourceSnapshotId: null,
+            lineNumber: i + 1,
+            lineType: 'PRODUCT',
+            productId: item.productId,
+            variantId: item.variantId,
+            productName: item.variantTitle
+              ? `${item.productTitle} — ${item.variantTitle}`
+              : item.productTitle,
+            sku: item.franchiseSku ?? item.globalSku,
+            hsnOrSacCode: item.hsnCode,
+            uqcCode: null,
+            quantity: new Prisma.Decimal(item.quantity),
+            unitPriceInPaise: unitPricePaise,
+            grossAmountInPaise: lineGrossPaise,
+            discountAmountInPaise: lineDiscountPaise,
+            taxableAmountInPaise: lineTaxablePaise,
+            gstRateBps: item.gstRateBps,
+            cgstAmountInPaise: lineCgstPaise,
+            sgstAmountInPaise: lineSgstPaise,
+            igstAmountInPaise: lineIgstPaise,
+            totalTaxAmountInPaise: lineTaxPaise,
+            cessAmountInPaise: 0n,
+            lineTotalInPaise: lineTaxablePaise + lineTaxPaise,
+            currencyCode: 'INR',
+          },
+        });
+      }
+
+      return created;
+    });
+
+    this.logger.log(
+      `Generated POS ${documentType} ${doc.documentNumber} (FY ${fy}) for sale ${sale.saleNumber}: ${typeDecision.reason}`,
+    );
+
+    return {
+      document: {
+        id: doc.id,
+        documentNumber: doc.documentNumber,
+        documentType: doc.documentType,
+      },
+      isNew: true,
+      reason: typeDecision.reason,
+    };
+  }
+
+  /**
    * Phase 10 — generic status transition gated by the FSM.
    * Refuses forbidden transitions (e.g. GENERATED → VOIDED_DRAFT,
    * any → DRAFT, anything from a terminal state).

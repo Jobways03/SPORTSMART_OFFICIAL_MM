@@ -130,14 +130,24 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState('');
   const [exceptionCount, setExceptionCount] = useState(0);
+  // Phase 0 — explicit fetch-error state so an API outage surfaces to
+  // ops instead of a silent forever-loading spinner. Previously this
+  // page swallowed every error with .catch((err) => console.warn(err)) which hid
+  // production incidents on the most-used admin page.
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchOrders = (p: number) => {
     setLoading(true);
+    setFetchError(null);
     const params = new URLSearchParams({ page: String(p), limit: '20' });
     if (statusFilter) params.append('orderStatus', statusFilter);
     apiClient<OrdersResponse>(`/admin/orders?${params.toString()}`)
       .then((res) => { if (res.data) setData(res.data); })
-      .catch(() => {})
+      .catch((err) => {
+        setFetchError(
+          err?.message || 'Could not load orders. The API may be down — retry, or check the API logs.',
+        );
+      })
       .finally(() => setLoading(false));
   };
 
@@ -145,7 +155,10 @@ export default function OrdersPage() {
   const fetchExceptionCount = () => {
     apiClient<OrdersResponse>('/admin/orders?orderStatus=EXCEPTION_QUEUE&limit=1')
       .then((res) => { if (res.data) setExceptionCount(res.data.pagination.total); })
-      .catch(() => {});
+      .catch(() => {
+        // Non-critical secondary fetch — the main list's error surface
+        // already tells ops the API is unhappy.
+      });
   };
 
   useEffect(() => { fetchExceptionCount(); }, []);
@@ -348,7 +361,43 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {loading && !data ? (
+      {fetchError ? (
+        <div
+          role="alert"
+          style={{
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 12,
+            padding: 24,
+            color: '#991b1b',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 16,
+          }}
+        >
+          <div>
+            <strong style={{ display: 'block', marginBottom: 4 }}>Couldn't load orders</strong>
+            <span style={{ fontSize: 13 }}>{fetchError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => fetchOrders(page)}
+            style={{
+              background: '#dc2626',
+              color: '#fff',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: 6,
+              fontWeight: 600,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : loading && !data ? (
         <div style={{ background: '#fff', borderRadius: 12, textAlign: 'center', padding: 60, color: '#6b7280', border: '1px solid #e5e7eb' }}>
           Loading orders...
         </div>

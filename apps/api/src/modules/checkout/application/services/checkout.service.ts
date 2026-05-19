@@ -25,6 +25,7 @@ import { DiscountAllocationService } from '../../../discounts/application/servic
 // sub_order_tax_summaries + order_tax_summaries for EVERY order
 // (with or without a discount applied). See docs/tax/CA.md §A.
 import { TaxSnapshotService } from '../../../tax/application/services/tax-snapshot.service';
+import { TaxPublicFacade } from '../../../tax/application/facades/tax-public.facade';
 // Phase 30 — CheckoutTaxPreviewService returns the CGST/SGST/IGST
 // breakdown for the pre-payment summary so the customer sees the
 // same split the post-placement invoice will carry.
@@ -43,6 +44,7 @@ import { PaymentOpsFacade } from '../../../payments-ops/application/facades/paym
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { CodRuleEngine } from '../../../cod/application/services/cod-rule-engine.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { StockRestoreService } from '../../../orders/application/services/stock-restore.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import {
@@ -79,6 +81,11 @@ export class CheckoutService {
     private readonly taxSnapshot: TaxSnapshotService,
     // Phase 30 GST.
     private readonly taxPreview: CheckoutTaxPreviewService,
+    // Phase 37 — read-side facade for the tax module. Used at place-order
+    // time to validate that a buyer-picked CustomerTaxProfile.id actually
+    // belongs to the buyer — checkout never reaches into the tax module's
+    // customer_tax_profiles table directly.
+    private readonly taxFacade: TaxPublicFacade,
     private readonly affiliateFacade: AffiliatePublicFacade,
     private readonly walletFacade: WalletPublicFacade,
     private readonly paymentOpsFacade: PaymentOpsFacade,
@@ -98,6 +105,10 @@ export class CheckoutService {
     // future-proofs against payload changes (a totalAmount edit slipped
     // into a status-only update path was the original Phase 0 hazard).
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    // Follow-up #H8 — used to release confirmed stock when wallet
+    // debit fails after the order has been committed. Without this,
+    // the order is cancelled but the stock stays deducted.
+    private readonly stockRestore: StockRestoreService,
   ) {}
 
   // ── Initiate Checkout ──────────────────────────────────────────────────
@@ -610,12 +621,14 @@ export class CheckoutService {
     // checkout, verify the row belongs to this customer before
     // snapshotting it. Silently dropping (rather than 400-ing) would
     // mean the user thinks they bought under GSTIN X but the invoice
-    // came out under their default — bad surprise.
+    // came out under their default — bad surprise. Routed via the
+    // TaxPublicFacade so checkout doesn't read the tax module's
+    // customer_tax_profiles table directly.
     if (selectedTaxProfileId) {
-      const owns = await this.prisma.customerTaxProfile.findFirst({
-        where: { id: selectedTaxProfileId, customerId: userId },
-        select: { id: true },
-      });
+      const owns = await this.taxFacade.customerOwnsTaxProfile(
+        userId,
+        selectedTaxProfileId,
+      );
       if (!owns) {
         throw new BadRequestAppException(
           'Selected tax profile does not belong to this customer',
@@ -963,10 +976,10 @@ export class CheckoutService {
 
     // Wallet debit — runs AFTER the order is committed so the ledger
     // entry references a real order id. If it fails (e.g. balance race
-    // lost the optimistic-lock retry budget), cancel the order to keep
-    // the system consistent. Stock + reservations were already confirmed
-    // above, so we mark the order CANCELLED here rather than tearing
-    // everything back down.
+    // lost the optimistic-lock retry budget), cancel the order AND
+    // restore the stock that was just confirmed above. Pre-Follow-up
+    // #H8, the cancel happened but the stock stayed deducted, leaving
+    // the catalog ledger short until manual cleanup.
     if (walletDebitInPaise > 0) {
       try {
         await this.walletFacade.debitForCheckout({
@@ -976,15 +989,63 @@ export class CheckoutService {
           description: `Order ${result.orderNumber} — wallet portion`,
         });
       } catch (err) {
-        await this.prisma.masterOrder.update({
-          where: { id: result.masterOrderId },
-          data: this.moneyDualWrite.applyPaise('masterOrder', {
-            orderStatus: 'CANCELLED',
-            paymentStatus: 'CANCELLED',
-          }),
+        // Follow-up #H8 — flip the order status + restore stock atomically.
+        // Seller reservations were CONFIRMED above (lines 963-970), so
+        // `restoreForReservation` undoes both the stockQty + variant.stock
+        // decrements. Franchise items had their stock deducted at reserve
+        // time and need an explicit `unreserveStock` to release.
+        await this.prisma.$transaction(async (tx) => {
+          await tx.masterOrder.update({
+            where: { id: result.masterOrderId },
+            data: this.moneyDualWrite.applyPaise('masterOrder', {
+              orderStatus: 'CANCELLED',
+              paymentStatus: 'CANCELLED',
+            }),
+          });
+          for (const item of session.items) {
+            if (item.allocatedNodeType === 'FRANCHISE') continue;
+            if (!item.reservationId) continue;
+            try {
+              await this.stockRestore.restoreForReservation(
+                tx,
+                item.reservationId,
+              );
+            } catch (restoreErr) {
+              // Log + continue: a partial restore is still better than no
+              // restore, and the cron sweepers will catch stragglers.
+              this.logger.warn(
+                `H8 stock-restore failed for reservation ${item.reservationId} on order ${result.masterOrderId}: ${
+                  (restoreErr as Error).message
+                }`,
+              );
+            }
+          }
         });
+
+        // Franchise reservations release outside the tx — the franchise
+        // facade owns its own transaction boundary. Best-effort; the
+        // FranchiseReservationCleanupService picks up stragglers.
+        for (const item of session.items) {
+          if (item.allocatedNodeType !== 'FRANCHISE') continue;
+          if (!item.allocatedSellerId) continue;
+          try {
+            await this.franchiseFacade.unreserveStock(
+              item.allocatedSellerId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+            );
+          } catch (unrErr) {
+            this.logger.warn(
+              `H8 franchise unreserve failed for order ${result.masterOrderId}: ${
+                (unrErr as Error).message
+              }`,
+            );
+          }
+        }
+
         throw new BadRequestAppException(
-          `Wallet debit failed: ${(err as Error).message}. Order cancelled.`,
+          `Wallet debit failed: ${(err as Error).message}. Order cancelled and stock restored.`,
         );
       }
     }

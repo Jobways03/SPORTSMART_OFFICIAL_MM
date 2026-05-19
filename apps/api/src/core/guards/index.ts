@@ -8,6 +8,9 @@ export { FranchiseAuthGuard } from './franchise-auth.guard';
 export { FranchiseActiveGuard } from './franchise-active.guard';
 export { AffiliateAuthGuard } from './affiliate-auth.guard';
 export { AnyAuthGuard } from './any-auth.guard';
+// Phase 38 — D2C / RETAIL seller-type scoping. Stack after one of the
+// auth guards. See seller-type.guard.ts for the full pattern.
+export { D2cOnlyGuard, RetailOnlyGuard, type SellerType } from './seller-type.guard';
 // Phase 10 (PR 10.10) — step-up auth for destructive ops. Re-export
 // from core/step-up via the guards index so callers can pick up the
 // guard + decorator alongside the existing auth primitives.

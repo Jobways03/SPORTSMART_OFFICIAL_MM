@@ -1,5 +1,7 @@
 import { apiClient, ApiResponse } from '@/lib/api-client';
 
+export type SellerType = 'D2C' | 'RETAIL';
+
 export interface SellerListItem {
   sellerId: string;
   sellerName: string;
@@ -8,6 +10,10 @@ export interface SellerListItem {
   phoneNumber: string;
   status: string;
   verificationStatus: string;
+  // Phase 38 — D2C / RETAIL discriminator. Nullable for the brief
+  // window between deploy and Prisma client regen on a given pod;
+  // every active row has this populated by the backfill migration.
+  sellerType: SellerType | null;
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
   isEmailVerified: boolean;
@@ -63,6 +69,9 @@ export interface ListSellersParams {
   search?: string;
   status?: string;
   verificationStatus?: string;
+  // Phase 38 — D2C / RETAIL filter. The super admin can narrow by
+  // type or leave it unset to see both classes.
+  sellerType?: SellerType;
   sortBy?: string;
   sortOrder?: string;
   fromDate?: string;
@@ -77,6 +86,7 @@ export const adminSellersService = {
     if (params.search) query.set('search', params.search);
     if (params.status) query.set('status', params.status);
     if (params.verificationStatus) query.set('verificationStatus', params.verificationStatus);
+    if (params.sellerType) query.set('sellerType', params.sellerType);
     if (params.sortBy) query.set('sortBy', params.sortBy);
     if (params.sortOrder) query.set('sortOrder', params.sortOrder);
     if (params.fromDate) query.set('fromDate', params.fromDate);

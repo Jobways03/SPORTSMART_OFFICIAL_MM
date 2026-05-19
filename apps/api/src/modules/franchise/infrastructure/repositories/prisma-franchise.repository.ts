@@ -118,17 +118,37 @@ export class PrismaFranchiseRepository implements FranchisePartnerRepository {
     });
   }
 
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot.
+   * Same contract as Admin / Seller: hit = theft replay.
+   */
+  async findSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    franchisePartnerId: string;
+  } | null> {
+    return this.prisma.franchiseSession.findFirst({
+      where: { previousRefreshTokenHash: hashRefreshToken(rawToken) } as any,
+      select: { id: true, franchisePartnerId: true },
+    });
+  }
+
   async rotateSession(
     sessionId: string,
     newRawRefreshToken: string,
     newExpiresAt: Date,
   ): Promise<void> {
+    // Phase 1 / C6 — stash the burned hash for reuse detection.
+    const current = await this.prisma.franchiseSession.findUnique({
+      where: { id: sessionId },
+      select: { refreshToken: true },
+    });
     await this.prisma.franchiseSession.update({
       where: { id: sessionId },
       data: {
+        previousRefreshTokenHash: current?.refreshToken ?? null,
         refreshToken: hashRefreshToken(newRawRefreshToken),
         expiresAt: newExpiresAt,
-      },
+      } as any,
     });
   }
 

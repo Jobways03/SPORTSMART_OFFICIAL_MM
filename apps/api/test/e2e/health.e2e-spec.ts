@@ -4,6 +4,8 @@ import request from 'supertest';
 import { HealthController } from '../../src/core/health/health.controller';
 import { PrismaService } from '../../src/bootstrap/database/prisma.service';
 import { RedisService } from '../../src/bootstrap/cache/redis.service';
+import { EnvService } from '../../src/bootstrap/env/env.service';
+import { ExternalDepsProbeService } from '../../src/core/health/external-deps-probe.service';
 import { buildTestApp } from './helpers/test-app';
 
 /**
@@ -29,12 +31,25 @@ import { buildTestApp } from './helpers/test-app';
  *      /health would 503.
  */
 
+const envStub = {
+  getBoolean: jest.fn().mockReturnValue(false),
+  getString: jest.fn().mockReturnValue(''),
+  getNumber: jest.fn().mockReturnValue(0),
+} as unknown as EnvService;
+
+const externalProbeStub = {
+  probeAll: jest.fn().mockResolvedValue([]),
+} as unknown as ExternalDepsProbeService;
+
 @Module({
   controllers: [HealthController],
   providers: [
     {
       provide: PrismaService,
-      useValue: { $queryRawUnsafe: jest.fn().mockResolvedValue(undefined) },
+      useValue: {
+        $queryRaw: jest.fn().mockResolvedValue([{ '?column?': 1 }]),
+        $queryRawUnsafe: jest.fn().mockResolvedValue(undefined),
+      },
     },
     {
       provide: RedisService,
@@ -42,6 +57,8 @@ import { buildTestApp } from './helpers/test-app';
         getClient: () => ({ ping: jest.fn().mockResolvedValue('PONG') }),
       },
     },
+    { provide: EnvService, useValue: envStub },
+    { provide: ExternalDepsProbeService, useValue: externalProbeStub },
   ],
 })
 class HealthyHealthModule {}
@@ -52,6 +69,7 @@ class HealthyHealthModule {}
     {
       provide: PrismaService,
       useValue: {
+        $queryRaw: jest.fn().mockRejectedValue(new Error('db down')),
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('db down')),
       },
     },
@@ -61,6 +79,8 @@ class HealthyHealthModule {}
         getClient: () => ({ ping: jest.fn().mockResolvedValue('PONG') }),
       },
     },
+    { provide: EnvService, useValue: envStub },
+    { provide: ExternalDepsProbeService, useValue: externalProbeStub },
   ],
 })
 class DegradedHealthModule {}

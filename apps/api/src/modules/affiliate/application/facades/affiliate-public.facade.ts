@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 
 /**
  * Cross-module surface area for the affiliate program. The
@@ -20,7 +21,10 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 export class AffiliatePublicFacade {
   private readonly logger = new Logger(AffiliatePublicFacade.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventBus: EventBusService,
+  ) {}
 
   /**
    * Resolve a referral payload into an active affiliate, if any.
@@ -375,7 +379,7 @@ export class AffiliatePublicFacade {
       ? `${c.notes}\n[${target.toLowerCase()}] ${reason}`
       : `[${target.toLowerCase()}] ${reason}`;
 
-    await this.prisma.affiliateCommission.update({
+    const updated = await this.prisma.affiliateCommission.update({
       where: { id: c.id },
       data: {
         status: target,
@@ -388,6 +392,34 @@ export class AffiliatePublicFacade {
     this.logger.log(
       `Affiliate commission ${c.id} (order ${orderId}) → ${target}: ${reason}`,
     );
+
+    // Phase 2 / C2 — broadcast the REVERSED transition so settlements
+    // can issue an offsetting ledger row, notifications can tell the
+    // affiliate "your earnings were reversed", and audit gets a trail.
+    // CANCELLED (pre-PAID) doesn't need an event today — no money
+    // was settled, no downstream needs to react beyond the local
+    // update. A future PR can add `affiliate.commission.cancelled`
+    // if a real consumer surfaces.
+    if (target === 'REVERSED') {
+      await this.eventBus
+        .publish({
+          eventName: 'affiliate.commission.reversed',
+          aggregate: 'AffiliateCommission',
+          aggregateId: c.id,
+          occurredAt: new Date(),
+          payload: {
+            commissionId: c.id,
+            affiliateId: updated.affiliateId,
+            orderId,
+            reason,
+          },
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `Failed to publish affiliate.commission.reversed for ${c.id}: ${(err as Error).message}`,
+          );
+        });
+    }
   }
 
   // ── Legacy stubs kept for callers we haven't migrated yet ─────

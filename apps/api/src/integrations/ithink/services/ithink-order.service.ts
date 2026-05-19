@@ -113,9 +113,20 @@ export class IThinkOrderService {
       s_type: input.shipments[0]?.serviceType ?? '',
     };
 
+    // Phase 2 / C11 — stable idempotency key per batch. The
+    // shipment order numbers are the caller's stable identifier;
+    // joining them gives one key per Add Order call across retries.
+    // A duplicate Add Order with the same key correlates in the
+    // outbound HTTP log to the original even if iThink doesn't
+    // honor the header semantically.
+    const idempotencyKey =
+      'ithink:add-order:' +
+      input.shipments.map((s) => s.orderNumber).join(',');
+
     const response = await this.client.post<IThinkAddOrderResponseData>(
       'ADD_ORDER',
       body as unknown as Record<string, unknown>,
+      { idempotencyKey },
     );
 
     const data = response.data ?? ({} as IThinkAddOrderResponseData);
@@ -169,9 +180,14 @@ export class IThinkOrderService {
       );
     }
     const body: IThinkCancelOrderRequest = { awb_numbers: awbs.join(',') };
+    // Phase 2 / C11 — Cancel is idempotent (cancelling an already-
+    // cancelled AWB is a no-op from iThink's perspective), but the
+    // header still helps correlate retried attempts in our logs.
+    const idempotencyKey = 'ithink:cancel-order:' + awbs.join(',');
     const response = await this.client.post<IThinkCancelOrderResponseData>(
       'CANCEL_ORDER',
       body as unknown as Record<string, unknown>,
+      { idempotencyKey },
     );
     return response.data ?? ({} as IThinkCancelOrderResponseData);
   }

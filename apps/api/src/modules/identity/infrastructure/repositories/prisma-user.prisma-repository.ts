@@ -288,6 +288,41 @@ export class PrismaUserRepository implements UserRepository {
     });
   }
 
+  /**
+   * Phase 1 / H5 — atomic CAS increment. Returns the post-increment
+   * attempts count if the row was updated (attempts < maxAttempts at
+   * the moment of the increment), or null if the cap was already
+   * reached. Replaces the read-then-increment pattern in
+   * verify-reset-otp.use-case which two concurrent verifies could
+   * both pass.
+   *
+   * Implemented via updateMany so the WHERE clause expresses the
+   * "below cap" predicate atomically; updateMany returns `count` so
+   * the caller can tell whether the row was eligible. A follow-up
+   * findUnique fetches the new attempts value.
+   */
+  async incrementOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }> {
+    const res = await this.prisma.passwordResetOtp.updateMany({
+      where: {
+        id: otpId,
+        attempts: { lt: maxAttempts },
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (res.count !== 1) return { ok: false };
+    const after = await this.prisma.passwordResetOtp.findUnique({
+      where: { id: otpId },
+      select: { attempts: true },
+    });
+    return { ok: true, attempts: after?.attempts ?? 0 };
+  }
+
   async expireOtp(otpId: string): Promise<void> {
     await this.prisma.passwordResetOtp.update({
       where: { id: otpId },

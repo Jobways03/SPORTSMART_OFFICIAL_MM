@@ -188,4 +188,62 @@ export class SettlementsPublicFacade {
     this.logger.warn(`Affiliate ledger not yet available for ${affiliateId}`);
     return [];
   }
+
+  /**
+   * Phase 28+ — list every SellerSettlement whose cycle.periodEnd lands
+   * inside the supplied [startUtc, endUtc) window. Returns the columns
+   * the tax module's marketplace GSTR-1 commission aggregator needs,
+   * plus an embedded seller-snapshot (gstin, legal name, state code)
+   * pulled from the seller record. Keeps the SellerSettlement table
+   * + Seller table reads inside the settlements/seller module
+   * boundary.
+   */
+  async listSettlementsForCommissionGstr(
+    startUtc: Date,
+    endUtc: Date,
+  ): Promise<
+    Array<{
+      sellerId: string;
+      totalPlatformMargin: number;
+      totalPlatformMarginInPaise: bigint | null;
+      cgstOnCommissionInPaise: bigint | null;
+      sgstOnCommissionInPaise: bigint | null;
+      igstOnCommissionInPaise: bigint | null;
+      totalCommissionGstInPaise: bigint | null;
+      commissionGstRateBps: number | null;
+      commissionGstSplitType: 'CGST_SGST' | 'IGST' | null;
+      seller: {
+        gstin: string | null;
+        legalBusinessName: string | null;
+        sellerShopName: string | null;
+        gstStateCode: string | null;
+      } | null;
+    }>
+  > {
+    const rows = await (this.prisma as any).sellerSettlement.findMany({
+      where: { cycle: { periodEnd: { gte: startUtc, lt: endUtc } } },
+      include: {
+        seller: {
+          select: {
+            gstin: true,
+            legalBusinessName: true,
+            sellerShopName: true,
+            gstStateCode: true,
+          },
+        },
+      },
+    });
+    return rows.map((s: any) => ({
+      sellerId: s.sellerId,
+      totalPlatformMargin: Number(s.totalPlatformMargin ?? 0),
+      totalPlatformMarginInPaise: s.totalPlatformMarginInPaise ?? null,
+      cgstOnCommissionInPaise: s.cgstOnCommissionInPaise ?? null,
+      sgstOnCommissionInPaise: s.sgstOnCommissionInPaise ?? null,
+      igstOnCommissionInPaise: s.igstOnCommissionInPaise ?? null,
+      totalCommissionGstInPaise: s.totalCommissionGstInPaise ?? null,
+      commissionGstRateBps: s.commissionGstRateBps ?? null,
+      commissionGstSplitType: s.commissionGstSplitType ?? null,
+      seller: s.seller ?? null,
+    }));
+  }
 }

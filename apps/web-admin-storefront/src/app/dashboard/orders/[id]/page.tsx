@@ -552,7 +552,7 @@ export default function OrderDetailPage() {
   const fetchOrder = useCallback(() => {
     apiClient<OrderDetail>(`/admin/orders/${id}`)
       .then((res) => { if (res.data) setOrder(res.data); })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [id]);
 

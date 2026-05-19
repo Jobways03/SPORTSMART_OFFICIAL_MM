@@ -42,7 +42,7 @@ esac
 # Expand "all" into the canonical list. Keep this list in lockstep
 # with .github/workflows/deploy.yml's matrix.
 if [[ "$SERVICES_CSV" == "all" ]]; then
-  SERVICES_CSV="api,web-storefront,web-admin,web-admin-storefront,web-seller,web-franchise,web-franchise-admin,web-affiliate,web-affiliate-admin"
+  SERVICES_CSV="api,web-storefront,web-admin-storefront,web-d2c-seller,web-d2c-seller-admin,web-retail-seller,web-retail-seller-admin,web-franchise,web-franchise-admin,web-affiliate,web-affiliate-admin"
 fi
 
 echo "▶ Deploy plan"

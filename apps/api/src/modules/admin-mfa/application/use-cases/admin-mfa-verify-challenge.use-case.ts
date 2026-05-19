@@ -174,13 +174,25 @@ export class AdminMfaVerifyChallengeUseCase {
     // TOTP success. Backup-code consume doesn't have a step to
     // record; the consumed hash being spliced out of the persisted
     // list is the anti-replay mechanism for that path.
-    const updateData: Record<string, unknown> = {
-      lastLoginAt: new Date(),
-    };
+    //
+    // Phase 1 / H3 — the step advance now goes through the atomic
+    // CAS variant so two concurrent verifies presenting the same
+    // TOTP code cannot both win. If the CAS fails (returns false),
+    // another verify already advanced past this step → replay.
     if (stepToCommit !== undefined) {
-      updateData.mfaLastUsedStep = stepToCommit;
+      const advanced = await this.adminRepo.advanceMfaLastUsedStepCas(
+        claims.sub,
+        stepToCommit,
+      );
+      if (!advanced) {
+        throw new UnauthorizedAppException(
+          'This TOTP code has already been used. Wait for the next code from your authenticator app and try again.',
+        );
+      }
     }
-    await this.adminRepo.updateAdmin(claims.sub, updateData);
+    await this.adminRepo.updateAdmin(claims.sub, {
+      lastLoginAt: new Date(),
+    });
 
     const refreshToken = randomUUID();
     const refreshTtl = this.parseTimeToMs(

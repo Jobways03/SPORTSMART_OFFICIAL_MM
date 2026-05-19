@@ -5,6 +5,7 @@ import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.ada
 import { AffiliatePublicFacade } from './application/facades/affiliate-public.facade';
 import { AffiliateRegistrationService } from './application/services/affiliate-registration.service';
 import { AffiliateAuthService } from './application/services/affiliate-auth.service';
+import { AffiliateRefreshSessionService } from './application/services/affiliate-refresh-session.service';
 import { AffiliatePasswordResetService } from './application/services/affiliate-password-reset.service';
 import { AffiliateSettingsService } from './application/services/affiliate-settings.service';
 import { AffiliateCommissionService } from './application/services/affiliate-commission.service';
@@ -39,6 +40,7 @@ import { AffiliateSelfController } from './presentation/controllers/affiliate-se
     AffiliatePublicFacade,
     AffiliateRegistrationService,
     AffiliateAuthService,
+    AffiliateRefreshSessionService,
     AffiliatePasswordResetService,
     AffiliateSettingsService,
     AffiliateCommissionService,

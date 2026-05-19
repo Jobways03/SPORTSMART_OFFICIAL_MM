@@ -92,6 +92,19 @@ export interface UserRepository {
   invalidateActiveOtps(userId: string): Promise<void>;
   createOtp(userId: string, otpHash: string, expiresAt: Date): Promise<void>;
   incrementOtpAttempts(otpId: string): Promise<void>;
+  /**
+   * Phase 1 / H5 — atomic check-and-increment. Returns the new
+   * attempts count when the increment landed (and the row was still
+   * active + below the cap), or `{ ok: false }` when another
+   * concurrent verify already consumed the last slot, the OTP was
+   * already used / verified / expired. Use this instead of the
+   * read-then-increment pattern when calling from a hot verification
+   * loop.
+   */
+  incrementOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }>;
   expireOtp(otpId: string): Promise<void>;
   markOtpVerified(otpId: string, resetToken: string): Promise<void>;
   findOtpByResetToken(resetToken: string): Promise<PasswordResetOtpRecord | null>;
