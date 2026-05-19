@@ -130,6 +130,20 @@ export interface AdminRepository {
     select?: Record<string, boolean>,
   ): Promise<Partial<AdminRecord> | null>;
   updateAdmin(adminId: string, data: Record<string, unknown>): Promise<void>;
+  /**
+   * Phase 1 / H3 — atomic anti-replay advance for the TOTP step
+   * counter. Updates `mfaLastUsedStep` to `step` ONLY if the column
+   * is currently null OR strictly less than `step`. Returns true when
+   * the advance landed, false when another concurrent verify already
+   * advanced past this step (the same TOTP was being replayed).
+   *
+   * The check-and-advance is a single SQL UPDATE so two parallel
+   * verifies presenting the same code cannot both win.
+   */
+  advanceMfaLastUsedStepCas(
+    adminId: string,
+    step: number,
+  ): Promise<boolean>;
   createAdminSession(data: {
     adminId: string;
     refreshToken: string;
@@ -147,6 +161,16 @@ export interface AdminRepository {
     adminId: string;
     expiresAt: Date;
     revokedAt: Date | null;
+  } | null>;
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot
+   * (`previousRefreshTokenHash`). A hit means the caller presented
+   * a token that was already rotated out → theft. The use-case
+   * revokes every session for the actor on hit.
+   */
+  findAdminSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    adminId: string;
   } | null>;
   /**
    * Rotate the refresh token on an existing session (and bump expiresAt).

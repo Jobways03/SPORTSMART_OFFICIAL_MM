@@ -126,6 +126,12 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const [adminEmail, setAdminEmail] = useState('');
   const [pendingOrderCount, setPendingOrderCount] = useState(0);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  // Follow-up #H41 — sidebar overlay state for mobile. Below 768px the
+  // sidebar slides off-screen by default and the hamburger button in
+  // the navbar toggles it back in. Pre-Follow-up-H41 the sidebar just
+  // `display: none`d below 768px, leaving the admin with no way to
+  // navigate from a phone.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // PR 4.6 — sidebar items filtered by the admin's effective permissions.
@@ -209,11 +215,27 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
 
   const initials = getInitials(adminName || 'Super Admin');
 
+  // Follow-up #H41 — close the sidebar drawer whenever the route
+  // changes so the user doesn't have to tap a backdrop after landing
+  // on the new page. Desktop is unaffected (CSS only shows the
+  // overlay below 768px).
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [pathname]);
+
   return (
     <div className="admin-shell">
       {/* Top Navbar */}
       <nav className="admin-navbar">
         <div className="navbar-left">
+          <button
+            className="navbar-hamburger"
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-label="Toggle sidebar"
+            aria-expanded={sidebarOpen}
+          >
+            ☰
+          </button>
           <Link href="/dashboard" className="navbar-brand">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -280,7 +302,13 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
         </div>
       </nav>
 
-      <aside className="admin-sidebar">
+      {/* Follow-up #H41 — Sidebar overlay (mobile only via CSS) */}
+      <div
+        className={`sidebar-overlay${sidebarOpen ? ' visible' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <aside className={`admin-sidebar${sidebarOpen ? ' mobile-open' : ''}`}>
         <nav className="sidebar-nav">
           {visibleNavItems === null && (
             <div style={{ padding: '8px 16px', color: '#94a3b8', fontSize: 12 }}>

@@ -173,14 +173,14 @@ export default function CustomerInvoicesPage() {
                   title={
                     doc.status !== 'PDF_GENERATED'
                       ? 'PDF is still being generated — check back shortly'
-                      : 'Download PDF'
+                      : 'Download invoice'
                   }
                 >
                   {downloadingId === doc.id
                     ? '…'
                     : doc.status !== 'PDF_GENERATED'
                       ? 'Preparing'
-                      : 'Download PDF'}
+                      : 'Download invoice'}
                 </button>
               </div>
             </article>

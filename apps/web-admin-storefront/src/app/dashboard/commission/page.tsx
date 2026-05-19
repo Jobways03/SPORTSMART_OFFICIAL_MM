@@ -47,7 +47,7 @@ export default function StorefrontCommissionPage() {
 
     apiClient<CommissionResponse>(`/admin/commission?${params}`)
       .then((res) => { if (res.data) setData(res.data); })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [search, dateFrom, dateTo]);
 

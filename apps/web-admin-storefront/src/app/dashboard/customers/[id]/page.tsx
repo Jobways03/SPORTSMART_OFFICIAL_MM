@@ -154,7 +154,7 @@ export default function CustomerDetailPage() {
       .then((res) => {
         if (res.data) setData(res.data);
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [id]);
 

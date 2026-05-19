@@ -22,6 +22,7 @@ import {
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { calculateLineTax } from '../../../tax/domain/tax-engine';
+import { TaxPublicFacade } from '../../../tax/application/facades/tax-public.facade';
 
 @Injectable()
 export class FranchisePosService {
@@ -37,6 +38,7 @@ export class FranchisePosService {
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
     private readonly prisma: PrismaService,
+    private readonly taxFacade: TaxPublicFacade,
   ) {
     this.logger.setContext('FranchisePosService');
   }
@@ -82,6 +84,42 @@ export class FranchisePosService {
 
     if (!input.items || input.items.length === 0) {
       throw new BadRequestAppException('At least one item is required');
+    }
+
+    // Phase 4 / H45 — server-side guards. The POS frontend now clamps
+    // these values client-side but a non-browser caller (curl, an
+    // out-of-date build, a buggy barcode-scanner integration) can
+    // still send a negative unitPrice or a discount that exceeds the
+    // line gross. Refuse with a specific error rather than letting
+    // it through to net-negative totals.
+    for (const it of input.items) {
+      if (it.quantity == null || it.quantity < 1) {
+        throw new BadRequestAppException(
+          `Item ${it.productId}: quantity must be at least 1 (got ${it.quantity})`,
+        );
+      }
+      if (!Number.isInteger(it.quantity)) {
+        throw new BadRequestAppException(
+          `Item ${it.productId}: quantity must be a whole number (got ${it.quantity})`,
+        );
+      }
+      if (it.unitPrice == null || it.unitPrice < 0) {
+        throw new BadRequestAppException(
+          `Item ${it.productId}: unitPrice cannot be negative (got ${it.unitPrice})`,
+        );
+      }
+      const discount = it.lineDiscount ?? 0;
+      if (discount < 0) {
+        throw new BadRequestAppException(
+          `Item ${it.productId}: lineDiscount cannot be negative (got ${discount})`,
+        );
+      }
+      const lineGross = it.unitPrice * it.quantity;
+      if (discount > lineGross) {
+        throw new BadRequestAppException(
+          `Item ${it.productId}: lineDiscount ${discount} exceeds line gross ${lineGross.toFixed(2)} (would make net negative)`,
+        );
+      }
     }
 
     // 2. Validate each item and build enriched items list
@@ -280,10 +318,33 @@ export class FranchisePosService {
         saleNumber: sale.saleNumber,
         franchiseId,
         netAmount,
+        // Phase 3 / C8 — emit the tax rollup on the event so a
+        // downstream invoice-generator handler (when wired) can
+        // build the tax_document row without re-querying.
+        cgstAmount,
+        sgstAmount,
+        igstAmount,
+        taxableAmount: netAmount - (cgstAmount + sgstAmount + igstAmount),
         itemCount: enrichedItems.length,
         actorId,
       },
     });
+
+    // Follow-up #133 — issue the §31 tax invoice for the POS sale. The
+    // facade is best-effort and never throws, so a wedged tax-document
+    // service can't roll back the sale; a missing invoice surfaces
+    // via the gap-audit cron + the PDF-pending retry processor (Phase
+    // 19). Finance gates GSTR-1 filing on the presence of these rows.
+    const invoice = await this.taxFacade.generateInvoiceForPosSale(sale.id);
+    if (invoice) {
+      this.logger.log(
+        `POS sale ${saleNumber} issued ${invoice.documentNumber} (isNew=${invoice.isNew})`,
+      );
+    } else {
+      this.logger.warn(
+        `POS sale ${saleNumber} recorded but tax invoice generation failed — gap-audit cron will surface for retry`,
+      );
+    }
 
     this.logger.log(
       `POS sale ${saleNumber} recorded for franchise ${franchise.franchiseCode} — net=${netAmount}`,

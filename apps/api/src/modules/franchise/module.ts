@@ -31,6 +31,7 @@ import { FranchisePublicFacade } from './application/facades/franchise-public.fa
 // Phase 5 imports — Franchise Order Fulfillment
 import { CatalogModule } from '../catalog/module';
 import { MoneyModule } from '../../core/money/money.module';
+import { TaxModule } from '../tax/module';
 import { FranchiseOrdersService } from './application/services/franchise-orders.service';
 import { FranchiseOrdersController } from './presentation/controllers/franchise-orders.controller';
 import { AdminFranchiseOrdersController } from './presentation/controllers/admin-franchise-orders.controller';
@@ -131,7 +132,7 @@ import { AdminImpersonateFranchiseUseCase } from './application/use-cases/admin-
 import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delete-franchise.use-case';
 
 @Module({
-  imports: [CatalogModule, MoneyModule],
+  imports: [CatalogModule, MoneyModule, TaxModule],
   controllers: [
     FranchiseAuthController,
     FranchiseProfileController,

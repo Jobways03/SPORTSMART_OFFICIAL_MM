@@ -501,6 +501,43 @@ export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy
         'Record is REFUNDED and cannot be adjusted.',
       );
     }
+    // Phase 2 / H10 — even a PENDING record can be inside a
+    // SellerSettlement that has already been APPROVED or PAID by
+    // finance. Editing the earning at that point silently drifts
+    // the cycle's totals from what was approved. Refuse, and route
+    // the operator to the reversal flow.
+    if (record.settlementId) {
+      const settlement = await this.prisma.sellerSettlement.findUnique({
+        where: { id: record.settlementId },
+        select: { id: true, status: true, cycleId: true },
+      });
+      if (
+        settlement &&
+        (settlement.status === 'APPROVED' || settlement.status === 'PAID')
+      ) {
+        throw new BadRequestAppException(
+          `Record belongs to a SellerSettlement in ${settlement.status} state; ` +
+            'totals on an approved cycle are frozen. ' +
+            'Use the reversal flow to record a corrective adjustment instead.',
+        );
+      }
+      if (settlement?.cycleId) {
+        const cycle = await this.prisma.settlementCycle.findUnique({
+          where: { id: settlement.cycleId },
+          select: { status: true },
+        });
+        if (
+          cycle &&
+          (cycle.status === 'APPROVED' || cycle.status === 'PAID')
+        ) {
+          throw new BadRequestAppException(
+            `Settlement cycle is in ${cycle.status} state; commission ` +
+              'records included in an approved cycle are frozen. ' +
+              'Use the reversal flow.',
+          );
+        }
+      }
+    }
     if (!input.reason || input.reason.trim().length < 3) {
       throw new BadRequestAppException(
         'A reason (min 3 chars) is required for every manual adjustment.',

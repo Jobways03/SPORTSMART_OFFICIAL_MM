@@ -10,6 +10,7 @@ import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import * as compression from 'compression';
+import cookieParser from 'cookie-parser';
 
 import { AppModule } from './app.module';
 import { EnvService } from './bootstrap/env/env.service';
@@ -119,6 +120,14 @@ async function bootstrap() {
     threshold: 1024,  // Only compress responses > 1KB
     level: 6,         // Balanced speed vs compression ratio
   }));
+
+  // Follow-up #H40 — parse incoming Cookie headers into req.cookies so
+  // auth guards can read tokens from httpOnly cookies set on login.
+  // Cookies are set/cleared via core/auth/auth-cookie.helper.ts which
+  // mirrors the same Secure + SameSite=Lax + Domain config across
+  // every persona's login + refresh + logout route. Bearer-header
+  // auth still works in parallel during the frontend migration.
+  app.use(cookieParser());
 
   // ── Security headers (helmet) ──
   // CSP is intentionally tight for an API; Swagger UI in non-prod relaxes it.

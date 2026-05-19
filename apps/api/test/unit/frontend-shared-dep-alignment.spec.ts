@@ -49,13 +49,15 @@ import * as path from 'path';
  */
 
 const FRONTEND_APPS = [
-  'web-admin',
   'web-admin-storefront',
   'web-affiliate',
   'web-affiliate-admin',
+  'web-d2c-seller',
+  'web-d2c-seller-admin',
   'web-franchise',
   'web-franchise-admin',
-  'web-seller',
+  'web-retail-seller',
+  'web-retail-seller-admin',
   'web-storefront',
 ] as const;
 
@@ -100,11 +102,12 @@ const MUST_ALIGN_DEPS: ReadonlyArray<{ name: string; in: DepLocation }> = [
 // Rule: across the apps that declare the dep, distinct version ranges
 // must be ≤ 1. Apps that don't declare are exempt.
 const OPTIONAL_ALIGN_DEPS: ReadonlyArray<{ name: string; in: DepLocation }> = [
-  // Rich-text editor used by admin-side frontends (web-admin,
-  // web-admin-storefront, web-seller).
+  // Rich-text editor used by admin-side frontends (web-d2c-seller-admin,
+  // web-retail-seller-admin, web-admin-storefront, web-d2c-seller,
+  // web-retail-seller).
   { name: 'react-quill-new', in: 'dependencies' },
   // HTML sanitizer used where user-generated content is rendered
-  // (web-seller for product descriptions, web-storefront for review
+  // (web-d2c-seller / web-retail-seller for product descriptions, web-storefront for review
   // bodies).
   { name: 'isomorphic-dompurify', in: 'dependencies' },
   // Shared UI workspace package — adopted by some frontends (the

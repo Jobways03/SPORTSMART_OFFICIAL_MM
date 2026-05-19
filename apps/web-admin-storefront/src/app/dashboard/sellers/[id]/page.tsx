@@ -186,7 +186,7 @@ export default function SellerDetailPage() {
       .then((res) => {
         if (res.data) setCommission(res.data);
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoadingCommission(false));
   }, [id]);
 

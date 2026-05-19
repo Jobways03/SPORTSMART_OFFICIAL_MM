@@ -227,7 +227,7 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'Tax/GST module owner — invoices, credit notes, e-way bills, e-invoices, GSTR reports, TCS, and the wallet-adjustments approval queue.',
     permissions: [
       // Core tax surface
-      'tax.read', 'tax.configure', 'tax.gstin.verify',
+      'tax.read', 'tax.configure', 'tax.gstn.verify',
       'tax.invoice.read', 'tax.invoice.download', 'tax.invoice.regeneratePdf',
       'tax.creditNote.read', 'tax.creditNote.download', 'tax.creditNote.create',
       'tax.creditNote.timebarOverride', 'tax.creditNote.timebarReview',

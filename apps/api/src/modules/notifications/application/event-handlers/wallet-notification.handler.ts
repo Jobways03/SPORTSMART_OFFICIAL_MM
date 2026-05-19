@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import type { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
 
@@ -20,9 +22,16 @@ export class WalletNotificationHandler {
   constructor(
     private readonly notifications: NotificationsPublicFacade,
     private readonly prisma: PrismaService,
+    // Phase 2 / M21-M32 — exposed (not private) so the
+    // @IdempotentHandler decorator can read it. The decorator
+    // consults EventDeduplicationService before invoking the
+    // handler body, so an outbox-driven replay can't trigger a
+    // duplicate email.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {}
 
   @OnEvent('wallet.credited')
+  @IdempotentHandler()
   async onWalletCredited(event: DomainEvent<WalletCreditedPayload>) {
     const { userId, amountInPaise, balanceAfterInPaise, description, walletTransactionId } =
       event.payload;

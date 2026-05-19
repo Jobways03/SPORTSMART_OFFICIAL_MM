@@ -193,7 +193,7 @@ export class InventoryManagementService {
   /**
    * Seller-scoped overview — same shape as `getInventoryOverview` but
    * scoped to one seller's mappings only. Powers the inventory dashboard
-   * on the seller portal (web-seller).
+   * on the seller portal (web-d2c-seller / web-retail-seller).
    */
   async getSellerOverview(sellerId: string): Promise<InventoryOverview> {
     const mappings = await this.repo.findActiveMappingsForSeller(sellerId);

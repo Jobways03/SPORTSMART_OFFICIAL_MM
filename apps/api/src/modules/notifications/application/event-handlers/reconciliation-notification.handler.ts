@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import type { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
 
@@ -27,9 +29,12 @@ export class ReconciliationNotificationHandler {
   constructor(
     private readonly notifications: NotificationsPublicFacade,
     private readonly prisma: PrismaService,
+    // Phase 2 / M21-M32 — outbox-replay dedup.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {}
 
   @OnEvent('reconciliation.discrepancies.found')
+  @IdempotentHandler()
   async onDiscrepanciesFound(event: DomainEvent<DiscrepancyFoundPayload>) {
     const p = event.payload;
 

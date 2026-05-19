@@ -6,12 +6,19 @@ import {
   HttpStatus,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AdminLoginDto } from '../dtos/admin-login.dto';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import {
+  clearAuthCookies,
+  readRefreshCookie,
+  setAuthCookies,
+} from '../../../../core/auth/auth-cookie.helper';
 import { AdminLoginUseCase } from '../../application/use-cases/admin-login.use-case';
 import { AdminLogoutUseCase } from '../../application/use-cases/admin-logout.use-case';
 import { AdminGetMeUseCase } from '../../application/use-cases/admin-get-me.use-case';
@@ -36,12 +43,26 @@ export class AdminAuthController {
     private readonly resendResetOtpUseCase: ResendAdminResetOtpUseCase,
     private readonly resetPasswordUseCase: ResetAdminPasswordUseCase,
     private readonly accessLog: AccessLogService,
+    private readonly env: EnvService,
   ) {}
+
+  private cookieSettings() {
+    return {
+      domain: this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
+      secure:
+        this.env.isProduction() ||
+        this.env.getString('NODE_ENV') === 'staging',
+    };
+  }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async login(@Body() dto: AdminLoginDto, @Req() req: Request) {
+  async login(
+    @Body() dto: AdminLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
     try {
@@ -51,6 +72,19 @@ export class AdminAuthController {
         userAgent,
         ipAddress,
       });
+
+      // Follow-up #H40 — mirror tokens to httpOnly cookies; body still
+      // carries them for the pre-migration admin frontends.
+      const accessToken = (data as { accessToken?: string })?.accessToken;
+      const refreshToken = (data as { refreshToken?: string })?.refreshToken;
+      if (accessToken && refreshToken) {
+        setAuthCookies(res, {
+          persona: 'admin',
+          accessToken,
+          refreshToken,
+          ...this.cookieSettings(),
+        });
+      }
 
       const adminId =
         (data as any)?.admin?.adminId ??
@@ -98,15 +132,31 @@ export class AdminAuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(
-    @Body() body: { refreshToken: string },
+    @Body() body: { refreshToken?: string },
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
 
+    // Follow-up #H40 — accept refresh token from body OR cookie.
+    const refreshToken =
+      body?.refreshToken ?? readRefreshCookie(req, 'admin');
+
     const data = await this.refreshSessionUseCase.execute({
-      refreshToken: body?.refreshToken,
+      refreshToken: refreshToken ?? '',
     });
+
+    const newAccess = (data as { accessToken?: string })?.accessToken;
+    const newRefresh = (data as { refreshToken?: string })?.refreshToken;
+    if (newAccess && newRefresh) {
+      setAuthCookies(res, {
+        persona: 'admin',
+        accessToken: newAccess,
+        refreshToken: newRefresh,
+        ...this.cookieSettings(),
+      });
+    }
 
     this.accessLog
       .record({
@@ -129,10 +179,18 @@ export class AdminAuthController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @UseGuards(AdminAuthGuard, PermissionsGuard)
-  async logout(@Req() req: Request) {
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const adminId = (req as any).adminId;
     const adminRole = (req as any).adminRole ?? null;
     await this.logoutUseCase.execute(adminId);
+
+    // Follow-up #H40 — clear auth cookies on the way out. The session
+    // is already revoked in the use case; this prevents a stale
+    // browser-side cookie from being replayed pointlessly until TTL.
+    clearAuthCookies(res, 'admin', this.cookieSettings().domain);
 
     this.accessLog
       .record({

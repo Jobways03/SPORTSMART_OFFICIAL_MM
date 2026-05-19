@@ -10,7 +10,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 /**
  * Seller-facing delivery-method operations. Used from the
- * `web-seller` dashboard:
+ * `web-d2c-seller` / `web-retail-seller` dashboards:
  *
  *   * `getMyEntitlements` — what methods can I use?
  *   * `chooseMethodForSubOrder` — pick iThink or self-delivery at

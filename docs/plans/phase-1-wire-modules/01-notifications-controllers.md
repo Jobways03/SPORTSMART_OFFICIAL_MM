@@ -142,14 +142,14 @@ model NotificationLog {
 
 ## 8. Frontend impact
 
-Admin UI lives in `apps/web-admin/src/app/dashboard/notifications/*`.
+Admin UI lives in `apps/web-d2c-seller-admin/src/app/dashboard/notifications/*`.
 
 | App | Route | Components | Notes |
 |---|---|---|---|
-| `web-admin` | `/dashboard/notifications/templates` | `TemplateList`, `TemplateEditor` | rich text editor reused from `@sportsmart/ui` |
-| `web-admin` | `/dashboard/notifications/templates/[id]` | `TemplateEditor`, `VersionHistory` | preview pane with sample params |
-| `web-admin` | `/dashboard/notifications/logs` | `LogTable`, `LogFilters` | filter by recipient/channel/status/date |
-| `web-admin` | `/dashboard/notifications/logs/[id]` | `LogDetail`, `RedispatchButton` | shows rendered output + provider response |
+| `web-d2c-seller-admin` | `/dashboard/notifications/templates` | `TemplateList`, `TemplateEditor` | rich text editor reused from `@sportsmart/ui` |
+| `web-d2c-seller-admin` | `/dashboard/notifications/templates/[id]` | `TemplateEditor`, `VersionHistory` | preview pane with sample params |
+| `web-d2c-seller-admin` | `/dashboard/notifications/logs` | `LogTable`, `LogFilters` | filter by recipient/channel/status/date |
+| `web-d2c-seller-admin` | `/dashboard/notifications/logs/[id]` | `LogDetail`, `RedispatchButton` | shows rendered output + provider response |
 
 ## 9. Edge cases
 
@@ -204,8 +204,8 @@ Admin UI lives in `apps/web-admin/src/app/dashboard/notifications/*`.
 8. Controller: `AdminNotificationsTemplatesController` + DTOs + Swagger.
 9. Controller: `AdminNotificationsLogsController` + redispatch endpoint.
 10. Permission: register `notifications:manage`, `notifications:view`, `notifications:view-pii` in identity seeder.
-11. Frontend: `web-admin` template list + editor pages.
-12. Frontend: `web-admin` log table + detail page + redispatch button.
+11. Frontend: `web-d2c-seller-admin` template list + editor pages.
+12. Frontend: `web-d2c-seller-admin` log table + detail page + redispatch button.
 13. Audit hooks on template create/update/activate.
 14. Rate limit middleware on dispatch/redispatch.
 15. Smoke test against dev DB.

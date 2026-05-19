@@ -34,8 +34,28 @@ export interface CartItemWithDetails {
   } | null;
 }
 
+// Phase 37 — narrow shape consumed by the tax module's cart-side
+// preview. Includes sellerId (not in CartWithItems) which the tax
+// engine needs for place-of-supply resolution.
+export interface CartItemForTaxPreview {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  /** Per-unit price in paise, derived from variant.price ?? product.basePrice. */
+  unitPriceInPaise: bigint;
+  /** Seller fulfilling this product (null for platform-owned). */
+  sellerId: string | null;
+}
+
 export interface CartRepository {
   findByCustomerId(customerId: string): Promise<CartWithItems | null>;
+  /**
+   * Phase 37 — minimal cart projection for the tax module's cart-side
+   * preview. Filters out save-for-later items. Used by the
+   * CartPublicFacade only — internal cart code keeps using
+   * findByCustomerId for the rich UI shape.
+   */
+  findItemsForTaxPreview(customerId: string): Promise<CartItemForTaxPreview[]>;
   upsertCart(customerId: string): Promise<{ id: string }>;
   findCartItem(cartId: string, productId: string, variantId: string | null): Promise<{ id: string; quantity: number } | null>;
   addCartItem(cartId: string, productId: string, variantId: string | null, quantity: number): Promise<void>;

@@ -1,7 +1,13 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import {
+  clearAuthCookies,
+  readRefreshCookie,
+  setAuthCookies,
+} from '../../../../core/auth/auth-cookie.helper';
 import { FranchiseRegisterDto } from '../dtos/franchise-register.dto';
 import { FranchiseLoginDto } from '../dtos/franchise-login.dto';
 import { FranchiseForgotPasswordDto } from '../dtos/franchise-forgot-password.dto';
@@ -36,7 +42,17 @@ export class FranchiseAuthController {
     private readonly changePasswordFranchiseUseCase: ChangePasswordFranchiseUseCase,
     private readonly logoutFranchiseUseCase: LogoutFranchiseUseCase,
     private readonly accessLog: AccessLogService,
+    private readonly env: EnvService,
   ) {}
+
+  private cookieSettings() {
+    return {
+      domain: this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
+      secure:
+        this.env.isProduction() ||
+        this.env.getString('NODE_ENV') === 'staging',
+    };
+  }
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
@@ -60,7 +76,11 @@ export class FranchiseAuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async login(@Body() dto: FranchiseLoginDto, @Req() req: Request) {
+  async login(
+    @Body() dto: FranchiseLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
     try {
@@ -70,6 +90,18 @@ export class FranchiseAuthController {
         userAgent,
         ipAddress,
       });
+
+      // Follow-up #H40 — mirror tokens to httpOnly cookies.
+      const accessToken = (data as { accessToken?: string })?.accessToken;
+      const refreshToken = (data as { refreshToken?: string })?.refreshToken;
+      if (accessToken && refreshToken) {
+        setAuthCookies(res, {
+          persona: 'franchise',
+          accessToken,
+          refreshToken,
+          ...this.cookieSettings(),
+        });
+      }
 
       const franchiseId = (data as any)?.franchise?.id ?? (data as any)?.franchiseId;
       if (franchiseId) {
@@ -113,15 +145,31 @@ export class FranchiseAuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(
-    @Body() body: { refreshToken: string },
+    @Body() body: { refreshToken?: string },
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
 
+    // Follow-up #H40 — accept refresh token from body OR cookie.
+    const refreshToken =
+      body?.refreshToken ?? readRefreshCookie(req, 'franchise');
+
     const data = await this.refreshFranchiseSessionUseCase.execute({
-      refreshToken: body?.refreshToken,
+      refreshToken: refreshToken ?? '',
     });
+
+    const newAccess = (data as { accessToken?: string })?.accessToken;
+    const newRefresh = (data as { refreshToken?: string })?.refreshToken;
+    if (newAccess && newRefresh) {
+      setAuthCookies(res, {
+        persona: 'franchise',
+        accessToken: newAccess,
+        refreshToken: newRefresh,
+        ...this.cookieSettings(),
+      });
+    }
 
     this.accessLog
       .record({
@@ -232,11 +280,17 @@ export class FranchiseAuthController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @UseGuards(FranchiseAuthGuard)
-  async logout(@Req() req: Request) {
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const franchiseId = (req as any).franchiseId;
     if (!franchiseId) {
       throw new UnauthorizedAppException('Franchise session not found');
     }
+    // Follow-up #H40 — clear cookies on logout so the browser doesn't
+    // keep replaying a now-invalid refresh cookie until TTL.
+    clearAuthCookies(res, 'franchise', this.cookieSettings().domain);
     await this.logoutFranchiseUseCase.execute(franchiseId);
     return {
       success: true,

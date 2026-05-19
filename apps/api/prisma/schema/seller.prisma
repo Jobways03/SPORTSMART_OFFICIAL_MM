@@ -4,6 +4,11 @@
 
 model Seller {
   id                  String       @id @default(uuid())
+  // Phase 38 — discriminator that scopes the seller to a single
+  // admin team + portal (D2C vs RETAIL). Existing rows are
+  // backfilled to D2C in the migration; new rows must declare it
+  // at onboarding via the seller-type-specific portal.
+  sellerType          SellerType   @default(D2C) @map("seller_type")
   sellerName          String       @map("seller_name")
   sellerShopName      String       @map("seller_shop_name")
   email               String       @unique
@@ -122,6 +127,7 @@ model Seller {
   @@index([isProfileCompleted])
   @@index([isDeleted])
   @@index([verificationStatus])
+  @@index([sellerType])
   @@map("sellers")
 }
 
@@ -129,6 +135,9 @@ model SellerSession {
   id           String    @id @default(uuid())
   sellerId     String    @map("seller_id")
   refreshToken String    @map("refresh_token")
+  // Phase 1 / C6 — refresh-token reuse detection. See AdminSession
+  // for the contract.
+  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
   userAgent    String?   @map("user_agent")
   ipAddress    String?   @map("ip_address")
   expiresAt    DateTime  @map("expires_at")
@@ -139,6 +148,7 @@ model SellerSession {
 
   @@index([sellerId])
   @@index([refreshToken])
+  @@index([previousRefreshTokenHash])
   @@map("seller_sessions")
 }
 

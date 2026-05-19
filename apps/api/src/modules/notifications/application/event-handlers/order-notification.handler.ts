@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EmailService } from '../../../../integrations/email/email.service';
@@ -12,6 +14,8 @@ export class OrderNotificationHandler {
     private readonly emailService: EmailService,
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
+    // Phase 2 / M21-M32 — outbox-replay dedup. See wallet handler.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {
     this.logger.setContext('OrderNotificationHandler');
   }
@@ -73,6 +77,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.master.created')
+  @IdempotentHandler()
   async onOrderPlaced(event: DomainEvent<{ masterOrderId: string; orderNumber: string; totalAmount: number; itemCount: number }>) {
     try {
       const order = await this.getMasterOrderContext(event.payload.masterOrderId);
@@ -104,6 +109,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('payments.payment.captured')
+  @IdempotentHandler()
   async onPaymentReceived(event: DomainEvent<{ masterOrderId: string; orderNumber: string; amount: number; paymentMethod: string; paymentReference?: string }>) {
     try {
       const order = await this.getMasterOrderContext(event.payload.masterOrderId);
@@ -141,6 +147,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.sub_order.status_changed')
+  @IdempotentHandler()
   async onSubOrderStatusChanged(event: DomainEvent<{ subOrderId: string; previousStatus: string; newStatus: string }>) {
     try {
       // Only send email when sub-order is SHIPPED
@@ -275,6 +282,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.master.routed')
+  @IdempotentHandler()
   async onOrderRouted(
     event: DomainEvent<{ masterOrderId: string; subOrderCount: number }>,
   ) {
@@ -295,11 +303,13 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.sub_order.reassigned')
+  @IdempotentHandler()
   async onSubOrderReassigned(event: DomainEvent<{ subOrderId: string }>) {
     await this.notifyFulfillmentNode(event.payload.subOrderId, true);
   }
 
   @OnEvent('orders.sub_order.created')
+  @IdempotentHandler()
   async onNewSubOrderCreated(event: DomainEvent<{ subOrderId: string }>) {
     // Auto-reallocation after a rejection creates a fresh sub-order for a
     // new node — treat it like a reassignment so the new node is notified.
@@ -307,6 +317,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.sub_order.delivered')
+  @IdempotentHandler()
   async onOrderDelivered(event: DomainEvent<{ subOrderId: string; masterOrderId: string; deliveredAt: Date }>) {
     try {
       const subOrder = await this.getSubOrderContext(event.payload.subOrderId);

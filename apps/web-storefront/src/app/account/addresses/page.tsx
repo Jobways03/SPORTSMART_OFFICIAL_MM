@@ -122,6 +122,10 @@ export default function AddressesPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Phase 4 / H46 — per-submission idempotency key. Generated when
+  // the form opens; reused across retry attempts of the same
+  // submission. A new key only on the next "Add" / "Edit" click.
+  const [submitKey, setSubmitKey] = useState<string | null>(null);
   // Phase 34 — india_states master, fetched once. Empty array =
   // loading or fetch failure; the page still works because the
   // backend re-resolves stateCode by name as a fallback.
@@ -156,10 +160,19 @@ export default function AddressesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus]);
 
+  // Phase 4 / H46 — mint a fresh idempotency key for each modal
+  // opening. Retries of the same submission reuse it; the next
+  // "Add" / "Edit" click gets a new one.
+  const mintSubmitKey = () =>
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `address-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
   const openCreateModal = () => {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    setSubmitKey(mintSubmitKey());
     setModalOpen(true);
   };
 
@@ -178,6 +191,7 @@ export default function AddressesPage() {
       isDefault: !!addr.isDefault,
     });
     setFormError(null);
+    setSubmitKey(mintSubmitKey());
     setModalOpen(true);
   };
 
@@ -236,10 +250,17 @@ export default function AddressesPage() {
 
     setSaving(true);
     try {
+      // Phase 4 / H46 — pass the submission-scoped idempotency key
+      // so a retry of the same submit (double-click / network blip)
+      // returns the cached response instead of writing a duplicate.
       if (editingId) {
-        await addressesService.update(editingId, payload);
+        await addressesService.update(
+          editingId,
+          payload,
+          submitKey ?? undefined,
+        );
       } else {
-        await addressesService.create(payload);
+        await addressesService.create(payload, submitKey ?? undefined);
       }
       fetchAddresses();
       setModalOpen(false);

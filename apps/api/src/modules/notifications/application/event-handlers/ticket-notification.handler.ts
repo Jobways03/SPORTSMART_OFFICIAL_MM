@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import type { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
 
 interface TicketReplyPayload {
@@ -21,7 +23,11 @@ interface TicketReplyPayload {
 export class TicketNotificationHandler {
   private readonly logger = new Logger(TicketNotificationHandler.name);
 
-  constructor(private readonly notifications: NotificationsPublicFacade) {}
+  constructor(
+    private readonly notifications: NotificationsPublicFacade,
+    // Phase 2 / M21-M32 — outbox-replay dedup. See wallet handler.
+    protected readonly eventDedup: EventDeduplicationService,
+  ) {}
 
   /**
    * Fires when ADMIN replies on a non-internal note. Notifies the ticket
@@ -30,6 +36,7 @@ export class TicketNotificationHandler {
    * Per-actor portal URLs make the deep-link land on the right login.
    */
   @OnEvent('tickets.message.added')
+  @IdempotentHandler()
   async onTicketReplied(event: DomainEvent<TicketReplyPayload>) {
     const p = event.payload;
     if (p.senderType !== 'ADMIN') return;

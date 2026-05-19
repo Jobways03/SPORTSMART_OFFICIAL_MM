@@ -25,6 +25,20 @@ enum SellerStatus {
   DEACTIVATED
 }
 
+// Phase 38 — Seller discriminator. Sellers are split into two
+// operational classes managed by different admin teams and (today)
+// surfaced on different seller portals + admin apps:
+//   D2C    — direct-to-consumer brands selling their own goods
+//   RETAIL — multi-brand retail outlets reselling third-party stock
+// The two share the same tax / commission / settlement plumbing
+// today; the discriminator exists so admin permissions + URLs can
+// scope to one class, and so divergent rules can land later without
+// another migration.
+enum SellerType {
+  D2C
+  RETAIL
+}
+
 enum FileClassification {
   PRODUCT_IMAGE
   PRODUCT_DOCUMENT

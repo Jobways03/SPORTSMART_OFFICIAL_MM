@@ -8,8 +8,25 @@
  * use access + refresh-token rotation), affiliate JWTs are issued for
  * the full session and are not refreshed. A 401 always means re-auth.
  */
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+/**
+ * Resolve the API base. In dev a `localhost:8000` fallback is fine; in
+ * production a missing env is a hard error — a Next.js build with the
+ * fallback would issue every API call against the user's own browser
+ * (localhost), so traffic never leaves the device. Throw at module load
+ * instead of silently breaking auth + payments.
+ */
+function resolveApiBase(): string {
+  const v = process.env.NEXT_PUBLIC_API_URL;
+  if (v) return v;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'NEXT_PUBLIC_API_URL must be set in production for web-affiliate — refusing to default to localhost.',
+    );
+  }
+  return 'http://localhost:8000/api/v1';
+}
+
+export const API_BASE = resolveApiBase();
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: any) {

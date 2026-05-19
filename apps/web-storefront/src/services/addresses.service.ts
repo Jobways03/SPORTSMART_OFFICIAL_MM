@@ -54,17 +54,34 @@ export const addressesService = {
     return apiClient<CustomerAddress[]>('/customer/addresses');
   },
 
-  create(payload: AddressPayload): Promise<ApiResponse<CustomerAddress>> {
+  // Phase 4 / H46 — caller supplies an idempotency key per submit
+  // so a double-click / network-retried POST doesn't create two
+  // identical address rows. The page builds the key once when the
+  // form opens and reuses it on retry of the same submission.
+  create(
+    payload: AddressPayload,
+    idempotencyKey?: string,
+  ): Promise<ApiResponse<CustomerAddress>> {
     return apiClient<CustomerAddress>('/customer/addresses', {
       method: 'POST',
       body: JSON.stringify(payload),
+      ...(idempotencyKey
+        ? { headers: { 'X-Idempotency-Key': idempotencyKey } }
+        : {}),
     });
   },
 
-  update(id: string, payload: UpdateAddressPayload): Promise<ApiResponse<CustomerAddress>> {
+  update(
+    id: string,
+    payload: UpdateAddressPayload,
+    idempotencyKey?: string,
+  ): Promise<ApiResponse<CustomerAddress>> {
     return apiClient<CustomerAddress>(`/customer/addresses/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
+      ...(idempotencyKey
+        ? { headers: { 'X-Idempotency-Key': idempotencyKey } }
+        : {}),
     });
   },
 

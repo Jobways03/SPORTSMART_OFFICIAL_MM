@@ -399,9 +399,12 @@ export const envSchema = z.object({
   AUTHZ_AUDIT_ENABLED: z.string().default('true'),
 
   // Phase 5 (PR 5.4) — minimum number of evidence images required at
-  // QC submission. 0 = off (legacy behaviour). Set to 2 once the QC
-  // tooling reliably uploads multi-angle shots for every inspection.
-  RETURN_QC_MIN_EVIDENCE: z.coerce.number().int().min(0).default(0),
+  // QC submission. 0 = off (legacy behaviour); 2 = at least two photos
+  // per inspection. Phase 0 (Gap audit) bumped the default to 2 so a
+  // QC decision can never be submitted with zero photos — that was a
+  // dispute-liability black hole. Set via env to override per
+  // environment (e.g. 0 in dev seeds, 2 in staging/prod).
+  RETURN_QC_MIN_EVIDENCE: z.coerce.number().int().min(0).default(2),
   // Phase 5 (PR 5.4) — restocking-fee rate in basis points (1bps = 0.01%).
   // Applied only to "buyer-fault" reasons (CHANGED_MIND, SIZE_FIT_ISSUE).
   // 0 = off (no fee deducted from refund). 1000 = 10%.
@@ -1066,6 +1069,11 @@ export const envSchema = z.object({
       key: 'MONEY_DUAL_WRITE_ENABLED',
       reason:
         'PR 7.1 — ADR-007 paise migration step 2 (dual-write base camp). MoneyDualWriteHelper.applyPaise computes the paise sibling for every Decimal money column on write and persists both in the same transaction. Off in prod, new writes drift away from the paise siblings going forward, and the step-3 backfill has to be re-run repeatedly to catch up — by the time step 4 (read-switch) lands, the only defensible posture is "every prod write has been dual-writing for the full retention window of any rows the read-switch will touch." Per-call-site wiring is a separate rollout; this gate only forces the apparatus on.',
+    },
+    {
+      key: 'PERMISSIONS_GUARD_STRICT',
+      reason:
+        'Phase 0 (Gap audit) — PermissionsGuard.STRICT forces the guard to throw (fail-closed) when a controller route is decorated with @Permissions(...) but the resolver cannot evaluate the admin\'s effective permission set (DB unreachable, role row missing, cache cold). Off / non-strict, the guard degrades-open: a transient permission-resolver failure lets the request through, masking config drift and turning a permission misconfiguration into a silent missing-check. Schema default is already \'true\'; this gate makes the production boot refuse if it gets flipped off.',
     },
   ];
   for (const { key, reason } of requiredOnInProd) {

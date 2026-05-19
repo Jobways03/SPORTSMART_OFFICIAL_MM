@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import type { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
 import { escapeHtml, safeHtml } from '../../../../core/util/escape-html';
@@ -56,9 +58,12 @@ export class DisputeNotificationHandler {
   constructor(
     private readonly notifications: NotificationsPublicFacade,
     private readonly prisma: PrismaService,
+    // Phase 2 / M21-M32 — outbox-replay dedup.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {}
 
   @OnEvent('disputes.filed')
+  @IdempotentHandler()
   async onFiled(event: DomainEvent<FiledPayload>) {
     const p = event.payload;
     const sellerId = await this.affectedSellerId(p.subOrderId);
@@ -79,6 +84,7 @@ export class DisputeNotificationHandler {
   }
 
   @OnEvent('disputes.message.added')
+  @IdempotentHandler()
   async onMessage(event: DomainEvent<MessageAddedPayload>) {
     const p = event.payload;
     const sellerId = await this.affectedSellerId(p.subOrderId);
@@ -104,6 +110,7 @@ export class DisputeNotificationHandler {
   }
 
   @OnEvent('disputes.decided')
+  @IdempotentHandler()
   async onDecided(event: DomainEvent<DecidedPayload>) {
     const p = event.payload;
     // outcomeLabel is platform-controlled (enum derived); kept inside

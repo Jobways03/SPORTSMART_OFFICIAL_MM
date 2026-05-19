@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import type { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
 
@@ -19,9 +21,12 @@ export class RefundCompletedNotificationHandler {
   constructor(
     private readonly notifications: NotificationsPublicFacade,
     private readonly prisma: PrismaService,
+    // Phase 2 / M21-M32 — outbox-replay dedup.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {}
 
   @OnEvent('returns.refund.completed')
+  @IdempotentHandler()
   async onRefundCompleted(event: DomainEvent<RefundCompletedPayload>) {
     const p = event.payload;
     try {

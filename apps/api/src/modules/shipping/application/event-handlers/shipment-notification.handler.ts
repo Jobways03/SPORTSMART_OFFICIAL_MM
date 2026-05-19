@@ -3,6 +3,8 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EmailService } from '../../../../integrations/email/email.service';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { safeHtml, rawHtml } from '../../../../core/util/escape-html';
 
 @Injectable()
@@ -12,9 +14,12 @@ export class ShipmentNotificationHandler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
+    // Phase 2 / M21-M32 — outbox-replay dedup. See wallet handler.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {}
 
   @OnEvent('shipping.shipment.dispatched')
+  @IdempotentHandler()
   async handleShipmentDispatched(event: DomainEvent): Promise<void> {
     try {
       const { subOrderId, awb, courierName } = event.payload as any;
@@ -52,6 +57,7 @@ export class ShipmentNotificationHandler {
   }
 
   @OnEvent('shipping.shipment.delivered')
+  @IdempotentHandler()
   async handleShipmentDelivered(event: DomainEvent): Promise<void> {
     try {
       const { subOrderId } = event.payload as any;

@@ -30,6 +30,16 @@ export class AdminListSellersDto {
   @IsIn(['NOT_VERIFIED', 'VERIFIED', 'REJECTED', 'UNDER_REVIEW'])
   verificationStatus?: string;
 
+  // Phase 38 — D2C / RETAIL discriminator. The seller-admin frontends
+  // hard-code this filter at the API client layer so a D2C admin only
+  // ever fetches D2C sellers; the backend treats it as an honest
+  // narrow-down filter (defence-in-depth at the role/permission layer
+  // restricts what each admin role can request).
+  @IsOptional()
+  @IsString()
+  @IsIn(['D2C', 'RETAIL'])
+  sellerType?: 'D2C' | 'RETAIL';
+
   @IsOptional()
   @IsString()
   @IsIn(['sellerName', 'sellerShopName', 'email', 'createdAt', 'status', 'verificationStatus', 'profileCompletionPercentage'])

@@ -32,7 +32,7 @@ export default function NewProcurementPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    adminNovaService.listWarehouses(true).then((res) => res.data && setWarehouses(res.data)).catch(() => {});
+    adminNovaService.listWarehouses(true).then((res) => res.data && setWarehouses(res.data)).catch((err) => console.warn(err));
   }, []);
 
   const addItem = () => setItems([...items, { ...EMPTY_LINE }]);

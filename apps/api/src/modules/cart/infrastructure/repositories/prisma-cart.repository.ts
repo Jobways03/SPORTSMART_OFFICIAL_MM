@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { CartRepository, CartWithItems } from '../../domain/repositories/cart.repository.interface';
+import {
+  CartRepository,
+  CartWithItems,
+  CartItemForTaxPreview,
+} from '../../domain/repositories/cart.repository.interface';
 
 @Injectable()
 export class PrismaCartRepository implements CartRepository {
@@ -46,6 +50,39 @@ export class PrismaCartRepository implements CartRepository {
           },
         },
       },
+    });
+  }
+
+  async findItemsForTaxPreview(
+    customerId: string,
+  ): Promise<CartItemForTaxPreview[]> {
+    const cart = await this.prisma.cart.findUnique({
+      where: { customerId },
+      include: {
+        items: {
+          where: { savedForLater: false },
+          include: {
+            product: {
+              select: { id: true, sellerId: true, basePrice: true },
+            },
+            variant: { select: { id: true, price: true } },
+          },
+        },
+      },
+    });
+    if (!cart) return [];
+    return cart.items.map((it) => {
+      const unitPriceRupees = it.variant?.price ?? it.product.basePrice;
+      const unitPriceInPaise = BigInt(
+        Math.round(Number(unitPriceRupees) * 100),
+      );
+      return {
+        productId: it.productId,
+        variantId: it.variantId,
+        quantity: it.quantity,
+        unitPriceInPaise,
+        sellerId: it.product.sellerId,
+      };
     });
   }
 

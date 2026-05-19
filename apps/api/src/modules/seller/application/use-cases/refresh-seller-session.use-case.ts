@@ -51,6 +51,23 @@ export class RefreshSellerSessionUseCase {
     const session =
       await this.sellerRepo.findSessionByRefreshToken(refreshToken);
     if (!session) {
+      // Phase 1 / C6 — refresh-token reuse detection. Primary miss;
+      // check the burned-hash slot. A hit means the caller presented
+      // an already-rotated token (theft replay). Revoke every session
+      // for this seller and refuse.
+      const burned =
+        await this.sellerRepo.findSessionByPreviousRefreshToken(
+          refreshToken,
+        );
+      if (burned) {
+        await this.sellerRepo.revokeAllSessions(burned.sellerId);
+        this.logger.warn(
+          `Refresh-token reuse detected for seller ${burned.sellerId} — revoked all sessions`,
+        );
+        throw new UnauthorizedAppException(
+          'Session security check failed. Please sign in again.',
+        );
+      }
       throw new UnauthorizedAppException('Invalid refresh token');
     }
     if (session.revokedAt) {

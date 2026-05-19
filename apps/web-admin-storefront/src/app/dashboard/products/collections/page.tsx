@@ -29,7 +29,7 @@ export default function CollectionsPage() {
     setLoading(true);
     apiClient<CollectionsResponse>(`/admin/collections?page=${p}&limit=50`)
       .then((res) => { if (res.data) setData(res.data); })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, []);
 

@@ -1,0 +1,28 @@
+{
+  "name": "@sportsmart/web-d2c-seller",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 4003",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@sportsmart/shared-utils": "workspace:*",
+    "@sportsmart/ui": "workspace:*",
+    "isomorphic-dompurify": "^3.9.0",
+    "next": "^15.5.14",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-quill-new": "^3.8.3"
+  },
+  "devDependencies": {
+    "@sportsmart/eslint-config": "workspace:*",
+    "@sportsmart/tsconfig": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.6.0"
+  }
+}

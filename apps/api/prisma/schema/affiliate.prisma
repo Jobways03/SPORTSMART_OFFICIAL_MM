@@ -119,11 +119,40 @@ model Affiliate {
   tdsRecords            AffiliateTdsRecord[]
   passwordResetOtps     AffiliatePasswordResetOtp[]
   phoneVerificationOtps AffiliatePhoneVerificationOtp[]
+  sessions              AffiliateSession[]
 
   @@index([status])
   @@index([email])
   @@index([userId])
   @@map("affiliates")
+}
+
+// Follow-up #123 — mirrors AdminSession / SellerSession / FranchiseSession.
+// Pre-existing affiliate auth issued a single long-lived 24h JWT with no
+// refresh path; rotating that JWT to a short-lived access token + DB-
+// backed refresh token closes the long-window-stolen-token attack class
+// and aligns affiliate with the other four personas.
+model AffiliateSession {
+  id          String    @id @default(uuid())
+  affiliateId String    @map("affiliate_id")
+  refreshToken String   @map("refresh_token")
+  // Phase 1 / C6 — refresh-token reuse detection. When a session
+  // rotates, the prior refresh token's SHA-256 hash is preserved here
+  // for one cycle so a replay of the old token surfaces as a theft
+  // signal and revokes every session for the affiliate.
+  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
+  userAgent   String?   @map("user_agent")
+  ipAddress   String?   @map("ip_address")
+  expiresAt   DateTime  @map("expires_at")
+  revokedAt   DateTime? @map("revoked_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId])
+  @@index([refreshToken])
+  @@index([previousRefreshTokenHash])
+  @@map("affiliate_sessions")
 }
 
 // ── Phone verification OTP ────────────────────────────────────

@@ -15,7 +15,7 @@
 // supplies under SAC 9985 / 18% rate.
 
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { SettlementsPublicFacade } from '../../../settlements/application/facades/settlements-public.facade';
 
 export interface MarketplaceCommissionGstrRow {
   /** Seller's GSTIN — receiver of the commission service. */
@@ -59,7 +59,7 @@ export class MarketplaceCommissionGstrService {
     'Settlement Count',
   ];
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly settlementsFacade: SettlementsPublicFacade) {}
 
   /**
    * Build the per-seller commission aggregation for a filing period.
@@ -74,23 +74,12 @@ export class MarketplaceCommissionGstrService {
     // Pull all SellerSettlement rows whose cycle's periodEnd falls
     // inside the IST month. We rely on the Phase 28 denorm columns
     // (totalCommissionGstInPaise etc) being populated; legacy rows
-    // before that work return zero contributions.
-    const settlements = await (this.prisma as any).sellerSettlement.findMany(
-      {
-        where: {
-          cycle: { periodEnd: { gte: startUtc, lt: endUtc } },
-        },
-        include: {
-          seller: {
-            select: {
-              gstin: true,
-              legalBusinessName: true,
-              sellerShopName: true,
-              gstStateCode: true,
-            },
-          },
-        },
-      },
+    // before that work return zero contributions. Routed via the
+    // SettlementsPublicFacade so the tax module never reads the
+    // settlements/seller tables directly.
+    const settlements = await this.settlementsFacade.listSettlementsForCommissionGstr(
+      startUtc,
+      endUtc,
     );
 
     // Group by sellerId. Each seller contributes one CSV row even
@@ -113,10 +102,10 @@ export class MarketplaceCommissionGstrService {
       }
     >();
 
-    for (const s of settlements as Array<Record<string, any>>) {
-      const sellerId = s.sellerId as string;
-      const sellerInfo = s.seller as Record<string, any> | undefined;
-      const gstin = (sellerInfo?.gstin as string | null) ?? '';
+    for (const s of settlements) {
+      const sellerId = s.sellerId;
+      const sellerInfo = s.seller;
+      const gstin = sellerInfo?.gstin ?? '';
       // Skip rows whose seller doesn't have a GSTIN registered —
       // commission to non-GSTIN sellers can't be reported on GSTR-1
       // §4 B2B (would go under §7 B2C or be exempt depending on
@@ -124,38 +113,22 @@ export class MarketplaceCommissionGstrService {
       if (!gstin) continue;
 
       const legalName =
-        (sellerInfo?.legalBusinessName as string | null) ??
-        (sellerInfo?.sellerShopName as string | null) ??
+        sellerInfo?.legalBusinessName ??
+        sellerInfo?.sellerShopName ??
         sellerId.slice(0, 8);
-      const stateCode = (sellerInfo?.gstStateCode as string | null) ?? '';
+      const stateCode = sellerInfo?.gstStateCode ?? '';
+      // totalPlatformMargin is Decimal; we use the in-paise sibling
+      // when present, else round-trip via Math.round.
       const commission = BigInt(
-        Math.round(Number(s.totalPlatformAmount || 0) * 0) +
-          // totalPlatformMargin is Decimal; we use the in-paise
-          // sibling when present, else round-trip via Math.round.
-          (typeof s.totalPlatformMarginInPaise === 'bigint'
-            ? Number(s.totalPlatformMarginInPaise.toString())
-            : Math.round(Number(s.totalPlatformMargin || 0) * 100)),
+        s.totalPlatformMarginInPaise != null
+          ? Number(s.totalPlatformMarginInPaise.toString())
+          : Math.round(Number(s.totalPlatformMargin || 0) * 100),
       );
-      const cgst =
-        s.cgstOnCommissionInPaise != null
-          ? BigInt(s.cgstOnCommissionInPaise)
-          : 0n;
-      const sgst =
-        s.sgstOnCommissionInPaise != null
-          ? BigInt(s.sgstOnCommissionInPaise)
-          : 0n;
-      const igst =
-        s.igstOnCommissionInPaise != null
-          ? BigInt(s.igstOnCommissionInPaise)
-          : 0n;
-      const total =
-        s.totalCommissionGstInPaise != null
-          ? BigInt(s.totalCommissionGstInPaise)
-          : 0n;
-      const rateBps =
-        typeof s.commissionGstRateBps === 'number'
-          ? s.commissionGstRateBps
-          : 1800;
+      const cgst = s.cgstOnCommissionInPaise ?? 0n;
+      const sgst = s.sgstOnCommissionInPaise ?? 0n;
+      const igst = s.igstOnCommissionInPaise ?? 0n;
+      const total = s.totalCommissionGstInPaise ?? 0n;
+      const rateBps = s.commissionGstRateBps ?? 1800;
       const split: 'CGST_SGST' | 'IGST' =
         s.commissionGstSplitType === 'CGST_SGST' ? 'CGST_SGST' : 'IGST';
 

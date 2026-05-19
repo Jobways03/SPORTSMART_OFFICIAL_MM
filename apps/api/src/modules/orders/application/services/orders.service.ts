@@ -257,11 +257,11 @@ export class OrdersService {
   async verifyOrder(id: string, adminId: string, remarks?: string) {
     const order = await this.orderRepo.findMasterOrderById(id);
     if (!order) throw new NotFoundAppException('Order not found');
-    if (order.orderStatus !== 'PLACED') {
-      throw new BadRequestAppException(
-        `Cannot verify order — current status is ${order.orderStatus}, expected PLACED`,
-      );
-    }
+    // Phase 0 / C7 — route through the FSM rather than a raw string
+    // compare. The transition table allows PLACED → VERIFIED plus a
+    // few recovery edges (PENDING_VERIFICATION, EXCEPTION_QUEUE);
+    // every other source state throws with a uniform error message.
+    assertTransition('OrderStatus', order.orderStatus, 'VERIFIED');
     if (order.paymentStatus === 'CANCELLED') {
       throw new BadRequestAppException('Cannot verify a cancelled order');
     }
@@ -1466,11 +1466,8 @@ export class OrdersService {
       sellerId,
     );
     if (!subOrder) throw new NotFoundAppException('Order not found');
-    if (subOrder.acceptStatus !== 'OPEN') {
-      throw new BadRequestAppException(
-        `Order is already ${subOrder.acceptStatus}`,
-      );
-    }
+    // Phase 0 / C7 — FSM-enforced transition. Source must be OPEN.
+    assertTransition('OrderAcceptStatus', subOrder.acceptStatus, 'ACCEPTED');
     const updateData: any = { acceptStatus: 'ACCEPTED' };
     if (options?.expectedDispatchDate) {
       updateData.expectedDispatchDate = new Date(
@@ -1483,6 +1480,32 @@ export class OrdersService {
     await this.orderRepo.updateMasterOrder(subOrder.masterOrderId, {
       orderStatus: 'SELLER_ACCEPTED',
     });
+
+    // Phase 2 / H6 — broadcast acceptance so the notifications +
+    // audit + downstream subscribers can react. Best-effort: if the
+    // event bus is misbehaving, the order's own state change has
+    // already been committed and the customer can still see the
+    // accept in their order detail page; the missed notification
+    // is recoverable via outbox replay.
+    await this.eventBus
+      .publish({
+        eventName: 'orders.sub_order.accepted',
+        aggregate: 'SubOrder',
+        aggregateId: id,
+        occurredAt: new Date(),
+        payload: {
+          subOrderId: id,
+          masterOrderId: subOrder.masterOrderId,
+          sellerId,
+          expectedDispatchDate:
+            options?.expectedDispatchDate ?? null,
+        },
+      })
+      .catch((err) => {
+        this.logger.error(
+          `Failed to publish orders.sub_order.accepted for ${id}: ${(err as Error).message}`,
+        );
+      });
 
     // Fire-and-forget invoice generation. Tax mode (OFF/AUDIT/STRICT) is
     // enforced inside the facade/service — in OFF the call no-ops, in
@@ -1508,11 +1531,8 @@ export class OrdersService {
         sellerId,
       );
     if (!subOrder) throw new NotFoundAppException('Order not found');
-    if (subOrder.acceptStatus !== 'OPEN') {
-      throw new BadRequestAppException(
-        `Order is already ${subOrder.acceptStatus}`,
-      );
-    }
+    // Phase 0 / C7 — FSM-enforced transition. Source must be OPEN.
+    assertTransition('OrderAcceptStatus', subOrder.acceptStatus, 'REJECTED');
 
     // Mark current sub-order as rejected
     await this.orderRepo.updateSubOrder(id, {

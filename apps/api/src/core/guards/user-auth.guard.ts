@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
+import { readAccessCookie } from '../auth/auth-cookie.helper';
 import { UnauthorizedAppException } from '../exceptions';
 
 export interface UserTokenPayload {
@@ -21,13 +22,21 @@ export class UserAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const authHeader = request.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // Follow-up #H40 — accept the token from EITHER source so the
+    // migration from sessionStorage to httpOnly cookies can roll out
+    // per-frontend. Bearer header wins when both are present so a
+    // client mid-migration that still sends Bearer keeps working.
+    const authHeader = request.headers.authorization;
+    const bearer =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7)
+        : undefined;
+    const token = bearer ?? readAccessCookie(request, 'customer');
+
+    if (!token) {
       throw new UnauthorizedAppException('Authentication required');
     }
-
-    const token = authHeader.slice(7);
 
     let payload: UserTokenPayload;
     try {

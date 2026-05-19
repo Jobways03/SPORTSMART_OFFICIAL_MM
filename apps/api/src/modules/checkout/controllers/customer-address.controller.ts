@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { UserAuthGuard } from '../../../core/guards';
+import { Idempotent } from '../../../core/decorators/idempotent.decorator';
 import { CustomerAddressService } from '../application/services/customer-address.service';
 
 @ApiTags('Customer Addresses')
@@ -29,7 +30,14 @@ export class CustomerAddressController {
     };
   }
 
+  // Phase 4 / H46 — protect address create + update against
+  // double-submits. A jittery click on "Save address" or a
+  // network-retried request would otherwise persist two identical
+  // rows in the customer's address book. The interceptor reads
+  // X-Idempotency-Key and replays the cached response on a retry
+  // with the same key (per-actor scope, 24-hour TTL).
   @Post()
+  @Idempotent()
   async createAddress(
     @Req() req: any,
     @Body()
@@ -59,6 +67,7 @@ export class CustomerAddressController {
   }
 
   @Patch(':addressId')
+  @Idempotent()
   async updateAddress(
     @Req() req: any,
     @Param('addressId') addressId: string,

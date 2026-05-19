@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -14,6 +16,8 @@ export class ReturnNotificationHandler {
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
     private readonly env: EnvService,
+    // Phase 2 / M21-M32 — outbox-replay dedup. See wallet handler.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {
     this.logger.setContext('ReturnNotificationHandler');
   }
@@ -69,6 +73,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.requested')
+  @IdempotentHandler()
   async onRequested(event: DomainEvent<{ returnId: string; returnNumber: string; itemCount: number }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -98,6 +103,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.approved')
+  @IdempotentHandler()
   async onApproved(event: DomainEvent<{ returnId: string; returnNumber: string; autoApproved: boolean }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -126,6 +132,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.rejected')
+  @IdempotentHandler()
   async onRejected(event: DomainEvent<{ returnId: string; returnNumber: string; reason: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -153,6 +160,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.pickup_scheduled')
+  @IdempotentHandler()
   async onPickupScheduled(event: DomainEvent<{ returnId: string; returnNumber: string; pickupScheduledAt: Date; tracking?: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -185,6 +193,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.in_transit')
+  @IdempotentHandler()
   async onInTransit(event: DomainEvent<{ returnId: string; returnNumber: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -209,6 +218,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.received')
+  @IdempotentHandler()
   async onReceived(event: DomainEvent<{ returnId: string; returnNumber: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -233,6 +243,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.qc_completed')
+  @IdempotentHandler()
   async onQcCompleted(event: DomainEvent<{ returnId: string; returnNumber: string; qcDecision: string; refundAmount: number }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -273,6 +284,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.refund.initiated')
+  @IdempotentHandler()
   async onRefundInitiated(event: DomainEvent<{ returnId: string; returnNumber: string; refundAmount: number; refundMethod: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -308,6 +320,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.refund.completed')
+  @IdempotentHandler()
   async onRefundCompleted(event: DomainEvent<{ returnId: string; returnNumber: string; refundAmount: number; refundReference: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);
@@ -385,6 +398,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.requested')
+  @IdempotentHandler()
   async onRequestedNodeNotify(event: DomainEvent<{ returnId: string; returnNumber: string; itemCount: number }>) {
     try {
       const node = await this.getNodeContext(event.payload.returnId);
@@ -412,6 +426,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.qc_completed')
+  @IdempotentHandler()
   async onQcCompletedNodeNotify(event: DomainEvent<{
     returnId: string;
     returnNumber: string;
@@ -453,6 +468,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.refund.completed')
+  @IdempotentHandler()
   async onRefundCompletedNodeNotify(event: DomainEvent<{
     returnId: string;
     returnNumber: string;
@@ -484,6 +500,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.return.stale_escalation')
+  @IdempotentHandler()
   async onStaleEscalation(event: DomainEvent<{
     returnId: string;
     returnNumber: string;
@@ -515,6 +532,7 @@ export class ReturnNotificationHandler {
   }
 
   @OnEvent('returns.refund.exhausted_escalation')
+  @IdempotentHandler()
   async onRefundExhaustedEscalation(event: DomainEvent<{
     returnId: string;
     returnNumber: string;
@@ -546,6 +564,7 @@ export class ReturnNotificationHandler {
   // ── Customer: cancelled ─────────────────────────────────────────
 
   @OnEvent('returns.return.cancelled')
+  @IdempotentHandler()
   async onCancelled(event: DomainEvent<{ returnId: string; returnNumber: string }>) {
     try {
       const ret = await this.getReturnContext(event.payload.returnId);

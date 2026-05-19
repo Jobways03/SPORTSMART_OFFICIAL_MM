@@ -239,6 +239,14 @@ export class CartService {
   }
 
   /**
+   * Phase 37 — return the minimal item projection the tax module's
+   * cart-side preview needs. Exposed via CartPublicFacade only.
+   */
+  async getItemsForTaxPreview(customerId: string) {
+    return this.cartRepo.findItemsForTaxPreview(customerId);
+  }
+
+  /**
    * Merge an anonymous-cart payload (held client-side in a cookie) into
    * the authenticated user's cart after login. Items are added one-by-one
    * via the existing addItem path so all validation + variant checks

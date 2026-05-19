@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sportsmart Marketplace — Tax & GST Walkthrough for the CA Conversation</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 22mm 16mm; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #111;
+    line-height: 1.45;
+    font-size: 10.5pt;
+  }
+  h1 { font-size: 20pt; margin: 0 0 4pt; color: #0b3a82; }
+  h1 + .subtitle { color: #555; margin-bottom: 18pt; font-size: 10.5pt; }
+  h2 {
+    margin-top: 22pt;
+    margin-bottom: 6pt;
+    color: #0b3a82;
+    font-size: 14pt;
+    border-bottom: 2px solid #d0d7e2;
+    padding-bottom: 2pt;
+    page-break-after: avoid;
+  }
+  h3 {
+    margin-top: 14pt;
+    margin-bottom: 4pt;
+    color: #1f3b6b;
+    font-size: 11.5pt;
+    page-break-after: avoid;
+  }
+  h4 {
+    margin-top: 10pt;
+    margin-bottom: 3pt;
+    color: #1f3b6b;
+    font-size: 10.5pt;
+  }
+  p { margin: 4pt 0; }
+  ul, ol { margin: 4pt 0 4pt 18pt; padding: 0; }
+  li { margin: 2pt 0; }
+  code, pre, .mono {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 9.5pt;
+  }
+  code {
+    background: #f3f4f6;
+    border-radius: 3px;
+    padding: 0 4px;
+  }
+  pre {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 8pt 10pt;
+    overflow-x: auto;
+    page-break-inside: avoid;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8pt 0;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+  th, td {
+    border: 1px solid #cbd5e0;
+    padding: 4pt 6pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #eef2f7; font-weight: 600; }
+  .callout {
+    border-left: 3px solid #2563eb;
+    background: #eff6ff;
+    padding: 8pt 10pt;
+    margin: 8pt 0;
+    border-radius: 0 4px 4px 0;
+    page-break-inside: avoid;
+  }
+  .warn {
+    border-left: 3px solid #b45309;
+    background: #fffbeb;
+    padding: 8pt 10pt;
+    margin: 8pt 0;
+    border-radius: 0 4px 4px 0;
+    page-break-inside: avoid;
+  }
+  .ok {
+    border-left: 3px solid #15803d;
+    background: #f0fdf4;
+    padding: 8pt 10pt;
+    margin: 8pt 0;
+    border-radius: 0 4px 4px 0;
+    page-break-inside: avoid;
+  }
+  .footnote { color: #555; font-size: 9pt; }
+  .pagebreak { page-break-before: always; }
+  .toc { border: 1px solid #e2e8f0; padding: 8pt 12pt; border-radius: 4px; background: #fafafa; }
+  .toc ol { margin-left: 16pt; }
+  .toc a { color: #1d4ed8; text-decoration: none; }
+  .footer-note {
+    margin-top: 22pt;
+    color: #555;
+    font-size: 9pt;
+    border-top: 1px solid #e5e7eb;
+    padding-top: 6pt;
+  }
+</style>
+</head>
+<body>
+
+<h1>Sportsmart Marketplace — Tax & GST Walkthrough</h1>
+<div class="subtitle">
+  A plain-language explanation of every tax-related decision baked into the system, written for a non-technical reader to discuss with a Chartered Accountant.<br>
+  Generated 2026-05-19 from the live codebase. Source-of-truth files are noted in each section.
+</div>
+
+<div class="toc">
+  <strong>What's inside</strong>
+  <p style="margin:6pt 0 4pt; font-size:9.5pt; color:#0b3a82;">
+    <strong>↓ Read first: "Implementation status snapshot" on the next page</strong> — distinguishes what is fully wired in the app today from what is stubbed or still pre-launch. Brief the CA on this before going into the detailed sections.
+  </p>
+  <ol>
+    <li>The 10-second mental model: who collects, deducts, and pays what</li>
+    <li>The four parties on every order</li>
+    <li>The GST calculation (taxable value, CGST/SGST/IGST, cess, rounding)</li>
+    <li>Place of Supply — intra-state vs inter-state</li>
+    <li>Discounts and how they interact with GST</li>
+    <li>Document types: Tax Invoice, Bill of Supply, Credit Note, etc.</li>
+    <li>Section 52 — TCS (the marketplace collects 1% from sellers)</li>
+    <li>Section 194-O — Income-Tax TDS (the marketplace deducts 1% as TDS)</li>
+    <li>Section 34 — Credit Notes and the 30-September time-bar</li>
+    <li>Returns: refund, credit note, or wallet credit</li>
+    <li>E-Invoicing (IRN/QR) — what's wired and what's not</li>
+    <li>E-Way Bill — when one is needed and how it gets generated</li>
+    <li>GSTR filings: GSTR-1, GSTR-3B, GSTR-8</li>
+    <li>Form 26Q and Form 16A — TDS quarterly return + certificate</li>
+    <li>The marketplace's OWN GSTR-1 commission section (SAC 9985)</li>
+    <li>Master data: HSN, UQC, India states, tax config knobs</li>
+    <li>B2B vs B2C invoices and the customer GSTIN picker at checkout</li>
+    <li>Supplier types: marketplace-seller vs franchise vs Sportsmart-direct</li>
+    <li>Tax modes: OFF / AUDIT / STRICT</li>
+    <li>Audit-readiness blockers</li>
+    <li>Retention and erasure (Section 36)</li>
+    <li>Open items deferred to post-launch</li>
+    <li>Quick CA-meeting checklist</li>
+  </ol>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<div class="pagebreak"></div>
+<h2 style="color:#7c2d12; border-bottom-color:#fbbf24;">Implementation status snapshot</h2>
+<p>
+  Every section in this document describes the <em>design</em> behaviour. The system implements most of it end-to-end against real data. Three integrations are deliberately <strong>stubbed</strong> until production go-live, and a handful of items are <strong>pre-launch</strong> (the code is ready; the configuration / sign-off is not). Flag these four caveats to the CA explicitly before walking through the detailed sections.
+</p>
+
+<h3 style="margin-top:14pt;">✅ Live and end-to-end (real data flows; admin can use today)</h3>
+<table>
+<tr><th>Capability</th><th>Source-of-truth file</th></tr>
+<tr><td>Tax engine math (CGST/SGST/IGST split, rounding, inclusive/exclusive)</td><td><code>tax-engine.ts</code></td></tr>
+<tr><td>Place of Supply (intra-state vs inter-state)</td><td><code>place-of-supply.service.ts</code></td></tr>
+<tr><td>Document-type picker (Tax Invoice / Bill of Supply / Mixed)</td><td><code>document-type-picker.ts</code></td></tr>
+<tr><td>Document numbering per (GSTIN, FY) with Postgres-lock sequencing</td><td><code>document-sequence.service.ts</code></td></tr>
+<tr><td>Section 52 TCS — ledger writes + GSTR-8 CSV</td><td><code>tcs.service.ts</code>, <code>gstr8-report.service.ts</code></td></tr>
+<tr><td>Section 194-O TDS — ledger, Form 26Q CSV, Form 16A HTML</td><td><code>tds-194o.service.ts</code>, <code>form-26q-report.service.ts</code></td></tr>
+<tr><td>Section 34 credit-note time-bar + daily classification cron</td><td><code>credit-note-eligibility.service.ts</code>, <code>tax-credit-note-timebar.cron.ts</code></td></tr>
+<tr><td>GSTR-1 / 3B / 8 / 26Q / 16A admin downloads</td><td><code>gstr1-report.service.ts</code>, <code>gstr3b-report.service.ts</code>, etc.</td></tr>
+<tr><td>Marketplace's own GSTR-1 commission section (SAC 9985)</td><td><code>marketplace-commission-gstr.service.ts</code></td></tr>
+<tr><td>HSN / UQC / TaxConfig / PlatformGstProfile admin CRUD</td><td>Rounds 12-15 admin pages</td></tr>
+<tr><td>GSTIN Mod-36 checksum validation</td><td><code>gstin-validator.ts</code></td></tr>
+<tr><td>Audit-readiness daily report (7 blocker classes + fix deep-links)</td><td><code>tax-audit-readiness.service.ts</code></td></tr>
+<tr><td>B2B GSTIN picker at checkout (snapshot per order)</td><td><code>master_orders.selected_tax_profile_id</code></td></tr>
+<tr><td>Discount tax-treatment categories (Section 15 — pre-supply transactional default)</td><td>Discount module</td></tr>
+<tr><td>Tax-mode flag (OFF / AUDIT / STRICT) — code path</td><td><code>tax-mode.service.ts</code></td></tr>
+<tr><td>India-states master + storefront address state-code dropdown</td><td><code>india_states</code> + Round 8 UI</td></tr>
+</table>
+
+<h3 style="margin-top:14pt; color:#b45309;">⚠️ Stubbed today — real integration is post-launch work</h3>
+<p class="footnote" style="margin-top:0;">
+  The provider factories crash loudly at boot if switched to the "real" choice without a real adapter — never silently fall back to a stub in production. Tell the CA: every stub is a known integration point, not a missing feature.
+</p>
+<table>
+<tr><th>Stub</th><th>What it pretends to do</th><th>What the real adapter will do</th><th>Env switch</th></tr>
+<tr><td>NIC IRP e-invoice provider</td><td>Returns a placeholder IRN, ackNo, ackDate, signed JSON, QR code URL</td><td>Register every B2B invoice with the NIC Invoice Registration Portal in real time per CBIC Rule 48(4)</td><td><code>EINVOICE_PROVIDER</code></td></tr>
+<tr><td>NIC e-Waybill provider</td><td>Returns <code>EWB-STUB-{uuid}</code></td><td>Generate the actual e-way bill via NIC e-Waybill API before dispatch per CBIC Rule 138</td><td><code>EWAY_BILL_PROVIDER</code></td></tr>
+<tr><td>GSTN portal verification</td><td>Verifies via local Mod-36 checksum only; stamps <code>isVerified=true</code></td><td>Live lookup on the GSTN sandbox/production API; verifies legal name + state + status</td><td><code>GSTN_PROVIDER</code></td></tr>
+<tr><td>Tax PDF storage (S3)</td><td>In-memory stub — admin prints HTML to PDF from the browser</td><td>Generate PDF server-side and upload to S3 with signed download URLs</td><td><code>TAX_PDF_STORAGE_PROVIDER</code></td></tr>
+</table>
+
+<h3 style="margin-top:14pt; color:#1d4ed8;">⏳ Pre-launch — code ready; awaiting CA sign-off / configuration</h3>
+<table>
+<tr><th>Item</th><th>Current state</th><th>What unblocks it</th></tr>
+<tr><td>Tax mode flipped to <code>STRICT</code></td><td>Code paths exist and have been tested. System runs <code>OFF</code> or <code>AUDIT</code> today.</td><td>Audit-readiness shows zero blockers + CA sign-off on <code>GST_ASSUMPTIONS.md</code></td></tr>
+<tr><td>Sportsmart legal name, PAN, primary GSTIN, AATO band</td><td>Placeholders in <code>GST_ASSUMPTIONS.md</code> (legal name "Sportsmart Marketplace Pvt Ltd"; primary GSTIN <code>36AAAAA0000AZZZ</code>)</td><td>CA confirms entity facts before strict-mode flip</td></tr>
+<tr><td>HSN length tier (4 / 6 / 8 digits)</td><td>Config key <code>required_hsn_length</code> exists; default is 6 digits per the ₹5cr-₹10cr AATO assumption</td><td>CA confirms the AATO band; admin sets the matching tier</td></tr>
+<tr><td>Composition seller invoice footer (Rule 49 wording)</td><td>Engineering draft is in <code>GST_ASSUMPTIONS.md</code>; flagged "CA to verify exact wording"</td><td>CA approves the footer text</td></tr>
+<tr><td>E-way bill per-state threshold overrides</td><td>Schema/config supports a JSON map; consumer reads the single global threshold today</td><td>CA names the states needing different thresholds; engineering wires the map read</td></tr>
+<tr><td>B2B place-of-supply rule (shipping-state vs registered-state)</td><td>Current interpretation: shipping state (IGST Act §12(2)(a))</td><td>CA confirms the interpretation (or asks to switch to registered state)</td></tr>
+</table>
+
+<div class="warn">
+  <strong>Four things to say out loud to the CA before walking through this PDF:</strong>
+  <ol style="margin-bottom:0;">
+    <li>NIC IRP, NIC e-Waybill and GSTN portal verification are <strong>stubbed today</strong>; the schema fields exist and admin pages exist, but the actual network call to the government portal is a placeholder. Real integration is post-launch work.</li>
+    <li>Tax PDF storage is <strong>stubbed today</strong>; admins use browser print-to-PDF until S3 is wired.</li>
+    <li>The system is currently in <strong>OFF or AUDIT</strong> mode. The <strong>STRICT-mode flip</strong> is gated on CA sign-off of <code>GST_ASSUMPTIONS.md</code> and zero audit-readiness blockers.</li>
+    <li>Sportsmart's entity details (legal name, PAN, primary GSTIN, AATO tier) are <strong>placeholders</strong> in the decision log — the CA fills them in before go-live.</li>
+  </ol>
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>1. The 10-second mental model</h2>
+
+<p>Sportsmart is an electronic-commerce <em>marketplace</em>: independent <strong>sellers</strong> list products; customers buy them; Sportsmart handles the storefront, payments, fulfilment, and statutory paperwork. Three statutory things happen on every sale:</p>
+
+<table>
+<tr><th>What</th><th>Who pays</th><th>Who collects/deducts</th><th>Where it ends up</th></tr>
+<tr><td>GST on the product (CGST + SGST or IGST)</td><td>Customer</td><td>The <em>seller</em> (we issue the invoice on their behalf)</td><td>Seller's GSTR-1 / GSTR-3B</td></tr>
+<tr><td>TCS @ 1% (Section 52)</td><td>The seller (deducted from settlement)</td><td>Sportsmart (marketplace)</td><td>Our GSTR-8</td></tr>
+<tr><td>TDS @ 1% (Section 194-O Income Tax)</td><td>The seller (deducted from settlement)</td><td>Sportsmart (marketplace)</td><td>Our Form 26Q + Form 16A</td></tr>
+</table>
+
+<p>In addition, when Sportsmart earns commission from a seller, that commission is itself a <em>service supply</em> from Sportsmart to the seller under SAC 9985 — Sportsmart charges 18% GST on it and reports it on its <strong>own</strong> GSTR-1.</p>
+
+<div class="callout">
+  <strong>Why this is complex:</strong> for every order we have to (a) issue a GST-compliant invoice for the seller, (b) deduct TCS, (c) deduct TDS, (d) charge GST on our own commission, (e) handle returns within Section-34 time limits, and (f) report all of this in monthly/quarterly returns. The code automates all six and exposes admin pages to file the resulting statements.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>2. The four parties on every order</h2>
+
+<ol>
+  <li><strong>Customer</strong> — the buyer. May be B2C (no GSTIN) or B2B (registered, with one or more GSTINs).</li>
+  <li><strong>Supplier</strong> — the entity that is legally selling the goods. One of three kinds:
+    <ul>
+      <li><code>MARKETPLACE_SELLER</code> — independent seller on the platform</li>
+      <li><code>FRANCHISE</code> — franchise partner</li>
+      <li><code>SPORTSMART</code> — Sportsmart-direct supplies</li>
+    </ul>
+  </li>
+  <li><strong>Marketplace</strong> — Sportsmart itself. For seller and franchise supplies, the marketplace is an <em>operator</em> under Section 52 (TCS) and a <em>person responsible for payment</em> under Section 194-O (TDS). For SPORTSMART-direct supplies, the marketplace IS the supplier.</li>
+  <li><strong>Government</strong> — CBIC for GST; CBDT for Income-Tax TDS. Both consume statutory returns that the admin team downloads from this system and files.</li>
+</ol>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>3. How the GST math runs on a line</h2>
+
+<p>Every cart line goes through a single pure function (file: <code>apps/api/src/modules/tax/domain/tax-engine.ts</code>). Inputs:</p>
+<ul>
+  <li>Gross amount (paise) — the price × quantity</li>
+  <li>Discount (paise) — already allocated to this line</li>
+  <li>GST rate (basis points; <code>1800</code> = 18%)</li>
+  <li>Cess rate (basis points; default 0)</li>
+  <li>Whether price <em>includes</em> tax (B2C convention: yes) or <em>excludes</em> tax</li>
+  <li>Intra-state? (true → CGST + SGST; false → IGST)</li>
+  <li>Supply taxability (<code>TAXABLE</code>, <code>NIL_RATED</code>, <code>EXEMPT</code>, <code>NON_GST</code>, <code>ZERO_RATED</code>, <code>OUT_OF_SCOPE</code>)</li>
+</ul>
+
+<p>Output (per line):</p>
+<pre>{ taxableInPaise, cgstInPaise, sgstInPaise, igstInPaise,
+  cessInPaise, totalTaxInPaise, lineTotalInPaise }</pre>
+
+<h4>Invariants the engine enforces</h4>
+<ul>
+  <li><code>cgst + sgst + igst === totalTax</code></li>
+  <li><code>taxable + totalTax + cess === lineTotal</code> (no penny ever lost in rounding)</li>
+  <li>For intra-state: CGST = SGST = half of total GST (with SGST derived as <code>totalTax − CGST</code> so the sum is exact)</li>
+</ul>
+
+<h4>Rounding</h4>
+<p>Each component is computed in BigInt paise using "half away from zero" rounding. The invoice grand total is rounded to the nearest whole rupee, and the difference (positive or negative) is shown as a <strong>Round-off</strong> line in line with CBIC convention.</p>
+
+<h4>Inclusive vs exclusive pricing</h4>
+<table>
+<tr><th>Mode</th><th>Used for</th><th>How the engine handles it</th></tr>
+<tr><td>GST-inclusive (default for B2C catalog)</td><td>Storefront retail prices</td><td>The displayed MRP already includes tax. The engine "backs out" the tax: taxable = price ÷ (1 + rate), tax = price − taxable.</td></tr>
+<tr><td>GST-exclusive</td><td>B2B / wholesale</td><td>Tax is added on top: taxable = price, tax = price × rate.</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>4. Place of Supply — intra-state vs inter-state</h2>
+
+<p>Indian GST splits a supply's tax based on where the recipient is, relative to the supplier:</p>
+<ul>
+  <li><strong>Same state</strong> (supplier state = customer state) → <strong>CGST + SGST</strong> (half / half)</li>
+  <li><strong>Different state</strong> → <strong>IGST</strong> (full rate)</li>
+</ul>
+
+<h4>How each party's state is determined</h4>
+<table>
+<tr><th>Party</th><th>Source of the 2-digit GST state code</th></tr>
+<tr><td>Customer (B2C)</td><td>Shipping address. State name resolved against the 38-row <code>india_states</code> CBIC master, OR the new <code>state_code</code> column on the address (Phase 34 — dropdown-driven).</td></tr>
+<tr><td>Customer (B2B)</td><td>Same as B2C — POS source is the <strong>shipping address state</strong>, NOT the billing/GSTIN state (assumption #44 in the decision log; CA to confirm).</td></tr>
+<tr><td>Seller</td><td>Seller's primary GSTIN's state (first 2 digits of the 15-char GSTIN).</td></tr>
+<tr><td>Franchise</td><td>Franchise's registered GSTIN state.</td></tr>
+<tr><td>SPORTSMART</td><td><code>platform_gst_profiles.gstStateCode</code> for the row marked <code>isDefault=true</code>.</td></tr>
+</table>
+
+<div class="warn">
+  <strong>CA confirm:</strong> for B2B orders where the customer has supplied a GSTIN, IGST Act §12(2)(a) is being interpreted to mean POS = recipient's <em>shipping state</em>. If your interpretation requires POS = recipient's <em>registered state</em>, this is a flag to change.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>5. Discounts and how they interact with GST</h2>
+
+<p>Indian GST law (CGST Act Section 15) requires discount to be applied <strong>before</strong> GST when it's a pre-supply transactional discount established at the time of supply. The engine treats coupon/promo discounts this way by default. Three discount kinds are distinguished:</p>
+
+<table>
+<tr><th>Kind</th><th>Tax treatment</th><th>Example</th></tr>
+<tr><td><code>PRE_SUPPLY_TRANSACTIONAL</code></td><td>Reduces taxable value at sale time. Lower taxable → lower GST.</td><td>Coupon "FLAT200"</td></tr>
+<tr><td><code>POST_SUPPLY_LINKED</code></td><td>Adjusted after sale via a Credit Note linked to original invoice. Reverses GST.</td><td>Quarterly volume rebate</td></tr>
+<tr><td><code>POST_SUPPLY_UNLINKED</code></td><td>No GST reversal possible (Section 34 ineligible). Booked as wallet credit / goodwill.</td><td>Ad-hoc admin write-off</td></tr>
+<tr><td><code>DISPLAY_ONLY</code></td><td>Just an MRP slash for marketing. Taxable value = the actual price charged.</td><td>"₹2,499 / <s>₹3,499</s>"</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>6. Document types — what gets issued and when</h2>
+
+<p>File: <code>apps/api/src/modules/tax/domain/document-type-picker.ts</code>. Logic is a pure function:</p>
+
+<table>
+<tr><th>Seller registration</th><th>Supply mix</th><th>Document issued</th><th>Section</th></tr>
+<tr><td>REGULAR</td><td>All taxable</td><td>Tax Invoice</td><td>Section 31</td></tr>
+<tr><td>REGULAR</td><td>Mixed taxable + exempt</td><td>Invoice-cum-Bill of Supply</td><td>Rule 46A</td></tr>
+<tr><td>REGULAR</td><td>All exempt / NIL / non-GST</td><td>Bill of Supply</td><td>Section 31(3)(c)</td></tr>
+<tr><td>COMPOSITION</td><td>Any</td><td>Bill of Supply (no GST collected)</td><td>Section 31(3)(c), Rule 49</td></tr>
+<tr><td>UNREGISTERED</td><td>Any</td><td>Bill of Supply</td><td>—</td></tr>
+</table>
+
+<h4>Document numbering</h4>
+<p>Per-(GSTIN, financial year) sequence. Format examples:</p>
+<ul>
+  <li>Tax Invoice: <code>SM-INV-000001</code></li>
+  <li>Bill of Supply: <code>SM-BOS-000001</code></li>
+  <li>Credit Note: <code>SM-CN-000001</code></li>
+  <li>Debit Note: <code>SM-DN-000001</code></li>
+  <li>Legacy Receipt (pre-strict-mode, no GSTIN): <code>SM-LR-000001</code></li>
+</ul>
+<p>Max 16 chars per CBIC rule. Allowed characters: <code>A-Z 0-9 / -</code>. Sequence is locked at the database level (Postgres SERIALIZABLE transaction on the <code>document_sequences</code> table) so two parallel writes can never get the same number. Cancelled numbers are kept in <code>skippedNumbers</code> — never reused.</p>
+
+<h4>When the invoice is generated</h4>
+<table>
+<tr><th>Payment</th><th>Trigger</th></tr>
+<tr><td>Online (prepaid)</td><td>Order reaches <code>paymentStatus=PAID</code> AND <code>subOrder.acceptStatus=ACCEPTED</code></td></tr>
+<tr><td>COD</td><td>Sub-order reaches <code>fulfillmentStatus=PACKED</code> (just before dispatch)</td></tr>
+</table>
+
+<h4>Invoice cancellation</h4>
+<p>Within the IRN window (24 hours after IRN, when e-invoicing is live): cancel through NIC IRP. After the window or for non-IRN documents: <strong>no in-place cancellation</strong> — issue a Credit Note (full reversal) and a fresh Invoice instead. Cancelled document numbers are preserved on the row and never reused.</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>7. Section 52 — TCS (1%)</h2>
+
+<p>As an e-commerce operator, the marketplace collects Tax Collected at Source @ 1% on the <em>net</em> taxable supplies of every marketplace seller (and franchise) it processes. This is paid into the Government's GST account against the seller's GSTIN.</p>
+
+<table>
+<tr><th>Topic</th><th>Behaviour</th></tr>
+<tr><td>Rate</td><td>100 basis points = 1%</td></tr>
+<tr><td>Split (intra-state)</td><td>CGST-TCS 50 bps + SGST-TCS 50 bps</td></tr>
+<tr><td>Split (inter-state)</td><td>IGST-TCS 100 bps</td></tr>
+<tr><td>Base</td><td>Net taxable supplies = gross supplies − returns − exempt − non-GST, in the filing period</td></tr>
+<tr><td>Timing</td><td>Computed at <strong>settlement run</strong> (per Section 52 — at credit to seller's account)</td></tr>
+<tr><td>Filing period</td><td>Calendar month</td></tr>
+<tr><td>Applies to</td><td><code>MARKETPLACE_SELLER</code> + <code>FRANCHISE</code></td></tr>
+<tr><td>Does NOT apply to</td><td><code>SPORTSMART</code> (we ARE the supplier)</td></tr>
+<tr><td>Return</td><td>GSTR-8 by the 10th of the next month (we generate CSV; admin files via GSTN portal)</td></tr>
+</table>
+
+<p>Each TCS deduction lands in <code>gst_tcs_settlement_ledger</code>. Status moves <code>PENDING → FILED → PAID_TO_GOVT</code> via admin actions on the Tax dashboard (GSTR-8 section).</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>8. Section 194-O — Income-Tax TDS (1%)</h2>
+
+<p>A separate statute (Income-Tax Act, not GST). Section 194-O makes the e-commerce operator the <em>person responsible</em> for deducting TDS @ 1% on the <strong>gross</strong> sale value (including GST) paid through the marketplace to a participating seller.</p>
+
+<table>
+<tr><th>Topic</th><th>Behaviour</th></tr>
+<tr><td>Rate</td><td>1% of gross sale value (incl. GST), 5% if seller has no PAN</td></tr>
+<tr><td>Threshold for individual/HUF sellers</td><td>₹5 lakh aggregate per FY — sellers below get exempted via an admin attestation flag (<code>seller.is194OExempt</code>)</td></tr>
+<tr><td>Timing</td><td>At settlement payout to the seller</td></tr>
+<tr><td>Return</td><td><strong>Form 26Q</strong> quarterly (CSV download; admin files via TIN-FC or e-filing)</td></tr>
+<tr><td>Certificate to seller</td><td><strong>Form 16A</strong> quarterly (HTML page; admin "Print → Save as PDF")</td></tr>
+<tr><td>Lifecycle</td><td><code>PENDING → DEPOSITED → CERTIFICATE_ISSUED</code> via the admin TDS dashboard</td></tr>
+</table>
+
+<div class="callout">
+  Settlement payout to the seller = (gross order value) − (commission + commission GST) − (TCS deducted) − (TDS deducted). All four deductions appear on the seller's payout statement.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>9. Section 34 — Credit Notes and the 30-September time-bar</h2>
+
+<p>CGST Act Section 34(2) lets a supplier reduce their output GST liability by issuing a Credit Note <strong>only if</strong> the credit note is declared in a return filed on or before:</p>
+
+<div class="ok">
+  <strong>30 September of the financial year FOLLOWING the year of supply.</strong><br>
+  Example: an invoice issued on 12 January 2026 (FY 2025-26) can be credit-noted up to 30 September 2026.
+</div>
+
+<p>Returns approved after this cutoff cannot reduce GST — the platform absorbs the GST cost and the customer is refunded via wallet credit instead. A daily cron (<code>tax_credit_note_timebar.cron.ts</code>) classifies every QC-approved return into one of three buckets:</p>
+
+<table>
+<tr><th>Status</th><th>Meaning</th><th>What happens</th></tr>
+<tr><td><code>ELIGIBLE</code></td><td>Inside the Section-34 window</td><td>System issues a Credit Note + reverses GST on filings</td></tr>
+<tr><td><code>TIME_BARRED</code></td><td>Past 30 Sept of FY+1</td><td>No GST reversal. Refund via wallet credit. Customer-facing line: "Refund processed. GST adjustment is not available for this return due to statutory reporting timelines."</td></tr>
+<tr><td><code>REQUIRES_FINANCE_REVIEW</code></td><td>Borderline (within 7 days of cutoff, or unusual invoice state)</td><td>Lands on the admin Time-bar Review queue. A finance lead chooses Credit Note OR wallet credit manually.</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>10. Returns — refund / credit note / wallet</h2>
+
+<p>Every customer return that passes QC falls into one of three refund paths, chosen by the eligibility classifier above:</p>
+
+<ol>
+  <li><strong>Real Credit Note</strong> — reduces the seller's output GST in the filing period the CN is declared. The system writes a <code>CREDIT_NOTE</code> document (own number, own number sequence) linked to the original invoice. Customer refund + GST reversal both happen.</li>
+  <li><strong>Wallet adjustment</strong> — when CN is not eligible (time-barred, unlinked discount, goodwill, etc.), a wallet credit is issued. No GST is reversed. Two-step admin approval is required when the amount exceeds the configured threshold (<code>goodwill_approval_threshold_paise</code>).</li>
+  <li><strong>Mixed</strong> — partial returns where some lines are CN-eligible and others are wallet-only.</li>
+</ol>
+
+<p>The customer's return-detail page now shows both: a Credit Note card with the CN number/date/amount, and a Wallet Credit card with the wallet ledger ID and reason.</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>11. E-Invoicing (IRN / QR)</h2>
+
+<p>CBIC Rule 48(4) — B2B invoices from suppliers above the prescribed aggregate annual turnover (currently ₹5 crore per Aug-2023 notification) must be registered with the NIC Invoice Registration Portal (IRP) before they can be issued. The portal returns an Invoice Reference Number (IRN), a signed JSON, and a QR code. The B2C invoice is not subject to IRN (today; may change with future thresholds).</p>
+
+<table>
+<tr><th>Status</th><th>Today</th></tr>
+<tr><td>Schema</td><td>Ready: <code>irn</code>, <code>ackNo</code>, <code>ackDate</code>, <code>signedDocumentJson</code>, <code>qrCodeUrl</code>, <code>einvoiceStatus</code> columns on every <code>tax_document</code> row</td></tr>
+<tr><td>Provider</td><td>Stub (logs payload, returns placeholder IRN). The selector at <code>EINVOICE_PROVIDER</code> env crashes loudly if set to <code>nic</code> without a real adapter — no silent fallback to stub in production.</td></tr>
+<tr><td>Applicability check</td><td>Wired in <code>einvoice-applicability.ts</code>. Looks at the seller's <code>aggregateTurnoverInPaise</code> + opt-in flag. If a seller is sub-threshold but has elected in (<code>einvoiceOptedIn=true</code>), it still applies.</td></tr>
+<tr><td>Retry cron</td><td>Yes — failed IRN registrations queue and retry on a daily cron (<code>einvoice-retry.cron.ts</code>).</td></tr>
+<tr><td>Cancellation window</td><td>24 hours from IRN generation (CBIC). Past that → Credit Note / Debit Note path.</td></tr>
+</table>
+
+<div class="warn">
+  <strong>CA decision pending:</strong> whether Sportsmart itself crosses the ₹5 crore AATO threshold and must apply IRN to its OWN GSTR-1 commission invoices to sellers. Currently assumed "yes" once aggregate platform commission revenue crosses the bar.
+</div>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>12. E-Way Bill</h2>
+
+<p>CBIC Rule 138 — when a consignment value exceeds ₹50,000 (default), an electronic waybill must be generated before the goods move. The marketplace generates the EWB on behalf of the seller before dispatch.</p>
+
+<table>
+<tr><th>Topic</th><th>Behaviour</th></tr>
+<tr><td>Threshold</td><td>₹50,000 single-national default (<code>eway_bill_threshold_paise</code> = 5000000). Per-state overrides supported.</td></tr>
+<tr><td>Generation timing</td><td>Before dispatch (sub-order is being marked PACKED → SHIPPED)</td></tr>
+<tr><td>Validity</td><td>Standard NIC slabs: ≤100 km = 1 day; +200 km / day after that</td></tr>
+<tr><td>Provider</td><td>Stub today (returns <code>EWB-STUB-{uuid}</code>); NIC e-Waybill API integration pending</td></tr>
+<tr><td>Failure</td><td>AdminTask <code>EWAY_BILL_GENERATION_FAILED</code> + retry on cron</td></tr>
+<tr><td>Ship-block</td><td>STRICT mode: yes (cannot ship without EWB); OFF / AUDIT: warn-only</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>13. GSTR filings — what the system gives admin</h2>
+
+<p>The admin dashboard at <code>/dashboard/tax</code> offers downloadable CSVs for every statutory return. Admin uploads / files via the GSTN portal — the system itself does NOT auto-file.</p>
+
+<table>
+<tr><th>Return</th><th>Frequency</th><th>What's in it</th><th>Generated by</th></tr>
+<tr><td>GSTR-1 (per seller)</td><td>Monthly</td><td>§4 B2B, §5 B2C-Large, §7 B2C-Small, §9B Credit Notes, §12 HSN summary, §13 Documents Issued</td><td><code>gstr1-report.service.ts</code></td></tr>
+<tr><td>GSTR-3B (per seller)</td><td>Monthly</td><td>Summary of outward + inward + ITC + tax payable</td><td><code>gstr3b-report.service.ts</code></td></tr>
+<tr><td>GSTR-8 (platform-wide)</td><td>Monthly</td><td>TCS collected on every supplier</td><td><code>gstr8-report.service.ts</code></td></tr>
+<tr><td>Form 26Q (platform-wide)</td><td>Quarterly</td><td>TDS deducted under Section 194-O</td><td><code>form-26q-report.service.ts</code></td></tr>
+<tr><td>Form 16A (per deductee)</td><td>Quarterly</td><td>TDS certificate to issue to each seller</td><td><code>form-26q-report.service.ts</code> → HTML render</td></tr>
+<tr><td>Marketplace GSTR-1 commission</td><td>Monthly</td><td>SAC 9985 outward supplies per (seller, state)</td><td><code>marketplace-commission-gstr.service.ts</code></td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>14. Form 26Q and Form 16A in detail</h2>
+
+<p>Form 26Q is the <strong>quarterly TDS return</strong> filed by every TDS deductor under the Income Tax Act. Form 16A is the <strong>TDS certificate</strong> issued to each deductee (each seller) for the same quarter.</p>
+
+<h4>The TDS lifecycle the admin runs</h4>
+<ol>
+  <li>System auto-creates a <code>section_194o_tds_ledger</code> row per (seller, quarter) at settlement.</li>
+  <li>Status starts as <code>PENDING</code>.</li>
+  <li>Admin downloads the Form 26Q CSV from <code>/dashboard/tax/tds194o</code>, files via TIN-FC, and clicks <strong>Mark DEPOSITED</strong>. Status → <code>DEPOSITED</code>, with a UTR reference saved.</li>
+  <li>Admin then generates Form 16A per ledger row (one per seller-quarter), prints to PDF, and emails the seller. Status → <code>CERTIFICATE_ISSUED</code>.</li>
+</ol>
+
+<h4>Form 16A — what's on the certificate</h4>
+<ul>
+  <li>Deductor (Sportsmart) name, address, TAN, PAN</li>
+  <li>Deductee (seller) name, address, PAN, GSTIN</li>
+  <li>Section 194-O statement; quarter (Q1 / Q2 / Q3 / Q4); FY</li>
+  <li>Sale value facilitated under §194-O (gross)</li>
+  <li>TDS deducted (1% of gross)</li>
+  <li>TDS deposited date + challan reference (UTR)</li>
+  <li>Verification by deductor</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>15. The marketplace's OWN GSTR-1 commission section</h2>
+
+<p>Distinct from the per-seller GSTR-1 above. When Sportsmart earns commission from a seller, that commission is a service supply by Sportsmart to the seller — taxable under SAC <strong>9985</strong> @ 18%.</p>
+
+<p>The export at <code>/dashboard/tax</code> (Marketplace GSTR-1 commission section) returns a CSV grouped per (seller GSTIN, state) for the filing period:</p>
+
+<ul>
+  <li>Recipient GSTIN (the seller)</li>
+  <li>Recipient legal name</li>
+  <li>Recipient state code</li>
+  <li>Filing Period</li>
+  <li>SAC Code (9985)</li>
+  <li>Rate (18%)</li>
+  <li>Taxable Value (commission in rupees)</li>
+  <li>CGST, SGST, IGST</li>
+  <li>Total GST</li>
+  <li>Tax split (CGST_SGST or IGST)</li>
+  <li>Number of constituent settlements</li>
+</ul>
+
+<p>Admin imports this CSV into Sportsmart's own GSTR-1 filing, alongside the per-seller §4 / §7 sections.</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>16. Master data</h2>
+
+<table>
+<tr><th>Table</th><th>What it holds</th><th>Admin page</th></tr>
+<tr><td><code>india_states</code></td><td>The 38 CBIC GST state codes (28 states + 8 UTs + special regions)</td><td>Read-only seeded; storefront state dropdown</td></tr>
+<tr><td><code>hsn_master</code></td><td>HSN codes + default GST rates + effective-dated rate changes</td><td><code>/dashboard/tax/hsn-master</code></td></tr>
+<tr><td><code>uqc_master</code></td><td>Unit Quantity Codes (NOS, PCS, KGS, etc.) — every invoice line must declare one</td><td><code>/dashboard/tax/uqc-master</code></td></tr>
+<tr><td><code>tax_config</code></td><td>Key/value runtime knobs (EWB threshold, TCS rate, shipping SAC, etc.)</td><td><code>/dashboard/tax/config</code></td></tr>
+<tr><td><code>platform_gst_profiles</code></td><td>Sportsmart's own GSTIN(s) — one default + extras per state</td><td><code>/dashboard/tax/platform-gst</code></td></tr>
+<tr><td><code>seller_gstins</code></td><td>One row per seller GSTIN + verification audit</td><td><code>/dashboard/tax/seller-gstins</code></td></tr>
+<tr><td><code>customer_tax_profiles</code></td><td>B2B customer GSTINs + verification</td><td><code>/dashboard/tax/customer-tax-profiles</code></td></tr>
+</table>
+
+<h4>Important defaults baked into <code>tax_config</code></h4>
+<table>
+<tr><th>Key</th><th>Default</th><th>Used for</th></tr>
+<tr><td><code>eway_bill_threshold_paise</code></td><td>5000000 (₹50,000)</td><td>EWB applicability threshold</td></tr>
+<tr><td><code>shipping_sac_code</code></td><td>"9968"</td><td>SAC on every shipping line</td></tr>
+<tr><td><code>shipping_gst_rate_bps</code></td><td>1800 (18%)</td><td>Shipping GST rate</td></tr>
+<tr><td><code>tcs_rate_bps</code></td><td>100 (1%)</td><td>Section 52 TCS rate</td></tr>
+<tr><td><code>default_gst_rate_bps_test_mode</code></td><td>1800</td><td>Fallback only when tax mode is OFF / AUDIT and HSN is missing</td></tr>
+<tr><td><code>goodwill_approval_threshold_paise</code></td><td>500000 (₹5,000)</td><td>Wallet credit threshold above which 2-step admin approval is required</td></tr>
+<tr><td><code>section_34_window_cutoff_month</code></td><td>9 (September)</td><td>Section 34 credit-note time-bar month</td></tr>
+<tr><td><code>required_hsn_length</code></td><td>6</td><td>Per ₹5cr–₹10cr AATO tier</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>17. B2B vs B2C and the GSTIN picker at checkout</h2>
+
+<p>A customer with at least one validated <code>CustomerTaxProfile</code> can pick which GSTIN this order's invoice goes against. The chosen profile ID is snapshotted on <code>master_orders.selected_tax_profile_id</code> and the invoice-generation service prefers it over the customer's global default.</p>
+
+<table>
+<tr><th>How many profiles</th><th>Checkout UI</th></tr>
+<tr><td>0</td><td>"Personal (B2C) invoice" with an "Add GSTIN" link</td></tr>
+<tr><td>1</td><td>Read-only card showing the profile + a "Change" link</td></tr>
+<tr><td>2 or more</td><td>Dropdown of every profile, default selected</td></tr>
+</table>
+
+<p>GSTIN is validated client-side (regex) and server-side (Mod-36 checksum). Admin can verify against the GSTN portal (currently stub; sandbox API integration planned) and stamp <code>isVerified=true</code>.</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>18. Supplier types — marketplace-seller vs franchise vs Sportsmart-direct</h2>
+
+<table>
+<tr><th>Supplier type</th><th>Who issues the invoice (party)</th><th>TCS deduction?</th><th>TDS deduction?</th><th>POS supplier state</th></tr>
+<tr><td><code>MARKETPLACE_SELLER</code></td><td>Seller (we generate it on their behalf)</td><td>Yes (1%)</td><td>Yes (1%)</td><td>Seller GSTIN state</td></tr>
+<tr><td><code>FRANCHISE</code></td><td>Franchise</td><td>Yes</td><td>Yes</td><td>Franchise GSTIN state</td></tr>
+<tr><td><code>SPORTSMART</code></td><td>Sportsmart (default platform GST profile)</td><td>No (we are the supplier)</td><td>No</td><td>Platform GST profile state</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>19. Tax modes — OFF / AUDIT / STRICT</h2>
+
+<p>A single environment flag controls how strictly the system enforces tax data on checkout and invoice generation. Set via the Tax dashboard.</p>
+
+<table>
+<tr><th>Mode</th><th>Behaviour</th><th>Use case</th></tr>
+<tr><td><code>OFF</code></td><td>Permissive. Missing HSN / rate / GSTIN — log warning, proceed with sensible defaults. <strong>DRAFT</strong> watermark on invoices.</td><td>Dev / early staging</td></tr>
+<tr><td><code>AUDIT</code></td><td>Same validation as STRICT, but failures are <strong>logged, not thrown</strong>. Lets us see "how many orders would block in production" without blocking real customers.</td><td>Staging soak before go-live</td></tr>
+<tr><td><code>STRICT</code></td><td>Production posture. Checkouts and invoice generation throw on missing tax data. DRAFT watermark suppressed.</td><td>Production after CA sign-off</td></tr>
+</table>
+
+<p>The flip from AUDIT to STRICT is gated on the <strong>Audit-Readiness</strong> report showing zero blockers.</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>20. Audit-readiness blockers</h2>
+
+<p>Daily report scans for conditions that would cause a strict-mode checkout/invoice failure. Each blocker has a count, sample row IDs, and (now) a "Fix" link to the admin page where it's resolvable.</p>
+
+<table>
+<tr><th>Code</th><th>What it means</th><th>Fix page</th></tr>
+<tr><td><code>product.missing_hsn</code></td><td>Approved product with <code>TAXABLE</code> taxability but no HSN code</td><td>Web-admin product edit OR /dashboard/products/bulk-tax-config</td></tr>
+<tr><td><code>product.missing_rate</code></td><td>Approved product with HSN but no GST rate</td><td>Same as above</td></tr>
+<tr><td><code>seller.missing_gstin</code></td><td>Active seller without a primary GSTIN row</td><td>/dashboard/tax/seller-gstins</td></tr>
+<tr><td><code>einvoice.unresolved</code></td><td>B2B invoice whose IRN never came back (stuck in PENDING)</td><td>/dashboard/tax/einvoices</td></tr>
+<tr><td><code>pdf.unresolved</code></td><td>Invoice whose PDF generation failed</td><td>/dashboard/tax/einvoices (same surface)</td></tr>
+<tr><td><code>tcs.unfiled</code></td><td>GSTR-8 row still in PENDING past the 10th of the next month</td><td>GSTR-8 section on /dashboard/tax</td></tr>
+<tr><td><code>timebar.requires_review</code></td><td>Return classified as REQUIRES_FINANCE_REVIEW</td><td>/dashboard/tax/timebar-review</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>21. Retention and erasure</h2>
+
+<p>CGST Act Section 36 — retain books / records for at least 72 months from the end of the FY of the supply. Our defaults match:</p>
+
+<table>
+<tr><th>Record class</th><th>Retention</th></tr>
+<tr><td>Tax documents (invoices, credit notes, BoS)</td><td>72 months</td></tr>
+<tr><td>PDFs</td><td>72 months</td></tr>
+<tr><td>TCS + TDS ledgers</td><td>72 months</td></tr>
+<tr><td>E-way bills</td><td>72 months</td></tr>
+<tr><td>Tax-related audit log</td><td>72 months</td></tr>
+<tr><td>Wallet adjustments (non-tax goodwill)</td><td>24 months</td></tr>
+</table>
+
+<p>GDPR / DPDP <em>right-to-erasure</em>: tax records are excluded from delete. The system may anonymise PII (name, contact) on the row but the GSTIN, document number, amounts, and tax columns are statutorily retained.</p>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>22. Open items deferred to post-launch</h2>
+
+<ul>
+  <li>Real NIC e-waybill API integration (stub today)</li>
+  <li>Real NIC IRP integration for e-invoice IRN (stub today)</li>
+  <li>Live GSTN portal verification for seller/customer GSTINs (stub today; uses local Mod-36 checksum only)</li>
+  <li>GST input credit on the platform's own purchases (out of scope — BAU CA work)</li>
+  <li>Stock transfer / branch transfer flows (Sportsmart-direct supply is single-warehouse today)</li>
+  <li>Section 9(5) services (Sportsmart is goods-only)</li>
+  <li>Compensation cess (no current sports HSN attracts cess; framework exists)</li>
+  <li>Reverse charge for unregistered suppliers buying from Sportsmart (rare; admin flag)</li>
+  <li>Automated CSV upload to GSTN portal (admin manual upload today)</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────────────────────── -->
+<h2>23. Quick CA-meeting checklist</h2>
+
+<p>Bring this to the meeting and walk down the list. Each item is an engineering assumption that the system already runs on — the CA's job is to confirm or correct it before the strict-mode flip.</p>
+
+<ol>
+  <li><strong>Identity:</strong> confirm the Sportsmart legal entity name, PAN, and primary GSTIN(s); state-wise GSTINs if any.</li>
+  <li><strong>AATO tier:</strong> confirm Sportsmart's aggregate annual turnover band — drives HSN length (4/6/8 digits) and e-invoicing applicability.</li>
+  <li><strong>POS rule for B2B with GSTIN:</strong> confirm IGST Act §12(2)(a) is interpreted as "recipient's shipping state" (current assumption) or "recipient's registered state".</li>
+  <li><strong>Discount treatment:</strong> confirm coupon discounts are PRE_SUPPLY_TRANSACTIONAL (reduce taxable value at sale).</li>
+  <li><strong>GST-inclusive default:</strong> confirm B2C catalog prices are GST-inclusive (CBIC convention); admin can flip per product.</li>
+  <li><strong>Shipping:</strong> confirm SAC 9968 @ 18% for postal/courier. Confirm shipping NOT refunded on returns by default.</li>
+  <li><strong>Convenience / COD / gift-wrap fees:</strong> confirm SAC 9985 @ 18% (other support services).</li>
+  <li><strong>Document numbering:</strong> confirm <code>SM-INV-NNNNNN</code>, etc., per (GSTIN, FY) is acceptable.</li>
+  <li><strong>Section 34 time-bar:</strong> confirm 30 September of FY+1 cutoff, and that time-barred returns go through wallet (not CN).</li>
+  <li><strong>TCS rate:</strong> confirm 1% (CGST-TCS 0.5 + SGST-TCS 0.5 intra-state; IGST-TCS 1 inter-state). Confirm filing cadence is monthly GSTR-8 by the 10th.</li>
+  <li><strong>TDS rate:</strong> confirm 1% under Section 194-O (5% no-PAN). Confirm Form 26Q quarterly + Form 16A certificate cadence.</li>
+  <li><strong>Composition seller:</strong> confirm Bill of Supply, no GST collected, Rule 49 footer text.</li>
+  <li><strong>Mixed taxable + exempt:</strong> confirm Invoice-cum-Bill of Supply (Rule 46A).</li>
+  <li><strong>E-invoicing threshold:</strong> confirm ₹5 crore AATO triggers IRN for the B2B invoices Sportsmart issues to sellers (commission billing); confirm B2C is outside IRN scope today.</li>
+  <li><strong>E-way bill threshold:</strong> confirm ₹50,000 single-national; flag any state-specific override needed (some states have lower thresholds for select goods).</li>
+  <li><strong>Retention:</strong> confirm 72 months from end of FY (Section 36).</li>
+  <li><strong>Strict-mode go-live date:</strong> agree on a date — Audit-Readiness must show zero blockers before the flip.</li>
+</ol>
+
+<div class="ok">
+  <strong>Where to find the live decision log:</strong> <code>docs/tax/GST_ASSUMPTIONS.md</code> in the codebase. Every row has an "Engineering assumption" + an empty "CA decision" column. Filled-in decisions update that file as the contract going forward.
+</div>
+
+<div class="footer-note">
+  Files referenced in this document live under <code>apps/api/src/modules/tax/</code> and <code>docs/tax/</code>. The latter (<code>CA.md</code>, <code>GST_ASSUMPTIONS.md</code>) is the long-form CA-facing companion; this PDF is the shorter conversational version.<br><br>
+  Generated 2026-05-19 for Sportsmart Marketplace.
+</div>
+
+</body>
+</html>

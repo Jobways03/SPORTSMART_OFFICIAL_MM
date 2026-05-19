@@ -81,6 +81,17 @@ export interface FranchisePartnerRepository {
   } | null>;
 
   /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot. A hit
+   * means the caller presented a refresh token that was already
+   * rotated out → theft replay → revoke every session for the
+   * franchise partner.
+   */
+  findSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    franchisePartnerId: string;
+  } | null>;
+
+  /**
    * Rotate the refresh token on an existing session (and bump expiresAt).
    * Caller passes the new RAW token; impl hashes it before persist.
    */

@@ -51,8 +51,9 @@ export class PrismaSellerRepository implements SellerRepository {
     email: string;
     phoneNumber: string;
     passwordHash: string;
+    sellerType?: 'D2C' | 'RETAIL';
   }): Promise<Seller> {
-    return this.prisma.seller.create({ data });
+    return this.prisma.seller.create({ data: data as any });
   }
 
   async updateSeller(
@@ -106,17 +107,40 @@ export class PrismaSellerRepository implements SellerRepository {
     });
   }
 
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot. Hit
+   * indicates the caller presented a token that was already rotated
+   * out — i.e. the legitimate client has already exchanged it, and
+   * what's arriving now is a stolen-token replay.
+   */
+  async findSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    sellerId: string;
+  } | null> {
+    return this.prisma.sellerSession.findFirst({
+      where: { previousRefreshTokenHash: hashRefreshToken(rawToken) } as any,
+      select: { id: true, sellerId: true },
+    });
+  }
+
   async rotateSession(
     sessionId: string,
     newRawRefreshToken: string,
     newExpiresAt: Date,
   ): Promise<void> {
+    // Phase 1 / C6 — stash the burned hash so a future request
+    // presenting the just-rotated token is recognisable as theft.
+    const current = await this.prisma.sellerSession.findUnique({
+      where: { id: sessionId },
+      select: { refreshToken: true },
+    });
     await this.prisma.sellerSession.update({
       where: { id: sessionId },
       data: {
+        previousRefreshTokenHash: current?.refreshToken ?? null,
         refreshToken: hashRefreshToken(newRawRefreshToken),
         expiresAt: newExpiresAt,
-      },
+      } as any,
     });
   }
 
