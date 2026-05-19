@@ -87,7 +87,7 @@ export default function ProcurementDetailPage() {
   const canReceive = detail.status === 'PLACED' || detail.status === 'IN_TRANSIT';
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: '#0F1115' }}>NOVA</h1>
       <p style={{ marginTop: 4, marginBottom: 16, fontSize: 14, color: '#525A65' }}>
         Sportsmart's own-brand warehouses, products, stocks, and procurement.

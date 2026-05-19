@@ -863,25 +863,6 @@ function ProductCard({
             }}
           >
             <span title={p.title}>{p.title}</span>
-            {p.potentialDuplicateOf && (
-              <span
-                title="Possible duplicate"
-                aria-label="Possible duplicate"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  width: 14,
-                  height: 14,
-                  color: '#d97706',
-                  flexShrink: 0,
-                }}
-              >
-                <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-                  <path fill="currentColor" d="M8 1l7 13H1L8 1zm0 5v3.5m0 2V11" />
-                  <circle cx="8" cy="11.5" r="0.8" fill="currentColor" />
-                </svg>
-              </span>
-            )}
           </div>
           <div
             style={{

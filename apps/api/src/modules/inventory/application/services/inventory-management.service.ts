@@ -39,6 +39,52 @@ export interface LowStockItem {
   isActive: boolean;
 }
 
+export type InventoryRowStatus = 'HEALTHY' | 'LOW' | 'OUT' | 'INACTIVE';
+
+/**
+ * Unified inventory row returned by the admin "all inventory" grid.
+ * Same shape regardless of whether the source is a seller mapping or
+ * a franchise stock row — the frontend only needs to know about
+ * `node` to render the source column.
+ */
+export interface InventoryRow {
+  id: string;
+  node: FulfillmentNode;
+  productId: string;
+  productTitle: string;
+  productCode: string | null;
+  variantId: string | null;
+  variantSku: string | null;
+  masterSku: string | null;
+  stockQty: number;
+  reservedQty: number;
+  availableStock: number;
+  lowStockThreshold: number;
+  status: InventoryRowStatus;
+  isActive: boolean;
+}
+
+/**
+ * Stock movement row returned by the per-mapping drill-down. Maps
+ * directly to the StockMovement table — exposed read-only so the
+ * admin UI can render an audit timeline.
+ */
+export interface MappingMovement {
+  id: string;
+  kind: string;
+  quantityDelta: number;
+  beforeStockQty: number;
+  afterStockQty: number;
+  beforeReservedQty: number | null;
+  afterReservedQty: number | null;
+  reason: string;
+  referenceType: string | null;
+  referenceId: string | null;
+  actorId: string | null;
+  actorRole: string | null;
+  createdAt: Date;
+}
+
 export interface OutOfStockProduct {
   productId: string;
   productTitle: string;
@@ -572,6 +618,159 @@ export class InventoryManagementService {
         (franchiseStats.totalStock - franchiseStats.totalReserved),
       lowStockCount: sellerLowStockCount + franchiseStats.lowStockCount,
       outOfStockCount: sellerOutOfStockCount + franchiseStats.outOfStockCount,
+    };
+  }
+
+  // ── T8: Unified admin inventory grid ───────────────────────────────
+  // One paginated, searchable view across seller mappings + franchise
+  // stock. Used by the redesigned admin Inventory page so the user can
+  // browse "everything currently in stock" rather than just low/out.
+
+  async getAdminAllInventory(opts: {
+    page: number;
+    limit: number;
+    search?: string;
+    sellerId?: string;
+    nodeType?: FulfillmentNodeType | 'ALL';
+    status?: InventoryRowStatus | 'ALL';
+  }): Promise<{ items: InventoryRow[]; total: number }> {
+    const {
+      page,
+      limit,
+      search,
+      sellerId,
+      nodeType = 'ALL',
+      status = 'ALL',
+    } = opts;
+
+    const wantSeller = nodeType === 'ALL' || nodeType === 'SELLER';
+    const wantFranchise = nodeType === 'ALL' || nodeType === 'FRANCHISE';
+
+    const [sellerMappings, franchiseRows] = await Promise.all([
+      wantSeller ? this.repo.findAllActiveMappings(sellerId) : Promise.resolve([]),
+      wantFranchise && !sellerId
+        ? this.franchiseFacade.findAllFranchiseRows()
+        : Promise.resolve([]),
+    ]);
+
+    const classify = (
+      available: number,
+      threshold: number,
+      isActive: boolean,
+    ): InventoryRowStatus => {
+      if (!isActive) return 'INACTIVE';
+      if (available <= 0) return 'OUT';
+      if (available <= threshold) return 'LOW';
+      return 'HEALTHY';
+    };
+
+    const sellerRows: InventoryRow[] = sellerMappings.map((m) => {
+      const available = m.stockQty - m.reservedQty;
+      return {
+        id: m.id,
+        node: {
+          type: 'SELLER',
+          id: m.sellerId,
+          name: m.seller.sellerShopName || m.seller.sellerName,
+        },
+        productId: m.productId,
+        productTitle: m.product.title,
+        productCode: m.product.productCode,
+        variantId: m.variantId,
+        variantSku: m.variant?.sku ?? null,
+        masterSku: m.variant?.masterSku ?? null,
+        stockQty: m.stockQty,
+        reservedQty: m.reservedQty,
+        availableStock: available,
+        lowStockThreshold: m.lowStockThreshold,
+        status: classify(available, m.lowStockThreshold, m.isActive),
+        isActive: m.isActive,
+      };
+    });
+
+    const franchiseInventoryRows: InventoryRow[] = franchiseRows.map((r) => {
+      const isActive = r.franchiseStatus === 'ACTIVE';
+      return {
+        id: r.id,
+        node: { type: 'FRANCHISE', id: r.franchiseId, name: r.franchiseName },
+        productId: r.productId,
+        productTitle: r.productTitle,
+        productCode: null,
+        variantId: r.variantId,
+        variantSku: r.variantSku,
+        masterSku: r.masterSku,
+        stockQty: r.stockQty,
+        reservedQty: r.reservedQty,
+        availableStock: r.availableStock,
+        lowStockThreshold: r.lowStockThreshold,
+        status: classify(r.availableStock, r.lowStockThreshold, isActive),
+        isActive,
+      };
+    });
+
+    let all = [...sellerRows, ...franchiseInventoryRows];
+
+    // Search filter — case-insensitive over title, SKUs, node name.
+    if (search) {
+      const q = search.trim().toLowerCase();
+      if (q) {
+        all = all.filter((r) =>
+          r.productTitle.toLowerCase().includes(q) ||
+          (r.masterSku ?? '').toLowerCase().includes(q) ||
+          (r.variantSku ?? '').toLowerCase().includes(q) ||
+          (r.productCode ?? '').toLowerCase().includes(q) ||
+          r.node.name.toLowerCase().includes(q),
+        );
+      }
+    }
+
+    if (status !== 'ALL') {
+      all = all.filter((r) => r.status === status);
+    }
+
+    // Sort: urgent first (OUT, LOW), then healthy by lowest available,
+    // inactive last. Within each bucket, lowest available stock first.
+    const statusRank: Record<InventoryRowStatus, number> = {
+      OUT: 0,
+      LOW: 1,
+      HEALTHY: 2,
+      INACTIVE: 3,
+    };
+    all.sort((a, b) => {
+      const sr = statusRank[a.status] - statusRank[b.status];
+      if (sr !== 0) return sr;
+      return a.availableStock - b.availableStock;
+    });
+
+    const total = all.length;
+    const offset = (page - 1) * limit;
+    const paged = all.slice(offset, offset + limit);
+
+    return { items: paged, total };
+  }
+
+  // ── T9: Per-mapping stock movement timeline ─────────────────────────
+  // Read-only audit trail for a single seller_product_mapping. Used by
+  // the admin inventory drill-down side panel to show what happened
+  // to a SKU's stock over time.
+
+  async getMappingMovements(
+    mappingId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ movements: MappingMovement[]; total: number }> {
+    const mapping = await this.repo.findMappingById(mappingId);
+    if (!mapping) {
+      throw new NotFoundAppException(`Mapping ${mappingId} not found`);
+    }
+    const result = await this.repo.findMovementsByMappingId(
+      mappingId,
+      page,
+      limit,
+    );
+    return {
+      movements: result.movements,
+      total: result.total,
     };
   }
 

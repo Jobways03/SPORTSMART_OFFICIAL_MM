@@ -307,10 +307,10 @@ function Kpi({
   accent?: 'indigo' | 'teal' | 'amber' | 'rose';
 }) {
   const accentColor = {
-    indigo: '#6366F1',
-    teal: '#14B8A6',
-    amber: '#F59E0B',
-    rose: '#F43F5E',
+    indigo: '#0F1115',
+    teal: '#2A8595',
+    amber: '#b45309',
+    rose: '#b91c1c',
   }[accent];
 
   let deltaPill: React.ReactNode = null;
@@ -485,8 +485,8 @@ function ProductTable({ rows }: { rows: ProductPerformance[] }) {
                         width: `${pct}%`,
                         background:
                           idx === 0
-                            ? 'linear-gradient(90deg, #6366F1, #4338CA)'
-                            : '#C7D2FE',
+                            ? '#0F1115'
+                            : '#D2D6DC',
                         borderRadius: 999,
                       }}
                     />
@@ -516,15 +516,15 @@ function SvgBars({ data }: { data: SalesSummary['byDay'] }) {
   return (
     <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
       <defs>
-        {/* Soft indigo gradient: feels data-focused without competing for
-            attention. Lighter at top, deeper at the base for visual weight. */}
+        {/* Near-black gradient: feels data-focused, matches the design
+            palette. Lighter at top, deeper at the base for visual weight. */}
         <linearGradient id="bar-grad-indigo" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#A5B4FC" />
-          <stop offset="100%" stopColor="#6366F1" />
+          <stop offset="0%" stopColor="#7A828F" />
+          <stop offset="100%" stopColor="#0F1115" />
         </linearGradient>
         <linearGradient id="bar-grad-peak" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#6366F1" />
-          <stop offset="100%" stopColor="#4338CA" />
+          <stop offset="0%" stopColor="#0F1115" />
+          <stop offset="100%" stopColor="#0F1115" />
         </linearGradient>
       </defs>
       {/* Grid lines + y-axis ticks */}
@@ -564,7 +564,7 @@ function SvgBars({ data }: { data: SalesSummary['byDay'] }) {
                 textAnchor="middle"
                 fontSize="10"
                 fontWeight="700"
-                fill="#4338CA"
+                fill="#0F1115"
                 style={{ fontVariantNumeric: 'tabular-nums' }}
               >
                 ₹{Math.round(d.revenue).toLocaleString('en-IN')}
@@ -627,10 +627,10 @@ function FunnelView({ funnel }: { funnel: ConversionFunnel }) {
   // funnel". The final "Orders paid" bar gets the darkest indigo so the eye
   // naturally lands on the conversion outcome, without alarming reds.
   const steps = [
-    { label: 'Carts created', value: funnel.cartCreated, color: '#C7D2FE' },
-    { label: 'Checkout initiated (est.)', value: funnel.checkoutInitiated, color: '#818CF8' },
-    { label: 'Orders placed', value: funnel.ordersPlaced, color: '#6366F1' },
-    { label: 'Orders paid', value: funnel.ordersPaid, color: '#4338CA' },
+    { label: 'Carts created', value: funnel.cartCreated, color: '#D2D6DC' },
+    { label: 'Checkout initiated (est.)', value: funnel.checkoutInitiated, color: '#7A828F' },
+    { label: 'Orders placed', value: funnel.ordersPlaced, color: '#525A65' },
+    { label: 'Orders paid', value: funnel.ordersPaid, color: '#0F1115' },
   ];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

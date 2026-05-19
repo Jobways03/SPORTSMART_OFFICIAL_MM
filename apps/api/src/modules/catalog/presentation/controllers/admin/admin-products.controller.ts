@@ -817,60 +817,6 @@ export class AdminProductsController {
     return { success: true, message: `Product status updated to ${dto.status}`, data: null };
   }
 
-  @Post(':productId/merge-into/:targetProductId')
-  @HttpCode(HttpStatus.OK)
-  async mergeProduct(@Req() req: Request, @Param('productId') productId: string, @Param('targetProductId') targetProductId: string) {
-    const adminId = (req as any).adminId;
-
-    const [sourceProduct, targetProduct] = await Promise.all([
-      this.productRepo.findProductForMerge(productId),
-      this.productRepo.findByIdBasic(targetProductId),
-    ]);
-
-    if (!sourceProduct) throw new NotFoundAppException('Source product not found');
-    if (!targetProduct) throw new NotFoundAppException('Target product not found');
-    if (sourceProduct.id === targetProduct.id) throw new BadRequestAppException('Cannot merge a product into itself');
-    if (!sourceProduct.sellerId) throw new BadRequestAppException('Source product has no associated seller');
-
-    const sellerProfile = await this.productRepo.findSellerById(sourceProduct.sellerId);
-    const mappingsCreated = await this.productRepo.mergeProducts(productId, targetProductId, adminId, sellerProfile, sourceProduct, targetProduct);
-
-    this.logger.log(`Product ${productId} merged into ${targetProductId} by admin ${adminId}. ${mappingsCreated.length} mapping(s) created.`);
-
-    return {
-      success: true,
-      message: `Product merged into existing product. ${mappingsCreated.length} seller mapping(s) created.`,
-      data: { sourceProductId: productId, targetProductId, mappingsCreated: mappingsCreated.length },
-    };
-  }
-
-  @Get(':productId/duplicate-info')
-  @HttpCode(HttpStatus.OK)
-  async getDuplicateInfo(@Param('productId') productId: string) {
-    const result = await this.productRepo.findDuplicateInfo(productId);
-    if (!result) throw new NotFoundAppException('Product not found');
-
-    if (!result.potentialDuplicateOf) {
-      return { success: true, message: 'No potential duplicate found', data: null };
-    }
-
-    if (!result.duplicate) {
-      return { success: true, message: 'Potential duplicate product no longer exists', data: null };
-    }
-
-    const d = result.duplicate;
-    return {
-      success: true,
-      message: 'Duplicate info retrieved',
-      data: {
-        id: d.id, productCode: d.productCode, title: d.title, status: d.status,
-        moderationStatus: d.moderationStatus, basePrice: d.basePrice, hasVariants: d.hasVariants,
-        brandName: d.brand?.name ?? null, categoryName: d.category?.name ?? null,
-        images: d.images, seller: d.seller,
-      },
-    };
-  }
-
   // ─────────────────────────────────────────────────────────────
   // Bulk moderation — approve / reject / request-changes for many
   // products in one request. Each item is processed independently:

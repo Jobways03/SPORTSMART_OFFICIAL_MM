@@ -13,7 +13,6 @@ import { ReApprovalService } from './application/services/re-approval.service';
 import { ServiceabilityService } from './application/services/serviceability.service';
 import { SellerAllocationService } from './application/services/seller-allocation.service';
 import { PostOfficeCacheService } from './application/services/post-office-cache.service';
-import { DuplicateDetectionService } from './application/services/duplicate-detection.service';
 import { CatalogCacheService } from './application/services/catalog-cache.service';
 import { StockSyncService } from './application/services/stock-sync.service';
 // Story 3.5 — pricing tier service (display-only at v1).
@@ -146,7 +145,6 @@ import { CartModule } from '../cart/module';
     // 165K-row post_offices reference dataset.
     PostOfficeCacheService,
     SellerAllocationService,
-    DuplicateDetectionService,
     CatalogCacheService,
     StockSyncService,
     ProductPricingTierService,

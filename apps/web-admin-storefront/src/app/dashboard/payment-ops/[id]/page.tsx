@@ -70,7 +70,7 @@ export default function AlertDetailPage() {
   const transitions = STATUS_TRANSITIONS[alert.status];
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <Link href="/dashboard/payment-ops" style={{ color: '#525A65', fontSize: 13, textDecoration: 'none', display: 'inline-block', marginBottom: 12 }}>
         ← Back to alerts
       </Link>

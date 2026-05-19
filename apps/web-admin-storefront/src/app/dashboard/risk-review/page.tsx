@@ -61,7 +61,7 @@ export default function RiskReviewPage() {
   }, [rows, bucket]);
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1280 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
         Risk review
       </h1>

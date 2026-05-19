@@ -115,7 +115,7 @@ export default function QueuesConsolePage() {
   const pageCount = Math.max(1, Math.ceil(total / limit));
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1320 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1320, margin: '0 auto' }}>
       <header style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#0f172a' }}>
           Queues

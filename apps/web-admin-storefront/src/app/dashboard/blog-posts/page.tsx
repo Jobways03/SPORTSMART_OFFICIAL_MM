@@ -77,7 +77,7 @@ function Inner() {
   }, [items, statusFilter]);
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 1240 }}>
+    <div style={{ padding: '32px 40px', maxWidth: 1240, margin: '0 auto' }}>
       <header style={headerStyle}>
         <div>
           <div style={eyebrow}>CONTENT</div>
@@ -581,40 +581,36 @@ const searchInput: React.CSSProperties = {
 
 const chipGroup: React.CSSProperties = {
   display: 'inline-flex',
-  background: '#F1F5F9',
-  padding: 3,
-  borderRadius: 10,
-  gap: 2,
+  alignItems: 'center',
+  gap: 4,
+  borderBottom: '1px solid #E5E7EB',
 };
 
 const chipStyle = (active: boolean): React.CSSProperties => ({
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  fontSize: 12.5,
+  gap: 8,
+  padding: '10px 14px',
+  marginBottom: -1,
+  fontSize: 13,
   fontWeight: 600,
+  background: 'transparent',
   border: 'none',
-  borderRadius: 8,
-  background: active ? '#fff' : 'transparent',
-  color: active ? '#0F172A' : '#64748B',
+  borderBottom: active ? '2px solid #0F1115' : '2px solid transparent',
+  color: active ? '#0F1115' : '#525A65',
   cursor: 'pointer',
-  boxShadow: active ? '0 1px 0 rgba(15,23,42,0.06), 0 2px 6px -2px rgba(15,23,42,0.12)' : 'none',
-  transition: 'background 120ms ease, color 120ms ease',
+  fontFamily: 'inherit',
+  transition: 'color 120ms ease, border-color 120ms ease',
 });
 
 const chipCount = (active: boolean): React.CSSProperties => ({
   fontSize: 11,
   fontWeight: 600,
-  background: active ? '#F1F5F9' : 'rgba(100,116,139,0.18)',
-  color: active ? '#475569' : '#64748B',
-  padding: '0 6px',
-  minWidth: 18,
-  height: 18,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 999,
+  background: active ? '#0F1115' : '#F3F4F6',
+  color: active ? '#fff' : '#525A65',
+  padding: '1px 7px',
+  borderRadius: 9999,
+  fontVariantNumeric: 'tabular-nums',
 });
 
 const errBox: React.CSSProperties = {

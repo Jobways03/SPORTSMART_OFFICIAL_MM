@@ -74,6 +74,22 @@ export interface ReservationWithMapping {
   };
 }
 
+export interface StockMovementRow {
+  id: string;
+  kind: string;
+  quantityDelta: number;
+  beforeStockQty: number;
+  afterStockQty: number;
+  beforeReservedQty: number | null;
+  afterReservedQty: number | null;
+  reason: string;
+  referenceType: string | null;
+  referenceId: string | null;
+  actorId: string | null;
+  actorRole: string | null;
+  createdAt: Date;
+}
+
 // ── Repository interface ────────────────────────────────────────
 
 export interface InventoryManagementRepository {
@@ -113,6 +129,13 @@ export interface InventoryManagementRepository {
     limit: number,
     filters?: { mappingId?: string; orderId?: string },
   ): Promise<{ reservations: ReservationWithMapping[]; total: number }>;
+
+  /* ── Stock movement audit ── */
+  findMovementsByMappingId(
+    mappingId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ movements: StockMovementRow[]; total: number }>;
 }
 
 export const INVENTORY_MANAGEMENT_REPOSITORY = Symbol('InventoryManagementRepository');

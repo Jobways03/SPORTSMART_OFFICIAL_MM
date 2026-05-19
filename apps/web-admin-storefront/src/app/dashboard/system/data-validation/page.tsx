@@ -90,7 +90,7 @@ export default function DataValidationPage() {
   };
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1200 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
       <Link
         href="/dashboard"
         style={{

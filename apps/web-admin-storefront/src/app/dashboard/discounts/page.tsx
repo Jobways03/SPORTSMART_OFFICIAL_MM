@@ -24,11 +24,13 @@ const TYPE_LABEL: Record<string, string> = {
   FREE_SHIPPING: 'Free shipping',
 };
 
-const TYPE_ICON: Record<string, string> = {
-  AMOUNT_OFF_PRODUCTS: '\u25C9',
-  AMOUNT_OFF_ORDER: '\u2B1C',
-  BUY_X_GET_Y: '\u25C9',
-  FREE_SHIPPING: '\u2708',
+type TypeIconName = 'tag' | 'bag' | 'gift' | 'truck';
+
+const TYPE_ICON_NAME: Record<string, TypeIconName> = {
+  AMOUNT_OFF_PRODUCTS: 'tag',
+  AMOUNT_OFF_ORDER: 'bag',
+  BUY_X_GET_Y: 'gift',
+  FREE_SHIPPING: 'truck',
 };
 
 const STATUS: Record<string, { bg: string; fg: string; dot: string }> = {
@@ -38,11 +40,11 @@ const STATUS: Record<string, { bg: string; fg: string; dot: string }> = {
   DRAFT:     { bg: '#f3f4f6', fg: '#6b7280', dot: '#9ca3af' },
 };
 
-const DISCOUNT_TYPES = [
-  { type: 'AMOUNT_OFF_PRODUCTS', label: 'Amount off products', desc: 'Discount specific products or collections of products', icon: '\u25C9' },
-  { type: 'BUY_X_GET_Y',        label: 'Buy X get Y',         desc: 'Discount specific products or collections of products', icon: '\u25C9' },
-  { type: 'AMOUNT_OFF_ORDER',    label: 'Amount off order',    desc: 'Discount the total order amount',                       icon: '\u2B1C' },
-  { type: 'FREE_SHIPPING',       label: 'Free shipping',       desc: 'Offer free shipping on an order',                       icon: '\u2708' },
+const DISCOUNT_TYPES: { type: string; label: string; desc: string; icon: TypeIconName }[] = [
+  { type: 'AMOUNT_OFF_PRODUCTS', label: 'Amount off products', desc: 'Discount specific products or collections of products', icon: 'tag' },
+  { type: 'BUY_X_GET_Y',        label: 'Buy X get Y',         desc: 'Discount specific products or collections of products', icon: 'gift' },
+  { type: 'AMOUNT_OFF_ORDER',    label: 'Amount off order',    desc: 'Discount the total order amount',                       icon: 'bag' },
+  { type: 'FREE_SHIPPING',       label: 'Free shipping',       desc: 'Offer free shipping on an order',                       icon: 'truck' },
 ];
 
 export default function DiscountsPage() {
@@ -188,8 +190,8 @@ export default function DiscountsPage() {
           textAlign: 'center', padding: '70px 20px',
           background: '#fff', border: '1px solid #e2e4e7', borderRadius: 12,
         }}>
-          <div style={{ width: 48, height: 48, borderRadius: '50%', background: '#f6f6f7', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
-            <span style={{ fontSize: 22 }}>&#127991;</span>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: '#F3F4F6', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16, color: '#7A828F' }}>
+            <TypeIcon name="tag" size={22} />
           </div>
           <h3 style={{ fontWeight: 600, fontSize: 16, margin: '0 0 8px', color: '#303030' }}>
             {tab !== 'All' ? `No ${tab.toLowerCase()} discounts` : 'No discounts yet'}
@@ -243,14 +245,14 @@ export default function DiscountsPage() {
                       {d.method === 'CODE' ? '1 code' : 'Automatic'}
                     </td>
                     <td style={{ ...td, fontSize: 13, color: '#616161' }}>
-                      <span style={{ marginRight: 6 }}>{TYPE_ICON[d.type]}</span>
+                      <span style={{ marginRight: 6, display: "inline-flex", verticalAlign: "middle", color: "#525A65" }}><TypeIcon name={TYPE_ICON_NAME[d.type] ?? "tag"} size={14} /></span>
                       {TYPE_LABEL[d.type]}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <div style={{ display: 'inline-flex', gap: 4 }}>
-                        <CombIcon active={d.combineProduct} title="Product" icon="\u25C9" />
-                        <CombIcon active={d.combineOrder} title="Order" icon="\u2B1C" />
-                        <CombIcon active={d.combineShipping} title="Shipping" icon="\u2708" />
+                        <CombIcon active={d.combineProduct} title="Product" name="tag" />
+                        <CombIcon active={d.combineOrder} title="Order" name="bag" />
+                        <CombIcon active={d.combineShipping} title="Shipping" name="truck" />
                       </div>
                     </td>
                     <td style={{ ...td, textAlign: 'right', fontSize: 14, fontWeight: 500, color: '#303030' }}>
@@ -302,10 +304,10 @@ export default function DiscountsPage() {
                   onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                 >
                   <div style={{
-                    width: 36, height: 36, borderRadius: 8, background: '#f6f6f7',
+                    width: 36, height: 36, borderRadius: 9, background: '#F3F4F6',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 16, color: '#616161', flexShrink: 0,
-                  }}>{item.icon}</div>
+                    color: '#0F1115', flexShrink: 0,
+                  }}><TypeIcon name={item.icon} size={18} /></div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 600, color: '#303030' }}>{item.label}</div>
                     <div style={{ fontSize: 13, color: '#8c9196', marginTop: 2 }}>{item.desc}</div>
@@ -333,17 +335,17 @@ export default function DiscountsPage() {
 }
 
 /* ── Sub-components ── */
-function CombIcon({ active, title, icon }: { active: boolean; title: string; icon: string }) {
+function CombIcon({ active, title, name }: { active: boolean; title: string; name: TypeIconName }) {
   return (
     <span
       title={`${title} discounts: ${active ? 'Can combine' : 'Cannot combine'}`}
       style={{
-        width: 22, height: 22, borderRadius: 4,
+        width: 22, height: 22, borderRadius: 6,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 11, color: active ? '#616161' : '#d1d5db',
-        background: active ? '#f1f2f4' : 'transparent',
+        color: active ? '#525A65' : '#D2D6DC',
+        background: active ? '#F3F4F6' : 'transparent',
       }}
-    >{icon}</span>
+    ><TypeIcon name={name} size={12} /></span>
   );
 }
 

@@ -225,7 +225,7 @@ export default function DisputeDetailPage() {
   const isResolved = detail.status.startsWith('RESOLVED_') || detail.status === 'CLOSED';
 
   return (
-    <div style={{ padding: '24px 32px', display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, maxWidth: 1280 }}>
+    <div style={{ padding: '24px 32px', display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, maxWidth: 1280, margin: '0 auto' }}>
       <div>
         <Link href="/dashboard/disputes" style={{ color: '#525A65', fontSize: 13, textDecoration: 'none', display: 'inline-block', marginBottom: 12 }}>
           ← Back to disputes
