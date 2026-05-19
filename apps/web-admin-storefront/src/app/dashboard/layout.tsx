@@ -1,11 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
 import { PermissionsProvider, usePermissions } from '@/lib/permissions';
 import './dashboard.css';
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+}
 
 interface NavItem {
   label: string;
@@ -105,7 +115,10 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [adminName, setAdminName] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
   const [pendingOrderCount, setPendingOrderCount] = useState(0);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   // PR 4.6 — sidebar items filtered by the admin's effective permissions.
   // Hides "NOVA Brand" from finance-only admins, "Wallets" from catalog-only
@@ -132,6 +145,16 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  useEffect(() => {
     const token = sessionStorage.getItem('adminAccessToken');
     if (!token) {
       router.replace('/login');
@@ -142,6 +165,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
       if (adminData) {
         const admin = JSON.parse(adminData);
         setAdminName(admin.name || 'Admin');
+        setAdminEmail(admin.email || '');
       }
     } catch {}
 
@@ -162,28 +186,77 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
     return pathname.startsWith(href);
   };
 
+  const initials = getInitials(adminName || 'Super Admin');
+
   return (
     <div className="admin-shell">
-      <aside className="admin-sidebar">
-        <Link href="/dashboard" className="sidebar-brand">
-          <span
-            style={{
-              display: 'inline-flex',
-              background: '#fff',
-              padding: '8px 12px',
-              borderRadius: 8,
-            }}
-          >
+      {/* Top Navbar */}
+      <nav className="admin-navbar">
+        <div className="navbar-left">
+          <Link href="/dashboard" className="navbar-brand">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/SportsMart_Web_Banner.avif"
               alt="SportsMart"
-              className="sidebar-brand-name"
+              className="navbar-brand-name"
               style={{ height: 36, width: 'auto', display: 'block' }}
             />
-          </span>
-        </Link>
+            <span className="navbar-brand-tag">SUPER ADMIN</span>
+          </Link>
+        </div>
 
+        <div className="navbar-right">
+          <div className="navbar-user" ref={dropdownRef}>
+            <button
+              className="navbar-dropdown-toggle"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              aria-expanded={dropdownOpen}
+              aria-haspopup="true"
+            >
+              <div className="navbar-user-info">
+                <div className="navbar-user-name">{adminName || 'Super Admin'}</div>
+                <div className="navbar-user-role">Super Admin</div>
+              </div>
+              <div className="navbar-avatar">{initials}</div>
+              <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`}>
+                ▼
+              </span>
+            </button>
+
+            {dropdownOpen && (
+              <div className="navbar-dropdown">
+                <div style={{ padding: '10px 12px', borderBottom: '1px solid #e5e7eb', marginBottom: 4 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                    {adminName || 'Super Admin'}
+                  </div>
+                  {adminEmail && (
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>{adminEmail}</div>
+                  )}
+                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                    Super Admin
+                  </div>
+                </div>
+                <div className="navbar-dropdown-divider" />
+                <Link
+                  href="/dashboard/settings"
+                  className="navbar-dropdown-item"
+                  onClick={() => setDropdownOpen(false)}
+                >
+                  Settings
+                </Link>
+                <button
+                  className="navbar-dropdown-item danger"
+                  onClick={handleLogout}
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </nav>
+
+      <aside className="admin-sidebar">
         <nav className="sidebar-nav">
           {visibleNavItems === null && (
             <div style={{ padding: '8px 16px', color: '#94a3b8', fontSize: 12 }}>
@@ -274,10 +347,6 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
             <span className="sidebar-item-icon">⚙️</span>
             Settings
           </Link>
-          <button className="sidebar-item" onClick={handleLogout}>
-            <span className="sidebar-item-icon">🚪</span>
-            Logout
-          </button>
         </div>
       </aside>
 

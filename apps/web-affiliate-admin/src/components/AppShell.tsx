@@ -57,25 +57,38 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!hydrated) return null;
 
+  const initials = (identity?.email ?? 'AA')
+    .split('@')[0]
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || 'AA';
+
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
-      <aside
+    <div style={{ minHeight: '100vh' }}>
+      {/* Top Navbar */}
+      <header
         style={{
-          width: 240,
-          background: '#0f172a',
-          color: '#e2e8f0',
-          padding: '20px 0',
-          flexShrink: 0,
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 60,
+          background: '#fff',
+          borderBottom: '1px solid #e5e7eb',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 24px',
+          zIndex: 200,
         }}
       >
-        <div style={{ padding: '0 20px 20px', borderBottom: '1px solid #1e293b' }}>
-          <div
-            style={{
-              display: 'inline-flex',
-              background: '#fff',
-              padding: '6px 10px',
-              borderRadius: 8,
-            }}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Link
+            href="/dashboard"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -83,89 +96,129 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               alt="SportsMart"
               style={{ height: 36, width: 'auto', display: 'block' }}
             />
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginTop: 10, textAlign: 'center' }}>
-            Affiliate Admin
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: '#fff',
+                background: '#dc2626',
+                padding: '2px 8px',
+                borderRadius: 4,
+                textTransform: 'uppercase',
+                letterSpacing: 1,
+              }}
+            >
+              AFFILIATE ADMIN
+            </span>
+          </Link>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', lineHeight: 1.2 }}>
+                {identity?.email ?? 'Admin'}
+              </div>
+              <div style={{ fontSize: 11, color: '#6b7280', lineHeight: 1.2 }}>
+                {identity?.role.replace(/_/g, ' ') ?? 'ADMIN'}
+              </div>
+            </div>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                background: '#dc2626',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              {initials}
+            </div>
+            <button
+              onClick={handleLogout}
+              style={{
+                padding: '7px 14px',
+                background: '#fff',
+                border: '1px solid #cbd5e1',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Sign out
+            </button>
           </div>
         </div>
-        <nav style={{ padding: '12px 0' }}>
-          {NAV.map((item, i) => {
-            const active =
-              pathname === item.href ||
-              (item.href !== '/dashboard' && pathname?.startsWith(item.href));
-            const prevSection = i > 0 ? NAV[i - 1].section : null;
-            const showHeader = item.section && item.section !== prevSection;
-            return (
-              <div key={item.href}>
-                {showHeader && (
-                  <div
-                    style={{
-                      padding: '14px 20px 6px',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      color: '#64748b',
-                      textTransform: 'uppercase',
-                      letterSpacing: '1px',
-                    }}
-                  >
-                    {item.section}
-                  </div>
-                )}
-                <Link
-                  href={item.href}
-                  style={{
-                    display: 'block',
-                    padding: '9px 20px',
-                    fontSize: 14,
-                    fontWeight: active ? 600 : 500,
-                    color: active ? '#fff' : '#cbd5e1',
-                    background: active ? '#1e293b' : 'transparent',
-                    borderLeft: '3px solid ' + (active ? '#3b82f6' : 'transparent'),
-                    textDecoration: 'none',
-                  }}
-                >
-                  {item.label}
-                </Link>
-              </div>
-            );
-          })}
-        </nav>
-      </aside>
+      </header>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <header
+      <div style={{ display: 'flex', minHeight: '100vh', paddingTop: 60 }}>
+        <aside
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 28px',
-            background: '#fff',
-            borderBottom: '1px solid #e2e8f0',
+            position: 'fixed',
+            top: 60,
+            left: 0,
+            bottom: 0,
+            width: 240,
+            background: '#0f172a',
+            color: '#cbd5e1',
+            padding: '16px 0',
+            overflowY: 'auto',
+            zIndex: 90,
           }}
         >
-          <div style={{ fontSize: 13, color: '#475569' }}>
-            <strong style={{ color: '#0f172a' }}>{identity?.email ?? '—'}</strong>{' '}
-            <span style={{ marginLeft: 6, padding: '3px 9px', fontSize: 11, fontWeight: 600, borderRadius: 999, background: '#e0e7ff', color: '#3730a3' }}>
-              {identity?.role.replace(/_/g, ' ')}
-            </span>
-          </div>
-          <button
-            onClick={handleLogout}
-            style={{
-              padding: '7px 14px',
-              background: '#fff',
-              border: '1px solid #cbd5e1',
-              borderRadius: 6,
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Sign out
-          </button>
-        </header>
+          <nav style={{ padding: '4px 0' }}>
+            {NAV.map((item, i) => {
+              const active =
+                pathname === item.href ||
+                (item.href !== '/dashboard' && pathname?.startsWith(item.href));
+              const prevSection = i > 0 ? NAV[i - 1].section : null;
+              const showHeader = item.section && item.section !== prevSection;
+              return (
+                <div key={item.href}>
+                  {showHeader && (
+                    <div
+                      style={{
+                        padding: '14px 20px 6px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: '#64748b',
+                        textTransform: 'uppercase',
+                        letterSpacing: 1.5,
+                      }}
+                    >
+                      {item.section}
+                    </div>
+                  )}
+                  <Link
+                    href={item.href}
+                    style={{
+                      display: 'block',
+                      padding: '10px 20px',
+                      fontSize: 14,
+                      fontWeight: active ? 600 : 500,
+                      color: active ? '#fff' : '#cbd5e1',
+                      background: active ? '#1e293b' : 'transparent',
+                      borderLeft: '3px solid ' + (active ? '#3b82f6' : 'transparent'),
+                      textDecoration: 'none',
+                    }}
+                  >
+                    {item.label}
+                  </Link>
+                </div>
+              );
+            })}
+          </nav>
+        </aside>
 
-        <main style={{ flex: 1, padding: 28, overflowX: 'auto' }}>{children}</main>
+        <main style={{ flex: 1, marginLeft: 240, padding: 28, overflowX: 'auto', background: '#f6f6f7', minHeight: 'calc(100vh - 60px)' }}>
+          {children}
+        </main>
       </div>
     </div>
   );
