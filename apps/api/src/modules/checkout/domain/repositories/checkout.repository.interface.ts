@@ -15,6 +15,11 @@ export interface CustomerAddressEntity {
   locality: string | null;
   city: string;
   state: string;
+  // Phase 34 — canonical CBIC 2-digit GST state code. May be null on
+  // legacy rows where the backfill could not resolve the free-text
+  // state name; the tax engine still works via the runtime name-lookup
+  // fallback in tax/domain/state-code-map.ts.
+  stateCode: string | null;
   postalCode: string;
   country: string | null;
   isDefault: boolean;
@@ -31,6 +36,11 @@ export interface CreateAddressInput {
   locality?: string | null;
   city: string;
   state: string;
+  // Phase 34 — optional canonical CBIC 2-digit GST state code. When
+  // omitted, the repository resolves it by name against india_states
+  // at write time. Passing an explicit value (e.g. from a future UI
+  // that selects from a dropdown) skips the lookup.
+  stateCode?: string | null;
   postalCode: string;
   isDefault?: boolean;
 }
@@ -43,6 +53,9 @@ export interface UpdateAddressInput {
   locality?: string | null;
   city?: string;
   state?: string;
+  // Phase 34 — when `state` is updated, the repository re-resolves
+  // stateCode from india_states. Explicit `stateCode` overrides.
+  stateCode?: string | null;
   postalCode?: string;
   isDefault?: boolean;
 }
@@ -172,6 +185,10 @@ export interface PlaceOrderTransactionInput {
   shippingOptionId?: string | null;
   shippingOptionName?: string | null;
   shippingFeeInPaise?: bigint;
+  // Phase 37 — buyer-picked B2B tax profile (CustomerTaxProfile.id).
+  // Null/undefined preserves the legacy behaviour where tax-document.
+  // service falls back to the customer's isDefault=true profile.
+  selectedTaxProfileId?: string | null;
 }
 
 export interface PlaceOrderTransactionResult {

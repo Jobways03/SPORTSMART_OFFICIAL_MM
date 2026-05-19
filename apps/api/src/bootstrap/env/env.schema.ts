@@ -638,6 +638,12 @@ export const envSchema = z.object({
   // 'nic' wires the real CBIC IRP API (crashes loudly until wired
   // — see TaxModule factory).
   EINVOICE_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+  // Phase 35 GST — GSTN portal verification provider. `stub` derives
+  // the result from the local Mod-36 checksum so dev / staging can
+  // exercise the verification UI without GSTN credentials. `sandbox`
+  // is reserved for the real GSTN sandbox API (crashes loudly at
+  // boot until wired — see TaxModule factory).
+  GSTN_PROVIDER: z.enum(['stub', 'sandbox']).default('stub'),
   // Phase 22 GST — IRN retry cron flags.
   TAX_EINVOICE_RETRY_CRON_ENABLED: z.string().default('true'),
   TAX_EINVOICE_RETRY_CAP: z.coerce.number().int().min(1).default(5),

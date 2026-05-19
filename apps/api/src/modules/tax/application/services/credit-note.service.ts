@@ -40,6 +40,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { DocumentSequenceService } from './document-sequence.service';
 import { TaxDocumentService } from './tax-document.service';
+import { TaxNotificationService } from './tax-notification.service';
 import { paiseToInvoiceWords } from '../../domain/amount-in-words';
 import { computeInvoiceRoundOff } from '../../domain/round-off';
 import {
@@ -100,6 +101,11 @@ export class CreditNoteService {
     private readonly prisma: PrismaService,
     private readonly docSequence: DocumentSequenceService,
     private readonly taxDocument: TaxDocumentService,
+    // Phase 31 — fires customerCreditNoteIssued always and
+    // customerB2bItcReversalRequired when the source invoice was B2B.
+    // Both are best-effort and non-throwing inside the notification
+    // service, so a notify failure can't crash CN issuance.
+    private readonly notifications: TaxNotificationService,
   ) {}
 
   /**
@@ -570,6 +576,48 @@ export class CreditNoteService {
         `issued for return ${returnRow.returnNumber} against invoice ${sourceInvoice.documentNumber}. ` +
         `Source invoice status: ${sourceInvoice.status} → ${nextStatus}.`,
     );
+
+    // Phase 31 — customer notifications. Fired post-commit and after
+    // the source invoice's FSM transition so a notify failure can't
+    // affect the persisted state. The notification service is
+    // non-throwing internally; this try/catch is belt + braces.
+    try {
+      await this.notifications.customerCreditNoteIssued({
+        customerId: returnRow.customerId,
+        documentId: result.id,
+        documentNumber: result.documentNumber,
+        documentTotalInPaise: result.documentTotalInPaise,
+        originalInvoiceNumber: sourceInvoice.documentNumber,
+        returnNumber: returnRow.returnNumber,
+      });
+
+      // B2B sales (buyer had a GSTIN on the source invoice) trigger
+      // the additional ITC-reversal demand email. The buyer is
+      // legally required to reverse the corresponding ITC under
+      // GSTR-3B Table 4(B) once the credit note appears in their
+      // GSTR-2B; this email puts the per-leg amounts on record.
+      if (sourceInvoice.invoiceType === 'B2B' && sourceInvoice.buyerGstin) {
+        await this.notifications.customerB2bItcReversalRequired({
+          customerId: returnRow.customerId,
+          documentId: result.id,
+          documentNumber: result.documentNumber,
+          originalInvoiceNumber: sourceInvoice.documentNumber,
+          originalInvoiceDate: sourceInvoice.generatedAt,
+          buyerGstin: sourceInvoice.buyerGstin,
+          cgstReversalInPaise: cgstTotal,
+          sgstReversalInPaise: sgstTotal,
+          igstReversalInPaise: igstTotal,
+          totalTaxReversalInPaise: totalTaxTotal,
+          returnNumber: returnRow.returnNumber,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Credit-note notifications failed for return ${returnRow.returnNumber}: ` +
+          `${(err as Error).message} — CN was issued correctly; email retry ` +
+          `is the notifications module's responsibility.`,
+      );
+    }
 
     return {
       creditNote: {

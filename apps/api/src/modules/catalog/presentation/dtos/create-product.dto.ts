@@ -4,12 +4,16 @@ import {
   IsUUID,
   IsBoolean,
   IsNumber,
+  IsInt,
   IsArray,
   Min,
+  Max,
+  Matches,
   ValidateNested,
   IsEnum,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SupplyTaxability } from '@prisma/client';
 
 export class ProductSeoDto {
   @IsOptional()
@@ -165,6 +169,53 @@ export class CreateProductDto {
   @IsOptional()
   @IsString()
   warrantyInfo?: string;
+
+  // ─── Tax fields (Phase 1 GST) ──────────────────────────────────
+  // Mirror the columns added to products in catalog.prisma:165-188.
+  // All optional — the schema fills in safe defaults
+  // (gstRateBps=0, supplyTaxability=TAXABLE, cessRateBps=0,
+  // taxInclusivePricing=true). TaxAuditReadinessService scans for
+  // TAXABLE products with missing hsnCode/gstRateBps and gates the
+  // OFF → STRICT mode flip on clearing those, so sellers/admins
+  // should supply this data on create even though the DTO permits
+  // omission.
+  // `taxConfigUpdatedBy` / `taxConfigUpdatedAt` are NOT accepted from
+  // input — the controller stamps them from the authenticated actor.
+  @IsOptional()
+  @Matches(/^\d{4,8}$/, {
+    message: 'hsnCode must be 4-8 digits (HSN hierarchical levels) with no spaces or punctuation',
+  })
+  hsnCode?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  gstRateBps?: number;
+
+  @IsOptional()
+  @IsEnum(SupplyTaxability)
+  supplyTaxability?: SupplyTaxability;
+
+  @IsOptional()
+  @IsBoolean()
+  taxInclusivePricing?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  cessRateBps?: number;
+
+  @IsOptional()
+  @Matches(/^[A-Z]{2,6}$/, {
+    message: 'defaultUqcCode must be 2-6 uppercase letters per CBIC UQC list (e.g. NOS, PCS, KGS)',
+  })
+  defaultUqcCode?: string;
+
+  @IsOptional()
+  @IsString()
+  taxCategory?: string;
 
   @IsOptional()
   @IsArray()

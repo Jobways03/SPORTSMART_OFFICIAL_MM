@@ -103,6 +103,17 @@ export default function EditProductPage() {
     dimensionUnit: 'cm',
     returnPolicy: '',
     warrantyInfo: '',
+    // Tax & GST — populated from the product in populateForm() and
+    // sent back as part of every save. Admin always touches them on
+    // any update (no change detection), so the audit stamp fires
+    // whenever the admin clicks Save with values in this section.
+    hsnCode: '',
+    gstRateBps: '',
+    supplyTaxability: '',
+    cessRateBps: '',
+    defaultUqcCode: '',
+    taxCategory: '',
+    taxInclusivePricing: true,
     tags: [] as string[],
     seoMetaTitle: '',
     seoMetaDescription: '',
@@ -183,6 +194,16 @@ export default function EditProductPage() {
       dimensionUnit: p.dimensionUnit || 'cm',
       returnPolicy: p.returnPolicy || '',
       warrantyInfo: p.warrantyInfo || '',
+      // Tax fields — string-coerced so they slot into the form state.
+      // Old products predating the Phase 1 GST migration may carry
+      // nulls; the defaults preserve a usable starting state.
+      hsnCode: p.hsnCode || '',
+      gstRateBps: p.gstRateBps != null ? String(p.gstRateBps) : '',
+      supplyTaxability: p.supplyTaxability || '',
+      cessRateBps: p.cessRateBps != null ? String(p.cessRateBps) : '',
+      defaultUqcCode: p.defaultUqcCode || '',
+      taxCategory: p.taxCategory || '',
+      taxInclusivePricing: p.taxInclusivePricing ?? true,
       tags: (p.tags || []).map(t => t.tag),
       seoMetaTitle: p.seo?.metaTitle || '',
       seoMetaDescription: p.seo?.metaDescription || '',
@@ -501,6 +522,20 @@ export default function EditProductPage() {
 
     payload.returnPolicy = form.returnPolicy.trim() || null;
     payload.warrantyInfo = form.warrantyInfo.trim() || null;
+
+    // Tax fields — always send the current form state. Admin controller
+    // writes through whatever arrives and stamps taxConfigUpdatedBy/At
+    // when any tax key is present, so a Save with no tax changes still
+    // refreshes the audit stamp (acceptable — admin saw and confirmed
+    // the tax config). Empty optional strings clear via null; numeric
+    // defaults fall back to 0 (column is non-nullable).
+    payload.hsnCode = form.hsnCode.trim() || null;
+    payload.gstRateBps = form.gstRateBps !== '' ? Number(form.gstRateBps) : 0;
+    payload.supplyTaxability = form.supplyTaxability || 'TAXABLE';
+    payload.cessRateBps = form.cessRateBps !== '' ? Number(form.cessRateBps) : 0;
+    payload.defaultUqcCode = form.defaultUqcCode || null;
+    payload.taxCategory = form.taxCategory.trim() || null;
+    payload.taxInclusivePricing = form.taxInclusivePricing;
 
     payload.tags = form.tags;
 
@@ -1728,6 +1763,151 @@ export default function EditProductPage() {
         )}
       </div>
 
+      {/* Tax & GST Classification */}
+      <div className="form-card">
+        <div className="form-card-title">TAX &amp; GST CLASSIFICATION</div>
+        <div className="info-box">
+          Drives invoice generation (Tax Invoice vs Bill of Supply), GSTR-1
+          reporting, and audit-readiness blockers. Saving here stamps the
+          tax-config audit fields with your admin ID.
+        </div>
+
+        {/* Phase 37 — attestation banner. Separate signal from
+            catalog moderation; finance must explicitly attest tax
+            config for STRICT-mode invoicing to trust it. Editing
+            any tax field auto-resets the attestation, so an admin
+            who just edited HSN/rate sees the unverified state. */}
+        <TaxConfigAttestationBanner
+          productId={productId}
+          verified={(product as any)?.taxConfigVerified}
+          verifiedAt={(product as any)?.taxConfigVerifiedAt}
+          verifiedBy={(product as any)?.taxConfigVerifiedBy}
+          onChange={loadProduct}
+        />
+
+        <div className="form-grid">
+          <div className="form-group">
+            <label className="form-label">HSN / SAC Code</label>
+            <input
+              type="text"
+              className="form-input"
+              value={form.hsnCode}
+              onChange={e => updateField('hsnCode', e.target.value)}
+              placeholder="e.g. 95069900"
+              maxLength={8}
+              inputMode="numeric"
+              disabled={!isEditable}
+            />
+            <span className="form-hint">4&ndash;8 digit code per CBIC. Sports goods sit under 9506xx.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">GST Rate</label>
+            <select
+              className="form-select"
+              value={form.gstRateBps}
+              onChange={e => updateField('gstRateBps', e.target.value)}
+              disabled={!isEditable}
+            >
+              <option value="">Select rate</option>
+              <option value="0">0%</option>
+              <option value="500">5%</option>
+              <option value="1200">12%</option>
+              <option value="1800">18%</option>
+              <option value="2800">28%</option>
+            </select>
+            <span className="form-hint">Standard CBIC slabs.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Supply Type</label>
+            <select
+              className="form-select"
+              value={form.supplyTaxability}
+              onChange={e => updateField('supplyTaxability', e.target.value)}
+              disabled={!isEditable}
+            >
+              <option value="">Select supply type</option>
+              <option value="TAXABLE">Taxable (standard)</option>
+              <option value="NIL_RATED">Nil-rated</option>
+              <option value="EXEMPT">Exempt</option>
+              <option value="NON_GST">Non-GST</option>
+              <option value="ZERO_RATED">Zero-rated (exports under LUT)</option>
+              <option value="OUT_OF_SCOPE">Out of scope</option>
+            </select>
+            <span className="form-hint">Drives the document type: Tax Invoice vs Bill of Supply.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Unit of Measure (UQC)</label>
+            <select
+              className="form-select"
+              value={form.defaultUqcCode}
+              onChange={e => updateField('defaultUqcCode', e.target.value)}
+              disabled={!isEditable}
+            >
+              <option value="">Select unit</option>
+              <option value="NOS">NOS &mdash; Numbers</option>
+              <option value="PCS">PCS &mdash; Pieces</option>
+              <option value="PAR">PAR &mdash; Pair</option>
+              <option value="SET">SET &mdash; Set</option>
+              <option value="BOX">BOX &mdash; Box</option>
+              <option value="KGS">KGS &mdash; Kilograms</option>
+              <option value="MTR">MTR &mdash; Metres</option>
+              <option value="DOZ">DOZ &mdash; Dozen</option>
+            </select>
+            <span className="form-hint">Appears on invoice line items per CBIC UQC list.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Tax Category</label>
+            <input
+              type="text"
+              className="form-input"
+              value={form.taxCategory}
+              onChange={e => updateField('taxCategory', e.target.value)}
+              placeholder="e.g. apparel-under-1000, footwear, equipment"
+              disabled={!isEditable}
+            />
+            <span className="form-hint">Optional. Internal grouping for admin bulk operations and reports.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Compensation Cess Rate</label>
+            <input
+              type="number"
+              className="form-input"
+              value={form.cessRateBps}
+              onChange={e => updateField('cessRateBps', e.target.value)}
+              placeholder="0"
+              min="0"
+              max="10000"
+              step="1"
+              disabled={!isEditable}
+            />
+            <span className="form-hint">Basis points (1800 = 18%). Default 0; rare for sports goods.</span>
+          </div>
+
+          <div className="form-group full-width">
+            <div className="form-checkbox-group">
+              <input
+                type="checkbox"
+                id="taxInclusivePricing"
+                checked={form.taxInclusivePricing}
+                onChange={e => updateField('taxInclusivePricing', e.target.checked)}
+                disabled={!isEditable}
+              />
+              <label htmlFor="taxInclusivePricing">
+                Listed price includes GST (B2C inclusive pricing &mdash; default)
+              </label>
+            </div>
+            <span className="form-hint">
+              Uncheck only if listed prices exclude GST (rare in B2C).
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* Tags */}
       <div className="form-card">
         <div className="form-card-title">TAGS</div>
@@ -2029,6 +2209,149 @@ export default function EditProductPage() {
           onSuccess={onModalSuccess}
         />
       )}
+    </div>
+  );
+}
+
+// ── Phase 37: admin tax-config attestation banner ──
+//
+// Surfaces "verified by admin Y on date Z" OR "not verified" with a
+// Verify button that POSTs the attestation endpoint. Calls `onChange`
+// after a successful flip so the parent re-fetches the product and
+// re-renders the banner in its new state.
+function TaxConfigAttestationBanner({
+  productId,
+  verified,
+  verifiedAt,
+  verifiedBy,
+  onChange,
+}: {
+  productId: string;
+  verified: boolean | undefined;
+  verifiedAt: string | null | undefined;
+  verifiedBy: string | null | undefined;
+  onChange: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleVerify = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await adminProductsService.verifyProductTaxConfig(productId);
+      onChange();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to verify tax config.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (verified) {
+    return (
+      <div
+        style={{
+          background: '#dcfce7',
+          border: '1px solid #86efac',
+          borderRadius: 6,
+          padding: '10px 14px',
+          marginBottom: 12,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ fontSize: 13, color: '#166534' }}>
+          <strong>✓ Tax config verified</strong>
+          {verifiedBy && (
+            <span style={{ color: '#15803d', marginLeft: 8 }}>
+              by {verifiedBy.slice(0, 8)}
+              {verifiedAt
+                ? ` on ${new Date(verifiedAt).toLocaleDateString('en-IN', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                  })}`
+                : ''}
+            </span>
+          )}
+          <div style={{ fontSize: 11, color: '#15803d', marginTop: 4 }}>
+            STRICT-mode invoicing will trust the HSN / GST rate / supply
+            taxability on this product. Editing any tax field below resets
+            this attestation.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleVerify}
+          disabled={busy}
+          style={{
+            background: '#15803d',
+            color: '#fff',
+            border: 'none',
+            padding: '6px 14px',
+            borderRadius: 4,
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.5 : 1,
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {busy ? 'Re-verifying…' : 'Re-verify'}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: '#fef3c7',
+        border: '1px solid #fcd34d',
+        borderRadius: 6,
+        padding: '10px 14px',
+        marginBottom: 12,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ fontSize: 13, color: '#92400e' }}>
+        <strong>⚠ Tax config not yet verified</strong>
+        <div style={{ fontSize: 11, color: '#a16207', marginTop: 4 }}>
+          Review HSN / GST rate / supply taxability, then click Verify to
+          attest. STRICT-mode invoicing requires this attestation. Any
+          subsequent edit to a tax field resets it back to unverified.
+        </div>
+        {error && (
+          <div style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>
+            {error}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={handleVerify}
+        disabled={busy}
+        style={{
+          background: '#d97706',
+          color: '#fff',
+          border: 'none',
+          padding: '6px 14px',
+          borderRadius: 4,
+          cursor: busy ? 'not-allowed' : 'pointer',
+          opacity: busy ? 0.5 : 1,
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+      >
+        {busy ? 'Verifying…' : 'Verify tax config'}
+      </button>
     </div>
   );
 }

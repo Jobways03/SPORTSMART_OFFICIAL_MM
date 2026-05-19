@@ -173,6 +173,30 @@ const { returnId } = useParams<{ returnId: string }>();
 
   const formatPrice = (price: number | null) =>
     price == null ? '-' : `\u20B9${Number(price).toLocaleString('en-IN')}`;
+  // Phase 38 \u2014 BigInt-paise \u2192 \u20B9X.YY. The credit-note + wallet-credit
+  // payloads carry paise as decimal strings; this helper renders them
+  // without an intermediate Number() conversion. Storefront tsconfig
+  // targets ES2017 so BigInt() ctor (not Nn literals).
+  const formatReturnPaiseAsRupees = (paise: string | null | undefined): string => {
+    if (!paise) return '\u20B90.00';
+    let value: bigint;
+    try {
+      value = BigInt(paise);
+    } catch {
+      return '\u20B90.00';
+    }
+    const ZERO = BigInt(0);
+    const HUNDRED = BigInt(100);
+    const negative = value < ZERO;
+    const abs = negative ? -value : value;
+    const rupees = abs / HUNDRED;
+    const remainder = abs % HUNDRED;
+    const rupeesStr = rupees
+      .toString()
+      .replace(/\B(?=(\d{2})+(\d{3})(?!\d))/g, ',');
+    const paiseStr = remainder.toString().padStart(2, '0');
+    return `${negative ? '-' : ''}\u20B9${rupeesStr}.${paiseStr}`;
+  };
   const formatDate = (d: string) =>
     new Date(d).toLocaleDateString('en-IN', {
       day: 'numeric',
@@ -769,6 +793,91 @@ const { returnId } = useParams<{ returnId: string }>();
                 <div>
                   <span style={{ color: '#6b7280' }}>Processed on: </span>
                   <strong>{formatDate(ret.refundProcessedAt)}</strong>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Phase 38 — credit-note OR wallet-credit story. Rendered
+            when one of the two settlement artefacts exists, so the
+            customer can see exactly where their refund lives: a GST
+            credit note against the original invoice, or a wallet
+            credit when the Section-34 window had lapsed. */}
+        {ret.creditNote && (
+          <div
+            style={{
+              border: '1px solid #bfdbfe',
+              borderRadius: 10,
+              padding: 16,
+              marginBottom: 16,
+              background: '#eff6ff',
+            }}
+          >
+            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#1e40af' }}>
+              Tax credit note
+            </h3>
+            <p style={{ fontSize: 12, color: '#374151', margin: '0 0 10px', lineHeight: 1.5 }}>
+              A GST credit note has been issued against your original tax
+              invoice. The reversal will appear on your GSTR-2A/2B if you
+              registered a B2B GSTIN at checkout.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+              <div>
+                <span style={{ color: '#6b7280' }}>Document number: </span>
+                <strong style={{ fontFamily: 'var(--font-mono, monospace)' }}>
+                  {ret.creditNote.documentNumber}
+                </strong>
+              </div>
+              <div>
+                <span style={{ color: '#6b7280' }}>Amount: </span>
+                <strong>{formatReturnPaiseAsRupees(ret.creditNote.documentTotalInPaise)}</strong>
+              </div>
+              <div>
+                <span style={{ color: '#6b7280' }}>Status: </span>
+                <strong>{ret.creditNote.status.replace(/_/g, ' ')}</strong>
+              </div>
+              {ret.creditNote.generatedAt && (
+                <div>
+                  <span style={{ color: '#6b7280' }}>Issued on: </span>
+                  <strong>{formatDate(ret.creditNote.generatedAt)}</strong>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {ret.walletCredit && (
+          <div
+            style={{
+              border: '1px solid #fcd34d',
+              borderRadius: 10,
+              padding: 16,
+              marginBottom: 16,
+              background: '#fffbeb',
+            }}
+          >
+            <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#92400e' }}>
+              Refund credited to wallet
+            </h3>
+            <p style={{ fontSize: 12, color: '#374151', margin: '0 0 10px', lineHeight: 1.5 }}>
+              {ret.walletCredit.kind === 'TIME_BARRED_CREDIT_NOTE'
+                ? 'The Section-34 window for issuing a GST credit note had lapsed for this order; we have credited the refund to your wallet instead. The GST cost is absorbed by the platform.'
+                : 'A wallet credit has been issued for this return.'}
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+              <div>
+                <span style={{ color: '#6b7280' }}>Amount: </span>
+                <strong>{formatReturnPaiseAsRupees(ret.walletCredit.amountInPaise)}</strong>
+              </div>
+              <div>
+                <span style={{ color: '#6b7280' }}>Status: </span>
+                <strong>{ret.walletCredit.status.replace(/_/g, ' ')}</strong>
+              </div>
+              {ret.walletCredit.approvedAt && (
+                <div>
+                  <span style={{ color: '#6b7280' }}>Credited on: </span>
+                  <strong>{formatDate(ret.walletCredit.approvedAt)}</strong>
                 </div>
               )}
             </div>

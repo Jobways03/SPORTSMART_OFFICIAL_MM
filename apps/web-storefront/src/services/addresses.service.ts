@@ -9,6 +9,9 @@ export interface CustomerAddress {
   locality: string | null;
   city: string;
   state: string;
+  // Phase 34 — canonical CBIC 2-digit GST state code. Optional in
+  // the wire shape because legacy rows may not have been backfilled.
+  stateCode?: string | null;
   postalCode: string;
   country: string;
   isDefault: boolean;
@@ -23,11 +26,28 @@ export interface AddressPayload {
   locality?: string;
   city: string;
   state: string;
+  // Phase 34 — picked from the form dropdown. Backend persists it
+  // directly when supplied; otherwise resolves by name.
+  stateCode?: string;
   postalCode: string;
   isDefault?: boolean;
 }
 
 export type UpdateAddressPayload = Partial<AddressPayload>;
+
+// Phase 34 — india_states master, fetched once and cached by the page.
+export interface IndiaStateRef {
+  code: string;
+  name: string;
+  isoCode: string | null;
+  isUnionTerritory: boolean;
+}
+
+export const taxReferenceService = {
+  indiaStates(): Promise<ApiResponse<IndiaStateRef[]>> {
+    return apiClient<IndiaStateRef[]>('/tax/india-states');
+  },
+};
 
 export const addressesService = {
   list(): Promise<ApiResponse<CustomerAddress[]>> {

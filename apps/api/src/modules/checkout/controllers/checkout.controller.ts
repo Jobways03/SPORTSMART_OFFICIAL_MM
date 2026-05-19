@@ -77,6 +77,11 @@ export class CheckoutController {
       // server re-quotes it against the current cart subtotal before
       // committing the order so the fee can't be tampered with.
       shippingOptionId?: string | null;
+      // Phase 37 — picked B2B GSTIN profile. Null/undefined = legacy
+      // behaviour (tax-document service falls back to the customer's
+      // isDefault=true profile). Backend validates ownership before
+      // snapshotting the ID on MasterOrder.
+      taxProfileId?: string | null;
     },
   ) {
     const walletApply = Number(body.walletApplyAmountInPaise);
@@ -87,6 +92,7 @@ export class CheckoutController {
       body.referralCode,
       Number.isFinite(walletApply) && walletApply > 0 ? walletApply : undefined,
       body.shippingOptionId ?? null,
+      body.taxProfileId ?? null,
     );
     const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {

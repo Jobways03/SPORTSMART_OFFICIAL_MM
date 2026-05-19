@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, Fragment } from 'react';
 import { apiClient } from '@/lib/api-client';
 
 interface EarningsSummary {
@@ -53,6 +53,23 @@ interface SettlementRecord {
   utrReference: string | null;
   createdAt: string;
   cycle: { periodStart: string; periodEnd: string; status: string };
+  // Phase 32 — statutory + commission-GST deduction snapshot.
+  // BigInt paise come over JSON as decimal strings to survive
+  // values > Number.MAX_SAFE_INTEGER. Old settlements (pre-Phase 27)
+  // carry zero in these fields; the formatter renders "₹0.00" so
+  // the breakdown remains coherent for historical rows.
+  tcsDeductedInPaise?: string;
+  tcsRateBpsSnapshot?: number;
+  tcsFilingPeriod?: string | null;
+  tdsDeductedInPaise?: string;
+  tdsRateBpsSnapshot?: number;
+  tdsFilingPeriod?: string | null;
+  commissionGstRateBps?: number;
+  commissionGstSplitType?: 'CGST_SGST' | 'IGST' | null;
+  cgstOnCommissionInPaise?: string;
+  sgstOnCommissionInPaise?: string;
+  igstOnCommissionInPaise?: string;
+  totalCommissionGstInPaise?: string;
 }
 
 interface SettlementResponse {
@@ -101,6 +118,14 @@ export default function SellerCommissionPage() {
   const [settlements, setSettlements] = useState<SettlementResponse | null>(null);
   const [settlementPage, setSettlementPage] = useState(1);
   const [settlementLoading, setSettlementLoading] = useState(false);
+  // Phase 32 — per-row expansion state for the settlement breakdown.
+  // Keyed by settlement id so the table can have multiple rows open
+  // at once and the open-state survives a page refetch.
+  const [expandedSettlements, setExpandedSettlements] = useState<
+    Record<string, boolean>
+  >({});
+  const toggleExpand = (id: string) =>
+    setExpandedSettlements((prev) => ({ ...prev, [id]: !prev[id] }));
 
   // Fetch earnings summary
   useEffect(() => {
@@ -150,6 +175,58 @@ export default function SellerCommissionPage() {
 
   const fmt = (n: number) =>
     `\u20B9${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  // Phase 32 \u2014 paise (BigInt-as-string) \u2192 "\u20B9X,XX,XXX.YY". Indian
+  // grouping, BigInt arithmetic so values > 2^53 paise still render
+  // exactly. Missing / unparseable input \u2192 "\u20B90.00" so legacy
+  // settlements (pre-Phase 27 columns null) display coherently.
+  // Storefront tsconfig targets ES2017 so we use BigInt() ctor, not
+  // `Nn` literals.
+  const fmtPaise = (paise: string | undefined | null): string => {
+    if (!paise) return '\u20B90.00';
+    let value: bigint;
+    try {
+      value = BigInt(paise);
+    } catch {
+      return '\u20B90.00';
+    }
+    const ZERO = BigInt(0);
+    const HUNDRED = BigInt(100);
+    const negative = value < ZERO;
+    const abs = negative ? -value : value;
+    const rupees = abs / HUNDRED;
+    const remainder = abs % HUNDRED;
+    const rupeesStr = rupees
+      .toString()
+      .replace(/\B(?=(\d{2})+(\d{3})(?!\d))/g, ',');
+    const paiseStr = remainder.toString().padStart(2, '0');
+    return `${negative ? '-' : ''}\u20B9${rupeesStr}.${paiseStr}`;
+  };
+
+  // Net payout formula (mirrors the backend's
+  // SettlementTds194OHookService.computeNetPayoutInPaise):
+  //   totalSettlement \u2212 tcsDeducted \u2212 tdsDeducted \u2212 totalCommissionGst
+  // Returns the result as a BigInt-paise string for fmtPaise().
+  const computeNetPayoutPaise = (s: SettlementRecord): string => {
+    const ZERO = BigInt(0);
+    // The legacy Decimal columns come over as numbers; convert through
+    // rupees \u2192 paise (\u00D7 100, rounded). Future PR can switch to the
+    // BigInt paise sibling when the API returns it directly.
+    const settlementPaise = BigInt(
+      Math.round(Number(s.totalSettlementAmount) * 100),
+    );
+    let result =
+      settlementPaise -
+      (s.tcsDeductedInPaise ? BigInt(s.tcsDeductedInPaise) : ZERO) -
+      (s.tdsDeductedInPaise ? BigInt(s.tdsDeductedInPaise) : ZERO) -
+      (s.totalCommissionGstInPaise
+        ? BigInt(s.totalCommissionGstInPaise)
+        : ZERO);
+    // Clamp at zero \u2014 a misconfigured deduction shouldn't render as
+    // a negative payout in the UI. The backend helper does the same.
+    if (result < ZERO) result = ZERO;
+    return result.toString();
+  };
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -428,43 +505,86 @@ export default function SellerCommissionPage() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
+                        <Th label="" />
                         <Th label="PERIOD" />
                         <Th label="ORDERS" />
                         <Th label="ITEMS" />
-                        <Th label="PLATFORM AMOUNT" />
-                        <Th label="SETTLEMENT AMOUNT" />
+                        <Th label="GROSS GMV" />
+                        <Th label="NET PAYOUT" />
                         <Th label="STATUS" />
                         <Th label="PAID DATE" />
                         <Th label="UTR" />
                       </tr>
                     </thead>
                     <tbody>
-                      {settlements.settlements.map((s, i) => (
-                        <tr
-                          key={s.id}
-                          style={{
-                            borderBottom: '1px solid #f3f4f6',
-                            background: i % 2 === 0 ? '#fff' : '#fafbfc',
-                          }}
-                        >
-                          <td style={tdStyle}>
-                            {fmtDate(s.cycle.periodStart)} - {fmtDate(s.cycle.periodEnd)}
-                          </td>
-                          <td style={{ ...tdStyle, textAlign: 'center' }}>{s.totalOrders}</td>
-                          <td style={{ ...tdStyle, textAlign: 'center' }}>{s.totalItems}</td>
-                          <td style={tdNumStyle}>{fmt(Number(s.totalPlatformAmount))}</td>
-                          <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 600 }}>
-                            {fmt(Number(s.totalSettlementAmount))}
-                          </td>
-                          <td style={tdStyle}>{statusBadge(s.status)}</td>
-                          <td style={tdStyle}>{s.paidAt ? fmtDate(s.paidAt) : '--'}</td>
-                          <td style={tdStyle}>
-                            <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                              {s.utrReference || '--'}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {settlements.settlements.map((s, i) => {
+                        const isExpanded = !!expandedSettlements[s.id];
+                        const netPayoutPaise = computeNetPayoutPaise(s);
+                        return (
+                          <Fragment key={s.id}>
+                            <tr
+                              style={{
+                                borderBottom: isExpanded
+                                  ? '1px solid #c7d2fe'
+                                  : '1px solid #f3f4f6',
+                                background: isExpanded
+                                  ? '#eef2ff'
+                                  : i % 2 === 0
+                                    ? '#fff'
+                                    : '#fafbfc',
+                                cursor: 'pointer',
+                              }}
+                              onClick={() => toggleExpand(s.id)}
+                            >
+                              <td
+                                style={{
+                                  ...tdStyle,
+                                  textAlign: 'center',
+                                  color: '#6b7280',
+                                  width: 28,
+                                }}
+                                aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                              >
+                                {isExpanded ? '▾' : '▸'}
+                              </td>
+                              <td style={tdStyle}>
+                                {fmtDate(s.cycle.periodStart)} - {fmtDate(s.cycle.periodEnd)}
+                              </td>
+                              <td style={{ ...tdStyle, textAlign: 'center' }}>{s.totalOrders}</td>
+                              <td style={{ ...tdStyle, textAlign: 'center' }}>{s.totalItems}</td>
+                              <td style={tdNumStyle}>{fmt(Number(s.totalPlatformAmount))}</td>
+                              <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 600 }}>
+                                {fmtPaise(netPayoutPaise)}
+                              </td>
+                              <td style={tdStyle}>{statusBadge(s.status)}</td>
+                              <td style={tdStyle}>{s.paidAt ? fmtDate(s.paidAt) : '--'}</td>
+                              <td style={tdStyle}>
+                                <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                                  {s.utrReference || '--'}
+                                </span>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr style={{ background: '#fafafe' }}>
+                                <td
+                                  colSpan={9}
+                                  style={{
+                                    padding: '16px 24px',
+                                    borderBottom: '1px solid #e5e7eb',
+                                  }}
+                                >
+                                  <SettlementBreakdown
+                                    settlement={s}
+                                    netPayoutPaise={netPayoutPaise}
+                                    fmt={fmt}
+                                    fmtPaise={fmtPaise}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -484,6 +604,269 @@ export default function SellerCommissionPage() {
         </>
       )}
     </div>
+  );
+}
+
+/* ── Settlement Breakdown ── */
+//
+// Phase 32 — itemised statement under each Settlement History row.
+// Shows the exact deduction story:
+//
+//   Gross GMV  (totalPlatformAmount)
+//   − Commission           (totalPlatformMargin)
+//   = Settlement Amount    (totalSettlementAmount, the row's amount)
+//   − Commission GST 18%   (totalCommissionGstInPaise, with CGST/SGST or IGST)
+//   − TCS (Section 52)     (tcsDeductedInPaise)
+//   − TDS (Section 194-O)  (tdsDeductedInPaise)
+//   = Net Payout to seller
+//
+// Numbers come from the SellerSettlement row directly — no extra fetch.
+function SettlementBreakdown({
+  settlement,
+  netPayoutPaise,
+  fmt,
+  fmtPaise,
+}: {
+  settlement: SettlementRecord;
+  netPayoutPaise: string;
+  fmt: (n: number) => string;
+  fmtPaise: (paise: string | undefined | null) => string;
+}) {
+  const commissionGstSplit = settlement.commissionGstSplitType;
+  const hasCommissionGst =
+    !!settlement.totalCommissionGstInPaise &&
+    settlement.totalCommissionGstInPaise !== '0';
+  const hasTcs =
+    !!settlement.tcsDeductedInPaise &&
+    settlement.tcsDeductedInPaise !== '0';
+  const hasTds =
+    !!settlement.tdsDeductedInPaise &&
+    settlement.tdsDeductedInPaise !== '0';
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) 220px',
+        gap: 32,
+        alignItems: 'flex-start',
+      }}
+    >
+      <div>
+        <h4
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: '#1f2937',
+            margin: '0 0 12px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+          }}
+        >
+          Payout breakdown
+        </h4>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <tbody>
+            <BreakdownRow
+              label="Gross GMV"
+              value={fmt(Number(settlement.totalPlatformAmount))}
+              hint="Customer-paid amount for orders in this period"
+            />
+            <BreakdownRow
+              label="Commission (platform fee)"
+              value={`−${fmt(Number(settlement.totalPlatformMargin))}`}
+              valueColor="#dc2626"
+              hint={`Platform fee retained on ${settlement.totalItems} item(s)`}
+            />
+            <BreakdownRow
+              label="Settlement amount"
+              value={fmt(Number(settlement.totalSettlementAmount))}
+              emphasis
+              hint="Gross GMV − Commission. Before statutory deductions below."
+            />
+            {hasCommissionGst && (
+              <>
+                <BreakdownRow
+                  label={`Commission GST @ ${
+                    (settlement.commissionGstRateBps ?? 1800) / 100
+                  }% ${commissionGstSplit === 'CGST_SGST' ? '(CGST + SGST)' : '(IGST)'}`}
+                  value={`−${fmtPaise(settlement.totalCommissionGstInPaise)}`}
+                  valueColor="#dc2626"
+                  hint="GST charged by platform on its commission service. You can claim this as ITC on your GSTR-3B."
+                />
+                {commissionGstSplit === 'CGST_SGST' && (
+                  <>
+                    <BreakdownSubRow
+                      label="CGST on commission"
+                      value={fmtPaise(settlement.cgstOnCommissionInPaise)}
+                    />
+                    <BreakdownSubRow
+                      label="SGST on commission"
+                      value={fmtPaise(settlement.sgstOnCommissionInPaise)}
+                    />
+                  </>
+                )}
+              </>
+            )}
+            {hasTcs && (
+              <BreakdownRow
+                label={`TCS @ ${
+                  (settlement.tcsRateBpsSnapshot ?? 100) / 100
+                }% (Section 52)`}
+                value={`−${fmtPaise(settlement.tcsDeductedInPaise)}`}
+                valueColor="#dc2626"
+                hint={
+                  settlement.tcsFilingPeriod
+                    ? `Auto-credits to your GSTR-2A/2B for ${settlement.tcsFilingPeriod}`
+                    : 'Auto-credits to your GSTR-2A/2B'
+                }
+              />
+            )}
+            {hasTds && (
+              <BreakdownRow
+                label={`TDS @ ${
+                  (settlement.tdsRateBpsSnapshot ?? 100) / 100
+                }% (Section 194-O)`}
+                value={`−${fmtPaise(settlement.tdsDeductedInPaise)}`}
+                valueColor="#dc2626"
+                hint={
+                  settlement.tdsFilingPeriod
+                    ? `Form 16A will be issued for ${settlement.tdsFilingPeriod}`
+                    : 'Form 16A will be issued quarterly'
+                }
+              />
+            )}
+            <BreakdownRow
+              label="Net payout"
+              value={fmtPaise(netPayoutPaise)}
+              emphasis
+              valueColor="#16a34a"
+              hint={
+                settlement.status === 'PAID'
+                  ? `Paid via UTR ${settlement.utrReference ?? '—'}`
+                  : 'Pending payment'
+              }
+            />
+          </tbody>
+        </table>
+        {!hasCommissionGst && !hasTcs && !hasTds && (
+          <p style={{ marginTop: 12, fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
+            This settlement was created before statutory-deduction tracking was
+            enabled. Net payout equals the settlement amount.
+          </p>
+        )}
+      </div>
+
+      <aside
+        style={{
+          background: '#fff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          padding: '14px 16px',
+          fontSize: 12,
+          color: '#374151',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: '#6b7280',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            marginBottom: 8,
+          }}
+        >
+          Compliance notes
+        </div>
+        <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
+          <li>TCS and TDS amounts are remitted to the government by the marketplace.</li>
+          <li>Reconcile TCS in your GSTR-2A/2B; reconcile TDS via Form 16A.</li>
+          <li>Commission GST is claimable as ITC.</li>
+        </ul>
+      </aside>
+    </div>
+  );
+}
+
+function BreakdownRow({
+  label,
+  value,
+  valueColor,
+  hint,
+  emphasis,
+}: {
+  label: string;
+  value: string;
+  valueColor?: string;
+  hint?: string;
+  emphasis?: boolean;
+}) {
+  return (
+    <tr
+      style={{
+        borderTop: emphasis ? '1px solid #e5e7eb' : undefined,
+        borderBottom: emphasis ? '1px solid #e5e7eb' : undefined,
+      }}
+    >
+      <td
+        style={{
+          padding: '6px 8px 6px 0',
+          fontWeight: emphasis ? 700 : 500,
+          color: emphasis ? '#1f2937' : '#374151',
+          verticalAlign: 'top',
+        }}
+      >
+        <div>{label}</div>
+        {hint && (
+          <div style={{ fontSize: 11, color: '#9ca3af', fontWeight: 400, marginTop: 2 }}>
+            {hint}
+          </div>
+        )}
+      </td>
+      <td
+        style={{
+          padding: '6px 0',
+          textAlign: 'right',
+          fontFamily: 'monospace',
+          fontSize: 13,
+          fontWeight: emphasis ? 700 : 500,
+          color: valueColor ?? '#1f2937',
+          whiteSpace: 'nowrap',
+          verticalAlign: 'top',
+        }}
+      >
+        {value}
+      </td>
+    </tr>
+  );
+}
+
+function BreakdownSubRow({ label, value }: { label: string; value: string }) {
+  return (
+    <tr>
+      <td
+        style={{
+          padding: '2px 8px 2px 24px',
+          color: '#6b7280',
+          fontSize: 12,
+        }}
+      >
+        {label}
+      </td>
+      <td
+        style={{
+          padding: '2px 0',
+          textAlign: 'right',
+          fontFamily: 'monospace',
+          fontSize: 12,
+          color: '#6b7280',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {value}
+      </td>
+    </tr>
   );
 }
 

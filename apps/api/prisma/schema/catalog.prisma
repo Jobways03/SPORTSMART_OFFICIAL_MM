@@ -186,6 +186,16 @@ model Product {
   taxCategory         String?           @map("tax_category")
   taxConfigUpdatedBy  String?           @map("tax_config_updated_by")
   taxConfigUpdatedAt  DateTime?         @map("tax_config_updated_at")
+  // Phase 37 — admin attestation that the product's tax config (HSN,
+  // GST rate, supply taxability, cess) has been reviewed for
+  // correctness. Seller-proposed tax fields land with this false;
+  // an admin flips it true via the verify-tax-config endpoint. Any
+  // subsequent write that changes a tax field auto-resets this to
+  // false so a seller can't bypass approval by editing post-attestation.
+  // Surfaced on the admin product list so reviewers can prioritise.
+  taxConfigVerified   Boolean           @default(false) @map("tax_config_verified")
+  taxConfigVerifiedAt DateTime?         @map("tax_config_verified_at")
+  taxConfigVerifiedBy String?           @map("tax_config_verified_by")
 
   // Duplicate detection
   potentialDuplicateOf String? @map("potential_duplicate_of")

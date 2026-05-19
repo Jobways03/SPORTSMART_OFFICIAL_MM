@@ -114,6 +114,26 @@ export interface ReturnDetail {
   exchangeRazorpayOrderId?: string | null;
   exchangePaymentCompletedAt?: string | null;
   replacementOrderId?: string | null;
+  // Phase 38 — refund-settlement story:
+  //   creditNote != null  → Section-34 window was open at QC, CN issued
+  //   walletCredit != null → Section-34 time-barred, refund routed via wallet
+  // Both can be null pre-QC. The UI renders one or the other (or
+  // "processing" when neither is present yet but refund is in flight).
+  creditNote?: {
+    id: string;
+    documentNumber: string;
+    documentTotalInPaise: string;
+    status: string;
+    generatedAt: string | null;
+  } | null;
+  walletCredit?: {
+    id: string;
+    kind: string;
+    status: string;
+    amountInPaise: string;
+    approvedAt: string | null;
+    reason: string;
+  } | null;
 }
 
 export interface CreateReturnPayload {

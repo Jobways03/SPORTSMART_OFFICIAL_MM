@@ -385,6 +385,33 @@ export default function SellerOnboardingPage() {
               maxLength={200}
             />
 
+            {/* Phase 35 — explicit hint that GST fields go through the
+                admin GSTN-verification queue before they're used on
+                invoices / GSTR filings. Mirrors the product tax-config
+                attestation banner so sellers don't expect immediate
+                effect. */}
+            <div
+              className="onboarding__hint"
+              style={{
+                background: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                color: '#1e3a8a',
+                padding: '10px 12px',
+                borderRadius: 6,
+                fontSize: 13,
+                marginBottom: 8,
+              }}
+            >
+              <strong>Heads up:</strong> GST registration details (GSTIN,
+              state code, PAN, registered address) are reviewed by the
+              Sportsmart admin team after submission. Tax invoices,
+              GSTR-1 filings, and e-invoicing will only use these
+              fields once an admin marks them <em>verified</em> against
+              the GSTN portal. Until then, your draft profile is held
+              and any documents we generate carry a “DRAFT — not for
+              ITC” banner.
+            </div>
+
             <label htmlFor="gstRegistrationType">GST registration type *</label>
             <select
               id="gstRegistrationType"

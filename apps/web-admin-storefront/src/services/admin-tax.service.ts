@@ -222,6 +222,269 @@ class AdminTaxService {
       { method: 'POST', body: JSON.stringify({ cancellationCode, reason }) },
     );
   }
+
+  // ── Phase 35 — GSTN portal verification ─────────────────────────
+
+  listSellerGstins(
+    verified?: 'true' | 'false',
+  ): Promise<ApiResponse<{ items: SellerGstinItem[] }>> {
+    const qs = verified ? `?verified=${verified}` : '';
+    return apiClient<{ items: SellerGstinItem[] }>(
+      `/admin/tax/seller-gstins${qs}`,
+    );
+  }
+
+  verifySellerGstin(
+    id: string,
+  ): Promise<ApiResponse<GstnVerifyOutcome>> {
+    return apiClient<GstnVerifyOutcome>(
+      `/admin/tax/seller-gstins/${id}/verify`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+  }
+
+  listCustomerTaxProfiles(
+    verified?: 'true' | 'false',
+  ): Promise<ApiResponse<{ items: CustomerTaxProfileItem[] }>> {
+    const qs = verified ? `?verified=${verified}` : '';
+    return apiClient<{ items: CustomerTaxProfileItem[] }>(
+      `/admin/tax/customer-tax-profiles${qs}`,
+    );
+  }
+
+  verifyCustomerTaxProfile(
+    id: string,
+  ): Promise<ApiResponse<GstnVerifyOutcome>> {
+    return apiClient<GstnVerifyOutcome>(
+      `/admin/tax/customer-tax-profiles/${id}/verify`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+  }
+
+  // ── Phase 27 — Section 194-O Income-Tax TDS lifecycle ───────────
+
+  listTds194O(
+    filingPeriod: string,
+  ): Promise<ApiResponse<{ items: Tds194OLedgerItem[] }>> {
+    return apiClient<{ items: Tds194OLedgerItem[] }>(
+      `/admin/tax/tds194o?filingPeriod=${encodeURIComponent(filingPeriod)}`,
+    );
+  }
+
+  markTdsDeposited(ledgerIds: string[], challanReference: string) {
+    return apiClient<{ flipped: number; requested: number }>(
+      `/admin/tax/tds194o/mark-deposited`,
+      { method: 'POST', body: JSON.stringify({ ledgerIds, challanReference }) },
+    );
+  }
+
+  markTdsCertificateIssued(ledgerIds: string[], certificateNumber: string) {
+    return apiClient<{ flipped: number; requested: number }>(
+      `/admin/tax/tds194o/mark-certificate-issued`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ ledgerIds, certificateNumber }),
+      },
+    );
+  }
+
+  // Phase 27 — Form 26Q quarterly TDS return CSV. Admin imports into
+  // NSDL's RPU (Return Preparation Utility) for upload to TIN-Protean.
+  // Returns the URL fragment; the page renders an <a> with this href
+  // so the browser handles the streaming download natively.
+  form26qCsvUrl(filingPeriod: string): string {
+    return `/api/v1/admin/tax/reports/form26q.csv?filingPeriod=${encodeURIComponent(filingPeriod)}`;
+  }
+
+  // Form 16A HTML certificate per (deductee, quarter). The browser
+  // opens this and the admin uses Print → Save as PDF to produce the
+  // shareable file. Per-ledger-row.
+  form16aHtmlUrl(ledgerId: string): string {
+    return `/api/v1/admin/tax/reports/form16a/${ledgerId}.html`;
+  }
+
+  // Phase 28+ — marketplace's OWN GSTR-1 commission section (SAC 9985).
+  // Aggregates per (seller GSTIN, period); admin imports into the
+  // marketplace's GSTR-1 filing alongside the per-seller §4 / §7
+  // sections.
+  marketplaceCommissionGstr1CsvUrl(filingPeriod: string): string {
+    return `/api/v1/admin/tax/reports/marketplace-commission-gstr1.csv?filingPeriod=${encodeURIComponent(filingPeriod)}`;
+  }
+
+  setSeller194oExemption(sellerId: string, exempt: boolean, reason?: string) {
+    return apiClient<{
+      id: string;
+      is194OExempt: boolean;
+      exempt194OReason: string | null;
+      exempt194OAttestedBy: string | null;
+      exempt194OAttestedAt: string | null;
+    }>(`/admin/tax/sellers/${sellerId}/194o-exempt`, {
+      method: 'POST',
+      body: JSON.stringify({ exempt, reason }),
+    });
+  }
+
+  // ── Phase 37 — HSN master CRUD ────────────────────────────────
+  listHsn(opts: { search?: string; activeOnly?: boolean } = {}) {
+    const qs = new URLSearchParams();
+    if (opts.search) qs.set('search', opts.search);
+    if (opts.activeOnly) qs.set('activeOnly', 'true');
+    const q = qs.toString();
+    return apiClient<HsnMasterItem[]>(`/admin/tax/hsn${q ? `?${q}` : ''}`);
+  }
+  createHsn(input: {
+    hsnCode: string;
+    description: string;
+    defaultGstRateBps: number;
+    supplyTaxability?: string;
+    defaultUqcCode?: string | null;
+    categoryHint?: string | null;
+    effectiveFrom?: string;
+  }) {
+    return apiClient<HsnMasterItem>('/admin/tax/hsn', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+  updateHsn(
+    id: string,
+    input: {
+      description?: string;
+      defaultUqcCode?: string | null;
+      categoryHint?: string | null;
+      isActive?: boolean;
+      effectiveTo?: string | null;
+    },
+  ) {
+    return apiClient<HsnMasterItem>(`/admin/tax/hsn/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  }
+
+  // ── Phase 37 — UQC master CRUD ────────────────────────────────
+  listUqc(opts: { search?: string; activeOnly?: boolean } = {}) {
+    const qs = new URLSearchParams();
+    if (opts.search) qs.set('search', opts.search);
+    if (opts.activeOnly) qs.set('activeOnly', 'true');
+    const q = qs.toString();
+    return apiClient<UqcMasterItem[]>(`/admin/tax/uqc${q ? `?${q}` : ''}`);
+  }
+  createUqc(input: { code: string; description: string }) {
+    return apiClient<UqcMasterItem>('/admin/tax/uqc', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+  updateUqc(
+    id: string,
+    input: { description?: string; isActive?: boolean },
+  ) {
+    return apiClient<UqcMasterItem>(`/admin/tax/uqc/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  }
+
+  // ── Phase 37 — TaxConfig key/value admin ──────────────────────
+  listTaxConfig() {
+    return apiClient<TaxConfigRow[]>('/admin/tax/config');
+  }
+  upsertTaxConfig(input: { key: string; value: unknown; description?: string | null }) {
+    return apiClient<TaxConfigRow>('/admin/tax/config', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  }
+
+  // ── Phase 37 — Platform GST profile CRUD ───────────────────────
+  listPlatformGst() {
+    return apiClient<PlatformGstProfileItem[]>('/admin/tax/platform-gst');
+  }
+  createPlatformGst(input: {
+    legalBusinessName: string;
+    gstin: string;
+    registeredAddressJson: unknown;
+    registrationType?: string;
+    panNumber?: string | null;
+    isDefault?: boolean;
+  }) {
+    return apiClient<PlatformGstProfileItem>('/admin/tax/platform-gst', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+  updatePlatformGst(
+    id: string,
+    input: {
+      legalBusinessName?: string;
+      registeredAddressJson?: unknown;
+      registrationType?: string;
+      panNumber?: string | null;
+      isActive?: boolean;
+    },
+  ) {
+    return apiClient<PlatformGstProfileItem>(`/admin/tax/platform-gst/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  }
+  setDefaultPlatformGst(id: string) {
+    return apiClient<PlatformGstProfileItem>(
+      `/admin/tax/platform-gst/${id}/set-default`,
+      { method: 'POST' },
+    );
+  }
+}
+
+export interface PlatformGstProfileItem {
+  id: string;
+  legalBusinessName: string;
+  gstin: string;
+  registeredAddressJson: unknown;
+  gstStateCode: string;
+  registrationType: string;
+  panNumber: string | null;
+  panLast4: string | null;
+  panVerified: boolean;
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaxConfigRow {
+  id: string;
+  key: string;
+  value: unknown;
+  description: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface UqcMasterItem {
+  id: string;
+  code: string;
+  description: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HsnMasterItem {
+  id: string;
+  hsnCode: string;
+  description: string;
+  defaultGstRateBps: number;
+  supplyTaxability: string;
+  defaultUqcCode: string | null;
+  categoryHint: string | null;
+  isActive: boolean;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TimebarReviewItem {
@@ -311,6 +574,87 @@ export interface EInvoiceItem {
   supplierGstin: string | null;
   buyerGstin: string | null;
   generatedAt: string | null;
+}
+
+// Phase 27 — TDS ledger item shape (BigInt paise serialised as strings).
+export interface Tds194OLedgerItem {
+  id: string;
+  sellerId: string;
+  filingPeriod: string;
+  sellerPanNumber: string | null;
+  sellerPanLast4: string | null;
+  sellerLegalName: string | null;
+  hadVerifiedPan: boolean;
+  grossSaleInPaise: string;
+  refundReversalInPaise: string;
+  netSaleInPaise: string;
+  adjustmentCarriedForwardInPaise: string;
+  tdsRateBps: number;
+  tdsInPaise: string;
+  status:
+    | 'COMPUTED'
+    | 'WITHHELD'
+    | 'DEPOSITED'
+    | 'CERTIFICATE_ISSUED'
+    | 'REVERSED';
+  computedAt: string;
+  withheldAt: string | null;
+  settlementId: string | null;
+  depositedAt: string | null;
+  depositedBy: string | null;
+  challanReference: string | null;
+  certificateIssuedAt: string | null;
+  certificateIssuedBy: string | null;
+  certificateNumber: string | null;
+}
+
+// Phase 35 — GSTN verification types.
+export interface SellerGstinItem {
+  id: string;
+  sellerId: string;
+  gstin: string;
+  stateCode: string;
+  legalName: string;
+  isPrimary: boolean;
+  registrationType: string;
+  verifiedAt: string | null;
+  verifiedBy: string | null;
+  verificationNotes: string | null;
+  createdAt: string;
+  seller?: {
+    id: string;
+    sellerShopName: string | null;
+    sellerName: string | null;
+  };
+}
+
+export interface CustomerTaxProfileItem {
+  id: string;
+  customerId: string;
+  gstin: string;
+  legalName: string;
+  stateCode: string;
+  isDefault: boolean;
+  isVerified: boolean;
+  verifiedAt: string | null;
+  verifiedBy: string | null;
+  verificationNotes: string | null;
+  createdAt: string;
+  customer?: {
+    id: string;
+    email: string | null;
+    firstName: string | null;
+    lastName: string | null;
+  };
+}
+
+export interface GstnVerifyOutcome {
+  verified: boolean;
+  found: boolean;
+  status: string;
+  legalName: string | null;
+  legalNameMismatch: boolean;
+  notes: string;
 }
 
 export const adminTaxService = new AdminTaxService();

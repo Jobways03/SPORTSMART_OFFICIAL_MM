@@ -71,8 +71,34 @@ function buildService(opts: {
       .fn()
       .mockResolvedValue({ collected: true }),
   } as any;
+  // Phase 27 — TDS hook stub. Same shape as the TCS stub above so the
+  // approve-cycle path can call both without the test caring about the
+  // return shape.
+  const tdsHook = {
+    applyToCycleOnApprove: jest
+      .fn()
+      .mockResolvedValue({
+        cycleId: '',
+        settlementsProcessed: 0,
+        settlementsSkipped: 0,
+        settlementsExempt: 0,
+        settlementsFailed: 0,
+        failedSettlementIds: [],
+        totalTdsDeductedInPaise: 0n,
+        filingPeriod: '2026-Q1',
+      }),
+    markWithheldOnPay: jest
+      .fn()
+      .mockResolvedValue({ ledgerId: null, flipped: false }),
+  } as any;
 
-  const service = new SettlementService(prisma, audit, moneyDualWrite, tcsHook);
+  const service = new SettlementService(
+    prisma,
+    audit,
+    moneyDualWrite,
+    tcsHook,
+    tdsHook,
+  );
   return {
     service,
     prisma,

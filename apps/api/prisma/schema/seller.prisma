@@ -68,6 +68,17 @@ model Seller {
   panLast4                      String?              @map("pan_last_4")
   panVerified                   Boolean              @default(false) @map("pan_verified")
 
+  // Phase 27 — Section 194-O sub-threshold exemption.
+  // Individual / HUF sellers whose projected aggregate FY gross sale
+  // stays under ₹5,00,000 AND who furnish PAN/Aadhaar are exempt
+  // from Section 194-O TDS. Admin attests this at onboarding /
+  // annual review; flipping back to false re-arms TDS deduction
+  // from the next settlement cycle. See docs/tax/TDS_194O_POLICY.md.
+  is194OExempt                  Boolean              @default(false) @map("is_194o_exempt")
+  exempt194OReason              String?              @map("exempt_194o_reason")
+  exempt194OAttestedBy          String?              @map("exempt_194o_attested_by")
+  exempt194OAttestedAt          DateTime?            @map("exempt_194o_attested_at")
+
   // ─── Logistics entitlements (admin-controlled) ────────────────
   // Toggled by marketplace admin in web-admin-storefront. The seller
   // picks the actual delivery method per shipment from whatever is
@@ -102,6 +113,10 @@ model Seller {
   // (sellerId, filingPeriod). One ACTIVE (non-REVERSED) row per
   // pairing enforced by partial UNIQUE index in the migration.
   gstTcsSettlements GstTcsSettlementLedger[]
+  // Phase 27 — Section 194-O Income-Tax TDS ledger rows per
+  // (sellerId, filingPeriod) quarterly. One active row per pairing
+  // enforced by partial UNIQUE index in the migration.
+  tds194OLedgers    Section194OTdsLedger[]
 
   @@index([status])
   @@index([isProfileCompleted])

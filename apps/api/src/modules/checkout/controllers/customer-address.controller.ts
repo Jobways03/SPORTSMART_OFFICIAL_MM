@@ -41,6 +41,11 @@ export class CustomerAddressController {
       locality?: string;
       city: string;
       state: string;
+      // Phase 34 — canonical CBIC 2-digit GST state code. Optional on
+      // the wire so the legacy free-text-state path still works, but
+      // when supplied is persisted directly to `customer_addresses.
+      // state_code` (avoids the runtime name-match fallback).
+      stateCode?: string;
       postalCode: string;
       isDefault?: boolean;
     },
@@ -66,6 +71,7 @@ export class CustomerAddressController {
       locality?: string | null;
       city?: string;
       state?: string;
+      stateCode?: string;
       postalCode?: string;
       isDefault?: boolean;
     },

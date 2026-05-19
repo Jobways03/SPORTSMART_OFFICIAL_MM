@@ -47,6 +47,11 @@ import {
   EInvoiceDocumentNotFoundError,
 } from '../../application/services/einvoice.service';
 import { CreditNoteService } from '../../application/services/credit-note.service';
+import {
+  GstnVerificationService,
+  SellerGstinNotFoundError,
+  CustomerTaxProfileNotFoundError,
+} from '../../application/services/gstn-verification.service';
 
 @ApiTags('Admin / Tax Ops')
 @Controller('admin/tax')
@@ -58,6 +63,7 @@ export class AdminTaxOperationsController {
     private readonly eway: EWayBillService,
     private readonly einvoice: EInvoiceService,
     private readonly creditNote: CreditNoteService,
+    private readonly gstn: GstnVerificationService,
   ) {}
 
   // ── Time-bar review queue (Phase 12) ──────────────────────────────
@@ -511,6 +517,188 @@ export class AdminTaxOperationsController {
     } catch (err) {
       throw mapEinvoiceError(err);
     }
+  }
+
+  // ── GSTN portal verification (Phase 35) ──────────────────────────
+  //
+  // List + verify endpoints for both target shapes. List is paginated
+  // + filterable by verification state so the admin queue surfaces
+  // unverified rows first.
+
+  @Get('seller-gstins')
+  @Permissions('tax.gstn.verify')
+  async listSellerGstins(
+    @Query('verified') verified?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const safeLimit = Math.min(200, Math.max(1, parseInt(limit ?? '50', 10) || 50));
+    const where: any = {};
+    if (verified === 'true') where.verifiedAt = { not: null };
+    if (verified === 'false') where.verifiedAt = null;
+    const rows = await this.prisma.sellerGstin.findMany({
+      where,
+      orderBy: [{ verifiedAt: 'asc' }, { createdAt: 'desc' }],
+      take: safeLimit,
+      include: {
+        seller: { select: { id: true, sellerShopName: true, sellerName: true } },
+      },
+    });
+    return {
+      success: true,
+      message: 'Seller GSTINs retrieved',
+      data: { items: rows },
+    };
+  }
+
+  @Get('customer-tax-profiles')
+  @Permissions('tax.gstn.verify')
+  async listCustomerTaxProfiles(
+    @Query('verified') verified?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const safeLimit = Math.min(200, Math.max(1, parseInt(limit ?? '50', 10) || 50));
+    const where: any = {};
+    if (verified === 'true') where.isVerified = true;
+    if (verified === 'false') where.isVerified = false;
+    const rows = await this.prisma.customerTaxProfile.findMany({
+      where,
+      orderBy: [{ isVerified: 'asc' }, { createdAt: 'desc' }],
+      take: safeLimit,
+      include: {
+        customer: { select: { id: true, email: true, firstName: true, lastName: true } },
+      },
+    });
+    return {
+      success: true,
+      message: 'Customer tax profiles retrieved',
+      data: { items: rows },
+    };
+  }
+
+  // (verify endpoints below)
+
+  //
+  // Two endpoints — one per target row type. Both run via the active
+  // GSTN_PROVIDER (stub today, sandbox once wired). The provider
+  // contract returns `found / status / legalName`; the service
+  // persists those onto the row + a verification note with the
+  // timestamp + provider name. Idempotent — re-running refreshes
+  // the timestamp and appends a fresh note line.
+
+  @Post('seller-gstins/:id/verify')
+  @Permissions('tax.gstn.verify')
+  async verifySellerGstin(@Req() req: any, @Param('id') id: string) {
+    try {
+      const result = await this.gstn.verifySellerGstin({
+        sellerGstinId: id,
+        actorId: req.adminId ?? 'unknown-admin',
+      });
+      return {
+        success: true,
+        message: result.verified
+          ? 'Seller GSTIN verified'
+          : 'Seller GSTIN check completed (not verified)',
+        data: result,
+      };
+    } catch (err) {
+      if (err instanceof SellerGstinNotFoundError) {
+        throw new HttpException(
+          { success: false, message: err.message, code: 'NOT_FOUND' },
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      throw new HttpException(
+        {
+          success: false,
+          message: (err as Error)?.message ?? 'failed',
+          code: 'INTERNAL_ERROR',
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Post('customer-tax-profiles/:id/verify')
+  @Permissions('tax.gstn.verify')
+  async verifyCustomerTaxProfile(
+    @Req() req: any,
+    @Param('id') id: string,
+  ) {
+    try {
+      const result = await this.gstn.verifyCustomerTaxProfile({
+        profileId: id,
+        actorId: req.adminId ?? 'unknown-admin',
+      });
+      return {
+        success: true,
+        message: result.verified
+          ? 'Customer tax profile verified'
+          : 'Customer tax profile check completed (not verified)',
+        data: result,
+      };
+    } catch (err) {
+      if (err instanceof CustomerTaxProfileNotFoundError) {
+        throw new HttpException(
+          { success: false, message: err.message, code: 'NOT_FOUND' },
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      throw new HttpException(
+        {
+          success: false,
+          message: (err as Error)?.message ?? 'failed',
+          code: 'INTERNAL_ERROR',
+        },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // ── Section 194-O exemption attestation (Phase 27) ──────────────
+  //
+  // Admin attests that a seller's projected annual gross stays below
+  // the ₹5L threshold AND they're individual/HUF with verified PAN/
+  // Aadhaar. Flipping is194OExempt=true tells Tds194OService.compute
+  // ForSeller to skip persisting a TDS row for them. Flipping false
+  // re-arms TDS deduction from the next settlement cycle.
+
+  @Post('sellers/:id/194o-exempt')
+  @Permissions('tax.gstn.verify')
+  async setSellerTds194OExemption(
+    @Req() req: any,
+    @Param('id') sellerId: string,
+    @Body() body: { exempt: boolean; reason?: string },
+  ) {
+    if (typeof body?.exempt !== 'boolean') {
+      throw new HttpException(
+        { success: false, message: 'exempt (boolean) required', code: 'INVALID_REQUEST' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const adminId = req.adminId ?? 'unknown-admin';
+    const seller = await (this.prisma as any).seller.update({
+      where: { id: sellerId },
+      data: {
+        is194OExempt: body.exempt,
+        exempt194OReason: body.exempt ? body.reason ?? null : null,
+        exempt194OAttestedBy: body.exempt ? adminId : null,
+        exempt194OAttestedAt: body.exempt ? new Date() : null,
+      },
+      select: {
+        id: true,
+        is194OExempt: true,
+        exempt194OReason: true,
+        exempt194OAttestedBy: true,
+        exempt194OAttestedAt: true,
+      },
+    });
+    return {
+      success: true,
+      message: body.exempt
+        ? 'Seller marked 194-O exempt'
+        : 'Seller 194-O exemption cleared',
+      data: seller,
+    };
   }
 }
 

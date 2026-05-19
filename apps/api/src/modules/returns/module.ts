@@ -12,6 +12,13 @@ import { FranchiseModule } from '../franchise/module';
 import { WalletModule } from '../wallet/module';
 import { LiabilityLedgerModule } from '../liability-ledger/module';
 import { DiscountsModule } from '../discounts/discounts.module';
+// TaxModule — issues credit notes (Section 34) on QC approve and the
+// time-bar fallback that routes the refund through a wallet adjustment.
+// Importing the module exposes CreditNoteService + WalletAdjustmentService
+// for DI in ReturnService. TaxModule itself depends on WalletModule
+// (already imported above) and NotificationsModule (independent), so
+// no cycle.
+import { TaxModule } from '../tax/module';
 import { RETURN_REPOSITORY } from './domain/repositories/return.repository.interface';
 import { PrismaReturnRepository } from './infrastructure/repositories/prisma-return.repository';
 import { ReturnService } from './application/services/return.service';
@@ -44,6 +51,7 @@ import { MoneyModule } from '../../core/money/money.module';
     LiabilityLedgerModule,
     DiscountsModule,
     MoneyModule,
+    TaxModule,
   ],
   controllers: [
     CustomerReturnsController,

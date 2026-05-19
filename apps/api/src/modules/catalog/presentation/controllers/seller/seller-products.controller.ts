@@ -94,6 +94,20 @@ export class SellerProductsController {
       resolvedBrandId = brand.id;
     }
 
+    // Tax columns supplied by the seller flow through unchanged. Admin
+    // moderation (existing approval workflow) is the safety net if the
+    // seller misclassifies HSN / rate. Stamp the audit fields when any
+    // tax data was supplied so the trail shows the seller as the
+    // origin until admin overrides.
+    const taxFieldsTouched =
+      dto.hsnCode !== undefined ||
+      dto.gstRateBps !== undefined ||
+      dto.supplyTaxability !== undefined ||
+      dto.taxInclusivePricing !== undefined ||
+      dto.cessRateBps !== undefined ||
+      dto.defaultUqcCode !== undefined ||
+      dto.taxCategory !== undefined;
+
     const product = await this.productRepo.createInTransaction(
       {
         sellerId,
@@ -119,6 +133,15 @@ export class SellerProductsController {
         dimensionUnit: dto.dimensionUnit,
         returnPolicy: dto.returnPolicy,
         warrantyInfo: dto.warrantyInfo,
+        hsnCode: dto.hsnCode,
+        gstRateBps: dto.gstRateBps,
+        supplyTaxability: dto.supplyTaxability,
+        taxInclusivePricing: dto.taxInclusivePricing,
+        cessRateBps: dto.cessRateBps,
+        defaultUqcCode: dto.defaultUqcCode,
+        taxCategory: dto.taxCategory,
+        taxConfigUpdatedBy: taxFieldsTouched ? sellerId : undefined,
+        taxConfigUpdatedAt: taxFieldsTouched ? new Date() : undefined,
       },
       dto.tags,
       dto.seo,
@@ -322,18 +345,52 @@ export class SellerProductsController {
       { key: 'dimensionUnit', dtoKey: 'dimensionUnit' },
       { key: 'returnPolicy', dtoKey: 'returnPolicy' },
       { key: 'warrantyInfo', dtoKey: 'warrantyInfo' },
+      // Tax columns — same change-detection as the rest. Re-approval
+      // classifier (re-approval.service) treats anything not on the
+      // self-serve allowlist as content, so a tax change correctly
+      // forces admin review.
+      { key: 'hsnCode', dtoKey: 'hsnCode' },
+      { key: 'gstRateBps', dtoKey: 'gstRateBps' },
+      { key: 'supplyTaxability', dtoKey: 'supplyTaxability' },
+      { key: 'taxInclusivePricing', dtoKey: 'taxInclusivePricing' },
+      { key: 'cessRateBps', dtoKey: 'cessRateBps' },
+      { key: 'defaultUqcCode', dtoKey: 'defaultUqcCode' },
+      { key: 'taxCategory', dtoKey: 'taxCategory' },
     ];
     for (const { key, dtoKey } of simpleFields) {
       const dtoVal = dto[dtoKey];
       if (dtoVal !== undefined) {
         // Compare with type coercion for Decimal fields
-        const curVal = current?.[key];
+        const curVal = (current as Record<string, unknown> | null)?.[key];
         const dtoStr = String(dtoVal ?? '');
         const curStr = String(curVal ?? '');
         if (dtoStr !== curStr) {
           updateData[key] = dtoVal;
         }
       }
+    }
+
+    // Stamp the tax-config audit fields once if any tax column actually
+    // ended up in updateData (changed vs. current). No-op writes do not
+    // bump the stamp.
+    const TAX_KEYS = [
+      'hsnCode',
+      'gstRateBps',
+      'supplyTaxability',
+      'taxInclusivePricing',
+      'cessRateBps',
+      'defaultUqcCode',
+      'taxCategory',
+    ] as const;
+    if (TAX_KEYS.some((k) => k in updateData)) {
+      updateData.taxConfigUpdatedBy = sellerId;
+      updateData.taxConfigUpdatedAt = new Date();
+      // Phase 37 — a seller edit to any tax field resets the
+      // admin attestation. Sellers cannot self-attest; the product
+      // re-enters the admin queue for tax-config review.
+      updateData.taxConfigVerified = false;
+      updateData.taxConfigVerifiedAt = null;
+      updateData.taxConfigVerifiedBy = null;
     }
 
     // Compare tags — only include if actually different

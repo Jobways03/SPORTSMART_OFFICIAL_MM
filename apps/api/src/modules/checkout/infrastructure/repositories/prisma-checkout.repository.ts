@@ -29,16 +29,19 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
     addressId: string,
     customerId: string,
   ): Promise<CustomerAddressEntity | null> {
+    // `as any` here only until the Prisma client is regenerated to
+    // include the Phase-34 stateCode column; the schema + migration
+    // both declare it.
     return this.prisma.customerAddress.findFirst({
       where: { id: addressId, customerId },
-    });
+    }) as any;
   }
 
   async findAddressesByCustomer(customerId: string): Promise<CustomerAddressEntity[]> {
     return this.prisma.customerAddress.findMany({
       where: { customerId },
       orderBy: { createdAt: 'desc' },
-    });
+    }) as any;
   }
 
   async clearDefaultAddresses(customerId: string): Promise<void> {
@@ -49,7 +52,13 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
   }
 
   async createAddress(input: CreateAddressInput): Promise<CustomerAddressEntity> {
-    return this.prisma.customerAddress.create({
+    // Phase 34 — resolve the GST state code at write time so the tax
+    // engine + place-of-supply reader doesn't have to round-trip the
+    // name-lookup at request time. Explicit input.stateCode wins;
+    // otherwise look up by name. Lookup miss is fine — column is
+    // nullable, the legacy state-code-map fallback still resolves it.
+    const stateCode = await this.resolveStateCode(input.stateCode, input.state);
+    return (this.prisma.customerAddress.create({
       data: {
         customerId: input.customerId,
         fullName: input.fullName,
@@ -59,20 +68,66 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         locality: input.locality || null,
         city: input.city,
         state: input.state,
+        stateCode: stateCode,
         postalCode: input.postalCode,
         isDefault: input.isDefault || false,
-      },
-    });
+      } as any,
+    }) as unknown as Promise<CustomerAddressEntity>);
   }
 
   async updateAddress(
     addressId: string,
     data: UpdateAddressInput,
   ): Promise<CustomerAddressEntity> {
+    // Phase 34 — when `state` is supplied (caller changed the
+    // state name), re-resolve stateCode unless caller explicitly
+    // overrode it. Pure name change → automatic stateCode refresh.
+    // Pure stateCode change (rare; admin override flow) → use it.
+    let resolvedStateCode: string | null | undefined = data.stateCode;
+    if (resolvedStateCode === undefined && data.state !== undefined) {
+      resolvedStateCode = await this.resolveStateCode(undefined, data.state);
+    }
+    const finalData: Record<string, unknown> = { ...data };
+    if (resolvedStateCode !== undefined) {
+      finalData.stateCode = resolvedStateCode;
+    }
     return this.prisma.customerAddress.update({
       where: { id: addressId },
-      data,
+      data: finalData as any,
+    }) as unknown as Promise<CustomerAddressEntity>;
+  }
+
+  /**
+   * Phase 34 — resolve a CBIC 2-digit GST state code:
+   *   - Explicit `explicit` value wins (when it matches the 2-digit
+   *     pattern; otherwise dropped — never persist a non-canonical
+   *     string as stateCode).
+   *   - Else look up by free-text name against india_states with
+   *     case-insensitive whitespace-tolerant match. Identical SQL
+   *     to the backfill so writes and backfilled rows stay aligned.
+   *   - Else return null. Column is nullable; legacy fallback in
+   *     tax/domain/state-code-map.ts can still resolve at read time.
+   */
+  private async resolveStateCode(
+    explicit: string | null | undefined,
+    name: string | undefined,
+  ): Promise<string | null> {
+    if (explicit !== undefined && explicit !== null) {
+      const trimmed = explicit.trim();
+      if (/^[0-9]{2}$/.test(trimmed)) return trimmed;
+    }
+    if (!name) return null;
+    const trimmedName = name.trim();
+    if (!trimmedName) return null;
+    // Same case-insensitive match the backfill uses.
+    const row = await (this.prisma as any).indiaState.findFirst({
+      where: {
+        stateName: { equals: trimmedName, mode: 'insensitive' },
+        isActive: true,
+      },
+      select: { gstStateCode: true },
     });
+    return row?.gstStateCode ?? null;
   }
 
   async deleteAddress(addressId: string): Promise<void> {
@@ -94,7 +149,7 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         where: { id: addressId },
         data: { isDefault: true },
       });
-    });
+    }) as any;
   }
 
   // ── Cart operations ──────────────────────────────────────────────────────
@@ -310,7 +365,9 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           shippingOptionId: input.shippingOptionId ?? null,
           shippingOptionName: input.shippingOptionName ?? null,
           shippingFeeInPaise: input.shippingFeeInPaise ?? 0n,
-        }),
+          // Phase 37 — checkout-picked B2B tax profile snapshot.
+          selectedTaxProfileId: input.selectedTaxProfileId ?? null,
+        } as any),
       });
 
       // Affiliate attribution — write the ReferralAttribution row in

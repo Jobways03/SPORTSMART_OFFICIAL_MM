@@ -73,6 +73,27 @@ export default function TaxDashboardPage() {
           <SubPageCard href="/dashboard/tax/einvoices"
             title="🧾 E-invoices / IRN"
             desc="Phase-22 NIC IRP IRN management" />
+          <SubPageCard href="/dashboard/tax/seller-gstins"
+            title="🪪 Seller GSTINs"
+            desc="Phase-35 GSTN portal verification for seller GSTINs" />
+          <SubPageCard href="/dashboard/tax/customer-tax-profiles"
+            title="🛡️ Customer tax profiles"
+            desc="Phase-35 GSTN portal verification for B2B customer GSTINs" />
+          <SubPageCard href="/dashboard/tax/tds194o"
+            title="📋 Section 194-O TDS"
+            desc="Phase-27 Form 26Q quarterly TDS lifecycle (deposit + Form 16A)" />
+          <SubPageCard href="/dashboard/tax/hsn-master"
+            title="📚 HSN master"
+            desc="Phase-37 CBIC HSN codes + effective-dated rate changes" />
+          <SubPageCard href="/dashboard/tax/uqc-master"
+            title="📏 UQC master"
+            desc="Phase-37 CBIC Unit Quantity Codes (Section 31 / Rule 46)" />
+          <SubPageCard href="/dashboard/tax/config"
+            title="⚙️ Tax config"
+            desc="Phase-37 runtime knobs (EWB threshold, TCS rate, shipping SAC, etc.)" />
+          <SubPageCard href="/dashboard/tax/platform-gst"
+            title="🏢 Platform GST profiles"
+            desc="Phase-37 Sportsmart's own GSTINs (OWN_BRAND / SPORTSMART supplier)" />
         </div>
       </section>
 
@@ -80,6 +101,7 @@ export default function TaxDashboardPage() {
 
       <Gstr8Section />
       <Gstr1Section />
+      <MarketplaceCommissionGstrSection />
     </div>
   );
 }
@@ -205,6 +227,39 @@ function ModeBadge({ mode, onRefresh }: { mode: TaxMode | null; onRefresh: () =>
 
 // ── Readiness ─────────────────────────────────────────────────────
 
+// Phase 37 — map each blocker code to its admin fix page. Codes that
+// have no in-app target (e.g. product.missing_hsn lives in web-admin,
+// not admin-storefront) return null and the row stays read-only.
+function blockerFixLink(code: string): { label: string; href: string } | null {
+  switch (code) {
+    case 'einvoice.unresolved':
+      return { label: 'Open e-invoices →', href: '/dashboard/tax/einvoices' };
+    case 'pdf.unresolved':
+      return { label: 'Open e-invoices →', href: '/dashboard/tax/einvoices' };
+    case 'timebar.requires_review':
+      return {
+        label: 'Open time-bar queue →',
+        href: '/dashboard/tax/timebar-review',
+      };
+    case 'tcs.unfiled':
+      // GSTR-8 section is anchored on this page; jump to it via hash.
+      return { label: 'Jump to GSTR-8 →', href: '#gstr8' };
+    case 'seller.missing_gstin':
+      return {
+        label: 'Open seller GSTINs →',
+        href: '/dashboard/tax/seller-gstins',
+      };
+    case 'product.missing_hsn':
+    case 'product.missing_rate':
+      // Product tax fields live in web-admin (different app); link
+      // to the bulk-tax-config page there. Both apps run under the
+      // same parent dashboard in prod, so the relative path works.
+      return null;
+    default:
+      return null;
+  }
+}
+
 function ReadinessSection({ report, onRefresh }: { report: AuditReadinessReport; onRefresh: () => void }) {
   return (
     <section style={card}>
@@ -236,28 +291,53 @@ function ReadinessSection({ report, onRefresh }: { report: AuditReadinessReport;
             <th style={{ ...th, textAlign: 'right' }}>Count</th>
             <th style={th}>Message</th>
             <th style={th}>Sample IDs</th>
+            <th style={th}>Fix</th>
           </tr>
         </thead>
         <tbody>
-          {report.blockers.map((b) => (
-            <tr key={b.code} style={{ borderTop: '1px solid #eee' }}>
-              <td style={{ ...td, fontFamily: 'monospace' }}>{b.code}</td>
-              <td
-                style={{
-                  ...td,
-                  textAlign: 'right',
-                  color: b.count > 0 ? '#dc2626' : '#16a34a',
-                  fontWeight: 700,
-                }}
-              >
-                {b.count}
-              </td>
-              <td style={td}>{b.message}</td>
-              <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>
-                {b.sampleIds.length > 0 ? b.sampleIds.join(', ') : '—'}
-              </td>
-            </tr>
-          ))}
+          {report.blockers.map((b) => {
+            const link = b.count > 0 ? blockerFixLink(b.code) : null;
+            return (
+              <tr key={b.code} style={{ borderTop: '1px solid #eee' }}>
+                <td style={{ ...td, fontFamily: 'monospace' }}>{b.code}</td>
+                <td
+                  style={{
+                    ...td,
+                    textAlign: 'right',
+                    color: b.count > 0 ? '#dc2626' : '#16a34a',
+                    fontWeight: 700,
+                  }}
+                >
+                  {b.count}
+                </td>
+                <td style={td}>{b.message}</td>
+                <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>
+                  {b.sampleIds.length > 0 ? b.sampleIds.join(', ') : '—'}
+                </td>
+                <td style={td}>
+                  {link ? (
+                    <Link
+                      href={link.href}
+                      style={{
+                        color: '#2563eb',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        textDecoration: 'none',
+                      }}
+                    >
+                      {link.label}
+                    </Link>
+                  ) : b.count > 0 ? (
+                    <span style={{ color: '#888', fontSize: 12 }}>
+                      No in-app target
+                    </span>
+                  ) : (
+                    <span style={{ color: '#16a34a', fontSize: 12 }}>✓</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>
@@ -315,7 +395,7 @@ function Gstr8Section() {
   };
 
   return (
-    <section style={card}>
+    <section style={card} id="gstr8">
       <h2>GSTR-8 (platform-side TCS)</h2>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <label>Filing period (YYYY-MM):</label>
@@ -484,6 +564,60 @@ function Gstr1Section() {
       </div>
 
       {msg && <p style={{ color: msg.startsWith('Error') ? '#dc2626' : '#16a34a', marginTop: 8 }}>{msg}</p>}
+    </section>
+  );
+}
+
+// ── Marketplace GSTR-1 (own filing) — commission section ─────────
+//
+// Phase 28+ — distinct from per-seller §4 B2B above: this CSV is the
+// marketplace's OWN GSTR-1 commission section under SAC 9985, grouped
+// by (sellerGstin, stateCode) for the chosen period. Treat the seller
+// as the recipient; the marketplace is the supplier.
+
+function MarketplaceCommissionGstrSection() {
+  const [period, setPeriod] = useState(defaultFilingPeriod());
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const download = async () => {
+    setMsg(null);
+    setBusy(true);
+    try {
+      const url = adminTaxService.marketplaceCommissionGstr1CsvUrl(period);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err: any) {
+      setMsg(`Error: ${err?.message ?? 'download failed'}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section style={card}>
+      <h2>Marketplace GSTR-1 — commission section (SAC 9985)</h2>
+      <p style={{ color: '#666', fontSize: 12, marginTop: 4 }}>
+        Marketplace's OWN GSTR-1 filing for commission charged to sellers.
+        Aggregated per (seller GSTIN, state) for the period; CGST/SGST when
+        the seller is intra-state with the marketplace, IGST otherwise.
+      </p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <label>Filing period (YYYY-MM):</label>
+        <input
+          value={period}
+          onChange={(e) => setPeriod(e.target.value)}
+          placeholder="2026-04"
+          style={input}
+        />
+        <button onClick={download} style={btnPrimary} disabled={busy || !period}>
+          {busy ? 'Downloading…' : 'Download CSV'}
+        </button>
+      </div>
+      {msg && (
+        <p style={{ color: msg.startsWith('Error') ? '#dc2626' : '#16a34a', marginTop: 8 }}>
+          {msg}
+        </p>
+      )}
     </section>
   );
 }

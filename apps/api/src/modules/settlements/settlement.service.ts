@@ -4,6 +4,8 @@ import { AuditPublicFacade } from '../audit/application/facades/audit-public.fac
 import { MoneyDualWriteHelper } from '../../core/money/money-dual-write.helper';
 import { toPaise } from '../../core/money/money-field-registry';
 import { SettlementTcsHookService } from '../tax/application/services/settlement-tcs-hook.service';
+import { SettlementTds194OHookService } from '../tax/application/services/settlement-tds-194o-hook.service';
+import { computeCommissionGst } from '../tax/domain/commission-gst-calculator';
 
 @Injectable()
 export class SettlementService {
@@ -17,6 +19,10 @@ export class SettlementService {
     private readonly moneyDualWrite: MoneyDualWriteHelper,
     // Phase 17 GST — TCS deduction at approval + collection at mark-paid.
     private readonly tcsHook: SettlementTcsHookService,
+    // Phase 27 — Section 194-O Income-Tax TDS deduction at approval +
+    // withholding at mark-paid. Independent of TCS — both stamp
+    // their own ledger row and denorm columns on SellerSettlement.
+    private readonly tdsHook: SettlementTds194OHookService,
   ) {}
 
   /* ── T3: Create settlement cycle ── */
@@ -39,7 +45,14 @@ export class SettlementService {
         },
       },
       include: {
-        seller: { select: { id: true, sellerShopName: true } },
+        seller: {
+          select: {
+            id: true,
+            sellerShopName: true,
+            // Phase 28 — needed for commission-GST place-of-supply.
+            gstStateCode: true,
+          },
+        },
       },
     });
 
@@ -55,6 +68,10 @@ export class SettlementService {
       string,
       {
         sellerName: string;
+        // Phase 28 — captured for commission-GST place-of-supply.
+        // May be empty for legacy sellers without a registered GSTIN;
+        // the calculator falls back to IGST in that case.
+        sellerStateCode: string;
         records: typeof pendingRecords;
         totalPlatformAmount: number;
         totalSettlementAmount: number;
@@ -76,6 +93,7 @@ export class SettlementService {
       } else {
         sellerMap.set(rec.sellerId, {
           sellerName: rec.seller?.sellerShopName || rec.sellerName,
+          sellerStateCode: rec.seller?.gstStateCode ?? '',
           records: [rec],
           totalPlatformAmount: Number(rec.totalPlatformAmount),
           totalSettlementAmount: Number(rec.totalSettlementAmount),
@@ -85,6 +103,16 @@ export class SettlementService {
         });
       }
     }
+
+    // Phase 28 — Look up the marketplace's own GST state code once
+    // so every seller settlement uses the same place-of-supply origin.
+    // Empty when no PlatformGstProfile is seeded — calculator falls
+    // back to IGST conservatively in that case.
+    const platformProfile = await this.prisma.platformGstProfile.findFirst({
+      where: { isDefault: true, isActive: true },
+      select: { gstStateCode: true },
+    });
+    const marketplaceStateCode = platformProfile?.gstStateCode ?? '';
 
     // Create cycle in a transaction
     const cycle = await this.prisma.$transaction(async (tx) => {
@@ -112,6 +140,19 @@ export class SettlementService {
 
       // Create per-seller settlements
       for (const [sellerId, data] of sellerMap) {
+        // Phase 28 — compute the commission-GST split at row-creation
+        // time so the settlement is fully GST-aware from the first
+        // moment it exists. Frozen with the marketplace + seller state
+        // codes so a later PlatformGstProfile / Seller.gstStateCode
+        // change doesn't rewrite the historical split.
+        const commissionGst = computeCommissionGst({
+          commissionAmountInPaise: BigInt(
+            Math.round(data.totalPlatformMargin * 100),
+          ),
+          marketplaceStateCode,
+          sellerStateCode: data.sellerStateCode,
+        });
+
         const sellerSettlement = await tx.sellerSettlement.create({
           data: this.moneyDualWrite.applyPaise('sellerSettlement', {
             cycleId: newCycle.id,
@@ -124,6 +165,19 @@ export class SettlementService {
             totalSettlementAmount: data.totalSettlementAmount.toFixed(2),
             totalPlatformMargin: data.totalPlatformMargin.toFixed(2),
             status: 'PENDING',
+            // Phase 28 — commission-GST denorm columns. Rate stored
+            // even when total is 0 so the historical rate snapshot is
+            // useful for audits.
+            commissionGstRateBps: commissionGst.rateBps,
+            commissionGstSplitType: commissionGst.splitType,
+            cgstOnCommissionInPaise: commissionGst.cgstInPaise,
+            sgstOnCommissionInPaise: commissionGst.sgstInPaise,
+            igstOnCommissionInPaise: commissionGst.igstInPaise,
+            totalCommissionGstInPaise: commissionGst.totalGstInPaise,
+            commissionGstMarketplaceStateCode:
+              marketplaceStateCode || null,
+            commissionGstSellerStateCode:
+              data.sellerStateCode || null,
           }),
         });
 
@@ -292,10 +346,26 @@ export class SettlementService {
       );
     }
 
+    // Phase 27 — apply Section 194-O TDS in the same pass. The two
+    // hooks operate on different denorm columns + different ledger
+    // tables, so a TCS failure doesn't block TDS and vice versa.
+    let tdsResult;
+    try {
+      tdsResult = await this.tdsHook.applyToCycleOnApprove({
+        cycleId,
+        actorId,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `194-O TDS apply-on-approve failed for cycle ${cycleId}: ${(err as Error).message}`,
+      );
+    }
+
     return {
       success: true,
       message: 'Settlement cycle approved',
       tcs: tcsResult,
+      tds: tdsResult,
     };
   }
 
@@ -371,6 +441,19 @@ export class SettlementService {
     } catch (err) {
       this.logger.warn(
         `TCS mark-collected failed for settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
+
+    // Phase 27 — same pattern for the 194-O TDS row. The TDS amount
+    // has been deducted from the seller's payout; flip the ledger
+    // COMPUTED → WITHHELD so admin sees it in the "challan-pending"
+    // queue. Best-effort: re-runnable via the admin endpoint if it
+    // fails here.
+    try {
+      await this.tdsHook.markWithheldOnPay({ settlementId });
+    } catch (err) {
+      this.logger.warn(
+        `194-O TDS mark-withheld failed for settlement ${settlementId}: ${(err as Error).message}`,
       );
     }
 

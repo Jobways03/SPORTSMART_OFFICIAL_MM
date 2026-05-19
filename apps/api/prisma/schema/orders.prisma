@@ -40,6 +40,15 @@ model CustomerAddress {
   locality     String?
   city         String
   state        String
+  // Phase 34 — canonical CBIC 2-digit GST state code. Coexists with
+  // `state` (free-text) to avoid breaking the dozens of read paths
+  // that show the state name in the UI. Tax-engine + place-of-supply
+  // code reads this directly; the legacy state-code-map.ts lookup
+  // is now a fallback only for rows that didn't get backfilled
+  // (e.g. an address whose `state` doesn't match any india_states
+  // row exactly — typo, alternate spelling). Backfill runs in the
+  // migration via JOIN on UPPER(TRIM(state_name)).
+  stateCode    String?  @map("state_code")
   postalCode   String   @map("postal_code")
   country      String   @default("India")
   isDefault    Boolean  @default(false) @map("is_default")
@@ -49,6 +58,7 @@ model CustomerAddress {
   customer User @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@index([customerId])
+  @@index([stateCode])
   @@map("customer_addresses")
 }
 
@@ -142,6 +152,13 @@ model MasterOrder {
   shippingOptionName  String? @map("shipping_option_name")
   shippingFeeInPaise  BigInt  @default(0) @map("shipping_fee_in_paise")
 
+  // Phase 37 — checkout-time B2B GSTIN picker. Snapshots which
+  // CustomerTaxProfile the buyer chose for this order's invoice.
+  // Null = "use whichever profile is currently default" (preserves
+  // legacy behaviour). No FK: profile rows may be deleted later, the
+  // tax-document service tolerates a stale reference.
+  selectedTaxProfileId String? @map("selected_tax_profile_id")
+
   // Online payment tracking (Razorpay)
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
@@ -171,6 +188,7 @@ model MasterOrder {
 
   @@index([customerId])
   @@index([orderNumber])
+  @@index([selectedTaxProfileId])
   @@index([orderStatus])
   // Phase 2 (PR 2.1) — customer order history: `WHERE customer_id = ?
   // ORDER BY created_at DESC`. The single-column `customer_id` index

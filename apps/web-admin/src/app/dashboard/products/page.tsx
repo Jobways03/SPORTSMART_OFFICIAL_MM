@@ -381,9 +381,18 @@ const router = useRouter();
             <span className="products-header-count">({pagination.total})</span>
           )}
         </h1>
-        <Link href="/dashboard/products/new" className="products-add-btn">
-          + ADD PRODUCT
-        </Link>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link
+            href="/dashboard/products/bulk-tax-config"
+            className="products-add-btn"
+            style={{ background: '#f3f4f6', color: '#111' }}
+          >
+            Bulk tax config
+          </Link>
+          <Link href="/dashboard/products/new" className="products-add-btn">
+            + ADD PRODUCT
+          </Link>
+        </div>
       </div>
 
       {/* Quick Filter Tabs */}
@@ -936,6 +945,18 @@ function ProductCard({
         {p.moderationStatus && p.moderationStatus !== 'APPROVED' && (
           <div style={{ flexShrink: 0 }}>
             <Pill tone="warning" label={formatStatus(p.moderationStatus)} subtle />
+          </div>
+        )}
+
+        {/* Phase 37 — tax-config attestation pill. Visible only when
+            the product's tax config has NOT been admin-verified yet.
+            Catalog moderation and tax-config attestation are separate
+            workflows (catalog team vs finance team); this pill signals
+            "finance signoff pending" so the catalog-side approval
+            isn't a false-green for STRICT-mode invoicing. */}
+        {p.taxConfigVerified === false && (
+          <div style={{ flexShrink: 0 }}>
+            <Pill tone="warning" label="Tax: unverified" subtle />
           </div>
         )}
 

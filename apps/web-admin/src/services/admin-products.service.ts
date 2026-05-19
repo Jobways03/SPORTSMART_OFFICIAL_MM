@@ -29,6 +29,11 @@ export interface ProductListItem {
   potentialDuplicateOf: string | null;
   createdAt: string;
   updatedAt: string;
+  // Phase 37 — surfaced on the list so the admin moderation queue
+  // can render an "unverified tax config" badge without a per-row
+  // fetch. Backend uses `include` (not `select`) so all Product
+  // columns flow into the response — we just type-narrow here.
+  taxConfigVerified?: boolean;
   // Pre-aggregated server-side so the list view can render an inline
   // inventory snapshot without per-row API calls.
   inventorySummary?: ProductInventorySummary;
@@ -57,6 +62,31 @@ export interface ProductDetail extends ProductListItem {
   dimensionUnit: string | null;
   returnPolicy: string | null;
   warrantyInfo: string | null;
+  // Tax fields — see catalog.prisma Product (Phase 1 GST). The API
+  // returns them on every product detail; surfacing them in the type
+  // lets the edit form populate without `(p as any)` casts.
+  hsnCode: string | null;
+  gstRateBps: number;
+  supplyTaxability:
+    | 'TAXABLE'
+    | 'NIL_RATED'
+    | 'EXEMPT'
+    | 'NON_GST'
+    | 'ZERO_RATED'
+    | 'OUT_OF_SCOPE';
+  taxInclusivePricing: boolean;
+  cessRateBps: number;
+  defaultUqcCode: string | null;
+  taxCategory: string | null;
+  // Phase 37 — admin tax-config attestation. Seller-proposed tax
+  // fields land with this false; an admin POSTs /verify-tax-config
+  // to flip it true. Any subsequent edit to a tax field auto-resets
+  // it. STRICT-mode invoicing should gate on this.
+  taxConfigVerified: boolean;
+  taxConfigVerifiedAt: string | null;
+  taxConfigVerifiedBy: string | null;
+  taxConfigUpdatedAt: string | null;
+  taxConfigUpdatedBy: string | null;
   variants: any[];
   images: any[];
   tags: { id: string; tag: string; }[];
@@ -106,6 +136,40 @@ export const adminProductsService = {
 
   approveProduct(productId: string): Promise<ApiResponse> {
     return apiClient(`/admin/products/${productId}/approve`, { method: 'PATCH' });
+  },
+
+  // Phase 37 — admin attestation of the product's tax config (HSN,
+  // GST rate, supply taxability, etc.). Separate from approveProduct
+  // which only flips catalog moderation status; tax-config is a
+  // finance/compliance signoff that gates STRICT-mode invoicing.
+  verifyProductTaxConfig(
+    productId: string,
+  ): Promise<
+    ApiResponse<{
+      taxConfigVerified: boolean;
+      taxConfigVerifiedAt: string;
+      taxConfigVerifiedBy: string;
+    }>
+  > {
+    return apiClient(`/admin/products/${productId}/verify-tax-config`, {
+      method: 'PATCH',
+    });
+  },
+
+  // Phase 37 — bulk tax-config update across many products.
+  bulkUpdateTaxConfig(input: {
+    productIds?: string[];
+    categoryId?: string | null;
+    missingHsnOnly?: boolean;
+    hsnCode?: string | null;
+    gstRateBps?: number;
+    supplyTaxability?: string;
+    defaultUqcCode?: string | null;
+  }): Promise<ApiResponse<{ updated: number }>> {
+    return apiClient('/admin/products/bulk/tax-config', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
   },
 
   rejectProduct(productId: string, reason: string): Promise<ApiResponse> {

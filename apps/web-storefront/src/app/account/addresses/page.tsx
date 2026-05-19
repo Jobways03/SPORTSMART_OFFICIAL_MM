@@ -8,6 +8,8 @@ import {
   addressesService,
   CustomerAddress,
   AddressPayload,
+  IndiaStateRef,
+  taxReferenceService,
 } from '@/services/addresses.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
@@ -21,6 +23,10 @@ interface FormState {
   locality: string;
   city: string;
   state: string;
+  // Phase 34 — selected from the india_states dropdown. Always kept
+  // in sync with `state` (the human-readable name) so the existing
+  // display paths keep working.
+  stateCode: string;
   postalCode: string;
   isDefault: boolean;
 }
@@ -33,6 +39,7 @@ const EMPTY_FORM: FormState = {
   locality: '',
   city: '',
   state: '',
+  stateCode: '',
   postalCode: '',
   isDefault: false,
 };
@@ -58,6 +65,22 @@ const router = useRouter();
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  // Phase 34 — india_states master, fetched once. Empty array =
+  // loading or fetch failure; the page still works because the
+  // backend re-resolves stateCode by name as a fallback.
+  const [indiaStates, setIndiaStates] = useState<IndiaStateRef[]>([]);
+
+  useEffect(() => {
+    taxReferenceService
+      .indiaStates()
+      .then((res) => {
+        if (res.data) setIndiaStates(res.data);
+      })
+      .catch(() => {
+        // Non-fatal — the dropdown silently degrades to whatever the
+        // page renders without master data.
+      });
+  }, []);
 
   const fetchAddresses = () => {
     setLoading(true);
@@ -93,6 +116,7 @@ const router = useRouter();
       locality: addr.locality || '',
       city: addr.city || '',
       state: addr.state || '',
+      stateCode: addr.stateCode || '',
       postalCode: addr.postalCode || '',
       isDefault: !!addr.isDefault,
     });
@@ -145,6 +169,10 @@ const router = useRouter();
       locality: form.locality.trim() || undefined,
       city: form.city.trim(),
       state: form.state.trim(),
+      // Phase 34 — only send stateCode when the dropdown was used.
+      // Empty string → omit, lets the backend re-resolve from the
+      // state name as a fallback.
+      stateCode: form.stateCode ? form.stateCode : undefined,
       postalCode: form.postalCode.trim(),
       isDefault: form.isDefault,
     };
@@ -354,14 +382,41 @@ const router = useRouter();
                 </div>
                 <div className="profile-field">
                   <label htmlFor="state">State</label>
-                  <input
-                    id="state"
-                    type="text"
-                    className="profile-input"
-                    value={form.state}
-                    onChange={(e) => setForm({ ...form, state: e.target.value })}
-                    required
-                  />
+                  {indiaStates.length > 0 ? (
+                    <select
+                      id="state"
+                      className="profile-input"
+                      value={form.stateCode || ''}
+                      onChange={(e) => {
+                        const code = e.target.value;
+                        const match = indiaStates.find((s) => s.code === code);
+                        setForm({
+                          ...form,
+                          stateCode: code,
+                          state: match ? match.name : '',
+                        });
+                      }}
+                      required
+                    >
+                      <option value="">Select state…</option>
+                      {indiaStates.map((s) => (
+                        <option key={s.code} value={s.code}>
+                          {s.name} {s.isUnionTerritory ? '(UT)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id="state"
+                      type="text"
+                      className="profile-input"
+                      value={form.state}
+                      onChange={(e) =>
+                        setForm({ ...form, state: e.target.value, stateCode: '' })
+                      }
+                      required
+                    />
+                  )}
                 </div>
                 <div className="profile-field">
                   <label htmlFor="postalCode">Postal Code (6 digits)</label>

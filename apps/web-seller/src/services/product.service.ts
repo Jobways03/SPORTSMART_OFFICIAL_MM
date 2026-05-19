@@ -61,6 +61,21 @@ export interface ProductDetail {
   dimensionUnit: string | null;
   returnPolicy: string | null;
   warrantyInfo: string | null;
+  // Tax fields — see catalog.prisma Product (Phase 1 GST). Mirrors the
+  // backend create/update DTOs (CreateProductDto / UpdateProductDto).
+  hsnCode: string | null;
+  gstRateBps: number;
+  supplyTaxability:
+    | 'TAXABLE'
+    | 'NIL_RATED'
+    | 'EXEMPT'
+    | 'NON_GST'
+    | 'ZERO_RATED'
+    | 'OUT_OF_SCOPE';
+  taxInclusivePricing: boolean;
+  cessRateBps: number;
+  defaultUqcCode: string | null;
+  taxCategory: string | null;
   category: { id: string; name: string } | null;
   brand: { id: string; name: string } | null;
   variants: ProductVariant[];

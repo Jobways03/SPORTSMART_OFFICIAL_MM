@@ -83,6 +83,16 @@ export default function CreateProductPage() {
     dimensionUnit: 'cm',
     returnPolicy: '',
     warrantyInfo: '',
+    // Tax & GST — values are strings (form-input convention) and get
+    // coerced to numbers / enum strings in buildPayload(). Empty strings
+    // mean "admin didn't pick" and the backend will use schema defaults.
+    hsnCode: '',
+    gstRateBps: '',
+    supplyTaxability: '',
+    cessRateBps: '',
+    defaultUqcCode: '',
+    taxCategory: '',
+    taxInclusivePricing: true,
     tags: [] as string[],
     seoMetaTitle: '',
     seoMetaDescription: '',
@@ -236,6 +246,20 @@ export default function CreateProductPage() {
 
     if (form.returnPolicy.trim()) payload.returnPolicy = form.returnPolicy.trim();
     if (form.warrantyInfo.trim()) payload.warrantyInfo = form.warrantyInfo.trim();
+
+    // Tax & GST — only send fields the admin actually filled in.
+    // Backend stamps tax_config_updated_by/at only when at least one
+    // tax field arrives, so the audit trail stays meaningful.
+    if (form.hsnCode.trim()) payload.hsnCode = form.hsnCode.trim();
+    if (form.gstRateBps !== '') payload.gstRateBps = Number(form.gstRateBps);
+    if (form.supplyTaxability) payload.supplyTaxability = form.supplyTaxability;
+    if (form.cessRateBps !== '') payload.cessRateBps = Number(form.cessRateBps);
+    if (form.defaultUqcCode) payload.defaultUqcCode = form.defaultUqcCode;
+    if (form.taxCategory.trim()) payload.taxCategory = form.taxCategory.trim();
+    // Boolean is sent only when the admin flips it off the default
+    // (true). Otherwise omit — DB default keeps it true and no audit
+    // stamp fires.
+    if (form.taxInclusivePricing === false) payload.taxInclusivePricing = false;
 
     if (form.tags.length > 0) payload.tags = form.tags;
 
@@ -623,6 +647,130 @@ export default function CreateProductPage() {
                 <option value="m">m</option>
               </select>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Section: Tax & GST Classification */}
+      <div className="form-card">
+        <div className="form-card-title">TAX &amp; GST CLASSIFICATION</div>
+        <div className="info-box">
+          Required for tax-invoice generation. Products without HSN code or
+          a GST rate get flagged at audit-readiness review before the
+          platform flips to STRICT tax mode.
+        </div>
+        <div className="form-grid">
+          <div className="form-group">
+            <label className="form-label">HSN / SAC Code</label>
+            <input
+              type="text"
+              className="form-input"
+              value={form.hsnCode}
+              onChange={e => updateField('hsnCode', e.target.value)}
+              placeholder="e.g. 95069900"
+              maxLength={8}
+              inputMode="numeric"
+            />
+            <span className="form-hint">4&ndash;8 digit code per CBIC. Sports goods sit under 9506xx.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">GST Rate</label>
+            <select
+              className="form-select"
+              value={form.gstRateBps}
+              onChange={e => updateField('gstRateBps', e.target.value)}
+            >
+              <option value="">Select rate</option>
+              <option value="0">0%</option>
+              <option value="500">5%</option>
+              <option value="1200">12%</option>
+              <option value="1800">18%</option>
+              <option value="2800">28%</option>
+            </select>
+            <span className="form-hint">Standard CBIC slabs.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Supply Type</label>
+            <select
+              className="form-select"
+              value={form.supplyTaxability}
+              onChange={e => updateField('supplyTaxability', e.target.value)}
+            >
+              <option value="">Select supply type</option>
+              <option value="TAXABLE">Taxable (standard)</option>
+              <option value="NIL_RATED">Nil-rated</option>
+              <option value="EXEMPT">Exempt</option>
+              <option value="NON_GST">Non-GST</option>
+              <option value="ZERO_RATED">Zero-rated (exports under LUT)</option>
+              <option value="OUT_OF_SCOPE">Out of scope</option>
+            </select>
+            <span className="form-hint">Drives the document type: Tax Invoice vs Bill of Supply.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Unit of Measure (UQC)</label>
+            <select
+              className="form-select"
+              value={form.defaultUqcCode}
+              onChange={e => updateField('defaultUqcCode', e.target.value)}
+            >
+              <option value="">Select unit</option>
+              <option value="NOS">NOS &mdash; Numbers</option>
+              <option value="PCS">PCS &mdash; Pieces</option>
+              <option value="PAR">PAR &mdash; Pair</option>
+              <option value="SET">SET &mdash; Set</option>
+              <option value="BOX">BOX &mdash; Box</option>
+              <option value="KGS">KGS &mdash; Kilograms</option>
+              <option value="MTR">MTR &mdash; Metres</option>
+              <option value="DOZ">DOZ &mdash; Dozen</option>
+            </select>
+            <span className="form-hint">Appears on invoice line items per CBIC UQC list.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Tax Category</label>
+            <input
+              type="text"
+              className="form-input"
+              value={form.taxCategory}
+              onChange={e => updateField('taxCategory', e.target.value)}
+              placeholder="e.g. apparel-under-1000, footwear, equipment"
+            />
+            <span className="form-hint">Optional. Internal grouping for admin bulk operations and reports.</span>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Compensation Cess Rate</label>
+            <input
+              type="number"
+              className="form-input"
+              value={form.cessRateBps}
+              onChange={e => updateField('cessRateBps', e.target.value)}
+              placeholder="0"
+              min="0"
+              max="10000"
+              step="1"
+            />
+            <span className="form-hint">Basis points (1800 = 18%). Default 0; rare for sports goods.</span>
+          </div>
+
+          <div className="form-group full-width">
+            <div className="form-checkbox-group">
+              <input
+                type="checkbox"
+                id="taxInclusivePricing"
+                checked={form.taxInclusivePricing}
+                onChange={e => updateField('taxInclusivePricing', e.target.checked)}
+              />
+              <label htmlFor="taxInclusivePricing">
+                Listed price includes GST (B2C inclusive pricing &mdash; default)
+              </label>
+            </div>
+            <span className="form-hint">
+              Uncheck only if listed prices exclude GST (rare in B2C).
+            </span>
           </div>
         </div>
       </div>

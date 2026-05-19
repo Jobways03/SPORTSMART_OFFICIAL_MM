@@ -974,10 +974,87 @@ export class AccountsSettlementService {
       return null;
     }
 
+    // Phase 33 — side-loaded per-settlement statutory-deduction
+    // breakdown (TCS Section 52 + TDS Section 194-O + 18% commission
+    // GST). Mirrors the existing `discountDeductionsBySeller` pattern
+    // so the frontend can render a tax column / expander without
+    // restructuring the cycle response shape. Keyed by SellerSettlement
+    // id, not sellerId (the same seller can have multiple settlements
+    // across cycles; here we are scoped to one cycle so it's the same
+    // 1:1, but keying by settlement id is the safe contract).
+    //
+    // Paise → string serialisation: BigInt over JSON, precision-safe.
+    // Net payout formula mirrors
+    // SettlementTds194OHookService.computeNetPayoutInPaise:
+    //   net = totalSettlement − tcs − tds − totalCommissionGst
+    const settlementsAny = sellerSettlements as Array<
+      (typeof sellerSettlements)[number] & {
+        tcsDeductedInPaise?: bigint | null;
+        tcsRateBpsSnapshot?: number | null;
+        tcsFilingPeriod?: string | null;
+        tdsDeductedInPaise?: bigint | null;
+        tdsRateBpsSnapshot?: number | null;
+        tdsFilingPeriod?: string | null;
+        commissionGstRateBps?: number | null;
+        commissionGstSplitType?: string | null;
+        cgstOnCommissionInPaise?: bigint | null;
+        sgstOnCommissionInPaise?: bigint | null;
+        igstOnCommissionInPaise?: bigint | null;
+        totalCommissionGstInPaise?: bigint | null;
+      }
+    >;
+    const taxBreakdownBySettlement: Record<
+      string,
+      {
+        tcsDeductedInPaise: string;
+        tcsRateBpsSnapshot: number;
+        tcsFilingPeriod: string | null;
+        tdsDeductedInPaise: string;
+        tdsRateBpsSnapshot: number;
+        tdsFilingPeriod: string | null;
+        commissionGstRateBps: number;
+        commissionGstSplitType: string | null;
+        cgstOnCommissionInPaise: string;
+        sgstOnCommissionInPaise: string;
+        igstOnCommissionInPaise: string;
+        totalCommissionGstInPaise: string;
+        netPayoutInPaise: string;
+      }
+    > = {};
+    for (const s of settlementsAny) {
+      const tcs = s.tcsDeductedInPaise ?? 0n;
+      const tds = s.tdsDeductedInPaise ?? 0n;
+      const commissionGst = s.totalCommissionGstInPaise ?? 0n;
+      // Convert the legacy Decimal totalSettlementAmount to paise via
+      // Math.round(x*100). Same conversion the seller payout page
+      // uses; safe for amounts up to ~₹90T per row.
+      const settlementPaise = BigInt(
+        Math.round(Number(s.totalSettlementAmount || 0) * 100),
+      );
+      let netPaise = settlementPaise - tcs - tds - commissionGst;
+      if (netPaise < 0n) netPaise = 0n;
+      taxBreakdownBySettlement[s.id] = {
+        tcsDeductedInPaise: tcs.toString(),
+        tcsRateBpsSnapshot: s.tcsRateBpsSnapshot ?? 100,
+        tcsFilingPeriod: s.tcsFilingPeriod ?? null,
+        tdsDeductedInPaise: tds.toString(),
+        tdsRateBpsSnapshot: s.tdsRateBpsSnapshot ?? 100,
+        tdsFilingPeriod: s.tdsFilingPeriod ?? null,
+        commissionGstRateBps: s.commissionGstRateBps ?? 1800,
+        commissionGstSplitType: s.commissionGstSplitType ?? null,
+        cgstOnCommissionInPaise: (s.cgstOnCommissionInPaise ?? 0n).toString(),
+        sgstOnCommissionInPaise: (s.sgstOnCommissionInPaise ?? 0n).toString(),
+        igstOnCommissionInPaise: (s.igstOnCommissionInPaise ?? 0n).toString(),
+        totalCommissionGstInPaise: commissionGst.toString(),
+        netPayoutInPaise: netPaise.toString(),
+      };
+    }
+
     return {
       cycle,
       sellerSettlements,
       franchiseSettlements,
+      taxBreakdownBySettlement,
       summary: {
         totalSellerPayable: sellerSettlements.reduce(
           (sum, s) => sum + Number(s.totalSettlementAmount || 0),

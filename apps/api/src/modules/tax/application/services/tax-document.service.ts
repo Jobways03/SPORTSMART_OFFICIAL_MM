@@ -217,9 +217,26 @@ export class TaxDocumentService {
     }
 
     // Recipient identity (customer).
-    const customerProfile = await this.prisma.customerTaxProfile.findFirst({
-      where: { customerId: subOrder.masterOrder.customerId, isDefault: true },
-    });
+    // Phase 37 — checkout may have picked a non-default profile. The
+    // selectedTaxProfileId snapshot wins when present; otherwise we
+    // fall back to whatever profile is currently isDefault.
+    const selectedProfileId = (subOrder.masterOrder as any).selectedTaxProfileId as
+      | string
+      | null
+      | undefined;
+    let customerProfile = selectedProfileId
+      ? await this.prisma.customerTaxProfile.findFirst({
+          where: {
+            id: selectedProfileId,
+            customerId: subOrder.masterOrder.customerId,
+          },
+        })
+      : null;
+    if (!customerProfile) {
+      customerProfile = await this.prisma.customerTaxProfile.findFirst({
+        where: { customerId: subOrder.masterOrder.customerId, isDefault: true },
+      });
+    }
     const customer = await this.prisma.user.findUnique({
       where: { id: subOrder.masterOrder.customerId },
       select: { id: true, firstName: true, lastName: true, email: true },

@@ -50,6 +50,10 @@ import {
   EWAY_BILL_PROVIDER,
   type EWayBillProvider,
 } from '../../infrastructure/eway-bill/eway-bill-provider';
+import {
+  haversineKm,
+  isIntraStateUnderThreshold,
+} from '../../domain/intra-state-distance';
 
 export class EWayBillNotFoundError extends Error {
   constructor(public readonly ewbId: string) {
@@ -188,9 +192,17 @@ export class EWayBillService {
       // Default ₹50,000 = 50_00_00 paise.
       50_00_00,
     );
+    // Phase 29 — intra-state distance exemption. CBIC + Sportsmart's
+    // HSN spec carve out intra-state movements at or below this
+    // distance from the EWB requirement, even when the consignment
+    // value clears the headline threshold.
+    const intraStateThresholdKm = await this.taxConfig.getNumber(
+      'eway_bill_intra_state_distance_threshold_km',
+      10,
+    );
     const { value, taxDocumentId, supplierGstin } =
       await this.computeConsignmentValue(subOrderId);
-    const required = value > BigInt(threshold);
+    let required = value > BigInt(threshold);
 
     if (existing) {
       // Idempotent — return current row but allow status to flip from
@@ -225,6 +237,47 @@ export class EWayBillService {
     // call will fill in any missing fields when transport details land.
     const addresses = await this.resolveAddresses(subOrderId);
 
+    // Phase 29 — intra-state sub-threshold-distance check. Only fires
+    // when (a) value already cleared the headline EWB threshold and
+    // (b) both state codes resolved. When the addresses stub still
+    // returns nulls (current state — Phase 25 admin retry fills them),
+    // the helper short-circuits with `exempt=false` so we stay
+    // conservative. When data IS available, an intra-state ≤ threshold
+    // consignment gets flipped to NOT_REQUIRED with the distance
+    // persisted on the row for the audit trail.
+    let computedDistanceKm: number | null = null;
+    let intraStateExemptApplied = false;
+    if (
+      required &&
+      addresses.fromStateCode &&
+      addresses.toStateCode &&
+      addresses.fromStateCode === addresses.toStateCode
+    ) {
+      computedDistanceKm = await this.computeGeodesicDistanceKm(
+        addresses.fromPincode,
+        addresses.toPincode,
+      );
+      const decision = isIntraStateUnderThreshold({
+        fromStateCode: addresses.fromStateCode,
+        toStateCode: addresses.toStateCode,
+        distanceKm: computedDistanceKm,
+        thresholdKm: intraStateThresholdKm,
+      });
+      if (decision.exempt) {
+        required = false;
+        intraStateExemptApplied = true;
+      } else if (decision.distanceMissing) {
+        // Intra-state but we couldn't pin down the distance — stay
+        // pessimistic. The PostOffice coords backfill (or the
+        // generate-time distance input from the seller's transporter)
+        // will let a subsequent classifyForSubOrder call flip this.
+        this.logger.warn(
+          `Intra-state EWB classification for sub-order ${subOrderId} could ` +
+            `not determine distance (missing pincode geo); staying REQUIRED.`,
+        );
+      }
+    }
+
     const created = await this.prisma.eWayBill.create({
       data: {
         subOrderId,
@@ -237,11 +290,22 @@ export class EWayBillService {
         fromStateCode: addresses.fromStateCode,
         toPincode: addresses.toPincode,
         toStateCode: addresses.toStateCode,
+        // Persist the geodesic distance so the audit log captures
+        // *why* the row landed as NOT_REQUIRED (and so admins
+        // reviewing the row can sanity-check the math).
+        distanceKm:
+          computedDistanceKm != null
+            ? Math.round(computedDistanceKm)
+            : undefined,
       },
     });
     this.logger.log(
       `EWB classified for sub-order ${subOrderId}: status=${created.status} ` +
-        `(consignment ${value.toString()} paise, threshold ${threshold})`,
+        `(consignment ${value.toString()} paise, threshold ${threshold}` +
+        (intraStateExemptApplied
+          ? `, intra-state ≤ ${intraStateThresholdKm}km exemption applied`
+          : '') +
+        ')',
     );
     return {
       row: created,
@@ -249,6 +313,49 @@ export class EWayBillService {
       thresholdPaise: threshold,
       consignmentValueInPaise: value,
     };
+  }
+
+  /**
+   * Look up pincode coordinates from `PostOffice` and compute the
+   * great-circle distance between the consignor and consignee. Returns
+   * null when either pincode is missing OR the post-office row doesn't
+   * carry lat/lon (legacy seed data without geo enrichment).
+   *
+   * Geodesic distance is an approximation — real road distance is
+   * typically up to ~30% longer — but for the 10km gate the
+   * conservative reading is what we want.
+   */
+  private async computeGeodesicDistanceKm(
+    fromPincode: string | null,
+    toPincode: string | null,
+  ): Promise<number | null> {
+    if (!fromPincode || !toPincode) return null;
+    // Same pincode short-circuit — no DB read needed, distance is
+    // effectively zero so the exemption clearly applies.
+    if (fromPincode === toPincode) return 0;
+    const rows = await this.prisma.postOffice.findMany({
+      where: { pincode: { in: [fromPincode, toPincode] } },
+      select: { pincode: true, latitude: true, longitude: true },
+    });
+    const from = rows.find((r) => r.pincode === fromPincode);
+    const to = rows.find((r) => r.pincode === toPincode);
+    if (
+      !from ||
+      !to ||
+      from.latitude == null ||
+      from.longitude == null ||
+      to.latitude == null ||
+      to.longitude == null
+    ) {
+      return null;
+    }
+    const dist = haversineKm(
+      Number(from.latitude),
+      Number(from.longitude),
+      Number(to.latitude),
+      Number(to.longitude),
+    );
+    return Number.isFinite(dist) ? dist : null;
   }
 
   /**

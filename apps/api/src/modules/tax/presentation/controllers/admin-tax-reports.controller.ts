@@ -33,6 +33,14 @@ import { Gstr8ReportService } from '../../application/services/gstr8-report.serv
 import { TaxAuditReadinessService } from '../../application/services/tax-audit-readiness.service';
 import { TaxModeService } from '../../application/services/tax-mode.service';
 import { TcsService } from '../../application/services/tcs.service';
+import { Tds194OService } from '../../application/services/tds-194o.service';
+import { Form26QReportService } from '../../application/services/form-26q-report.service';
+import { MarketplaceCommissionGstrService } from '../../application/services/marketplace-commission-gstr.service';
+// Phase 36 — every GSTR export carries seller-level PII (legal names,
+// GSTINs, taxable values). The audit row captures who downloaded
+// which report for which (seller, period), with IP + UA, so a
+// data-exfiltration investigation has a single-table read path.
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 @ApiTags('Admin / Tax')
 @Controller('admin/tax')
@@ -45,7 +53,59 @@ export class AdminTaxReportsController {
     private readonly gstr3b: Gstr3bReportService,
     private readonly gstr8: Gstr8ReportService,
     private readonly tcs: TcsService,
+    private readonly tds: Tds194OService,
+    private readonly form26q: Form26QReportService,
+    private readonly marketplaceCommissionGstr: MarketplaceCommissionGstrService,
+    private readonly audit: AuditPublicFacade,
   ) {}
+
+  /**
+   * Phase 36 — log a tax-report export to the audit ledger. Non-
+   * throwing: an audit-write failure must not block the download
+   * (the response is already being streamed). Errors are swallowed
+   * with a console.warn — the alternative (failing the download)
+   * is worse for ops than missing one audit row.
+   *
+   * resourceId encodes (sellerId | 'platform') + filingPeriod so
+   * audit-history searches by resource can filter to "all exports
+   * for seller X in period Y" cheaply.
+   */
+  private async logReportDownload(
+    req: any,
+    args: {
+      resource: string;
+      sellerId?: string | null;
+      filingPeriod: string;
+      format: 'csv' | 'json' | 'summary';
+      bytes: number;
+      section?: string;
+      extra?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const resourceId = `${args.sellerId ?? 'platform'}:${args.filingPeriod}`;
+    try {
+      await this.audit.writeAuditLog({
+        actorId: req?.adminId,
+        actorRole: 'ADMIN',
+        action: 'tax.report.exported',
+        module: 'tax',
+        resource: args.resource,
+        resourceId,
+        metadata: {
+          sellerId: args.sellerId ?? null,
+          filingPeriod: args.filingPeriod,
+          format: args.format,
+          section: args.section ?? null,
+          byteSize: args.bytes,
+          ...(args.extra ?? {}),
+        },
+        ipAddress: req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null,
+        userAgent: req?.headers?.['user-agent'] ?? null,
+      });
+    } catch {
+      // never fail the download on an audit-write blip
+    }
+  }
 
   // ── Mode + readiness ────────────────────────────────────────────
 
@@ -95,6 +155,7 @@ export class AdminTaxReportsController {
   @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr1B2bCsv(
+    @Req() req: any,
     @Res() res: Response,
     @Query('sellerId') sellerId?: string,
     @Query('filingPeriod') filingPeriod?: string,
@@ -108,6 +169,13 @@ export class AdminTaxReportsController {
       res,
       `gstr1-b2b-${sellerId}-${filingPeriod}.csv`,
     );
+    await this.logReportDownload(req, {
+      resource: 'gstr1.b2b',
+      sellerId,
+      filingPeriod: filingPeriod!,
+      format: 'csv',
+      bytes: Buffer.byteLength(csv, 'utf8'),
+    });
     res.send(csv);
   }
 
@@ -116,6 +184,7 @@ export class AdminTaxReportsController {
   @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr1SectionCsv(
+    @Req() req: any,
     @Res() res: Response,
     @Param('section') section: string,
     @Query('sellerId') sellerId?: string,
@@ -159,6 +228,14 @@ export class AdminTaxReportsController {
       res,
       `gstr1-${section}-${sellerId}-${filingPeriod}.csv`,
     );
+    await this.logReportDownload(req, {
+      resource: 'gstr1.section',
+      sellerId,
+      filingPeriod: filingPeriod!,
+      format: 'csv',
+      bytes: Buffer.byteLength(csv, 'utf8'),
+      section,
+    });
     res.send(csv);
   }
 
@@ -168,6 +245,7 @@ export class AdminTaxReportsController {
   @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr3bCsv(
+    @Req() req: any,
     @Res() res: Response,
     @Query('sellerId') sellerId?: string,
     @Query('filingPeriod') filingPeriod?: string,
@@ -181,6 +259,13 @@ export class AdminTaxReportsController {
       res,
       `gstr3b-${sellerId}-${filingPeriod}.csv`,
     );
+    await this.logReportDownload(req, {
+      resource: 'gstr3b',
+      sellerId,
+      filingPeriod: filingPeriod!,
+      format: 'csv',
+      bytes: Buffer.byteLength(csv, 'utf8'),
+    });
     res.send(csv);
   }
 
@@ -190,18 +275,27 @@ export class AdminTaxReportsController {
   @Permissions('tax.tcs.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async gstr8Csv(
+    @Req() req: any,
     @Res() res: Response,
     @Query('filingPeriod') filingPeriod?: string,
   ) {
     assertPeriod(filingPeriod);
     const csv = await this.gstr8.generateCsv(filingPeriod!);
     setCsvDownloadHeaders(res, `gstr8-${filingPeriod}.csv`);
+    await this.logReportDownload(req, {
+      resource: 'gstr8',
+      sellerId: null,
+      filingPeriod: filingPeriod!,
+      format: 'csv',
+      bytes: Buffer.byteLength(csv, 'utf8'),
+    });
     res.send(csv);
   }
 
   @Get('reports/gstr8.json')
   @Permissions('tax.tcs.export')
   async gstr8Json(
+    @Req() req: any,
     @Query('filingPeriod') filingPeriod?: string,
     @Query('operatorGstin') operatorGstin?: string,
   ) {
@@ -220,6 +314,15 @@ export class AdminTaxReportsController {
       filingPeriod!,
       operatorGstin,
     );
+    const serialised = JSON.stringify(payload);
+    await this.logReportDownload(req, {
+      resource: 'gstr8',
+      sellerId: null,
+      filingPeriod: filingPeriod!,
+      format: 'json',
+      bytes: Buffer.byteLength(serialised, 'utf8'),
+      extra: { operatorGstin },
+    });
     return {
       success: true,
       message: 'GSTR-8 JSON payload built',
@@ -229,12 +332,133 @@ export class AdminTaxReportsController {
 
   @Get('reports/gstr8/summary')
   @Permissions('tax.tcs.read')
-  async gstr8Summary(@Query('filingPeriod') filingPeriod?: string) {
+  async gstr8Summary(
+    @Req() req: any,
+    @Query('filingPeriod') filingPeriod?: string,
+  ) {
     assertPeriod(filingPeriod);
     const summary = await this.gstr8.summarise(filingPeriod!);
+    const serialised = serialiseBigInt(summary);
+    await this.logReportDownload(req, {
+      resource: 'gstr8.summary',
+      sellerId: null,
+      filingPeriod: filingPeriod!,
+      format: 'summary',
+      bytes: Buffer.byteLength(JSON.stringify(serialised), 'utf8'),
+    });
     return {
       success: true,
       message: 'GSTR-8 summary built',
+      data: serialised,
+    };
+  }
+
+  // ── Form 26Q (Section 194-O TDS quarterly return) ────────────────
+
+  @Get('reports/form26q.csv')
+  @Permissions('tax.tcs.export')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async form26qCsv(
+    @Req() req: any,
+    @Res() res: Response,
+    @Query('filingPeriod') filingPeriod?: string,
+  ) {
+    if (!filingPeriod) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'filingPeriod query param required (YYYY-Qn)',
+          code: 'INVALID_REQUEST',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const csv = await this.form26q.generateCsv(filingPeriod);
+    setCsvDownloadHeaders(res, `form26q-${filingPeriod}.csv`);
+    await this.logReportDownload(req, {
+      resource: 'form26q',
+      sellerId: null,
+      filingPeriod,
+      format: 'csv',
+      bytes: Buffer.byteLength(csv, 'utf8'),
+    });
+    res.send(csv);
+  }
+
+  // ── Marketplace's own GSTR-1 commission section ─────────────────
+  //
+  // The platform's commission to sellers is an outward supply on
+  // the platform's OWN GSTR-1 (SAC 9985 / 18%). Separate from the
+  // per-seller GSTR-1 the platform also generates ON BEHALF of
+  // sellers (the §4 B2B / §7 B2C product-sale sections).
+
+  @Get('reports/marketplace-commission-gstr1.csv')
+  @Permissions('tax.reports.export')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async marketplaceCommissionGstr1Csv(
+    @Req() req: any,
+    @Res() res: Response,
+    @Query('filingPeriod') filingPeriod?: string,
+  ) {
+    assertPeriod(filingPeriod);
+    const csv = await this.marketplaceCommissionGstr.generateCsv(filingPeriod!);
+    setCsvDownloadHeaders(
+      res,
+      `marketplace-commission-gstr1-${filingPeriod}.csv`,
+    );
+    await this.logReportDownload(req, {
+      resource: 'marketplace.commission.gstr1',
+      sellerId: null,
+      filingPeriod: filingPeriod!,
+      format: 'csv',
+      bytes: Buffer.byteLength(csv, 'utf8'),
+    });
+    res.send(csv);
+  }
+
+  @Get('reports/form16a/:ledgerId.html')
+  @Permissions('tax.tcs.export')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async form16aHtml(
+    @Req() req: any,
+    @Res() res: Response,
+    @Param('ledgerId') ledgerId: string,
+  ) {
+    const html = await this.form26q.renderForm16AHtml(ledgerId);
+    if (!html) {
+      throw new HttpException(
+        { success: false, message: 'TDS ledger row not found', code: 'NOT_FOUND' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    await this.logReportDownload(req, {
+      resource: 'form16a',
+      sellerId: null,
+      filingPeriod: '',
+      format: 'summary',
+      bytes: Buffer.byteLength(html, 'utf8'),
+      extra: { ledgerId },
+    });
+    res.send(html);
+  }
+
+  @Get('reports/form26q/summary')
+  @Permissions('tax.tcs.read')
+  async form26qSummary(@Query('filingPeriod') filingPeriod?: string) {
+    if (!filingPeriod) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'filingPeriod query param required (YYYY-Qn)',
+          code: 'INVALID_REQUEST',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const summary = await this.form26q.summarise(filingPeriod);
+    return {
+      success: true,
+      message: 'Form 26Q summary built',
       data: serialiseBigInt(summary),
     };
   }
@@ -292,6 +516,89 @@ export class AdminTaxReportsController {
     return {
       success: true,
       message: `${flipped} TCS row(s) marked PAID_TO_GOVT`,
+      data: { flipped, requested: body.ledgerIds.length },
+    };
+  }
+
+  // ── Section 194-O TDS lifecycle (Phase 27) ──────────────────────
+  //
+  // Parallel to the TCS lifecycle above. WITHHELD → DEPOSITED (after
+  // challan upload to NSDL/TIN-Protean) → CERTIFICATE_ISSUED (after
+  // Form 16A distributed). Both are bulk actions on ledger ids.
+
+  @Get('tds194o')
+  @Permissions('tax.tcs.read')
+  async listTds(@Query('filingPeriod') filingPeriod?: string) {
+    if (!filingPeriod) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'filingPeriod query param required (YYYY-Qn)',
+          code: 'INVALID_REQUEST',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const rows = await this.tds.listForPeriod(filingPeriod);
+    return {
+      success: true,
+      message: 'Section 194-O TDS ledger retrieved',
+      data: serialiseBigInt({ items: rows }),
+    };
+  }
+
+  @Post('tds194o/mark-deposited')
+  @Permissions('tax.tcs.markFiled')
+  async markTdsDeposited(
+    @Req() req: any,
+    @Body() body: { ledgerIds: string[]; challanReference: string },
+  ) {
+    if (!Array.isArray(body?.ledgerIds) || !body?.challanReference) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'ledgerIds + challanReference required',
+          code: 'INVALID_REQUEST',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const flipped = await this.tds.markDeposited({
+      ledgerIds: body.ledgerIds,
+      depositedBy: req.adminId ?? 'unknown-admin',
+      challanReference: body.challanReference,
+    });
+    return {
+      success: true,
+      message: `${flipped} TDS row(s) marked DEPOSITED`,
+      data: { flipped, requested: body.ledgerIds.length },
+    };
+  }
+
+  @Post('tds194o/mark-certificate-issued')
+  @Permissions('tax.tcs.markPaidToGovt')
+  async markTdsCertificateIssued(
+    @Req() req: any,
+    @Body() body: { ledgerIds: string[]; certificateNumber: string },
+  ) {
+    if (!Array.isArray(body?.ledgerIds) || !body?.certificateNumber) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'ledgerIds + certificateNumber required',
+          code: 'INVALID_REQUEST',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const flipped = await this.tds.markCertificateIssued({
+      ledgerIds: body.ledgerIds,
+      issuedBy: req.adminId ?? 'unknown-admin',
+      certificateNumber: body.certificateNumber,
+    });
+    return {
+      success: true,
+      message: `${flipped} TDS row(s) marked CERTIFICATE_ISSUED`,
       data: { flipped, requested: body.ledgerIds.length },
     };
   }

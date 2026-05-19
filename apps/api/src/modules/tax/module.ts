@@ -14,6 +14,9 @@
 import { Module } from '@nestjs/common';
 import { WalletModule } from '../wallet/module';
 import { NotificationsModule } from '../notifications/module';
+// Phase 36 — every GSTR-1 / GSTR-3B / GSTR-8 download is audited via
+// AuditPublicFacade so bulk-PII exports leave a trail.
+import { AuditModule } from '../audit/module';
 import {
   AdminAuthGuard,
   PermissionsGuard,
@@ -35,6 +38,11 @@ import { Gstr8ReportService } from './application/services/gstr8-report.service'
 import { Gstr1ReportService } from './application/services/gstr1-report.service';
 import { Gstr3bReportService } from './application/services/gstr3b-report.service';
 import { SettlementTcsHookService } from './application/services/settlement-tcs-hook.service';
+import { Tds194OService } from './application/services/tds-194o.service';
+import { SettlementTds194OHookService } from './application/services/settlement-tds-194o-hook.service';
+import { Form26QReportService } from './application/services/form-26q-report.service';
+import { MarketplaceCommissionGstrService } from './application/services/marketplace-commission-gstr.service';
+import { CheckoutTaxPreviewService } from './application/services/checkout-tax-preview.service';
 import { TaxDocumentPdfService } from './application/services/tax-document-pdf.service';
 import { TaxDocumentDownloadService } from './application/services/tax-document-download.service';
 import { TaxDocumentRetentionService } from './application/services/tax-document-retention.service';
@@ -44,11 +52,22 @@ import { TaxAuditReadinessService } from './application/services/tax-audit-readi
 import { TaxNotificationService } from './application/services/tax-notification.service';
 import { TaxCompatibilityService } from './application/services/tax-compatibility.service';
 import { TaxPublicFacade } from './application/facades/tax-public.facade';
+import { CustomerTaxProfileService } from './application/services/customer-tax-profile.service';
 import { CustomerTaxDocumentsController } from './presentation/controllers/customer-tax-documents.controller';
+import { CustomerTaxProfilesController } from './presentation/controllers/customer-tax-profiles.controller';
 import { SellerTaxDocumentsController } from './presentation/controllers/seller-tax-documents.controller';
 import { FranchiseTaxDocumentsController } from './presentation/controllers/franchise-tax-documents.controller';
 import { AdminTaxReportsController } from './presentation/controllers/admin-tax-reports.controller';
 import { AdminTaxOperationsController } from './presentation/controllers/admin-tax-operations.controller';
+import { PublicTaxReferenceController } from './presentation/controllers/public-tax-reference.controller';
+import { CustomerCartTaxPreviewController } from './presentation/controllers/customer-cart-tax-preview.controller';
+import { AdminHsnMasterController } from './presentation/controllers/admin-hsn-master.controller';
+import { HsnMasterService } from './application/services/hsn-master.service';
+import { AdminUqcMasterController } from './presentation/controllers/admin-uqc-master.controller';
+import { UqcMasterService } from './application/services/uqc-master.service';
+import { AdminTaxConfigController } from './presentation/controllers/admin-tax-config.controller';
+import { AdminPlatformGstProfileController } from './presentation/controllers/admin-platform-gst-profile.controller';
+import { PlatformGstProfileService } from './application/services/platform-gst-profile.service';
 import { TaxCreditNoteTimeBarCron } from './application/jobs/tax-credit-note-timebar.cron';
 import { TaxDocumentPdfRetryCron } from './application/jobs/tax-document-pdf-retry.cron';
 import { EInvoiceRetryCron } from './application/jobs/einvoice-retry.cron';
@@ -67,6 +86,12 @@ import {
   type EWayBillProvider,
 } from './infrastructure/eway-bill/eway-bill-provider';
 import { StubEWayBillProvider } from './infrastructure/eway-bill/stub-eway-bill-provider';
+import {
+  GSTN_PROVIDER,
+  type GstnProvider,
+} from './infrastructure/gstn/gstn-provider';
+import { StubGstnProvider } from './infrastructure/gstn/stub-gstn-provider';
+import { GstnVerificationService } from './application/services/gstn-verification.service';
 import { EnvService } from '../../bootstrap/env/env.service';
 
 // Phase 15 — Provider selector. Stub-only for now; the NIC adapter
@@ -116,6 +141,29 @@ const einvoiceProvider = {
   inject: [EnvService],
 };
 
+// Phase 35 — GSTN verification provider selector. `stub` derives the
+// outcome from the local Mod-36 checksum; `sandbox` is reserved for
+// the real GSTN sandbox API once credentials are issued. Same
+// crash-loudly pattern as the other provider factories.
+const gstnProvider = {
+  provide: GSTN_PROVIDER,
+  useFactory: (env: EnvService): GstnProvider => {
+    const choice = env.getString('GSTN_PROVIDER', 'stub');
+    switch (choice) {
+      case 'stub':
+        return new StubGstnProvider();
+      case 'sandbox':
+        throw new Error(
+          "GSTN_PROVIDER='sandbox' selected but SandboxGstnProvider is " +
+            'not yet implemented. Set GSTN_PROVIDER=stub or wire the GSTN sandbox.',
+        );
+      default:
+        throw new Error(`Unknown GSTN_PROVIDER='${choice}'`);
+    }
+  },
+  inject: [EnvService],
+};
+
 // Phase 19 — Tax-document PDF storage provider selector. Same
 // crash-loudly pattern as the EWB provider: 's3' is reserved until
 // the S3 adapter supports PUT, then this factory will switch on it.
@@ -139,13 +187,20 @@ const taxPdfStorageProvider = {
 };
 
 @Module({
-  imports: [WalletModule, NotificationsModule],
+  imports: [WalletModule, NotificationsModule, AuditModule],
   controllers: [
     CustomerTaxDocumentsController,
+    CustomerTaxProfilesController,
     SellerTaxDocumentsController,
     FranchiseTaxDocumentsController,
     AdminTaxReportsController,
     AdminTaxOperationsController,
+    PublicTaxReferenceController,
+    CustomerCartTaxPreviewController,
+    AdminHsnMasterController,
+    AdminUqcMasterController,
+    AdminTaxConfigController,
+    AdminPlatformGstProfileController,
   ],
   providers: [
     // Phase 25 — guards consumed by the controllers above. Same
@@ -161,6 +216,7 @@ const taxPdfStorageProvider = {
     TaxDocumentService,
     CreditNoteService,
     CreditNoteEligibilityService,
+    CustomerTaxProfileService,
     WalletAdjustmentService,
     LegacyReceiptService,
     EWayBillService,
@@ -170,6 +226,14 @@ const taxPdfStorageProvider = {
     Gstr1ReportService,
     Gstr3bReportService,
     SettlementTcsHookService,
+    Tds194OService,
+    SettlementTds194OHookService,
+    Form26QReportService,
+    MarketplaceCommissionGstrService,
+    HsnMasterService,
+    UqcMasterService,
+    PlatformGstProfileService,
+    CheckoutTaxPreviewService,
     TaxDocumentPdfService,
     TaxDocumentDownloadService,
     TaxDocumentRetentionService,
@@ -181,6 +245,8 @@ const taxPdfStorageProvider = {
     TaxPublicFacade,
     taxPdfStorageProvider,
     einvoiceProvider,
+    gstnProvider,
+    GstnVerificationService,
     TaxCreditNoteTimeBarCron,
     TaxDocumentPdfRetryCron,
     EInvoiceRetryCron,
@@ -193,6 +259,7 @@ const taxPdfStorageProvider = {
     TaxDocumentService,
     CreditNoteService,
     CreditNoteEligibilityService,
+    CustomerTaxProfileService,
     WalletAdjustmentService,
     LegacyReceiptService,
     EWayBillService,
@@ -201,6 +268,15 @@ const taxPdfStorageProvider = {
     Gstr1ReportService,
     Gstr3bReportService,
     SettlementTcsHookService,
+    Tds194OService,
+    SettlementTds194OHookService,
+    Form26QReportService,
+    MarketplaceCommissionGstrService,
+    HsnMasterService,
+    UqcMasterService,
+    PlatformGstProfileService,
+    CheckoutTaxPreviewService,
+    GstnVerificationService,
     TaxDocumentPdfService,
     TaxDocumentDownloadService,
     TaxDocumentRetentionService,

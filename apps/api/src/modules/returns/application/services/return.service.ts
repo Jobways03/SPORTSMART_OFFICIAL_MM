@@ -44,6 +44,11 @@ import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razo
 import { verifyRazorpaySignature } from './razorpay-signature';
 import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
+import {
+  CreditNoteService,
+  Section34TimeBarredError,
+} from '../../../tax/application/services/credit-note.service';
+import { WalletAdjustmentService } from '../../../tax/application/services/wallet-adjustment.service';
 
 export interface CreateReturnInput {
   subOrderId: string;
@@ -206,6 +211,16 @@ export class ReturnService {
     // amount columns on the return / returnItem / refundTransaction
     // models. No-ops when MONEY_DUAL_WRITE_ENABLED=false (dev/CI).
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    // GST Phase 11 — Section 34 credit note issued on QC approval,
+    // linking the original tax invoice's CGST/SGST/IGST reversal to
+    // the QC-approved quantities. Idempotent on the return: multi-cycle
+    // QC (partial → fuller approval over days) yields per-line deltas.
+    private readonly creditNote: CreditNoteService,
+    // GST Phase 13 — wallet-adjustment fallback when Section 34 blocks
+    // a credit note (original invoice older than 30 Sept of FY+1). The
+    // platform absorbs the GST cost and the refund posts via the
+    // wallet ledger under dual-approval gating.
+    private readonly walletAdjustment: WalletAdjustmentService,
   ) {
     this.logger.setContext('ReturnService');
   }
@@ -585,7 +600,98 @@ export class ReturnService {
     if (ret.customerId !== customerId) {
       throw new ForbiddenAppException('You do not have access to this return');
     }
-    return ret;
+
+    // Phase 38 — side-load the refund-settlement story so the
+    // customer-facing return detail can render either:
+    //   - "Credit note SM-CN-000042 issued for ₹X" (Section 34 window
+    //     open at QC-approve time), OR
+    //   - "Refund credited to wallet (₹X)" (Section 34 time-barred,
+    //     wallet adjustment route), OR
+    //   - "Refund processing" (QC approved but neither artefact exists
+    //     yet — the post-commit notifications haven't fired).
+    //
+    // Both reads are best-effort: a failure here MUST NOT block the
+    // return detail load. CreditNoteService scopes prior CNs by
+    // `reason contains returnNumber`; we mirror that.
+    let creditNote: {
+      id: string;
+      documentNumber: string;
+      documentTotalInPaise: string;
+      status: string;
+      generatedAt: Date | null;
+    } | null = null;
+    let walletCredit: {
+      id: string;
+      kind: string;
+      status: string;
+      amountInPaise: string;
+      approvedAt: Date | null;
+      reason: string;
+    } | null = null;
+    try {
+      const cn = await this.prisma.taxDocument.findFirst({
+        where: {
+          documentType: 'CREDIT_NOTE',
+          reason: { contains: ret.returnNumber },
+          status: { notIn: ['VOIDED_DRAFT'] },
+        },
+        orderBy: { generatedAt: 'desc' },
+        select: {
+          id: true,
+          documentNumber: true,
+          documentTotalInPaise: true,
+          status: true,
+          generatedAt: true,
+        },
+      });
+      if (cn) {
+        creditNote = {
+          id: cn.id,
+          documentNumber: cn.documentNumber,
+          documentTotalInPaise: cn.documentTotalInPaise.toString(),
+          status: cn.status,
+          generatedAt: cn.generatedAt,
+        };
+      }
+    } catch (err) {
+      this.logger.warn(
+        `getReturnDetail: CN lookup failed for return ${returnId}: ${(err as Error).message}`,
+      );
+    }
+    try {
+      const adj = await this.prisma.walletAdjustment.findFirst({
+        where: { returnId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          kind: true,
+          status: true,
+          amountInPaise: true,
+          approvedAt: true,
+          reason: true,
+        },
+      });
+      if (adj) {
+        walletCredit = {
+          id: adj.id,
+          kind: adj.kind,
+          status: adj.status,
+          amountInPaise: adj.amountInPaise.toString(),
+          approvedAt: adj.approvedAt,
+          reason: adj.reason,
+        };
+      }
+    } catch (err) {
+      this.logger.warn(
+        `getReturnDetail: wallet adjustment lookup failed for return ${returnId}: ${(err as Error).message}`,
+      );
+    }
+
+    return {
+      ...ret,
+      creditNote,
+      walletCredit,
+    };
   }
 
   // ── Cancel ─────────────────────────────────────────────────────────────
@@ -1682,6 +1788,76 @@ export class ReturnService {
       });
     } catch {
       // events are best-effort
+    }
+
+    // GST Phase 11/13 — issue the Section 34 credit note for the
+    // QC-approved quantities. Synchronous + post-commit so the
+    // customer-facing decision (status flip + refund initiation
+    // below) is never blocked by a CN failure; the daily
+    // TaxCreditNoteTimeBarCron remains the safety net for stuck
+    // rows. Three outcomes:
+    //
+    //   1. Section 34 window open → CreditNoteService persists the
+    //      CN + flips the source invoice to PARTIALLY_REVERSED /
+    //      FULLY_REVERSED via the FSM.
+    //   2. Section 34 window closed → Section34TimeBarredError →
+    //      WalletAdjustmentService.requestForTimeBarredReturn records
+    //      a TIME_BARRED_CREDIT_NOTE adjustment (PENDING_APPROVAL,
+    //      dual-approval if above threshold). Platform absorbs GST.
+    //   3. Other CN failure (missing source invoice, snapshot gap,
+    //      etc.) → log and rely on the timebar cron + admin
+    //      override endpoint to backfill. We do NOT throw — QC has
+    //      already advanced and the customer's refund must proceed.
+    //
+    // Skipped when QC rejected everything (no items to credit).
+    if (newStatus === 'QC_APPROVED' || newStatus === 'PARTIALLY_APPROVED') {
+      try {
+        const cn = await this.creditNote.generateForReturn(returnId, {
+          actorId,
+        });
+        if (cn.isNew) {
+          this.logger.log(
+            `Credit note ${cn.creditNote.documentNumber} issued for return ${ret.returnNumber} ` +
+              `against invoice ${cn.sourceInvoice.documentNumber} ` +
+              `(source now ${cn.sourceInvoice.statusAfter})`,
+          );
+        } else {
+          this.logger.log(
+            `Credit note path idempotent: existing ${cn.creditNote.documentNumber} ` +
+              `still covers return ${ret.returnNumber}.`,
+          );
+        }
+      } catch (err) {
+        if (err instanceof Section34TimeBarredError) {
+          try {
+            const adj =
+              await this.walletAdjustment.requestForTimeBarredReturn({
+                returnId,
+                requestedByAdminId: actorId,
+              });
+            this.logger.warn(
+              `Return ${ret.returnNumber} is past Section 34 window — routed ` +
+                `to wallet adjustment ${adj.id} (status ${adj.status}); ` +
+                `no credit note issued, platform absorbs GST cost.`,
+            );
+          } catch (adjErr) {
+            // Both paths failed — log loudly. TaxCreditNoteTimeBarCron
+            // re-classifies daily; admins can also use the time-bar
+            // override endpoint to retry.
+            this.logger.error(
+              `Time-barred fallback to wallet adjustment FAILED for return ` +
+                `${ret.returnNumber}: ${(adjErr as Error).message} — ` +
+                `TaxCreditNoteTimeBarCron will re-classify on next sweep.`,
+            );
+          }
+        } else {
+          this.logger.error(
+            `Credit-note generation FAILED for return ${ret.returnNumber}: ` +
+              `${(err as Error).message} — refund still proceeding; ` +
+              `TaxCreditNoteTimeBarCron will re-classify on next sweep.`,
+          );
+        }
+      }
     }
 
     // Phase 13 — write the liability ledger row that recovers (or

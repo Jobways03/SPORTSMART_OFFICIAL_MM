@@ -83,6 +83,10 @@ export class CustomerAddressService {
       locality?: string;
       city: string;
       state: string;
+      // Phase 34 — caller-supplied CBIC 2-digit GST code (storefront
+      // address-form dropdown). Optional; repository resolves by name
+      // when omitted. Validated to 2 digits to fail loudly on garbage.
+      stateCode?: string;
       postalCode: string;
       isDefault?: boolean;
     },
@@ -99,6 +103,16 @@ export class CustomerAddressService {
     // (non-numeric pincode, invalid phone) fails fast with a specific
     // error rather than getting a generic "pincode not found".
     validateContactFields(input);
+
+    // Phase 34 — if stateCode came from the form dropdown, sanity-check
+    // the shape. Repo will re-resolve from name when null, so an
+    // invalid code triggers a hard error rather than a silent
+    // fallback.
+    if (input.stateCode != null && !/^[0-9]{2}$/.test(input.stateCode)) {
+      throw new BadRequestAppException(
+        'stateCode must be the 2-digit CBIC GST state code',
+      );
+    }
 
     // Validate pincode against PostOffice database and auto-populate
     // city / state / locality when available.
@@ -143,6 +157,7 @@ export class CustomerAddressService {
       locality: resolvedLocality,
       city: resolvedCity,
       state: resolvedState,
+      stateCode: input.stateCode ?? null,
       postalCode,
       isDefault: input.isDefault || false,
     });
@@ -166,6 +181,13 @@ export class CustomerAddressService {
     // Sprint 3 Story 2.4 — same format validation as create. Only
     // checks fields that are actually being updated.
     validateContactFields(input);
+
+    // Phase 34 — same stateCode shape guard as createAddress.
+    if (input.stateCode != null && !/^[0-9]{2}$/.test(input.stateCode)) {
+      throw new BadRequestAppException(
+        'stateCode must be the 2-digit CBIC GST state code',
+      );
+    }
 
     // Validate pincode if it's being changed
     if (input.postalCode && input.postalCode !== existing.postalCode) {

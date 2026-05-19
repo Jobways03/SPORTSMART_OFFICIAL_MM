@@ -25,6 +25,17 @@ import { DiscountAllocationService } from '../../../discounts/application/servic
 // sub_order_tax_summaries + order_tax_summaries for EVERY order
 // (with or without a discount applied). See docs/tax/CA.md §A.
 import { TaxSnapshotService } from '../../../tax/application/services/tax-snapshot.service';
+// Phase 30 — CheckoutTaxPreviewService returns the CGST/SGST/IGST
+// breakdown for the pre-payment summary so the customer sees the
+// same split the post-placement invoice will carry.
+import {
+  CheckoutTaxPreviewService,
+  CheckoutTaxPreviewResult,
+} from '../../../tax/application/services/checkout-tax-preview.service';
+import {
+  lookupStateCodeByName,
+  buildStateIndex,
+} from '../../../tax/domain/state-code-map';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AffiliatePublicFacade } from '../../../affiliate/application/facades/affiliate-public.facade';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
@@ -48,6 +59,12 @@ const PLACE_ORDER_LOCK_TTL_SECONDS = 30;
 export class CheckoutService {
   private readonly logger = new Logger(CheckoutService.name);
 
+  // Phase 30 — lazy state-name → 2-digit-code index. Built once per
+  // process lifetime from india_states (small, ~38 rows). Used to
+  // map a free-text CustomerAddress.state ("Karnataka", "TAMIL NADU")
+  // to the GST 2-digit code the tax engine expects.
+  private stateIndexPromise: Promise<ReadonlyMap<string, string>> | null = null;
+
   constructor(
     @Inject(CHECKOUT_REPOSITORY)
     private readonly repo: ICheckoutRepository,
@@ -60,6 +77,8 @@ export class CheckoutService {
     private readonly discountAllocation: DiscountAllocationService,
     // Phase 6 GST.
     private readonly taxSnapshot: TaxSnapshotService,
+    // Phase 30 GST.
+    private readonly taxPreview: CheckoutTaxPreviewService,
     private readonly affiliateFacade: AffiliatePublicFacade,
     private readonly walletFacade: WalletPublicFacade,
     private readonly paymentOpsFacade: PaymentOpsFacade,
@@ -326,6 +345,36 @@ export class CheckoutService {
 
     await this.sessionService.save(userId, session);
 
+    // Phase 30 — compute the tax preview so the customer sees the
+    // CGST/SGST/IGST split before paying. Best-effort: a failure
+    // here must not block checkout — the response gracefully returns
+    // `taxPreview: null` and the UI falls back to the prior
+    // "GST: Included in price" string.
+    let taxPreview: CheckoutTaxPreviewResult | null = null;
+    try {
+      const customerShippingStateCode =
+        await this.resolveStateCodeFromAddressName(address.state);
+      taxPreview = await this.taxPreview.previewForSession({
+        items: session.items
+          .filter((it) => it.serviceable)
+          .map((it) => ({
+            productId: it.productId,
+            variantId: it.variantId,
+            unitPriceInPaise: BigInt(
+              Math.round(it.unitPrice * 100),
+            ),
+            quantity: it.quantity,
+            sellerId: it.allocatedSellerId,
+          })),
+        customerShippingStateCode,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Checkout tax preview failed for user ${userId}: ` +
+          `${(err as Error).message}. Returning checkout without preview.`,
+      );
+    }
+
     return {
       message: unserviceableCount > 0
         ? `${unserviceableCount} item(s) cannot be delivered to your address`
@@ -339,8 +388,42 @@ export class CheckoutService {
         unserviceableCount: session.unserviceableCount,
         addressSnapshot: session.addressSnapshot,
         expiresAt: session.expiresAt,
+        // Phase 30 — null when the preview failed; UI handles the
+        // null-fallback string. Otherwise carries the BigInt-paise
+        // breakdown serialised as decimal strings.
+        taxPreview,
       },
     };
+  }
+
+  /**
+   * Lazy-load the india_states name → code index. The table has ~38
+   * rows so the in-memory cache is trivial; built once per process
+   * lifetime.
+   */
+  private async getStateIndex(): Promise<ReadonlyMap<string, string>> {
+    if (!this.stateIndexPromise) {
+      this.stateIndexPromise = (async () => {
+        const rows = await this.prisma.indiaState.findMany({
+          where: { isActive: true },
+          select: { gstStateCode: true, stateName: true },
+        });
+        return buildStateIndex(rows);
+      })();
+    }
+    return this.stateIndexPromise;
+  }
+
+  private async resolveStateCodeFromAddressName(
+    rawStateName: string | null | undefined,
+  ): Promise<string | null> {
+    if (!rawStateName) return null;
+    // If the caller already stored a 2-digit code, accept it as-is.
+    if (/^[0-9]{2}$/.test(rawStateName.trim())) {
+      return rawStateName.trim();
+    }
+    const index = await this.getStateIndex();
+    return lookupStateCodeByName(rawStateName, index);
   }
 
   // ── Get Checkout Summary ───────────────────────────────────────────────
@@ -362,6 +445,36 @@ export class CheckoutService {
       );
     }
 
+    // Phase 30 — recompute the tax preview for the cached session
+    // so refresh / direct-navigation hits also get the breakdown.
+    // Best-effort; same null-fallback as initiateCheckout.
+    let taxPreview: CheckoutTaxPreviewResult | null = null;
+    try {
+      const customerShippingStateCode =
+        await this.resolveStateCodeFromAddressName(
+          session.addressSnapshot.state,
+        );
+      taxPreview = await this.taxPreview.previewForSession({
+        items: session.items
+          .filter((it) => it.serviceable)
+          .map((it) => ({
+            productId: it.productId,
+            variantId: it.variantId,
+            unitPriceInPaise: BigInt(
+              Math.round(it.unitPrice * 100),
+            ),
+            quantity: it.quantity,
+            sellerId: it.allocatedSellerId,
+          })),
+        customerShippingStateCode,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `getCheckoutSummary tax preview failed for user ${userId}: ` +
+          `${(err as Error).message}`,
+      );
+    }
+
     return {
       items: session.items,
       totalAmount: session.totalAmount,
@@ -371,6 +484,7 @@ export class CheckoutService {
       unserviceableCount: session.unserviceableCount,
       addressSnapshot: session.addressSnapshot,
       expiresAt: session.expiresAt,
+      taxPreview,
     };
   }
 
@@ -436,6 +550,11 @@ export class CheckoutService {
     referralCode?: string,
     walletApplyAmountInPaise?: number,
     shippingOptionId?: string | null,
+    // Phase 37 — checkout B2B GSTIN picker. When the buyer has multiple
+    // tax profiles and explicitly chose one, the ID is snapshotted on
+    // MasterOrder and the tax-document service prefers it at invoice
+    // time over the global default profile.
+    selectedTaxProfileId?: string | null,
   ) {
     // Per-user lock: prevents double-submit (UI double-click or client
     // retry) from committing two MasterOrders against the same checkout
@@ -461,6 +580,7 @@ export class CheckoutService {
         referralCode,
         walletApplyAmountInPaise,
         shippingOptionId,
+        selectedTaxProfileId,
       );
     } finally {
       await this.redis.releaseLock(lockKey);
@@ -474,6 +594,7 @@ export class CheckoutService {
     referralCode?: string,
     walletApplyAmountInPaise?: number,
     shippingOptionId?: string | null,
+    selectedTaxProfileId?: string | null,
   ) {
     const method: 'COD' | 'ONLINE' =
       paymentMethod?.toUpperCase() === 'ONLINE' ? 'ONLINE' : 'COD';
@@ -483,6 +604,23 @@ export class CheckoutService {
       throw new NotFoundAppException(
         'No active checkout session — please initiate checkout first',
       );
+    }
+
+    // Phase 37 — when the buyer chose a specific B2B profile at
+    // checkout, verify the row belongs to this customer before
+    // snapshotting it. Silently dropping (rather than 400-ing) would
+    // mean the user thinks they bought under GSTIN X but the invoice
+    // came out under their default — bad surprise.
+    if (selectedTaxProfileId) {
+      const owns = await this.prisma.customerTaxProfile.findFirst({
+        where: { id: selectedTaxProfileId, customerId: userId },
+        select: { id: true },
+      });
+      if (!owns) {
+        throw new BadRequestAppException(
+          'Selected tax profile does not belong to this customer',
+        );
+      }
     }
 
     if (new Date(session.expiresAt) < new Date()) {
@@ -777,6 +915,7 @@ export class CheckoutService {
         shippingOptionId: resolvedShippingOptionId,
         shippingOptionName: resolvedShippingOptionName,
         shippingFeeInPaise: resolvedShippingFeeInPaise,
+        selectedTaxProfileId: selectedTaxProfileId ?? null,
       });
     } catch (err) {
       // Compensating action: release franchise reservations on failure

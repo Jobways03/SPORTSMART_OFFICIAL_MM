@@ -37,6 +37,13 @@ export const TAX_TEMPLATE_KEYS = {
   customer: {
     invoiceIssued:        'tax.customer.invoice_issued.email',
     creditNoteIssued:     'tax.customer.credit_note_issued.email',
+    // Phase 31 — B2B buyers must reverse the ITC they claimed on the
+    // original invoice when a credit note is issued (Section 34 +
+    // GSTR-2B auto-population doesn't reverse the buyer's claim, only
+    // surfaces the CN). Separate template from the generic credit-note
+    // email so the body can include the CGST/SGST/IGST reversal
+    // amounts the buyer needs to declare on their GSTR-3B Table 4(B).
+    creditNoteB2bItcReversal: 'tax.customer.credit_note_b2b_itc_reversal.email',
     timeBarredRefund:     'tax.customer.refund_via_wallet.email',
   },
   seller: {
@@ -109,6 +116,58 @@ export class TaxNotificationService {
         originalInvoiceNumber: args.originalInvoiceNumber ?? '',
         returnNumber: args.returnNumber ?? '',
         downloadUrl: args.downloadUrl ?? null,
+      },
+      eventId: args.documentId,
+    });
+  }
+
+  /**
+   * "Reverse the ITC you claimed on invoice X." Fires alongside
+   * `customerCreditNoteIssued` ONLY when the source invoice was B2B
+   * (buyer had a GSTIN on the original). The buyer is legally
+   * required (Section 34 + GSTR-3B Table 4(B)) to reverse the ITC
+   * they claimed on the original tax invoice once the credit note
+   * lands on their GSTR-2B; this email is the operational nudge.
+   *
+   * Body variables list the per-leg reversal so the buyer's
+   * accountant can plug them straight into the GSTR-3B return:
+   *   - cgstReversalRupees / sgstReversalRupees / igstReversalRupees
+   *   - originalInvoiceNumber + originalInvoiceDate
+   *   - buyerGstin (echoed so the buyer can confirm the right entity)
+   */
+  async customerB2bItcReversalRequired(args: {
+    customerId: string;
+    documentId: string;
+    documentNumber: string;
+    originalInvoiceNumber: string;
+    originalInvoiceDate: Date | null;
+    buyerGstin: string;
+    cgstReversalInPaise: bigint;
+    sgstReversalInPaise: bigint;
+    igstReversalInPaise: bigint;
+    totalTaxReversalInPaise: bigint;
+    returnNumber: string | null;
+  }): Promise<void> {
+    await this.safeNotify({
+      eventClass: 'tax.invoice',
+      templateKey: TAX_TEMPLATE_KEYS.customer.creditNoteB2bItcReversal,
+      recipientId: args.customerId,
+      vars: {
+        documentNumber: args.documentNumber,
+        originalInvoiceNumber: args.originalInvoiceNumber,
+        originalInvoiceDate: args.originalInvoiceDate
+          ? formatIstDate(args.originalInvoiceDate)
+          : '',
+        buyerGstin: args.buyerGstin,
+        cgstReversalRupees: paiseToRupees(args.cgstReversalInPaise),
+        sgstReversalRupees: paiseToRupees(args.sgstReversalInPaise),
+        igstReversalRupees: paiseToRupees(args.igstReversalInPaise),
+        totalTaxReversalRupees: paiseToRupees(args.totalTaxReversalInPaise),
+        returnNumber: args.returnNumber ?? '',
+        note:
+          'Declare the above amounts under "ITC Reversed — Others" on ' +
+          'your GSTR-3B Table 4(B)(2) for the period in which this ' +
+          'credit note is reflected in your GSTR-2B.',
       },
       eventId: args.documentId,
     });

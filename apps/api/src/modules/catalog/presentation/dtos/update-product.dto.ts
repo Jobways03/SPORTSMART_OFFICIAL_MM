@@ -4,11 +4,16 @@ import {
   IsUUID,
   IsBoolean,
   IsNumber,
+  IsInt,
   IsArray,
   Min,
+  Max,
+  Matches,
   ValidateNested,
+  IsEnum,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { SupplyTaxability } from '@prisma/client';
 import { ProductSeoDto, CreateVariantInlineDto } from './create-product.dto';
 
 export class UpdateProductDto {
@@ -114,6 +119,46 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   warrantyInfo?: string;
+
+  // ─── Tax fields (Phase 1 GST) ──────────────────────────────────
+  // See CreateProductDto for the equivalent block + rationale.
+  // `taxConfigUpdatedBy` / `taxConfigUpdatedAt` are stamped by the
+  // controller from the actor — never accepted from input.
+  @IsOptional()
+  @Matches(/^\d{4,8}$/, {
+    message: 'hsnCode must be 4-8 digits (HSN hierarchical levels) with no spaces or punctuation',
+  })
+  hsnCode?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  gstRateBps?: number;
+
+  @IsOptional()
+  @IsEnum(SupplyTaxability)
+  supplyTaxability?: SupplyTaxability;
+
+  @IsOptional()
+  @IsBoolean()
+  taxInclusivePricing?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10_000)
+  cessRateBps?: number;
+
+  @IsOptional()
+  @Matches(/^[A-Z]{2,6}$/, {
+    message: 'defaultUqcCode must be 2-6 uppercase letters per CBIC UQC list (e.g. NOS, PCS, KGS)',
+  })
+  defaultUqcCode?: string;
+
+  @IsOptional()
+  @IsString()
+  taxCategory?: string;
 
   @IsOptional()
   @IsArray()

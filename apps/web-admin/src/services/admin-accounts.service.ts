@@ -113,6 +113,27 @@ export interface SettlementCycleSettlementEntry {
   createdAt: string;
 }
 
+// Phase 33 — side-loaded statutory-deduction breakdown per
+// SellerSettlement (TCS Section 52 + TDS Section 194-O + 18%
+// commission GST). Returned by GET /admin/accounts/settlements/
+// cycles/:cycleId. Keyed by settlement id. Paise values are
+// BigInt-as-string so JSON survives values > 2^53.
+export interface SettlementTaxBreakdown {
+  tcsDeductedInPaise: string;
+  tcsRateBpsSnapshot: number;
+  tcsFilingPeriod: string | null;
+  tdsDeductedInPaise: string;
+  tdsRateBpsSnapshot: number;
+  tdsFilingPeriod: string | null;
+  commissionGstRateBps: number;
+  commissionGstSplitType: string | null;
+  cgstOnCommissionInPaise: string;
+  sgstOnCommissionInPaise: string;
+  igstOnCommissionInPaise: string;
+  totalCommissionGstInPaise: string;
+  netPayoutInPaise: string;
+}
+
 export interface SettlementCycleDetail {
   id: string;
   periodStart: string;
@@ -126,6 +147,8 @@ export interface SettlementCycleDetail {
   createdAt: string;
   sellerSettlements: SettlementCycleSettlementEntry[];
   franchiseSettlements: SettlementCycleSettlementEntry[];
+  /** Phase 33 — keyed by settlement id. */
+  taxBreakdownBySettlement?: Record<string, SettlementTaxBreakdown>;
   // Phase B (P0.5) — seller-funded discount deductions per seller.
   // Keyed by sellerId. Amounts are paise (BigInt → string on the
   // wire). Empty for cycles with no seller-funded discounts.

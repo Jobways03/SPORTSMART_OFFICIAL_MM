@@ -63,6 +63,37 @@ model SellerSettlement {
   tcsRateBpsSnapshot    Int      @default(100) @map("tcs_rate_bps_snapshot")
   tcsFilingPeriod       String?  @map("tcs_filing_period")
 
+  // Phase 27 — Section 194-O Income-Tax TDS deduction snapshot.
+  // Parallel to TCS but on GROSS sale value (including GST) and
+  // quarterly cadence. Net payout shown to the seller becomes:
+  //   totalSettlement − tcsDeducted − tdsDeducted − totalCommissionGst
+  // The ledger row at `tdsLedgerId` carries the full state-machine
+  // history; the denorm columns here keep the payout statement a
+  // single-table read.
+  tdsLedgerId           String?  @map("tds_ledger_id")
+  tdsDeductedInPaise    BigInt   @default(0)   @map("tds_deducted_in_paise")
+  tdsRateBpsSnapshot    Int      @default(100) @map("tds_rate_bps_snapshot")
+  tdsFilingPeriod       String?  @map("tds_filing_period")
+
+  // Phase 28 — 18% GST on marketplace commission (output supply by
+  // platform to the seller per Section 9 CGST Act + SAC 9985). Place
+  // of supply is the seller's state (IGST Act Section 12(2)(a)),
+  // so the intra/inter split depends on (marketplace state, seller
+  // state). The marketplace owes this GST to the government; the
+  // seller can claim it as ITC. Subtracted from the seller's net
+  // payout because the marketplace withholds it.
+  commissionGstRateBps          Int      @default(1800) @map("commission_gst_rate_bps")
+  commissionGstSplitType        String?  @map("commission_gst_split_type")
+  cgstOnCommissionInPaise       BigInt   @default(0)    @map("cgst_on_commission_in_paise")
+  sgstOnCommissionInPaise       BigInt   @default(0)    @map("sgst_on_commission_in_paise")
+  igstOnCommissionInPaise       BigInt   @default(0)    @map("igst_on_commission_in_paise")
+  totalCommissionGstInPaise     BigInt   @default(0)    @map("total_commission_gst_in_paise")
+  // 2-digit state codes captured at compute time so a later
+  // PlatformGstProfile or Seller.gstStateCode change doesn't rewrite
+  // the historical split.
+  commissionGstMarketplaceStateCode String? @map("commission_gst_marketplace_state_code")
+  commissionGstSellerStateCode      String? @map("commission_gst_seller_state_code")
+
   status                SellerSettlementStatus @default(PENDING) @map("status")
   paidAt                DateTime?              @map("paid_at")
   utrReference          String?                @map("utr_reference")
@@ -73,6 +104,7 @@ model SellerSettlement {
   seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   commissionRecords CommissionRecord[]
   tcsLedger         GstTcsSettlementLedger? @relation(fields: [tcsLedgerId], references: [id], onDelete: Restrict)
+  tdsLedger         Section194OTdsLedger?   @relation(fields: [tdsLedgerId], references: [id], onDelete: Restrict)
   // Phase 12 (2026-05-16) — back-relation for the SettlementAdjustment FK.
   adjustments       SettlementAdjustment[]
 

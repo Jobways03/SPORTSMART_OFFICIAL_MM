@@ -269,6 +269,20 @@ export class AdminProductsController {
     // (admin-created = pre-approved). Otherwise DRAFT for platform products.
     const initialStatus = seller ? 'ACTIVE' : 'DRAFT';
 
+    // Stamp the tax-config audit fields if the admin supplied any
+    // GST-relevant data on create. Mirrors the seller path — keeps
+    // products.tax_config_updated_by/_at honest as a "who last touched
+    // the tax columns" trail. Undefined-only writes (no tax fields in
+    // the DTO) skip the stamp so it stays null until first set.
+    const taxFieldsTouched =
+      dto.hsnCode !== undefined ||
+      dto.gstRateBps !== undefined ||
+      dto.supplyTaxability !== undefined ||
+      dto.taxInclusivePricing !== undefined ||
+      dto.cessRateBps !== undefined ||
+      dto.defaultUqcCode !== undefined ||
+      dto.taxCategory !== undefined;
+
     const product = await this.productRepo.createInTransaction(
       {
         sellerId: seller?.id || null, productCode, title: dto.title, slug,
@@ -281,6 +295,19 @@ export class AdminProductsController {
         weight: dto.weight, weightUnit: dto.weightUnit,
         length: dto.length, width: dto.width, height: dto.height, dimensionUnit: dto.dimensionUnit,
         returnPolicy: dto.returnPolicy, warrantyInfo: dto.warrantyInfo,
+        hsnCode: dto.hsnCode,
+        gstRateBps: dto.gstRateBps,
+        supplyTaxability: dto.supplyTaxability,
+        taxInclusivePricing: dto.taxInclusivePricing,
+        cessRateBps: dto.cessRateBps,
+        defaultUqcCode: dto.defaultUqcCode,
+        taxCategory: dto.taxCategory,
+        taxConfigUpdatedBy: taxFieldsTouched ? adminId : undefined,
+        taxConfigUpdatedAt: taxFieldsTouched ? new Date() : undefined,
+        // Phase 37 — tax config starts unverified. Admin attests via
+        // POST /admin/products/:productId/verify-tax-config after
+        // review. Defaulted in schema so no explicit write needed
+        // on create.
       },
       dto.tags,
       dto.seo,
@@ -393,6 +420,40 @@ export class AdminProductsController {
     if (dto.returnPolicy !== undefined) updateData.returnPolicy = dto.returnPolicy;
     if (dto.warrantyInfo !== undefined) updateData.warrantyInfo = dto.warrantyInfo;
 
+    // Tax columns — forward each that was supplied, then stamp the
+    // audit fields once if any of them was touched. Undefined-only
+    // updates leave taxConfigUpdatedBy/_At untouched so the trail
+    // reflects "who last actually changed tax data".
+    if (dto.hsnCode !== undefined) updateData.hsnCode = dto.hsnCode;
+    if (dto.gstRateBps !== undefined) updateData.gstRateBps = dto.gstRateBps;
+    if (dto.supplyTaxability !== undefined) updateData.supplyTaxability = dto.supplyTaxability;
+    if (dto.taxInclusivePricing !== undefined) updateData.taxInclusivePricing = dto.taxInclusivePricing;
+    if (dto.cessRateBps !== undefined) updateData.cessRateBps = dto.cessRateBps;
+    if (dto.defaultUqcCode !== undefined) updateData.defaultUqcCode = dto.defaultUqcCode;
+    if (dto.taxCategory !== undefined) updateData.taxCategory = dto.taxCategory;
+    const adminTaxFieldsTouched = (
+      dto.hsnCode !== undefined ||
+      dto.gstRateBps !== undefined ||
+      dto.supplyTaxability !== undefined ||
+      dto.taxInclusivePricing !== undefined ||
+      dto.cessRateBps !== undefined ||
+      dto.defaultUqcCode !== undefined ||
+      dto.taxCategory !== undefined
+    );
+    if (adminTaxFieldsTouched) {
+      updateData.taxConfigUpdatedBy = adminId;
+      updateData.taxConfigUpdatedAt = new Date();
+      // Phase 37 — touching the tax fields resets the attestation.
+      // An admin editing tax config doesn't auto-attest — they
+      // must follow up with POST /admin/products/:productId/
+      // verify-tax-config to flip verified back to true. This
+      // keeps "admin made the edit" and "admin attested the
+      // config" as separate signals in the audit trail.
+      updateData.taxConfigVerified = false;
+      updateData.taxConfigVerifiedAt = null;
+      updateData.taxConfigVerifiedBy = null;
+    }
+
     const product = await this.productRepo.updateInTransaction(productId, updateData, dto.tags, dto.seo);
     this.logger.log(`Product ${productId} updated by admin ${adminId}`);
 
@@ -484,6 +545,173 @@ export class AdminProductsController {
     }
 
     return { success: true, message: 'Product approved and activated successfully', data: null };
+  }
+
+  // Phase 37 — admin attestation of the tax config. Separate from
+  // product approval because the HSN / GST rate / supply taxability
+  // review is a different competence (tax/finance team) from the
+  // catalog content review (product team). The flag gates STRICT-
+  // mode invoicing: TaxAuditReadinessService can be extended later
+  // to flag "active products with unverified tax config" so the
+  // STRICT-mode flip doesn't go live until every active product has
+  // a finance signoff.
+  //
+  // Any subsequent edit to a tax field on the product auto-resets
+  // this flag — see the admin/seller updateProduct paths.
+  // Phase 37 — Bulk product tax-config update.
+  //
+  // Apply HSN code + GST rate + UQC + supply taxability to many
+  // products in one call. Filter is either an explicit productIds list
+  // OR a category match (with optional "missing HSN only" sub-filter).
+  // Sets taxConfigVerified=true since an admin is explicitly attesting
+  // the values.
+  @Post('bulk/tax-config')
+  @HttpCode(HttpStatus.OK)
+  async bulkUpdateTaxConfig(
+    @Req() req: Request,
+    @Body()
+    body: {
+      productIds?: string[];
+      categoryId?: string | null;
+      missingHsnOnly?: boolean;
+      // Tax fields to apply. At least one must be provided.
+      hsnCode?: string | null;
+      gstRateBps?: number;
+      supplyTaxability?: string;
+      defaultUqcCode?: string | null;
+    },
+  ) {
+    const adminId = (req as any).adminId ?? 'admin';
+    const hasAny =
+      body.hsnCode !== undefined ||
+      body.gstRateBps !== undefined ||
+      body.supplyTaxability !== undefined ||
+      body.defaultUqcCode !== undefined;
+    if (!hasAny) {
+      throw new BadRequestAppException(
+        'At least one tax field (hsnCode / gstRateBps / supplyTaxability / defaultUqcCode) must be supplied',
+      );
+    }
+    if (
+      (body.productIds == null || body.productIds.length === 0) &&
+      !body.categoryId
+    ) {
+      throw new BadRequestAppException(
+        'Either productIds[] or categoryId is required',
+      );
+    }
+    if (body.gstRateBps != null) {
+      if (
+        !Number.isInteger(body.gstRateBps) ||
+        body.gstRateBps < 0 ||
+        body.gstRateBps > 4000
+      ) {
+        throw new BadRequestAppException(
+          'gstRateBps must be an integer between 0 and 4000',
+        );
+      }
+    }
+
+    // Resolve target set. Explicit IDs win; otherwise filter by
+    // category + missingHsnOnly.
+    const where: Record<string, unknown> = {};
+    if (body.productIds && body.productIds.length > 0) {
+      where.id = { in: body.productIds };
+    } else if (body.categoryId) {
+      where.categoryId = body.categoryId;
+      if (body.missingHsnOnly) {
+        where.OR = [{ hsnCode: null }, { hsnCode: '' }];
+      }
+    }
+    const candidates = await this.prisma.product.findMany({
+      where,
+      select: { id: true },
+      take: 2000,
+    });
+    if (candidates.length === 0) {
+      return {
+        success: true,
+        message: 'No matching products',
+        data: { updated: 0 },
+      };
+    }
+
+    const data: Record<string, unknown> = {
+      taxConfigVerified: true,
+      taxConfigVerifiedAt: new Date(),
+      taxConfigVerifiedBy: adminId,
+      taxConfigUpdatedAt: new Date(),
+      taxConfigUpdatedBy: adminId,
+    };
+    if (body.hsnCode !== undefined) data.hsnCode = body.hsnCode;
+    if (body.gstRateBps !== undefined) data.gstRateBps = body.gstRateBps;
+    if (body.supplyTaxability !== undefined)
+      data.supplyTaxability = body.supplyTaxability;
+    if (body.defaultUqcCode !== undefined)
+      data.defaultUqcCode = body.defaultUqcCode;
+
+    const result = await this.prisma.product.updateMany({
+      where: { id: { in: candidates.map((c) => c.id) } },
+      data: data as any,
+    });
+    this.logger.log(
+      `Bulk tax-config update by admin ${adminId}: ` +
+        `${result.count} products affected`,
+    );
+    return {
+      success: true,
+      message: `${result.count} product(s) updated`,
+      data: { updated: result.count },
+    };
+  }
+
+  @Patch(':productId/verify-tax-config')
+  @HttpCode(HttpStatus.OK)
+  async verifyTaxConfig(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+  ) {
+    const adminId = (req as any).adminId;
+    const product = await this.productRepo.findByIdBasic(productId);
+    if (!product) throw new NotFoundAppException('Product not found');
+
+    if ((product as any).taxConfigVerified === true) {
+      // Idempotent — already attested.
+      return {
+        success: true,
+        message: 'Tax config already verified',
+        data: {
+          taxConfigVerified: true,
+          taxConfigVerifiedAt: (product as any).taxConfigVerifiedAt,
+          taxConfigVerifiedBy: (product as any).taxConfigVerifiedBy,
+        },
+      };
+    }
+
+    const verifiedAt = new Date();
+    await this.productRepo.updateInTransaction(
+      productId,
+      {
+        taxConfigVerified: true,
+        taxConfigVerifiedAt: verifiedAt,
+        taxConfigVerifiedBy: adminId,
+      },
+      undefined,
+      undefined,
+    );
+    this.logger.log(
+      `Product ${productId} tax config verified by admin ${adminId}`,
+    );
+
+    return {
+      success: true,
+      message: 'Tax config verified',
+      data: {
+        taxConfigVerified: true,
+        taxConfigVerifiedAt: verifiedAt,
+        taxConfigVerifiedBy: adminId,
+      },
+    };
   }
 
   @Patch(':productId/reject')
