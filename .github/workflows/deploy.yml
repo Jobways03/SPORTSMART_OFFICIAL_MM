@@ -100,7 +100,7 @@ jobs:
       # API image (single build).
       - name: Build + push API image
         if: contains(inputs.services, 'api') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.api
@@ -115,7 +115,7 @@ jobs:
       # The list mirrors the frontend-ci matrix; keep them in lockstep.
       - name: Build + push web-storefront
         if: contains(inputs.services, 'web-storefront') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -129,7 +129,7 @@ jobs:
 
       - name: Build + push web-admin-storefront
         if: contains(inputs.services, 'web-admin-storefront') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -143,7 +143,7 @@ jobs:
 
       - name: Build + push web-d2c-seller-admin
         if: contains(inputs.services, 'web-d2c-seller-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -157,7 +157,7 @@ jobs:
 
       - name: Build + push web-d2c-seller
         if: contains(inputs.services, 'web-d2c-seller') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -171,7 +171,7 @@ jobs:
 
       - name: Build + push web-retail-seller-admin
         if: contains(inputs.services, 'web-retail-seller-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -185,7 +185,7 @@ jobs:
 
       - name: Build + push web-retail-seller
         if: contains(inputs.services, 'web-retail-seller') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -199,7 +199,7 @@ jobs:
 
       - name: Build + push web-franchise
         if: contains(inputs.services, 'web-franchise') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -213,7 +213,7 @@ jobs:
 
       - name: Build + push web-franchise-admin
         if: contains(inputs.services, 'web-franchise-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -227,7 +227,7 @@ jobs:
 
       - name: Build + push web-affiliate
         if: contains(inputs.services, 'web-affiliate') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
@@ -241,7 +241,7 @@ jobs:
 
       - name: Build + push web-affiliate-admin
         if: contains(inputs.services, 'web-affiliate-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: infra/docker/Dockerfile.web
