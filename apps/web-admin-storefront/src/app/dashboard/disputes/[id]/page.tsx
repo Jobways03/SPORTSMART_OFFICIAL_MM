@@ -11,6 +11,7 @@ import {
   STATUS_COLOR,
   KIND_LABEL,
 } from '@/services/admin-disputes.service';
+import CaseTimeline from '@/components/CaseTimeline';
 
 export default function DisputeDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -363,6 +364,14 @@ export default function DisputeDetailPage() {
             </div>
           </form>
         )}
+
+        <div style={{ marginTop: 16 }}>
+          <CaseTimeline
+            caseKind="dispute"
+            caseId={detail.id}
+            refreshKey={detail.updatedAt}
+          />
+        </div>
       </div>
 
       <aside style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

@@ -14,6 +14,7 @@ import {
   TicketPriority,
 } from '@/services/admin-support.service';
 import { ApiError } from '@/lib/api-client';
+import CaseTimeline from '@/components/CaseTimeline';
 
 const STATUS_OPTIONS: TicketStatus[] = [
   'OPEN',
@@ -340,6 +341,14 @@ export default function TicketDetailPage() {
             </button>
           </div>
         </form>
+
+        <div style={{ marginTop: 16 }}>
+          <CaseTimeline
+            caseKind="ticket"
+            caseId={ticket.id}
+            refreshKey={ticket.updatedAt}
+          />
+        </div>
       </div>
 
       {/* Side panel */}

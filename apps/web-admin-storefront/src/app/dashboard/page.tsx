@@ -43,6 +43,15 @@ interface SellerPerformanceItem {
   isActive: boolean;
 }
 
+interface AllocationAnalytics {
+  primaryServiceableCount: number;
+  fallbackUsedCount: number;
+  unservicableCount: number;
+  reassignedCount: number;
+  exceptionQueueCount: number;
+  avgDistanceKm: number | null;
+}
+
 interface ProductPerformanceData {
   topByRevenue: ProductPerformanceItem[];
   mostSellersMapped: {
@@ -94,6 +103,7 @@ export default function DashboardHome() {
     null,
   );
   const [sellerPerf, setSellerPerf] = useState<SellerPerformanceItem[]>([]);
+  const [allocation, setAllocation] = useState<AllocationAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -112,13 +122,17 @@ export default function DashboardHome() {
       apiClient<SellerPerformanceItem[]>(
         '/admin/dashboard/seller-performance',
       ).catch(() => null),
-    ]).then(([kpiRes, prodRes, sellerRes]) => {
+      apiClient<AllocationAnalytics>(
+        '/admin/dashboard/allocation-analytics',
+      ).catch(() => null),
+    ]).then(([kpiRes, prodRes, sellerRes, allocRes]) => {
       if (kpiRes?.data) setKpis(kpiRes.data);
       if (prodRes?.data) setProductPerf(prodRes.data);
       if (sellerRes?.data)
         setSellerPerf(
           Array.isArray(sellerRes.data) ? sellerRes.data.slice(0, 5) : [],
         );
+      if (allocRes?.data) setAllocation(allocRes.data);
       setLoading(false);
     });
   }, []);
@@ -345,6 +359,55 @@ export default function DashboardHome() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </Section>
+          )}
+
+          {/* ── Allocation analytics ──────────────────────── */}
+          {allocation && (
+            <Section
+              title="Allocation health"
+              subtitle="How the routing engine resolved the last batch of orders"
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                <AllocStat
+                  label="Primary serviceable"
+                  value={allocation.primaryServiceableCount}
+                  tone="ok"
+                />
+                <AllocStat
+                  label="Used fallback"
+                  value={allocation.fallbackUsedCount}
+                  tone="warn"
+                />
+                <AllocStat
+                  label="Unservicable"
+                  value={allocation.unservicableCount}
+                  tone="danger"
+                />
+                <AllocStat
+                  label="Reassigned"
+                  value={allocation.reassignedCount}
+                />
+                <AllocStat
+                  label="Exception queue"
+                  value={allocation.exceptionQueueCount}
+                  tone={allocation.exceptionQueueCount > 0 ? 'warn' : undefined}
+                />
+                <AllocStat
+                  label="Avg distance"
+                  value={
+                    allocation.avgDistanceKm == null
+                      ? '—'
+                      : `${allocation.avgDistanceKm.toFixed(1)} km`
+                  }
+                />
               </div>
             </Section>
           )}
@@ -727,6 +790,50 @@ function Section({
       </div>
       <div style={styles.card}>{children}</div>
     </section>
+  );
+}
+
+function AllocStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  tone?: 'ok' | 'warn' | 'danger';
+}) {
+  const color =
+    tone === 'ok'
+      ? '#16a34a'
+      : tone === 'warn'
+        ? '#d97706'
+        : tone === 'danger'
+          ? '#dc2626'
+          : '#0f172a';
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 12,
+        padding: '12px 14px',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          color: '#64748b',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4, color }}>
+        {value}
+      </div>
+    </div>
   );
 }
 

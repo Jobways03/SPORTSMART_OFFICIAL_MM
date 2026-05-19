@@ -7,11 +7,12 @@ import {
   NotificationTemplate,
   NotificationChannel,
   NotificationStatus,
+  DispatchPayload,
   STATUS_COLOR,
   CHANNEL_LABEL,
 } from '@/services/admin-notifications.service';
 
-type Tab = 'logs' | 'templates';
+type Tab = 'logs' | 'templates' | 'dispatch';
 
 export default function NotificationsAdminPage() {
   const [tab, setTab] = useState<Tab>('logs');
@@ -26,7 +27,7 @@ export default function NotificationsAdminPage() {
       </p>
 
       <div style={{ display: 'flex', borderBottom: '1px solid #E5E7EB', marginBottom: 20 }}>
-        {(['logs', 'templates'] as const).map((t) => (
+        {(['logs', 'templates', 'dispatch'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -47,7 +48,9 @@ export default function NotificationsAdminPage() {
         ))}
       </div>
 
-      {tab === 'logs' ? <LogsTab /> : <TemplatesTab />}
+      {tab === 'logs' && <LogsTab />}
+      {tab === 'templates' && <TemplatesTab />}
+      {tab === 'dispatch' && <DispatchTab />}
     </div>
   );
 }
@@ -489,4 +492,310 @@ const lbl: React.CSSProperties = {
   letterSpacing: 0.5,
   marginTop: 12,
   marginBottom: 4,
+};
+
+// ── Dispatch ─────────────────────────────────────────────────────
+//
+// Manual one-off notification dispatch. Two modes:
+//   - Template path: pick a template key, supply a recipientId + vars;
+//     respects user opt-out preferences.
+//   - Raw path: pick a channel, supply recipient/to + body; bypasses
+//     opt-out — use ONLY for account-security alerts.
+
+type DispatchMode = 'template' | 'raw';
+
+function DispatchTab() {
+  const [mode, setMode] = useState<DispatchMode>('template');
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<{ jobId: string; eventId: string } | null>(
+    null,
+  );
+
+  // Template-mode fields
+  const [templateKey, setTemplateKey] = useState('');
+  const [recipientId, setRecipientId] = useState('');
+  const [eventClass, setEventClass] = useState('admin.manual');
+  const [varsText, setVarsText] = useState('{}');
+
+  // Raw-mode fields
+  const [rawChannel, setRawChannel] = useState<NotificationChannel>('EMAIL');
+  const [rawTo, setRawTo] = useState('');
+  const [rawSubject, setRawSubject] = useState('');
+  const [rawBody, setRawBody] = useState('');
+  const [rawEventType, setRawEventType] = useState('admin.manual');
+
+  async function submit() {
+    setErr(null);
+    setResult(null);
+    setSubmitting(true);
+    try {
+      let payload: DispatchPayload;
+      if (mode === 'template') {
+        if (!templateKey.trim()) throw new Error('templateKey is required');
+        if (!recipientId.trim()) throw new Error('recipientId is required');
+        let vars: Record<string, unknown> = {};
+        try {
+          vars = varsText.trim() ? JSON.parse(varsText) : {};
+        } catch {
+          throw new Error('Vars must be valid JSON');
+        }
+        payload = {
+          templateKey: templateKey.trim(),
+          recipientId: recipientId.trim(),
+          vars,
+          eventClass: eventClass.trim() || undefined,
+        };
+      } else {
+        if (!rawBody.trim()) throw new Error('Body is required');
+        if (!recipientId.trim() && !rawTo.trim()) {
+          throw new Error('Either recipientId or "to" is required');
+        }
+        payload = {
+          channel: rawChannel,
+          recipientId: recipientId.trim() || undefined,
+          to: rawTo.trim() || undefined,
+          subject: rawSubject.trim() || undefined,
+          body: rawBody,
+          eventType: rawEventType.trim() || undefined,
+        };
+      }
+      const res = await adminNotificationsService.dispatch(payload);
+      if (res.data) setResult(res.data);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Dispatch failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <div
+        style={{
+          padding: '10px 14px',
+          background: '#fef3c7',
+          border: '1px solid #fde68a',
+          color: '#92400e',
+          borderRadius: 10,
+          fontSize: 13,
+          marginBottom: 16,
+        }}
+      >
+        <strong>Heads-up:</strong> the <em>raw</em> path bypasses
+        recipient opt-out preferences. Reserve it for account-security
+        notifications. For routine sends, use the <em>template</em> path.
+      </div>
+
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
+        {(['template', 'raw'] as DispatchMode[]).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => {
+              setMode(m);
+              setErr(null);
+              setResult(null);
+            }}
+            style={{
+              padding: '8px 14px',
+              fontSize: 13,
+              fontWeight: 600,
+              background: mode === m ? '#0F1115' : '#fff',
+              color: mode === m ? '#fff' : '#525A65',
+              border: `1px solid ${mode === m ? '#0F1115' : '#E5E7EB'}`,
+              borderRadius: 9999,
+              cursor: 'pointer',
+              textTransform: 'capitalize',
+            }}
+          >
+            {m} path
+          </button>
+        ))}
+      </div>
+
+      {mode === 'template' && (
+        <div
+          style={{
+            background: '#fff',
+            border: '1px solid #E5E7EB',
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+          }}
+        >
+          <label style={lbl}>Template key</label>
+          <input
+            type="text"
+            value={templateKey}
+            onChange={(e) => setTemplateKey(e.target.value)}
+            placeholder="e.g. order.shipped"
+            style={inp}
+          />
+
+          <label style={lbl}>Recipient ID</label>
+          <input
+            type="text"
+            value={recipientId}
+            onChange={(e) => setRecipientId(e.target.value)}
+            placeholder="customer / seller / admin UUID"
+            style={inp}
+          />
+
+          <label style={lbl}>Event class (optional)</label>
+          <input
+            type="text"
+            value={eventClass}
+            onChange={(e) => setEventClass(e.target.value)}
+            placeholder="admin.manual"
+            style={inp}
+          />
+
+          <label style={lbl}>Vars (JSON)</label>
+          <textarea
+            value={varsText}
+            onChange={(e) => setVarsText(e.target.value)}
+            rows={6}
+            style={{ ...inp, fontFamily: 'ui-monospace, monospace', resize: 'vertical' }}
+          />
+        </div>
+      )}
+
+      {mode === 'raw' && (
+        <div
+          style={{
+            background: '#fff',
+            border: '1px solid #E5E7EB',
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+          }}
+        >
+          <label style={lbl}>Channel</label>
+          <select
+            value={rawChannel}
+            onChange={(e) => setRawChannel(e.target.value as NotificationChannel)}
+            style={inp}
+          >
+            <option value="EMAIL">EMAIL</option>
+            <option value="SMS">SMS</option>
+            <option value="WHATSAPP">WHATSAPP</option>
+          </select>
+
+          <label style={lbl}>Recipient ID (preferred)</label>
+          <input
+            type="text"
+            value={recipientId}
+            onChange={(e) => setRecipientId(e.target.value)}
+            placeholder="UUID — resolves to the user's saved channel address"
+            style={inp}
+          />
+
+          <label style={lbl}>
+            …or <em>to</em> (raw address)
+          </label>
+          <input
+            type="text"
+            value={rawTo}
+            onChange={(e) => setRawTo(e.target.value)}
+            placeholder="email@example.com or +91..."
+            style={inp}
+          />
+
+          {rawChannel === 'EMAIL' && (
+            <>
+              <label style={lbl}>Subject</label>
+              <input
+                type="text"
+                value={rawSubject}
+                onChange={(e) => setRawSubject(e.target.value)}
+                style={inp}
+              />
+            </>
+          )}
+
+          <label style={lbl}>Body</label>
+          <textarea
+            value={rawBody}
+            onChange={(e) => setRawBody(e.target.value)}
+            rows={6}
+            style={{ ...inp, resize: 'vertical' }}
+          />
+
+          <label style={lbl}>Event type (for audit)</label>
+          <input
+            type="text"
+            value={rawEventType}
+            onChange={(e) => setRawEventType(e.target.value)}
+            style={inp}
+          />
+        </div>
+      )}
+
+      {err && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#991b1b',
+            borderRadius: 10,
+            fontSize: 13,
+            marginBottom: 12,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {result && (
+        <div
+          style={{
+            padding: '10px 14px',
+            background: '#ecfdf5',
+            border: '1px solid #6ee7b7',
+            color: '#065f46',
+            borderRadius: 10,
+            fontSize: 13,
+            marginBottom: 12,
+          }}
+        >
+          Enqueued — jobId{' '}
+          <code style={{ fontFamily: 'ui-monospace, monospace' }}>{result.jobId}</code>{' '}
+          (eventId{' '}
+          <code style={{ fontFamily: 'ui-monospace, monospace' }}>{result.eventId}</code>)
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={submit}
+        disabled={submitting}
+        style={{
+          height: 40,
+          padding: '0 22px',
+          border: 'none',
+          background: '#0F1115',
+          color: '#fff',
+          borderRadius: 9999,
+          fontWeight: 600,
+          fontSize: 14,
+          cursor: submitting ? 'wait' : 'pointer',
+          opacity: submitting ? 0.6 : 1,
+        }}
+      >
+        {submitting ? 'Dispatching…' : 'Dispatch notification'}
+      </button>
+    </div>
+  );
+}
+
+const inp: React.CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  border: '1px solid #D2D6DC',
+  borderRadius: 8,
+  fontSize: 13,
+  boxSizing: 'border-box',
+  fontFamily: 'inherit',
 };

@@ -13,6 +13,12 @@ interface SettingTile {
 
 const SETTINGS_TILES: SettingTile[] = [
   {
+    title: 'Two-factor authentication',
+    description: 'Enrol a TOTP authenticator on your account, save backup codes, or confirm your existing enrolment. Protects against credential leaks.',
+    href: '/dashboard/settings/mfa',
+    icon: '🔐',
+  },
+  {
     title: 'Roles & Permissions',
     description: 'Define what each admin role can do. System roles ship pre-configured; create custom roles for finer slicing.',
     href: '/dashboard/roles',

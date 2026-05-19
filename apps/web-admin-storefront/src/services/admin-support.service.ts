@@ -135,6 +135,42 @@ export const adminSupportService = {
   listCategories(): Promise<ApiResponse<TicketCategory[]>> {
     return apiClient<TicketCategory[]>('/admin/support/categories');
   },
+
+  createCategory(payload: {
+    name: string;
+    description?: string;
+    scopedTo?: TicketActorType | null;
+    sortOrder?: number;
+  }): Promise<ApiResponse<TicketCategory>> {
+    return apiClient<TicketCategory>('/admin/support/categories', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateCategory(
+    id: string,
+    payload: {
+      name?: string;
+      description?: string | null;
+      scopedTo?: TicketActorType | null;
+      sortOrder?: number;
+      active?: boolean;
+    },
+  ): Promise<ApiResponse<TicketCategory>> {
+    return apiClient<TicketCategory>(
+      `/admin/support/categories/${id}`,
+      { method: 'PATCH', body: JSON.stringify(payload) },
+    );
+  },
+
+  /** Soft-delete (sets active=false server-side). */
+  deactivateCategory(id: string): Promise<ApiResponse<TicketCategory>> {
+    return apiClient<TicketCategory>(
+      `/admin/support/categories/${id}`,
+      { method: 'DELETE' },
+    );
+  },
   /**
    * Phase 11 — promote a support ticket onto the formal-dispute track.
    * Customer never sees the dispute exists; their support thread keeps

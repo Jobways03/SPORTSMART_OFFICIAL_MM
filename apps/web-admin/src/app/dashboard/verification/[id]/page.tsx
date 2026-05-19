@@ -10,6 +10,7 @@ import {
   getRiskInfo,
   rejectOrder,
   releaseClaim,
+  rescoreOrder,
   RiskInfo,
 } from '@/services/admin-verification.service';
 import { RiskBadge } from '@/components/RiskBadge';
@@ -78,6 +79,7 @@ export default function VerificationDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [remarks, setRemarks] = useState('');
   const [submitting, setSubmitting] = useState<null | 'approve' | 'reject' | 'release'>(null);
+  const [rescoring, setRescoring] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -368,6 +370,55 @@ export default function VerificationDetailPage() {
                 ))}
               </ul>
             )}
+            <div
+              style={{
+                marginTop: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                fontSize: 12,
+                color: 'var(--color-text-secondary)',
+              }}
+            >
+              {risk.scoredAt && (
+                <span>
+                  Last scored {new Date(risk.scoredAt).toLocaleString()}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!id || rescoring) return;
+                  setRescoring(true);
+                  setError(null);
+                  try {
+                    const res = await rescoreOrder(id);
+                    if (res.data) setRisk(res.data);
+                  } catch (e) {
+                    setError(
+                      e instanceof Error ? e.message : 'Rescore failed',
+                    );
+                  } finally {
+                    setRescoring(false);
+                  }
+                }}
+                disabled={rescoring}
+                style={{
+                  marginLeft: 'auto',
+                  height: 28,
+                  padding: '0 12px',
+                  border: '1px solid var(--color-border)',
+                  background: '#fff',
+                  borderRadius: 9999,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: rescoring ? 'wait' : 'pointer',
+                  opacity: rescoring ? 0.6 : 1,
+                }}
+              >
+                {rescoring ? 'Re-scoring…' : '↻ Re-score'}
+              </button>
+            </div>
           </div>
         </div>
       )}

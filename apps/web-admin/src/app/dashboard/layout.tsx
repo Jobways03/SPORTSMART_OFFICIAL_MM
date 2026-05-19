@@ -119,6 +119,8 @@ export default function DashboardLayout({
     { href: '/dashboard/sellers', label: 'Sellers', icon: '&#128101;' },
     { href: '/dashboard/products', label: 'Products', icon: '&#128230;' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
+    { href: '/dashboard/verification', label: 'Verification', icon: '&#10003;' },
+    { href: '/dashboard/routing', label: 'Routing', icon: '&#128640;' },
     { href: '/dashboard/returns', label: 'Returns', icon: '&#8634;' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },
     { href: '/dashboard/accounts', label: 'Accounts', icon: '&#128202;' },
@@ -180,6 +182,14 @@ export default function DashboardLayout({
                     Seller Admin
                   </div>
                 </div>
+                <Link
+                  href="/dashboard/settings/mfa"
+                  className="navbar-dropdown-item"
+                  onClick={() => setDropdownOpen(false)}
+                >
+                  <span className="dropdown-icon">&#128274;</span>
+                  Two-factor auth
+                </Link>
                 <div className="navbar-dropdown-divider" />
                 <button
                   className="navbar-dropdown-item danger"

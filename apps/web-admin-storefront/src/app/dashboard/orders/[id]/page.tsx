@@ -543,12 +543,39 @@ export default function OrderDetailPage() {
   const [reassigning, setReassigning] = useState(false);
   const [reassignError, setReassignError] = useState('');
 
+  // Sub-order cancel state.
+  const [cancelSubOrderId, setCancelSubOrderId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+
   const fetchOrder = useCallback(() => {
     apiClient<OrderDetail>(`/admin/orders/${id}`)
       .then((res) => { if (res.data) setOrder(res.data); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [id]);
+
+  const submitCancel = async () => {
+    if (!cancelSubOrderId || cancelling) return;
+    setCancelError('');
+    setCancelling(true);
+    try {
+      await apiClient(`/admin/orders/sub-orders/${cancelSubOrderId}/cancel`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: cancelReason.trim() || undefined }),
+      });
+      setCancelSubOrderId(null);
+      setCancelReason('');
+      fetchOrder();
+    } catch (err: any) {
+      setCancelError(
+        err?.body?.message || err?.message || 'Cancel failed',
+      );
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   useEffect(() => { fetchOrder(); }, [fetchOrder]);
 
@@ -912,7 +939,7 @@ export default function OrderDetailPage() {
               {(currentStatus === 'ROUTED_TO_SELLER' || currentStatus === 'SELLER_ACCEPTED' || currentStatus === 'EXCEPTION_QUEUE') &&
                 (so.acceptStatus === 'OPEN' || so.acceptStatus === 'REJECTED') &&
                 so.fulfillmentStatus !== 'DELIVERED' && so.fulfillmentStatus !== 'CANCELLED' && (
-                <div style={{ marginBottom: 12 }}>
+                <div style={{ marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     onClick={() => openReassignModal(so.id)}
                     disabled={!!actionLoading || reassigning}
@@ -924,6 +951,23 @@ export default function OrderDetailPage() {
                     }}
                   >
                     &#8634; Reassign Order
+                  </button>
+                  {/* Mid-flow cancel — safe at any pre-delivery stage. Releases stock holds. */}
+                  <button
+                    onClick={() => {
+                      setCancelSubOrderId(so.id);
+                      setCancelReason('');
+                      setCancelError('');
+                    }}
+                    disabled={!!actionLoading || cancelling}
+                    style={{
+                      padding: '8px 16px', fontSize: 13, fontWeight: 600,
+                      border: '1px solid #dc2626', background: '#fef2f2',
+                      color: '#dc2626', borderRadius: 8, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    Cancel sub-order
                   </button>
                 </div>
               )}
@@ -1553,6 +1597,100 @@ export default function OrderDetailPage() {
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Cancel sub-order modal ── */}
+      {cancelSubOrderId && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: 16,
+          }}
+          onClick={() => {
+            if (!cancelling) {
+              setCancelSubOrderId(null);
+              setCancelReason('');
+              setCancelError('');
+            }
+          }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 16, padding: 24,
+              width: '100%', maxWidth: 480,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, marginBottom: 6 }}>
+              Cancel sub-order
+            </h2>
+            <p style={{ margin: 0, fontSize: 13, color: '#525A65', lineHeight: 1.5, marginBottom: 14 }}>
+              This releases stock holds on the assigned node and marks the
+              sub-order CANCELLED. Use the returns flow for delivered items.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 12, color: '#525A65', fontWeight: 600, marginBottom: 4 }}>
+              Reason (optional)
+            </label>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              rows={3}
+              disabled={cancelling}
+              placeholder="e.g. customer requested cancellation pre-shipment"
+              style={{
+                width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                borderRadius: 8, fontSize: 13, boxSizing: 'border-box',
+                fontFamily: 'inherit', resize: 'vertical',
+              }}
+            />
+
+            {cancelError && (
+              <div style={{
+                marginTop: 10, padding: '8px 12px',
+                background: '#fef2f2', border: '1px solid #fecaca',
+                color: '#991b1b', borderRadius: 8, fontSize: 13,
+              }}>
+                {cancelError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setCancelSubOrderId(null);
+                  setCancelReason('');
+                  setCancelError('');
+                }}
+                disabled={cancelling}
+                style={{
+                  height: 36, padding: '0 16px', border: '1px solid #D2D6DC',
+                  background: '#fff', color: '#0F1115',
+                  borderRadius: 9999, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Keep order
+              </button>
+              <button
+                type="button"
+                onClick={submitCancel}
+                disabled={cancelling}
+                style={{
+                  height: 36, padding: '0 16px', border: 'none',
+                  background: '#dc2626', color: '#fff',
+                  borderRadius: 9999, fontSize: 13, fontWeight: 700,
+                  cursor: cancelling ? 'wait' : 'pointer',
+                  opacity: cancelling ? 0.6 : 1,
+                }}
+              >
+                {cancelling ? 'Cancelling…' : 'Cancel sub-order'}
+              </button>
+            </div>
           </div>
         </div>
       )}

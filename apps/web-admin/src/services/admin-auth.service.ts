@@ -5,7 +5,8 @@ export interface AdminLoginPayload {
   password: string;
 }
 
-export interface AdminLoginResponseData {
+export interface AdminLoginSession {
+  mfaRequired?: false;
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
@@ -15,6 +16,29 @@ export interface AdminLoginResponseData {
     email: string;
     role: string;
   };
+}
+
+/**
+ * Returned by /admin/auth/login when the admin has MFA enrolled
+ * (`mfaEnabledAt != null`). The caller must POST the TOTP code +
+ * challengeToken to /admin/auth/mfa-verify to obtain the real session.
+ */
+export interface AdminLoginMfaChallenge {
+  mfaRequired: true;
+  challengeToken: string;
+  challengeExpiresIn: number;
+  admin: {
+    adminId: string;
+    email: string;
+  };
+}
+
+export type AdminLoginResponseData = AdminLoginSession | AdminLoginMfaChallenge;
+
+export function isMfaChallenge(
+  data: AdminLoginResponseData,
+): data is AdminLoginMfaChallenge {
+  return (data as AdminLoginMfaChallenge).mfaRequired === true;
 }
 
 export interface AdminMeResponseData {

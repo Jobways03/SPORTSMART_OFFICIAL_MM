@@ -12,6 +12,7 @@ import {
   LiabilityParty,
   CustomerRemedy,
 } from '@/services/admin-returns.service';
+import CaseTimeline from '@/components/CaseTimeline';
 
 type QcRow = { returnItemId: string; qcOutcome: QcOutcome; qcQuantityApproved: number; qcNotes: string };
 
@@ -2392,6 +2393,10 @@ export default function AdminReturnDetailPage() {
               </div>
             </div>
           )}
+
+          <div style={{ marginBottom: 16 }}>
+            <CaseTimeline caseKind="return" caseId={data.id} refreshKey={data.updatedAt} />
+          </div>
 
           {data.statusHistory && data.statusHistory.length > 0 && (
             <div style={cardStyleV2}>
