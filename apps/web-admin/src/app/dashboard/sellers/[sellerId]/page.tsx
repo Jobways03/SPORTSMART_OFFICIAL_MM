@@ -890,18 +890,62 @@ export default function AdminSellerDetailPage() {
             <h2>Product Mappings</h2>
             <p>Products this seller is mapped to with stock levels</p>
           </div>
-          <button
-            type="button"
-            onClick={fetchProductMappings}
-            disabled={productMappingsLoading}
-            style={{
-              padding: '6px 14px', fontSize: 12, fontWeight: 500,
-              border: '1px solid var(--color-border)', borderRadius: 'var(--radius)',
-              background: '#fff', cursor: 'pointer', color: 'var(--color-text)',
-            }}
-          >
-            {productMappingsLoading ? 'Loading...' : 'Refresh'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!window.confirm('Suspend ALL active mappings for this seller? They will be hidden from allocation until reactivated.')) {
+                  return;
+                }
+                try {
+                  await apiClient(`/admin/sellers/${sellerId}/suspend-mappings`, { method: 'POST' });
+                  await fetchProductMappings();
+                } catch (e) {
+                  alert((e as Error).message || 'Suspend failed');
+                }
+              }}
+              style={{
+                padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                border: '1px solid #fecaca', borderRadius: 'var(--radius)',
+                background: '#fff', cursor: 'pointer', color: '#991b1b',
+              }}
+            >
+              Suspend all mappings
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!window.confirm('Re-activate ALL suspended mappings for this seller?')) {
+                  return;
+                }
+                try {
+                  await apiClient(`/admin/sellers/${sellerId}/activate-mappings`, { method: 'POST' });
+                  await fetchProductMappings();
+                } catch (e) {
+                  alert((e as Error).message || 'Activate failed');
+                }
+              }}
+              style={{
+                padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                border: '1px solid #bbf7d0', borderRadius: 'var(--radius)',
+                background: '#fff', cursor: 'pointer', color: '#15803d',
+              }}
+            >
+              Re-activate all
+            </button>
+            <button
+              type="button"
+              onClick={fetchProductMappings}
+              disabled={productMappingsLoading}
+              style={{
+                padding: '6px 14px', fontSize: 12, fontWeight: 500,
+                border: '1px solid var(--color-border)', borderRadius: 'var(--radius)',
+                background: '#fff', cursor: 'pointer', color: 'var(--color-text)',
+              }}
+            >
+              {productMappingsLoading ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
         {productMappingsLoading && productMappings.length === 0 ? (

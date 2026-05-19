@@ -60,8 +60,10 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Products', href: '/dashboard/products', icon: '📦', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
   // Inventory has no dedicated permission key today — falls under products.
   { label: 'Inventory', href: '/dashboard/inventory', icon: '📊', anyOf: ['products.read'], section: 'operations' },
+  { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: '🚨', anyOf: ['products.read'], section: 'operations' },
 
   // Customer Care — escalations and people-facing queues.
+  { label: 'Queues', href: '/dashboard/queues', icon: '🗂️', anyOf: ['audit.read'], section: 'care' },
   { label: 'Returns', href: '/dashboard/returns', icon: '↩️', anyOf: ['returns.read'], section: 'care' },
   { label: 'Disputes', href: '/dashboard/disputes', icon: '⚖️', anyOf: ['disputes.read'], section: 'care' },
   { label: 'Support', href: '/dashboard/support', icon: '💬', anyOf: ['support.read'], section: 'care' },
@@ -181,10 +183,23 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
     router.replace('/login');
   };
 
-  const isActive = (href: string) => {
-    if (href === '/dashboard') return pathname === '/dashboard';
-    return pathname.startsWith(href);
-  };
+  // Longest-match wins so that a nested route like /dashboard/inventory/alerts
+  // highlights only "Low-stock alerts", not also the parent "Inventory".
+  const activeHref = useMemo(() => {
+    let best: string | null = null;
+    for (const item of navItems) {
+      if (item.href === '/dashboard') {
+        if (pathname === '/dashboard') return '/dashboard';
+        continue;
+      }
+      if (pathname === item.href || pathname.startsWith(item.href + '/')) {
+        if (!best || item.href.length > best.length) best = item.href;
+      }
+    }
+    return best;
+  }, [pathname]);
+
+  const isActive = (href: string) => activeHref === href;
 
   const initials = getInitials(adminName || 'Super Admin');
 

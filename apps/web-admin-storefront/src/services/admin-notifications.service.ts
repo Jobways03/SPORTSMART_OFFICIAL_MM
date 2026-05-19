@@ -3,6 +3,24 @@ import { apiClient, ApiResponse } from '@/lib/api-client';
 export type NotificationChannel = 'EMAIL' | 'SMS' | 'WHATSAPP';
 export type NotificationStatus = 'QUEUED' | 'SENT' | 'FAILED' | 'RETRY';
 
+export type DispatchPayload =
+  | {
+      // Template path
+      templateKey: string;
+      recipientId: string;
+      vars?: Record<string, unknown>;
+      eventClass?: string;
+    }
+  | {
+      // Raw path
+      channel: NotificationChannel;
+      recipientId?: string;
+      to?: string;
+      subject?: string;
+      body: string;
+      eventType?: string;
+    };
+
 export interface NotificationLog {
   id: string;
   channel: NotificationChannel;
@@ -121,6 +139,24 @@ export const adminNotificationsService = {
     return apiClient(`/admin/notifications/templates/${encodeURIComponent(key)}/preview`, {
       method: 'POST',
       body: JSON.stringify({ vars }),
+    });
+  },
+
+  // ── Manual dispatch (admin escape hatch) ──────────────────────
+  /**
+   * POST /admin/notifications/dispatch — manually enqueue a notification.
+   *
+   * Two body shapes, discriminated by `templateKey`:
+   *   Template path:  { templateKey, recipientId, vars?, eventClass? }
+   *   Raw path:       { channel, recipientId? | to?, subject?, body, eventType? }
+   *
+   * Template path respects user opt-out preferences; raw path bypasses
+   * them (use only for account-security-class alerts).
+   */
+  dispatch(payload: DispatchPayload): Promise<ApiResponse<{ jobId: string; eventId: string }>> {
+    return apiClient(`/admin/notifications/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 

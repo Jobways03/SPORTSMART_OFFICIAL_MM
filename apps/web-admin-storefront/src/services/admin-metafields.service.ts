@@ -64,6 +64,21 @@ export const adminMetafieldsService = {
     });
   },
 
+  /**
+   * DELETE /admin/products/:productId/metafields/:metafieldId — remove a single
+   * metafield value. The corresponding metafield-definition stays; only this
+   * product's value for it is cleared.
+   */
+  deleteProductMetafield(
+    productId: string,
+    metafieldId: string,
+  ): Promise<ApiResponse<void>> {
+    return apiClient<void>(
+      `/admin/products/${productId}/metafields/${metafieldId}`,
+      { method: 'DELETE' },
+    );
+  },
+
   // ─── Storefront Filter Configuration ──────────────────────────
 
   listFilters(params?: { scopeType?: string; isActive?: string }): Promise<ApiResponse<FiltersResult>> {

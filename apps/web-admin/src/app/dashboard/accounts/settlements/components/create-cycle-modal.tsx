@@ -15,17 +15,39 @@ export default function CreateCycleModal({ onClose, onSuccess }: Props) {
   const [periodEnd, setPeriodEnd] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [preview, setPreview] = useState<any | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
-  const handleSubmit = async () => {
-    setError('');
+  const validate = (): boolean => {
     if (!periodStart || !periodEnd) {
       setError('Please provide both period start and period end dates.');
-      return;
+      return false;
     }
     if (new Date(periodStart) > new Date(periodEnd)) {
       setError('Period start must be before or equal to period end.');
-      return;
+      return false;
     }
+    return true;
+  };
+
+  const handlePreview = async () => {
+    setError('');
+    setPreview(null);
+    if (!validate()) return;
+    setPreviewing(true);
+    try {
+      const res = await adminAccountsService.previewCycle(periodStart, periodEnd);
+      setPreview(res.data ?? null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Preview failed.');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    setError('');
+    if (!validate()) return;
     setSubmitting(true);
     try {
       await adminAccountsService.createCycle(periodStart, periodEnd);
@@ -79,15 +101,51 @@ export default function CreateCycleModal({ onClose, onSuccess }: Props) {
               disabled={submitting}
             />
           </div>
+
+          {preview && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: '10px 12px',
+                background: '#ecfdf5',
+                border: '1px solid #6ee7b7',
+                borderRadius: 8,
+                fontSize: 12,
+                color: '#065f46',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>Dry-run preview</strong>
+              <pre
+                style={{
+                  margin: '6px 0 0',
+                  fontSize: 11,
+                  fontFamily: 'ui-monospace, monospace',
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: 240,
+                  overflowY: 'auto',
+                }}
+              >
+                {JSON.stringify(preview, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
         <div className="modal-footer">
-          <button className="modal-btn" onClick={onClose} disabled={submitting}>
+          <button className="modal-btn" onClick={onClose} disabled={submitting || previewing}>
             Cancel
+          </button>
+          <button
+            className="modal-btn"
+            onClick={handlePreview}
+            disabled={previewing || submitting || !periodStart || !periodEnd}
+          >
+            {previewing ? 'Previewing…' : 'Preview'}
           </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleSubmit}
-            disabled={submitting || !periodStart || !periodEnd}
+            disabled={submitting || previewing || !periodStart || !periodEnd}
           >
             {submitting ? 'Creating...' : 'Create Cycle'}
           </button>

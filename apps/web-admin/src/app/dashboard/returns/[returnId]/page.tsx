@@ -16,6 +16,7 @@ import ConfirmRefundModal from '../components/confirm-refund-modal';
 import InitiateRefundModal from '../components/initiate-refund-modal';
 import MarkRefundFailedModal from '../components/mark-refund-failed-modal';
 import UploadEvidenceModal from '../components/upload-evidence-modal';
+import CaseTimeline from '@/components/CaseTimeline';
 import {
   formatCurrency,
   formatDate,
@@ -906,6 +907,10 @@ export default function ReturnDetailPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <CaseTimeline caseKind="return" caseId={ret.id} refreshKey={ret.updatedAt} />
           </div>
         </div>
 

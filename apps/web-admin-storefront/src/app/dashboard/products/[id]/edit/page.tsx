@@ -1369,6 +1369,26 @@ const router = useRouter();
             <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
               {metafields.filter(m => m.definition.ownerType === 'CATEGORY' || !m.definition.ownerType).map((mf) => {
                 const def = mf.definition;
+                const canDelete = !!mf.metafieldId;
+                const handleDelete = async () => {
+                  if (!mf.metafieldId) return;
+                  if (!window.confirm(`Remove "${def.name}" from this product? The definition itself is kept.`)) {
+                    return;
+                  }
+                  try {
+                    await adminMetafieldsService.deleteProductMetafield(productId, mf.metafieldId);
+                    setMetafields((prev) =>
+                      prev.map((m) =>
+                        m.definition.id === def.id
+                          ? { ...m, value: null, hasValue: false, metafieldId: null }
+                          : m,
+                      ),
+                    );
+                    showToast('success', 'Attribute removed');
+                  } catch {
+                    showToast('error', 'Remove failed');
+                  }
+                };
                 return (
                   <div key={def.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '12px 0', borderBottom: '1px solid #ebebeb', gap: 12 }}>
                     {/* Label */}
@@ -1539,6 +1559,27 @@ const router = useRouter();
                         </div>
                       )}
                     </div>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        onClick={handleDelete}
+                        title="Remove this attribute value"
+                        style={{
+                          border: '1px solid #fecaca',
+                          background: '#fff',
+                          color: '#991b1b',
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: '4px 8px',
+                          cursor: 'pointer',
+                          alignSelf: 'flex-start',
+                          marginTop: 6,
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </div>
                 );
               })}

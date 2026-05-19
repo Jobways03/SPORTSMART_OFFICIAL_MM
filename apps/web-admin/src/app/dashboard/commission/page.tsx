@@ -139,6 +139,64 @@ export default function AdminCommissionPage() {
   const [dateTo, setDateTo] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
+  // History + adjust modal state.
+  const [historyFor, setHistoryFor] = useState<CommissionRecord | null>(null);
+  const [historyData, setHistoryData] = useState<any[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [adjustNewEarning, setAdjustNewEarning] = useState('');
+  const [adjustReason, setAdjustReason] = useState('');
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [adjustError, setAdjustError] = useState<string | null>(null);
+
+  const openHistory = async (r: CommissionRecord) => {
+    setHistoryFor(r);
+    setHistoryData(null);
+    setHistoryLoading(true);
+    setAdjustNewEarning(String(r.adminEarning ?? ''));
+    setAdjustReason('');
+    setAdjustError(null);
+    try {
+      const res = await apiClient<any[]>(`/admin/commission/${r.id}/history`);
+      setHistoryData(res.data ?? []);
+    } catch (err) {
+      setAdjustError(err instanceof Error ? err.message : 'Failed to load history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const submitAdjust = async () => {
+    if (!historyFor) return;
+    const parsed = Number(adjustNewEarning);
+    if (isNaN(parsed)) {
+      setAdjustError('newAdminEarning must be a number');
+      return;
+    }
+    if (!adjustReason.trim()) {
+      setAdjustError('Reason is required');
+      return;
+    }
+    setAdjustSaving(true);
+    setAdjustError(null);
+    try {
+      await apiClient(`/admin/commission/${historyFor.id}/adjust`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          newAdminEarning: parsed,
+          reason: adjustReason.trim(),
+        }),
+      });
+      // Refresh history + list.
+      const res = await apiClient<any[]>(`/admin/commission/${historyFor.id}/history`);
+      setHistoryData(res.data ?? []);
+      setAdjustReason('');
+    } catch (err) {
+      setAdjustError(err instanceof Error ? err.message : 'Adjust failed');
+    } finally {
+      setAdjustSaving(false);
+    }
+  };
+
   // Seller breakdown
   const [sellerData, setSellerData] = useState<SellerBreakdownResponse | null>(null);
   const [sellerPage, setSellerPage] = useState(1);
@@ -359,25 +417,76 @@ export default function AdminCommissionPage() {
             Platform margin tracking, settlement cycles, and reconciliation.
           </p>
         </div>
-        <Link
-          href="/dashboard/commission/settings"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            height: 38,
-            padding: '0 16px',
-            fontSize: 13,
-            fontWeight: 600,
-            background: '#0f172a',
-            color: '#ffffff',
-            border: '1px solid #0f172a',
-            borderRadius: 8,
-            textDecoration: 'none',
-          }}
-        >
-          Commission settings
-        </Link>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const token = sessionStorage.getItem('adminAccessToken');
+                const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+                const params = new URLSearchParams();
+                if (search) params.set('search', search);
+                if (dateFrom) params.set('dateFrom', dateFrom);
+                if (dateTo) params.set('dateTo', dateTo);
+                if (statusFilter) params.set('status', statusFilter);
+                const res = await fetch(
+                  `${apiBase}/api/v1/admin/commission/export?${params.toString()}`,
+                  { headers: { Authorization: `Bearer ${token ?? ''}` } },
+                );
+                if (!res.ok) throw new Error(`Export failed (${res.status})`);
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `commission-${new Date().toISOString().slice(0, 10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                if (res.headers.get('X-Export-Truncated') === 'true') {
+                  alert('Export capped at 50,000 rows — narrow the date range to get the full set.');
+                }
+              } catch (err) {
+                alert(err instanceof Error ? err.message : 'Export failed');
+              }
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: 38,
+              padding: '0 14px',
+              fontSize: 13,
+              fontWeight: 600,
+              background: '#fff',
+              color: '#0f172a',
+              border: '1px solid #d1d5db',
+              borderRadius: 8,
+              cursor: 'pointer',
+            }}
+          >
+            ⤓ Export CSV
+          </button>
+          <Link
+            href="/dashboard/commission/settings"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: 38,
+              padding: '0 16px',
+              fontSize: 13,
+              fontWeight: 600,
+              background: '#0f172a',
+              color: '#ffffff',
+              border: '1px solid #0f172a',
+              borderRadius: 8,
+              textDecoration: 'none',
+            }}
+          >
+            Commission settings
+          </Link>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -512,6 +621,7 @@ export default function AdminCommissionPage() {
                         <Th label="SETTLEMENT PRICE" align="right" />
                         <Th label="PLATFORM MARGIN" align="right" />
                         <Th label="STATUS" />
+                        <Th label="" align="right" />
                       </tr>
                     </thead>
                     <tbody>
@@ -536,6 +646,25 @@ export default function AdminCommissionPage() {
                           <td style={tdNumStyle}>{fmt(Number(r.settlementPrice))}</td>
                           <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 600 }}>{fmt(Number(r.platformMargin))}</td>
                           <td style={tdStyle}>{statusBadge(r.status)}</td>
+                          <td style={{ ...tdStyle, textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              onClick={() => openHistory(r)}
+                              style={{
+                                height: 26,
+                                padding: '0 10px',
+                                border: '1px solid #d1d5db',
+                                background: '#fff',
+                                color: '#0f172a',
+                                borderRadius: 9999,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              History
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -864,9 +993,166 @@ export default function AdminCommissionPage() {
           )}
         </>
       )}
+
+      {/* History + adjust modal */}
+      {historyFor && (
+        <div
+          onClick={() => !adjustSaving && setHistoryFor(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(15,17,21,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 50, padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 16, padding: 24,
+              width: '100%', maxWidth: 720, maxHeight: '90vh',
+              overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Commission history</h2>
+            <p style={{ margin: '6px 0 14px', fontSize: 12, color: '#525A65' }}>
+              {historyFor.orderNumber} · {historyFor.sellerName} · record{' '}
+              <code style={{ fontFamily: 'ui-monospace, monospace' }}>
+                {historyFor.id.slice(0, 8)}
+              </code>
+            </p>
+
+            <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#0f172a', marginBottom: 8 }}>Audit trail</h3>
+
+            {historyLoading && (
+              <div style={{ fontSize: 13, color: '#64748b', padding: 8 }}>Loading…</div>
+            )}
+
+            {!historyLoading && historyData && historyData.length === 0 && (
+              <div style={{ fontSize: 12, color: '#94a3b8', padding: 8 }}>
+                No reversals or adjustments yet.
+              </div>
+            )}
+
+            {!historyLoading && historyData && historyData.length > 0 && (
+              <ol style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+                {historyData.map((ev: any, idx: number) => (
+                  <li key={idx} style={{
+                    borderLeft: '2px solid #e5e7eb',
+                    paddingLeft: 12,
+                    paddingBottom: 12,
+                  }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
+                      {ev.type || ev.event || 'event'}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                      {ev.at ? new Date(ev.at).toLocaleString() : ''}
+                      {ev.actor ? ` · ${ev.actor}` : ''}
+                    </div>
+                    {(ev.reason || ev.note) && (
+                      <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
+                        {ev.reason || ev.note}
+                      </div>
+                    )}
+                    {(ev.amount != null || ev.newAdminEarning != null) && (
+                      <div style={{ fontSize: 12, color: '#475569', marginTop: 4, fontFamily: 'ui-monospace, monospace' }}>
+                        {ev.amount != null ? `amount ${Number(ev.amount).toFixed(2)}` : `new admin earning ${Number(ev.newAdminEarning).toFixed(2)}`}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            {historyFor.status !== 'SETTLED' && historyFor.status !== 'REFUNDED' && (
+              <>
+                <h3 style={{ margin: '18px 0 8px', fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                  Adjust this record (dispute resolution)
+                </h3>
+                <p style={{ margin: 0, fontSize: 12, color: '#64748b', marginBottom: 8 }}>
+                  Overrides the platform earning. Settled / refunded records can&apos;t be adjusted here — use the reversal flow instead.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10 }}>
+                  <label style={{ display: 'block' }}>
+                    <span style={{ display: 'block', fontSize: 11, color: '#525A65', fontWeight: 600, marginBottom: 4 }}>
+                      New admin earning (₹)
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={adjustNewEarning}
+                      onChange={(e) => setAdjustNewEarning(e.target.value)}
+                      style={modalInp}
+                    />
+                  </label>
+                  <label style={{ display: 'block' }}>
+                    <span style={{ display: 'block', fontSize: 11, color: '#525A65', fontWeight: 600, marginBottom: 4 }}>
+                      Reason
+                    </span>
+                    <input
+                      type="text"
+                      value={adjustReason}
+                      onChange={(e) => setAdjustReason(e.target.value)}
+                      placeholder="e.g. dispute ruling 2026-05-15"
+                      style={modalInp}
+                    />
+                  </label>
+                </div>
+
+                {adjustError && (
+                  <div style={{
+                    marginTop: 10, padding: '8px 12px',
+                    background: '#fef2f2', border: '1px solid #fecaca',
+                    color: '#991b1b', borderRadius: 8, fontSize: 13,
+                  }}>
+                    {adjustError}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryFor(null)}
+                    disabled={adjustSaving}
+                    style={{
+                      height: 36, padding: '0 16px',
+                      border: '1px solid #d1d5db', background: '#fff', color: '#0f172a',
+                      borderRadius: 9999, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                    }}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitAdjust}
+                    disabled={adjustSaving}
+                    style={{
+                      height: 36, padding: '0 16px',
+                      border: 'none', background: '#0f172a', color: '#fff',
+                      borderRadius: 9999, fontWeight: 700, fontSize: 13,
+                      cursor: adjustSaving ? 'wait' : 'pointer',
+                      opacity: adjustSaving ? 0.6 : 1,
+                    }}
+                  >
+                    {adjustSaving ? 'Saving…' : 'Apply adjustment'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const modalInp: React.CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  border: '1px solid #D2D6DC',
+  borderRadius: 8,
+  fontSize: 13,
+  boxSizing: 'border-box',
+  fontFamily: 'inherit',
+};
 
 /* ── Components ── */
 

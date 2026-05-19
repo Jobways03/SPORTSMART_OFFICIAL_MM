@@ -261,6 +261,19 @@ const { id } = useParams<{ id: string }>();
   const [shipCourierOther, setShipCourierOther] = useState('');
   const [shipError, setShipError] = useState('');
 
+  // Seller-initiated return modal (B2B reversal for DELIVERED sub-orders).
+  // Backend: POST /seller/orders/:subOrderId/return with
+  //   { items: Array<{ orderItemId, quantity, reason }> }.
+  // Use case: the customer returned via an off-platform channel, or the
+  // goods came back damaged through a B2B route. Stock is restored on
+  // the seller's stockQty and the sub-order is marked CANCELLED; does
+  // NOT create a customer-facing Return row.
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [returnDraft, setReturnDraft] = useState<
+    Record<string, { include: boolean; quantity: number; reason: string }>
+  >({});
+  const [returnError, setReturnError] = useState('');
+
   // Shipment-evidence state — pre-ship "proof of dispatch" photos
   // surfaced to the admin when the customer files a return so they
   // have an as-shipped baseline to compare against. Stored as
@@ -475,6 +488,115 @@ const { id } = useParams<{ id: string }>();
     setShipCourierSelection('');
     setShipCourierOther('');
     setShipError('');
+  };
+
+  // ── Seller-initiated return ──────────────────────────────────────────
+  const openReturnModal = () => {
+    if (!order) return;
+    // Pre-compute how much of each item has already been returned via
+    // customer-initiated returns so we don't allow the seller to
+    // reverse more than what was actually delivered + still on hand.
+    const alreadyReturned: Record<string, number> = {};
+    for (const r of order.returns ?? []) {
+      for (const ri of r.items ?? []) {
+        alreadyReturned[ri.orderItemId] =
+          (alreadyReturned[ri.orderItemId] ?? 0) + ri.quantity;
+      }
+    }
+    const draft: typeof returnDraft = {};
+    for (const item of order.items) {
+      const remaining = Math.max(
+        0,
+        item.quantity - (alreadyReturned[item.id] ?? 0),
+      );
+      draft[item.id] = {
+        include: false,
+        quantity: remaining,
+        reason: 'CUSTOMER_RETURNED_OFFLINE',
+      };
+    }
+    setReturnDraft(draft);
+    setReturnError('');
+    setShowReturnModal(true);
+  };
+
+  const closeReturnModal = () => {
+    setShowReturnModal(false);
+    setReturnDraft({});
+    setReturnError('');
+  };
+
+  const handleReturnSubmit = async () => {
+    if (!order) return;
+    const items = Object.entries(returnDraft)
+      .filter(([, v]) => v.include && v.quantity > 0)
+      .map(([orderItemId, v]) => ({
+        orderItemId,
+        quantity: v.quantity,
+        reason: v.reason,
+      }));
+    if (items.length === 0) {
+      setReturnError(
+        'Select at least one item and enter a quantity greater than zero.',
+      );
+      return;
+    }
+    // Validate per-item: quantity ≤ what was actually delivered (minus
+    // any prior customer-initiated returns we pre-populated above).
+    for (const [orderItemId, v] of Object.entries(returnDraft)) {
+      if (!v.include) continue;
+      const item = order.items.find((i) => i.id === orderItemId);
+      if (!item) continue;
+      if (v.quantity > item.quantity) {
+        setReturnError(
+          `Quantity for "${item.productTitle}" exceeds what was delivered.`,
+        );
+        return;
+      }
+      if (v.quantity < 1) {
+        setReturnError(
+          `Quantity for "${item.productTitle}" must be at least 1.`,
+        );
+        return;
+      }
+    }
+
+    const confirmed = await confirmDialog({
+      title: 'Reverse this delivery?',
+      message:
+        `This will mark the selected items as returned to your warehouse, ` +
+        `restore the stock, and cancel the sub-order. Use this ONLY when ` +
+        `the goods came back through a B2B / off-platform channel — not ` +
+        `for a customer-driven return.`,
+      confirmText: 'Initiate return',
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setActionLoading('return');
+    setReturnError('');
+    try {
+      await apiClient(`/seller/orders/${order.id}/return`, {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      });
+      await notify({
+        title: 'Return initiated',
+        message:
+          'Stock has been restored. The customer is not affected by this action.',
+        kind: 'success',
+      });
+      closeReturnModal();
+      fetchOrder();
+    } catch (err) {
+      setReturnError(
+        err instanceof ApiError
+          ? err.body?.message || 'Failed to initiate return'
+          : 'Network error. Please try again.',
+      );
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   if (loading) {
@@ -1155,6 +1277,49 @@ const { id } = useParams<{ id: string }>();
             <SellerReturnsCard order={order} />
           )}
 
+          {/* -- SELLER-INITIATED RETURN (B2B reversal) --
+              Only meaningful once the goods have been delivered. Hidden
+              for CANCELLED sub-orders. Backend allows the action even
+              when a customer return exists — useful when the customer's
+              return was partial and the rest came back via B2B. */}
+          {order.fulfillmentStatus === 'DELIVERED' &&
+            order.acceptStatus !== 'CANCELLED' && (
+              <div style={sideCard}>
+                <h3 style={sideCardTitle}>B2B / OFF-PLATFORM REVERSAL</h3>
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: '#6b7280',
+                    margin: '0 0 14px 0',
+                    lineHeight: 1.55,
+                  }}
+                >
+                  Use this only when the goods came back through a B2B or
+                  off-platform channel. Stock is restored to your inventory
+                  and the sub-order is cancelled. Does NOT create a customer
+                  return record.
+                </p>
+                <button
+                  onClick={openReturnModal}
+                  disabled={actionLoading !== null}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    background: '#fff',
+                    color: '#dc2626',
+                    border: '1px solid #fecaca',
+                    borderRadius: 8,
+                    cursor: actionLoading ? 'not-allowed' : 'pointer',
+                    opacity: actionLoading ? 0.6 : 1,
+                  }}
+                >
+                  Initiate B2B return
+                </button>
+              </div>
+            )}
+
           {/* -- ADDITIONAL ORDER DETAILS -- */}
           <div style={sideCard}>
             <h3 style={sideCardTitle}>ADDITIONAL ORDER DETAILS</h3>
@@ -1527,6 +1692,233 @@ const { id } = useParams<{ id: string }>();
                 }}
               >
                 {actionLoading === 'ship' ? 'Shipping...' : 'Confirm Shipped'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -- B2B RETURN MODAL -- */}
+      {showReturnModal && (
+        <div
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 1000, padding: 20,
+          }}
+          onClick={closeReturnModal}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 12, padding: 28, width: 600,
+              maxWidth: '92vw', maxHeight: '88vh', overflowY: 'auto',
+              boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 4px 0', fontSize: 18, fontWeight: 700, color: '#dc2626' }}>
+              Initiate B2B / off-platform return
+            </h3>
+            <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 16px 0', lineHeight: 1.55 }}>
+              Mark which items came back to your warehouse and why. Stock is
+              restored to your inventory and the sub-order is cancelled. The
+              customer is <strong>not</strong> notified by this action — use
+              the platform's customer-return flow for that path.
+            </p>
+
+            <div
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                overflow: 'hidden',
+                marginBottom: 14,
+              }}
+            >
+              {order.items.map((item, idx) => {
+                const draft = returnDraft[item.id];
+                if (!draft) return null;
+                return (
+                  <div
+                    key={item.id}
+                    style={{
+                      padding: '12px 14px',
+                      borderTop: idx === 0 ? 'none' : '1px solid #f3f4f6',
+                      background: draft.include ? '#fafbff' : '#fff',
+                      display: 'grid',
+                      gridTemplateColumns: 'auto 1fr auto auto',
+                      gap: 12,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={draft.include}
+                      onChange={(e) =>
+                        setReturnDraft((prev) => ({
+                          ...prev,
+                          [item.id]: { ...prev[item.id]!, include: e.target.checked },
+                        }))
+                      }
+                      style={{ width: 16, height: 16 }}
+                    />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>
+                        {item.productTitle}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>
+                        {item.variantTitle ? `${item.variantTitle} · ` : ''}
+                        SKU {item.sku ?? '—'} · delivered qty {item.quantity}
+                      </div>
+                    </div>
+                    <div>
+                      <label
+                        style={{
+                          display: 'block',
+                          fontSize: 10,
+                          color: '#6b7280',
+                          fontWeight: 600,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.03em',
+                          marginBottom: 2,
+                        }}
+                      >
+                        Qty
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={item.quantity}
+                        value={draft.quantity}
+                        disabled={!draft.include}
+                        onChange={(e) => {
+                          const v = Math.max(1, Math.min(item.quantity, Number(e.target.value) || 0));
+                          setReturnDraft((prev) => ({
+                            ...prev,
+                            [item.id]: { ...prev[item.id]!, quantity: v },
+                          }));
+                        }}
+                        style={{
+                          width: 72,
+                          padding: '6px 8px',
+                          fontSize: 13,
+                          border: '1px solid #d1d5db',
+                          borderRadius: 6,
+                          background: draft.include ? '#fff' : '#f3f4f6',
+                          textAlign: 'center',
+                          fontFamily: 'ui-monospace, monospace',
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label
+                        style={{
+                          display: 'block',
+                          fontSize: 10,
+                          color: '#6b7280',
+                          fontWeight: 600,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.03em',
+                          marginBottom: 2,
+                        }}
+                      >
+                        Reason
+                      </label>
+                      <select
+                        value={draft.reason}
+                        disabled={!draft.include}
+                        onChange={(e) =>
+                          setReturnDraft((prev) => ({
+                            ...prev,
+                            [item.id]: { ...prev[item.id]!, reason: e.target.value },
+                          }))
+                        }
+                        style={{
+                          padding: '6px 8px',
+                          fontSize: 13,
+                          border: '1px solid #d1d5db',
+                          borderRadius: 6,
+                          background: draft.include ? '#fff' : '#f3f4f6',
+                          minWidth: 200,
+                        }}
+                      >
+                        <option value="CUSTOMER_RETURNED_OFFLINE">
+                          Customer returned (off-platform)
+                        </option>
+                        <option value="DAMAGED_ON_RECEIPT">
+                          Damaged on receipt
+                        </option>
+                        <option value="WRONG_ITEM_DISPATCHED">
+                          Wrong item dispatched
+                        </option>
+                        <option value="QUALITY_ISSUE">
+                          Quality issue identified post-delivery
+                        </option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {returnError && (
+              <div
+                style={{
+                  background: '#fee2e2',
+                  border: '1px solid #fecaca',
+                  color: '#991b1b',
+                  borderRadius: 6,
+                  padding: '8px 12px',
+                  fontSize: 13,
+                  marginBottom: 12,
+                }}
+              >
+                {returnError}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: 'flex',
+                gap: 10,
+                justifyContent: 'flex-end',
+                marginTop: 8,
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeReturnModal}
+                disabled={actionLoading === 'return'}
+                style={{
+                  padding: '10px 18px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  border: '1px solid #d1d5db',
+                  background: '#fff',
+                  color: '#374151',
+                  borderRadius: 6,
+                  cursor: actionLoading === 'return' ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleReturnSubmit}
+                disabled={actionLoading === 'return'}
+                style={{
+                  padding: '10px 20px',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  border: 'none',
+                  background: '#dc2626',
+                  color: '#fff',
+                  borderRadius: 6,
+                  cursor: actionLoading === 'return' ? 'not-allowed' : 'pointer',
+                  opacity: actionLoading === 'return' ? 0.7 : 1,
+                }}
+              >
+                {actionLoading === 'return' ? 'Submitting…' : 'Initiate return'}
               </button>
             </div>
           </div>

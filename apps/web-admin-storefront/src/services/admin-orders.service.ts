@@ -68,3 +68,43 @@ export async function reassignOrder(
     body: JSON.stringify({ sellerId, reason }),
   });
 }
+
+export interface ReassignmentEvent {
+  id: string;
+  subOrderId: string;
+  fromSellerId: string | null;
+  fromSellerName: string | null;
+  toSellerId: string;
+  toSellerName: string;
+  reason: string | null;
+  reassignedById: string;
+  reassignedByName: string | null;
+  createdAt: string;
+}
+
+/**
+ * GET /admin/orders/:id/reassignment-history — chronological audit trail
+ * of every reassignment touching this master order.
+ */
+export async function getReassignmentHistory(
+  orderId: string,
+): Promise<ApiResponse<ReassignmentEvent[]>> {
+  return apiClient<ReassignmentEvent[]>(
+    `/admin/orders/${orderId}/reassignment-history`,
+  );
+}
+
+/**
+ * PATCH /admin/orders/sub-orders/:subOrderId/cancel — mid-flow cancel
+ * for a single sub-order. Safe to call at any stage except DELIVERED.
+ * Releases stock holds on the currently owning node.
+ */
+export async function cancelSubOrder(
+  subOrderId: string,
+  reason?: string,
+): Promise<ApiResponse<unknown>> {
+  return apiClient(`/admin/orders/sub-orders/${subOrderId}/cancel`, {
+    method: 'PATCH',
+    body: JSON.stringify({ reason }),
+  });
+}
