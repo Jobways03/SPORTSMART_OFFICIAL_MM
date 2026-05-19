@@ -53,9 +53,66 @@ const normalizePhone = (phone: string): string => {
   return `+${digits}`;
 };
 
+const ICONS = {
+  plus: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  ),
+  phone: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+    </svg>
+  ),
+  mapPin: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 10c0 7-8 13-8 13s-8-6-8-13a8 8 0 0 1 16 0z" />
+      <circle cx="12" cy="10" r="3" />
+    </svg>
+  ),
+  edit: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  ),
+  star: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+    </svg>
+  ),
+  trash: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  ),
+  close: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+  alert: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+  ),
+  homeEmpty: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 9.5L12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1V9.5z" />
+    </svg>
+  ),
+};
+
 export default function AddressesPage() {
   const { notify, confirmDialog } = useModal();
-const router = useRouter();
+  const router = useRouter();
   const authStatus = useAuthGuard();
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,7 +194,6 @@ const router = useRouter();
     if (!form.phone.trim()) return 'Phone is required.';
 
     const phoneDigits = form.phone.replace(/\D/g, '');
-    // Accept 10 digits (Indian), or 12 digits starting with 91 (+91XXXXXXXXXX)
     const localDigits = phoneDigits.startsWith('91') && phoneDigits.length === 12
       ? phoneDigits.slice(2)
       : phoneDigits;
@@ -152,7 +208,8 @@ const router = useRouter();
     return null;
   };
 
-  const handleSubmit = async (e: FormEvent) => {e.preventDefault();
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
     setFormError(null);
 
     const validationError = validateForm();
@@ -197,7 +254,8 @@ const router = useRouter();
     }
   };
 
-  const handleDelete = async (addr: CustomerAddress) => {const confirmed = typeof window !== 'undefined'
+  const handleDelete = async (addr: CustomerAddress) => {
+    const confirmed = typeof window !== 'undefined'
       ? await confirmDialog(`Delete address for ${addr.fullName}? This cannot be undone.`)
       : false;
     if (!confirmed) return;
@@ -210,7 +268,8 @@ const router = useRouter();
     }
   };
 
-  const handleSetDefault = async (addr: CustomerAddress) => {try {
+  const handleSetDefault = async (addr: CustomerAddress) => {
+    try {
       await addressesService.setDefault(addr.id);
       fetchAddresses();
     } catch (err) {
@@ -240,64 +299,83 @@ const router = useRouter();
         </div>
 
         <div className="addresses-header">
-          <h1 className="orders-page-title">My Addresses</h1>
-          <button className="profile-save-btn" onClick={openCreateModal}>
-            + Add New Address
+          <div className="addresses-header-text">
+            <h1 className="account-page-title">My Addresses</h1>
+            <p className="account-page-subtitle">
+              Manage shipping addresses for faster checkout
+            </p>
+          </div>
+          <button className="profile-btn-primary addresses-add-btn" onClick={openCreateModal}>
+            <span className="addresses-add-icon">{ICONS.plus}</span>
+            Add new address
           </button>
         </div>
 
         {addresses.length === 0 ? (
-          <div className="orders-empty">
-            <span className="orders-empty-icon">&#127968;</span>
+          <div className="addresses-empty">
+            <div className="addresses-empty-icon">{ICONS.homeEmpty}</div>
             <h3>No addresses saved</h3>
             <p>Add your first shipping address to speed up checkout.</p>
-            <button className="orders-empty-btn" onClick={openCreateModal}>
-              Add Address
+            <button className="profile-btn-primary" onClick={openCreateModal}>
+              <span className="addresses-add-icon">{ICONS.plus}</span>
+              Add address
             </button>
           </div>
         ) : (
-          <div className="orders-list">
+          <div className="addresses-grid">
             {addresses.map((addr) => (
-              <div key={addr.id} className="address-card">
-                <div className="orders-card-header">
-                  <div className="orders-card-header-left">
-                    <span className="orders-card-number">{addr.fullName}</span>
-                    {addr.isDefault && (
-                      <span className="address-card-default-badge">Default</span>
-                    )}
-                  </div>
-                  <span className="orders-card-date">{addr.phone}</span>
+              <div
+                key={addr.id}
+                className={`address-card${addr.isDefault ? ' is-default' : ''}`}
+              >
+                <div className="address-card-header">
+                  <div className="address-card-name">{addr.fullName}</div>
+                  {addr.isDefault && (
+                    <span className="address-card-default-badge">Default</span>
+                  )}
                 </div>
 
-                <div className="address-card-body">
-                  <div>{addr.addressLine1}</div>
-                  {addr.addressLine2 && <div>{addr.addressLine2}</div>}
-                  {addr.locality && <div>{addr.locality}</div>}
-                  <div>
-                    {addr.city}, {addr.state} {addr.postalCode}
+                <div className="address-card-info">
+                  <div className="address-card-row">
+                    <span className="address-card-row-icon">{ICONS.phone}</span>
+                    <span>{addr.phone}</span>
                   </div>
-                  <div>{addr.country || 'India'}</div>
+                  <div className="address-card-row">
+                    <span className="address-card-row-icon">{ICONS.mapPin}</span>
+                    <div className="address-card-text">
+                      <div>{addr.addressLine1}</div>
+                      {addr.addressLine2 && <div>{addr.addressLine2}</div>}
+                      {addr.locality && <div>{addr.locality}</div>}
+                      <div>
+                        {addr.city}, {addr.state} {addr.postalCode}
+                      </div>
+                      <div className="address-card-country">{addr.country || 'India'}</div>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="address-card-actions">
                   <button
-                    className="address-card-action-btn"
+                    className="address-action"
                     onClick={() => openEditModal(addr)}
                   >
+                    <span className="address-action-icon">{ICONS.edit}</span>
                     Edit
                   </button>
                   {!addr.isDefault && (
                     <button
-                      className="address-card-action-btn"
+                      className="address-action"
                       onClick={() => handleSetDefault(addr)}
                     >
-                      Set as Default
+                      <span className="address-action-icon">{ICONS.star}</span>
+                      Set as default
                     </button>
                   )}
                   <button
-                    className="address-card-action-btn address-card-action-btn-danger"
+                    className="address-action address-action-danger"
                     onClick={() => handleDelete(addr)}
                   >
+                    <span className="address-action-icon">{ICONS.trash}</span>
                     Delete
                   </button>
                 </div>
@@ -310,10 +388,29 @@ const router = useRouter();
       {modalOpen && (
         <div className="address-modal-overlay" onClick={closeModal}>
           <div className="address-modal" onClick={(e) => e.stopPropagation()}>
-            <h2 className="address-modal-title">
-              {editingId ? 'Edit Address' : 'Add New Address'}
-            </h2>
+            <div className="address-modal-header">
+              <div>
+                <h2 className="address-modal-title">
+                  {editingId ? 'Edit address' : 'Add new address'}
+                </h2>
+                <p className="address-modal-subtitle">
+                  {editingId
+                    ? 'Update your shipping details below.'
+                    : 'We use this address for shipping and order updates.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="address-modal-close"
+                onClick={closeModal}
+                aria-label="Close"
+              >
+                {ICONS.close}
+              </button>
+            </div>
+
             <form onSubmit={handleSubmit}>
+              <div className="address-modal-section-label">Contact</div>
               <div className="profile-form-grid">
                 <div className="profile-field">
                   <label htmlFor="fullName">Full Name</label>
@@ -327,7 +424,7 @@ const router = useRouter();
                   />
                 </div>
                 <div className="profile-field">
-                  <label htmlFor="phone">Phone (10 digits)</label>
+                  <label htmlFor="phone">Phone</label>
                   <input
                     id="phone"
                     type="tel"
@@ -337,30 +434,41 @@ const router = useRouter();
                     onChange={(e) => setForm({ ...form, phone: e.target.value })}
                     required
                   />
+                  <div className="profile-field-helper">10-digit Indian mobile number.</div>
                 </div>
+              </div>
+
+              <div className="address-modal-section-label">Address</div>
+              <div className="profile-form-grid">
                 <div className="profile-field profile-field-full">
                   <label htmlFor="addressLine1">Address Line 1</label>
                   <input
                     id="addressLine1"
                     type="text"
                     className="profile-input"
+                    placeholder="House / flat number, building, street"
                     value={form.addressLine1}
                     onChange={(e) => setForm({ ...form, addressLine1: e.target.value })}
                     required
                   />
                 </div>
                 <div className="profile-field profile-field-full">
-                  <label htmlFor="addressLine2">Address Line 2 (optional)</label>
+                  <label htmlFor="addressLine2">
+                    Address Line 2 <span className="profile-field-optional">(optional)</span>
+                  </label>
                   <input
                     id="addressLine2"
                     type="text"
                     className="profile-input"
+                    placeholder="Landmark, area"
                     value={form.addressLine2}
                     onChange={(e) => setForm({ ...form, addressLine2: e.target.value })}
                   />
                 </div>
                 <div className="profile-field">
-                  <label htmlFor="locality">Locality (optional)</label>
+                  <label htmlFor="locality">
+                    Locality <span className="profile-field-optional">(optional)</span>
+                  </label>
                   <input
                     id="locality"
                     type="text"
@@ -419,13 +527,14 @@ const router = useRouter();
                   )}
                 </div>
                 <div className="profile-field">
-                  <label htmlFor="postalCode">Postal Code (6 digits)</label>
+                  <label htmlFor="postalCode">Postal Code</label>
                   <input
                     id="postalCode"
                     type="text"
                     inputMode="numeric"
                     maxLength={6}
                     className="profile-input"
+                    placeholder="6 digits"
                     value={form.postalCode}
                     onChange={(e) =>
                       setForm({ ...form, postalCode: e.target.value.replace(/\D/g, '') })
@@ -433,31 +542,40 @@ const router = useRouter();
                     required
                   />
                 </div>
-                <div className="profile-field profile-field-full">
-                  <label className="profile-checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={form.isDefault}
-                      onChange={(e) => setForm({ ...form, isDefault: e.target.checked })}
-                    />
-                    <span>Set as default address</span>
-                  </label>
-                </div>
               </div>
 
-              {formError && <div className="profile-error-msg">{formError}</div>}
+              <label className="address-default-toggle">
+                <input
+                  type="checkbox"
+                  checked={form.isDefault}
+                  onChange={(e) => setForm({ ...form, isDefault: e.target.checked })}
+                />
+                <span className="address-default-toggle-text">
+                  <span className="address-default-toggle-title">Set as default address</span>
+                  <span className="address-default-toggle-desc">
+                    Use this address by default at checkout.
+                  </span>
+                </span>
+              </label>
+
+              {formError && (
+                <div className="profile-alert profile-alert-error">
+                  <span className="profile-alert-icon">{ICONS.alert}</span>
+                  {formError}
+                </div>
+              )}
 
               <div className="address-modal-actions">
                 <button
                   type="button"
-                  className="address-card-action-btn"
+                  className="profile-btn-secondary"
                   onClick={closeModal}
                   disabled={saving}
                 >
                   Cancel
                 </button>
-                <button type="submit" className="profile-save-btn" disabled={saving}>
-                  {saving ? 'Saving...' : editingId ? 'Update Address' : 'Save Address'}
+                <button type="submit" className="profile-btn-primary" disabled={saving}>
+                  {saving ? 'Saving…' : editingId ? 'Update address' : 'Save address'}
                 </button>
               </div>
             </form>

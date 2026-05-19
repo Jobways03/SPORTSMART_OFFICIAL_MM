@@ -120,6 +120,17 @@ export default function AdminReturnsListPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
+  // Bulk-action selection + transient banner state.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState<null | 'approve' | 'close'>(null);
+  const [bulkResult, setBulkResult] = useState<{
+    succeeded: number;
+    failed: number;
+    failures: Array<{ id: string; error?: string }>;
+  } | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const fetchReturns = useCallback(
     async (page: number) => {
       setLoading(true);
@@ -149,6 +160,117 @@ export default function AdminReturnsListPage() {
     fetchReturns(1);
   }, [fetchReturns]);
 
+  // Drop selections that aren't visible anymore so the count is honest.
+  useEffect(() => {
+    const visible = new Set(returns.map((r) => r.id));
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (visible.has(id)) next.add(id);
+      });
+      return next.size === prev.size ? prev : next;
+    });
+  }, [returns]);
+
+  const toggleId = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllVisible = () => {
+    setSelectedIds((prev) => {
+      const allVisibleSelected = returns.every((r) => prev.has(r.id));
+      if (allVisibleSelected) return new Set();
+      const next = new Set(prev);
+      returns.forEach((r) => next.add(r.id));
+      return next;
+    });
+  };
+
+  const runBulk = async (action: 'approve' | 'close') => {
+    if (selectedIds.size === 0 || bulkBusy) return;
+    const ids = Array.from(selectedIds);
+    // Confirm — bulk-approve / bulk-close are SUPER_ADMIN-only and irreversible
+    // on the per-record path. The backend cap is 100; mirror it here so the
+    // user gets a clear message instead of a 400.
+    if (ids.length > 100) {
+      setBulkResult({
+        succeeded: 0,
+        failed: ids.length,
+        failures: [{ id: '*', error: 'Batch capped at 100 — refine selection.' }],
+      });
+      return;
+    }
+    if (
+      !window.confirm(
+        `${action === 'approve' ? 'Approve' : 'Close'} ${ids.length} return${ids.length === 1 ? '' : 's'}? This bypasses per-record review.`,
+      )
+    ) {
+      return;
+    }
+    setBulkBusy(action);
+    setBulkResult(null);
+    try {
+      const res =
+        action === 'approve'
+          ? await adminReturnsService.bulkApprove(ids)
+          : await adminReturnsService.bulkClose(ids);
+      const results = res.data?.results ?? [];
+      const succeeded = results.filter((r) => r.success).length;
+      const failed = results.length - succeeded;
+      setBulkResult({
+        succeeded,
+        failed,
+        failures: results
+          .filter((r) => !r.success)
+          .map((r) => ({ id: r.id, error: r.error })),
+      });
+      setSelectedIds(new Set());
+      // Refresh the list so the UI reflects new statuses.
+      fetchReturns(pagination.page);
+    } catch (err) {
+      setBulkResult({
+        succeeded: 0,
+        failed: ids.length,
+        failures: [
+          { id: '*', error: err instanceof Error ? err.message : 'Bulk action failed' },
+        ],
+      });
+    } finally {
+      setBulkBusy(null);
+    }
+  };
+
+  const runExport = async () => {
+    if (exportBusy) return;
+    setExportBusy(true);
+    setExportError(null);
+    try {
+      const blob = await adminReturnsService.exportCsv({
+        status: statusFilter || undefined,
+        dateFrom: fromDate || undefined,
+        dateTo: toDate || undefined,
+        search: search.trim() || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.download = `returns-${stamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExportBusy(false);
+    }
+  };
+
   const hasFilters = !!(search || statusFilter || fromDate || toDate);
   const handleClear = () => {
     setSearch('');
@@ -172,7 +294,174 @@ export default function AdminReturnsListPage() {
             Review, approve, and process customer returns.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={runExport}
+          disabled={exportBusy}
+          style={{
+            height: 36,
+            padding: '0 16px',
+            border: '1px solid #D2D6DC',
+            background: '#fff',
+            color: '#0F1115',
+            borderRadius: 9999,
+            fontWeight: 600,
+            fontSize: 13,
+            cursor: exportBusy ? 'wait' : 'pointer',
+            opacity: exportBusy ? 0.6 : 1,
+          }}
+        >
+          {exportBusy ? 'Exporting…' : '⤓ Export CSV'}
+        </button>
       </header>
+
+      {exportError && (
+        <div
+          style={{
+            margin: '12px 0',
+            padding: '10px 14px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#991b1b',
+            borderRadius: 10,
+            fontSize: 13,
+          }}
+        >
+          {exportError}
+        </div>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 14px',
+            background: '#fff7ed',
+            border: '1px solid #fed7aa',
+            borderRadius: 10,
+            margin: '12px 0',
+            fontSize: 13,
+          }}
+        >
+          <strong style={{ color: '#9a3412' }}>
+            {selectedIds.size} selected
+          </strong>
+          <span style={{ color: '#9a3412', fontSize: 12 }}>
+            (SUPER_ADMIN only — cap 100)
+          </span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => runBulk('approve')}
+              disabled={!!bulkBusy}
+              style={{
+                height: 32,
+                padding: '0 14px',
+                border: 'none',
+                background: '#16a34a',
+                color: '#fff',
+                borderRadius: 9999,
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: bulkBusy ? 'wait' : 'pointer',
+                opacity: bulkBusy ? 0.6 : 1,
+              }}
+            >
+              {bulkBusy === 'approve' ? 'Approving…' : 'Bulk approve'}
+            </button>
+            <button
+              type="button"
+              onClick={() => runBulk('close')}
+              disabled={!!bulkBusy}
+              style={{
+                height: 32,
+                padding: '0 14px',
+                border: 'none',
+                background: '#0F1115',
+                color: '#fff',
+                borderRadius: 9999,
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: bulkBusy ? 'wait' : 'pointer',
+                opacity: bulkBusy ? 0.6 : 1,
+              }}
+            >
+              {bulkBusy === 'close' ? 'Closing…' : 'Bulk close'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={!!bulkBusy}
+              style={{
+                height: 32,
+                padding: '0 14px',
+                border: '1px solid #fed7aa',
+                background: '#fff',
+                color: '#9a3412',
+                borderRadius: 9999,
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {bulkResult && (
+        <div
+          style={{
+            margin: '12px 0',
+            padding: '10px 14px',
+            background: bulkResult.failed === 0 ? '#ecfdf5' : '#fef3c7',
+            border: `1px solid ${bulkResult.failed === 0 ? '#6ee7b7' : '#fde68a'}`,
+            color: bulkResult.failed === 0 ? '#065f46' : '#92400e',
+            borderRadius: 10,
+            fontSize: 13,
+          }}
+        >
+          <div>
+            Bulk: <strong>{bulkResult.succeeded}</strong> succeeded,{' '}
+            <strong>{bulkResult.failed}</strong> failed.{' '}
+            <button
+              type="button"
+              onClick={() => setBulkResult(null)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'inherit',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+                padding: 0,
+                fontSize: 13,
+              }}
+            >
+              dismiss
+            </button>
+          </div>
+          {bulkResult.failures.length > 0 && (
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              {bulkResult.failures.slice(0, 5).map((f, i) => (
+                <li key={i} style={{ fontSize: 12 }}>
+                  <code style={{ fontFamily: 'ui-monospace, monospace' }}>
+                    {f.id.slice(0, 8)}
+                  </code>
+                  {f.error ? ` — ${f.error}` : ''}
+                </li>
+              ))}
+              {bulkResult.failures.length > 5 && (
+                <li style={{ fontSize: 12 }}>
+                  …and {bulkResult.failures.length - 5} more
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* ── Attention bar ──────────────────────────────────── */}
       {!loading && needsReview > 0 && !statusFilter && (
@@ -311,6 +600,28 @@ export default function AdminReturnsListPage() {
               <table style={styles.table}>
                 <thead>
                   <tr>
+                    <th style={{ ...styles.th, width: 36 }}>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible"
+                        checked={
+                          returns.length > 0 &&
+                          returns.every((r) => selectedIds.has(r.id))
+                        }
+                        ref={(el) => {
+                          if (el) {
+                            const some = returns.some((r) =>
+                              selectedIds.has(r.id),
+                            );
+                            const all = returns.every((r) =>
+                              selectedIds.has(r.id),
+                            );
+                            el.indeterminate = some && !all;
+                          }
+                        }}
+                        onChange={toggleAllVisible}
+                      />
+                    </th>
                     <th style={styles.th}>Return</th>
                     <th style={styles.th}>Order</th>
                     <th style={styles.th}>Customer</th>
@@ -330,6 +641,8 @@ export default function AdminReturnsListPage() {
                     <ReturnRow
                       key={r.id}
                       data={r}
+                      selected={selectedIds.has(r.id)}
+                      onToggle={() => toggleId(r.id)}
                       onOpen={() => router.push(`/dashboard/returns/${r.id}`)}
                     />
                   ))}
@@ -358,9 +671,13 @@ export default function AdminReturnsListPage() {
 function ReturnRow({
   data: r,
   onOpen,
+  selected,
+  onToggle,
 }: {
   data: ReturnListItem;
   onOpen: () => void;
+  selected: boolean;
+  onToggle: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const customerFullName =
@@ -389,6 +706,17 @@ function ReturnRow({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
+      <td
+        style={{ ...styles.td, width: 36 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          type="checkbox"
+          aria-label={`Select return ${r.returnNumber}`}
+          checked={selected}
+          onChange={onToggle}
+        />
+      </td>
       <td style={styles.td}>
         <span style={styles.returnNumber}>{r.returnNumber}</span>
       </td>

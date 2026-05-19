@@ -114,6 +114,7 @@ export default function DashboardLayout({
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128200;', disabled: !isActive, description: 'Stock levels, low-stock, out-of-stock' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;', disabled: !isActive },
     { href: '/dashboard/returns', label: 'Returns', icon: '&#8617;', disabled: !isActive },
+    { href: '/dashboard/disputes', label: 'Disputes', icon: '&#9888;', disabled: !isActive, description: 'Respond to customer disputes; 72h SLA' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },
     { href: '/dashboard/tax/invoices', label: 'Tax Invoices', icon: '&#129534;', disabled: !isActive, description: 'GST invoices, credit notes — download for filing' },
     { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },

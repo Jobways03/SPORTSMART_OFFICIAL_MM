@@ -8,11 +8,11 @@
 
 :root {
   --sidebar-width: 240px;
-  --sidebar-bg: #1a1a1a;
-  --sidebar-text: #b5b5b5;
+  --sidebar-bg: #0f172a;
+  --sidebar-text: #cbd5e1;
   --sidebar-text-hover: #fff;
-  --sidebar-active-bg: #333;
-  --sidebar-section-text: #8c8c8c;
+  --sidebar-active-bg: #1e293b;
+  --sidebar-section-text: #64748b;
   --topbar-height: 0px;
   --content-bg: #f6f6f7;
   --card-bg: #fff;

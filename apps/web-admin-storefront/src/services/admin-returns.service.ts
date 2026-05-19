@@ -1,4 +1,4 @@
-import { apiClient, ApiResponse } from '@/lib/api-client';
+import { apiClient, API_BASE, ApiResponse } from '@/lib/api-client';
 
 export type ReturnStatus =
   | 'REQUESTED'
@@ -283,4 +283,72 @@ export const adminReturnsService = {
   closeReturn(returnId: string): Promise<ApiResponse> {
     return apiClient(`/admin/returns/${returnId}/close`, { method: 'PATCH' });
   },
+
+  // ── Bulk operations (SUPER_ADMIN only, hard-capped at 100) ──────
+  bulkApprove(returnIds: string[]): Promise<ApiResponse<{ results: BulkResult[] }>> {
+    return apiClient(`/admin/returns/bulk-approve`, {
+      method: 'POST',
+      body: JSON.stringify({ returnIds }),
+    });
+  },
+
+  bulkClose(returnIds: string[]): Promise<ApiResponse<{ results: BulkResult[] }>> {
+    return apiClient(`/admin/returns/bulk-close`, {
+      method: 'POST',
+      body: JSON.stringify({ returnIds }),
+    });
+  },
+
+  // ── CSV export ─────────────────────────────────────────────────
+  /**
+   * Trigger a CSV download. Returns the streaming Response unread so the
+   * caller can pipe it to a blob; this avoids loading 50k rows into JS memory.
+   */
+  async exportCsv(params: {
+    status?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+  } = {}): Promise<Blob> {
+    const qs = new URLSearchParams();
+    if (params.status) qs.set('status', params.status);
+    if (params.dateFrom) qs.set('dateFrom', params.dateFrom);
+    if (params.dateTo) qs.set('dateTo', params.dateTo);
+    if (params.search) qs.set('search', params.search);
+    const token = (typeof window !== 'undefined' && sessionStorage.getItem('adminAccessToken')) || '';
+    const res = await fetch(
+      `${API_BASE}/api/v1/admin/returns/export${qs.toString() ? `?${qs}` : ''}`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(text || `Export failed (${res.status})`);
+    }
+    return res.blob();
+  },
+
+  // ── Customer return history ────────────────────────────────────
+  getCustomerHistory(customerId: string): Promise<
+    ApiResponse<{ items: ReturnListItem[]; aggregates: CustomerHistoryAggregates }>
+  > {
+    return apiClient(
+      `/admin/returns/customers/${encodeURIComponent(customerId)}/history`,
+    );
+  },
 };
+
+export interface BulkResult {
+  id: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface CustomerHistoryAggregates {
+  totalReturns: number;
+  totalRefundedAmount: number;
+  refundedCount: number;
+  rejectedCount: number;
+  pendingCount: number;
+}

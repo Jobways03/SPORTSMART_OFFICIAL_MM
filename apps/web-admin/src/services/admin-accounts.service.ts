@@ -300,6 +300,64 @@ export const adminAccountsService = {
     });
   },
 
+  /**
+   * GET /admin/accounts/settlements/preview — dry-run a new cycle without
+   * persisting it. Returns the same shape as a real cycle so the UI can
+   * show what the bookkeeper is about to commit.
+   */
+  previewCycle(periodStart: string, periodEnd: string): Promise<ApiResponse<unknown>> {
+    const qs = new URLSearchParams({ periodStart, periodEnd }).toString();
+    return apiClient(`/admin/accounts/settlements/preview?${qs}`);
+  },
+
+  /** PATCH /admin/accounts/settlements/cycles/:id/preview — flip status PENDING → PREVIEWED. */
+  markCyclePreviewed(cycleId: string): Promise<ApiResponse<SettlementCycleListItem>> {
+    return apiClient<SettlementCycleListItem>(
+      `/admin/accounts/settlements/cycles/${cycleId}/preview`,
+      { method: 'PATCH' },
+    );
+  },
+
+  /**
+   * POST /admin/accounts/settlements/mark-paid — batch mark-paid for a set
+   * of settlements across both seller and franchise ledgers.
+   */
+  batchMarkPaid(
+    settlements: Array<{
+      id: string;
+      type: 'seller' | 'franchise';
+      reference: string;
+    }>,
+  ): Promise<ApiResponse<unknown>> {
+    return apiClient('/admin/accounts/settlements/mark-paid', {
+      method: 'POST',
+      body: JSON.stringify({ settlements }),
+    });
+  },
+
+  /**
+   * GET /admin/accounts/settlements/franchise-ledger/:entryId/history —
+   * full audit trail for a single franchise ledger entry.
+   */
+  getFranchiseLedgerHistory(entryId: string): Promise<ApiResponse<unknown[]>> {
+    return apiClient(
+      `/admin/accounts/settlements/franchise-ledger/${entryId}/history`,
+    );
+  },
+
+  /**
+   * GET /admin/accounts/settlements/franchise-ledger/export — CSV export URL
+   * the UI can hand to <a download>. Apply filters via query string.
+   */
+  franchiseLedgerExportUrl(params: { fromDate?: string; toDate?: string; franchiseId?: string } = {}): string {
+    const qs = new URLSearchParams();
+    if (params.fromDate) qs.set('fromDate', params.fromDate);
+    if (params.toDate) qs.set('toDate', params.toDate);
+    if (params.franchiseId) qs.set('franchiseId', params.franchiseId);
+    const tail = qs.toString();
+    return `/admin/accounts/settlements/franchise-ledger/export${tail ? `?${tail}` : ''}`;
+  },
+
   getRevenueReport(
     fromDate: string,
     toDate: string,

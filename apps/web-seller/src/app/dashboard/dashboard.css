@@ -193,15 +193,15 @@
   text-align: center;
 }
 
-/* ===== Sidebar ===== */
+/* ===== Sidebar (slate-navy — matches affiliate portal style) ===== */
 .dashboard-sidebar {
   position: fixed;
   top: 60px;
   left: 0;
   bottom: 0;
   width: 240px;
-  background: #fff;
-  border-right: 1px solid #e5e7eb;
+  background: #0f172a;
+  border-right: 1px solid #1e293b;
   padding: 16px 0;
   overflow-y: auto;
   z-index: 90;
@@ -209,17 +209,17 @@
 }
 
 .sidebar-section {
-  padding: 0 12px;
-  margin-bottom: 8px;
+  padding: 0;
+  margin-bottom: 4px;
 }
 
 .sidebar-section-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  color: var(--color-text-secondary);
+  color: #64748b;
   text-transform: uppercase;
-  letter-spacing: 1.2px;
-  padding: 8px 12px 6px;
+  letter-spacing: 1.5px;
+  padding: 14px 20px 6px;
 }
 
 .sidebar-nav-item {
@@ -227,29 +227,46 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 10px 20px;
   font-size: 14px;
   font-weight: 500;
-  color: var(--color-text-secondary);
+  color: #cbd5e1;
   background: none;
   border: none;
-  border-radius: 8px;
+  border-left: 3px solid transparent;
+  border-radius: 0;
   cursor: pointer;
   text-decoration: none;
-  transition: all 0.15s;
-  margin-bottom: 2px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  margin-bottom: 0;
 }
 
 .sidebar-nav-item:hover {
-  color: var(--color-text);
-  background: var(--color-bg-page);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
   text-decoration: none;
 }
 
 .sidebar-nav-item.active {
-  color: var(--color-primary);
-  background: #eff6ff;
+  color: #fff;
+  background: #1e293b;
+  border-left-color: #3b82f6;
   font-weight: 600;
+}
+
+/* Hide icons — match the clean text-only affiliate portal style */
+.sidebar-nav-item .nav-icon { display: none; }
+
+/* Brand area — subtitle below logo, centered, white bold */
+.sidebar-brand-subtitle {
+  display: block;
+  text-align: center;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  margin-top: 12px;
+  padding: 0 16px 16px;
+  border-bottom: 1px solid #1e293b;
 }
 
 .sidebar-nav-item .nav-icon {

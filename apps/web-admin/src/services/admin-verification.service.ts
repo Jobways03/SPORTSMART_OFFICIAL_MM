@@ -149,6 +149,19 @@ export function getTeamStatus(): Promise<ApiResponse<TeamStatus>> {
   return apiClient<TeamStatus>('/admin/verification/team-status');
 }
 
+/**
+ * POST /admin/verification/orders/:id/rescore — recompute the risk
+ * score for one order. Useful when external data (e.g. AVS, fraud feed)
+ * has been refreshed and the verifier wants the latest band before
+ * acting. Returns the new RiskInfo.
+ */
+export function rescoreOrder(orderId: string): Promise<ApiResponse<RiskInfo>> {
+  return apiClient<RiskInfo>(
+    `/admin/verification/orders/${orderId}/rescore`,
+    { method: 'POST' },
+  );
+}
+
 /** POST /admin/verification/orders/:id/force-release — SUPER_ADMIN only. */
 export function forceRelease(
   orderId: string,
