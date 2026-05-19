@@ -102,7 +102,7 @@ export default function RefundApprovalDetailPage() {
   const src = row.source;
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <Link href="/dashboard/finance/refund-approvals" style={{ color: '#2A8595', fontSize: 13, fontWeight: 600 }}>
         ← Back to refund approvals
       </Link>

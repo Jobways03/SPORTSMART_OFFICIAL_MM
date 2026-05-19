@@ -245,6 +245,74 @@ export class FranchisePublicFacade {
   // mental model. The shape mirrors InventoryManagementService's
   // LowStockItem so the inventory service can map across.
 
+  /**
+   * Every franchise_stock row, regardless of health. The unified
+   * inventory grid filters by status client-side so it can show "all
+   * inventory" too. Same shape as findFranchiseLowStockRows for easy
+   * mapping in the service layer.
+   */
+  async findAllFranchiseRows(): Promise<
+    Array<{
+      id: string;
+      franchiseId: string;
+      franchiseName: string;
+      franchiseStatus: string;
+      productId: string;
+      productTitle: string;
+      variantId: string | null;
+      variantSku: string | null;
+      masterSku: string | null;
+      stockQty: number;
+      reservedQty: number;
+      availableStock: number;
+      lowStockThreshold: number;
+      updatedAt: Date;
+    }>
+  > {
+    const rows = await this.prisma.franchiseStock.findMany({
+      include: { franchise: { select: { id: true, businessName: true, status: true } } },
+    });
+    if (rows.length === 0) return [];
+
+    const productIds = Array.from(new Set(rows.map((r) => r.productId)));
+    const variantIds = Array.from(
+      new Set(rows.map((r) => r.variantId).filter(Boolean) as string[]),
+    );
+    const [products, variants] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, title: true },
+      }),
+      variantIds.length
+        ? this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, sku: true, masterSku: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const variantById = new Map(variants.map((v) => [v.id, v]));
+
+    return rows.map((r) => ({
+      id: r.id,
+      franchiseId: r.franchiseId,
+      franchiseName: r.franchise.businessName,
+      franchiseStatus: r.franchise.status,
+      productId: r.productId,
+      productTitle: productById.get(r.productId)?.title ?? '(unknown product)',
+      variantId: r.variantId,
+      variantSku: r.variantId ? variantById.get(r.variantId)?.sku ?? null : null,
+      masterSku: r.variantId
+        ? variantById.get(r.variantId)?.masterSku ?? null
+        : null,
+      stockQty: r.onHandQty,
+      reservedQty: r.reservedQty,
+      availableStock: r.availableQty,
+      lowStockThreshold: r.lowStockThreshold,
+      updatedAt: r.updatedAt,
+    }));
+  }
+
   async findFranchiseLowStockRows(): Promise<
     Array<{
       id: string;

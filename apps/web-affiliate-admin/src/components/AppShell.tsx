@@ -8,7 +8,8 @@ import { clearSession } from '../lib/api';
 const NAV: Array<{ href: string; label: string; section?: string }> = [
   { href: '/dashboard/overview', label: 'Overview', section: 'Home' },
   { href: '/dashboard', label: 'Applications', section: 'Affiliates' },
-  { href: '/dashboard/kyc', label: 'KYC review', section: 'Affiliates' },
+  // KYC review temporarily disabled (commented out per product request).
+  // { href: '/dashboard/kyc', label: 'KYC review', section: 'Affiliates' },
   { href: '/dashboard/commissions', label: 'Commissions', section: 'Money' },
   { href: '/dashboard/payouts', label: 'Payouts', section: 'Money' },
   { href: '/dashboard/tds', label: 'TDS records', section: 'Money' },

@@ -211,17 +211,17 @@ export default function OrdersPage() {
   })();
 
   return (
-    <div style={{ padding: '24px 28px', background: '#f8fafc', minHeight: 'calc(100vh - 56px)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1440, margin: '0 auto', background: '#f8fafc', minHeight: 'calc(100vh - 56px)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, letterSpacing: '-0.01em' }}>Orders</h1>
-          <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>Orders</h1>
+          <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', maxWidth: 720 }}>
             Manage orders, verification, and returns across the marketplace.
-          </div>
+          </p>
         </div>
         {data && (
-          <div style={{ fontSize: 12, color: '#6b7280' }}>
-            <strong style={{ color: '#111827', fontSize: 14 }}>{data.pagination.total}</strong> orders total
+          <div style={{ fontSize: 12, color: '#525A65' }}>
+            <strong style={{ color: '#0F1115', fontSize: 14 }}>{data.pagination.total.toLocaleString('en-IN')}</strong> orders total
           </div>
         )}
       </div>
@@ -231,7 +231,7 @@ export default function OrdersPage() {
         <MetricCard
           label="All Orders"
           value={data?.pagination.total ?? 0}
-          color="#1e3a8a"
+          color="#0F1115"
           active={statusFilter === ''}
           onClick={() => { setStatusFilter(''); setPage(1); }}
         />
@@ -245,7 +245,7 @@ export default function OrdersPage() {
         <MetricCard
           label="In Progress"
           value={metrics.inProgress}
-          color="#2563eb"
+          color="#1d4ed8"
           active={statusFilter === 'ROUTED_TO_SELLER'}
           onClick={() => { setStatusFilter(statusFilter === 'ROUTED_TO_SELLER' ? '' : 'ROUTED_TO_SELLER'); setPage(1); }}
         />
@@ -302,8 +302,8 @@ export default function OrdersPage() {
                   fontWeight: active ? 700 : 500,
                   border: 'none',
                   borderRadius: 999,
-                  background: active ? '#1e3a8a' : '#f1f5f9',
-                  color: active ? '#fff' : '#475569',
+                  background: active ? '#0F1115' : '#f1f5f9',
+                  color: active ? '#fff' : '#525A65',
                   cursor: 'pointer',
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -458,7 +458,7 @@ export default function OrdersPage() {
                         onMouseLeave={(e) => (e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#fcfdff')}
                       >
                         <td style={tdStyle}>
-                          <div style={{ fontWeight: 700, color: '#2563eb', fontSize: 13 }}>{order.orderNumber}</div>
+                          <div style={{ fontWeight: 700, color: '#0F1115', fontSize: 13, fontFamily: 'ui-monospace, monospace' }}>{order.orderNumber}</div>
                           <div style={{ fontSize: 11, color: '#9ca3af' }}>{order.paymentMethod ?? '—'}</div>
                         </td>
                         <td style={tdStyle}>
@@ -474,7 +474,7 @@ export default function OrdersPage() {
                                 width: 34,
                                 height: 34,
                                 borderRadius: '50%',
-                                background: 'linear-gradient(135deg, #6366f1, #2563eb)',
+                                background: '#0F1115',
                                 color: '#fff',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -522,7 +522,7 @@ export default function OrdersPage() {
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                             {fulfillmentStatuses.map((s, i) => {
                               const fLabel = s === 'DELIVERED' ? 'Delivered' : s === 'SHIPPED' ? 'Shipped' : s === 'PACKED' ? 'Packed' : s === 'CANCELLED' ? 'Cancelled' : s === 'FULFILLED' ? 'Fulfilled' : 'Unfulfilled';
-                              const fColor = s === 'DELIVERED' ? '#15803d' : s === 'SHIPPED' ? '#2563eb' : s === 'PACKED' ? '#d97706' : s === 'CANCELLED' ? '#dc2626' : s === 'FULFILLED' ? '#16a34a' : '#6366f1';
+                              const fColor = s === 'DELIVERED' ? '#15803d' : s === 'SHIPPED' ? '#1d4ed8' : s === 'PACKED' ? '#d97706' : s === 'CANCELLED' ? '#dc2626' : s === 'FULFILLED' ? '#16a34a' : '#525A65';
                               return <span key={i}>{badge(fLabel, fColor)}</span>;
                             })}
                           </div>

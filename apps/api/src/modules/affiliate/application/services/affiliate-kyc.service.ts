@@ -102,7 +102,7 @@ export class AffiliateKycService {
     const kyc = await this.prisma.affiliateKyc.findUnique({
       where: { affiliateId },
     });
-    return kyc ? this.toPublic(kyc) : null;
+    return kyc ? this.toAdminView(kyc) : null;
   }
 
   /**
@@ -172,9 +172,7 @@ export class AffiliateKycService {
 
   /**
    * Strip the encrypted columns from the response — only the last-4
-   * mirror is safe to ship over the wire. Admin verification UI
-   * shows the last-4 and the document URLs; full PAN never leaves
-   * the server.
+   * mirror is safe to ship to the affiliate's own UI.
    */
   private toPublic(kyc: any) {
     return {
@@ -190,6 +188,41 @@ export class AffiliateKycService {
       rejectionReason: kyc.rejectionReason,
       createdAt: kyc.createdAt,
       updatedAt: kyc.updatedAt,
+    };
+  }
+
+  /**
+   * Admin-facing view: includes the FULL decrypted PAN + Aadhaar so the
+   * reviewer can cross-check against the uploaded scan and (when
+   * needed) re-enter into NSDL / GSTIN portals. Decryption only runs
+   * for users who already passed `affiliates.read` permission. Every
+   * call to this method is implicitly an admin read of PII — the audit
+   * log should reflect that at the controller layer.
+   */
+  private toAdminView(kyc: any) {
+    let panFull: string | null = null;
+    let aadhaarFull: string | null = null;
+    try {
+      if (kyc.panNumberEnc && kyc.panNumberIv) {
+        panFull = this.encryption.decrypt(kyc.panNumberEnc, kyc.panNumberIv);
+      }
+    } catch {
+      panFull = null;
+    }
+    try {
+      if (kyc.aadhaarNumberEnc && kyc.aadhaarNumberIv) {
+        aadhaarFull = this.encryption.decrypt(
+          kyc.aadhaarNumberEnc,
+          kyc.aadhaarNumberIv,
+        );
+      }
+    } catch {
+      aadhaarFull = null;
+    }
+    return {
+      ...this.toPublic(kyc),
+      panNumber: panFull,
+      aadhaarNumber: aadhaarFull,
     };
   }
 }

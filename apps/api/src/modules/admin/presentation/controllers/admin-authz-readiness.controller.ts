@@ -1,9 +1,10 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AdminPermissionResolver } from '../../../../core/authorization/admin-permission-resolver.service';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   ALL_PERMISSION_KEYS,
   PERMISSION_RISK,
@@ -35,6 +36,7 @@ export class AdminAuthzReadinessController {
   constructor(
     private readonly env: EnvService,
     private readonly resolver: AdminPermissionResolver,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('readiness')
@@ -58,6 +60,7 @@ export class AdminAuthzReadinessController {
       ([role, perms]) => ({
         role,
         permissionCount: perms.length,
+        permissions: [...perms].sort(),
       }),
     );
 
@@ -100,15 +103,19 @@ export class AdminAuthzReadinessController {
     }
     const ungrantedKeys = ALL_PERMISSION_KEYS.filter((k) => !grantedKeys.has(k));
 
-    const riskTiers = {
-      CRITICAL: 0,
-      HIGH: 0,
-      MEDIUM: 0,
-      LOW: 0,
+    // Both the counts (for KPI tiles) and the actual lists (for the
+    // expandable drill-down panels on the readiness page).
+    const riskTiers = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    const permissionsByTier: Record<'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW', string[]> = {
+      CRITICAL: [], HIGH: [], MEDIUM: [], LOW: [],
     };
     for (const key of ALL_PERMISSION_KEYS) {
       const tier = PERMISSION_RISK[key] ?? 'LOW';
       riskTiers[tier]++;
+      permissionsByTier[tier].push(key);
+    }
+    for (const tier of Object.keys(permissionsByTier) as (keyof typeof permissionsByTier)[]) {
+      permissionsByTier[tier].sort();
     }
 
     return {
@@ -122,14 +129,89 @@ export class AdminAuthzReadinessController {
         registry: {
           totalPermissions,
           riskTiers,
+          permissionsByTier,
           ungrantedKeys,
         },
         roles: roleSummaries,
         superAdmin: {
           permissionCount: superAdminResolved.permissions.length,
           fullyResolved: superAdminResolved.fullyResolved,
+          permissions: [...superAdminResolved.permissions].sort(),
         },
         warnings,
+      },
+    };
+  }
+
+  /**
+   * GET /admin/authz/recent-denials
+   *
+   * The most useful pre-flip signal: who/what would have been blocked
+   * by the permissions guard in the recent past. Reads
+   * authorization_audits where decision=DENY, ordered by createdAt
+   * desc. Defaults to wouldHaveBlocked=true so the response only
+   * surfaces things that *would have failed* in strict mode (i.e.
+   * actionable items for the operator).
+   *
+   *   - `limit` (max 100, default 30)
+   *   - `wouldHaveBlocked` (default 'true' — pass 'false' to also see
+   *     strict-mode DENYs that already returned 403)
+   *   - `since` ISO timestamp — only entries newer than this
+   */
+  @Get('recent-denials')
+  @Permissions('roles.read')
+  async recentDenials(
+    @Query('limit') limit?: string,
+    @Query('wouldHaveBlocked') wouldHaveBlocked?: string,
+    @Query('since') since?: string,
+  ) {
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? '30', 10) || 30));
+    const onlyWouldBlock = wouldHaveBlocked !== 'false';
+
+    const where: any = { decision: 'DENY' };
+    if (onlyWouldBlock) where.wouldHaveBlocked = true;
+    if (since) {
+      const sinceDate = new Date(since);
+      if (!Number.isNaN(sinceDate.getTime())) {
+        where.createdAt = { gte: sinceDate };
+      }
+    }
+
+    const [rows, total] = await Promise.all([
+      this.prisma.authorizationAudit.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limitNum,
+        select: {
+          id: true,
+          createdAt: true,
+          adminId: true,
+          actorRole: true,
+          routeLabel: true,
+          method: true,
+          path: true,
+          layer: true,
+          decision: true,
+          wouldHaveBlocked: true,
+          requiredPermissions: true,
+          resourceType: true,
+          action: true,
+          reason: true,
+        },
+      }),
+      this.prisma.authorizationAudit.count({ where }),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        items: rows,
+        total,
+        filters: {
+          limit: limitNum,
+          wouldHaveBlocked: onlyWouldBlock,
+          since: since ?? null,
+        },
       },
     };
   }

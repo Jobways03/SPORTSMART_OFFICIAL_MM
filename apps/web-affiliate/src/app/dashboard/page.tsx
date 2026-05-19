@@ -72,10 +72,13 @@ export default function DashboardPage() {
   const referralLink = primaryCoupon ? `${STOREFRONT}/?ref=${encodeURIComponent(primaryCoupon)}` : null;
 
   const accountActive = profile.status === 'ACTIVE';
-  const kycVerified = profile.kycStatus === 'VERIFIED';
+  // KYC step temporarily removed from onboarding checklist (KYC feature
+  // disabled). Hard-coded true so the progress ring + allDone gate work
+  // as if KYC were complete. Restore by reading profile.kycStatus again.
+  const kycVerified = true;
   const hasMethod = methods.length > 0;
   const hasCoupon = !!primaryCoupon;
-  const allDone = accountActive && kycVerified && hasMethod && hasCoupon;
+  const allDone = accountActive && hasMethod && hasCoupon;
 
   const totalEarned = Number(balances.pending) + Number(balances.confirmed) + Number(balances.paid);
   const totalCount = balances.counts.pending + balances.counts.confirmed + balances.counts.paid + balances.counts.hold;
@@ -107,8 +110,8 @@ export default function DashboardPage() {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
             <ProgressRing
-              value={[accountActive, kycVerified, hasMethod, hasCoupon].filter(Boolean).length}
-              max={4}
+              value={[accountActive, hasMethod, hasCoupon].filter(Boolean).length}
+              max={3}
             />
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Get set up to earn</div>
@@ -129,12 +132,14 @@ export default function DashboardPage() {
               title="Share your code"
               body="Your primary code earns commission on every order that uses it."
             />
+            {/* KYC step temporarily removed — feature disabled.
             <Step
               done={kycVerified}
               href="/dashboard/kyc"
               title="Complete KYC"
               body="Required by Section 194H — submit PAN and (optional) Aadhaar."
             />
+            */}
             <Step
               done={hasMethod}
               href="/dashboard/payouts"

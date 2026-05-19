@@ -99,7 +99,7 @@ export default function SellerMappingsPage() {
   const pageCount = Math.max(1, Math.ceil(total / limit));
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1400 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <Link
         href="/dashboard/products"
         style={{

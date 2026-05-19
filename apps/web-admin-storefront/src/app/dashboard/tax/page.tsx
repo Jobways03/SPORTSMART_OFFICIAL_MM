@@ -1,29 +1,82 @@
 'use client';
 
 // Phase 25 GST — Super Admin tax dashboard hub.
+//
+// Single entry-point for India tax compliance. Surfaces the strict-mode
+// posture, audit-readiness blockers, all operational queues, and the
+// CSV exports finance needs for GSTR-1 / 3B / 8 + Marketplace commission.
+// Sub-pages own their own UIs; this page just routes to them and shows
+// at-a-glance posture.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useModal } from '@sportsmart/ui';
 import {
   adminTaxService,
   AuditReadinessReport,
+  BlockerSummary,
   Gstr8Summary,
   TaxMode,
 } from '@/services/admin-tax.service';
 
+// ── Static config ─────────────────────────────────────────────────
+
 const GSTR1_SECTIONS = [
   { value: 'b2c-large', label: '§5 — B2C Large (>₹2.5L inter-state)' },
-  { value: 'b2c-small', label: '§7 — B2C Small (state+rate)' },
+  { value: 'b2c-small', label: '§7 — B2C Small (state + rate)' },
   { value: 'credit-notes', label: '§9B — Credit Notes' },
   { value: 'hsn', label: '§12 — HSN Summary' },
   { value: 'docs-issued', label: '§13 — Documents Issued' },
 ];
 
+type SubPage = {
+  href: string;
+  title: string;
+  desc: string;
+  icon: IconName;
+  group: 'queues' | 'verify' | 'masters';
+};
+
+const SUB_PAGES: SubPage[] = [
+  { group: 'queues',  href: '/dashboard/tax/timebar-review',          title: 'Time-bar review',       desc: 'Returns flagged for finance review or beyond the credit-note cutoff.',                  icon: 'clock' },
+  { group: 'queues',  href: '/dashboard/tax/wallet-adjustments',       title: 'Wallet adjustments',    desc: 'Goodwill credits & time-barred refunds awaiting dual approval.',                        icon: 'wallet' },
+  { group: 'queues',  href: '/dashboard/tax/eway-bills',               title: 'E-way bills',           desc: 'CBIC Rule 138 — generate, cancel, or override e-way bills per consignment.',           icon: 'truck' },
+  { group: 'queues',  href: '/dashboard/tax/einvoices',                title: 'E-invoices / IRN',      desc: 'NIC IRP IRN lifecycle — generate, cancel, and retry failed e-invoices.',               icon: 'receipt' },
+  { group: 'queues',  href: '/dashboard/tax/tds194o',                  title: 'Section 194-O TDS',     desc: 'Form 26Q quarterly TDS — deposit & Form 16A certificate lifecycle.',                    icon: 'percent' },
+
+  { group: 'verify',  href: '/dashboard/tax/seller-gstins',            title: 'Seller GSTINs',         desc: 'GSTN portal verification for active seller GSTINs (legal name match).',                 icon: 'building' },
+  { group: 'verify',  href: '/dashboard/tax/customer-tax-profiles',    title: 'Customer tax profiles', desc: 'GSTN portal verification for B2B customer GSTINs claiming ITC.',                       icon: 'shield' },
+
+  { group: 'masters', href: '/dashboard/tax/hsn-master',               title: 'HSN master',            desc: 'CBIC HSN codes with effective-dated rate changes — used by products & invoices.',       icon: 'tag' },
+  { group: 'masters', href: '/dashboard/tax/uqc-master',               title: 'UQC master',            desc: 'CBIC Unit Quantity Codes — required on Tax Invoices under Section 31 / Rule 46.',     icon: 'ruler' },
+  { group: 'masters', href: '/dashboard/tax/config',                   title: 'Tax config',            desc: 'Runtime knobs — EWB threshold, TCS rate, shipping SAC, and other policy values.',      icon: 'sliders' },
+  { group: 'masters', href: '/dashboard/tax/platform-gst',             title: 'Platform GST profiles', desc: "Sportsmart's own GSTINs used for OWN_BRAND supply and platform-side filings.",        icon: 'store' },
+];
+
+const GROUP_META: Record<SubPage['group'], { title: string; hint: string }> = {
+  queues:  { title: 'Compliance queues',  hint: 'Work that needs an admin action — returns, e-way bills, TDS deposits.' },
+  verify:  { title: 'GSTN verifications', hint: 'Confirm GSTINs against the GSTN portal before they appear on invoices.' },
+  masters: { title: 'Reference data',     hint: 'Codes & runtime config the tax engine reads at invoice time.' },
+};
+
+// Friendlier title for blocker codes (shown next to the raw code).
+const BLOCKER_TITLE: Record<string, string> = {
+  'product.missing_hsn':       'Products without HSN code',
+  'product.missing_rate':      'Taxable products without GST rate',
+  'seller.missing_gstin':      'Active sellers without GSTIN',
+  'einvoice.unresolved':       'E-invoices stuck past retry cap',
+  'pdf.unresolved':            'Invoice PDFs failed past retry cap',
+  'tcs.unfiled':               'TCS rows past the GSTR-8 cutoff',
+  'timebar.requires_review':   'Returns flagged for finance review',
+};
+
+// ── Page ──────────────────────────────────────────────────────────
+
 export default function TaxDashboardPage() {
   const [mode, setMode] = useState<TaxMode | null>(null);
   const [readiness, setReadiness] = useState<AuditReadinessReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -34,112 +87,187 @@ export default function TaxDashboardPage() {
       ]);
       setMode(m?.data?.mode ?? null);
       setReadiness(r?.data ?? null);
+      setRefreshedAt(new Date());
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  if (loading) {
-    return <div style={{ padding: 24 }}>Loading tax dashboard…</div>;
-  }
+  useEffect(() => { void refresh(); }, [refresh]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200 }}>
-      <h1>Tax / GST</h1>
-      <p style={{ color: '#666', marginBottom: 24 }}>
-        Phases 0–27 surfaces. Flip the mode below; see{' '}
-        <code>docs/tax/STRICT_MODE_ROLLOUT_RUNBOOK.md</code> before going STRICT.
-      </p>
+    <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
+      {/* ── Header ─────────────────────────────────────────── */}
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>
+          Tax & GST
+        </h1>
+        <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', maxWidth: 760 }}>
+          Compliance posture, audit readiness, and every GST / TDS filing surface in one place.
+          Flip the engine mode below — review the runbook before going <Mono>STRICT</Mono>.
+        </p>
+      </div>
 
-      <ModeBadge mode={mode} onRefresh={refresh} />
+      {/* ── KPI strip ─────────────────────────────────────── */}
+      <KpiStrip
+        mode={mode}
+        readiness={readiness}
+        loading={loading}
+        refreshedAt={refreshedAt}
+      />
 
-      {/* Sub-page navigation cards */}
-      <section style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Operations</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-          <SubPageCard href="/dashboard/tax/timebar-review"
-            title="⏰ Time-bar review"
-            desc="Phase-12 returns flagged REQUIRES_FINANCE_REVIEW or TIME_BARRED" />
-          <SubPageCard href="/dashboard/tax/wallet-adjustments"
-            title="💰 Wallet adjustments"
-            desc="Phase-13 goodwill + time-barred refund approval queue" />
-          <SubPageCard href="/dashboard/tax/eway-bills"
-            title="🚚 E-way bills"
-            desc="Phase-15 CBIC Rule 138 generation / cancel / override" />
-          <SubPageCard href="/dashboard/tax/einvoices"
-            title="🧾 E-invoices / IRN"
-            desc="Phase-22 NIC IRP IRN management" />
-          <SubPageCard href="/dashboard/tax/seller-gstins"
-            title="🪪 Seller GSTINs"
-            desc="Phase-35 GSTN portal verification for seller GSTINs" />
-          <SubPageCard href="/dashboard/tax/customer-tax-profiles"
-            title="🛡️ Customer tax profiles"
-            desc="Phase-35 GSTN portal verification for B2B customer GSTINs" />
-          <SubPageCard href="/dashboard/tax/tds194o"
-            title="📋 Section 194-O TDS"
-            desc="Phase-27 Form 26Q quarterly TDS lifecycle (deposit + Form 16A)" />
-          <SubPageCard href="/dashboard/tax/hsn-master"
-            title="📚 HSN master"
-            desc="Phase-37 CBIC HSN codes + effective-dated rate changes" />
-          <SubPageCard href="/dashboard/tax/uqc-master"
-            title="📏 UQC master"
-            desc="Phase-37 CBIC Unit Quantity Codes (Section 31 / Rule 46)" />
-          <SubPageCard href="/dashboard/tax/config"
-            title="⚙️ Tax config"
-            desc="Phase-37 runtime knobs (EWB threshold, TCS rate, shipping SAC, etc.)" />
-          <SubPageCard href="/dashboard/tax/platform-gst"
-            title="🏢 Platform GST profiles"
-            desc="Phase-37 Sportsmart's own GSTINs (OWN_BRAND / SPORTSMART supplier)" />
-        </div>
-      </section>
+      {/* ── Mode control ──────────────────────────────────── */}
+      <ModeCard mode={mode} onRefresh={refresh} loading={loading} />
 
+      {/* ── Operations directory (grouped) ─────────────────── */}
+      <OperationsDirectory />
+
+      {/* ── Audit readiness ───────────────────────────────── */}
       {readiness && <ReadinessSection report={readiness} onRefresh={refresh} />}
 
-      <Gstr8Section />
-      <Gstr1Section />
-      <MarketplaceCommissionGstrSection />
+      {/* ── Filings (CSV exports) ─────────────────────────── */}
+      <h2 style={sectionHeading}>Filings & CSV exports</h2>
+      <p style={sectionSub}>
+        Download what GSTN / TIN-Protean expects. Files mirror the official template columns —
+        upload directly or import into your filing utility.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, marginBottom: 32 }}>
+        <Gstr8Section />
+        <Gstr1Section />
+        <MarketplaceCommissionGstrSection />
+      </div>
     </div>
   );
 }
 
-function SubPageCard({ href, title, desc }: { href: string; title: string; desc: string }) {
+// ── KPI strip ─────────────────────────────────────────────────────
+
+function KpiStrip({
+  mode,
+  readiness,
+  loading,
+  refreshedAt,
+}: {
+  mode: TaxMode | null;
+  readiness: AuditReadinessReport | null;
+  loading: boolean;
+  refreshedAt: Date | null;
+}) {
+  const total = readiness?.totalBlockers ?? 0;
+  const ready = readiness?.ready ?? false;
+  const byCode = (code: string) => readiness?.blockers.find((b) => b.code === code)?.count ?? 0;
+
+  const modeTone: KpiTone =
+    mode === 'STRICT' ? 'success' : mode === 'AUDIT' ? 'warning' : mode === 'OFF' ? 'neutral' : 'muted';
+  const modeHint =
+    mode === 'STRICT' ? 'Production posture — validation enforced.'
+    : mode === 'AUDIT' ? 'Staging soak — violations logged.'
+    : mode === 'OFF' ? 'Dev only — validation skipped.'
+    : 'Mode unavailable.';
+
   return (
-    <Link href={href} style={{
-      display: 'block', padding: 12, border: '1px solid #e5e7eb', borderRadius: 6,
-      textDecoration: 'none', color: 'inherit', background: '#f9fafb',
-    }}>
-      <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: 12, color: '#6b7280' }}>{desc}</div>
-    </Link>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
+      <Kpi
+        label="Engine mode"
+        value={mode ?? '—'}
+        tone={modeTone}
+        hint={modeHint}
+        loading={loading && mode === null}
+      />
+      <Kpi
+        label="Audit blockers"
+        value={ready ? 'Ready' : total.toLocaleString('en-IN')}
+        tone={ready ? 'success' : total > 0 ? 'danger' : 'muted'}
+        hint={ready ? 'Cleared to flip STRICT.' : `${total} item${total === 1 ? '' : 's'} blocking STRICT.`}
+        loading={loading && readiness === null}
+      />
+      <Kpi
+        label="Sellers missing GSTIN"
+        value={byCode('seller.missing_gstin').toLocaleString('en-IN')}
+        tone={byCode('seller.missing_gstin') > 0 ? 'danger' : 'success'}
+        hint="Active sellers with no verified GSTIN row."
+        loading={loading && readiness === null}
+      />
+      <Kpi
+        label="Time-bar queue"
+        value={byCode('timebar.requires_review').toLocaleString('en-IN')}
+        tone={byCode('timebar.requires_review') > 0 ? 'warning' : 'muted'}
+        hint="Returns awaiting finance triage."
+        loading={loading && readiness === null}
+      />
+      <Kpi
+        label="Last refreshed"
+        value={refreshedAt ? relTime(refreshedAt) : '—'}
+        tone="muted"
+        hint={refreshedAt ? refreshedAt.toLocaleString('en-IN') : 'Pending first load.'}
+        loading={loading && refreshedAt === null}
+      />
+    </div>
   );
 }
 
-// ── Mode badge ────────────────────────────────────────────────────
+type KpiTone = 'success' | 'warning' | 'danger' | 'neutral' | 'muted';
 
-function ModeBadge({ mode, onRefresh }: { mode: TaxMode | null; onRefresh: () => void }) {
+const KPI_TONE: Record<KpiTone, { color: string; chip: string }> = {
+  success: { color: '#15803d', chip: '#dcfce7' },
+  warning: { color: '#b45309', chip: '#fef3c7' },
+  danger:  { color: '#b91c1c', chip: '#fee2e2' },
+  neutral: { color: '#0F1115', chip: '#F3F4F6' },
+  muted:   { color: '#525A65', chip: '#F3F4F6' },
+};
+
+function Kpi({
+  label, value, tone, hint, loading,
+}: {
+  label: string; value: string; tone: KpiTone; hint?: string; loading?: boolean;
+}) {
+  const t = KPI_TONE[tone];
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: 16, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+    }}>
+      <div style={{ fontSize: 11, color: '#7A828F', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+        {label}
+      </div>
+      {loading ? (
+        <div style={{ height: 28, width: '60%', background: '#F3F4F6', borderRadius: 6 }} />
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 22, fontWeight: 700, color: t.color, fontVariantNumeric: 'tabular-nums' }}>
+            {value}
+          </span>
+          {tone !== 'muted' && tone !== 'neutral' && (
+            <span style={{
+              width: 8, height: 8, borderRadius: 9999, background: t.color,
+            }} />
+          )}
+        </div>
+      )}
+      {hint && (
+        <div style={{ fontSize: 12, color: '#525A65', lineHeight: 1.4 }}>{hint}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Mode control ──────────────────────────────────────────────────
+
+function ModeCard({
+  mode, onRefresh, loading,
+}: {
+  mode: TaxMode | null; onRefresh: () => Promise<void>; loading: boolean;
+}) {
   const { confirmDialog } = useModal();
   const [busy, setBusy] = useState<TaxMode | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
-  const color =
-    mode === 'STRICT' ? '#16a34a' : mode === 'AUDIT' ? '#ca8a04' : '#6b7280';
-  const label =
-    mode === 'STRICT'
-      ? 'STRICT — production posture; DRAFT banner suppressed'
-      : mode === 'AUDIT'
-      ? 'AUDIT — staging soak; violations logged, not thrown'
-      : 'OFF — dev permissive; DRAFT banner visible';
-
   const flip = async (target: TaxMode) => {
     if (target === mode) return;
     const warnings: Record<TaxMode, string> = {
-      OFF: 'Switch to OFF? Tax data validation will be permissive and the DRAFT banner will reappear on invoices.',
-      AUDIT: 'Switch to AUDIT? Validation runs but failures are LOGGED, not thrown. Safe for staging soak.',
-      STRICT: 'Switch to STRICT? Validation will THROW on missing tax data — checkouts and invoice generation can fail. Only flip after audit-readiness shows zero blockers.',
+      OFF: 'Switch to OFF? Tax data validation will be permissive and the DRAFT banner will reappear on invoices. Dev / break-glass only.',
+      AUDIT: 'Switch to AUDIT? Validation runs but failures are LOGGED, not thrown. Safe for staging soak — recommended before going STRICT.',
+      STRICT: 'Switch to STRICT? Validation will THROW on missing tax data — checkouts and invoice generation can fail. Only flip after audit readiness shows zero blockers.',
     };
     const ok = await confirmDialog({
       title: `Switch tax mode to ${target}?`,
@@ -153,7 +281,7 @@ function ModeBadge({ mode, onRefresh }: { mode: TaxMode | null; onRefresh: () =>
     setMsg(null);
     try {
       await adminTaxService.setMode(target);
-      setMsg({ kind: 'ok', text: `Mode set to ${target}` });
+      setMsg({ kind: 'ok', text: `Mode set to ${target}.` });
       await onRefresh();
     } catch (err: any) {
       setMsg({ kind: 'err', text: err?.message ?? `Failed to set mode to ${target}` });
@@ -163,60 +291,59 @@ function ModeBadge({ mode, onRefresh }: { mode: TaxMode | null; onRefresh: () =>
   };
 
   return (
-    <section style={card}>
-      <h2>Current mode</h2>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span
-          style={{
-            background: color,
-            color: '#fff',
-            padding: '4px 12px',
-            borderRadius: 4,
-            fontWeight: 700,
-            fontSize: 14,
-          }}
-        >
-          {mode ?? 'UNKNOWN'}
-        </span>
-        <span style={{ color: '#444' }}>{label}</span>
-        <button onClick={onRefresh} style={btnSecondary}>Refresh</button>
+    <section style={{ ...card, marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={cardHeading}>Engine mode</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#525A65', maxWidth: 600 }}>
+            Controls whether the tax engine validates and throws on missing data. Read{' '}
+            <Mono>docs/tax/STRICT_MODE_ROLLOUT_RUNBOOK.md</Mono> before changing.
+          </p>
+        </div>
+        <button onClick={() => void onRefresh()} style={btnGhost} disabled={loading}>
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
-      <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: '#666' }}>Switch to:</span>
+
+      <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: '#525A65', fontWeight: 600 }}>Switch to:</span>
         {(['OFF', 'AUDIT', 'STRICT'] as TaxMode[]).map((target) => {
           const isCurrent = target === mode;
           const isBusy = busy === target;
-          const btnColor = target === 'STRICT' ? '#16a34a' : target === 'AUDIT' ? '#ca8a04' : '#6b7280';
           return (
             <button
               key={target}
               onClick={() => flip(target)}
               disabled={isCurrent || isBusy || !!busy}
               style={{
-                background: isCurrent ? '#e5e7eb' : btnColor,
-                color: isCurrent ? '#6b7280' : '#fff',
-                border: 'none',
-                padding: '6px 14px',
-                borderRadius: 4,
+                height: 36,
+                padding: '0 16px',
+                borderRadius: 9999,
+                fontSize: 13,
                 fontWeight: 600,
-                fontSize: 12,
                 cursor: isCurrent || isBusy ? 'not-allowed' : 'pointer',
+                border: isCurrent ? '1px solid #0F1115' : '1px solid #D2D6DC',
+                background: isCurrent ? '#0F1115' : '#fff',
+                color: isCurrent ? '#fff' : '#0F1115',
                 opacity: isBusy ? 0.6 : 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
               }}
             >
+              {isCurrent && <span style={{ width: 6, height: 6, borderRadius: 9999, background: '#fff' }} />}
               {isBusy ? `Setting ${target}…` : target}
             </button>
           );
         })}
       </div>
+
       {msg && (
         <div style={{
-          marginTop: 12,
-          padding: '6px 10px',
-          borderRadius: 4,
-          fontSize: 12,
-          background: msg.kind === 'ok' ? '#dcfce7' : '#fee2e2',
-          color: msg.kind === 'ok' ? '#166534' : '#991b1b',
+          marginTop: 12, padding: '8px 12px', borderRadius: 10, fontSize: 13,
+          border: `1px solid ${msg.kind === 'ok' ? '#bbf7d0' : '#fca5a5'}`,
+          background: msg.kind === 'ok' ? '#f0fdf4' : '#fef2f2',
+          color: msg.kind === 'ok' ? '#15803d' : '#b91c1c',
         }}>
           {msg.text}
         </div>
@@ -225,122 +352,231 @@ function ModeBadge({ mode, onRefresh }: { mode: TaxMode | null; onRefresh: () =>
   );
 }
 
-// ── Readiness ─────────────────────────────────────────────────────
+// ── Operations directory ──────────────────────────────────────────
 
-// Phase 37 — map each blocker code to its admin fix page. Codes that
-// have no in-app target (e.g. product.missing_hsn lives in web-admin,
-// not admin-storefront) return null and the row stays read-only.
+function OperationsDirectory() {
+  const groups: SubPage['group'][] = ['queues', 'verify', 'masters'];
+  return (
+    <>
+      {groups.map((g) => {
+        const meta = GROUP_META[g];
+        const pages = SUB_PAGES.filter((p) => p.group === g);
+        return (
+          <section key={g} style={{ marginBottom: 24 }}>
+            <h2 style={sectionHeading}>{meta.title}</h2>
+            <p style={sectionSub}>{meta.hint}</p>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+              gap: 12,
+            }}>
+              {pages.map((p) => <SubPageCard key={p.href} page={p} />)}
+            </div>
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+function SubPageCard({ page }: { page: SubPage }) {
+  return (
+    <Link href={page.href} style={{
+      display: 'block',
+      padding: 16,
+      background: '#fff',
+      border: '1px solid #E5E7EB',
+      borderRadius: 14,
+      textDecoration: 'none',
+      color: 'inherit',
+      transition: 'border-color 120ms ease, box-shadow 120ms ease',
+    }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#0F1115'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#E5E7EB'; }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{
+          width: 32, height: 32, borderRadius: 9,
+          background: '#F3F4F6',
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          color: '#0F1115',
+        }}>
+          <Icon name={page.icon} size={18} />
+        </span>
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#0F1115' }}>{page.title}</div>
+      </div>
+      <div style={{ fontSize: 12, color: '#525A65', lineHeight: 1.45 }}>{page.desc}</div>
+    </Link>
+  );
+}
+
+// ── Audit readiness ───────────────────────────────────────────────
+
 function blockerFixLink(code: string): { label: string; href: string } | null {
   switch (code) {
     case 'einvoice.unresolved':
-      return { label: 'Open e-invoices →', href: '/dashboard/tax/einvoices' };
     case 'pdf.unresolved':
-      return { label: 'Open e-invoices →', href: '/dashboard/tax/einvoices' };
+      return { label: 'Open e-invoices', href: '/dashboard/tax/einvoices' };
     case 'timebar.requires_review':
-      return {
-        label: 'Open time-bar queue →',
-        href: '/dashboard/tax/timebar-review',
-      };
+      return { label: 'Open time-bar queue', href: '/dashboard/tax/timebar-review' };
     case 'tcs.unfiled':
-      // GSTR-8 section is anchored on this page; jump to it via hash.
-      return { label: 'Jump to GSTR-8 →', href: '#gstr8' };
+      return { label: 'Jump to GSTR-8', href: '#gstr8' };
     case 'seller.missing_gstin':
-      return {
-        label: 'Open seller GSTINs →',
-        href: '/dashboard/tax/seller-gstins',
-      };
+      return { label: 'Open seller GSTINs', href: '/dashboard/tax/seller-gstins' };
     case 'product.missing_hsn':
     case 'product.missing_rate':
-      // Product tax fields live in web-admin (different app); link
-      // to the bulk-tax-config page there. Both apps run under the
-      // same parent dashboard in prod, so the relative path works.
       return null;
     default:
       return null;
   }
 }
 
-function ReadinessSection({ report, onRefresh }: { report: AuditReadinessReport; onRefresh: () => void }) {
+function ReadinessSection({
+  report, onRefresh,
+}: { report: AuditReadinessReport; onRefresh: () => Promise<void> }) {
+  // Sort: blocking first (count > 0), then by count desc.
+  const sorted = useMemo<BlockerSummary[]>(
+    () => [...report.blockers].sort((a, b) => b.count - a.count),
+    [report],
+  );
+  const blocking = sorted.filter((b) => b.count > 0);
+  const clear = sorted.filter((b) => b.count === 0);
+
   return (
-    <section style={card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0 }}>Audit readiness</h2>
-        <div>
-          <span
-            style={{
-              background: report.ready ? '#16a34a' : '#dc2626',
-              color: '#fff',
-              padding: '4px 12px',
-              borderRadius: 4,
-              fontWeight: 700,
-              marginRight: 8,
-            }}
-          >
-            {report.ready ? 'READY' : `${report.totalBlockers} BLOCKER${report.totalBlockers === 1 ? '' : 'S'}`}
-          </span>
-          <button onClick={onRefresh} style={btnSecondary}>Refresh</button>
+    <section style={{ ...card, marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={cardHeading}>Audit readiness</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#525A65' }}>
+            Generated <span style={{ color: '#0F1115', fontWeight: 500 }}>{new Date(report.generatedAt).toLocaleString('en-IN')}</span>
+            {' · '}<span title={report.generatedAt}>{relTime(new Date(report.generatedAt))}</span>
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <VerdictPill ready={report.ready} count={report.totalBlockers} />
+          <button onClick={() => void onRefresh()} style={btnGhost}>Refresh</button>
         </div>
       </div>
-      <p style={{ color: '#888', fontSize: 12 }}>
-        Generated {new Date(report.generatedAt).toLocaleString()}
-      </p>
-      <table style={tbl}>
-        <thead>
-          <tr>
-            <th style={th}>Code</th>
-            <th style={{ ...th, textAlign: 'right' }}>Count</th>
-            <th style={th}>Message</th>
-            <th style={th}>Sample IDs</th>
-            <th style={th}>Fix</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.blockers.map((b) => {
-            const link = b.count > 0 ? blockerFixLink(b.code) : null;
-            return (
-              <tr key={b.code} style={{ borderTop: '1px solid #eee' }}>
-                <td style={{ ...td, fontFamily: 'monospace' }}>{b.code}</td>
-                <td
-                  style={{
-                    ...td,
-                    textAlign: 'right',
-                    color: b.count > 0 ? '#dc2626' : '#16a34a',
-                    fontWeight: 700,
-                  }}
-                >
-                  {b.count}
-                </td>
-                <td style={td}>{b.message}</td>
-                <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>
-                  {b.sampleIds.length > 0 ? b.sampleIds.join(', ') : '—'}
-                </td>
-                <td style={td}>
-                  {link ? (
-                    <Link
-                      href={link.href}
-                      style={{
-                        color: '#2563eb',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        textDecoration: 'none',
-                      }}
-                    >
-                      {link.label}
-                    </Link>
-                  ) : b.count > 0 ? (
-                    <span style={{ color: '#888', fontSize: 12 }}>
-                      No in-app target
-                    </span>
-                  ) : (
-                    <span style={{ color: '#16a34a', fontSize: 12 }}>✓</span>
-                  )}
+
+      <div style={{ marginTop: 16, overflow: 'hidden', border: '1px solid #E5E7EB', borderRadius: 12 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+              <th style={th}>Check</th>
+              <th style={{ ...th, width: 80, textAlign: 'right' }}>Count</th>
+              <th style={th}>What it means</th>
+              <th style={{ ...th, width: 240 }}>Sample IDs</th>
+              <th style={{ ...th, width: 180 }}>Fix</th>
+            </tr>
+          </thead>
+          <tbody>
+            {blocking.map((b) => <BlockerRow key={b.code} blocker={b} />)}
+            {clear.length > 0 && (
+              <tr style={{ background: '#FAFAFA' }}>
+                <td colSpan={5} style={{ ...td, fontSize: 11, fontWeight: 600, color: '#525A65', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  Cleared ({clear.length})
                 </td>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            )}
+            {clear.map((b) => <BlockerRow key={b.code} blocker={b} />)}
+            {sorted.length === 0 && (
+              <tr><td colSpan={5} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 24 }}>
+                No checks reported. Backend may not be populating audit-readiness yet.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </section>
+  );
+}
+
+function BlockerRow({ blocker }: { blocker: BlockerSummary }) {
+  const link = blocker.count > 0 ? blockerFixLink(blocker.code) : null;
+  const isBlocking = blocker.count > 0;
+  const title = BLOCKER_TITLE[blocker.code] ?? blocker.code;
+  const samples = blocker.sampleIds.slice(0, 3);
+  const extra = Math.max(0, blocker.sampleIds.length - samples.length);
+
+  return (
+    <tr style={{ borderTop: '1px solid #F3F4F6' }}>
+      <td style={td}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: 9999,
+            background: isBlocking ? '#b91c1c' : '#15803d',
+          }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#0F1115' }}>{title}</div>
+            <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#7A828F', marginTop: 2 }}>
+              {blocker.code}
+            </div>
+          </div>
+        </div>
+      </td>
+      <td style={{ ...td, textAlign: 'right' }}>
+        <span style={{
+          fontSize: 16, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+          color: isBlocking ? '#b91c1c' : '#15803d',
+        }}>
+          {blocker.count.toLocaleString('en-IN')}
+        </span>
+      </td>
+      <td style={{ ...td, color: '#525A65', lineHeight: 1.45, maxWidth: 360 }}>
+        {blocker.message}
+      </td>
+      <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#525A65' }}>
+        {samples.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {samples.map((s) => (
+              <span key={s} title={s} style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                {s.slice(0, 16)}…
+              </span>
+            ))}
+            {extra > 0 && (
+              <span style={{ color: '#7A828F', fontSize: 11 }}>+{extra} more</span>
+            )}
+          </div>
+        ) : (
+          <span style={{ color: '#7A828F' }}>—</span>
+        )}
+      </td>
+      <td style={td}>
+        {link ? (
+          <Link href={link.href} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            color: '#0F1115', fontSize: 12, fontWeight: 600, textDecoration: 'none',
+            border: '1px solid #D2D6DC', borderRadius: 9999, padding: '6px 12px',
+          }}>
+            {link.label} <Icon name="arrow-right" size={12} />
+          </Link>
+        ) : isBlocking ? (
+          <span style={{ color: '#7A828F', fontSize: 12 }}>No in-app target</span>
+        ) : (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            color: '#15803d', fontSize: 12, fontWeight: 600,
+          }}>
+            <Icon name="check" size={12} /> Clear
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function VerdictPill({ ready, count }: { ready: boolean; count: number }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding: '4px 10px', borderRadius: 9999,
+      background: ready ? '#dcfce7' : '#fee2e2',
+      color: ready ? '#15803d' : '#b91c1c',
+      fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: 9999, background: ready ? '#15803d' : '#b91c1c' }} />
+      {ready ? 'Ready' : `${count} blocker${count === 1 ? '' : 's'}`}
+    </span>
   );
 }
 
@@ -351,144 +587,185 @@ function Gstr8Section() {
   const [summary, setSummary] = useState<Gstr8Summary | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payRef, setPayRef] = useState('');
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [busy, setBusy] = useState<'load' | 'filed' | 'paid' | 'csv' | null>(null);
 
   const loadSummary = async () => {
     setMsg(null);
+    setBusy('load');
     try {
       const res = await adminTaxService.getGstr8Summary(period);
       setSummary(res.data ?? null);
       setSelected(new Set());
     } catch (err: any) {
-      setMsg(`Error: ${err?.message ?? 'failed to load summary'}`);
-    }
+      setMsg({ kind: 'err', text: err?.message ?? 'Failed to load summary' });
+    } finally { setBusy(null); }
   };
 
   const toggle = (id: string) => {
     const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (next.has(id)) next.delete(id); else next.add(id);
     setSelected(next);
+  };
+  const toggleAll = () => {
+    if (!summary) return;
+    if (selected.size === summary.rows.length) setSelected(new Set());
+    else setSelected(new Set(summary.rows.map((r) => r.id)));
   };
 
   const markFiled = async () => {
     if (selected.size === 0) return;
+    setBusy('filed');
     try {
       const res = await adminTaxService.markFiled([...selected]);
-      setMsg(`Marked FILED: flipped=${res.data?.flipped} / requested=${res.data?.requested}`);
+      setMsg({ kind: 'ok', text: `Marked FILED — ${res.data?.flipped} of ${res.data?.requested} rows.` });
       await loadSummary();
     } catch (err: any) {
-      setMsg(`Error: ${err?.message ?? 'markFiled failed'}`);
-    }
+      setMsg({ kind: 'err', text: err?.message ?? 'markFiled failed' });
+    } finally { setBusy(null); }
   };
 
   const markPaid = async () => {
     if (selected.size === 0 || !payRef) return;
+    setBusy('paid');
     try {
       const res = await adminTaxService.markPaid([...selected], payRef);
-      setMsg(`Marked PAID_TO_GOVT: flipped=${res.data?.flipped} / requested=${res.data?.requested}`);
+      setMsg({ kind: 'ok', text: `Marked PAID_TO_GOVT — ${res.data?.flipped} of ${res.data?.requested} rows.` });
       setPayRef('');
       await loadSummary();
     } catch (err: any) {
-      setMsg(`Error: ${err?.message ?? 'markPaid failed'}`);
-    }
+      setMsg({ kind: 'err', text: err?.message ?? 'markPaid failed' });
+    } finally { setBusy(null); }
+  };
+
+  const downloadCsv = async () => {
+    setBusy('csv');
+    setMsg(null);
+    try { await adminTaxService.gstr8Csv(period); }
+    catch (err: any) { setMsg({ kind: 'err', text: err?.message ?? 'CSV download failed' }); }
+    finally { setBusy(null); }
   };
 
   return (
     <section style={card} id="gstr8">
-      <h2>GSTR-8 (platform-side TCS)</h2>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-        <label>Filing period (YYYY-MM):</label>
-        <input
-          value={period}
-          onChange={(e) => setPeriod(e.target.value)}
-          placeholder="2026-04"
-          style={input}
-        />
-        <button onClick={loadSummary} style={btnPrimary}>Load summary</button>
-        <button
-          onClick={() => adminTaxService.gstr8Csv(period).catch((e) => setMsg(`Error: ${e?.message}`))}
-          style={btnSecondary}
-        >
-          Download CSV
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h2 style={cardHeading}>GSTR-8 — Platform-side TCS</h2>
+          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#525A65', maxWidth: 640 }}>
+            Marketplace's own GSTR-8 filing — TCS collected at source on every seller supply.
+            Load a filing period to see per-supplier rows and flip status as you file & pay.
+          </p>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Field label="Filing period">
+          <input
+            value={period} onChange={(e) => setPeriod(e.target.value)}
+            placeholder="2026-04" style={input}
+          />
+        </Field>
+        <button onClick={loadSummary} style={btnPrimary} disabled={busy === 'load' || !period}>
+          {busy === 'load' ? 'Loading…' : 'Load summary'}
+        </button>
+        <button onClick={downloadCsv} style={btnGhost} disabled={busy === 'csv' || !period}>
+          <Icon name="download" size={14} /> {busy === 'csv' ? 'Downloading…' : 'Download CSV'}
         </button>
       </div>
 
-      {msg && <p style={{ color: msg.startsWith('Error') ? '#dc2626' : '#16a34a' }}>{msg}</p>}
+      {msg && <Banner msg={msg} />}
 
       {summary && (
         <>
-          <div style={{ display: 'flex', gap: 24, marginBottom: 12 }}>
-            <Stat label="Sellers" value={summary.sellerCount.toString()} />
-            <Stat label="Gross taxable" value={`₹${paiseToRupees(summary.totalGrossInPaise)}`} />
-            <Stat label="Net taxable" value={`₹${paiseToRupees(summary.totalNetTaxableInPaise)}`} />
-            <Stat label="Total TCS" value={`₹${paiseToRupees(summary.totalTcsInPaise)}`} />
+          <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+            <Stat label="Sellers"          value={summary.sellerCount.toLocaleString('en-IN')} />
+            <Stat label="Gross taxable"    value={`₹${paiseToRupees(summary.totalGrossInPaise)}`} />
+            <Stat label="Net taxable"      value={`₹${paiseToRupees(summary.totalNetTaxableInPaise)}`} />
+            <Stat label="Total TCS"        value={`₹${paiseToRupees(summary.totalTcsInPaise)}`} accent />
           </div>
 
-          <table style={tbl}>
-            <thead>
-              <tr>
-                <th style={{ ...th, width: 30 }}></th>
-                <th style={th}>Supplier GSTIN</th>
-                <th style={{ ...th, textAlign: 'right' }}>Gross</th>
-                <th style={{ ...th, textAlign: 'right' }}>Net</th>
-                <th style={{ ...th, textAlign: 'right' }}>TCS</th>
-                <th style={th}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.rows.map((r) => (
-                <tr key={r.id} style={{ borderTop: '1px solid #eee' }}>
-                  <td style={td}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(r.id)}
-                      onChange={() => toggle(r.id)}
-                    />
-                  </td>
-                  <td style={{ ...td, fontFamily: 'monospace', fontSize: 11 }}>
-                    {r.supplierGstin ?? '—'}
-                  </td>
-                  <td style={{ ...td, textAlign: 'right' }}>
-                    ₹{paiseToRupees(r.grossTaxableSupplyInPaise)}
-                  </td>
-                  <td style={{ ...td, textAlign: 'right' }}>
-                    ₹{paiseToRupees(r.netTaxableSupplyInPaise)}
-                  </td>
-                  <td style={{ ...td, textAlign: 'right', fontWeight: 700 }}>
-                    ₹{paiseToRupees(r.totalTcsInPaise)}
-                  </td>
-                  <td style={td}>{r.status}</td>
+          <div style={{ marginTop: 12, overflow: 'hidden', border: '1px solid #E5E7EB', borderRadius: 12 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+                  <th style={{ ...th, width: 36 }}>
+                    {summary.rows.length > 0 && (
+                      <input
+                        type="checkbox"
+                        checked={selected.size === summary.rows.length && summary.rows.length > 0}
+                        ref={(el) => { if (el) el.indeterminate = selected.size > 0 && selected.size < summary.rows.length; }}
+                        onChange={toggleAll}
+                        style={{ cursor: 'pointer' }}
+                      />
+                    )}
+                  </th>
+                  <th style={th}>Supplier GSTIN</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Gross</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Net</th>
+                  <th style={{ ...th, textAlign: 'right' }}>TCS</th>
+                  <th style={th}>Status</th>
                 </tr>
-              ))}
-              {summary.rows.length === 0 && (
-                <tr>
-                  <td colSpan={6} style={{ ...td, textAlign: 'center', color: '#888' }}>
+              </thead>
+              <tbody>
+                {summary.rows.map((r) => (
+                  <tr key={r.id} style={{ borderTop: '1px solid #F3F4F6', background: selected.has(r.id) ? '#FAFAFA' : '#fff' }}>
+                    <td style={td}>
+                      <input
+                        type="checkbox" checked={selected.has(r.id)}
+                        onChange={() => toggle(r.id)} style={{ cursor: 'pointer' }}
+                      />
+                    </td>
+                    <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 12, color: '#0F1115' }}>
+                      {r.supplierGstin ?? <span style={{ color: '#7A828F' }}>—</span>}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      ₹{paiseToRupees(r.grossTaxableSupplyInPaise)}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      ₹{paiseToRupees(r.netTaxableSupplyInPaise)}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+                      ₹{paiseToRupees(r.totalTcsInPaise)}
+                    </td>
+                    <td style={td}>
+                      <StatusPill status={r.status} />
+                    </td>
+                  </tr>
+                ))}
+                {summary.rows.length === 0 && (
+                  <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 24 }}>
                     No TCS rows for {period} (NIL filing).
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {summary.rows.length > 0 && (
-            <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button onClick={markFiled} style={btnPrimary} disabled={selected.size === 0}>
-                Mark {selected.size} row(s) FILED
+            <div style={{
+              marginTop: 12, padding: 12, background: '#FAFAFA',
+              border: '1px solid #E5E7EB', borderRadius: 12,
+              display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+            }}>
+              <span style={{ fontSize: 13, color: '#525A65', fontWeight: 600 }}>
+                {selected.size === 0 ? 'Select rows to act on' : `${selected.size} row${selected.size === 1 ? '' : 's'} selected`}
+              </span>
+              <button onClick={markFiled} style={btnSecondary} disabled={selected.size === 0 || busy === 'filed'}>
+                {busy === 'filed' ? 'Marking…' : `Mark FILED`}
               </button>
-              <input
-                value={payRef}
-                onChange={(e) => setPayRef(e.target.value)}
-                placeholder="UTR / payment reference"
-                style={input}
-              />
-              <button
-                onClick={markPaid}
-                style={btnPrimary}
-                disabled={selected.size === 0 || !payRef}
-              >
-                Mark {selected.size} row(s) PAID_TO_GOVT
-              </button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  value={payRef} onChange={(e) => setPayRef(e.target.value)}
+                  placeholder="UTR / payment ref" style={{ ...input, width: 180 }}
+                />
+                <button
+                  onClick={markPaid}
+                  style={btnPrimary}
+                  disabled={selected.size === 0 || !payRef || busy === 'paid'}
+                >
+                  {busy === 'paid' ? 'Marking…' : 'Mark PAID_TO_GOVT'}
+                </button>
+              </div>
             </div>
           )}
         </>
@@ -503,177 +780,232 @@ function Gstr1Section() {
   const [sellerId, setSellerId] = useState('');
   const [period, setPeriod] = useState(defaultFilingPeriod());
   const [section, setSection] = useState('b2c-large');
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [busy, setBusy] = useState<'b2b' | 'section' | '3b' | null>(null);
 
-  const safeCall = async (fn: () => Promise<void>) => {
-    try {
-      setMsg(null);
-      await fn();
-    } catch (err: any) {
-      setMsg(`Error: ${err?.message ?? 'download failed'}`);
-    }
+  const safeCall = async (kind: 'b2b' | 'section' | '3b', fn: () => Promise<void>) => {
+    setBusy(kind); setMsg(null);
+    try { await fn(); }
+    catch (err: any) { setMsg({ kind: 'err', text: err?.message ?? 'Download failed' }); }
+    finally { setBusy(null); }
   };
+
+  const disabled = !sellerId || !period;
 
   return (
     <section style={card}>
-      <h2>GSTR-1 / GSTR-3B (per-seller)</h2>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <label>Seller ID:</label>
-        <input
-          value={sellerId}
-          onChange={(e) => setSellerId(e.target.value)}
-          placeholder="uuid"
-          style={{ ...input, width: 280 }}
-        />
-        <label>Filing period:</label>
-        <input
-          value={period}
-          onChange={(e) => setPeriod(e.target.value)}
-          placeholder="2026-04"
-          style={input}
-        />
+      <h2 style={cardHeading}>GSTR-1 / GSTR-3B — Per-seller</h2>
+      <p style={{ margin: '4px 0 0', fontSize: 13, color: '#525A65', maxWidth: 640 }}>
+        Per-seller filing files. Pick a seller and a period, then export the section your filing
+        utility expects. §4 B2B is the most common; other sections are below.
+      </p>
+
+      <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+        <Field label="Seller ID">
+          <input
+            value={sellerId} onChange={(e) => setSellerId(e.target.value)}
+            placeholder="uuid" style={input}
+          />
+        </Field>
+        <Field label="Filing period">
+          <input
+            value={period} onChange={(e) => setPeriod(e.target.value)}
+            placeholder="2026-04" style={input}
+          />
+        </Field>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <button
-          onClick={() => safeCall(() => adminTaxService.gstr1Csv(sellerId, period))}
-          style={btnPrimary}
-          disabled={!sellerId || !period}
+          onClick={() => safeCall('b2b', () => adminTaxService.gstr1Csv(sellerId, period))}
+          style={btnPrimary} disabled={disabled || busy === 'b2b'}
         >
-          §4 B2B CSV
+          <Icon name="download" size={14} /> {busy === 'b2b' ? 'Downloading…' : '§4 B2B CSV'}
         </button>
-        <select value={section} onChange={(e) => setSection(e.target.value)} style={input}>
+
+        <select value={section} onChange={(e) => setSection(e.target.value)} style={{ ...input, paddingRight: 28 }}>
           {GSTR1_SECTIONS.map((s) => (
             <option key={s.value} value={s.value}>{s.label}</option>
           ))}
         </select>
         <button
-          onClick={() => safeCall(() => adminTaxService.gstr1SectionCsv(section, sellerId, period))}
-          style={btnPrimary}
-          disabled={!sellerId || !period}
+          onClick={() => safeCall('section', () => adminTaxService.gstr1SectionCsv(section, sellerId, period))}
+          style={btnSecondary} disabled={disabled || busy === 'section'}
         >
-          Download section CSV
+          <Icon name="download" size={14} /> {busy === 'section' ? 'Downloading…' : 'Section CSV'}
         </button>
+
         <button
-          onClick={() => safeCall(() => adminTaxService.gstr3bCsv(sellerId, period))}
-          style={btnSecondary}
-          disabled={!sellerId || !period}
+          onClick={() => safeCall('3b', () => adminTaxService.gstr3bCsv(sellerId, period))}
+          style={btnGhost} disabled={disabled || busy === '3b'}
         >
-          GSTR-3B CSV
+          <Icon name="download" size={14} /> {busy === '3b' ? 'Downloading…' : 'GSTR-3B CSV'}
         </button>
       </div>
 
-      {msg && <p style={{ color: msg.startsWith('Error') ? '#dc2626' : '#16a34a', marginTop: 8 }}>{msg}</p>}
+      {msg && <Banner msg={msg} />}
     </section>
   );
 }
 
 // ── Marketplace GSTR-1 (own filing) — commission section ─────────
-//
-// Phase 28+ — distinct from per-seller §4 B2B above: this CSV is the
-// marketplace's OWN GSTR-1 commission section under SAC 9985, grouped
-// by (sellerGstin, stateCode) for the chosen period. Treat the seller
-// as the recipient; the marketplace is the supplier.
 
 function MarketplaceCommissionGstrSection() {
   const [period, setPeriod] = useState(defaultFilingPeriod());
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const download = async () => {
-    setMsg(null);
-    setBusy(true);
+    setMsg(null); setBusy(true);
     try {
       const url = adminTaxService.marketplaceCommissionGstr1CsvUrl(period);
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (err: any) {
-      setMsg(`Error: ${err?.message ?? 'download failed'}`);
-    } finally {
-      setBusy(false);
-    }
+      setMsg({ kind: 'err', text: err?.message ?? 'Download failed' });
+    } finally { setBusy(false); }
   };
 
   return (
     <section style={card}>
-      <h2>Marketplace GSTR-1 — commission section (SAC 9985)</h2>
-      <p style={{ color: '#666', fontSize: 12, marginTop: 4 }}>
-        Marketplace's OWN GSTR-1 filing for commission charged to sellers.
-        Aggregated per (seller GSTIN, state) for the period; CGST/SGST when
-        the seller is intra-state with the marketplace, IGST otherwise.
+      <h2 style={cardHeading}>Marketplace GSTR-1 — Commission section (SAC 9985)</h2>
+      <p style={{ margin: '4px 0 0', fontSize: 13, color: '#525A65', maxWidth: 720 }}>
+        Marketplace's <em>own</em> GSTR-1 filing for commission charged to sellers. Aggregated per
+        (seller GSTIN, state) — CGST/SGST if intra-state with the marketplace, IGST otherwise.
       </p>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <label>Filing period (YYYY-MM):</label>
-        <input
-          value={period}
-          onChange={(e) => setPeriod(e.target.value)}
-          placeholder="2026-04"
-          style={input}
-        />
+      <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Field label="Filing period">
+          <input
+            value={period} onChange={(e) => setPeriod(e.target.value)}
+            placeholder="2026-04" style={input}
+          />
+        </Field>
         <button onClick={download} style={btnPrimary} disabled={busy || !period}>
-          {busy ? 'Downloading…' : 'Download CSV'}
+          <Icon name="download" size={14} /> {busy ? 'Opening…' : 'Download CSV'}
         </button>
       </div>
-      {msg && (
-        <p style={{ color: msg.startsWith('Error') ? '#dc2626' : '#16a34a', marginTop: 8 }}>
-          {msg}
-        </p>
-      )}
+      {msg && <Banner msg={msg} />}
     </section>
   );
 }
 
-// ── Styles + helpers ───────────────────────────────────────────────
+// ── Status pill (for GSTR-8 rows) ─────────────────────────────────
 
-const card: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 8,
-  padding: 16,
-  marginBottom: 16,
+const STATUS_TONE: Record<string, { color: string; chip: string }> = {
+  COMPUTED:       { color: '#0F1115', chip: '#F3F4F6' },
+  COLLECTED:      { color: '#1d4ed8', chip: '#dbeafe' },
+  FILED:          { color: '#7c3aed', chip: '#ede9fe' },
+  PAID_TO_GOVT:   { color: '#15803d', chip: '#dcfce7' },
+  REVERSED:       { color: '#7A828F', chip: '#F3F4F6' },
 };
-const btnPrimary: React.CSSProperties = {
-  background: '#2563eb',
-  color: '#fff',
-  border: 'none',
-  padding: '6px 12px',
-  borderRadius: 4,
-  cursor: 'pointer',
-};
-const btnSecondary: React.CSSProperties = {
-  background: '#f3f4f6',
-  color: '#111',
-  border: '1px solid #d1d5db',
-  padding: '6px 12px',
-  borderRadius: 4,
-  cursor: 'pointer',
-};
-const input: React.CSSProperties = {
-  border: '1px solid #d1d5db',
-  borderRadius: 4,
-  padding: '4px 8px',
-  fontSize: 14,
-};
-const tbl: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  fontSize: 13,
-};
-const th: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '6px 8px',
-  background: '#f9fafb',
-  fontWeight: 600,
-};
-const td: React.CSSProperties = { padding: '6px 8px', verticalAlign: 'top' };
 
-function Stat({ label, value }: { label: string; value: string }) {
+function StatusPill({ status }: { status: string }) {
+  const tone = STATUS_TONE[status] ?? { color: '#525A65', chip: '#F3F4F6' };
   return (
-    <div style={{ background: '#f3f4f6', padding: '8px 12px', borderRadius: 4 }}>
-      <div style={{ fontSize: 11, color: '#666' }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700 }}>{value}</div>
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      height: 22, padding: '0 10px', borderRadius: 9999,
+      background: tone.chip, color: tone.color,
+      fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: 9999, background: tone.color }} />
+      {status.replace(/_/g, ' ')}
+    </span>
+  );
+}
+
+// ── Shared bits ───────────────────────────────────────────────────
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140 }}>
+      <span style={{
+        fontSize: 11, fontWeight: 600, color: '#525A65',
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Banner({ msg }: { msg: { kind: 'ok' | 'err'; text: string } }) {
+  return (
+    <div style={{
+      marginTop: 12, padding: '8px 12px', borderRadius: 10, fontSize: 13,
+      border: `1px solid ${msg.kind === 'ok' ? '#bbf7d0' : '#fca5a5'}`,
+      background: msg.kind === 'ok' ? '#f0fdf4' : '#fef2f2',
+      color: msg.kind === 'ok' ? '#15803d' : '#b91c1c',
+    }}>
+      {msg.text}
     </div>
   );
 }
+
+function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div style={{
+      background: accent ? '#0F1115' : '#F9FAFB',
+      border: '1px solid ' + (accent ? '#0F1115' : '#E5E7EB'),
+      padding: '10px 14px', borderRadius: 12,
+    }}>
+      <div style={{
+        fontSize: 11, fontWeight: 600, color: accent ? '#94A3B8' : '#525A65',
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>{label}</div>
+      <div style={{
+        fontSize: 18, fontWeight: 700, marginTop: 4,
+        color: accent ? '#fff' : '#0F1115',
+        fontVariantNumeric: 'tabular-nums',
+      }}>{value}</div>
+    </div>
+  );
+}
+
+function Mono({ children }: { children: React.ReactNode }) {
+  return (
+    <code style={{
+      fontFamily: 'ui-monospace, monospace', fontSize: 12,
+      padding: '1px 6px', background: '#F3F4F6', borderRadius: 4,
+    }}>{children}</code>
+  );
+}
+
+// ── Icons ─────────────────────────────────────────────────────────
+
+type IconName =
+  | 'clock' | 'wallet' | 'truck' | 'receipt' | 'percent'
+  | 'building' | 'shield' | 'tag' | 'ruler' | 'sliders' | 'store'
+  | 'arrow-right' | 'check' | 'download';
+
+function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
+  const paths: Record<IconName, React.ReactNode> = {
+    'clock':       (<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
+    'wallet':      (<><path d="M3 7a2 2 0 0 1 2-2h13v4" /><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3" /><path d="M16 13h5v-3h-5a1.5 1.5 0 0 0 0 3z" /></>),
+    'truck':       (<><rect x="2" y="6" width="12" height="10" rx="1" /><path d="M14 9h4l3 3v4h-7" /><circle cx="7" cy="18" r="2" /><circle cx="17" cy="18" r="2" /></>),
+    'receipt':     (<><path d="M5 3v18l3-2 3 2 3-2 3 2V3z" /><path d="M9 8h6M9 12h6M9 16h4" /></>),
+    'percent':     (<><circle cx="7" cy="7" r="2" /><circle cx="17" cy="17" r="2" /><path d="M19 5 5 19" /></>),
+    'building':    (<><rect x="4" y="3" width="16" height="18" rx="1" /><path d="M9 7h.01M15 7h.01M9 11h.01M15 11h.01M9 15h.01M15 15h.01" /></>),
+    'shield':      (<><path d="M12 3 4 6v6c0 5 4 8 8 9 4-1 8-4 8-9V6z" /><path d="m9 12 2 2 4-4" /></>),
+    'tag':         (<><path d="M3 12 12 3h7v7l-9 9z" /><circle cx="15.5" cy="8.5" r="1" /></>),
+    'ruler':       (<><path d="M3 17 17 3l4 4L7 21z" /><path d="m7 7 2 2M11 11l2 2M15 15l2 2" /></>),
+    'sliders':     (<><path d="M4 6h11M19 6h1M4 12h6M14 12h6M4 18h13M21 18h-1" /><circle cx="17" cy="6" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="18" r="2" /></>),
+    'store':       (<><path d="M3 9 4 4h16l1 5" /><path d="M3 9v11h18V9" /><path d="M3 9c0 2 1.5 3 3 3s3-1 3-3c0 2 1.5 3 3 3s3-1 3-3c0 2 1.5 3 3 3s3-1 3-3" /></>),
+    'arrow-right': (<path d="M5 12h14M13 6l6 6-6 6" />),
+    'check':       (<path d="m5 12 5 5 9-11" />),
+    'download':    (<><path d="M12 3v13" /><path d="m6 11 6 6 6-6" /><path d="M5 21h14" /></>),
+  };
+  return (
+    <svg
+      width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" strokeWidth="1.75"
+      strokeLinecap="round" strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {paths[name]}
+    </svg>
+  );
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
 
 function paiseToRupees(p: string): string {
   if (!p) return '0.00';
@@ -681,7 +1013,6 @@ function paiseToRupees(p: string): string {
   const abs = negative ? p.slice(1) : p;
   const whole = abs.length > 2 ? abs.slice(0, -2) : '0';
   const cents = abs.length > 2 ? abs.slice(-2) : abs.padStart(2, '0');
-  // Indian grouping
   const grouped = formatIndianGrouping(whole);
   return (negative ? '-' : '') + grouped + '.' + cents;
 }
@@ -706,3 +1037,87 @@ function defaultFilingPeriod(): string {
   const m = (d.getUTCMonth() + 1).toString().padStart(2, '0');
   return `${y}-${m}`;
 }
+
+function relTime(d: Date): string {
+  const diff = Math.max(0, Date.now() - d.getTime());
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24);
+  if (days < 7) return `${days}d ago`;
+  const w = Math.floor(days / 7);
+  if (w < 4) return `${w}w ago`;
+  const mo = Math.floor(days / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  const y = Math.floor(days / 365);
+  return `${y}y ago`;
+}
+
+// ── Shared styles ─────────────────────────────────────────────────
+
+const card: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #E5E7EB',
+  borderRadius: 16,
+  padding: 20,
+};
+
+const cardHeading: React.CSSProperties = {
+  fontSize: 16, fontWeight: 700, color: '#0F1115', margin: 0,
+};
+
+const sectionHeading: React.CSSProperties = {
+  fontSize: 14, fontWeight: 700, color: '#0F1115', margin: 0,
+  marginTop: 8, marginBottom: 4,
+  textTransform: 'uppercase', letterSpacing: '0.06em',
+};
+
+const sectionSub: React.CSSProperties = {
+  fontSize: 13, color: '#525A65', margin: 0, marginBottom: 12,
+};
+
+const btnPrimary: React.CSSProperties = {
+  height: 36, padding: '0 16px',
+  background: '#0F1115', color: '#fff',
+  border: '1px solid #0F1115', borderRadius: 9999,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+};
+
+const btnSecondary: React.CSSProperties = {
+  height: 36, padding: '0 16px',
+  background: '#fff', color: '#0F1115',
+  border: '1px solid #D2D6DC', borderRadius: 9999,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+};
+
+const btnGhost: React.CSSProperties = {
+  height: 36, padding: '0 14px',
+  background: 'transparent', color: '#525A65',
+  border: '1px solid #E5E7EB', borderRadius: 9999,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+};
+
+const input: React.CSSProperties = {
+  height: 36, padding: '0 12px',
+  border: '1px solid #D2D6DC', borderRadius: 9,
+  fontSize: 13, color: '#0F1115',
+  outline: 'none', background: '#fff',
+  minWidth: 140,
+};
+
+const th: React.CSSProperties = {
+  padding: '12px 16px', textAlign: 'left',
+  fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+  letterSpacing: '0.06em', color: '#525A65',
+};
+
+const td: React.CSSProperties = {
+  padding: '12px 16px', fontSize: 13, color: '#0F1115',
+  verticalAlign: 'middle',
+};

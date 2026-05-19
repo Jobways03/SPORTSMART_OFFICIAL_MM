@@ -47,7 +47,7 @@ export default function MenusListPage() {
   };
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 1100 }}>
+    <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <div>
           <h1 style={{ fontSize: 26, fontWeight: 600, color: '#111', margin: 0 }}>Navigation menus</h1>

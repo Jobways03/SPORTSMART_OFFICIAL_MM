@@ -71,7 +71,7 @@ export default function LowStockAlertsPage() {
   );
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1280 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
       <header style={{ marginBottom: 20 }}>
         <Link
           href="/dashboard/inventory"

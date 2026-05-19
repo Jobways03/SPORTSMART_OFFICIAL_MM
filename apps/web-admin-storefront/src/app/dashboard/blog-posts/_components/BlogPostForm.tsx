@@ -106,7 +106,7 @@ export default function BlogPostForm({ initial }: Props) {
   }
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 1200 }}>
+    <div style={{ padding: '32px 40px', maxWidth: 1200, margin: '0 auto' }}>
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: '#0f172a' }}>
           {editMode ? 'Edit blog post' : 'Add blog post'}

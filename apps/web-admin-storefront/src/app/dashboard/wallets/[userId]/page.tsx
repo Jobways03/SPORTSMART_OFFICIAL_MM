@@ -71,7 +71,7 @@ export default function WalletDetailPage() {
   if (!data) return null;
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <Link
         href="/dashboard/wallets"
         style={{

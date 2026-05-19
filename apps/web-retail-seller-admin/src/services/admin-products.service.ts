@@ -26,7 +26,6 @@ export interface ProductListItem {
   seller: { id: string; sellerName: string; sellerShopName: string; email: string; } | null;
   category: { id: string; name: string; } | null;
   brand: { id: string; name: string; } | null;
-  potentialDuplicateOf: string | null;
   createdAt: string;
   updatedAt: string;
   // Phase 37 — surfaced on the list so the admin moderation queue
@@ -191,17 +190,6 @@ export const adminProductsService = {
       method: 'PATCH',
       body: JSON.stringify({ status, reason }),
     });
-  },
-
-  // Duplicate detection & merge
-  mergeProduct(sourceProductId: string, targetProductId: string): Promise<ApiResponse> {
-    return apiClient(`/admin/products/${sourceProductId}/merge-into/${targetProductId}`, {
-      method: 'POST',
-    });
-  },
-
-  getDuplicateInfo(productId: string): Promise<ApiResponse<any>> {
-    return apiClient<any>(`/admin/products/${productId}/duplicate-info`);
   },
 
   // Seller mapping approval endpoints

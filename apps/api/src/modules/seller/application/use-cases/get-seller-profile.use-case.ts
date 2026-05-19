@@ -51,6 +51,14 @@ export class GetSellerProfileUseCase {
       isGstVerified: true,
       gstVerifiedAt: true,
       panVerified: true,
+      // Phase 26 GST — onboarding stepper on the seller portal reads
+      // these to decide which step to show next (Submit KYC vs.
+      // Awaiting approval). Without them the page falls through with
+      // no card rendered. gstVerificationNotes carries the admin's
+      // rejection reason so the form can prefill the "fix and resubmit"
+      // banner.
+      verificationStatus: true,
+      gstVerificationNotes: true,
     });
 
     if (!seller) {
@@ -95,6 +103,8 @@ export class GetSellerProfileUseCase {
       isGstVerified: (seller as any).isGstVerified ?? false,
       gstVerifiedAt: (seller as any).gstVerifiedAt ?? null,
       panVerified: (seller as any).panVerified ?? false,
+      verificationStatus: (seller as any).verificationStatus ?? 'NOT_VERIFIED',
+      gstVerificationNotes: (seller as any).gstVerificationNotes ?? null,
     };
   }
 }

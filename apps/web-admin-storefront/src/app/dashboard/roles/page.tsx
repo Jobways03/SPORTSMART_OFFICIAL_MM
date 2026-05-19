@@ -25,6 +25,8 @@ interface ConfirmState {
   onConfirm: () => void | Promise<void>;
 }
 
+type StatusFilter = 'ALL' | 'ACTIVE' | 'DISABLED';
+
 function RolesPageInner() {
   const [roles, setRoles] = useState<RoleSummary[]>([]);
   const [permissionCatalog, setPermissionCatalog] = useState<PermissionEntry[]>([]);
@@ -35,6 +37,11 @@ function RolesPageInner() {
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  /* Filters + per-row actions menu */
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  const [search, setSearch] = useState('');
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -56,6 +63,14 @@ function RolesPageInner() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  /* Click-anywhere to close the row menu */
+  useEffect(() => {
+    if (!openMenuId) return;
+    const close = () => setOpenMenuId(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [openMenuId]);
 
   const handleToggleActive = (role: RoleSummary) => {
     const next = !role.isActive;
@@ -83,100 +98,194 @@ function RolesPageInner() {
     });
   };
 
+  const counts = useMemo(() => {
+    const total = roles.length;
+    const active = roles.filter((r) => r.isActive).length;
+    return { total, active, disabled: total - active };
+  }, [roles]);
+
+  const filteredRoles = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return roles.filter((r) => {
+      if (statusFilter === 'ACTIVE' && !r.isActive) return false;
+      if (statusFilter === 'DISABLED' && r.isActive) return false;
+      if (!q) return true;
+      return (
+        r.name.toLowerCase().includes(q) ||
+        (r.description ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [roles, statusFilter, search]);
+
   return (
-    <div style={{ padding: '24px 32px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Roles</h1>
-          <p style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
-            Define what each admin user can do. System roles ship pre-configured and can be edited only by description.
+    <div style={styles.page}>
+      {/* Header */}
+      <header style={styles.header}>
+        <div style={{ minWidth: 0 }}>
+          <h1 style={styles.h1}>Roles</h1>
+          <p style={styles.headerSub}>
+            Define what each admin user can do. System roles ship pre-configured.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={btnPrimary}
-        >
-          + New role
+        <button onClick={() => setShowCreate(true)} style={styles.btnPrimaryNew}>
+          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              d="M10 4v12M4 10h12"
+            />
+          </svg>
+          New role
         </button>
+      </header>
+
+      {/* Toolbar: tabs + search */}
+      <div style={styles.toolbar}>
+        <div style={styles.tabs} role="tablist" aria-label="Filter roles by status">
+          {(
+            [
+              { key: 'ALL', label: `All ${counts.total}` },
+              { key: 'ACTIVE', label: `Active ${counts.active}` },
+              { key: 'DISABLED', label: `Disabled ${counts.disabled}` },
+            ] as { key: StatusFilter; label: string }[]
+          ).map((t) => (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={statusFilter === t.key}
+              onClick={() => setStatusFilter(t.key)}
+              style={{
+                ...styles.tab,
+                ...(statusFilter === t.key ? styles.tabActive : {}),
+              }}
+              type="button"
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={styles.searchWrap}>
+          <svg viewBox="0 0 20 20" style={styles.searchIcon} aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              d="M9 3a6 6 0 104.472 10.03L17 17M9 15A6 6 0 109 3a6 6 0 000 12z"
+            />
+          </svg>
+          <input
+            type="search"
+            placeholder="Search roles"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={styles.searchInput}
+            aria-label="Search roles"
+          />
+        </div>
       </div>
 
+      {/* Error banner */}
       {error && (
-        <div style={{ padding: 10, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, color: '#991b1b', marginBottom: 14, fontSize: 13 }}>
+        <div style={styles.errorBanner}>
           {error}
         </div>
       )}
 
-      {loading ? (
-        <div style={{ color: '#64748b' }}>Loading roles…</div>
-      ) : (
-        <div style={tableWrap}>
-          <table style={tableStyle}>
-            <thead>
-              <tr style={trHead}>
-                <th style={th}>Name</th>
-                <th style={th}>Description</th>
-                <th style={th}>Permissions</th>
-                <th style={th}>Type</th>
-                <th style={{ ...th, textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {roles.map((r) => (
-                <tr key={r.id} style={tr}>
-                  <td style={{ ...td, fontWeight: 600 }}>{r.name}</td>
-                  <td style={{ ...td, color: '#475569' }}>{r.description ?? '—'}</td>
-                  <td style={td}>{r.permissions.length}</td>
-                  <td style={td}>
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {r.isSystem ? (
-                        <span style={{ ...badge, background: '#dbeafe', color: '#1d4ed8' }}>System</span>
-                      ) : (
-                        <span style={{ ...badge, background: '#f1f5f9', color: '#475569' }}>Custom</span>
-                      )}
-                      {!r.isActive && (
-                        <span style={{ ...badge, background: '#fef3c7', color: '#92400e' }}>Disabled</span>
-                      )}
-                    </div>
-                  </td>
-                  <td style={{ ...td, textAlign: 'right' }}>
-                    <button onClick={() => setEditing(r)} style={btnGhost}>
-                      Edit
-                    </button>
-                    {(() => {
-                      const isSuperAdminRole = r.isSystem && r.name === 'Super Admin';
-                      const disabled = isSuperAdminRole;
-                      const next = !r.isActive;
-                      return (
-                        <button
-                          onClick={() => handleToggleActive(r)}
-                          disabled={disabled}
-                          style={{
-                            ...(next ? btnPrimary : btnDanger),
-                            padding: '6px 12px',
-                            fontSize: 12,
-                            opacity: disabled ? 0.4 : 1,
-                            cursor: disabled ? 'not-allowed' : 'pointer',
-                          }}
-                          title={isSuperAdminRole ? 'Super Admin role cannot be disabled' : ''}
-                        >
-                          {next ? 'Enable' : 'Disable'}
-                        </button>
-                      );
-                    })()}
-                  </td>
-                </tr>
-              ))}
-              {roles.length === 0 && (
+      {/* Body */}
+      <div style={styles.card}>
+        {loading ? (
+          <div style={{ padding: 48, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+            Loading roles…
+          </div>
+        ) : filteredRoles.length === 0 ? (
+          <div style={styles.emptyBody}>
+            {roles.length === 0
+              ? 'No roles yet. Click "New role" to create one.'
+              : 'No roles match your filters.'}
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={styles.table}>
+              <thead>
                 <tr>
-                  <td colSpan={5} style={{ ...td, textAlign: 'center', color: '#94a3b8', padding: 30 }}>
-                    No roles yet. Click "+ New role" to create one.
-                  </td>
+                  <th style={styles.th}>Role</th>
+                  <th style={styles.th}>Description</th>
+                  <th style={{ ...styles.th, textAlign: 'right' }}>Permissions</th>
+                  <th style={styles.th}>Status</th>
+                  <th style={{ ...styles.th, width: 36 }} aria-hidden="true" />
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {filteredRoles.map((r) => (
+                  <tr
+                    key={r.id}
+                    style={styles.tr}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLTableRowElement).style.background = '#fafbfc';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLTableRowElement).style.background = '#fff';
+                    }}
+                  >
+                    <td style={styles.td}>
+                      <div style={styles.roleName}>{r.name}</div>
+                      <div style={styles.roleType}>
+                        {r.isSystem ? 'System role' : 'Custom role'}
+                      </div>
+                    </td>
+                    <td style={{ ...styles.td, color: '#475569', maxWidth: 480 }}>
+                      {r.description ?? '—'}
+                    </td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>
+                      <span style={styles.permsCount}>
+                        {r.permissions.length}
+                      </span>
+                    </td>
+                    <td style={styles.td}>
+                      <StatusPill active={r.isActive} />
+                    </td>
+                    <td style={{ ...styles.td, position: 'relative' }}>
+                      <button
+                        type="button"
+                        aria-label={`Actions for ${r.name}`}
+                        aria-expanded={openMenuId === r.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(openMenuId === r.id ? null : r.id);
+                        }}
+                        style={styles.menuTrigger}
+                      >
+                        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                          <circle cx="3" cy="8" r="1.4" fill="currentColor" />
+                          <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                          <circle cx="13" cy="8" r="1.4" fill="currentColor" />
+                        </svg>
+                      </button>
+                      {openMenuId === r.id && (
+                        <RoleActionMenu
+                          role={r}
+                          onEdit={() => {
+                            setOpenMenuId(null);
+                            setEditing(r);
+                          }}
+                          onToggle={() => {
+                            setOpenMenuId(null);
+                            handleToggleActive(r);
+                          }}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {showCreate && (
         <RoleFormModal
@@ -218,6 +327,325 @@ function RolesPageInner() {
     </div>
   );
 }
+
+/* ── Status pill ────────────────────────────────────────────── */
+
+function StatusPill({ active }: { active: boolean }) {
+  const p = active
+    ? { dot: '#16a34a', bg: '#f0fdf4', fg: '#15803d', label: 'Active' }
+    : { dot: '#94a3b8', bg: '#f1f5f9', fg: '#475569', label: 'Disabled' };
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '3px 10px 3px 8px',
+        fontSize: 11.5,
+        fontWeight: 600,
+        borderRadius: 999,
+        background: p.bg,
+        color: p.fg,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: p.dot,
+          flexShrink: 0,
+        }}
+      />
+      {p.label}
+    </span>
+  );
+}
+
+/* ── Row actions menu ───────────────────────────────────────── */
+
+function RoleActionMenu({
+  role,
+  onEdit,
+  onToggle,
+}: {
+  role: RoleSummary;
+  onEdit: () => void;
+  onToggle: () => void;
+}) {
+  // Super Admin role must always stay enabled; the disable item is
+  // shown but greyed out with an explanatory title.
+  const isSuperAdminRole = role.isSystem && role.name === 'Super Admin';
+  const toggleLabel = role.isActive ? 'Disable role' : 'Enable role';
+  return (
+    <div
+      role="menu"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'absolute',
+        top: '100%',
+        right: 12,
+        marginTop: 4,
+        minWidth: 180,
+        background: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: 8,
+        boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08)',
+        padding: 4,
+        zIndex: 10,
+      }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onEdit}
+        style={menuItemStyle()}
+      >
+        Edit role
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onToggle}
+        disabled={isSuperAdminRole}
+        title={
+          isSuperAdminRole ? 'Super Admin role cannot be disabled' : undefined
+        }
+        style={menuItemStyle({
+          color: role.isActive ? '#b91c1c' : '#15803d',
+          disabled: isSuperAdminRole,
+        })}
+      >
+        {toggleLabel}
+      </button>
+    </div>
+  );
+}
+
+function menuItemStyle(opts?: { color?: string; disabled?: boolean }): React.CSSProperties {
+  return {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    padding: '8px 12px',
+    background: 'transparent',
+    border: 'none',
+    borderRadius: 6,
+    fontSize: 13,
+    fontWeight: 500,
+    color: opts?.color ?? '#334155',
+    cursor: opts?.disabled ? 'not-allowed' : 'pointer',
+    opacity: opts?.disabled ? 0.5 : 1,
+    fontFamily: 'inherit',
+  };
+}
+
+/* ── Page styles (scoped to the list view) ───────────────────── */
+
+const styles: Record<string, React.CSSProperties> = {
+  page: {
+    color: '#0f172a',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+    padding: '24px 32px',
+  },
+  header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+    marginBottom: 20,
+    flexWrap: 'wrap',
+  },
+  h1: {
+    margin: 0,
+    fontSize: 24,
+    fontWeight: 700,
+    letterSpacing: '-0.01em',
+    color: '#0f172a',
+  },
+  headerSub: {
+    margin: '4px 0 0',
+    fontSize: 13,
+    color: '#64748b',
+  },
+  btnPrimaryNew: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 38,
+    padding: '0 16px',
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#fff',
+    background: '#0f172a',
+    border: '1px solid #0f172a',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    whiteSpace: 'nowrap',
+  },
+
+  toolbar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 12,
+    alignItems: 'center',
+    marginBottom: 14,
+    flexWrap: 'wrap',
+  },
+  tabs: {
+    display: 'inline-flex',
+    gap: 4,
+    borderBottom: '1px solid #e2e8f0',
+    flex: 1,
+    minWidth: 0,
+  },
+  tab: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 38,
+    padding: '0 14px',
+    fontSize: 13,
+    fontWeight: 500,
+    color: '#64748b',
+    background: 'transparent',
+    border: 'none',
+    borderBottom: '2px solid transparent',
+    marginBottom: -1,
+    cursor: 'pointer',
+    transition: 'color 0.12s, border-color 0.12s',
+    fontFamily: 'inherit',
+  },
+  tabActive: {
+    color: '#0f172a',
+    // Full shorthand — pairs with the base tab's `borderBottom` so
+    // React doesn't warn about mixing shorthand and longhand.
+    borderBottom: '2px solid #0f172a',
+    fontWeight: 600,
+  },
+
+  searchWrap: {
+    position: 'relative',
+    width: 280,
+    flexShrink: 0,
+  },
+  searchIcon: {
+    position: 'absolute',
+    left: 12,
+    top: '50%',
+    transform: 'translateY(-50%)',
+    width: 16,
+    height: 16,
+    color: '#94a3b8',
+    pointerEvents: 'none',
+  },
+  searchInput: {
+    width: '100%',
+    height: 38,
+    padding: '0 12px 0 36px',
+    fontSize: 13.5,
+    color: '#0f172a',
+    background: '#fff',
+    border: '1px solid #e2e8f0',
+    borderRadius: 8,
+    outline: 'none',
+    boxSizing: 'border-box',
+    fontFamily: 'inherit',
+  },
+
+  errorBanner: {
+    padding: '10px 14px',
+    background: '#fef2f2',
+    border: '1px solid #fecaca',
+    borderRadius: 8,
+    color: '#991b1b',
+    marginBottom: 14,
+    fontSize: 13,
+  },
+
+  card: {
+    background: '#fff',
+    border: '1px solid #e2e8f0',
+    borderRadius: 10,
+    overflow: 'visible',
+  },
+
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: 13,
+  },
+  th: {
+    textAlign: 'left',
+    padding: '10px 16px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    background: '#f8fafc',
+    borderBottom: '1px solid #e2e8f0',
+    whiteSpace: 'nowrap',
+  },
+  tr: {
+    borderBottom: '1px solid #f1f5f9',
+    transition: 'background-color 0.08s',
+    background: '#fff',
+  },
+  td: {
+    padding: '14px 16px',
+    verticalAlign: 'middle',
+    color: '#0f172a',
+  },
+  roleName: {
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: '#0f172a',
+    lineHeight: 1.3,
+  },
+  roleType: {
+    fontSize: 11,
+    color: '#94a3b8',
+    marginTop: 3,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    fontWeight: 500,
+  },
+  permsCount: {
+    display: 'inline-block',
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: '#0f172a',
+    fontVariantNumeric: 'tabular-nums',
+    padding: '2px 8px',
+    background: '#f1f5f9',
+    borderRadius: 999,
+    minWidth: 26,
+    textAlign: 'center',
+  },
+  menuTrigger: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    padding: 0,
+    background: 'transparent',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
+    color: '#94a3b8',
+  },
+
+  emptyBody: {
+    padding: '56px 24px',
+    textAlign: 'center',
+    color: '#94a3b8',
+    fontSize: 13.5,
+  },
+};
 
 function RoleFormModal({
   mode,

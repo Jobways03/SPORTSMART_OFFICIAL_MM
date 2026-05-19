@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 
@@ -23,11 +23,11 @@ interface CustomersResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
-type FilterKey = 'all' | 'verified' | 'unverified' | 'buyers';
+type Tab = 'ALL' | 'VERIFIED' | 'UNVERIFIED' | 'BUYERS' | 'NEW';
 
 const NEW_CUSTOMER_DAYS = 7;
 
-/* ── Formatting helpers ─────────────────────────────────────── */
+// ── Formatting helpers ────────────────────────────────────────────
 
 const inr = (n: number) =>
   `₹${Number(n).toLocaleString('en-IN', {
@@ -74,7 +74,7 @@ function isNewCustomer(iso: string): boolean {
   return !isNaN(diffDays) && diffDays <= NEW_CUSTOMER_DAYS;
 }
 
-/* ── Page ────────────────────────────────────────────────────── */
+// ── Page ──────────────────────────────────────────────────────────
 
 export default function CustomersPage() {
   const router = useRouter();
@@ -82,18 +82,19 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const [tab, setTab] = useState<Tab>('ALL');
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Phase 4 / M59 — visible error state instead of silent catch.
   // Same pattern as the orders page (C14).
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchCustomers = useCallback(
-    (p: number) => {
+    (p: number, q: string) => {
       setLoading(true);
       setFetchError(null);
       const params = new URLSearchParams({ page: String(p), limit: '50' });
-      if (search.trim()) params.set('search', search.trim());
+      if (q.trim()) params.set('search', q.trim());
 
       apiClient<CustomersResponse>(`/admin/customers?${params}`)
         .then((res) => {
@@ -107,108 +108,108 @@ export default function CustomersPage() {
         })
         .finally(() => setLoading(false));
     },
-    [search],
+    [],
   );
 
+  // Initial + page-change fetch.
   useEffect(() => {
-    fetchCustomers(page);
-  }, [page, fetchCustomers]);
+    fetchCustomers(page, search);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
-  const handleSearch = () => {
-    setPage(1);
-    fetchCustomers(1);
-  };
+  // Debounced live search — reset to page 1 when the query changes.
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      setPage(1);
+      fetchCustomers(1, search);
+    }, 300);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
-  const filterCounts = useMemo(() => {
+  // Counts derived from currently loaded page.
+  const counts = useMemo(() => {
     const list = data?.customers ?? [];
     return {
       all: list.length,
       verified: list.filter((c) => c.emailVerified).length,
       unverified: list.filter((c) => !c.emailVerified).length,
       buyers: list.filter((c) => c.orderCount > 0).length,
+      newSignups: list.filter((c) => isNewCustomer(c.createdAt)).length,
+      totalSpentPage: list.reduce((acc, c) => acc + (c.amountSpent || 0), 0),
     };
   }, [data]);
 
   const visible = useMemo(() => {
     const list = data?.customers ?? [];
-    switch (filter) {
-      case 'verified':
-        return list.filter((c) => c.emailVerified);
-      case 'unverified':
-        return list.filter((c) => !c.emailVerified);
-      case 'buyers':
-        return list.filter((c) => c.orderCount > 0);
-      default:
-        return list;
-    }
-  }, [data, filter]);
+    if (tab === 'VERIFIED')   return list.filter((c) => c.emailVerified);
+    if (tab === 'UNVERIFIED') return list.filter((c) => !c.emailVerified);
+    if (tab === 'BUYERS')     return list.filter((c) => c.orderCount > 0);
+    if (tab === 'NEW')        return list.filter((c) => isNewCustomer(c.createdAt));
+    return list;
+  }, [data, tab]);
 
   const totalPages = data?.pagination.totalPages ?? 1;
 
   return (
-    <div style={styles.page}>
-      {/* ── Page header ─────────────────────────────────────── */}
-      <header style={styles.header}>
-        <div>
-          <h1 style={styles.h1}>Customers</h1>
-          <p style={styles.headerSub}>
-            Shoppers who have created an account on your storefront.
-          </p>
-        </div>
-      </header>
-
-      {/* ── Toolbar: tabs + search ──────────────────────────── */}
-      <div style={styles.toolbar}>
-        <div style={styles.tabs} role="tablist" aria-label="Customer filter">
-          <Tab
-            label="All"
-            count={filterCounts.all}
-            active={filter === 'all'}
-            onSelect={() => setFilter('all')}
-          />
-          <Tab
-            label="Verified"
-            count={filterCounts.verified}
-            active={filter === 'verified'}
-            onSelect={() => setFilter('verified')}
-          />
-          <Tab
-            label="Not verified"
-            count={filterCounts.unverified}
-            active={filter === 'unverified'}
-            onSelect={() => setFilter('unverified')}
-          />
-          <Tab
-            label="With orders"
-            count={filterCounts.buyers}
-            active={filter === 'buyers'}
-            onSelect={() => setFilter('buyers')}
-          />
-        </div>
-
-        <div style={styles.searchWrap}>
-          <svg style={styles.searchIcon} viewBox="0 0 20 20" aria-hidden="true">
-            <path
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              d="M9 3a6 6 0 104.472 10.03L17 17M9 15A6 6 0 109 3a6 6 0 000 12z"
-            />
-          </svg>
-          <input
-            type="search"
-            placeholder="Search by name, email, or phone"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            style={styles.searchInput}
-            aria-label="Search customers"
-          />
-        </div>
+    <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
+      {/* ── Header ─────────────────────────────────────────── */}
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>
+          Customers
+        </h1>
+        <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', maxWidth: 680, lineHeight: 1.5 }}>
+          Shoppers who have created an account on your storefront. Tap a row to see contact, address, and order history.
+        </p>
       </div>
 
-      {/* ── States ──────────────────────────────────────────── */}
+      <KpiStrip
+        loading={loading && !data}
+        total={data?.pagination.total ?? 0}
+        pageSize={data?.customers.length ?? 0}
+        counts={counts}
+      />
+
+      {/* ── Tabs ──────────────────────────────────────────── */}
+      <div style={{
+        borderBottom: '1px solid #E5E7EB',
+        display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap',
+        marginBottom: 12,
+      }}>
+        <Tabs current={tab} counts={counts} onChange={setTab} />
+      </div>
+
+      {/* ── Search + refresh ──────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 420 }}>
+          <input
+            type="search"
+            placeholder="Search by name, email, or phone…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ ...input, width: '100%', paddingLeft: 36 }}
+            aria-label="Search customers"
+          />
+          <span style={{
+            position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
+            color: '#7A828F', display: 'inline-flex',
+          }}>
+            <SearchIcon />
+          </span>
+        </div>
+        <button
+          onClick={() => fetchCustomers(page, search)}
+          style={btnGhost}
+          disabled={loading}
+        >
+          <RefreshIcon /> {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+
+      {/* ── Table / states ──────────────────────────────── */}
       {fetchError ? (
         <div
           role="alert"
@@ -232,7 +233,7 @@ export default function CustomersPage() {
           </div>
           <button
             type="button"
-            onClick={() => fetchCustomers(page)}
+            onClick={() => fetchCustomers(page, search)}
             style={{
               background: '#dc2626',
               color: '#fff',
@@ -250,32 +251,30 @@ export default function CustomersPage() {
       ) : loading && !data ? (
         <SkeletonTable />
       ) : !data || visible.length === 0 ? (
-        <EmptyState search={search} filter={filter} />
+        <EmptyState search={search} tab={tab} />
       ) : (
         <>
-          <div style={styles.card}>
-            <div style={styles.tableScroll}>
-              <table style={styles.table}>
+          <div style={{
+            background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, overflow: 'hidden',
+          }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                 <colgroup>
-                  <col style={{ width: '38%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col />
-                  <col style={{ width: 90 }} />
+                  <col style={{ width: '36%' }} />
                   <col style={{ width: 140 }} />
-                  <col style={{ width: 36 }} />
+                  <col />
+                  <col style={{ width: 80 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 40 }} />
                 </colgroup>
                 <thead>
-                  <tr>
-                    <th style={styles.th}>Customer</th>
-                    <th style={styles.th}>Email status</th>
-                    <th style={styles.th}>Location</th>
-                    <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                      Orders
-                    </th>
-                    <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                      Spent
-                    </th>
-                    <th style={{ ...styles.th, width: 36 }} aria-hidden="true" />
+                  <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+                    <th style={th}>Customer</th>
+                    <th style={th}>Email status</th>
+                    <th style={th}>Location</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Orders</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Spent</th>
+                    <th style={{ ...th, width: 40 }} aria-hidden="true" />
                   </tr>
                 </thead>
                 <tbody>
@@ -297,7 +296,7 @@ export default function CustomersPage() {
             total={data.pagination.total}
             limit={data.pagination.limit}
             visibleCount={visible.length}
-            filtered={filter !== 'all'}
+            filtered={tab !== 'ALL'}
             onChange={setPage}
           />
         </>
@@ -306,55 +305,134 @@ export default function CustomersPage() {
   );
 }
 
-/* ── Tab ────────────────────────────────────────────────────── */
+// ── KPI strip ─────────────────────────────────────────────────────
 
-function Tab({
-  label,
-  count,
-  active,
-  onSelect,
+function KpiStrip({
+  loading, total, pageSize, counts,
 }: {
-  label: string;
-  count: number;
-  active: boolean;
-  onSelect: () => void;
+  loading: boolean;
+  total: number;
+  pageSize: number;
+  counts: {
+    verified: number; unverified: number; buyers: number;
+    newSignups: number; totalSpentPage: number;
+  };
 }) {
-  const [hover, setHover] = useState(false);
+  const verifiedPct = pageSize > 0 ? Math.round((counts.verified / pageSize) * 100) : 0;
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onSelect}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        ...styles.tab,
-        ...(active
-          ? styles.tabActive
-          : hover
-            ? styles.tabHover
-            : {}),
-      }}
-    >
-      <span>{label}</span>
-      <span
-        style={{
-          ...styles.tabCount,
-          ...(active ? styles.tabCountActive : {}),
-        }}
-      >
-        {count}
-      </span>
-    </button>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gap: 12, marginBottom: 16,
+    }}>
+      <Kpi label="Total customers"
+        value={total.toLocaleString('en-IN')}
+        tone="neutral" loading={loading}
+        hint="Across all pages of this storefront." />
+      <Kpi label="Verified (this page)"
+        value={`${counts.verified.toLocaleString('en-IN')}`}
+        tone={pageSize > 0 && verifiedPct >= 80 ? 'success' : 'neutral'}
+        loading={loading}
+        hint={pageSize > 0 ? `${verifiedPct}% of the loaded ${pageSize}` : '—'} />
+      <Kpi label="With orders"
+        value={counts.buyers.toLocaleString('en-IN')}
+        tone={counts.buyers > 0 ? 'success' : 'muted'} loading={loading}
+        hint="Loaded customers with at least one order." />
+      <Kpi label={`New (≤ ${NEW_CUSTOMER_DAYS}d)`}
+        value={counts.newSignups.toLocaleString('en-IN')}
+        tone={counts.newSignups > 0 ? 'success' : 'muted'} loading={loading}
+        hint="Signed up in the last week." />
+      <Kpi label="Spend (this page)"
+        value={inr(counts.totalSpentPage)}
+        tone="neutral" loading={loading}
+        hint="Sum across loaded customers." />
+    </div>
   );
 }
 
-/* ── Row ────────────────────────────────────────────────────── */
+type KpiTone = 'success' | 'warning' | 'danger' | 'neutral' | 'muted';
+const KPI_TONE: Record<KpiTone, string> = {
+  success: '#15803d', warning: '#b45309', danger: '#b91c1c',
+  neutral: '#0F1115', muted: '#525A65',
+};
+function Kpi({
+  label, value, tone, hint, loading,
+}: {
+  label: string; value: string; tone: KpiTone; hint?: string; loading?: boolean;
+}) {
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: 16, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+    }}>
+      <div style={kpiLabel}>{label}</div>
+      {loading ? (
+        <div style={{ height: 28, width: '60%', background: '#F3F4F6', borderRadius: 6 }} />
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 22, fontWeight: 700, color: KPI_TONE[tone],
+            fontVariantNumeric: 'tabular-nums',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {value}
+          </span>
+          {(tone === 'warning' || tone === 'danger' || tone === 'success') && (
+            <span style={{ width: 8, height: 8, borderRadius: 9999, background: KPI_TONE[tone] }} />
+          )}
+        </div>
+      )}
+      {hint && <div style={{ fontSize: 12, color: '#525A65', lineHeight: 1.4 }}>{hint}</div>}
+    </div>
+  );
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────
+
+function Tabs({
+  current, counts, onChange,
+}: {
+  current: Tab;
+  counts: {
+    all: number; verified: number; unverified: number; buyers: number; newSignups: number;
+  };
+  onChange: (t: Tab) => void;
+}) {
+  const tabs: { key: Tab; label: string; count: number }[] = [
+    { key: 'ALL',        label: 'All',          count: counts.all },
+    { key: 'VERIFIED',   label: 'Verified',     count: counts.verified },
+    { key: 'UNVERIFIED', label: 'Not verified', count: counts.unverified },
+    { key: 'BUYERS',     label: 'With orders',  count: counts.buyers },
+    { key: 'NEW',        label: 'New',          count: counts.newSignups },
+  ];
+  return (
+    <>
+      {tabs.map((t) => {
+        const active = current === t.key;
+        return (
+          <button
+            key={t.key} type="button" onClick={() => onChange(t.key)}
+            style={active ? tabActive : tabIdle}
+          >
+            {t.label}
+            <span style={{
+              marginLeft: 8, fontSize: 11, fontWeight: 600,
+              padding: '1px 7px', borderRadius: 9999,
+              background: active ? '#0F1115' : '#F3F4F6',
+              color: active ? '#fff' : '#525A65',
+              fontVariantNumeric: 'tabular-nums',
+            }}>{t.count}</span>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+// ── Row ───────────────────────────────────────────────────────────
 
 function CustomerRow({
-  customer: c,
-  onOpen,
+  customer: c, onOpen,
 }: {
   customer: Customer;
   onOpen: () => void;
@@ -374,115 +452,110 @@ function CustomerRow({
       }}
       tabIndex={0}
       style={{
-        ...styles.tr,
-        background: hover ? '#f8fafc' : 'transparent',
+        borderTop: '1px solid #F3F4F6',
+        cursor: 'pointer',
+        outline: 'none',
+        background: hover ? '#FAFAFA' : 'transparent',
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <td style={styles.td}>
-        <div style={styles.nameCell}>
+      <td style={td}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <div
             style={{
-              ...styles.avatar,
-              background: color.bg,
-              color: color.fg,
+              width: 36, height: 36, borderRadius: '50%',
+              fontSize: 12, fontWeight: 700,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0, letterSpacing: '0.02em',
+              background: color.bg, color: color.fg,
             }}
             aria-hidden="true"
           >
             {initials(c.firstName, c.lastName)}
           </div>
           <div style={{ minWidth: 0 }}>
-            <div style={styles.nameRow}>
-              <span style={styles.nameText}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <span style={{
+                fontWeight: 600, color: '#0F1115',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
                 {c.firstName} {c.lastName}
               </span>
-              {isNew && <span style={styles.newBadge}>New</span>}
+              {isNew && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center',
+                  height: 18, padding: '0 7px', borderRadius: 9999,
+                  background: '#dcfce7', color: '#15803d',
+                  fontSize: 10, fontWeight: 700,
+                  textTransform: 'uppercase', letterSpacing: '0.06em',
+                  flexShrink: 0,
+                }}>New</span>
+              )}
             </div>
-            <div style={styles.metaRow}>
-              <span style={styles.emailText} title={c.email}>
-                {c.email}
-              </span>
-              <span style={styles.metaDivider} aria-hidden="true">
-                •
-              </span>
-              <span style={styles.joinedText}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              marginTop: 2, fontSize: 12, color: '#525A65', minWidth: 0,
+            }}>
+              <span title={c.email} style={{
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
+              }}>{c.email}</span>
+              <span aria-hidden="true" style={{ color: '#CBD5E1', flexShrink: 0 }}>•</span>
+              <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
                 Joined {relativeTime(c.createdAt)}
               </span>
             </div>
           </div>
         </div>
       </td>
-      <td style={styles.td}>
+      <td style={td}>
         {c.emailVerified ? (
-          <span style={{ ...styles.pill, ...styles.pillPositive }}>
-            <span style={{ ...styles.pillDot, background: '#16a34a' }} />
+          <span style={pillSuccess}>
+            <span style={{ width: 6, height: 6, borderRadius: 9999, background: '#15803d' }} />
             Verified
           </span>
         ) : (
-          <span style={{ ...styles.pill, ...styles.pillNeutral }}>
-            <span style={{ ...styles.pillDot, background: '#94a3b8' }} />
+          <span style={pillMuted}>
+            <span style={{ width: 6, height: 6, borderRadius: 9999, background: '#94A3B8' }} />
             Not verified
           </span>
         )}
       </td>
-      <td style={{ ...styles.td, color: c.location ? '#0f172a' : '#94a3b8' }}>
+      <td style={{ ...td, color: c.location ? '#0F1115' : '#7A828F' }}>
         {c.location || '—'}
       </td>
-      <td style={{ ...styles.td, textAlign: 'right' as const }}>
+      <td style={{ ...td, textAlign: 'right' }}>
         {c.orderCount === 0 ? (
-          <span style={{ color: '#94a3b8' }}>—</span>
+          <span style={{ color: '#7A828F' }}>—</span>
         ) : (
-          <span style={{ color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ color: '#0F1115', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
             {c.orderCount}
           </span>
         )}
       </td>
-      <td
-        style={{
-          ...styles.td,
-          textAlign: 'right' as const,
-          fontWeight: 600,
-          color: '#0f172a',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
+      <td style={{
+        ...td, textAlign: 'right',
+        fontWeight: 600, color: '#0F1115', fontVariantNumeric: 'tabular-nums',
+      }}>
         {inr(c.amountSpent)}
       </td>
-      <td style={{ ...styles.td, padding: 0, textAlign: 'right' }}>
-        <svg
-          viewBox="0 0 20 20"
+      <td style={{ ...td, padding: '14px 12px 14px 0', textAlign: 'right' }}>
+        <ChevronRight
           style={{
-            ...styles.rowChevron,
-            opacity: hover ? 1 : 0,
-            color: hover ? '#64748b' : 'transparent',
+            opacity: hover ? 1 : 0.3,
+            color: hover ? '#525A65' : '#CBD5E1',
+            transition: 'opacity 0.12s, color 0.12s',
           }}
-          aria-hidden="true"
-        >
-          <path
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M8 4l6 6-6 6"
-          />
-        </svg>
+        />
       </td>
     </tr>
   );
 }
 
-/* ── Pagination ─────────────────────────────────────────────── */
+// ── Pagination ────────────────────────────────────────────────────
 
 function Pagination({
-  page,
-  totalPages,
-  total,
-  limit,
-  visibleCount,
-  filtered,
-  onChange,
+  page, totalPages, total, limit, visibleCount, filtered, onChange,
 }: {
   page: number;
   totalPages: number;
@@ -498,526 +571,217 @@ function Pagination({
   const nextDisabled = page >= totalPages;
 
   return (
-    <div style={styles.pagination}>
-      <span style={styles.paginationLabel}>
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      marginTop: 12, padding: '0 4px', flexWrap: 'wrap', gap: 12,
+    }}>
+      <span style={{ fontSize: 12, color: '#525A65' }}>
         {filtered ? (
           <>
-            Showing <strong>{visibleCount}</strong> filtered of{' '}
-            <strong>{total.toLocaleString('en-IN')}</strong>
+            Showing <strong style={{ color: '#0F1115' }}>{visibleCount}</strong> filtered of{' '}
+            <strong style={{ color: '#0F1115' }}>{total.toLocaleString('en-IN')}</strong>
           </>
         ) : (
           <>
-            Showing <strong>{from}</strong>–<strong>{to}</strong> of{' '}
-            <strong>{total.toLocaleString('en-IN')}</strong>
+            Showing <strong style={{ color: '#0F1115' }}>{from}</strong>–
+            <strong style={{ color: '#0F1115' }}>{to}</strong> of{' '}
+            <strong style={{ color: '#0F1115' }}>{total.toLocaleString('en-IN')}</strong>
           </>
         )}
       </span>
-      <div style={styles.paginationControls}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <button
           disabled={prevDisabled}
           onClick={() => onChange(page - 1)}
-          style={{
-            ...styles.pageBtn,
-            ...(prevDisabled ? styles.pageBtnDisabled : {}),
-          }}
+          style={prevDisabled ? { ...pageBtn, ...pageBtnDisabled } : pageBtn}
           aria-label="Previous page"
         >
-          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-            <path
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M12 4l-6 6 6 6"
-            />
-          </svg>
+          <ChevronLeft />
         </button>
-        <span style={styles.pageIndicator}>
+        <span style={{
+          padding: '0 10px', fontSize: 13, color: '#525A65',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
           Page {page} of {totalPages}
         </span>
         <button
           disabled={nextDisabled}
           onClick={() => onChange(page + 1)}
-          style={{
-            ...styles.pageBtn,
-            ...(nextDisabled ? styles.pageBtnDisabled : {}),
-          }}
+          style={nextDisabled ? { ...pageBtn, ...pageBtnDisabled } : pageBtn}
           aria-label="Next page"
         >
-          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
-            <path
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M8 4l6 6-6 6"
-            />
-          </svg>
+          <ChevronRight />
         </button>
       </div>
     </div>
   );
 }
 
-/* ── Loading skeleton ───────────────────────────────────────── */
+// ── Empty / skeleton ──────────────────────────────────────────────
 
-function SkeletonTable() {
-  return (
-    <div style={styles.card}>
-      <div style={styles.tableScroll}>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Customer</th>
-              <th style={styles.th}>Email status</th>
-              <th style={styles.th}>Location</th>
-              <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                Orders
-              </th>
-              <th style={{ ...styles.th, textAlign: 'right' as const }}>
-                Spent
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: 5 }).map((_, i) => (
-              <tr key={i} style={styles.tr}>
-                <td style={styles.td}>
-                  <div style={styles.nameCell}>
-                    <div style={{ ...styles.avatar, ...styles.shimmer }} />
-                    <div>
-                      <div style={{ ...styles.skelLine, width: 160 }} />
-                      <div
-                        style={{ ...styles.skelLine, width: 220, marginTop: 6 }}
-                      />
-                    </div>
-                  </div>
-                </td>
-                <td style={styles.td}>
-                  <div style={{ ...styles.skelLine, width: 96, height: 22 }} />
-                </td>
-                <td style={styles.td}>
-                  <div style={{ ...styles.skelLine, width: 160 }} />
-                </td>
-                <td style={{ ...styles.td, textAlign: 'right' as const }}>
-                  <div
-                    style={{ ...styles.skelLine, width: 36, marginLeft: 'auto' }}
-                  />
-                </td>
-                <td style={{ ...styles.td, textAlign: 'right' as const }}>
-                  <div
-                    style={{ ...styles.skelLine, width: 80, marginLeft: 'auto' }}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <style>{shimmerKeyframes}</style>
-    </div>
-  );
-}
-
-/* ── Empty state ────────────────────────────────────────────── */
-
-function EmptyState({
-  search,
-  filter,
-}: {
-  search: string;
-  filter: FilterKey;
-}) {
+function EmptyState({ search, tab }: { search: string; tab: Tab }) {
   let title: string;
   let body: string;
   if (search) {
     title = 'No customers match your search';
     body = 'Try a different name, email, or phone number.';
-  } else if (filter !== 'all') {
+  } else if (tab !== 'ALL') {
     title = 'No customers match this filter';
-    body = 'Switch to "All" to see every customer.';
+    body = 'Switch to "All" to see every customer on this page.';
   } else {
     title = 'No customers yet';
-    body =
-      'Customers will appear here once someone creates an account on your storefront.';
+    body = 'Customers will appear here once someone creates an account on your storefront.';
   }
-
   return (
-    <div style={styles.empty}>
-      <svg viewBox="0 0 48 48" style={styles.emptyIcon} aria-hidden="true">
-        <path
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M24 26a7 7 0 100-14 7 7 0 000 14zM10 40c1.4-6.6 7.3-11 14-11s12.6 4.4 14 11"
-        />
-      </svg>
-      <h3 style={styles.emptyTitle}>{title}</h3>
-      <p style={styles.emptyBody}>{body}</p>
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: 48, textAlign: 'center',
+    }}>
+      <div style={{
+        width: 44, height: 44, borderRadius: 9999, background: '#F3F4F6',
+        margin: '0 auto 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#7A828F',
+      }}>
+        <UserIcon size={20} />
+      </div>
+      <div style={{ fontSize: 14, color: '#0F1115', fontWeight: 600 }}>{title}</div>
+      <div style={{ fontSize: 13, color: '#525A65', marginTop: 4, maxWidth: 360, margin: '4px auto 0' }}>
+        {body}
+      </div>
     </div>
   );
 }
 
-/* ── Styles ─────────────────────────────────────────────────── */
-
-const shimmerKeyframes = `
-@keyframes customers-shimmer {
-  0%   { background-position: -400px 0; }
-  100% { background-position:  400px 0; }
+function SkeletonTable() {
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, overflow: 'hidden',
+    }}>
+      <div style={{ padding: 16 }}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} style={{
+            display: 'flex', alignItems: 'center', gap: 16, padding: '12px 0',
+            borderBottom: '1px solid #F3F4F6',
+          }}>
+            <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#F3F4F6' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ width: '40%', height: 14, background: '#F3F4F6', borderRadius: 4 }} />
+              <div style={{ width: '60%', height: 12, background: '#F3F4F6', borderRadius: 4, marginTop: 6 }} />
+            </div>
+            <div style={{ width: 90, height: 22, background: '#F3F4F6', borderRadius: 9999 }} />
+            <div style={{ width: 100, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+            <div style={{ width: 40, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+            <div style={{ width: 90, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
-`;
 
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    color: '#0f172a',
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
-  },
+// ── Icons ─────────────────────────────────────────────────────────
 
-  /* Header */
-  header: {
-    marginBottom: 20,
-  },
-  h1: {
-    margin: 0,
-    fontSize: 24,
-    fontWeight: 700,
-    letterSpacing: '-0.01em',
-    color: '#0f172a',
-  },
-  headerSub: {
-    margin: '4px 0 0',
-    fontSize: 13,
-    color: '#64748b',
-  },
+function SearchIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+function RefreshIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 12a9 9 0 0 0-15-6.7L3 8" /><path d="M3 3v5h5" />
+      <path d="M3 12a9 9 0 0 0 15 6.7l3-2.7" /><path d="M21 21v-5h-5" />
+    </svg>
+  );
+}
+function ChevronLeft({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m15 6-6 6 6 6" />
+    </svg>
+  );
+}
+function ChevronRight({ size = 14, style }: { size?: number; style?: React.CSSProperties }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden style={style}>
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+function UserIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="9" r="4" />
+      <path d="M5 21c1.4-4.5 4-6.5 7-6.5s5.6 2 7 6.5" />
+    </svg>
+  );
+}
 
-  /* Toolbar */
-  toolbar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 16,
-    marginBottom: 16,
-    flexWrap: 'wrap',
-  },
-  tabs: {
-    display: 'inline-flex',
-    gap: 4,
-    padding: 4,
-    background: '#f1f5f9',
-    borderRadius: 10,
-    border: '1px solid #e2e8f0',
-  },
-  tab: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    height: 30,
-    padding: '0 12px',
-    fontSize: 13,
-    fontWeight: 500,
-    color: '#475569',
-    background: 'transparent',
-    border: 'none',
-    borderRadius: 7,
-    cursor: 'pointer',
-    transition: 'background-color 0.12s, color 0.12s, box-shadow 0.12s',
-    fontFamily: 'inherit',
-  },
-  tabHover: {
-    background: 'rgba(255, 255, 255, 0.6)',
-    color: '#0f172a',
-  },
-  tabActive: {
-    background: '#ffffff',
-    color: '#0f172a',
-    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)',
-    fontWeight: 600,
-  },
-  tabCount: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 18,
-    padding: '0 6px',
-    height: 18,
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#64748b',
-    background: '#e2e8f0',
-    borderRadius: 999,
-    fontVariantNumeric: 'tabular-nums',
-  },
-  tabCountActive: {
-    color: '#ffffff',
-    background: '#0f172a',
-  },
+// ── Shared styles ─────────────────────────────────────────────────
 
-  searchWrap: {
-    position: 'relative',
-    flex: '1 1 260px',
-    maxWidth: 360,
-  },
-  searchIcon: {
-    position: 'absolute',
-    left: 12,
-    top: '50%',
-    transform: 'translateY(-50%)',
-    width: 16,
-    height: 16,
-    color: '#94a3b8',
-    pointerEvents: 'none',
-  },
-  searchInput: {
-    width: '100%',
-    height: 38,
-    padding: '0 12px 0 36px',
-    fontSize: 14,
-    color: '#0f172a',
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
-    outline: 'none',
-    boxSizing: 'border-box',
-    transition: 'border-color 0.12s, box-shadow 0.12s',
-  },
-
-  /* Table */
-  card: {
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-  tableScroll: {
-    overflowX: 'auto',
-  },
-  table: {
-    width: '100%',
-    borderCollapse: 'collapse',
-    fontSize: 14,
-  },
-  th: {
-    textAlign: 'left',
-    padding: '10px 16px',
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    background: '#f8fafc',
-    borderBottom: '1px solid #e2e8f0',
-    whiteSpace: 'nowrap',
-  },
-  tr: {
-    borderBottom: '1px solid #f1f5f9',
-    cursor: 'pointer',
-    outline: 'none',
-    transition: 'background-color 0.08s',
-  },
-  td: {
-    padding: '14px 16px',
-    verticalAlign: 'middle',
-    fontSize: 14,
-    color: '#0f172a',
-  },
-
-  /* Customer cell */
-  nameCell: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    minWidth: 0,
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: '50%',
-    fontSize: 12,
-    fontWeight: 700,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    letterSpacing: '0.02em',
-  },
-  nameRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    minWidth: 0,
-  },
-  nameText: {
-    fontWeight: 600,
-    color: '#0f172a',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  newBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    padding: '1px 7px',
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: '0.06em',
-    textTransform: 'uppercase',
-    color: '#00604a',
-    background: 'rgba(0, 128, 96, 0.10)',
-    border: '1px solid rgba(0, 128, 96, 0.2)',
-    borderRadius: 4,
-    flexShrink: 0,
-  },
-  metaRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 2,
-    fontSize: 12,
-    color: '#64748b',
-    minWidth: 0,
-  },
-  emailText: {
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    maxWidth: '100%',
-  },
-  metaDivider: {
-    color: '#cbd5e1',
-    flexShrink: 0,
-  },
-  joinedText: {
-    flexShrink: 0,
-    whiteSpace: 'nowrap',
-  },
-
-  /* Pill */
-  pill: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '3px 10px 3px 8px',
-    fontSize: 12,
-    fontWeight: 500,
-    borderRadius: 999,
-    border: '1px solid',
-    lineHeight: 1.4,
-    whiteSpace: 'nowrap',
-  },
-  pillDot: {
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
-  pillPositive: {
-    background: 'rgba(22, 163, 74, 0.08)',
-    color: '#15803d',
-    borderColor: 'rgba(22, 163, 74, 0.2)',
-  },
-  pillNeutral: {
-    background: '#f1f5f9',
-    color: '#475569',
-    borderColor: '#e2e8f0',
-  },
-
-  /* Row chevron */
-  rowChevron: {
-    width: 16,
-    height: 16,
-    display: 'inline-block',
-    marginRight: 12,
-    transition: 'opacity 0.12s, color 0.12s',
-  },
-
-  /* Pagination */
-  pagination: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 16,
-    padding: '0 4px',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  paginationLabel: {
-    fontSize: 13,
-    color: '#475569',
-  },
-  paginationControls: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 4,
-  },
-  pageBtn: {
-    width: 32,
-    height: 32,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
-    background: '#ffffff',
-    cursor: 'pointer',
-    color: '#334155',
-    transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
-  },
-  pageBtnDisabled: {
-    color: '#cbd5e1',
-    cursor: 'not-allowed',
-    background: '#f8fafc',
-  },
-  pageIndicator: {
-    padding: '0 10px',
-    fontSize: 13,
-    color: '#475569',
-    fontVariantNumeric: 'tabular-nums',
-  },
-
-  /* Empty */
-  empty: {
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 10,
-    padding: '56px 24px',
-    textAlign: 'center',
-  },
-  emptyIcon: {
-    width: 40,
-    height: 40,
-    color: '#94a3b8',
-    marginBottom: 12,
-  },
-  emptyTitle: {
-    margin: 0,
-    fontSize: 16,
-    fontWeight: 600,
-    color: '#0f172a',
-  },
-  emptyBody: {
-    margin: '6px auto 0',
-    fontSize: 13,
-    color: '#64748b',
-    maxWidth: 360,
-  },
-
-  /* Shimmer */
-  skelLine: {
-    display: 'block',
-    height: 12,
-    borderRadius: 4,
-    background:
-      'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 37%, #f1f5f9 63%) 0 0 / 800px 100%',
-    animation: 'customers-shimmer 1.2s ease-in-out infinite',
-  },
-  shimmer: {
-    background:
-      'linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 37%, #f1f5f9 63%) 0 0 / 800px 100%',
-    animation: 'customers-shimmer 1.2s ease-in-out infinite',
-  },
+const kpiLabel: React.CSSProperties = {
+  fontSize: 11, color: '#7A828F', textTransform: 'uppercase',
+  letterSpacing: '0.06em', fontWeight: 600,
+};
+const tabIdle: React.CSSProperties = {
+  background: 'transparent', border: 'none',
+  padding: '10px 14px', marginBottom: -1,
+  fontSize: 13, fontWeight: 600, color: '#525A65',
+  cursor: 'pointer',
+  borderBottom: '2px solid transparent',
+  display: 'inline-flex', alignItems: 'center',
+  fontFamily: 'inherit',
+};
+const tabActive: React.CSSProperties = {
+  ...tabIdle, color: '#0F1115', borderBottom: '2px solid #0F1115',
+};
+const input: React.CSSProperties = {
+  height: 36, padding: '0 12px',
+  border: '1px solid #D2D6DC', borderRadius: 9,
+  fontSize: 13, color: '#0F1115',
+  outline: 'none', background: '#fff', boxSizing: 'border-box',
+};
+const btnGhost: React.CSSProperties = {
+  height: 36, padding: '0 14px',
+  background: 'transparent', color: '#525A65',
+  border: '1px solid #E5E7EB', borderRadius: 9999,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+};
+const th: React.CSSProperties = {
+  padding: '12px 16px', textAlign: 'left',
+  fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+  letterSpacing: '0.06em', color: '#525A65',
+  whiteSpace: 'nowrap',
+};
+const td: React.CSSProperties = {
+  padding: '14px 16px', fontSize: 14, color: '#0F1115',
+  verticalAlign: 'middle',
+};
+const pillBase: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+  height: 22, padding: '0 10px', borderRadius: 9999,
+  fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+};
+const pillSuccess: React.CSSProperties = {
+  ...pillBase, background: '#dcfce7', color: '#15803d',
+};
+const pillMuted: React.CSSProperties = {
+  ...pillBase, background: '#F3F4F6', color: '#525A65',
+};
+const pageBtn: React.CSSProperties = {
+  width: 32, height: 32,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  border: '1px solid #E5E7EB', borderRadius: 9999,
+  background: '#fff', cursor: 'pointer', color: '#525A65',
+};
+const pageBtnDisabled: React.CSSProperties = {
+  color: '#CBD5E1', cursor: 'not-allowed', background: '#FAFAFA',
 };
