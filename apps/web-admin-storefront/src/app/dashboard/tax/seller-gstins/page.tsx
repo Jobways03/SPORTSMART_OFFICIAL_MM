@@ -28,6 +28,42 @@ export default function SellerGstinsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [lastOutcomes, setLastOutcomes] = useState<Record<string, GstnVerifyOutcome>>({});
 
+  // 194-O exemption modal state. The list endpoint doesn't echo the
+  // seller's current exemption status, so the modal always asks the
+  // operator to pick the new state explicitly (no "toggle" — explicit
+  // affirmative action is required for an audit-bearing flag).
+  const [exemptFor, setExemptFor] = useState<SellerGstinItem | null>(null);
+  const [exemptValue, setExemptValue] = useState<'true' | 'false'>('true');
+  const [exemptReason, setExemptReason] = useState('');
+  const [exemptSaving, setExemptSaving] = useState(false);
+  const [exemptErr, setExemptErr] = useState<string | null>(null);
+
+  const submitExempt = async () => {
+    if (!exemptFor) return;
+    setExemptSaving(true);
+    setExemptErr(null);
+    try {
+      await adminTaxService.setSeller194oExemption(
+        exemptFor.sellerId,
+        exemptValue === 'true',
+        exemptReason.trim() || undefined,
+      );
+      setMsg({
+        kind: 'ok',
+        text:
+          exemptValue === 'true'
+            ? 'Seller marked 194-O exempt'
+            : 'Seller 194-O exemption removed',
+      });
+      setExemptFor(null);
+      setExemptReason('');
+    } catch (err: any) {
+      setExemptErr(err?.message ?? 'Update failed');
+    } finally {
+      setExemptSaving(false);
+    }
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     setMsg(null);

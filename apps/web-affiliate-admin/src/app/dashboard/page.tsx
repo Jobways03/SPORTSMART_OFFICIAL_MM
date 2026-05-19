@@ -631,7 +631,9 @@ function AffiliateCard({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>{a.firstName} {a.lastName}</div>
           <StatusPill status={a.status} />
+          {/* KYC pill hidden — KYC feature disabled.
           {a.kycStatus !== 'NOT_STARTED' && <KycPill status={a.kycStatus} />}
+          */}
           {a.commissionPercentage != null && (
             <span style={{ padding: '2px 7px', fontSize: 10, fontWeight: 700, borderRadius: 4, background: '#f0fdf4', color: '#15803d' }}>
               {Number(a.commissionPercentage).toFixed(2)}% rate
@@ -918,7 +920,9 @@ function ManageAffiliateModal({
                 Manage {detail.firstName} {detail.lastName}
               </h2>
               <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>
-                {detail.email} · Status: {detail.status.replace(/_/g, ' ')} · KYC: {detail.kycStatus.replace(/_/g, ' ')}
+                {detail.email} · Status: {detail.status.replace(/_/g, ' ')}
+                {/* KYC label hidden — feature disabled */}
+                {/* · KYC: {detail.kycStatus.replace(/_/g, ' ')} */}
               </p>
             </div>
             <button onClick={onClose} style={btnGhost}>Close</button>

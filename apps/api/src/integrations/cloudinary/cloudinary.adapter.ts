@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
+import { randomUUID } from 'node:crypto';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../bootstrap/logging/app-logger.service';
 
@@ -54,6 +55,31 @@ export class CloudinaryAdapter {
     options: CloudinaryUploadOptions,
   ): Promise<CloudinaryUploadResult> {
     if (!this.configured) {
+      // Dev-only fallback: when Cloudinary creds are absent and we're
+      // NOT in production, return a deterministic placeholder URL so
+      // upload-dependent flows (KYC, branding, evidence) stay testable
+      // locally. Production still throws loudly — a misconfigured prod
+      // is a real bug, not a UX papercut.
+      const env = (this.envService.getOptional('NODE_ENV') || '').toLowerCase();
+      if (env !== 'production') {
+        const id = randomUUID();
+        const publicId = `dev-stub/${options.folder.replace(/\//g, '_')}/${id}`;
+        const secureUrl =
+          `https://placehold.co/600x400/eef2ff/4338ca` +
+          `?text=DEV+STUB+${encodeURIComponent(options.folder)}`;
+        this.logger.warn(
+          `Cloudinary not configured — returning dev-stub URL ` +
+          `(publicId=${publicId}, bytes=${fileBuffer.length})`,
+        );
+        return {
+          secureUrl,
+          publicId,
+          format: 'png',
+          width: 600,
+          height: 400,
+          bytes: fileBuffer.length,
+        };
+      }
       throw new Error('Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET.');
     }
 

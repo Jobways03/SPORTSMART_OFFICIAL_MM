@@ -34,13 +34,15 @@ export function validateEmail(value: string): string | null {
   return null;
 }
 
+// India mobile rule: exactly 10 digits, first digit 6-9. TRAI reserves
+// 6/7/8/9 prefixes for cellular operators; 0-5 prefixes are landline
+// area codes that won't reach a phone via SMS/WhatsApp.
 export function validatePhoneNumber(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return 'Phone number is required';
-  const digits = trimmed.replace(/\D/g, '');
-  if (digits.length === 0) return 'Phone number must contain only digits';
-  if (digits.length < 10) return 'Phone number must be at least 10 digits';
-  if (digits.length > 15) return 'Phone number must not exceed 15 digits';
+  if (/\D/.test(trimmed)) return 'Phone number must contain only digits';
+  if (trimmed.length !== 10) return 'Phone number must be exactly 10 digits';
+  if (!/^[6-9]/.test(trimmed)) return 'Phone number must start with 6, 7, 8, or 9';
   return null;
 }
 

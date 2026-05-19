@@ -228,15 +228,39 @@ export default function FranchiseRegisterPage() {
             <input
               id="phoneNumber"
               type="tel"
-              placeholder="Enter your phone number"
+              placeholder="10-digit mobile starting with 6, 7, 8, or 9"
               value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
+              onChange={(e) => {
+                // Strip non-digits as the user types; reject any leading
+                // digit that isn't 6-9 (Indian mobile prefix). Hard-cap
+                // at 10 chars — backend rejects anything else anyway,
+                // catch it client-side for a snappier UX.
+                let next = e.target.value.replace(/\D/g, '');
+                next = next.replace(/^[0-5]+/, '');
+                next = next.slice(0, 10);
+                setPhoneNumber(next);
+              }}
+              onKeyDown={(e) => {
+                // Block 'e', '+', '-', '.' that <input type="tel"> would
+                // otherwise allow in some browsers.
+                if (['e', 'E', '+', '-', '.', ' '].includes(e.key)) {
+                  e.preventDefault();
+                }
+              }}
               onBlur={() => handleBlur('phoneNumber', phoneNumber)}
+              inputMode="numeric"
+              pattern="[6-9][0-9]{9}"
+              maxLength={10}
               aria-invalid={!!errors.phoneNumber}
-              aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}
+              aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : 'phoneNumber-hint'}
               disabled={isSubmitting || isSuccess}
               autoComplete="tel"
             />
+            {!errors.phoneNumber && (
+              <span id="phoneNumber-hint" style={{ fontSize: 12, color: '#64748b' }}>
+                {phoneNumber.length}/10 digits
+              </span>
+            )}
             {errors.phoneNumber && (
               <span id="phoneNumber-error" className="field-error" role="alert">
                 {errors.phoneNumber}

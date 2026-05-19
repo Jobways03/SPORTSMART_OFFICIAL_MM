@@ -167,11 +167,16 @@ export class AffiliatePayoutService {
     if (affiliate.status !== 'ACTIVE') {
       throw new ForbiddenAppException('Only ACTIVE affiliates can request payouts.');
     }
+    // KYC gate temporarily disabled (KYC feature paused per product
+    // request). Restore the block below to re-enforce the §15.1
+    // "VERIFIED before payout" rule.
+    /*
     if (affiliate.kycStatus !== 'VERIFIED') {
       throw new ForbiddenAppException(
         'Please complete KYC verification before requesting a payout.',
       );
     }
+    */
 
     const primary = await this.prisma.affiliatePayoutMethodRecord.findFirst({
       where: { affiliateId: input.affiliateId, isPrimary: true },
