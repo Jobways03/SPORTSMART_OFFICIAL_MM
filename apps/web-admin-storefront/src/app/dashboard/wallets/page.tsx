@@ -76,14 +76,14 @@ export default function WalletsPage() {
   const totalPages = Math.max(1, Math.ceil(pagination.total / pagination.limit));
 
   return (
-    <div style={{ padding: '24px 32px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16, gap: 16, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: '#0F1115' }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>
             Wallets
           </h1>
-          <p style={{ marginTop: 4, fontSize: 14, color: '#525A65' }}>
-            {pagination.total.toLocaleString('en-IN')} wallet{pagination.total === 1 ? '' : 's'}
+          <p style={{ marginTop: 6, fontSize: 13, color: '#525A65' }}>
+            {pagination.total.toLocaleString('en-IN')} wallet{pagination.total === 1 ? '' : 's'} on file.
           </p>
         </div>
 
@@ -140,15 +140,43 @@ export default function WalletsPage() {
           </thead>
           <tbody>
             {loading && wallets.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 32 }}>
-                  Loading wallets…
-                </td>
-              </tr>
+              [0, 1, 2, 3, 4].map((i) => (
+                <tr key={`skel-${i}`} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                  <td style={td}>
+                    <div style={{ width: '60%', height: 14, background: '#F3F4F6', borderRadius: 4 }} />
+                  </td>
+                  <td style={td}>
+                    <div style={{ width: '80%', height: 14, background: '#F3F4F6', borderRadius: 4 }} />
+                  </td>
+                  <td style={{ ...td, textAlign: 'right' }}>
+                    <div style={{ width: 90, height: 14, background: '#F3F4F6', borderRadius: 4, marginLeft: 'auto' }} />
+                  </td>
+                  <td style={td}>
+                    <div style={{ width: 100, height: 14, background: '#F3F4F6', borderRadius: 4 }} />
+                  </td>
+                  <td style={{ ...td, textAlign: 'right' }}>
+                    <div style={{ width: 50, height: 14, background: '#F3F4F6', borderRadius: 4, marginLeft: 'auto' }} />
+                  </td>
+                </tr>
+              ))
             ) : wallets.length === 0 ? (
               <tr>
-                <td colSpan={5} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 32 }}>
-                  No wallets found.
+                <td colSpan={5} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 48 }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: 9999, background: '#F3F4F6',
+                    margin: '0 auto 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                      <path d="M3 7a2 2 0 0 1 2-2h13v4" />
+                      <path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3" />
+                      <path d="M16 13h5v-3h-5a1.5 1.5 0 0 0 0 3z" />
+                    </svg>
+                  </div>
+                  <div style={{ fontSize: 14, color: '#0F1115', fontWeight: 600 }}>No wallets found</div>
+                  <div style={{ fontSize: 13, color: '#525A65', marginTop: 4 }}>
+                    Try a different search term.
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -169,7 +197,7 @@ export default function WalletsPage() {
                         // Compare via BigInt so the sign check works
                         // identically for `number` and `string` inputs
                         // (BigInt-serialised balances arrive as strings).
-                        color: BigInt(w.balanceInPaise) > 0n ? '#15803d' : '#0F1115',
+                        color: BigInt(w.balanceInPaise) > BigInt(0) ? '#15803d' : '#0F1115',
                       }}
                     >
                       {formatPaise(w.balanceInPaise)}
@@ -186,13 +214,18 @@ export default function WalletsPage() {
                     <Link
                       href={`/dashboard/wallets/${w.userId}`}
                       style={{
-                        color: '#2A8595',
-                        fontWeight: 600,
+                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                        height: 28, padding: '0 12px',
+                        color: '#0F1115', fontWeight: 600, fontSize: 12,
+                        background: '#fff', border: '1px solid #D2D6DC', borderRadius: 9999,
                         textDecoration: 'none',
-                        fontSize: 13,
                       }}
                     >
-                      View →
+                      View
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <path d="M5 12h14M13 6l6 6-6 6" />
+                      </svg>
                     </Link>
                   </td>
                 </tr>

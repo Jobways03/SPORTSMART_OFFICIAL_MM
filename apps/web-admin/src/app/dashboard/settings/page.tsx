@@ -21,7 +21,7 @@ const SETTINGS_TILES: SettingTile[] = [
 
 export default function SettingsHubPage() {
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 1080 }}>
+    <div style={{ padding: '32px 40px', maxWidth: 1080, margin: '0 auto' }}>
       <header style={{ marginBottom: 28 }}>
         <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: '#0f172a' }}>
           Settings

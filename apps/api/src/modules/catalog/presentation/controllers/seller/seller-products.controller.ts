@@ -28,7 +28,6 @@ import { ProductSlugService } from '../../../application/services/product-slug.s
 import { ProductCodeService } from '../../../application/services/product-code.service';
 import { ProductOwnershipService } from '../../../application/services/product-ownership.service';
 import { ReApprovalService } from '../../../application/services/re-approval.service';
-import { DuplicateDetectionService } from '../../../application/services/duplicate-detection.service';
 import { CreateProductDto } from '../../dtos/create-product.dto';
 import { UpdateProductDto } from '../../dtos/update-product.dto';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
@@ -48,7 +47,6 @@ export class SellerProductsController {
     private readonly productCodeService: ProductCodeService,
     private readonly ownershipService: ProductOwnershipService,
     private readonly reApprovalService: ReApprovalService,
-    private readonly duplicateDetectionService: DuplicateDetectionService,
     private readonly eventBus: EventBusService,
   ) {
     this.logger.setContext('SellerProductsController');
@@ -619,27 +617,11 @@ export class SellerProductsController {
       }
     }
 
-    // Run duplicate detection
-    let potentialDuplicates: any[] = [];
-    try {
-      potentialDuplicates = await this.duplicateDetectionService.findPotentialDuplicates({
-        title: product.title,
-        brandId: product.brandId ?? undefined,
-        categoryId: product.categoryId ?? undefined,
-        excludeProductId: productId,
-      });
-    } catch (err) {
-      this.logger.warn(`Duplicate detection failed for product ${productId}: ${err}`);
-    }
-
-    const bestMatchId = potentialDuplicates.length > 0 ? potentialDuplicates[0].productId : null;
-
     await this.productRepo.submitForReviewInTransaction(
       productId,
       {
         status: 'SUBMITTED',
         moderationStatus: 'PENDING',
-        ...(bestMatchId ? { potentialDuplicateOf: bestMatchId } : {}),
       },
       {
         fromStatus: product.status,
@@ -671,7 +653,6 @@ export class SellerProductsController {
       message: 'Product submitted for review',
       data: {
         product: { id: productId },
-        potentialDuplicates,
       },
     };
   }

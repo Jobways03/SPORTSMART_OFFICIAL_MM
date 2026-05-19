@@ -67,7 +67,7 @@ export default function BulkTaxConfigPage() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 800 }}>
+    <div style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
       <h1>Bulk product tax-config update</h1>
       <p style={{ color: '#666' }}>
         Apply HSN code + GST rate + UQC + supply taxability to many

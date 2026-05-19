@@ -10,6 +10,7 @@ import {
   VariantLookup,
   ProductLookup,
   ReservationWithMapping,
+  StockMovementRow,
 } from '../../domain/repositories/inventory-management.repository.interface';
 
 @Injectable()
@@ -250,6 +251,42 @@ export class PrismaInventoryManagementRepository implements InventoryManagementR
           product: r.mapping.product,
           variant: r.mapping.variant,
         },
+      })),
+      total,
+    };
+  }
+
+  /* ── Stock movement audit ──────────────────────────────────────── */
+
+  async findMovementsByMappingId(
+    mappingId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ movements: StockMovementRow[]; total: number }> {
+    const [rows, total] = await Promise.all([
+      this.prisma.stockMovement.findMany({
+        where: { mappingId },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.stockMovement.count({ where: { mappingId } }),
+    ]);
+    return {
+      movements: rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        quantityDelta: r.quantityDelta,
+        beforeStockQty: r.beforeStockQty,
+        afterStockQty: r.afterStockQty,
+        beforeReservedQty: r.beforeReservedQty,
+        afterReservedQty: r.afterReservedQty,
+        reason: r.reason,
+        referenceType: r.referenceType,
+        referenceId: r.referenceId,
+        actorId: r.actorId,
+        actorRole: r.actorRole,
+        createdAt: r.createdAt,
       })),
       total,
     };

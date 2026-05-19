@@ -189,7 +189,7 @@ export default function RegisterPage() {
               ].map(({ icon: Icon, title, desc }) => (
                 <li
                   key={title}
-                  className="bg-white/55 backdrop-blur-[1px] border border-ink-900/10 p-3"
+                  className="bg-white border border-ink-900/10 p-3"
                 >
                   <Icon className="size-4 text-accent-dark" strokeWidth={1.75} />
                   <div className="mt-2 text-body font-semibold text-ink-900">

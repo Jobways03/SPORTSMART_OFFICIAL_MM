@@ -169,7 +169,7 @@ export default function LoginPage() {
           </div>
 
           {/* Bottom — testimonial card */}
-          <div className="max-w-md bg-white/70 backdrop-blur-[1px] border border-ink-900/10 p-5 rounded-2xl">
+          <div className="max-w-md bg-white border border-ink-900/10 p-5 rounded-2xl">
             <div className="flex items-center gap-1 text-ink-900" aria-label="5 star rating">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Star key={i} className="size-3.5 fill-current" strokeWidth={0} />

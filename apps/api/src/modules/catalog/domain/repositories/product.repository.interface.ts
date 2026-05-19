@@ -67,13 +67,6 @@ export interface IProductRepository {
   ): Promise<void>;
   submitForReviewInTransaction(productId: string, data: any, historyEntry: any): Promise<void>;
 
-  // ── Merge ──
-  mergeProducts(sourceId: string, targetId: string, adminId: string, sellerProfile: any, sourceProduct: any, targetProduct: any): Promise<any[]>;
-  findProductForMerge(productId: string): Promise<any | null>;
-
-  // ── Duplicate info ──
-  findDuplicateInfo(productId: string): Promise<any | null>;
-
   // ── Slug check ──
   findBySlug(slug: string): Promise<any | null>;
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiClient } from '@/lib/api-client';
 
 interface CommissionRecord {
@@ -27,9 +27,7 @@ interface CommissionResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
-function Th({ label }: { label: string }) {
-  return <th style={thStyle}>{label}</th>;
-}
+// ── Page ──────────────────────────────────────────────────────────
 
 export default function StorefrontCommissionPage() {
   const [data, setData] = useState<CommissionResponse | null>(null);
@@ -57,209 +55,363 @@ export default function StorefrontCommissionPage() {
 
   const handleApply = () => { setPage(1); fetchData(1); };
   const handleClear = () => {
-    setSearch('');
-    setDateFrom('');
-    setDateTo('');
-    setPage(1);
+    setSearch(''); setDateFrom(''); setDateTo(''); setPage(1);
   };
 
-  const fmt = (n: number) =>
-    `\u20B9${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const hasFilters = Boolean(search || dateFrom || dateTo);
 
-  const fmtDate = (d: string) =>
-    new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-
-  const totalCommission = data?.records.reduce((a, r) => a + Number(r.totalCommission), 0) ?? 0;
-  const totalSellerEarning = data?.records.reduce((a, r) => a + Number(r.productEarning), 0) ?? 0;
-  const totalRefunded = data?.records.reduce((a, r) => a + Number(r.refundedAdminEarning), 0) ?? 0;
-
-  const hasFilters = search || dateFrom || dateTo;
+  const totals = useMemo(() => {
+    const records = data?.records ?? [];
+    return {
+      totalCommission: records.reduce((a, r) => a + Number(r.totalCommission), 0),
+      totalSellerEarning: records.reduce((a, r) => a + Number(r.productEarning), 0),
+      totalRefunded: records.reduce((a, r) => a + Number(r.refundedAdminEarning), 0),
+    };
+  }, [data]);
 
   return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Commission</h1>
-        <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>
-          Track commissions from delivered orders. Commissions are processed after the return/exchange window expires.
+    <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>
+          Commission
+        </h1>
+        <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', maxWidth: 720, lineHeight: 1.5 }}>
+          Commissions earned from delivered orders. Records are processed after the
+          return/exchange window expires.
         </p>
       </div>
 
-      {/* Filters */}
+      <KpiStrip
+        loading={loading && !data}
+        totalRecords={data?.pagination.total ?? 0}
+        page={totals}
+      />
+
+      {/* Filter bar */}
       <div style={{
-        background: '#fff',
-        border: '1px solid #e5e7eb',
-        borderRadius: 10,
-        padding: '16px 20px',
-        marginBottom: 20,
-        display: 'flex',
-        gap: 12,
-        flexWrap: 'wrap',
-        alignItems: 'flex-end',
+        background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+        padding: 16, marginBottom: 16,
+        display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end',
       }}>
-        <div style={{ flex: '1 1 200px' }}>
-          <label style={filterLabelStyle}>Search</label>
+        <Field label="Search" style={{ flex: '1 1 240px' }}>
           <input
             type="text"
-            placeholder="Order no, product, seller..."
+            placeholder="Order #, product, seller…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleApply()}
-            style={filterInputStyle}
+            style={input}
           />
-        </div>
-        <div style={{ flex: '0 1 160px' }}>
-          <label style={filterLabelStyle}>From Date</label>
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={filterInputStyle} />
-        </div>
-        <div style={{ flex: '0 1 160px' }}>
-          <label style={filterLabelStyle}>To Date</label>
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={filterInputStyle} />
-        </div>
-        <div style={{ display: 'flex', gap: 8, paddingBottom: 1 }}>
-          <button onClick={handleApply} style={filterBtnStyle}>Apply</button>
+        </Field>
+        <Field label="From" style={{ flex: '0 1 160px' }}>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={input} />
+        </Field>
+        <Field label="To" style={{ flex: '0 1 160px' }}>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={input} />
+        </Field>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleApply} style={btnPrimary}>Apply</button>
           {hasFilters && (
-            <button onClick={handleClear} style={{ ...filterBtnStyle, background: '#fff', color: '#374151', border: '1px solid #d1d5db' }}>
-              Clear
-            </button>
+            <button onClick={handleClear} style={btnGhost}>Clear</button>
           )}
         </div>
       </div>
 
-      {/* Summary cards */}
-      {data && data.records.length > 0 && (
-        <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
-          <SummaryCard label="Total Commission" value={fmt(totalCommission)} color="#2563eb" />
-          <SummaryCard label="Seller Earning" value={fmt(totalSellerEarning)} color="#7c3aed" />
-          <SummaryCard label="Refunded" value={fmt(totalRefunded)} color="#dc2626" />
-          <SummaryCard label="Total Records" value={String(data.pagination.total)} color="#374151" />
-        </div>
-      )}
-
-      {loading && !data ? (
-        <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading commissions...</div>
-      ) : !data || data.records.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60 }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>&#128176;</div>
-          <h3 style={{ fontWeight: 600, marginBottom: 8 }}>No commission records {hasFilters ? 'match your filters' : 'yet'}</h3>
-          <p style={{ color: '#6b7280' }}>
-            {hasFilters
-              ? 'Try adjusting your filters or clearing them.'
-              : 'Commission records appear here after orders are delivered and the return window expires (1 min for testing).'}
-          </p>
-        </div>
-      ) : (
-        <>
-          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
-                    <Th label="ORDER NO" />
-                    <Th label="DATE" />
-                    <Th label="SELLER" />
-                    <Th label="PRODUCT" />
-                    <Th label="QTY" />
-                    <Th label="UNIT PRICE" />
-                    <Th label="TOTAL PRICE" />
-                    <Th label="COMMISSION" />
-                    <Th label="SELLER EARNING" />
-                    <Th label="REFUNDED" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.records.map((r, i) => (
-                    <tr
-                      key={r.id}
-                      style={{
-                        borderBottom: '1px solid #f3f4f6',
-                        background: i % 2 === 0 ? '#fff' : '#fafbfc',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f4ff')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = i % 2 === 0 ? '#fff' : '#fafbfc')}
-                    >
-                      <td style={tdStyle}>
-                        <strong style={{ color: '#2563eb' }}>{r.orderNumber}</strong>
-                      </td>
-                      <td style={tdStyle}>{fmtDate(r.createdAt)}</td>
-                      <td style={tdStyle}><span style={{ fontWeight: 500 }}>{r.sellerName}</span></td>
-                      <td style={tdStyle}>
-                        <span style={{ color: '#2563eb' }} title={r.productTitle}>
-                          {r.productTitle.length > 22 ? r.productTitle.slice(0, 22) + '...' : r.productTitle}
-                        </span>
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: 'center' }}>{r.quantity}</td>
-                      <td style={tdNumStyle}>{fmt(Number(r.unitPrice))}</td>
-                      <td style={tdNumStyle}>{fmt(Number(r.totalPrice))}</td>
-                      <td style={{ ...tdNumStyle, fontWeight: 600, color: '#dc2626' }}>{fmt(Number(r.totalCommission))}</td>
-                      <td style={{ ...tdNumStyle, color: '#7c3aed', fontWeight: 600 }}>{fmt(Number(r.productEarning))}</td>
-                      <td style={{
-                        ...tdNumStyle,
-                        color: Number(r.refundedAdminEarning) > 0 ? '#dc2626' : '#9ca3af',
-                        fontWeight: Number(r.refundedAdminEarning) > 0 ? 600 : 400,
-                      }}>
-                        {fmt(Number(r.refundedAdminEarning))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      {/* Table / states */}
+      <div style={{
+        background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, overflow: 'hidden',
+      }}>
+        {loading && !data ? (
+          <Skeleton />
+        ) : !data || data.records.length === 0 ? (
+          <EmptyState hasFilters={hasFilters} onClear={handleClear} />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+                  <th style={th}>Order #</th>
+                  <th style={th}>Date</th>
+                  <th style={th}>Seller</th>
+                  <th style={th}>Product</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Qty</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Unit price</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Total price</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Commission</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Seller earning</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Refunded</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.records.map((r) => <Row key={r.id} record={r} />)}
+              </tbody>
+            </table>
           </div>
+        )}
+      </div>
 
-          {data.pagination.totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 20 }}>
-              <button disabled={page <= 1} onClick={() => setPage(page - 1)} style={pageBtnStyle}>Previous</button>
-              <span style={{ padding: '8px 12px', fontSize: 14 }}>Page {page} of {data.pagination.totalPages}</span>
-              <button disabled={page >= data.pagination.totalPages} onClick={() => setPage(page + 1)} style={pageBtnStyle}>Next</button>
-            </div>
-          )}
-        </>
+      {data && data.pagination.totalPages > 1 && (
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          marginTop: 12, padding: '0 4px', flexWrap: 'wrap', gap: 12,
+        }}>
+          <span style={{ fontSize: 12, color: '#525A65' }}>
+            Page <strong style={{ color: '#0F1115' }}>{page}</strong> of{' '}
+            <strong style={{ color: '#0F1115' }}>{data.pagination.totalPages}</strong>
+            {' · '}<strong style={{ color: '#0F1115' }}>{data.pagination.total.toLocaleString('en-IN')}</strong> total
+          </span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage(page - 1)}
+              style={page <= 1 ? { ...pageBtn, ...pageBtnDisabled } : pageBtn}
+            >Previous</button>
+            <button
+              disabled={page >= data.pagination.totalPages}
+              onClick={() => setPage(page + 1)}
+              style={page >= data.pagination.totalPages ? { ...pageBtn, ...pageBtnDisabled } : pageBtn}
+            >Next</button>
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-function SummaryCard({ label, value, color }: { label: string; value: string; color: string }) {
+// ── KPI strip ─────────────────────────────────────────────────────
+
+function KpiStrip({
+  loading, totalRecords, page,
+}: {
+  loading: boolean;
+  totalRecords: number;
+  page: { totalCommission: number; totalSellerEarning: number; totalRefunded: number };
+}) {
   return (
-    <div style={{ flex: '1 1 160px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '16px 20px', borderTop: `3px solid ${color}` }}>
-      <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+      gap: 12, marginBottom: 16,
+    }}>
+      <Kpi label="Total records"
+        value={totalRecords.toLocaleString('en-IN')}
+        tone="neutral" loading={loading}
+        hint="Across all loaded pages." />
+      <Kpi label="Commission (this page)"
+        value={inr(page.totalCommission)}
+        tone="success" loading={loading}
+        hint="Platform earnings on visible rows." />
+      <Kpi label="Seller earning (this page)"
+        value={inr(page.totalSellerEarning)}
+        tone="neutral" loading={loading}
+        hint="Net to sellers on visible rows." />
+      <Kpi label="Refunded (this page)"
+        value={inr(page.totalRefunded)}
+        tone={page.totalRefunded > 0 ? 'danger' : 'muted'} loading={loading}
+        hint="Admin earning clawed back on returns." />
     </div>
   );
 }
 
-const filterLabelStyle: React.CSSProperties = {
-  display: 'block', fontSize: 11, fontWeight: 600, color: '#6b7280',
-  textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 4,
+type KpiTone = 'success' | 'warning' | 'danger' | 'neutral' | 'muted';
+const KPI_TONE: Record<KpiTone, string> = {
+  success: '#15803d', warning: '#b45309', danger: '#b91c1c',
+  neutral: '#0F1115', muted: '#525A65',
 };
+function Kpi({
+  label, value, tone, hint, loading,
+}: {
+  label: string; value: string; tone: KpiTone; hint?: string; loading?: boolean;
+}) {
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: 16, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0,
+    }}>
+      <div style={kpiLabel}>{label}</div>
+      {loading ? (
+        <div style={{ height: 28, width: '60%', background: '#F3F4F6', borderRadius: 6 }} />
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 22, fontWeight: 700, color: KPI_TONE[tone],
+            fontVariantNumeric: 'tabular-nums',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {value}
+          </span>
+          {(tone === 'warning' || tone === 'danger' || tone === 'success') && (
+            <span style={{ width: 8, height: 8, borderRadius: 9999, background: KPI_TONE[tone] }} />
+          )}
+        </div>
+      )}
+      {hint && <div style={{ fontSize: 12, color: '#525A65', lineHeight: 1.4 }}>{hint}</div>}
+    </div>
+  );
+}
 
-const filterInputStyle: React.CSSProperties = {
-  width: '100%', padding: '8px 10px', fontSize: 13,
-  border: '1px solid #d1d5db', borderRadius: 6, background: '#fff',
-  outline: 'none', boxSizing: 'border-box',
+// ── Row ───────────────────────────────────────────────────────────
+
+function Row({ record: r }: { record: CommissionRecord }) {
+  const refunded = Number(r.refundedAdminEarning);
+  return (
+    <tr style={{ borderTop: '1px solid #F3F4F6' }}>
+      <td style={td}>
+        <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, fontWeight: 600, color: '#0F1115' }}>
+          {r.orderNumber}
+        </span>
+      </td>
+      <td style={{ ...td, color: '#525A65', whiteSpace: 'nowrap' }}>
+        {new Date(r.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+      </td>
+      <td style={td}>
+        <span style={{ fontWeight: 500, color: '#0F1115' }}>{r.sellerName}</span>
+      </td>
+      <td style={td}>
+        <span style={{ color: '#0F1115' }} title={r.productTitle}>
+          {r.productTitle.length > 28 ? r.productTitle.slice(0, 28) + '…' : r.productTitle}
+        </span>
+      </td>
+      <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {r.quantity}
+      </td>
+      <td style={tdNum}>{inr(Number(r.unitPrice))}</td>
+      <td style={tdNum}>{inr(Number(r.totalPrice))}</td>
+      <td style={{ ...tdNum, fontWeight: 700, color: '#0F1115' }}>{inr(Number(r.totalCommission))}</td>
+      <td style={{ ...tdNum, color: '#525A65' }}>{inr(Number(r.productEarning))}</td>
+      <td style={{
+        ...tdNum,
+        color: refunded > 0 ? '#b91c1c' : '#7A828F',
+        fontWeight: refunded > 0 ? 700 : 400,
+      }}>
+        {inr(refunded)}
+      </td>
+    </tr>
+  );
+}
+
+// ── Empty / skeleton ──────────────────────────────────────────────
+
+function EmptyState({ hasFilters, onClear }: { hasFilters: boolean; onClear: () => void }) {
+  return (
+    <div style={{ padding: 48, textAlign: 'center' }}>
+      <div style={{
+        width: 44, height: 44, borderRadius: 9999, background: '#F3F4F6',
+        margin: '0 auto 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#7A828F',
+      }}>
+        <PercentIcon />
+      </div>
+      <div style={{ fontSize: 14, color: '#0F1115', fontWeight: 600 }}>
+        No commission records {hasFilters ? 'match your filters' : 'yet'}
+      </div>
+      <div style={{ fontSize: 13, color: '#525A65', marginTop: 4, maxWidth: 460, margin: '4px auto 0' }}>
+        {hasFilters
+          ? 'Try adjusting your filters or clearing them.'
+          : 'Records appear after orders are delivered and the return window expires.'}
+      </div>
+      {hasFilters && (
+        <button onClick={onClear} style={{ ...btnGhost, marginTop: 16 }}>Clear filters</button>
+      )}
+    </div>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div style={{ padding: 16 }}>
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div key={i} style={{
+          display: 'flex', alignItems: 'center', gap: 16, padding: '12px 0',
+          borderBottom: '1px solid #F3F4F6',
+        }}>
+          <div style={{ width: 80, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+          <div style={{ width: 100, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+          <div style={{ width: 140, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+          <div style={{ flex: 1, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+          <div style={{ width: 80, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+          <div style={{ width: 80, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Field({
+  label, children, style,
+}: { label: string; children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6, ...style }}>
+      <span style={kpiLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+// ── Icons ─────────────────────────────────────────────────────────
+
+function PercentIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="7" cy="7" r="2" />
+      <circle cx="17" cy="17" r="2" />
+      <path d="M19 5 5 19" />
+    </svg>
+  );
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+
+function inr(n: number): string {
+  return `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// ── Shared styles ─────────────────────────────────────────────────
+
+const kpiLabel: React.CSSProperties = {
+  fontSize: 11, color: '#7A828F', textTransform: 'uppercase',
+  letterSpacing: '0.06em', fontWeight: 600,
 };
-
-const filterBtnStyle: React.CSSProperties = {
-  padding: '8px 20px', fontSize: 13, fontWeight: 600,
-  border: 'none', borderRadius: 6, background: '#2563eb',
-  color: '#fff', cursor: 'pointer', whiteSpace: 'nowrap',
+const input: React.CSSProperties = {
+  height: 36, padding: '0 12px',
+  border: '1px solid #D2D6DC', borderRadius: 9,
+  fontSize: 13, color: '#0F1115',
+  outline: 'none', background: '#fff', boxSizing: 'border-box', width: '100%',
 };
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left', padding: '12px 8px', fontWeight: 600,
-  fontSize: 10, color: '#6b7280', textTransform: 'uppercase',
-  letterSpacing: '0.04em', whiteSpace: 'nowrap',
+const btnPrimary: React.CSSProperties = {
+  height: 36, padding: '0 18px',
+  background: '#0F1115', color: '#fff',
+  border: '1px solid #0F1115', borderRadius: 9999,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
 };
-
-const tdStyle: React.CSSProperties = {
-  padding: '12px 8px', verticalAlign: 'middle', whiteSpace: 'nowrap',
+const btnGhost: React.CSSProperties = {
+  height: 36, padding: '0 14px',
+  background: 'transparent', color: '#525A65',
+  border: '1px solid #E5E7EB', borderRadius: 9999,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
 };
-
-const tdNumStyle: React.CSSProperties = {
-  ...tdStyle, fontFamily: 'monospace', fontSize: 12, textAlign: 'right',
+const th: React.CSSProperties = {
+  padding: '12px 16px', textAlign: 'left',
+  fontSize: 11, fontWeight: 600, textTransform: 'uppercase',
+  letterSpacing: '0.06em', color: '#525A65', whiteSpace: 'nowrap',
 };
-
-const pageBtnStyle: React.CSSProperties = {
-  padding: '8px 16px', border: '1px solid #d1d5db', borderRadius: 6,
-  background: '#fff', fontSize: 13, cursor: 'pointer',
+const td: React.CSSProperties = {
+  padding: '14px 16px', fontSize: 13, color: '#0F1115',
+  verticalAlign: 'middle',
+};
+const tdNum: React.CSSProperties = {
+  ...td, fontFamily: 'ui-monospace, monospace', fontSize: 12,
+  textAlign: 'right', whiteSpace: 'nowrap',
+};
+const pageBtn: React.CSSProperties = {
+  height: 32, padding: '0 14px',
+  border: '1px solid #D2D6DC', borderRadius: 9999,
+  background: '#fff', cursor: 'pointer',
+  fontSize: 12, fontWeight: 600, color: '#0F1115',
+};
+const pageBtnDisabled: React.CSSProperties = {
+  color: '#CBD5E1', cursor: 'not-allowed', background: '#FAFAFA',
 };

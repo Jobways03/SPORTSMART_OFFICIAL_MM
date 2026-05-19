@@ -3,6 +3,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -31,6 +32,98 @@ export class AdminInventoryController {
       success: true,
       message: 'Inventory overview retrieved',
       data: overview,
+    };
+  }
+
+  /**
+   * GET /admin/inventory/all
+   * Unified, paginated, filterable inventory grid across seller
+   * mappings + franchise stock. Powers the redesigned admin
+   * Inventory page so the user can browse "all stock", not just
+   * low / out-of-stock items.
+   */
+  @Get('all')
+  @HttpCode(HttpStatus.OK)
+  async getAllInventory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('sellerId') sellerId?: string,
+    @Query('nodeType') nodeType?: string,
+    @Query('status') status?: string,
+  ) {
+    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
+
+    const validNode =
+      nodeType === 'SELLER' || nodeType === 'FRANCHISE' || nodeType === 'ALL'
+        ? (nodeType as 'SELLER' | 'FRANCHISE' | 'ALL')
+        : 'ALL';
+
+    const validStatus =
+      status === 'HEALTHY' || status === 'LOW' || status === 'OUT' ||
+      status === 'INACTIVE' || status === 'ALL'
+        ? (status as 'HEALTHY' | 'LOW' | 'OUT' | 'INACTIVE' | 'ALL')
+        : 'ALL';
+
+    const result = await this.inventoryService.getAdminAllInventory({
+      page: pageNum,
+      limit: limitNum,
+      search,
+      sellerId,
+      nodeType: validNode,
+      status: validStatus,
+    });
+
+    return {
+      success: true,
+      message: 'Inventory retrieved',
+      data: {
+        items: result.items,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: result.total,
+          totalPages: Math.ceil(result.total / limitNum),
+        },
+      },
+    };
+  }
+
+  /**
+   * GET /admin/inventory/mappings/:mappingId/movements
+   * Stock movement audit trail for a single seller mapping. Used
+   * by the admin inventory drill-down to show what happened to a
+   * SKU's stock over time.
+   */
+  @Get('mappings/:mappingId/movements')
+  @HttpCode(HttpStatus.OK)
+  async getMappingMovements(
+    @Param('mappingId') mappingId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit || '50', 10) || 50));
+
+    const result = await this.inventoryService.getMappingMovements(
+      mappingId,
+      pageNum,
+      limitNum,
+    );
+
+    return {
+      success: true,
+      message: 'Stock movements retrieved',
+      data: {
+        movements: result.movements,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: result.total,
+          totalPages: Math.ceil(result.total / limitNum),
+        },
+      },
     };
   }
 

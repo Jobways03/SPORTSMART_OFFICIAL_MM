@@ -1048,6 +1048,9 @@ const shimmerKeyframes = `
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
+    padding: '24px 32px',
+    maxWidth: 1280,
+    margin: '0 auto',
     color: '#0f172a',
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',

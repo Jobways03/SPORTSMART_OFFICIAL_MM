@@ -313,9 +313,6 @@ export class PrismaProductRepository implements IProductRepository {
           // remain visible through ProductStatusHistory.
           rejectionReason: null,
           changeRequestNote: null,
-          // Admin accepted this as a new product, so the duplicate match
-          // is no longer a concern — dismiss the warning permanently.
-          potentialDuplicateOf: null,
           moderatorId: moderator?.moderatorId ?? null,
           reviewedAt,
         },
@@ -379,120 +376,6 @@ export class PrismaProductRepository implements IProductRepository {
       await tx.product.update({ where: { id: productId }, data });
       await tx.productStatusHistory.create({ data: { productId, ...historyEntry } });
     });
-  }
-
-  async mergeProducts(
-    sourceId: string,
-    targetId: string,
-    adminId: string,
-    sellerProfile: any,
-    sourceProduct: any,
-    targetProduct: any,
-  ): Promise<any[]> {
-    const mappingsCreated: any[] = [];
-
-    await this.prisma.$transaction(async (tx) => {
-      const sellerId = sourceProduct.sellerId;
-
-      if (sourceProduct.hasVariants && sourceProduct.variants.length > 0) {
-        const targetVariants = await tx.productVariant.findMany({
-          where: { productId: targetId, isDeleted: false },
-          select: { id: true, price: true, stock: true },
-        });
-
-        if (targetVariants.length > 0) {
-          for (const tv of targetVariants) {
-            const mapping = await tx.sellerProductMapping.create({
-              data: {
-                sellerId, productId: targetId, variantId: tv.id,
-                stockQty: 0,
-                settlementPrice: tv.price ? Number(tv.price) : undefined,
-                pickupAddress: sellerProfile?.storeAddress || null,
-                pickupPincode: sellerProfile?.sellerZipCode || null,
-                dispatchSla: 2, isActive: true,
-              },
-            });
-            mappingsCreated.push(mapping);
-          }
-        } else {
-          const mapping = await tx.sellerProductMapping.create({
-            data: {
-              sellerId, productId: targetId, variantId: null,
-              stockQty: sourceProduct.baseStock ?? 0,
-              settlementPrice: sourceProduct.basePrice ? Number(sourceProduct.basePrice) : undefined,
-              pickupAddress: sellerProfile?.storeAddress || null,
-              pickupPincode: sellerProfile?.sellerZipCode || null,
-              dispatchSla: 2, isActive: true,
-            },
-          });
-          mappingsCreated.push(mapping);
-        }
-      } else {
-        const mapping = await tx.sellerProductMapping.create({
-          data: {
-            sellerId, productId: targetId, variantId: null,
-            stockQty: sourceProduct.baseStock ?? 0,
-            settlementPrice: sourceProduct.basePrice ? Number(sourceProduct.basePrice) : undefined,
-            pickupAddress: sellerProfile?.storeAddress || null,
-            pickupPincode: sellerProfile?.sellerZipCode || null,
-            dispatchSla: 2, isActive: true,
-          },
-        });
-        mappingsCreated.push(mapping);
-      }
-
-      await tx.product.update({
-        where: { id: sourceId },
-        data: { isDeleted: true, deletedAt: new Date(), status: 'ARCHIVED' },
-      });
-      await tx.productVariant.updateMany({
-        where: { productId: sourceId },
-        data: { isDeleted: true, deletedAt: new Date() },
-      });
-      await tx.productStatusHistory.create({
-        data: {
-          productId: sourceId, fromStatus: sourceProduct.status, toStatus: 'ARCHIVED',
-          changedBy: adminId, reason: `Merged into product ${targetId}`,
-        },
-      });
-    });
-
-    return mappingsCreated;
-  }
-
-  async findProductForMerge(productId: string): Promise<any | null> {
-    return this.prisma.product.findFirst({
-      where: { id: productId, isDeleted: false },
-      include: {
-        variants: { where: { isDeleted: false }, select: { id: true, price: true, stock: true } },
-      },
-    });
-  }
-
-  async findDuplicateInfo(productId: string): Promise<any | null> {
-    const product = await this.prisma.product.findFirst({
-      where: { id: productId, isDeleted: false },
-      select: { potentialDuplicateOf: true },
-    });
-    if (!product || !product.potentialDuplicateOf) return product;
-
-    // Stale data guard: if the stored duplicate points at the product itself,
-    // treat it as no duplicate so we don't render a self-match warning.
-    if (product.potentialDuplicateOf === productId) {
-      return { potentialDuplicateOf: null };
-    }
-
-    const duplicate = await this.prisma.product.findFirst({
-      where: { id: product.potentialDuplicateOf, isDeleted: false },
-      include: {
-        category: { select: { id: true, name: true } },
-        brand: { select: { id: true, name: true } },
-        images: { orderBy: { sortOrder: 'asc' }, take: 3 },
-        seller: { select: { id: true, sellerName: true, sellerShopName: true } },
-      },
-    });
-
-    return { potentialDuplicateOf: product.potentialDuplicateOf, duplicate };
   }
 
   async findBySlug(slug: string): Promise<any | null> {

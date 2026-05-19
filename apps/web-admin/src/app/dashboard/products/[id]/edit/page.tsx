@@ -154,11 +154,6 @@ export default function EditProductPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Duplicate detection state
-  const [duplicateProduct, setDuplicateProduct] = useState<any>(null);
-  const [duplicateLoading, setDuplicateLoading] = useState(false);
-  const [merging, setMerging] = useState(false);
-
   // ----- Toast helper -----
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
@@ -248,39 +243,6 @@ export default function EditProductPage() {
       setLoading(false);
     }
   }, [productId, populateForm, router]);
-
-  const loadDuplicateInfo = useCallback(async () => {
-    setDuplicateLoading(true);
-    try {
-      const res = await adminProductsService.getDuplicateInfo(productId);
-      if (res.data) {
-        setDuplicateProduct(res.data);
-      }
-    } catch {
-      // Non-critical
-    } finally {
-      setDuplicateLoading(false);
-    }
-  }, [productId]);
-
-  const handleMerge = async (targetId: string) => {if (!(await confirmDialog('Are you sure you want to merge this product into the existing one? This will archive the current product and create seller mappings on the target product.'))) return;
-    setMerging(true);
-    try {
-      await adminProductsService.mergeProduct(productId, targetId);
-      showToast('success', 'Product merged successfully. The seller has been mapped to the existing product.');
-      await loadProduct();
-    } catch (err: any) {
-      showToast('error', err?.message || 'Failed to merge products.');
-    } finally {
-      setMerging(false);
-    }
-  };
-
-  useEffect(() => {
-    if (product && (product as any).potentialDuplicateOf) {
-      loadDuplicateInfo();
-    }
-  }, [product, loadDuplicateInfo]);
 
   useEffect(() => {
     async function loadData() {
@@ -814,63 +776,6 @@ export default function EditProductPage() {
     }
   }
 
-  // ----- Status banner -----
-
-  function renderStatusBanner() {
-    if (!product) return null;
-    const productStatus = product.status;
-    const moderation = product.moderationStatus;
-
-    // Product status takes priority
-    if (productStatus === 'DRAFT') {
-      return (
-        <div className="status-banner" style={{ background: '#f3f4f6', border: '1px solid #d1d5db', color: '#374151' }}>
-          This product is a draft and not visible on the storefront.
-        </div>
-      );
-    }
-    if (productStatus === 'ACTIVE') {
-      return (
-        <div className="status-banner active">
-          This product is live on the storefront.
-        </div>
-      );
-    }
-    if (productStatus === 'SUSPENDED') {
-      return (
-        <div className="status-banner" style={{ background: '#fef3c7', border: '1px solid #f59e0b', color: '#92400e' }}>
-          This product is suspended.
-        </div>
-      );
-    }
-
-    // Moderation status for seller-submitted products
-    if (moderation === 'REJECTED') {
-      return (
-        <div className="status-banner rejected">
-          <strong>Rejected</strong>
-          {product.moderationNote && <> &mdash; {product.moderationNote}</>}
-        </div>
-      );
-    }
-    if (moderation === 'CHANGES_REQUESTED') {
-      return (
-        <div className="status-banner changes-requested">
-          <strong>Changes Requested</strong>
-          {product.moderationNote && <> &mdash; {product.moderationNote}</>}
-        </div>
-      );
-    }
-    if (moderation === 'SUBMITTED' || moderation === 'IN_REVIEW' || productStatus === 'SUBMITTED') {
-      return (
-        <div className="status-banner submitted">
-          This product is pending review.
-        </div>
-      );
-    }
-    return null;
-  }
-
   // ----- Loading / Error states -----
 
   if (loading) {
@@ -920,36 +825,38 @@ export default function EditProductPage() {
         </div>
       </div>
 
-      {/* Status Banner */}
-      {renderStatusBanner()}
+      {/* Compact context bar — replaces the verbose status banner +
+          seller info row with a single chip row: status, seller, last
+          update. Rejection / change-request notes surface inline. */}
+      <ProductContextBar product={product} />
 
-      {/* Read-only banner for admin-created products */}
+      {/* Read-only banner for admin-created products — separate from
+          the context bar because it's about edit permission, not
+          lifecycle state. */}
       {isAdminCreated && (
         <div style={{
-          padding: '14px 20px',
+          padding: '10px 14px',
           background: '#eff6ff',
           border: '1px solid #bfdbfe',
-          borderRadius: 10,
+          borderRadius: 8,
           marginBottom: 16,
-          fontSize: 14,
+          fontSize: 12.5,
           color: '#1e40af',
-          fontWeight: 500,
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
+          gap: 8,
         }}>
-          <span style={{ fontSize: 18 }}>&#128274;</span>
-          This product was created by the Storefront Admin. Product content is read-only.
-        </div>
-      )}
-
-      {/* Seller info (readonly) */}
-      {product.seller && (
-        <div className="info-box" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          <strong>Seller:</strong>
-          <span>
-            {product.seller.sellerName} ({product.seller.sellerShopName}) &mdash; {product.seller.email}
-          </span>
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M4 8h8v6H4zM5 8V5a3 3 0 016 0v3"
+            />
+          </svg>
+          Created by Storefront Admin — product content is read-only here.
         </div>
       )}
 
@@ -984,107 +891,6 @@ export default function EditProductPage() {
               onClick={() => setActiveModal('requestChanges')}
             >
               Request Changes
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Duplicate Warning Card */}
-      {(product as any).potentialDuplicateOf && duplicateProduct && (
-        <div className="form-card" style={{ marginBottom: 16, border: '2px solid #f59e0b', background: '#fffbeb' }}>
-          <div className="form-card-title" style={{ color: '#92400e' }}>
-            &#9888; DUPLICATE WARNING
-          </div>
-          <p style={{ fontSize: 14, marginBottom: 16, color: '#78350f' }}>
-            This product may be a duplicate of an existing product in the catalog. Review the comparison below.
-          </p>
-
-          {duplicateLoading ? (
-            <p style={{ fontSize: 13, color: '#92400e' }}>Loading duplicate details...</p>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 16 }}>
-              {/* Submitted product */}
-              <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 8 }}>
-                  Submitted Product
-                </div>
-                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>{product.title}</div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                  Brand: {(product as any).brand?.name || 'N/A'}
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>
-                  Category: {(product as any).category?.name || 'N/A'}
-                </div>
-                {product.images && product.images.length > 0 && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {product.images.slice(0, 3).map((img: any) => (
-                      <img
-                        key={img.id}
-                        src={img.url}
-                        alt={product.title}
-                        style={{ width: 60, height: 60, objectFit: 'cover' as const, borderRadius: 6, border: '1px solid #e5e7eb' }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Existing product */}
-              <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 8 }}>
-                  Existing Product
-                </div>
-                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>{duplicateProduct.title}</div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                  Brand: {duplicateProduct.brandName || 'N/A'}
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                  Category: {duplicateProduct.categoryName || 'N/A'}
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>
-                  Status: {duplicateProduct.status} | Code: {duplicateProduct.productCode || 'N/A'}
-                </div>
-                {duplicateProduct.images && duplicateProduct.images.length > 0 && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {duplicateProduct.images.slice(0, 3).map((img: any) => (
-                      <img
-                        key={img.id}
-                        src={img.url}
-                        alt={duplicateProduct.title}
-                        style={{ width: 60, height: 60, objectFit: 'cover' as const, borderRadius: 6, border: '1px solid #e5e7eb' }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button
-              type="button"
-              className="form-btn primary"
-              style={{ background: '#16a34a' }}
-              onClick={handleApprove}
-            >
-              Approve as New Product
-            </button>
-            <button
-              type="button"
-              className="form-btn"
-              style={{ background: '#2563eb', color: '#fff', border: 'none' }}
-              onClick={() => handleMerge(duplicateProduct.id)}
-              disabled={merging}
-            >
-              {merging ? 'Merging...' : 'Merge into Existing'}
-            </button>
-            <button
-              type="button"
-              className="form-btn"
-              style={{ background: '#dc2626', color: '#fff', border: 'none' }}
-              onClick={() => setActiveModal('reject')}
-            >
-              Reject as Duplicate
             </button>
           </div>
         </div>
@@ -2208,6 +2014,171 @@ export default function EditProductPage() {
           onClose={() => setActiveModal(null)}
           onSuccess={onModalSuccess}
         />
+      )}
+    </div>
+  );
+}
+
+/* ── Product context bar ───────────────────────────────────────
+   One compact row at the top of the edit page: status pill, seller
+   chip, last-updated timestamp. Replaces the old "live on storefront"
+   banner + the verbose seller info row. Rejection / change-request
+   notes surface in a small note row underneath when present. */
+
+function ProductContextBar({ product }: { product: any }) {
+  const status: string = product.status ?? 'DRAFT';
+  const moderationStatus: string | null = product.moderationStatus ?? null;
+
+  let label: string;
+  let tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+  let note: string | null = null;
+
+  if (moderationStatus === 'REJECTED') {
+    label = 'Rejected';
+    tone = 'danger';
+    note = product.moderationNote || product.rejectionReason || null;
+  } else if (moderationStatus === 'CHANGES_REQUESTED') {
+    label = 'Changes requested';
+    tone = 'warning';
+    note = product.moderationNote || product.changeRequestNote || null;
+  } else if (moderationStatus === 'SUBMITTED' || moderationStatus === 'IN_REVIEW' || status === 'SUBMITTED') {
+    label = 'Pending review';
+    tone = 'warning';
+  } else if (status === 'ACTIVE') {
+    label = 'Live on storefront';
+    tone = 'success';
+  } else if (status === 'APPROVED') {
+    label = 'Approved';
+    tone = 'info';
+  } else if (status === 'DRAFT') {
+    label = 'Draft';
+    tone = 'neutral';
+  } else if (status === 'SUSPENDED') {
+    label = 'Suspended';
+    tone = 'neutral';
+  } else if (status === 'ARCHIVED') {
+    label = 'Archived';
+    tone = 'neutral';
+  } else {
+    label = status.replace(/_/g, ' ').toLowerCase();
+    tone = 'neutral';
+  }
+
+  const tonePalette: Record<typeof tone, { dot: string; fg: string; bg: string }> = {
+    success: { dot: '#16a34a', fg: '#15803d', bg: '#f0fdf4' },
+    warning: { dot: '#d97706', fg: '#b45309', bg: '#fffbeb' },
+    danger:  { dot: '#dc2626', fg: '#b91c1c', bg: '#fef2f2' },
+    info:    { dot: '#2563eb', fg: '#1d4ed8', bg: '#eff6ff' },
+    neutral: { dot: '#94a3b8', fg: '#475569', bg: '#f8fafc' },
+  };
+  const p = tonePalette[tone];
+
+  const sellerName: string | null =
+    product.seller?.sellerShopName || product.seller?.sellerName || null;
+
+  let lastUpdate: Date | null = null;
+  const history = Array.isArray(product.statusHistory) ? product.statusHistory : [];
+  if (history.length > 0) {
+    const latest = [...history].sort(
+      (a: any, b: any) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    )[0];
+    if (latest?.createdAt) lastUpdate = new Date(latest.createdAt);
+  } else if (product.updatedAt) {
+    lastUpdate = new Date(product.updatedAt);
+  }
+
+  const lastUpdateLabel = lastUpdate
+    ? lastUpdate.toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: lastUpdate.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined,
+      })
+    : null;
+
+  const chipBase: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    height: 28,
+    padding: '0 10px',
+    fontSize: 12.5,
+    fontWeight: 500,
+    borderRadius: 6,
+    whiteSpace: 'nowrap',
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 14px',
+          background: '#fff',
+          border: '1px solid #e2e8f0',
+          borderRadius: 8,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ ...chipBase, background: p.bg, color: p.fg, fontWeight: 600 }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: p.dot,
+              flexShrink: 0,
+            }}
+          />
+          {label}
+        </span>
+
+        {sellerName && (
+          <>
+            <span style={{ width: 1, height: 18, background: '#e2e8f0' }} />
+            <span style={{ ...chipBase, color: '#475569' }}>
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" style={{ color: '#94a3b8' }}>
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14a6 6 0 1112 0"
+                />
+              </svg>
+              <span style={{ color: '#94a3b8' }}>Sold by</span>
+              <strong style={{ color: '#0f172a', fontWeight: 600 }}>{sellerName}</strong>
+            </span>
+          </>
+        )}
+
+        {lastUpdateLabel && (
+          <>
+            <span style={{ flex: 1, minWidth: 8 }} />
+            <span style={{ ...chipBase, color: '#94a3b8', fontSize: 12 }}>
+              Updated {lastUpdateLabel}
+            </span>
+          </>
+        )}
+      </div>
+
+      {note && (
+        <div
+          style={{
+            marginTop: 6,
+            padding: '8px 14px',
+            background: p.bg,
+            border: `1px solid ${p.dot}33`,
+            borderRadius: 6,
+            fontSize: 12.5,
+            color: p.fg,
+          }}
+        >
+          <strong style={{ fontWeight: 600 }}>{label}:</strong> {note}
+        </div>
       )}
     </div>
   );
