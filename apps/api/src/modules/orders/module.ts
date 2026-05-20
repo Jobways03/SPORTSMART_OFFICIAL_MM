@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AdminOrdersController } from './presentation/controllers/admin-orders.controller';
 import { AdminRoutingController } from './presentation/controllers/admin-routing.controller';
 import { SellerOrdersController } from './presentation/controllers/seller-orders.controller';
@@ -20,7 +20,8 @@ import { MoneyModule } from '../../core/money/money.module';
 import { TaxModule } from '../tax/module';
 
 @Module({
-  imports: [CatalogModule, FranchiseModule, MoneyModule, TaxModule],
+  // Tax-centric cycle break (Tax → Checkout → ... → Orders chain).
+  imports: [CatalogModule, FranchiseModule, MoneyModule, forwardRef(() => TaxModule)],
   controllers: [
     AdminOrdersController,
     AdminRoutingController,

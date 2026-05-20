@@ -10,7 +10,7 @@ import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import * as compression from 'compression';
-import cookieParser from 'cookie-parser';
+import * as cookieParser from 'cookie-parser';
 
 import { AppModule } from './app.module';
 import { EnvService } from './bootstrap/env/env.service';

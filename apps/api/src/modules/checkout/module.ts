@@ -40,7 +40,9 @@ import { CodModule } from '../cod/module';
 @Module({
   imports: [
     CatalogModule,
-    FranchiseModule,
+    // Tax → Checkout → Franchise → Tax circular chain; forwardRef
+    // mirrors the TaxModule side already declared below.
+    forwardRef(() => FranchiseModule),
     DiscountsModule,
     ShippingOptionsModule,
     AffiliateModule,
