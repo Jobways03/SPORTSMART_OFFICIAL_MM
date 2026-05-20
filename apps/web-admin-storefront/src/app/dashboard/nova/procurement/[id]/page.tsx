@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, notFound } from 'next/navigation';
 import { NovaTabs } from '../../components/nova-tabs';
 import {
   adminNovaService,
@@ -21,6 +21,7 @@ const ALLOWED_TRANSITIONS: Record<OwnBrandProcurementStatus, OwnBrandProcurement
 };
 
 export default function ProcurementDetailPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<ProcurementDetail | null>(null);
   const [loading, setLoading] = useState(true);

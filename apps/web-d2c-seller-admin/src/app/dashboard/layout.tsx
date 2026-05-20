@@ -130,6 +130,8 @@ export default function DashboardLayout({
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },
     { href: '/dashboard/accounts', label: 'Accounts', icon: '&#128202;' },
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
+    { href: '/dashboard/storefront', label: 'Storefront', icon: '&#128722;' },
+    { href: '/dashboard/settings', label: 'Settings', icon: '&#9881;' },
   ];
 
   return (

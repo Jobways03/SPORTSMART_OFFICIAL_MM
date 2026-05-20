@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, notFound } from 'next/navigation';
 import { NovaTabs } from '../components/nova-tabs';
 import {
   adminNovaService,
@@ -25,6 +25,7 @@ const STATUSES: Array<{ value: OwnBrandProcurementStatus | ''; label: string }> 
 ];
 
 export default function NovaProcurementListPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const router = useRouter();
   const [pos, setPos] = useState<ProcurementOrder[]>([]);
   const [warehouses, setWarehouses] = useState<OwnBrandWarehouse[]>([]);

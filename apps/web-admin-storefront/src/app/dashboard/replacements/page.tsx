@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import {
   adminReturnsService,
   ReturnListItem,
@@ -43,6 +44,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export default function ReplacementsPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_REPLACEMENTS !== 'true') notFound();
   const [tab, setTab] = useState<Tab>('PENDING_STOCK_CHECK');
   const [rows, setRows] = useState<ReturnListItem[]>([]);
   const [loading, setLoading] = useState(true);

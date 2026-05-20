@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, notFound } from 'next/navigation';
 import { NovaTabs } from '../../components/nova-tabs';
 import {
   adminNovaService,
@@ -20,6 +20,7 @@ interface LineItem {
 const EMPTY_LINE: LineItem = { productId: '', variantId: '', quantityOrdered: '', unitCost: '' };
 
 export default function NewProcurementPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const router = useRouter();
   const [warehouses, setWarehouses] = useState<OwnBrandWarehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState('');
