@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, notFound } from 'next/navigation';
 import { NovaTabs } from '../components/nova-tabs';
 import {
   adminNovaService,
@@ -28,6 +28,7 @@ const EMPTY: WarehouseForm = {
 };
 
 export default function NovaWarehousesPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const router = useRouter();
   const [warehouses, setWarehouses] = useState<OwnBrandWarehouse[]>([]);
   const [loading, setLoading] = useState(true);

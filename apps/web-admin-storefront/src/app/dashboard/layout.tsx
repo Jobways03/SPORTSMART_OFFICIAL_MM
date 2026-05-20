@@ -47,7 +47,7 @@ interface NavItem {
 // now (highest priority); Growth is reporting / campaigns (lowest).
 // Section headers render automatically when `section` changes between
 // adjacent visible items.
-type NavSection = 'operations' | 'care' | 'finance' | 'risk' | 'growth';
+type NavSection = 'operations' | 'care' | 'finance' | 'risk' | 'growth' | 'system';
 
 const SECTION_LABELS: Record<NavSection, string> = {
   operations: 'Operations',
@@ -55,6 +55,7 @@ const SECTION_LABELS: Record<NavSection, string> = {
   finance: 'Finance',
   risk: 'Risk',
   growth: 'Growth',
+  system: 'System',
 };
 
 const navItems: (NavItem & { section?: NavSection })[] = [
@@ -64,6 +65,7 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   // Operations — day-to-day order/catalog work, highest priority.
   { label: 'Orders', href: '/dashboard/orders', icon: 'orders', hasPendingBadge: true, anyOf: ['orders.read'], section: 'operations' },
   { label: 'Products', href: '/dashboard/products', icon: 'package', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
+  { label: 'Seller Mappings', href: '/dashboard/products/seller-mappings', icon: 'users', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
   // Inventory has no dedicated permission key today — falls under products.
   { label: 'Inventory', href: '/dashboard/inventory', icon: 'inventory', anyOf: ['products.read'], section: 'operations' },
   { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: 'alert-triangle', anyOf: ['products.read'], section: 'operations' },
@@ -81,6 +83,11 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Wallets', href: '/dashboard/wallets', icon: 'wallet', anyOf: ['wallets.read'], section: 'finance' },
   { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: 'shield', anyOf: ['paymentOps.read'], section: 'finance' },
   { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: 'recon', anyOf: ['recon.read'], section: 'finance' },
+  // Refund Saga Console — observability into the refund-execution state
+  // machine. Surfaces stuck/failed sagas so finance ops can step in
+  // before they breach SLA. Gated on the same permissions as Payment
+  // Ops and refund visibility.
+  { label: 'Refund Sagas', href: '/dashboard/finance/refund-sagas', icon: 'recon', anyOf: ['paymentOps.read', 'refunds.read'], section: 'finance' },
   // Liability Ledger is finance ops — `refunds.approve` already gates the
   // backend list endpoint, mirror that here.
   { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: 'book', anyOf: ['refunds.approve'], section: 'finance' },
@@ -98,10 +105,20 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Marketing', href: '/dashboard/marketing', icon: 'megaphone', anyOf: ['discounts.read'], section: 'growth' },
   { label: 'Analytics', href: '/dashboard/analytics', icon: 'chart', anyOf: ['analytics.read'], section: 'growth' },
 
-  // Hidden — replacement/exchange flow disabled in UI for now.
-  // { label: 'Replacements', href: '/dashboard/replacements', icon: '🔁' },
-  // NOVA Brand entry removed per product request — route still exists at
-  // /dashboard/nova/* if needed directly.
+  // System — integrity / observability tools used by admins, not customer-facing.
+  { label: 'Data Validation', href: '/dashboard/system/data-validation', icon: 'shield', anyOf: ['audit.read'], section: 'system' },
+
+  // Post-MVP1 features — parked behind env flags. The pages themselves
+  // also guard with notFound() so direct-URL access is blocked when the
+  // flag is off. To enable in an environment, set the corresponding
+  // NEXT_PUBLIC_FEATURE_* var to "true" (see .env.example).
+  ...(process.env.NEXT_PUBLIC_FEATURE_REPLACEMENTS === 'true'
+    ? [{ label: 'Replacements', href: '/dashboard/replacements', icon: 'returns' as IconName, anyOf: ['returns.read'], section: 'care' as NavSection }]
+    : []),
+  ...(process.env.NEXT_PUBLIC_FEATURE_NOVA === 'true'
+    ? [{ label: 'NOVA Brand', href: '/dashboard/nova/procurement', icon: 'package' as IconName, anyOf: ['products.read', 'catalog.read'], section: 'operations' as NavSection }]
+    : []),
+
   // Moved into Settings (still reachable at the same URLs via the Settings hub):
   //   Notifications, Storefront Content, Storefront Navigation,
   //   Shipping, Access Logs, Admin Activity.
