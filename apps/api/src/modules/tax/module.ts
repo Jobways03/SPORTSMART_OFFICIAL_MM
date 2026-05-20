@@ -202,7 +202,9 @@ const taxPdfStorageProvider = {
     WalletModule,
     NotificationsModule,
     AuditModule,
-    SettlementsModule,
+    // SettlementsModule also imports TaxModule (for SettlementTcsHookService);
+    // forwardRef on both sides resolves the circular dependency at bootstrap.
+    forwardRef(() => SettlementsModule),
     CartModule,
     forwardRef(() => CheckoutModule),
   ],

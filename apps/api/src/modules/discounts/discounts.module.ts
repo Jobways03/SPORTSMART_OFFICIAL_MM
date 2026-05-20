@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AdminDiscountsController } from './presentation/controllers/admin-discounts.controller';
 import { CustomerDiscountsController } from './presentation/controllers/customer-discounts.controller';
 import { DiscountsService } from './application/services/discounts.service';
@@ -21,7 +21,8 @@ import { AuditModule } from '../audit/module';
 import { TaxModule } from '../tax/module';
 
 @Module({
-  imports: [AffiliateModule, AuditModule, TaxModule],
+  // TaxModule pulls Checkout → Discounts via forwardRef chain; mirror it here.
+  imports: [AffiliateModule, AuditModule, forwardRef(() => TaxModule)],
   controllers: [AdminDiscountsController, CustomerDiscountsController],
   providers: [
     AdminAuthGuard,

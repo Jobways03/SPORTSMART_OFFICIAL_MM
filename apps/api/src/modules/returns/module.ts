@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import {
   AdminAuthGuard,
   FranchiseAuthGuard,
@@ -51,7 +51,8 @@ import { MoneyModule } from '../../core/money/money.module';
     LiabilityLedgerModule,
     DiscountsModule,
     MoneyModule,
-    TaxModule,
+    // Break Tax-centric cycles (Tax → Checkout → Returns and similar).
+    forwardRef(() => TaxModule),
   ],
   controllers: [
     CustomerReturnsController,

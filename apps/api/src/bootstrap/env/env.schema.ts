@@ -55,6 +55,12 @@ export const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().default('1h'),
   JWT_REFRESH_TTL: z.string().default('30d'),
 
+  // Cookie domain pinning for auth cookies (admin, seller, franchise,
+  // affiliate, identity login + refresh). Blank in dev — cookies default
+  // to the request host. In prod set to `.sportsmart.com` (with the leading
+  // dot) so the cookie is shared across api., admin., seller.* subdomains.
+  AUTH_COOKIE_DOMAIN: z.string().optional(),
+
   // S3 - optional in dev
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().optional(),

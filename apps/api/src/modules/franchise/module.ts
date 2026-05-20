@@ -20,7 +20,7 @@
  * JWT_FRANCHISE_SECRET, so a franchise token cannot reach seller endpoints
  * even if a route were misconfigured.
  */
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { FranchiseAuthGuard, AdminAuthGuard, FranchiseActiveGuard } from '../../core/guards';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
@@ -132,7 +132,8 @@ import { AdminImpersonateFranchiseUseCase } from './application/use-cases/admin-
 import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delete-franchise.use-case';
 
 @Module({
-  imports: [CatalogModule, MoneyModule, TaxModule],
+  // Tax → Checkout → Franchise → Tax cycle; forwardRef breaks the loop.
+  imports: [CatalogModule, MoneyModule, forwardRef(() => TaxModule)],
   controllers: [
     FranchiseAuthController,
     FranchiseProfileController,
