@@ -1,0 +1,85 @@
+// Phase 108 (2026-05-25) — B2B / off-platform seller return reversal.
+//
+// Replaces the old fire-and-forget POST /seller/orders/:id/return (which
+// self-credited stock + cancelled the sub-order with no record, no approval,
+// no commission/settlement effect, no audit). A reversal is now a persisted,
+// admin-approved request:
+//
+//   PENDING_APPROVAL ──approve──▶ APPROVED   (effects applied atomically)
+//                    ──reject───▶ REJECTED
+//                    ──cancel───▶ CANCELLED  (seller, pre-decision only)
+//
+// Effects applied ONLY on approval (see SellerReversalService.approve):
+//   • stock restored to SellerProductMapping + ProductVariant/Product
+//   • StockMovement ledger row (kind RESTOCKED)
+//   • commission reversed proportionally (CommissionReversalSource.SELLER_REVERSAL)
+//   • SellerDebit row (LedgerSourceType.SELLER_REVERSAL) so settlement recovers it
+//   • OrderItem.reversedQuantity incremented
+//   • SubOrder.sellerReversalStatus mirrored (fulfillmentStatus stays DELIVERED —
+//     the customer kept the goods, so their order history is unchanged)
+//
+// GST: deliberately NOT adjusted in-system (off-platform B2B). See
+// docs/tax/GST_ASSUMPTIONS.md — pending CA sign-off.
+
+enum SellerReversalStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model SellerReversal {
+  id            String               @id @default(uuid())
+  subOrderId    String               @map("sub_order_id")
+  sellerId      String               @map("seller_id")
+  masterOrderId String               @map("master_order_id")
+  status        SellerReversalStatus @default(PENDING_APPROVAL)
+
+  // Seller's justification (free text, validated + length-capped at the DTO).
+  reason String
+
+  // Gross value of the reversed items (Σ unitPrice × qty), snapshotted at
+  // request time so the admin queue + audit don't depend on live prices.
+  reversalValueInPaise BigInt @map("reversal_value_in_paise")
+
+  requestedAt DateTime @default(now()) @map("requested_at")
+
+  // Decision (admin approve/reject) provenance.
+  decidedByAdminId String?   @map("decided_by_admin_id")
+  decidedAt        DateTime? @map("decided_at")
+  rejectionReason  String?   @map("rejection_reason")
+
+  // Links created on approval (traceability into the finance/ledger tables).
+  sellerDebitId String? @map("seller_debit_id")
+
+  // Network-retry / double-submit dedup (Idempotency-Key header derived).
+  idempotencyKey String? @unique @map("idempotency_key")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items SellerReversalItem[]
+
+  @@index([sellerId, status, requestedAt(sort: Desc)])
+  @@index([status, requestedAt(sort: Desc)])
+  @@index([subOrderId])
+  @@map("seller_reversals")
+}
+
+model SellerReversalItem {
+  id          String  @id @default(uuid())
+  reversalId  String  @map("reversal_id")
+  orderItemId String  @map("order_item_id")
+  productId   String  @map("product_id")
+  variantId   String? @map("variant_id")
+  quantity    Int
+
+  // Per-unit price snapshot (paise) at request time.
+  unitPriceInPaise BigInt @map("unit_price_in_paise")
+
+  reversal SellerReversal @relation(fields: [reversalId], references: [id], onDelete: Cascade)
+
+  @@index([reversalId])
+  @@index([orderItemId])
+  @@map("seller_reversal_items")
+}

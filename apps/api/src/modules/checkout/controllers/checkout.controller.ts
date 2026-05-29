@@ -7,9 +7,15 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { UserAuthGuard } from '../../../core/guards';
 import { Idempotent } from '../../../core/decorators/idempotent.decorator';
 import { CheckoutService } from '../application/services/checkout.service';
+import {
+  PlaceOrderDto,
+  RetryPaymentDto,
+  VerifyPaymentDto,
+} from '../presentation/dtos/place-order.dto';
 
 @ApiTags('Checkout')
 @Controller('customer/checkout')
@@ -34,10 +40,22 @@ export class CheckoutController {
   @Get('summary')
   async getCheckoutSummary(@Req() req: any) {
     const data = await this.checkoutService.getCheckoutSummary(req.userId);
+    // Phase 66 (audit Gap #12) — surface the ALLOW_ONLINE_PAYMENTS
+    // flag so the storefront can hide the ONLINE option without
+    // having to read its own env. Default 'true' (Razorpay configured
+    // in prod).
+    const allowOnlinePayments =
+      (process.env.ALLOW_ONLINE_PAYMENTS ?? 'true').toLowerCase() !== 'false';
     return {
       success: true,
       message: 'Checkout summary retrieved',
-      data,
+      data: {
+        ...(data as any),
+        paymentOptions: {
+          codEnabled: true,
+          onlineEnabled: allowOnlinePayments,
+        },
+      },
     };
   }
 
@@ -57,42 +75,23 @@ export class CheckoutController {
   // creating a duplicate MasterOrder + duplicate Razorpay order +
   // duplicate stock reservation. Client MUST supply X-Idempotency-Key.
   @Post('place-order')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Idempotent()
-  async placeOrder(
-    @Req() req: any,
-    @Body()
-    body: {
-      paymentMethod?: string;
-      couponCode?: string;
-      // Affiliate referral code from URL ?ref= cookie. Independent of
-      // couponCode — a customer can apply both (a discount coupon AND
-      // an affiliate referral code), or just one, or neither. The
-      // attribution rule (SRS §7.3) is "coupon wins" if the coupon
-      // itself is also an affiliate-owned code.
-      referralCode?: string;
-      // Optional wallet portion to apply to this order. Server clamps
-      // to chargedTotal and validates available balance before debit.
-      walletApplyAmountInPaise?: number;
-      // Shipping option (v1). The customer picks one at checkout; the
-      // server re-quotes it against the current cart subtotal before
-      // committing the order so the fee can't be tampered with.
-      shippingOptionId?: string | null;
-      // Phase 37 — picked B2B GSTIN profile. Null/undefined = legacy
-      // behaviour (tax-document service falls back to the customer's
-      // isDefault=true profile). Backend validates ownership before
-      // snapshotting the ID on MasterOrder.
-      taxProfileId?: string | null;
-    },
-  ) {
-    const walletApply = Number(body.walletApplyAmountInPaise);
+  async placeOrder(@Req() req: any, @Body() dto: PlaceOrderDto) {
+    // Phase 66 (audit Gap #13) — strict paymentMethod. The DTO
+    // enforces enum membership at the pipe; we pass the validated
+    // value straight through. Pre-Phase-66 'UPI' silently became
+    // COD; now it's a 400 from the validator.
     const data = await this.checkoutService.placeOrder(
       req.userId,
-      body.paymentMethod,
-      body.couponCode,
-      body.referralCode,
-      Number.isFinite(walletApply) && walletApply > 0 ? walletApply : undefined,
-      body.shippingOptionId ?? null,
-      body.taxProfileId ?? null,
+      dto.paymentMethod,
+      dto.couponCode,
+      dto.referralCode,
+      dto.walletApplyAmountInPaise && dto.walletApplyAmountInPaise > 0
+        ? dto.walletApplyAmountInPaise
+        : undefined,
+      dto.shippingOptionId ?? null,
+      dto.taxProfileId ?? null,
     );
     const isOnline = (data as any).paymentMethod === 'ONLINE';
     return {
@@ -106,16 +105,11 @@ export class CheckoutController {
 
   // ── POST /customer/checkout/payment/retry ───────────────────────────
   @Post('payment/retry')
-  async retryPayment(
-    @Req() req: any,
-    @Body() body: { orderNumber: string },
-  ) {
-    if (!body.orderNumber) {
-      return { success: false, message: 'orderNumber is required' };
-    }
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async retryPayment(@Req() req: any, @Body() dto: RetryPaymentDto) {
     const data = await this.checkoutService.retryPayment(
       req.userId,
-      body.orderNumber,
+      dto.orderNumber,
     );
     return {
       success: true,
@@ -132,31 +126,13 @@ export class CheckoutController {
   // hits Razorpay's fetchPayment, which has rate limits worth
   // respecting).
   @Post('payment/verify')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Idempotent()
-  async verifyPayment(
-    @Req() req: any,
-    @Body()
-    body: {
-      razorpayOrderId: string;
-      razorpayPaymentId: string;
-      razorpaySignature: string;
-    },
-  ) {
-    if (
-      !body.razorpayOrderId ||
-      !body.razorpayPaymentId ||
-      !body.razorpaySignature
-    ) {
-      return {
-        success: false,
-        message:
-          'razorpayOrderId, razorpayPaymentId, and razorpaySignature are required',
-      };
-    }
+  async verifyPayment(@Req() req: any, @Body() dto: VerifyPaymentDto) {
     const data = await this.checkoutService.verifyPayment(req.userId, {
-      razorpayOrderId: body.razorpayOrderId,
-      razorpayPaymentId: body.razorpayPaymentId,
-      razorpaySignature: body.razorpaySignature,
+      razorpayOrderId: dto.razorpayOrderId,
+      razorpayPaymentId: dto.razorpayPaymentId,
+      razorpaySignature: dto.razorpaySignature,
     });
     return {
       success: true,

@@ -139,9 +139,46 @@ export class TaxSnapshotService {
       }
 
       // 4. Batch product + variant queries.
-      const productIds = [...new Set(items.map((i) => i.productId))];
+      //
+      // Phase 70 (2026-05-22) — Phase 67 audit Gap #15. Prefer the
+      // in-tx OrderItemTaxConfigSnapshot rows (populated by
+      // placeOrderTransaction). Legacy orders without snapshot rows
+      // fall back to the live product/variant read — same behaviour
+      // as pre-Phase-70. Mid-flow admin edits to gstRateBps /
+      // hsnCode can no longer drift the snapshot away from what
+      // the customer was actually charged.
+      const orderItemIds = items.map((i) => i.id);
+      const configSnapshots = orderItemIds.length
+        ? await tx.orderItemTaxConfigSnapshot.findMany({
+            where: { orderItemId: { in: orderItemIds } },
+            select: {
+              orderItemId: true,
+              hsnCode: true,
+              gstRateBps: true,
+              supplyTaxability: true,
+              priceIncludesTax: true,
+              cessRateBps: true,
+              uqcCode: true,
+              productSource: true,
+            },
+          })
+        : [];
+      const configByOrderItem = new Map(
+        configSnapshots.map((s) => [s.orderItemId, s]),
+      );
+
+      // Live fallback — only fire the product/variant queries for
+      // items that don't have a snapshot row (legacy orders).
+      const itemsNeedingLiveLookup = items.filter(
+        (i) => !configByOrderItem.has(i.id),
+      );
+      const productIds = [
+        ...new Set(itemsNeedingLiveLookup.map((i) => i.productId)),
+      ];
       const variantIds = [
-        ...new Set(items.map((i) => i.variantId).filter((v): v is string => !!v)),
+        ...new Set(
+          itemsNeedingLiveLookup.map((i) => i.variantId).filter((v): v is string => !!v),
+        ),
       ];
       const [products, variants] = await Promise.all([
         productIds.length
@@ -199,18 +236,37 @@ export class TaxSnapshotService {
         const pos = posMap.get(it.subOrderId);
         const isIntraState = pos?.isIntraState ?? false;
 
-        const product = productById.get(it.productId);
-        const variant = it.variantId ? variantById.get(it.variantId) : null;
-
-        const hsnCode = variant?.hsnCodeOverride ?? product?.hsnCode ?? null;
-        const gstRateBps =
-          variant?.gstRateBpsOverride ?? product?.gstRateBps ?? 0;
-        const cessRateBps = product?.cessRateBps ?? 0;
-        const supplyTaxability = ((product?.supplyTaxability as SupplyTaxability) ??
-          'TAXABLE') as TaxabilityName;
-        const priceIncludesTax =
-          variant?.taxInclusivePricingOverride ?? product?.taxInclusivePricing ?? true;
-        const uqcCode = variant?.uqcCodeOverride ?? product?.defaultUqcCode ?? null;
+        // Phase 70 (audit Gap #15) — snapshot-first resolution.
+        // If a Phase-70+ order placed this item, the resolved
+        // (variant ?? product) tax config is already on the
+        // OrderItemTaxConfigSnapshot row. Legacy orders fall
+        // through to the live product/variant lookup.
+        const cfg = configByOrderItem.get(it.id);
+        let hsnCode: string | null;
+        let gstRateBps: number;
+        let cessRateBps: number;
+        let supplyTaxability: TaxabilityName;
+        let priceIncludesTax: boolean;
+        let uqcCode: string | null;
+        if (cfg) {
+          hsnCode = cfg.hsnCode;
+          gstRateBps = cfg.gstRateBps;
+          cessRateBps = cfg.cessRateBps;
+          supplyTaxability = (cfg.supplyTaxability as TaxabilityName) ?? 'TAXABLE';
+          priceIncludesTax = cfg.priceIncludesTax;
+          uqcCode = cfg.uqcCode;
+        } else {
+          const product = productById.get(it.productId);
+          const variant = it.variantId ? variantById.get(it.variantId) : null;
+          hsnCode = variant?.hsnCodeOverride ?? product?.hsnCode ?? null;
+          gstRateBps = variant?.gstRateBpsOverride ?? product?.gstRateBps ?? 0;
+          cessRateBps = product?.cessRateBps ?? 0;
+          supplyTaxability = ((product?.supplyTaxability as SupplyTaxability) ??
+            'TAXABLE') as TaxabilityName;
+          priceIncludesTax =
+            variant?.taxInclusivePricingOverride ?? product?.taxInclusivePricing ?? true;
+          uqcCode = variant?.uqcCodeOverride ?? product?.defaultUqcCode ?? null;
+        }
 
         const grossInPaise = BigInt(it.totalPriceInPaise);
         const allocatedDiscount = discountByItem.get(it.id) ?? 0n;
@@ -227,8 +283,12 @@ export class TaxSnapshotService {
           supplyTaxability,
         });
 
+        // Phase 70 — productSource also comes from snapshot when present.
+        const productSourceResolved = cfg
+          ? cfg.productSource
+          : productById.get(it.productId)?.productSource;
         const supplierType =
-          product?.productSource === 'OWN_BRAND'
+          productSourceResolved === 'OWN_BRAND'
             ? ('OWN_BRAND' as const)
             : ('MARKETPLACE_SELLER' as const);
 

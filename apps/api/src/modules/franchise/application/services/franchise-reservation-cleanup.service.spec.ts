@@ -44,6 +44,12 @@ function buildService(opts: {
       findMany: findManyExpired,
       findFirst: findFirstFollowUp,
     },
+    // Phase 159p — the sweeper now also checks whether a placed order references
+    // the reservation (skip-if-order-linked, the oversell fix). These tests
+    // exercise abandoned-cart orphans (no order), so default to null.
+    orderItem: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
     franchisePartner: {
       findMany: findManyContracts,
       update: updateContract,

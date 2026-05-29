@@ -267,7 +267,7 @@ export default function SellerDetailPage() {
             <Pill label={status.label} tone={status.tone} />
             <Pill label={verify.label} tone={verify.tone} />
             {/* Quick link to the delivery-method entitlement screen.
-                Marketplace admin toggles iThink / Self Delivery here. */}
+                Marketplace admin toggles Self Delivery here. */}
             <Link
               href={`/dashboard/sellers/${seller.sellerId}/delivery-methods`}
               style={{

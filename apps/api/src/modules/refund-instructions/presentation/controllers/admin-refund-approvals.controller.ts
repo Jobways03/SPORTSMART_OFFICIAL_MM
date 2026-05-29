@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   Param,
   Patch,
   Query,
@@ -9,11 +10,17 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  RequiresStepUp,
+  StepUpGuard,
+} from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { RefundInstructionService } from '../../application/services/refund-instruction.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { LiabilityLedgerPublicFacade } from '../../../liability-ledger/application/facades/liability-ledger-public.facade';
@@ -29,13 +36,16 @@ import { LiabilityLedgerPublicFacade } from '../../../liability-ledger/applicati
  */
 @ApiTags('Refunds — Admin')
 @Controller('admin/refund-instructions')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, StepUpGuard)
 export class AdminRefundApprovalsController {
+  private readonly logger = new Logger(AdminRefundApprovalsController.name);
+
   constructor(
     private readonly service: RefundInstructionService,
     private readonly prisma: PrismaService,
     private readonly audit: AuditPublicFacade,
     private readonly ledger: LiabilityLedgerPublicFacade,
+    private readonly eventBus: EventBusService,
   ) {}
 
   /**
@@ -45,7 +55,7 @@ export class AdminRefundApprovalsController {
    * audit views.
    */
   @Get()
-  @Permissions('refunds.approve')
+  @Permissions('refunds.read')
   async list(
     @Query('status') status?: string,
     @Query('page') page = '1',
@@ -93,7 +103,7 @@ export class AdminRefundApprovalsController {
   }
 
   @Get(':id')
-  @Permissions('refunds.approve')
+  @Permissions('refunds.read')
   async get(@Param('id') id: string) {
     const row = await this.prisma.refundInstruction.findUnique({
       where: { id },
@@ -230,14 +240,44 @@ export class AdminRefundApprovalsController {
   @Patch(':id/approve')
   @Idempotent()
   @Permissions('refunds.approve')
+  // Phase 26 — approval triggers the refund saga (gateway + wallet);
+  // money moves. Tight 1-min window.
+  @RequiresStepUp({ maxAgeMs: 60_000 })
   async approve(@Req() req: any, @Param('id') id: string) {
     const updated = await this.service.approveByFinance({
       instructionId: id,
       adminId: req.adminId,
     });
+    // Phase 125 — a high-value refund's FIRST approval only records the
+    // approver; the money doesn't move until a second, distinct admin
+    // approves. Word the response + audit accordingly.
+    const pendingSecond = (updated as any).pendingSecondApproval === true;
+    // Money-movement action — always audited (was previously only
+    // logger.log'd, leaving no compliance trail on who released funds).
+    this.audit
+      .writeAuditLog({
+        actorId: req.adminId,
+        actorRole: 'ADMIN',
+        action: pendingSecond
+          ? 'refund.first_approval_recorded'
+          : 'refund.approved',
+        module: 'refund-instructions',
+        resource: 'refund_instruction',
+        resourceId: id,
+        newValue: {
+          status: updated.status,
+          amountInPaise: updated.amountInPaise.toString(),
+          firstApprovedBy: updated.firstApprovedBy ?? null,
+          approvedBy: updated.approvedBy ?? null,
+          pendingSecondApproval: pendingSecond,
+        },
+      })
+      .catch(() => undefined);
     return {
       success: true,
-      message: 'Refund approved',
+      message: pendingSecond
+        ? 'First approval recorded — a second, distinct approver is required'
+        : 'Refund approved',
       data: { ...updated, amountInPaise: updated.amountInPaise.toString() },
     };
   }
@@ -246,7 +286,10 @@ export class AdminRefundApprovalsController {
   // audit + customer-notification event. Decorate for consistency.
   @Patch(':id/reject')
   @Idempotent()
-  @Permissions('refunds.approve')
+  @Permissions('refunds.reject')
+  // Phase 26 — rejection halts money movement; reversible only via
+  // ops intervention. 5-min window.
+  @RequiresStepUp()
   async reject(
     @Req() req: any,
     @Param('id') id: string,
@@ -260,10 +303,102 @@ export class AdminRefundApprovalsController {
       adminId: req.adminId,
       reason: body.reason.trim(),
     });
+
+    // Phase 127 — reverse the dispute's liability-ledger attribution. The
+    // decision booked a SellerDebit / LogisticsClaim / PlatformExpense at
+    // decision time; a rejected refund means the money never moved, so the
+    // cost attribution must be reversed — else the seller is debited (or the
+    // platform shows an expense) for a refund that never happened. RETURN-
+    // sourced rejections are left alone: their ledger semantics differ and
+    // aren't part of the dispute-decision attribution path.
+    let reversal: Awaited<
+      ReturnType<LiabilityLedgerPublicFacade['reverseForSource']>
+    > | null = null;
+    if (updated.sourceType === 'DISPUTE') {
+      reversal = await this.ledger
+        .reverseForSource({
+          sourceType: 'DISPUTE',
+          sourceId: updated.sourceId,
+          reason: `Refund rejected by finance: ${body.reason.trim()}`,
+        })
+        .catch((err) => {
+          this.logger.error(
+            `Liability reversal failed for dispute ${updated.sourceId}: ${
+              (err as Error).message
+            }`,
+          );
+          return null;
+        });
+      // A debit/claim was already applied or in-flight with the courier —
+      // undoing it is a settlement reversal / claim withdrawal, not a status
+      // flip. Queue it for ops with a 24h SLA.
+      if (reversal?.needsManual) {
+        await this.ledger
+          .enqueueAdminTask({
+            kind: 'SELLER_DEBIT_DISPUTED',
+            sourceType: 'DISPUTE',
+            sourceId: updated.sourceId,
+            reason:
+              `Refund for dispute ${updated.sourceId} was rejected, but a liability row is ` +
+              `already applied/in-flight — manual reversal required ` +
+              `(sellerDebit=${reversal.sellerDebit}, logisticsClaim=${reversal.logisticsClaim}).`,
+            slaHours: 24,
+          })
+          .catch(() => undefined);
+      }
+    }
+
+    this.audit
+      .writeAuditLog({
+        actorId: req.adminId,
+        actorRole: 'ADMIN',
+        action: 'refund.rejected',
+        module: 'refund-instructions',
+        resource: 'refund_instruction',
+        resourceId: id,
+        newValue: {
+          status: updated.status,
+          reason: body.reason.trim(),
+          amountInPaise: updated.amountInPaise.toString(),
+          liabilityReversal: reversal ?? undefined,
+        },
+      })
+      .catch(() => undefined);
+    // Phase 130 — tell the customer their refund is on hold. Without this they
+    // were told (on disputes.decided) that a refund was coming, then never saw
+    // it. Emitted as an event so the notification handler stays decoupled +
+    // replay-safe (@IdempotentHandler). Best-effort: a notify hiccup must not
+    // fail the rejection itself.
+    this.eventBus
+      .publish({
+        eventName: 'refunds.instruction.rejected',
+        aggregate: 'RefundInstruction',
+        aggregateId: updated.id,
+        occurredAt: new Date(),
+        payload: {
+          instructionId: updated.id,
+          sourceType: updated.sourceType,
+          sourceId: updated.sourceId,
+          customerId: updated.customerId,
+          amountInPaise: updated.amountInPaise.toString(),
+          reason: body.reason.trim(),
+        },
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Failed to emit refunds.instruction.rejected for ${updated.id}: ${
+            (err as Error).message
+          }`,
+        ),
+      );
     return {
       success: true,
       message: 'Refund rejected',
-      data: { ...updated, amountInPaise: updated.amountInPaise.toString() },
+      data: {
+        ...updated,
+        amountInPaise: updated.amountInPaise.toString(),
+        liabilityReversal: reversal ?? undefined,
+      },
     };
   }
 

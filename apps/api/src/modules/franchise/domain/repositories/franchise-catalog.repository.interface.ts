@@ -20,6 +20,13 @@ export interface FranchiseCatalogRepository {
     variantId: string | null,
   ): Promise<any | null>;
 
+  // Phase 159n — APPROVED + active gated lookup for POS / procurement / stock.
+  findApprovedActiveByFranchiseAndProduct(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+  ): Promise<any | null>;
+
   create(data: {
     franchiseId: string;
     productId: string;
@@ -46,6 +53,9 @@ export interface FranchiseCatalogRepository {
 
   delete(id: string): Promise<void>;
 
+  // Phase 159n — soft-remove (STOPPED + isActive=false + removed actor/at).
+  softRemove(id: string, actorId?: string): Promise<void>;
+
   findAvailableProducts(params: {
     page: number;
     limit: number;
@@ -55,11 +65,11 @@ export interface FranchiseCatalogRepository {
     excludeFranchiseId?: string;
   }): Promise<{ products: any[]; total: number }>;
 
-  approve(id: string): Promise<any>;
+  approve(id: string, actorId?: string): Promise<any>;
 
-  stop(id: string): Promise<any>;
+  stop(id: string, actorId?: string, reason?: string | null): Promise<any>;
 
-  reject(id: string): Promise<any>;
+  reject(id: string, actorId?: string, reason?: string | null): Promise<any>;
 
   findAllPaginated(params: {
     page: number;

@@ -11,9 +11,8 @@ import {
 /**
  * Inline picker rendered on a SubOrder accept screen. Asks the seller
  * which delivery method to use, gated by their admin-controlled
- * entitlements. Disables (with explanation) any method the admin
- * hasn't enabled, and hides itself entirely if neither method is
- * available.
+ * entitlements. Disables (with explanation) the method if the admin
+ * hasn't enabled it, and hides itself entirely if it isn't available.
  *
  * On confirm, calls the backend to lock in the choice. The caller
  * gets the updated SubOrder via the onChosen callback so it can
@@ -74,7 +73,7 @@ export function DeliveryMethodPicker({
     return <div style={{ color: '#6b7280', fontSize: 13 }}>Loading delivery options…</div>;
   }
 
-  if (!entitlements || (!entitlements.ithinkEnabled && !entitlements.selfDeliveryEnabled && !entitlements.ithinkPending)) {
+  if (!entitlements || !entitlements.selfDeliveryEnabled) {
     return (
       <div
         style={{
@@ -87,32 +86,18 @@ export function DeliveryMethodPicker({
         }}
       >
         Your admin has not enabled any delivery method yet. Contact support to get
-        iThink or Self Delivery turned on for your account.
+        Self Delivery turned on for your account.
       </div>
     );
   }
 
   const containerStyle: React.CSSProperties = compact
     ? { display: 'flex', gap: 10 }
-    : { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
+    : { display: 'grid', gridTemplateColumns: '1fr', gap: 12 };
 
   return (
     <div>
       <div style={containerStyle}>
-        <Option
-          label="iThink Logistics"
-          description="We book a courier (Delhivery / Bluedart / etc.) via iThink. AWB & tracking are auto-generated."
-          icon="\u{1F69A}"
-          enabled={entitlements.ithinkEnabled}
-          pending={entitlements.ithinkPending}
-          disabledReason={
-            entitlements.ithinkPending
-              ? 'iThink approval is pending'
-              : 'iThink is not enabled for your account'
-          }
-          loading={submitting}
-          onClick={() => handleChoose('ITHINK_LOGISTICS')}
-        />
         <Option
           label="Self Delivery"
           description="You deliver to the customer yourself. Update the status manually as you progress."

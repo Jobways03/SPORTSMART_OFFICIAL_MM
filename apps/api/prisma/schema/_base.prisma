@@ -11,6 +11,13 @@ enum UserRole {
 }
 
 enum UserStatus {
+  // New customers between POST /auth/register and successful OTP
+  // verification. Login is refused for users in this state so a
+  // never-verified account cannot be used to authenticate. Transition
+  // PENDING_VERIFICATION -> ACTIVE happens inside the
+  // VerifyEmailOtpUseCase transaction (status + emailVerified flip
+  // together).
+  PENDING_VERIFICATION
   ACTIVE
   INACTIVE
   SUSPENDED
@@ -68,9 +75,14 @@ enum VariantStatus {
   ARCHIVED
 }
 
+/// Phase 32 (2026-05-21) — IN_REVIEW value dropped. Zero rows ever
+/// carried it (no controller / service / event handler wrote the
+/// value) and no admin-claim review flow ships before MVP. Frontend
+/// switch cases on the string `'IN_REVIEW'` are now unreachable and
+/// can be cleaned up in a follow-up frontend phase (the cases were
+/// already dead — they didn't match any row).
 enum ModerationStatus {
   PENDING
-  IN_REVIEW
   APPROVED
   REJECTED
   CHANGES_REQUESTED
@@ -81,6 +93,12 @@ enum MappingApprovalStatus {
   APPROVED
   REJECTED
   STOPPED
+  // Phase 59 (2026-05-22) — bulk admin-initiated suspension of a
+  // seller's full catalog (audit Gap #2). Separated from STOPPED
+  // (single-mapping admin action, Phase 56/57) so the bulk
+  // activate path can target SUSPENDED-only without inadvertently
+  // re-activating REJECTED or STOPPED mappings (audit Gap #1).
+  SUSPENDED
 }
 
 enum OrderStatus {
@@ -93,7 +111,33 @@ enum OrderStatus {
   DISPATCHED
   DELIVERED
   CANCELLED
+  // Phase 74 (2026-05-22) — verifier rejection. Distinct from
+  // CANCELLED (customer-initiated) so analytics + finance can
+  // reconcile, refund saga can branch, and the customer
+  // notification carries the right copy.
+  REJECTED
   EXCEPTION_QUEUE
+  // Phase 81 (2026-05-22) — cancel audit Gap #6/#20. A master with
+  // some-but-not-all sub-orders cancelled doesn't fit CANCELLED
+  // (some are still alive) or any "active" status (some are dead).
+  // The mid-flow cancel writer flips master to this state when the
+  // cancelled-vs-total ratio is partial; full-cancel still becomes
+  // CANCELLED.
+  PARTIALLY_CANCELLED
+  // Phase 82 (2026-05-23) — packing & shipping audit Gap #12/#13.
+  // Master rollup: when some sub-orders have shipped but others are
+  // still being packed, DISPATCHED is misleading (sounds like the
+  // whole order is in transit). PARTIALLY_SHIPPED is the truthful
+  // mid-state; once the last sub-order ships, the rollup moves to
+  // DISPATCHED (or DELIVERED on the customer-visible terminal).
+  PARTIALLY_SHIPPED
+  // Phase 83 (2026-05-23) — delivery audit Gap (Flow #63 carry).
+  // Mid-state for "some sub-orders delivered, others still in
+  // transit / accepted". Pre-Phase-83 the master stayed at
+  // DISPATCHED until every sub-order was DELIVERED, so the
+  // customer view said "Shipped" for the entire 7-day window even
+  // if 2 of 3 packages had arrived.
+  PARTIALLY_DELIVERED
 }
 
 enum FranchiseStatus {
@@ -130,6 +174,10 @@ enum FranchiseLedgerSource {
   POS_SALE
   POS_SALE_REVERSAL
   PROCUREMENT_FEE
+  // Phase 159p (audit #8) — the PRINCIPAL (landed) cost of a settled
+  // procurement, posted as a franchise→HQ payable distinct from the platform
+  // PROCUREMENT_FEE, so the franchise's HQ liability is answerable from the ledger.
+  PROCUREMENT_COST
   RETURN_REVERSAL
   ADJUSTMENT
   PENALTY
@@ -157,6 +205,54 @@ enum PosSaleStatus {
   PARTIALLY_RETURNED
 }
 
+// Phase 159q (audit #9) — promote the free-string sale_type column to an enum
+// so a direct DB write / migration can't insert an out-of-range value.
+enum PosSaleType {
+  WALK_IN
+  PHONE_ORDER
+  LOCAL_DELIVERY
+}
+
+// Phase 159q (audit #8) — promote the free-string payment_method column.
+enum PosPaymentMethod {
+  CASH
+  UPI
+  CARD
+}
+
+// Phase 159q (audit #6) — explicit payment settlement state. Physical-POS sales
+// record COMPLETED (the cashier confirms payment in person); the PENDING/FAILED
+// states are for a future integrated payment-gateway flow flipped via webhook.
+enum PosPaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+// Phase 159q (audit #10) — row-level visibility of §31 tax-invoice generation
+// instead of log-only. Set ISSUED/FAILED after the tax facade call.
+enum PosTaxInvoiceStatus {
+  PENDING
+  ISSUED
+  FAILED
+}
+
+// Phase 159r (POS void/return audit #12) — how a refund was paid back.
+enum PosRefundMethod {
+  CASH
+  UPI
+  CARD
+  MANUAL
+}
+
+// Phase 159r (audit #7) — condition of a returned unit; DAMAGED routes to
+// damagedQty instead of sellable onHandQty.
+enum PosReturnItemCondition {
+  SALEABLE
+  DAMAGED
+}
+
 enum ProcurementItemStatus {
   PENDING
   APPROVED
@@ -181,6 +277,18 @@ enum InventoryMovementType {
   LOSS
   ADJUSTMENT
   AUDIT_CORRECTION
+  // Phase 159o (audit #12) — distinguishes stock restored by a courier
+  // Return-To-Origin (undelivered shipment coming back to the franchise) from a
+  // customer-initiated ORDER_RETURN, so reconciliation/reporting can tell the
+  // two apart. NOTE: the franchise RTO-restock path is not yet wired
+  // (StockRestoreService restores seller stock only); this value is in place so
+  // that wiring uses the correct movement type. Tracked as a shipping/orders
+  // follow-up.
+  RTO_RESTOCK
+  // Phase 159r (POS void/return audit #8) — a POS-sale VOID restock, distinct
+  // from a customer POS_RETURN, so daily reconciliation can tell voids from
+  // genuine returns.
+  POS_VOID
 }
 
 enum FranchiseStaffRole {
@@ -188,6 +296,16 @@ enum FranchiseStaffRole {
   MANAGER
   POS_OPERATOR
   WAREHOUSE_STAFF
+}
+
+// Phase 159t (staff audit #12) — staff lifecycle state. INVITED is reserved for
+// the invitation/activation flow (the staff-auth subsystem, surfaced); today
+// the owner sets the password directly so new staff are created ACTIVE.
+enum FranchiseStaffStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  TERMINATED
 }
 
 enum ReturnStatus {
@@ -202,6 +320,13 @@ enum ReturnStatus {
   PARTIALLY_APPROVED
   REFUND_PROCESSING
   REFUNDED
+  // Phase 100 (2026-05-23) — Phase 98 audit Gap #18 closure. Terminal
+  // state for refunds that exhausted all retries (REFUND_MAX_RETRY_-
+  // ATTEMPTS) without success. The customer's case is escalated to
+  // ops via the existing RETURN_REFUND_FAILED AdminTask kind; the
+  // Return itself stays in this state so dashboards can filter
+  // "stuck refunds".
+  REFUND_FAILED
   COMPLETED
   CANCELLED
   // Phase 12 (post-Phase-11) — dispute-driven return-status overrides.
@@ -285,18 +410,15 @@ enum MetafieldType {
 }
 
 // ─── Logistics ───────────────────────────────────────────────────
-// How a SubOrder is delivered to the customer. Each seller and
-// franchise can have either or both methods enabled by their
-// respective admin. The seller/franchise picks per-shipment at
-// fulfilment time from the methods their admin allows.
+// How a SubOrder is delivered to the customer. Self-delivery is the
+// only method today (iThink removed); the courier-agnostic shipping
+// module remains for a future carrier.
 enum DeliveryMethod {
-  ITHINK_LOGISTICS // Booked with iThink; their carriers handle pickup + delivery.
-  SELF_DELIVERY    // Seller / franchise delivers themselves; no courier.
+  SELF_DELIVERY // Seller / franchise delivers themselves; no courier.
 }
 
-// Status lifecycle for SELF_DELIVERY shipments. ITHINK_LOGISTICS
-// shipments don't use this — their progress comes from the iThink
-// scan history (mapped to ShipmentStatusInternal in code).
+// Status lifecycle for SELF_DELIVERY shipments — the only delivery
+// method today. Progress is driven by manual seller/franchise updates.
 enum SelfDeliveryStatus {
   PENDING
   READY_FOR_PICKUP
@@ -304,20 +426,4 @@ enum SelfDeliveryStatus {
   DELIVERED
   FAILED
   CANCELLED
-}
-
-// Approval state for a seller / franchise warehouse registered with
-// iThink. Set to PENDING when Add Warehouse returns; flips to
-// APPROVED via the daily Get Warehouse reconciliation cron.
-//
-// STALE means the seller / franchise updated their profile address
-// after the iThink warehouse was registered, so iThink still holds the
-// previous pickup address. Admin must re-register (creates a fresh
-// warehouse_id on iThink, deactivates the old one via their panel).
-enum IThinkWarehouseApprovalStatus {
-  NOT_REGISTERED
-  PENDING
-  APPROVED
-  REJECTED
-  STALE
 }

@@ -9,6 +9,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import type { NotificationChannel, NotificationStatus } from '@prisma/client';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { NotificationLogRepository } from '../../infrastructure/persistence/prisma/notification-log.repository';
 import { NotificationsPublicFacade } from '../../application/facades/notifications-public.facade';
@@ -16,6 +17,7 @@ import { NotificationsPublicFacade } from '../../application/facades/notificatio
 @ApiTags('Admin Notifications')
 @Controller('admin/notifications/logs')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('notifications.read')
 export class AdminNotificationLogsController {
   constructor(
     private readonly logs: NotificationLogRepository,

@@ -71,6 +71,10 @@ export class TaxAuditReadinessService {
 
     blockers.push(await this.scanMissingHsn());
     blockers.push(await this.scanMissingRate());
+    // Phase 45 (2026-05-21) — closes audit Gap #11. Counts products
+    // with data present but no admin attestation — would block
+    // STRICT-mode invoice generation per the Phase 45 gate.
+    blockers.push(await this.scanUnverifiedConfig());
     blockers.push(await this.scanMissingSellerGstin());
     blockers.push(await this.scanEinvoiceUnresolved());
     blockers.push(await this.scanPdfUnresolved());
@@ -116,6 +120,44 @@ export class TaxAuditReadinessService {
       message:
         'TAXABLE products without HSN code. Strict mode rejects at ' +
         'invoice generation per CBIC HSN-on-invoice rule.',
+    };
+  }
+
+  /**
+   * Phase 45 (2026-05-21) — closes audit Gap #11. TAXABLE products
+   * that DO have an HSN + rate set but have NOT been attested by an
+   * admin. STRICT-mode invoice generation refuses to emit a Tax
+   * Invoice for these (see TaxDocumentService.assertInvoiceLinesAreTaxReady).
+   *
+   * Surfaces the queue so the readiness dashboard can warn ops
+   * before flipping STRICT on.
+   */
+  private async scanUnverifiedConfig(): Promise<BlockerSummary> {
+    const where: any = {
+      supplyTaxability: 'TAXABLE',
+      taxConfigVerified: false,
+      // Filter out products that also fail missing_hsn/missing_rate;
+      // those have their own blockers and we don't want to
+      // double-count. Unverified-config is specifically about
+      // configs with data present.
+      AND: [
+        { hsnCode: { not: null } },
+        { hsnCode: { not: '' } },
+        { gstRateBps: { gt: 0 } },
+      ],
+    };
+    const rows = await this.prisma.product
+      .findMany({ where, select: { id: true }, take: 5 })
+      .catch(() => []);
+    const count = await this.prisma.product.count({ where }).catch(() => 0);
+    return {
+      code: 'product.unverified_config',
+      count,
+      sampleIds: rows.map((r) => r.id),
+      message:
+        'TAXABLE products with HSN + rate set but no admin attestation. ' +
+        'Strict mode refuses to issue Tax Invoices for these — admin must ' +
+        'call PATCH /admin/products/:id/verify-tax-config per product.',
     };
   }
 

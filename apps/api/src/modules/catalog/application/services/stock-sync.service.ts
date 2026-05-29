@@ -83,4 +83,136 @@ export class StockSyncService {
       );
     }
   }
+
+  /**
+   * Phase 41 (2026-05-21) — atomic variant update + mapping sync.
+   * Closes audit gap #10 (oversell window when a concurrent checkout
+   * reservation interleaved between the variant write and the mapping
+   * write).
+   *
+   * The transaction:
+   *   1. SELECT FOR UPDATE on the matching mapping row (Postgres
+   *      advisory-lock equivalent for inventory). Any concurrent
+   *      reservation that takes the same row blocks until we commit.
+   *   2. Update the variant row.
+   *   3. If newStock is provided, update the mapping's stockQty to
+   *      match.
+   *
+   * The lock is held only for the duration of the (small) write
+   * transaction so reservation latency is bounded.
+   */
+  async updateVariantWithMappingSync(args: {
+    sellerId: string;
+    productId: string;
+    variantId: string;
+    updateData: Record<string, unknown>;
+    newStock?: number;
+  }): Promise<unknown> {
+    const { sellerId, productId, variantId, updateData, newStock } = args;
+
+    return this.prisma.$transaction(async (tx) => {
+      // Phase 41 — SELECT ... FOR UPDATE on the mapping row. We always
+      // try to lock so the reservation path (which also locks the
+      // mapping at checkout) serializes against us, even when this
+      // call doesn't touch the stock column. The lock is a no-op when
+      // no mapping exists.
+      await tx.$queryRaw`
+        SELECT id FROM seller_product_mappings
+        WHERE seller_id = ${sellerId}
+          AND product_id = ${productId}
+          AND variant_id = ${variantId}
+        FOR UPDATE
+      `;
+
+      const updated = await tx.productVariant.update({
+        where: { id: variantId },
+        data: updateData,
+        include: {
+          optionValues: { include: { optionValue: { include: { optionDefinition: true } } } },
+          images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }] },
+        },
+      });
+
+      if (newStock !== undefined) {
+        const mapping = await tx.sellerProductMapping.findFirst({
+          where: { sellerId, productId, variantId },
+        });
+        if (mapping) {
+          await tx.sellerProductMapping.update({
+            where: { id: mapping.id },
+            data: { stockQty: newStock },
+          });
+        }
+      }
+
+      return updated;
+    });
+  }
+
+  /**
+   * Phase 41 (2026-05-21) — admin path. Admin variant updates don't
+   * cascade to seller mappings (each seller owns their own stock), but
+   * they DO change status / price / dimensions that downstream
+   * reservation logic may read. Wrap the variant write in a
+   * transaction with SELECT FOR UPDATE on every mapping row for this
+   * variant so any concurrent checkout reservation serializes against
+   * the admin write. This is defense-in-depth: today no admin path
+   * syncs mapping stock, but the lock means a future change can do so
+   * without re-introducing the seller-path race window.
+   */
+  async updateVariantAdmin(
+    productId: string,
+    variantId: string,
+    updateData: Record<string, unknown>,
+  ): Promise<unknown> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM seller_product_mappings
+        WHERE product_id = ${productId}
+          AND variant_id = ${variantId}
+        FOR UPDATE
+      `;
+      return tx.productVariant.update({
+        where: { id: variantId },
+        data: updateData,
+        include: {
+          optionValues: { include: { optionValue: { include: { optionDefinition: true } } } },
+          images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }] },
+        },
+      });
+    });
+  }
+
+  /**
+   * Phase 41 — bulk variant edit path. Same lock pattern as
+   * updateVariantWithMappingSync but doesn't update the variant row
+   * (the bulk-update path already updated it transactionally via
+   * bulkUpdate). Used to serialize the per-row mapping sync after
+   * bulkUpdate without re-doing the variant write.
+   */
+  async syncMappingStockFromVariantLocked(
+    sellerId: string,
+    productId: string,
+    variantId: string,
+    newStock: number,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT id FROM seller_product_mappings
+        WHERE seller_id = ${sellerId}
+          AND product_id = ${productId}
+          AND variant_id = ${variantId}
+        FOR UPDATE
+      `;
+      const mapping = await tx.sellerProductMapping.findFirst({
+        where: { sellerId, productId, variantId },
+      });
+      if (mapping) {
+        await tx.sellerProductMapping.update({
+          where: { id: mapping.id },
+          data: { stockQty: newStock },
+        });
+      }
+    });
+  }
 }

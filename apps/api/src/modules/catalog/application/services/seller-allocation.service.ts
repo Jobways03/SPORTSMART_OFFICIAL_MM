@@ -1,7 +1,9 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { PostOfficeCacheService } from './post-office-cache.service';
+import { StockMovementLedgerService } from '../../../inventory/application/services/stock-movement-ledger.service';
+import { MAX_RESERVATION_QUANTITY } from '../../../inventory/application/facades/inventory-public.facade';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -16,15 +18,49 @@ export interface AllocatedSeller {
   sellerName: string;      // seller name or franchise name
   franchiseId?: string;    // only set when nodeType is FRANCHISE
   mappingId: string;       // SellerProductMapping ID or FranchiseCatalogMapping ID
-  distanceKm: number;
+  // Phase 64 (2026-05-22) — distanceKm is now nullable (audit
+  // Gap #9). Pre-Phase-64 the allocator used `distance: 999` as a
+  // placeholder for "no coordinates", which competed against real
+  // 200km sellers as a not-quite-furthest candidate. Now a
+  // candidate with no resolvable distance is represented as `null`
+  // and excluded from distance-based ranking.
+  distanceKm: number | null;
   dispatchSla: number;
   availableStock: number;
   estimatedDeliveryDays: number;
   score: number;
+  // Phase 159m — set only for FRANCHISE candidates selected via an admin
+  // pincode→franchise territory mapping. `pincodeMappingId` is snapshot onto
+  // the AllocationLog; `mappingPriority` (higher wins) feeds the score so a
+  // priority-100 franchise outranks a priority-50 one for the same pincode.
+  pincodeMappingId?: string;
+  mappingPriority?: number;
 }
+
+/**
+ * Phase 64 (2026-05-22) — typed reason enum for unserviceable
+ * outcomes (audit Gap #16). Pre-Phase-64 the checkout returned
+ * three hardcoded English strings; ops + support couldn't tell
+ * out-of-stock from no-mapping from no-service-area.
+ */
+export type ServiceabilityReason =
+  | 'OK'
+  | 'NO_MAPPING'
+  | 'OUT_OF_STOCK'
+  | 'NO_SERVICE_AREA'
+  | 'DISTANCE_EXCEEDED'
+  | 'PRODUCT_INACTIVE'
+  | 'VARIANT_INACTIVE'
+  | 'PINCODE_UNKNOWN'
+  | 'RACE_LOST';
 
 export interface AllocationResult {
   serviceable: boolean;
+  /**
+   * Phase 64 (audit Gap #16) — typed reason for why an allocation
+   * was unserviceable. 'OK' on success.
+   */
+  reason: ServiceabilityReason;
   primary: AllocatedSeller | null;
   secondary: AllocatedSeller | null;
   tertiary: AllocatedSeller | null;
@@ -53,14 +89,32 @@ export interface AllocateAndReserveResult {
 // ── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
-export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
+export class SellerAllocationService {
   private readonly logger = new Logger(SellerAllocationService.name);
-  private expiryInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Phase 52 (2026-05-21) — pre-Phase-52 the constructor wired a
+  // 60s setInterval that ran releaseExpiredReservations(); the
+  // leader-elected ReservationExpirySweepCron is now the canonical
+  // expiry path. Both running together emitted duplicate events
+  // and burned DB cycles on the non-leader pods, so the local
+  // interval has been removed. The releaseExpiredReservations
+  // method stays — it's still useful from tests + manual ops.
 
   // Scoring weights — configurable via env, cached at startup.
   private readonly wDistance: number;
   private readonly wStock: number;
   private readonly wSla: number;
+  // Phase 159m — weight for an admin pincode→franchise territory mapping's
+  // priority (0..1000, normalised). Only contributes for franchise candidates
+  // selected via a mapping; sellers + unmapped franchises get 0 here, so the
+  // unmapped routing path is unchanged.
+  private readonly wPincodePriority: number;
+  // Phase 64 (2026-05-22) — Haversine cap above which a candidate
+  // is filtered out as unserviceable (audit Gap #8). 0 disables the
+  // cap (back-compat for tests). Pre-Phase-64 a Chennai customer
+  // could be routed to a Punjab seller 2500km away — technically
+  // serviceable but practically a 5-7 day shipment with broken UX.
+  private readonly maxDistanceKm: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -70,36 +124,19 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     // typical multi-seller routing. The cache moves all but the first
     // lookup per pincode off the DB.
     private readonly postOfficeCache: PostOfficeCacheService,
+    // Phase 52 polish (2026-05-21) — ledger writes for the allocation
+    // reservation path so checkout-driven reservations land in the
+    // forensic trail alongside facade-driven ones.
+    private readonly stockLedger: StockMovementLedgerService,
   ) {
     this.wDistance = this.envService.getNumber('ROUTING_DISTANCE_WEIGHT', 0.7);
     this.wStock = this.envService.getNumber('ROUTING_STOCK_WEIGHT', 0.2);
     this.wSla = this.envService.getNumber('ROUTING_SLA_WEIGHT', 0.1);
-  }
-
-  // ── Lifecycle ───────────────────────────────────────────────────────────
-
-  onModuleInit() {
-    // Run expired-reservation cleanup every 60 seconds
-    this.expiryInterval = setInterval(async () => {
-      try {
-        const count = await this.releaseExpiredReservations();
-        if (count > 0) {
-          this.logger.log(`Released ${count} expired stock reservation(s)`);
-        }
-      } catch (err) {
-        this.logger.error(
-          `Error releasing expired reservations: ${err instanceof Error ? err.message : err}`,
-        );
-      }
-    }, 60_000);
-    this.logger.log('Stock reservation expiry job started (every 60s)');
-  }
-
-  onModuleDestroy() {
-    if (this.expiryInterval) {
-      clearInterval(this.expiryInterval);
-      this.expiryInterval = null;
-    }
+    this.wPincodePriority = this.envService.getNumber(
+      'ROUTING_PINCODE_PRIORITY_WEIGHT',
+      0.5,
+    );
+    this.maxDistanceKm = this.envService.getNumber('ROUTING_MAX_DISTANCE_KM', 1500);
   }
 
   // ── T1-T2  Core allocation ─────────────────────────────────────────────
@@ -127,6 +164,47 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     if (!customerPincode) throw new BadRequestAppException('customerPincode is required');
     if (quantity < 1) throw new BadRequestAppException('quantity must be >= 1');
 
+    // Phase 64 (2026-05-22) — pincode format validation (audit Gap
+    // #19). Pre-Phase-64 a garbage value `abc123` flowed through to
+    // the PostOffice cache miss → customerCoords=null → every
+    // mapping ranked at 999km → "serviceable" with bizarre output.
+    // Reject at the entry point with a typed reason so the caller
+    // can surface PINCODE_UNKNOWN.
+    if (!/^[1-9][0-9]{5}$/.test(customerPincode)) {
+      return {
+        serviceable: false,
+        reason: 'PINCODE_UNKNOWN',
+        primary: null,
+        secondary: null,
+        tertiary: null,
+        allEligible: [],
+      };
+    }
+
+    // Phase 64 (audit Gap #27) — reject when the product is not
+    // ACTIVE or has been soft-deleted. Pre-Phase-64 an admin-
+    // deactivated product would still allocate if the mappings
+    // hadn't been cleaned up, leaving customers able to checkout a
+    // PAUSED/ARCHIVED product. Check runs BEFORE the pincode
+    // PostOffice lookup so a customer browsing a deactivated
+    // product gets the precise reason (PRODUCT_INACTIVE) instead
+    // of a generic PINCODE_UNKNOWN if their pincode also happens
+    // to be unmapped.
+    const productRow = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { status: true, isDeleted: true },
+    });
+    if (!productRow || productRow.isDeleted || productRow.status !== 'ACTIVE') {
+      return {
+        serviceable: false,
+        reason: 'PRODUCT_INACTIVE',
+        primary: null,
+        secondary: null,
+        tertiary: null,
+        allEligible: [],
+      };
+    }
+
     // 1. Customer pincode coordinates — Redis-cached (24h TTL) so the
     //    165K-row post_offices table is touched at most once per
     //    pincode per day (Phase 4 follow-up, 2026-05-16).
@@ -134,13 +212,41 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     const customerLat = customerCoords?.latitude ?? null;
     const customerLon = customerCoords?.longitude ?? null;
 
-    // 2. Find all active + approved seller mappings for this product/variant
+    // Phase 64 (audit Gap #19) — if PostOffice has no coords for
+    // the supplied pincode, surface PINCODE_UNKNOWN. Pre-Phase-64
+    // this fell through to the 999-km placeholder path.
+    if (customerLat === null || customerLon === null) {
+      return {
+        serviceable: false,
+        reason: 'PINCODE_UNKNOWN',
+        primary: null,
+        secondary: null,
+        tertiary: null,
+        allEligible: [],
+      };
+    }
+
+    // 2. Find all active + approved seller mappings for this product/variant.
+    //
+    // Phase 77 (2026-05-22) — align with franchise variant-fallback
+    // semantics (audit Gap #3). Pre-Phase-77 the seller path required
+    // exact variantId equality while the franchise path used
+    // `OR: [{ variantId }, { variantId: null }]`. A product with
+    // variants and only product-level (variantId=null) seller
+    // mappings deflected to franchises while sellers existed. Now
+    // both sides match the same variant-OR-product-level rule.
+    // Variant-specific mappings still win at scoring time (the
+    // input ordering keeps variant-specific rows ahead of
+    // wildcards; `seen` dedupe in the seller loop keeps the
+    // first-seen mapping per seller).
     const mappingWhere: any = {
       productId,
       isActive: true,
       approvalStatus: 'APPROVED',
     };
-    if (variantId) mappingWhere.variantId = variantId;
+    if (variantId) {
+      mappingWhere.OR = [{ variantId }, { variantId: null }];
+    }
     if (excludeMappingIds && excludeMappingIds.length > 0) {
       mappingWhere.id = { notIn: excludeMappingIds };
     }
@@ -161,11 +267,26 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           },
         },
       },
-      orderBy: { id: 'asc' },
+      // Phase 77 (audit Gap #3) — variant-specific rows first so the
+      // dedupe loop below keeps variant rows over product-level
+      // wildcards. Then mappingId asc as the deterministic tiebreak.
+      orderBy: [{ variantId: 'desc' }, { id: 'asc' }],
+    });
+
+    // Phase 77 — dedupe by sellerId. With the variant-OR-product-level
+    // query (Gap #3), a single seller can appear twice for a variant
+    // order (once via the variant-specific mapping, once via the
+    // product-level fallback). The `variantId: 'desc'` orderBy puts
+    // variant-specific rows first, so a Set keeps the right one.
+    const sellerSeen = new Set<string>();
+    const dedupedMappings = sellerMappings.filter((m) => {
+      if (sellerSeen.has(m.sellerId)) return false;
+      sellerSeen.add(m.sellerId);
+      return true;
     });
 
     // Keep only ACTIVE sellers with enough available stock
-    const stockEligible = sellerMappings.filter((m) => {
+    const stockEligible = dedupedMappings.filter((m) => {
       if (m.seller.status !== 'ACTIVE') return false;
       const available = m.stockQty - m.reservedQty;
       return available >= quantity;
@@ -206,9 +327,12 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     );
 
     // 3. Filter by distance — seller must be within serviceable range
+    // Phase 64 — distance is nullable for no-coords mappings
+    // (audit Gap #9). They still compete for selection but are
+    // excluded from the distance score.
     const serviceable: {
       mapping: (typeof eligible)[number];
-      distance: number;
+      distance: number | null;
     }[] = [];
 
     // Phase 4 follow-up (2026-05-16) — batch-prefetch coordinates
@@ -246,13 +370,21 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
         distance = this.calculateDistance(customerLat, customerLon, sellerLat, sellerLon);
       }
 
-      // If seller has coordinates → check distance; if no coordinates → allow (assume serviceable)
-      if (distance !== null) {
-        serviceable.push({ mapping, distance });
-      } else {
-        // No coordinates available — include seller but with high distance so they rank lower
-        serviceable.push({ mapping, distance: 999 });
+      // Phase 64 (audit Gaps #8 + #9). Two behaviour changes:
+      //   - Max distance cap: a mapping resolved > maxDistanceKm
+      //     away is filtered out as unserviceable. Pre-Phase-64
+      //     the cap didn't exist and the allocator would happily
+      //     route a Chennai customer to a 2500km Punjab seller.
+      //   - No-coords mappings are now distinctly tracked with
+      //     distance=null instead of the synthetic 999 placeholder.
+      //     They still compete for selection but are excluded from
+      //     the distance score (the score's distance term becomes
+      //     0 for them) so a 200km seller correctly outranks a
+      //     no-coords seller.
+      if (distance !== null && this.maxDistanceKm > 0 && distance > this.maxDistanceKm) {
+        continue; // filtered out
       }
+      serviceable.push({ mapping, distance });
     }
 
     // 4. Build seller candidates with nodeType
@@ -261,10 +393,14 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       sellerId: s.mapping.seller.id,
       sellerName: s.mapping.seller.sellerShopName || s.mapping.seller.sellerName,
       mappingId: s.mapping.id,
-      distanceKm: Math.round(s.distance * 100) / 100,
+      distanceKm: s.distance !== null ? Math.round(s.distance * 100) / 100 : null,
       dispatchSla: s.mapping.dispatchSla,
       availableStock: s.mapping.stockQty - s.mapping.reservedQty,
-      estimatedDeliveryDays: this.estimateDeliveryDays(s.distance, s.mapping.dispatchSla),
+      // Phase 64 — unknown distance falls back to "0 km transit" so
+      // the SLA-only estimate is the floor. This was effectively
+      // the pre-Phase-64 behaviour for the 999-placeholder case;
+      // we preserve it for the null-distance case.
+      estimatedDeliveryDays: this.estimateDeliveryDays(s.distance ?? 0, s.mapping.dispatchSla),
       score: 0, // will be scored below
     }));
 
@@ -285,29 +421,96 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     ];
 
     if (allCandidates.length === 0) {
-      return { serviceable: false, primary: null, secondary: null, tertiary: null, allEligible: [] };
+      // Phase 64 (audit Gap #16) — diagnose WHY there are no
+      // candidates. We approximate by re-running the cheap
+      // exclusion filters: if mappings existed but were filtered
+      // by stock, surface OUT_OF_STOCK; if they were filtered by
+      // service-area opt-in, surface NO_SERVICE_AREA; otherwise
+      // NO_MAPPING. The distance-cap path doesn't carry context
+      // through here, so DISTANCE_EXCEEDED is surfaced only when
+      // we have evidence: candidates existed pre-distance-filter.
+      let reason: ServiceabilityReason = 'NO_MAPPING';
+      if (sellerMappings.length > 0) {
+        // Mappings exist for the product but were filtered out.
+        const seller0 = sellerMappings[0];
+        if (seller0 && seller0.seller.status !== 'ACTIVE') {
+          reason = 'NO_MAPPING';
+        } else if (stockEligible.length === 0) {
+          reason = 'OUT_OF_STOCK';
+        } else if (eligible.length === 0) {
+          reason = 'NO_SERVICE_AREA';
+        } else {
+          // Stock + service area passed, so all candidates must
+          // have been filtered by the distance cap.
+          reason = 'DISTANCE_EXCEEDED';
+        }
+      }
+      return {
+        serviceable: false,
+        reason,
+        primary: null,
+        secondary: null,
+        tertiary: null,
+        allEligible: [],
+      };
     }
 
-    const maxDistance = Math.max(...allCandidates.map((c) => c.distanceKm), 1);
+    // Phase 64 (audit Gap #9) — distances may be null when a
+    // candidate had no coordinates. Use the max of known distances
+    // for normalization; null-distance candidates get a 0 distance
+    // score component (don't contribute to or benefit from
+    // distance ranking).
+    const knownDistances = allCandidates
+      .map((c) => c.distanceKm)
+      .filter((d): d is number => d !== null);
+    const maxDistance = knownDistances.length > 0 ? Math.max(...knownDistances, 1) : 1;
     const maxSla = Math.max(...allCandidates.map((c) => c.dispatchSla), 1);
 
     const scored: AllocatedSeller[] = allCandidates.map((candidate) => {
       let score = 0;
-      // Distance score (lower distance = higher score)
-      score += this.wDistance * (1 - candidate.distanceKm / maxDistance);
+      // Distance score (lower distance = higher score). Null
+      // distance contributes 0 to this term — a no-coords
+      // candidate doesn't get credit for being "closer" than a
+      // real candidate.
+      if (candidate.distanceKm !== null) {
+        score += this.wDistance * (1 - candidate.distanceKm / maxDistance);
+      }
       // Stock confidence
       score += this.wStock * Math.min(candidate.availableStock / quantity, 1);
       // SLA score (faster dispatch = higher score)
       score += this.wSla * (1 - candidate.dispatchSla / maxSla);
-      // No priority boost — sellers and franchises compete equally
+      // Phase 159m — admin pincode→franchise territory priority. Only set for
+      // franchise candidates chosen via an active mapping (else undefined → no
+      // effect), so unmapped routing is unchanged. Higher priority (0..1000)
+      // ranks a franchise above a lower-priority one serving the same pincode.
+      if (candidate.mappingPriority != null) {
+        score += this.wPincodePriority * (candidate.mappingPriority / 1000);
+      }
       return { ...candidate, score: Math.round(score * 10000) / 10000 };
     });
 
-    // 7. Sort by score descending — highest score wins
-    scored.sort((a, b) => b.score - a.score);
+    // 7. Sort by score descending — highest score wins.
+    //
+    // Phase 77 (2026-05-22) — explicit secondary key on equal score
+    // (audit Gap #13). Pre-Phase-77 we relied on stable sort + the
+    // input `orderBy` to break ties; that's deterministic in a
+    // single replica but two replicas can read with subtly
+    // different ordering under concurrent writes. Adding the
+    // mappingId tiebreak removes the race-window entirely.
+    scored.sort((a, b) => {
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) return scoreDelta;
+      // Lexicographic on mappingId — every candidate has one, so
+      // this is a total ordering. nullish-safe (no candidate has a
+      // null mappingId at this stage).
+      const am = a.mappingId ?? '';
+      const bm = b.mappingId ?? '';
+      return am < bm ? -1 : am > bm ? 1 : 0;
+    });
 
     const result: AllocationResult = {
       serviceable: true,
+      reason: 'OK',
       primary: scored[0] ?? null,
       secondary: scored[1] ?? null,
       tertiary: scored[2] ?? null,
@@ -320,29 +523,76 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * Phase 64 (2026-05-22) — non-mutating preview of allocation
+   * (audit Gaps #3 + #5). Reuses the full allocator pipeline —
+   * service-area opt-in, available=stockQty-reservedQty, distance
+   * cap, product status — so the PDP serviceability check and the
+   * new cart preview return EXACTLY the same answer the checkout
+   * allocator will. Pre-Phase-64 the PDP used a separate
+   * ServiceabilityService with looser rules: it ignored
+   * SellerServiceArea, used raw stockQty, and didn't enforce a
+   * distance cap. Customers saw "deliverable" on PDP and
+   * "unserviceable" at checkout for the SAME pincode.
+   *
+   * The method skips two side effects the full allocate() path
+   * performs:
+   *   - AllocationLog write (we don't want PDP page-load traffic
+   *     polluting forensic queries)
+   *   - reservation (the preview is read-only by contract)
+   */
+  async previewServiceability(input: {
+    productId: string;
+    variantId?: string;
+    customerPincode: string;
+    quantity: number;
+  }): Promise<AllocationResult> {
+    // The allocate() call already wraps the logAllocation in a
+    // catch-all so a logging miss won't propagate; but for a
+    // preview we'd rather skip the write entirely. Inline a thin
+    // copy by temporarily NO-OPing the writer. Cleaner than a
+    // boolean flag in the hot path.
+    const originalLog = this.logAllocation.bind(this);
+    (this as any).logAllocation = async () => undefined;
+    try {
+      return await this.allocate(input);
+    } finally {
+      (this as any).logAllocation = originalLog;
+    }
+  }
+
   // ── T4  Stock reservation ──────────────────────────────────────────────
 
+  /**
+   * Phase 52 polish (2026-05-21) — the seller-allocation reservation
+   * path is the primary checkout reservation creator. Pre-polish it
+   * bypassed both the new attribution columns and the StockMovement
+   * ledger that InventoryPublicFacade.reserveStock writes. This
+   * version mirrors the facade's contract inline so every reservation
+   * — whether created via the facade or the allocation path — carries
+   * customerId attribution and lands in the ledger.
+   */
   async reserveStock(input: {
     mappingId: string;
     quantity: number;
     orderId?: string;
     expiresInMinutes?: number;
+    customerId?: string | null;
+    sessionId?: string | null;
+    cartId?: string | null;
   }): Promise<StockReservationResult> {
     const { mappingId, quantity, orderId, expiresInMinutes = 15 } = input;
 
     if (quantity < 1) throw new BadRequestAppException('quantity must be >= 1');
+    if (quantity > MAX_RESERVATION_QUANTITY) {
+      throw new BadRequestAppException(
+        `quantity must not exceed ${MAX_RESERVATION_QUANTITY} units per reservation`,
+      );
+    }
 
     // Reserve inside a transaction with a row-level lock so concurrent
     // reservations against the same mapping serialize correctly.
-    //
-    // The race we're closing: two transactions both `findUnique`, both see
-    // `available >= quantity`, both increment `reservedQty`. Without the
-    // FOR UPDATE the database happily lets both commit and oversells.
-    // With FOR UPDATE the second SELECT blocks until the first commits,
-    // then sees the updated `reservedQty` and correctly rejects.
-    return this.prisma.$transaction(async (tx) => {
-      // Acquire the row lock. Postgres-only — uses raw SQL because Prisma
-      // does not expose FOR UPDATE on its query builder.
+    const txResult = await this.prisma.$transaction(async (tx) => {
       const lockedRows = await tx.$queryRaw<
         Array<{ id: string; stock_qty: number; reserved_qty: number }>
       >`
@@ -363,18 +613,13 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      // Re-fetch via the type-safe client so downstream code that expected
-      // a Prisma model object still works (the locked row above only has
-      // the snake_case columns we asked for).
       const mapping = await tx.sellerProductMapping.findUnique({
         where: { id: mappingId },
       });
       if (!mapping) {
-        // Should not happen — we just locked it.
         throw new NotFoundAppException(`Mapping ${mappingId} not found`);
       }
 
-      // Create reservation
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
 
       const reservation = await tx.stockReservation.create({
@@ -383,25 +628,52 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           quantity,
           status: 'RESERVED',
           orderId: orderId ?? null,
+          customerId: input.customerId ?? null,
+          sessionId: input.sessionId ?? null,
+          cartId: input.cartId ?? null,
           expiresAt,
         },
       });
 
-      // Increment reservedQty
       await tx.sellerProductMapping.update({
         where: { id: mappingId },
         data: { reservedQty: { increment: quantity } },
       });
 
       return {
-        id: reservation.id,
-        mappingId: reservation.mappingId,
-        quantity: reservation.quantity,
-        status: reservation.status,
-        orderId: reservation.orderId,
-        expiresAt: reservation.expiresAt,
+        reservation,
+        before: { stockQty: locked.stock_qty, reservedQty: locked.reserved_qty },
+        after: { stockQty: locked.stock_qty, reservedQty: locked.reserved_qty + quantity },
       };
     });
+
+    // Phase 52 polish — ledger write after the transaction commits.
+    // Best-effort: a ledger failure must NOT roll back the reservation
+    // (the source of truth is the StockReservation row).
+    await this.stockLedger.record({
+      resource: 'SellerProductMapping',
+      resourceId: mappingId,
+      kind: 'RESERVED',
+      quantityDelta: quantity,
+      beforeStockQty: txResult.before.stockQty,
+      afterStockQty: txResult.after.stockQty,
+      beforeReservedQty: txResult.before.reservedQty,
+      afterReservedQty: txResult.after.reservedQty,
+      reason: 'Reservation created (allocation path)',
+      referenceType: 'RESERVATION',
+      referenceId: txResult.reservation.id,
+      actorId: input.customerId ?? undefined,
+      actorRole: input.customerId ? 'CUSTOMER' : 'SYSTEM',
+    });
+
+    return {
+      id: txResult.reservation.id,
+      mappingId: txResult.reservation.mappingId,
+      quantity: txResult.reservation.quantity,
+      status: txResult.reservation.status,
+      orderId: txResult.reservation.orderId,
+      expiresAt: txResult.reservation.expiresAt,
+    };
   }
 
   // ── T4.5  Combined allocate + reserve with auto-fallback ───────────────
@@ -434,6 +706,14 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     orderId?: string;
     expiresInMinutes?: number;
     excludeMappingIds?: string[];
+    // Phase 77 (2026-05-22) — Phase 52 customerId attribution
+    // propagation. Pre-Phase-77 only the 2-step
+    // reserveStock path threaded customerId for the stock-ledger
+    // forensic trail; switching checkout to allocateAndReserve
+    // would have lost that attribution.
+    customerId?: string | null;
+    sessionId?: string | null;
+    cartId?: string | null;
   }): Promise<AllocateAndReserveResult> {
     const {
       productId,
@@ -443,6 +723,9 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
       orderId,
       expiresInMinutes,
       excludeMappingIds,
+      customerId,
+      sessionId,
+      cartId,
     } = input;
 
     const allocation = await this.allocate({
@@ -494,6 +777,9 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           quantity,
           orderId,
           expiresInMinutes,
+          customerId: customerId ?? null,
+          sessionId: sessionId ?? null,
+          cartId: cartId ?? null,
         });
         if (skippedMappingIds.length > 0) {
           this.logger.warn(
@@ -604,6 +890,66 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Phase 69 (2026-05-22) — Phase 68 audit Gap #8. Idempotent
+   * "make sure this order item has a live CONFIRMED reservation
+   * on the given mapping" — used by the order-verification path
+   * to re-reserve stock when the original checkout-time
+   * reservation went stale (4-hour-old orders, mapping
+   * re-assignment) or was never confirmed (legacy orders).
+   *
+   * Semantics:
+   *   • If an existing CONFIRMED reservation already covers
+   *     (orderId, mappingId) with >= quantity units, returns its
+   *     id unchanged (no-op).
+   *   • Otherwise reserves + confirms fresh on the supplied
+   *     mapping. The fresh reservation is returned to the caller
+   *     so OrderItem.stockReservationId can be re-pointed.
+   *
+   * The caller (orders.service.verifyOrder) wraps this in a
+   * compensating-cancel block — if any item fails to reserve,
+   * the order goes back to PLACED (or CANCELLED if the partial
+   * pass already mutated some items).
+   */
+  async ensureConfirmedReservationAtVerify(input: {
+    orderId: string;
+    mappingId: string;
+    quantity: number;
+    customerId?: string | null;
+  }): Promise<{ reservationId: string; reused: boolean }> {
+    // Look for an existing CONFIRMED reservation on this mapping
+    // for this order. The orderId + mappingId + status combo is
+    // tight enough that one row should match; if multiples exist
+    // (multi-item same-mapping orders), any will do.
+    const existing = await this.prisma.stockReservation.findFirst({
+      where: {
+        orderId: input.orderId,
+        mappingId: input.mappingId,
+        status: 'CONFIRMED',
+        quantity: { gte: input.quantity },
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return { reservationId: existing.id, reused: true };
+    }
+    // Fresh reservation. Pre-Phase-69 a stale order entering
+    // verification had no protection — stock could be sniped by
+    // a fresh customer between verify and seller-accept. The
+    // 15-minute TTL is intentionally short here; the seller is
+    // expected to accept within their SLA window and the
+    // confirmation makes the deduction permanent.
+    const reservation = await this.reserveStock({
+      mappingId: input.mappingId,
+      quantity: input.quantity,
+      orderId: input.orderId,
+      expiresInMinutes: 15,
+      customerId: input.customerId ?? null,
+    });
+    await this.confirmReservation(reservation.id, input.orderId);
+    return { reservationId: reservation.id, reused: false };
+  }
+
+  /**
    * Confirm a reservation (e.g. after payment succeeds).
    */
   async confirmReservation(reservationId: string, orderId?: string): Promise<void> {
@@ -694,6 +1040,7 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
           allocatedSellerId: result.primary.nodeType === 'SELLER' ? result.primary.sellerId : null,
           allocatedFranchiseId: result.primary.nodeType === 'FRANCHISE' ? result.primary.franchiseId : null,
           allocatedMappingId: result.primary.mappingId,
+          allocatedPincodeMappingId: result.primary.pincodeMappingId ?? null,
           allocationReason: `Re-allocated from failed mapping ${failedMappingId} (${result.primary.nodeType})`,
           distanceKm: result.primary.distanceKm,
           score: result.primary.score,
@@ -713,6 +1060,12 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     result: AllocationResult,
   ): Promise<void> {
     try {
+      // Phase 77 (2026-05-22) — Phase 76 audit Gap #7. Persist the
+      // full ranked candidate list as AllocationCandidate child
+      // rows alongside the primary AllocationLog. A later "why
+      // was seller X chosen over Y" forensic question can be
+      // answered by reading the children, even after stockQty /
+      // reservedQty have drifted.
       if (result.primary) {
         await this.prisma.allocationLog.create({
           data: {
@@ -723,10 +1076,26 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
             allocatedSellerId: result.primary.nodeType === 'SELLER' ? result.primary.sellerId : null,
             allocatedFranchiseId: result.primary.nodeType === 'FRANCHISE' ? result.primary.franchiseId : null,
             allocatedMappingId: result.primary.mappingId,
+            allocatedPincodeMappingId: result.primary.pincodeMappingId ?? null,
             allocationReason: `Primary allocation — highest score (${result.primary.nodeType})`,
             distanceKm: result.primary.distanceKm,
             score: result.primary.score,
             isReallocated: false,
+            candidates: {
+              create: (result.allEligible ?? []).map((c, idx) => ({
+                rank: idx + 1,
+                nodeType: c.nodeType,
+                sellerId: c.nodeType === 'SELLER' ? c.sellerId : null,
+                franchiseId: c.nodeType === 'FRANCHISE' ? c.franchiseId ?? null : null,
+                mappingId: c.mappingId,
+                distanceKm: c.distanceKm,
+                availableStock: c.availableStock,
+                dispatchSla: c.dispatchSla,
+                score: c.score,
+                excluded: false,
+                excludeReason: null,
+              })),
+            },
           },
         });
       } else {
@@ -767,7 +1136,32 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     customerLat: number | null;
     customerLon: number | null;
   }): Promise<AllocatedSeller[]> {
-    const { productId, variantId, quantity, customerLat, customerLon } = input;
+    const { productId, variantId, quantity, customerLat, customerLon, customerPincode } =
+      input;
+
+    // Phase 159m — admin pincode→franchise territory map (supplement mode).
+    // If the customer pincode has ≥1 ACTIVE mapping, ONLY those franchises are
+    // eligible (and each carries its priority for ranking). If the pincode has
+    // no mapping, this map is empty and the legacy distance-based discovery
+    // below runs unchanged.
+    const pincodeMappingRows =
+      await this.prisma.franchisePincodeMapping.findMany({
+        where: { pincode: customerPincode, isActive: true },
+        select: { id: true, franchiseId: true, priority: true },
+      });
+    const mappingByFranchise = new Map<
+      string,
+      { id: string; priority: number }
+    >();
+    for (const m of pincodeMappingRows) {
+      // Same franchise can't have two active rows for one pincode (unique
+      // constraint), but guard anyway: keep the higher priority.
+      const prev = mappingByFranchise.get(m.franchiseId);
+      if (!prev || m.priority > prev.priority) {
+        mappingByFranchise.set(m.franchiseId, { id: m.id, priority: m.priority });
+      }
+    }
+    const territoryMode = mappingByFranchise.size > 0;
 
     // 1. Find all approved + active catalog mappings for this product.
     //    A franchise qualifies if it has either a variant-specific mapping
@@ -805,57 +1199,106 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
     // Deduplicate by franchiseId (keep first mapping found)
     const seen = new Set<string>();
 
-    for (const mapping of catalogMappings) {
+    // Phase 77 (2026-05-22) — eliminate the N+1 (audit Gaps #9 + #22).
+    // Pre-Phase-77 each iteration ran two `franchiseStock.findFirst`
+    // queries (variant + wildcard) AND a `postOfficeCache.lookup`
+    // inside the loop. The cache helped with pincodes but the
+    // FranchiseStock reads were per-iteration. With 50 mappings ⇒
+    // 100 sequential DB round-trips. Now: two batched findMany
+    // queries before the loop, then in-memory lookup.
+    const operationalMappings = catalogMappings.filter((m) => {
+      const f = m.franchise;
+      return (
+        (f.status === 'ACTIVE' || f.status === 'APPROVED') &&
+        !f.isDeleted &&
+        // Phase 159m — territory enforcement: when the pincode has mappings,
+        // only mapped franchises are eligible. Unmapped pincode → all pass.
+        (!territoryMode || mappingByFranchise.has(f.id)) &&
+        !seen.has(f.id) &&
+        seen.add(f.id) // sneaky: returns the Set, truthy
+      );
+    });
+    const franchiseIds = operationalMappings.map((m) => m.franchise.id);
+
+    // Batch fetch all candidate stock rows (variant-specific +
+    // product-level wildcards together; the lookup map keys
+    // resolve the precedence).
+    const stockRows = franchiseIds.length
+      ? await this.prisma.franchiseStock.findMany({
+          where: {
+            franchiseId: { in: franchiseIds },
+            productId,
+            OR: variantId
+              ? [{ variantId }, { variantId: null }]
+              : [{ variantId: null }],
+          },
+        })
+      : [];
+    // Build lookup: prefer variant-specific over wildcard for each
+    // franchise. variant-specific rows are processed second so
+    // they overwrite the wildcard entry — the map's final value
+    // wins.
+    const stockByFranchise = new Map<string, (typeof stockRows)[number]>();
+    for (const s of stockRows.filter((s) => s.variantId === null)) {
+      stockByFranchise.set(s.franchiseId, s);
+    }
+    if (variantId) {
+      for (const s of stockRows.filter((s) => s.variantId === variantId)) {
+        stockByFranchise.set(s.franchiseId, s);
+      }
+    }
+
+    // Batch fetch warehouse pincode coords. Unique pincodes only —
+    // the cache `lookupMany` is itself batched to a single
+    // findMany if any miss the L1 cache.
+    const warehousePincodes = Array.from(
+      new Set(
+        operationalMappings
+          .map((m) => m.franchise.warehousePincode)
+          .filter((p): p is string => !!p),
+      ),
+    );
+    const warehouseCoordsMap = new Map<
+      string,
+      { latitude: number | null; longitude: number | null }
+    >();
+    await Promise.all(
+      warehousePincodes.map(async (p) => {
+        const coords = await this.postOfficeCache.lookup(p);
+        warehouseCoordsMap.set(p, {
+          latitude: coords?.latitude ?? null,
+          longitude: coords?.longitude ?? null,
+        });
+      }),
+    );
+
+    for (const mapping of operationalMappings) {
       const franchise = mapping.franchise;
-
-      // Allow both ACTIVE and APPROVED — same precedent as procurement.service.ts.
-      // APPROVED means admin has approved the franchise; ACTIVE means fully
-      // activated. Both states are operational for fulfillment purposes.
-      // Only PENDING / SUSPENDED / DEACTIVATED / soft-deleted are excluded.
-      const operational =
-        franchise.status === 'ACTIVE' || franchise.status === 'APPROVED';
-      if (!operational || franchise.isDeleted) continue;
-      if (seen.has(franchise.id)) continue;
-      seen.add(franchise.id);
-
-      // 2. Check FranchiseStock: try variant-specific row first, then fall
-      //    back to product-level (variantId=NULL) so a product-level
-      //    franchise can still fulfill a variant order.
-      let stock = null as Awaited<ReturnType<typeof this.prisma.franchiseStock.findFirst>>;
-      if (variantId) {
-        stock = await this.prisma.franchiseStock.findFirst({
-          where: { franchiseId: franchise.id, productId, variantId },
-        });
-      }
-      if (!stock) {
-        stock = await this.prisma.franchiseStock.findFirst({
-          where: { franchiseId: franchise.id, productId, variantId: null },
-        });
-      }
-
+      const stock = stockByFranchise.get(franchise.id);
       if (!stock || stock.availableQty < quantity) continue;
 
-      // 3. Calculate distance from franchise warehouse pincode to customer pincode
-      let distance = 999;
+      // Calculate distance from franchise warehouse pincode to customer pincode
+      let distance: number | null = null;
       if (customerLat && customerLon && franchise.warehousePincode) {
-        // Phase 4 follow-up (2026-05-16) — cached lookup.
-        const warehouseCoords = await this.postOfficeCache.lookup(
-          franchise.warehousePincode,
-        );
-        if (
-          warehouseCoords?.latitude != null &&
-          warehouseCoords?.longitude != null
-        ) {
+        const coords = warehouseCoordsMap.get(franchise.warehousePincode);
+        if (coords?.latitude != null && coords?.longitude != null) {
           distance = this.calculateDistance(
             customerLat,
             customerLon,
-            warehouseCoords.latitude,
-            warehouseCoords.longitude,
+            coords.latitude,
+            coords.longitude,
           );
         }
       }
 
+      // Phase 77 — apply the same max-distance cap as the seller
+      // path so a franchise warehouse 2500km away is also excluded.
+      if (distance !== null && this.maxDistanceKm > 0 && distance > this.maxDistanceKm) {
+        continue;
+      }
+
       const dispatchSla = 1; // franchise default dispatch SLA
+      const territory = mappingByFranchise.get(franchise.id);
 
       candidates.push({
         nodeType: 'FRANCHISE',
@@ -863,11 +1306,15 @@ export class SellerAllocationService implements OnModuleInit, OnModuleDestroy {
         sellerName: franchise.businessName,
         franchiseId: franchise.id,
         mappingId: mapping.id,
-        distanceKm: Math.round(distance * 100) / 100,
+        distanceKm: distance !== null ? Math.round(distance * 100) / 100 : null,
         dispatchSla,
         availableStock: stock.availableQty,
-        estimatedDeliveryDays: this.estimateDeliveryDays(distance, dispatchSla),
+        estimatedDeliveryDays: this.estimateDeliveryDays(distance ?? 0, dispatchSla),
         score: 0,
+        // Phase 159m — territory mapping snapshot + priority (set only when the
+        // pincode had an active mapping for this franchise).
+        pincodeMappingId: territory?.id,
+        mappingPriority: territory?.priority,
       });
     }
 

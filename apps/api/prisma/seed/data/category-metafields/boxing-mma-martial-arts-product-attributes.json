@@ -1,0 +1,578 @@
+{
+  "boxing-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "training", "label": "Training / Sparring" },
+        { "value": "bag", "label": "Bag Gloves" },
+        { "value": "competition", "label": "Competition" },
+        { "value": "lace_up", "label": "Lace-Up (Pro)" }
+      ]
+    },
+    {
+      "key": "glove_weight",
+      "name": "Glove Weight (oz)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "8", "label": "8 oz" },
+        { "value": "10", "label": "10 oz" },
+        { "value": "12", "label": "12 oz" },
+        { "value": "14", "label": "14 oz" },
+        { "value": "16", "label": "16 oz" },
+        { "value": "18", "label": "18 oz" }
+      ]
+    },
+    {
+      "key": "closure_type",
+      "name": "Closure Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "velcro", "label": "Velcro" },
+        { "value": "lace", "label": "Lace-Up" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" },
+        { "value": "gold", "label": "Gold" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "mma-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" }
+      ]
+    },
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "sparring", "label": "Sparring" },
+        { "value": "grappling", "label": "Grappling" },
+        { "value": "competition", "label": "Competition" },
+        { "value": "hybrid", "label": "Hybrid / Training" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+  "hand-wraps-inner-gloves": [
+    {
+      "key": "wrap_type",
+      "name": "Wrap Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "traditional", "label": "Traditional Hand Wraps" },
+        { "value": "mexican", "label": "Mexican Style (Elastic)" },
+        { "value": "quick_wrap", "label": "Quick Wraps / Gel" },
+        { "value": "inner_glove", "label": "Inner Gloves" },
+        { "value": "knuckle_guard", "label": "Knuckle Guard" }
+      ]
+    },
+    {
+      "key": "length",
+      "name": "Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "108", "label": "108\" (2.75m)" },
+        { "value": "120", "label": "120\" (3m)" },
+        { "value": "180", "label": "180\" (4.5m)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "punching-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "heavy_bag", "label": "Heavy Bag" },
+        { "value": "speed_bag", "label": "Speed Bag" },
+        { "value": "double_end", "label": "Double-End Bag" },
+        { "value": "uppercut", "label": "Uppercut Bag" },
+        { "value": "free_standing", "label": "Free-Standing Bag" },
+        { "value": "body_bag", "label": "Body / Wrecking Ball Bag" },
+        { "value": "maize_bag", "label": "Maize Bag / Slip Bag" }
+      ]
+    },
+    {
+      "key": "bag_weight",
+      "name": "Bag Weight",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "25_lb", "label": "25 lb (11 kg)" },
+        { "value": "40_lb", "label": "40 lb (18 kg)" },
+        { "value": "50_lb", "label": "50 lb (23 kg)" },
+        { "value": "70_lb", "label": "70 lb (32 kg)" },
+        { "value": "100_lb", "label": "100 lb (45 kg)" },
+        { "value": "100_plus", "label": "100+ lb" }
+      ]
+    },
+    {
+      "key": "filled",
+      "name": "Pre-Filled",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+  "boxing-headgear": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "headgear_type",
+      "name": "Headgear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "open_face", "label": "Open Face" },
+        { "value": "full_face", "label": "Full Face / Cheek" },
+        { "value": "bar_face", "label": "Face Bar / Cage" },
+        { "value": "competition", "label": "Competition" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+  "focus-pads-shields": [
+    {
+      "key": "pad_type",
+      "name": "Pad Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "focus_mitt", "label": "Focus Mitts / Pads" },
+        { "value": "thai_pad", "label": "Thai Pads / Kick Pads" },
+        { "value": "kick_shield", "label": "Kick Shield" },
+        { "value": "belly_pad", "label": "Belly Pad / Body Protector" },
+        { "value": "coaching_mitt", "label": "Coaching Mitts" }
+      ]
+    },
+    {
+      "key": "sold_as",
+      "name": "Sold As",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "pair", "label": "Pair" },
+        { "value": "single", "label": "Single" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "boxing-protective-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "mouthguard", "label": "Mouthguard" },
+        { "value": "groin_guard", "label": "Groin Guard" },
+        { "value": "shin_guard", "label": "Shin Guard" },
+        { "value": "chest_guard", "label": "Chest Guard" },
+        { "value": "elbow_pad", "label": "Elbow Pad" },
+        { "value": "knee_pad", "label": "Knee Pad" },
+        { "value": "ankle_support", "label": "Ankle Support" }
+      ]
+    },
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+  "martial-arts-uniforms": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "karate_gi", "label": "Karate Gi" },
+        { "value": "judo_gi", "label": "Judo Gi" },
+        { "value": "bjj_gi", "label": "BJJ Gi" },
+        { "value": "taekwondo", "label": "Taekwondo Dobok" },
+        { "value": "muay_thai_shorts", "label": "Muay Thai Shorts" },
+        { "value": "mma_shorts", "label": "MMA Shorts" },
+        { "value": "rash_guard", "label": "Rash Guard / No-Gi Top" },
+        { "value": "kung_fu", "label": "Kung Fu Uniform" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "0000", "label": "0000 (Kids 3-4)" },
+        { "value": "000", "label": "000 (Kids 5-6)" },
+        { "value": "00", "label": "00 (Kids 7-8)" },
+        { "value": "0", "label": "0 (Kids 9-10)" },
+        { "value": "1", "label": "1 (Kids 11-12)" },
+        { "value": "2", "label": "2 (XS)" },
+        { "value": "3", "label": "3 (S)" },
+        { "value": "4", "label": "4 (M)" },
+        { "value": "5", "label": "5 (L)" },
+        { "value": "6", "label": "6 (XL)" },
+        { "value": "7", "label": "7 (XXL)" }
+      ]
+    },
+    {
+      "key": "gi_weight",
+      "name": "Gi Weight",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "description": "Applicable for Gi uniforms only",
+      "choices": [
+        { "value": "lightweight", "label": "Lightweight (Student)" },
+        { "value": "middleweight", "label": "Middleweight (Training)" },
+        { "value": "heavyweight", "label": "Heavyweight (Competition)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "martial-arts-belts": [
+    {
+      "key": "belt_color",
+      "name": "Belt Color / Grade",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "green", "label": "Green" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "brown", "label": "Brown" },
+        { "value": "black", "label": "Black" }
+      ]
+    },
+    {
+      "key": "belt_size",
+      "name": "Belt Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "0", "label": "0 (200cm)" },
+        { "value": "1", "label": "1 (220cm)" },
+        { "value": "2", "label": "2 (240cm)" },
+        { "value": "3", "label": "3 (260cm)" },
+        { "value": "4", "label": "4 (280cm)" },
+        { "value": "5", "label": "5 (300cm)" },
+        { "value": "6", "label": "6 (320cm)" }
+      ]
+    },
+    {
+      "key": "martial_art",
+      "name": "Martial Art",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "karate", "label": "Karate" },
+        { "value": "judo", "label": "Judo" },
+        { "value": "bjj", "label": "BJJ" },
+        { "value": "taekwondo", "label": "Taekwondo" },
+        { "value": "universal", "label": "Universal" }
+      ]
+    }
+  ],
+  "boxing-ring-cage-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "boxing_ring", "label": "Boxing Ring" },
+        { "value": "ring_ropes", "label": "Ring Ropes / Accessories" },
+        { "value": "ring_canvas", "label": "Ring Canvas / Mat" },
+        { "value": "cage_panels", "label": "MMA Cage Panels" },
+        { "value": "corner_pads", "label": "Corner Pads" },
+        { "value": "round_timer", "label": "Round Timer / Bell" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+  "boxing-training-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "skipping_rope", "label": "Skipping Rope / Jump Rope" },
+        { "value": "reflex_ball", "label": "Reflex Ball" },
+        { "value": "speed_ladder", "label": "Speed Ladder" },
+        { "value": "resistance_band", "label": "Resistance Bands" },
+        { "value": "bag_stand", "label": "Bag Stand / Bracket" },
+        { "value": "bag_platform", "label": "Speed Bag Platform" },
+        { "value": "floor_to_ceiling", "label": "Floor-to-Ceiling Ball" },
+        { "value": "hand_gripper", "label": "Hand Gripper / Strengthener" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced / Pro" }
+      ]
+    }
+  ],
+  "martial-arts-mats": [
+    {
+      "key": "mat_type",
+      "name": "Mat Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "jigsaw", "label": "Jigsaw / Interlocking Tiles" },
+        { "value": "roll_out", "label": "Roll-Out Mat" },
+        { "value": "tatami", "label": "Tatami Mat" },
+        { "value": "crash_mat", "label": "Crash / Landing Mat" },
+        { "value": "wrestling", "label": "Wrestling Mat" }
+      ]
+    },
+    {
+      "key": "thickness",
+      "name": "Thickness",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "20mm", "label": "20mm" },
+        { "value": "25mm", "label": "25mm" },
+        { "value": "30mm", "label": "30mm" },
+        { "value": "40mm", "label": "40mm" },
+        { "value": "50mm_plus", "label": "50mm+" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" }
+      ]
+    }
+  ]
+}

@@ -4,7 +4,9 @@ import {
   IsString,
   IsUUID,
   IsIn,
-  IsNumber,
+  IsInt,
+  Min,
+  Max,
   MinLength,
   MaxLength,
 } from 'class-validator';
@@ -24,8 +26,17 @@ export class FranchiseAdjustStockDto {
   })
   adjustmentType!: 'DAMAGE' | 'LOSS' | 'ADJUSTMENT' | 'AUDIT_CORRECTION';
 
+  // Phase 159o (audit #9) — quantity is a SIGNED integer delta. DAMAGE requires
+  // a positive value (units damaged); LOSS / ADJUSTMENT / AUDIT_CORRECTION may
+  // be negative to decrement or positive to increment. Previously only
+  // @IsNumber, so a fractional 1.5 or an unbounded -50000 passed validation.
+  // Bound the magnitude (±1,000,000) and force a whole number; the repository's
+  // under-lock `afterQty < 0` guard still prevents any signed delta from
+  // driving stock negative.
   @IsNotEmpty({ message: 'Quantity is required' })
-  @IsNumber({}, { message: 'Quantity must be a number' })
+  @IsInt({ message: 'Quantity must be a whole number' })
+  @Min(-1_000_000, { message: 'Quantity is out of the allowed range' })
+  @Max(1_000_000, { message: 'Quantity is out of the allowed range' })
   quantity!: number;
 
   @IsNotEmpty({ message: 'Reason is required' })

@@ -24,9 +24,15 @@ describe('PermissionsGuard', () => {
     } as any;
     const audit = { record: jest.fn() } as any;
     const unifiedAudit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+    // Phase 24 (2026-05-20) — PrismaService added for the CRITICAL
+    // auto-step-up check. The test matrix doesn't exercise CRITICAL
+    // permissions, so a stub-by-jest is sufficient.
+    const prisma = {
+      adminSession: { findUnique: jest.fn().mockResolvedValue(null) },
+    } as any;
 
-    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit);
-    return { guard, reflector, audit, unifiedAudit };
+    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit, prisma);
+    return { guard, reflector, audit, unifiedAudit, prisma };
   }
 
   function makeCtx(user: any, requiredPermissions: string[] | undefined) {
@@ -47,54 +53,60 @@ describe('PermissionsGuard', () => {
     return { ctx, req, requiredPermissions };
   }
 
-  it('returns true when no @Permissions decorator is set (open route)', () => {
+  // Phase 24 (2026-05-20) — `canActivate` is now async because of the
+  // CRITICAL auto-step-up branch. Test assertions updated to await /
+  // .rejects accordingly.
+
+  it('returns true when no @Permissions decorator is set (open route)', async () => {
     const { guard, reflector } = buildGuard({ strict: true });
     reflector.getAllAndOverride.mockReturnValueOnce(undefined);
     const { ctx } = makeCtx({ id: 'a1', roles: ['SUPER_ADMIN'], permissions: [] }, undefined);
-    expect(guard.canActivate(ctx)).toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
-  it('allows when actor permissions include all required (strict mode)', () => {
+  it('allows when actor permissions include all required (strict mode)', async () => {
     const { guard, reflector, audit } = buildGuard({ strict: true });
-    reflector.getAllAndOverride.mockReturnValueOnce(['orders.read']);
+    reflector.getAllAndOverride
+      .mockReturnValueOnce(['orders.read']) // PERMISSIONS_KEY
+      .mockReturnValueOnce(undefined); // REQUIRES_STEP_UP_METADATA_KEY
     const { ctx } = makeCtx(
       { id: 'a1', roles: ['SUPER_ADMIN'], permissions: ['orders.read', 'orders.cancel'] },
       ['orders.read'],
     );
-    expect(guard.canActivate(ctx)).toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ decision: 'ALLOW', wouldHaveBlocked: false }),
     );
   });
 
-  it('throws ForbiddenAppException when permission missing and strict=true', () => {
+  it('throws ForbiddenAppException when permission missing and strict=true', async () => {
     const { guard, reflector, audit, unifiedAudit } = buildGuard({ strict: true });
     reflector.getAllAndOverride.mockReturnValueOnce(['wallets.adjust']);
     const { ctx } = makeCtx(
       { id: 'a2', roles: ['SELLER_SUPPORT'], permissions: ['orders.read'] },
       ['wallets.adjust'],
     );
-    expect(() => guard.canActivate(ctx)).toThrow(ForbiddenAppException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenAppException);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ decision: 'DENY', wouldHaveBlocked: false }),
     );
     expect(unifiedAudit.writeAuditLog).toHaveBeenCalled();
   });
 
-  it('allows but audits wouldHaveBlocked=true when strict=false (soak mode)', () => {
+  it('allows but audits wouldHaveBlocked=true when strict=false (soak mode)', async () => {
     const { guard, reflector, audit } = buildGuard({ strict: false });
     reflector.getAllAndOverride.mockReturnValueOnce(['wallets.adjust']);
     const { ctx } = makeCtx(
       { id: 'a3', roles: ['SELLER_SUPPORT'], permissions: ['orders.read'] },
       ['wallets.adjust'],
     );
-    expect(guard.canActivate(ctx)).toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ decision: 'ALLOW', wouldHaveBlocked: true }),
     );
   });
 
-  it('regression: req.user.permissions=[] (legacy bug) results in 403 under strict', () => {
+  it('regression: req.user.permissions=[] (legacy bug) results in 403 under strict', async () => {
     // This is the exact prod failure mode: AdminAuthGuard used to leave
     // permissions undefined, so the guard saw an empty list and would
     // have denied every request once PERMISSIONS_GUARD_STRICT flipped.
@@ -104,16 +116,16 @@ describe('PermissionsGuard', () => {
       { id: 'a4', roles: ['SUPER_ADMIN'], permissions: [] },
       ['orders.read'],
     );
-    expect(() => guard.canActivate(ctx)).toThrow(ForbiddenAppException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenAppException);
   });
 
-  it('requires EVERY listed permission (AND semantics)', () => {
+  it('requires EVERY listed permission (AND semantics)', async () => {
     const { guard, reflector } = buildGuard({ strict: true });
     reflector.getAllAndOverride.mockReturnValueOnce(['orders.read', 'orders.cancel']);
     const { ctx } = makeCtx(
       { id: 'a5', roles: ['SELLER_OPERATIONS'], permissions: ['orders.read'] }, // missing orders.cancel
       ['orders.read', 'orders.cancel'],
     );
-    expect(() => guard.canActivate(ctx)).toThrow(ForbiddenAppException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenAppException);
   });
 });

@@ -19,9 +19,7 @@ interface SubOrder {
   fulfillmentStatus: string;
   acceptStatus: string;
   acceptDeadlineAt: string | null;
-  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
-  ithinkAwb?: string | null;
-  ithinkLogistic?: string | null;
+  deliveryMethod?: 'SELF_DELIVERY' | null;
   items: { productTitle: string; quantity: number; totalPrice: number }[];
   returns?: ReturnLite[];
   masterOrder: {
@@ -375,11 +373,7 @@ export default function SellerOrdersPage() {
                       })()}
                     </td>
                     <td style={tdStyle}>
-                      <DeliveryMethodBadge
-                        method={so.deliveryMethod ?? null}
-                        awb={so.ithinkAwb}
-                        courier={so.ithinkLogistic}
-                      />
+                      <DeliveryMethodBadge method={so.deliveryMethod ?? null} />
                     </td>
                     <td style={tdStyle}>
                       <div>

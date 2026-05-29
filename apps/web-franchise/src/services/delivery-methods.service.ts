@@ -1,12 +1,6 @@
 import { apiClient } from '@/lib/api-client';
 
-export type DeliveryMethod = 'ITHINK_LOGISTICS' | 'SELF_DELIVERY';
-
-export type IThinkWarehouseApprovalStatus =
-  | 'NOT_REGISTERED'
-  | 'PENDING'
-  | 'APPROVED'
-  | 'REJECTED';
+export type DeliveryMethod = 'SELF_DELIVERY';
 
 export type SelfDeliveryStatus =
   | 'PENDING'
@@ -17,9 +11,6 @@ export type SelfDeliveryStatus =
   | 'CANCELLED';
 
 export interface FranchiseDeliveryEntitlements {
-  ithinkEnabled: boolean;
-  ithinkPending: boolean;
-  ithinkWarehouseStatus: IThinkWarehouseApprovalStatus;
   selfDeliveryEnabled: boolean;
   selfDeliveryPincodes: string[] | null;
 }

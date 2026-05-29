@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { sellerProfileService } from '@/services/profile.service';
+import { sellerProfileService, type SellerProfileData } from '@/services/profile.service';
+import { sellerAuthService } from '@/services/auth.service';
 import './dashboard.css';
 
 interface SellerInfo {
@@ -14,6 +15,7 @@ interface SellerInfo {
   phoneNumber: string;
   status?: string;
   isEmailVerified?: boolean;
+  verificationStatus?: SellerProfileData['verificationStatus'];
 }
 
 function getInitials(name: string): string {
@@ -24,6 +26,42 @@ function getInitials(name: string): string {
     .slice(0, 2)
     .join('')
     .toUpperCase();
+}
+
+/**
+ * Phase 19 (2026-05-20) — seller dashboard layout.
+ *
+ * Three audit-driven changes:
+ *
+ *   1. Onboarding redirect. After the profile fetch resolves, any
+ *      seller whose account is not fully verified (email-verified +
+ *      status=ACTIVE + verificationStatus=VERIFIED) is redirected to
+ *      /dashboard/onboarding. Public routes within the dashboard
+ *      that the seller is allowed to access pre-approval —
+ *      /dashboard/onboarding itself and /dashboard/profile — are
+ *      exempted from the redirect.
+ *
+ *   2. The "pending approval" banner is now a clickable Link to
+ *      /dashboard/onboarding.
+ *
+ *   3. Sign-out calls the server (`sellerAuthService.logout()`)
+ *      before clearing local state, so the SellerSession row is
+ *      actually revoked and cookies cleared. Best-effort: a 401
+ *      here still clears the UI state.
+ *
+ * Cross-tab profile-refresh: a 'seller-profile-updated' event
+ * triggers a refetch of /seller/profile. The onboarding wizard
+ * dispatches this after submit/verify so the layout's banner +
+ * sidebar state update without a hard reload.
+ */
+const ONBOARDING_EXEMPT_PATHS = [
+  '/dashboard/onboarding',
+  '/dashboard/profile',
+  '/dashboard/support',
+];
+
+function isExemptFromGate(pathname: string): boolean {
+  return ONBOARDING_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
 export default function DashboardLayout({
@@ -38,7 +76,7 @@ export default function DashboardLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const refreshProfile = useCallback(async () => {
     try {
       const token = sessionStorage.getItem('accessToken');
       const sellerData = sessionStorage.getItem('seller');
@@ -46,45 +84,84 @@ export default function DashboardLayout({
         router.replace('/login');
         return;
       }
-      const cached = JSON.parse(sellerData);
+      const cached: SellerInfo = JSON.parse(sellerData);
       setSeller(cached);
 
-      // Fetch fresh status from API to keep sessionStorage in sync
-      sellerProfileService.getProfile(token).then(res => {
-        if (res.data) {
-          const updated = {
-            ...cached,
-            status: res.data.status,
-            isEmailVerified: res.data.isEmailVerified,
-          };
-          setSeller(updated);
+      const res = await sellerProfileService.getProfile(token).catch(() => null);
+      if (res?.data) {
+        const updated: SellerInfo = {
+          ...cached,
+          status: res.data.status,
+          isEmailVerified: res.data.isEmailVerified,
+          verificationStatus: res.data.verificationStatus,
+        };
+        setSeller(updated);
+        try {
           sessionStorage.setItem('seller', JSON.stringify(updated));
+        } catch {
+          // storage unavailable
         }
-      }).catch(() => {
-        // ignore — use cached data
-      });
+      }
     } catch {
       router.replace('/login');
     }
   }, [router]);
 
-  // Close dropdown on outside click
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    void refreshProfile();
+  }, [refreshProfile]);
+
+  // Phase 19 (2026-05-20) — listen for cross-tab + intra-app
+  // 'seller-profile-updated' events so the onboarding wizard can
+  // poke the layout to re-fetch after a status change. Without this,
+  // the banner + sidebar stay stale until the user navigates.
+  useEffect(() => {
+    const handler = () => {
+      void refreshProfile();
+    };
+    window.addEventListener('seller-profile-updated', handler);
+    return () => window.removeEventListener('seller-profile-updated', handler);
+  }, [refreshProfile]);
+
+  // Outside-click for the user dropdown.
+  useEffect(() => {
+    const h = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  // Close sidebar on route change
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
 
-  const handleLogout = useCallback(() => {
+  // Phase 19 (2026-05-20) — onboarding redirect gate. Skip while the
+  // profile is still loading (seller=null) and skip on exempt paths
+  // so the seller can actually reach /dashboard/onboarding etc.
+  useEffect(() => {
+    if (!seller) return;
+    if (isExemptFromGate(pathname)) return;
+    const fullyApproved =
+      seller.isEmailVerified === true &&
+      seller.status === 'ACTIVE' &&
+      seller.verificationStatus === 'VERIFIED';
+    if (!fullyApproved) {
+      router.replace('/dashboard/onboarding');
+    }
+  }, [seller, pathname, router]);
+
+  const handleLogout = useCallback(async () => {
+    setDropdownOpen(false);
+    try {
+      // Server-side revoke first, then clear local. A 401 here
+      // (token already expired) is fine — local clear still runs.
+      await sellerAuthService.logout();
+    } catch {
+      // Best-effort.
+    }
     try {
       sessionStorage.removeItem('accessToken');
       sessionStorage.removeItem('refreshToken');
@@ -92,7 +169,7 @@ export default function DashboardLayout({
     } catch {
       // Storage unavailable
     }
-    router.push('/login');
+    router.replace('/login');
   }, [router]);
 
   if (!seller) return null;
@@ -101,9 +178,12 @@ export default function DashboardLayout({
 
   const isPending = seller.status === 'PENDING_APPROVAL';
   const isEmailUnverified = seller.isEmailVerified === false;
-  const canAccessProducts = seller.status === 'ACTIVE' && seller.isEmailVerified === true;
-
-  const isActive = seller.status === 'ACTIVE';
+  const isUnderReview = seller.verificationStatus === 'UNDER_REVIEW';
+  const isRejected = seller.verificationStatus === 'REJECTED';
+  const isActive =
+    seller.status === 'ACTIVE' &&
+    seller.verificationStatus === 'VERIFIED' &&
+    seller.isEmailVerified === true;
 
   const navItems = [
     { href: '/dashboard', label: 'Dashboard', icon: '&#9776;' },
@@ -114,12 +194,56 @@ export default function DashboardLayout({
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128200;', disabled: !isActive, description: 'Stock levels, low-stock, out-of-stock' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;', disabled: !isActive },
     { href: '/dashboard/returns', label: 'Returns', icon: '&#8617;', disabled: !isActive },
+    { href: '/dashboard/reversals', label: 'Reversals', icon: '&#128257;', disabled: !isActive, description: 'B2B / off-platform reversal requests' },
     { href: '/dashboard/disputes', label: 'Disputes', icon: '&#9888;', disabled: !isActive, description: 'Respond to customer disputes; 72h SLA' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },
     { href: '/dashboard/tax/invoices', label: 'Tax Invoices', icon: '&#129534;', disabled: !isActive, description: 'GST invoices, credit notes — download for filing' },
     { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },
     { href: '#', label: 'Analytics', icon: '&#128200;', disabled: true },
   ];
+
+  // Banner content depends on the seller's current state. The
+  // banner is wrapped in a Link to /dashboard/onboarding so a
+  // click goes straight to the wizard.
+  const banner = (() => {
+    if (isEmailUnverified) {
+      return {
+        href: '/dashboard/onboarding',
+        bg: '#fee2e2',
+        border: '#ef4444',
+        color: '#991b1b',
+        text: 'Verify your email to continue. Click here to open the verification step.',
+      };
+    }
+    if (isRejected) {
+      return {
+        href: '/dashboard/onboarding',
+        bg: '#fee2e2',
+        border: '#ef4444',
+        color: '#991b1b',
+        text: 'Your onboarding was rejected. Click here to view the reason and resubmit.',
+      };
+    }
+    if (isUnderReview) {
+      return {
+        href: '/dashboard/onboarding',
+        bg: '#fef3c7',
+        border: '#f59e0b',
+        color: '#92400e',
+        text: 'Your onboarding is under admin review. Click here to check status.',
+      };
+    }
+    if (isPending) {
+      return {
+        href: '/dashboard/onboarding',
+        bg: '#fef3c7',
+        border: '#f59e0b',
+        color: '#92400e',
+        text: 'Complete onboarding to activate your seller account. Click here to start.',
+      };
+    }
+    return null;
+  })();
 
   return (
     <div className="dashboard-shell">
@@ -195,13 +319,11 @@ export default function DashboardLayout({
         </div>
       </nav>
 
-      {/* Sidebar Overlay (mobile) */}
       <div
         className={`sidebar-overlay${sidebarOpen ? ' visible' : ''}`}
         onClick={() => setSidebarOpen(false)}
       />
 
-      {/* Sidebar */}
       <aside className={`dashboard-sidebar${sidebarOpen ? ' mobile-open' : ''}`}>
         <div className="sidebar-section">
           <div className="sidebar-section-label">Menu</div>
@@ -238,7 +360,7 @@ export default function DashboardLayout({
                   fontWeight: 600,
                   marginLeft: 'auto',
                 }}>
-                  SOON
+                  {item.label === 'Analytics' ? 'SOON' : 'LOCKED'}
                 </span>
               )}
             </Link>
@@ -257,35 +379,25 @@ export default function DashboardLayout({
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="dashboard-content">
-        {isPending && (
-          <div style={{
-            background: '#fef3c7',
-            border: '1px solid #f59e0b',
-            borderRadius: 8,
-            padding: '12px 16px',
-            marginBottom: 16,
-            color: '#92400e',
-            fontSize: 14,
-            fontWeight: 500,
-          }}>
-            Your account is pending admin approval. Please complete your profile details to proceed with account review.
-          </div>
-        )}
-        {!isPending && isEmailUnverified && (
-          <div style={{
-            background: '#fee2e2',
-            border: '1px solid #ef4444',
-            borderRadius: 8,
-            padding: '12px 16px',
-            marginBottom: 16,
-            color: '#991b1b',
-            fontSize: 14,
-            fontWeight: 500,
-          }}>
-            Please verify your email before you can manage products.
-          </div>
+        {banner && (
+          <Link
+            href={banner.href}
+            style={{
+              display: 'block',
+              background: banner.bg,
+              border: `1px solid ${banner.border}`,
+              borderRadius: 8,
+              padding: '12px 16px',
+              marginBottom: 16,
+              color: banner.color,
+              fontSize: 14,
+              fontWeight: 500,
+              textDecoration: 'none',
+            }}
+          >
+            {banner.text}
+          </Link>
         )}
         {children}
       </main>

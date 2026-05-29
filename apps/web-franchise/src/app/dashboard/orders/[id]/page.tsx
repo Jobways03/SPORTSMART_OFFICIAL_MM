@@ -1211,16 +1211,11 @@ function FranchiseDeliverySection({
 
   const accepted = order.acceptStatus === 'ACCEPTED';
   const method = (order as any).deliveryMethod as
-    | 'ITHINK_LOGISTICS'
     | 'SELF_DELIVERY'
     | null
     | undefined;
   const isSelf = method === 'SELF_DELIVERY';
-  const isIThink = method === 'ITHINK_LOGISTICS';
   const noMethodYet = !method;
-  const ithinkAwb = (order as any).ithinkAwb as string | null | undefined;
-  const ithinkLogistic = (order as any).ithinkLogistic as string | null | undefined;
-  const ithinkTrackingUrl = (order as any).ithinkTrackingUrl as string | null | undefined;
   const selfDeliveryStatus = (order as any).selfDeliveryStatus as
     | 'PENDING'
     | 'READY_FOR_PICKUP'
@@ -1237,23 +1232,7 @@ function FranchiseDeliverySection({
         <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
           Delivery method:
         </span>
-        <DeliveryMethodBadge
-          method={method ?? null}
-          awb={ithinkAwb}
-          courier={ithinkLogistic}
-          size="md"
-          showAwb={isIThink}
-        />
-        {isIThink && ithinkTrackingUrl && (
-          <a
-            href={ithinkTrackingUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}
-          >
-            Track on iThink ↗
-          </a>
-        )}
+        <DeliveryMethodBadge method={method ?? null} size="md" />
       </div>
 
       {accepted && noMethodYet && (

@@ -12,7 +12,7 @@
  *      settlement runs).
  *   2. List your first product (deep-link into the existing product
  *      creation flow).
- *   3. Enable a delivery method (Self-delivery or iThink).
+ *   3. Enable a delivery method (Self-delivery).
  *
  * The page surfaces a "Skip for now" link that takes them to the
  * main dashboard — first-listing is encouraged, not blocking. A
@@ -160,8 +160,8 @@ export default function FirstListingPage() {
           <div className="first-listing__card-step">Step 3</div>
           <h2>Enable a delivery method</h2>
           <p>
-            Either ship yourself (Self-delivery) or let our courier
-            partner (iThink) handle pickups. You can enable both.
+            Ship orders yourself with Self-delivery and set your
+            service-area pincodes.
           </p>
           <Link
             href="/dashboard/profile/delivery"

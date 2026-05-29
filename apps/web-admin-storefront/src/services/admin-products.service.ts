@@ -15,7 +15,14 @@ export interface ProductListItem {
   slug: string;
   status: string;
   moderationStatus: string;
+  // Phase 32 (2026-05-21) — `moderationNote` is legacy; readers
+  // prefer `rejectionReason` / `changeRequestNote`. `isReSubmission`
+  // is true when the product has prior APPROVED status history —
+  // signals to the moderator that this is not a first-time review.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
+  isReSubmission: boolean;
   hasVariants: boolean;
   basePrice: string | null;
   baseStock: number | null;
@@ -121,7 +128,7 @@ export const adminProductsService = {
 
   bulkApprove(
     productIds: string[],
-  ): Promise<ApiResponse<{ ok: string[]; failed: Array<{ id: string; reason: string }> }>> {
+  ): Promise<ApiResponse<{ ok: string[]; alreadyDone: string[]; failed: Array<{ id: string; reason: string }> }>> {
     return apiClient('/admin/products/bulk/approve', {
       method: 'POST',
       body: JSON.stringify({ productIds }),
@@ -131,7 +138,7 @@ export const adminProductsService = {
   bulkReject(
     productIds: string[],
     reason: string,
-  ): Promise<ApiResponse<{ ok: string[]; failed: Array<{ id: string; reason: string }> }>> {
+  ): Promise<ApiResponse<{ ok: string[]; alreadyDone: string[]; failed: Array<{ id: string; reason: string }> }>> {
     return apiClient('/admin/products/bulk/reject', {
       method: 'POST',
       body: JSON.stringify({ productIds, reason }),
@@ -141,7 +148,7 @@ export const adminProductsService = {
   bulkRequestChanges(
     productIds: string[],
     note: string,
-  ): Promise<ApiResponse<{ ok: string[]; failed: Array<{ id: string; reason: string }> }>> {
+  ): Promise<ApiResponse<{ ok: string[]; alreadyDone: string[]; failed: Array<{ id: string; reason: string }> }>> {
     return apiClient('/admin/products/bulk/request-changes', {
       method: 'POST',
       body: JSON.stringify({ productIds, note }),
@@ -267,6 +274,62 @@ export const adminProductsService = {
 
   deleteCategory(id: string): Promise<ApiResponse<any>> {
     return apiClient(`/admin/categories/${id}`, { method: 'DELETE' });
+  },
+
+  /**
+   * Phase 34 (2026-05-21) — bulk reorder siblings under one parent.
+   * Backend requires every item to share the same parentId; UI
+   * enforces that by only ever sending one sibling group per call.
+   */
+  reorderCategories(
+    items: Array<{ id: string; sortOrder: number }>,
+  ): Promise<ApiResponse<unknown>> {
+    return apiClient('/admin/categories/reorder', {
+      method: 'PATCH',
+      body: JSON.stringify({ items }),
+    });
+  },
+
+  /**
+   * Phase 34 (2026-05-21) — paginated audit log for one category.
+   */
+  getCategoryAuditLog(
+    id: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<ApiResponse<unknown[]>> {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const q = qs.toString();
+    return apiClient(`/admin/categories/${id}/audit-log${q ? '?' + q : ''}`);
+  },
+
+  /**
+   * Phase 35 (2026-05-21) — paginated audit log for one brand.
+   */
+  getBrandAuditLog(
+    id: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<ApiResponse<unknown[]>> {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const q = qs.toString();
+    return apiClient(`/admin/brands/${id}/audit-log${q ? '?' + q : ''}`);
+  },
+
+  /**
+   * Phase 37 (2026-05-21) — paginated audit log for one collection.
+   */
+  getCollectionAuditLog(
+    id: string,
+    params?: { limit?: number; offset?: number },
+  ): Promise<ApiResponse<unknown[]>> {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const q = qs.toString();
+    return apiClient(`/admin/collections/${id}/audit-log${q ? '?' + q : ''}`);
   },
 
   // ─── Admin Brands CRUD ──────────────────────────────────────────

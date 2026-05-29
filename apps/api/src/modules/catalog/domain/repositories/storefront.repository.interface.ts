@@ -26,7 +26,10 @@ export interface IStorefrontRepository {
   updateFilterConfig(id: string, data: any): Promise<any>;
   deleteFilterConfig(id: string): Promise<void>;
   findFilterConfigById(id: string): Promise<any | null>;
-  reorderFilterConfigs(ids: string[]): Promise<void>;
+  // Phase 40 (2026-05-21) — reorderFilterConfigs now validates the
+  // input ids and runs in a single transaction. Returns the count of
+  // updated rows so the controller can detect partial drift.
+  reorderFilterConfigs(ids: string[]): Promise<{ updated: number }>;
 
   // ── Pincode lookup ──
   findPostOfficeByPincode(pincode: string): Promise<any[]>;
@@ -43,9 +46,19 @@ export interface IStorefrontRepository {
   computeAvailabilityFacets(baseConditions: any[]): Promise<{ in_stock: number; out_of_stock: number }>;
   computeBooleanMetafieldFacets(defKey: string, allConditions: any[]): Promise<{ val: boolean; count: number }[]>;
   computeNumericMetafieldRange(defKey: string, allConditions: any[]): Promise<{ min: number; max: number } | null>;
-  computeTextMetafieldFacets(defKey: string, allConditions: any[]): Promise<{ value: string; count: number }[]>;
+  // Phase 40 (2026-05-21) — accept an optional `limit` (default 200,
+  // hard-capped to 500). Pre-Phase-40 the hardcoded LIMIT 50 silently
+  // truncated rich filters (e.g. category with 80+ Material values).
+  computeTextMetafieldFacets(
+    defKey: string,
+    allConditions: any[],
+    limit?: number,
+  ): Promise<{ value: string; count: number }[]>;
   findCollectionProductCategoryIds(collectionId: string): Promise<string[]>;
 
   // ── Auto-generate filter definitions for category/collection ──
+  // Phase 40 (2026-05-21) — now reads `isFilterable=true` flag instead
+  // of the hardcoded type allowlist; includes NUMBER_INTEGER /
+  // NUMBER_DECIMAL / RATING so range filters work.
   findFilterableDefinitions(categoryIds: string[]): Promise<any[]>;
 }

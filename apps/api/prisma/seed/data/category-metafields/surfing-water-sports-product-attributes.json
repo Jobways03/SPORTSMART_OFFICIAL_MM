@@ -1,0 +1,595 @@
+{
+  "surfboards": [
+    {
+      "key": "board_type",
+      "name": "Board Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "shortboard", "label": "Shortboard" },
+        { "value": "longboard", "label": "Longboard" },
+        { "value": "funboard", "label": "Funboard / Mid-Length" },
+        { "value": "fish", "label": "Fish" },
+        { "value": "foam", "label": "Foam / Soft Top (Beginner)" },
+        { "value": "gun", "label": "Gun (Big Wave)" }
+      ]
+    },
+    {
+      "key": "board_length",
+      "name": "Board Length (ft)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "under_6", "label": "Under 6'" },
+        { "value": "6_0_6_6", "label": "6'0\" – 6'6\"" },
+        { "value": "6_6_7_0", "label": "6'6\" – 7'0\"" },
+        { "value": "7_0_7_6", "label": "7'0\" – 7'6\"" },
+        { "value": "7_6_8_0", "label": "7'6\" – 8'0\"" },
+        { "value": "8_0_9_0", "label": "8'0\" – 9'0\"" },
+        { "value": "9_0_plus", "label": "9'0\"+" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" }
+      ]
+    },
+    {
+      "key": "fin_setup",
+      "name": "Fin Setup",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "single", "label": "Single Fin" },
+        { "value": "twin", "label": "Twin Fin" },
+        { "value": "thruster", "label": "Thruster (Tri-Fin)" },
+        { "value": "quad", "label": "Quad" },
+        { "value": "5_fin", "label": "5-Fin (Convertible)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "black", "label": "Black" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "wetsuits": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "wetsuit_type",
+      "name": "Wetsuit Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "full_5_4", "label": "Full Suit 5/4mm (Cold)" },
+        { "value": "full_4_3", "label": "Full Suit 4/3mm (Cool)" },
+        { "value": "full_3_2", "label": "Full Suit 3/2mm (Mild)" },
+        { "value": "spring", "label": "Spring Suit (Shorty)" },
+        { "value": "long_john", "label": "Long John / Jane (Sleeveless)" },
+        { "value": "top_jacket", "label": "Wetsuit Top / Jacket" },
+        { "value": "rash_vest", "label": "Rash Vest / Guard" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "ms", "label": "MS" },
+        { "value": "mt", "label": "MT" },
+        { "value": "l", "label": "L" },
+        { "value": "ls", "label": "LS" },
+        { "value": "lt", "label": "LT" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "entry_type",
+      "name": "Entry Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "back_zip", "label": "Back Zip" },
+        { "value": "chest_zip", "label": "Chest Zip" },
+        { "value": "zipperless", "label": "Zipperless" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "black_blue", "label": "Black / Blue" },
+        { "value": "black_red", "label": "Black / Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "surf-fins": [
+    {
+      "key": "fin_setup",
+      "name": "Fin Setup",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "single", "label": "Single Fin" },
+        { "value": "twin", "label": "Twin Fin Set" },
+        { "value": "thruster", "label": "Thruster Set (3)" },
+        { "value": "quad", "label": "Quad Set (4)" },
+        { "value": "5_fin", "label": "5-Fin Set" }
+      ]
+    },
+    {
+      "key": "fin_system",
+      "name": "Fin System",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "fcs_ii", "label": "FCS II" },
+        { "value": "fcs_1", "label": "FCS I" },
+        { "value": "futures", "label": "Futures" },
+        { "value": "us_box", "label": "US Box (Longboard)" }
+      ]
+    },
+    {
+      "key": "fin_size",
+      "name": "Fin Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "small", "label": "Small (Under 65kg)" },
+        { "value": "medium", "label": "Medium (65-80kg)" },
+        { "value": "large", "label": "Large (80kg+)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "clear", "label": "Clear" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "surf-leashes": [
+    {
+      "key": "leash_length",
+      "name": "Leash Length",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "5_ft", "label": "5' (Shortboard)" },
+        { "value": "6_ft", "label": "6' (Shortboard)" },
+        { "value": "7_ft", "label": "7' (Funboard)" },
+        { "value": "8_ft", "label": "8' (Mini Mal)" },
+        { "value": "9_ft", "label": "9' (Longboard)" },
+        { "value": "10_ft", "label": "10' (Longboard / SUP)" }
+      ]
+    },
+    {
+      "key": "leash_type",
+      "name": "Leash Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "regular", "label": "Regular" },
+        { "value": "comp", "label": "Comp (Thin / Light)" },
+        { "value": "big_wave", "label": "Big Wave (Heavy Duty)" },
+        { "value": "coiled", "label": "Coiled (SUP / Bodyboard)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "clear", "label": "Clear" }
+      ]
+    }
+  ],
+  "paddle-boards": [
+    {
+      "key": "board_type",
+      "name": "Board Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "inflatable", "label": "Inflatable (iSUP)" },
+        { "value": "rigid", "label": "Rigid / Hard" },
+        { "value": "touring", "label": "Touring" },
+        { "value": "racing", "label": "Racing" },
+        { "value": "yoga_fitness", "label": "Yoga / Fitness" },
+        { "value": "fishing", "label": "Fishing SUP" }
+      ]
+    },
+    {
+      "key": "board_length",
+      "name": "Board Length (ft)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "under_10", "label": "Under 10'" },
+        { "value": "10_0_10_6", "label": "10'0\" – 10'6\"" },
+        { "value": "10_6_11_0", "label": "10'6\" – 11'0\"" },
+        { "value": "11_0_12_0", "label": "11'0\" – 12'0\"" },
+        { "value": "12_0_plus", "label": "12'0\"+" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" }
+      ]
+    },
+    {
+      "key": "paddle_included",
+      "name": "Paddle Included",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" },
+        { "value": "green", "label": "Green" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "paddles": [
+    {
+      "key": "paddle_type",
+      "name": "Paddle Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "sup", "label": "SUP Paddle" },
+        { "value": "kayak_single", "label": "Kayak Paddle (Single Blade)" },
+        { "value": "kayak_double", "label": "Kayak Paddle (Double Blade)" },
+        { "value": "canoe", "label": "Canoe Paddle" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "aluminum", "label": "Aluminum" },
+        { "value": "fiberglass", "label": "Fiberglass" },
+        { "value": "carbon", "label": "Carbon" },
+        { "value": "wood", "label": "Wood" }
+      ]
+    },
+    {
+      "key": "adjustable",
+      "name": "Adjustable Length",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "kayaks": [
+    {
+      "key": "kayak_type",
+      "name": "Kayak Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "sit_on_top", "label": "Sit-On-Top" },
+        { "value": "sit_inside", "label": "Sit-Inside" },
+        { "value": "inflatable", "label": "Inflatable" },
+        { "value": "touring", "label": "Touring / Sea" },
+        { "value": "whitewater", "label": "Whitewater" },
+        { "value": "fishing", "label": "Fishing Kayak" },
+        { "value": "tandem", "label": "Tandem (2-Person)" }
+      ]
+    },
+    {
+      "key": "kayak_length",
+      "name": "Kayak Length (ft)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "under_10", "label": "Under 10'" },
+        { "value": "10_12", "label": "10' – 12'" },
+        { "value": "12_14", "label": "12' – 14'" },
+        { "value": "14_plus", "label": "14'+" }
+      ]
+    },
+    {
+      "key": "seating_capacity",
+      "name": "Seating Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "1", "label": "1 Person" },
+        { "value": "2", "label": "2 Person" },
+        { "value": "3", "label": "3 Person" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "bodyboards": [
+    {
+      "key": "board_size",
+      "name": "Board Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "33_36", "label": "33-36\" (Kids)" },
+        { "value": "37_39", "label": "37-39\" (Small)" },
+        { "value": "40_42", "label": "40-42\" (Medium)" },
+        { "value": "42_44", "label": "42-44\" (Large)" },
+        { "value": "44_plus", "label": "44\"+ (XL)" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "life-jackets-pfds": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "pfd_type",
+      "name": "PFD Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "recreational", "label": "Recreational / General" },
+        { "value": "kayak_sup", "label": "Kayak / SUP" },
+        { "value": "watersport", "label": "Water Sport / Wakeboard" },
+        { "value": "fishing", "label": "Fishing" },
+        { "value": "inflatable", "label": "Inflatable Belt" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "child", "label": "Child (15-25kg)" },
+        { "value": "youth", "label": "Youth (25-40kg)" },
+        { "value": "s_m", "label": "S/M (40-70kg)" },
+        { "value": "l_xl", "label": "L/XL (70-100kg)" },
+        { "value": "xxl", "label": "XXL (100kg+)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "red", "label": "Red" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "black", "label": "Black" },
+        { "value": "yellow", "label": "Yellow" }
+      ]
+    }
+  ],
+  "surf-wax-traction": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "wax_cold", "label": "Surf Wax – Cold Water" },
+        { "value": "wax_cool", "label": "Surf Wax – Cool Water" },
+        { "value": "wax_warm", "label": "Surf Wax – Warm Water" },
+        { "value": "wax_tropical", "label": "Surf Wax – Tropical" },
+        { "value": "base_coat", "label": "Base Coat Wax" },
+        { "value": "traction_pad", "label": "Traction Pad / Deck Grip" },
+        { "value": "wax_comb", "label": "Wax Comb / Remover" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "description": "Applicable for traction pads",
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "water-sports-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "board_bag", "label": "Surfboard Bag / Sock" },
+        { "value": "board_travel", "label": "Surfboard Travel Bag" },
+        { "value": "sup_bag", "label": "SUP Bag" },
+        { "value": "wetsuit_bag", "label": "Wetsuit Bag / Bucket" },
+        { "value": "dry_bag", "label": "Dry Bag" },
+        { "value": "kayak_deck_bag", "label": "Kayak Deck Bag" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "description": "Applicable for dry bags",
+      "choices": [
+        { "value": "5l", "label": "5L" },
+        { "value": "10l", "label": "10L" },
+        { "value": "20l", "label": "20L" },
+        { "value": "30l", "label": "30L" },
+        { "value": "40l_plus", "label": "40L+" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "water-sports-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "roof_rack", "label": "Board Roof Rack / Strap" },
+        { "value": "board_repair", "label": "Board Repair Kit" },
+        { "value": "wetsuit_hanger", "label": "Wetsuit Hanger" },
+        { "value": "poncho", "label": "Changing Poncho / Robe" },
+        { "value": "waterproof_phone", "label": "Waterproof Phone Case" },
+        { "value": "sup_pump", "label": "SUP Pump" },
+        { "value": "kayak_seat", "label": "Kayak Seat / Cushion" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

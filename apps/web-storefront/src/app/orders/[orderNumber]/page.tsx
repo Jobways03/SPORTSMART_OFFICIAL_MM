@@ -711,15 +711,9 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
                   Fulfilled by SPORTSMART
                 </span>
-                {/* Delivery method indicator — clickable tracking link when iThink. */}
+                {/* Delivery method indicator. */}
                 {so.deliveryMethod && (
-                  <DeliveryMethodBadge
-                    method={so.deliveryMethod}
-                    awb={so.ithinkAwb}
-                    courier={so.ithinkLogistic}
-                    trackingUrl={so.ithinkTrackingUrl}
-                    asTrackingLink
-                  />
+                  <DeliveryMethodBadge method={so.deliveryMethod} />
                 )}
                 {so.acceptStatus === 'CANCELLED' && (
                   <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: '#dc262620', color: '#dc2626' }}>Cancelled</span>

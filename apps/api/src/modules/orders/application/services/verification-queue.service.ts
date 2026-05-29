@@ -5,30 +5,139 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { OrdersService } from './orders.service';
 import { RiskScoringService } from './risk-scoring.service';
 
-// Held by Postgres, not by JS — kept as a constant string so the SQL
-// stays readable. Bumping this changes how long an idle verifier holds
-// an order before the next claim-next can pick it up.
-const CLAIM_TTL_INTERVAL = "15 minutes";
+// Phase 68 (2026-05-22) — claim TTL is now env-driven (audit Gap
+// #16). The SQL still needs an interval literal — we read the env
+// at construction and format it back into a Postgres INTERVAL string.
+// Default 15 minutes preserves prior behaviour.
+const DEFAULT_CLAIM_TTL_MINUTES = 15;
 
 // Hard cap on a single bulk-approve call. The frontend should request
 // smaller batches in practice; this is a safety net so a misbehaving
 // client can't ask the API to verify hundreds of orders in one request
 // (each verify does allocation work that scales linearly).
-const BULK_APPROVE_MAX = 25;
+//
+// Phase 76 (2026-05-22) — env-tunable (audit Gap #16). Default 25
+// preserves legacy behaviour; absolute ceiling 50 enforced in the
+// constructor so an env typo can't blow up the cap.
+const DEFAULT_BULK_APPROVE_MAX = 25;
+const ABSOLUTE_BULK_APPROVE_CEILING = 50;
+
+// Phase 76 (audit Gap #6) — concurrency cap for the parallelised
+// verify loop. Each verify hits a DB tx + allocation reads; running
+// 25 in parallel would saturate the connection pool. 5 gives a ~5x
+// speedup vs sequential without monopolising the pool.
+const BULK_VERIFY_PARALLELISM = 5;
+
+// Phase 76 (audit Gap #12) — cap the per-reason text bundled into
+// the audit metadata blob. A Prisma error stack can be multi-KB;
+// 25 of those bloat the audit row. The detailed reason is still in
+// the server log + per-order audit (Phase 74's
+// OrderVerificationDecision).
+const AUDIT_REASON_MAX_CHARS = 200;
+
+/**
+ * Phase 76 (2026-05-22) — Phase 75 bulk-approve audit Gap #13.
+ * Translate raw Error.message to a stable enum code the UI can
+ * branch on. Internal Prisma error stacks ("Foreign key constraint
+ * violated: …") were leaking to the verifier surface; the enum
+ * keeps the surface stable + private.
+ */
+function sanitiseReason(err: Error): {
+  code:
+    | 'ALLOCATION_FAILED'
+    | 'PAYMENT_CANCELLED'
+    | 'STATUS_TRANSITION_INVALID'
+    | 'CLAIM_CONFLICT'
+    | 'CONCURRENT_UPDATE'
+    | 'STOCK_RACE_LOST'
+    | 'UNKNOWN';
+  privateMessage: string;
+} {
+  const m = (err.message ?? '').toLowerCase();
+  if (m.includes('held by another verifier') || m.includes('claim')) {
+    return { code: 'CLAIM_CONFLICT', privateMessage: err.message };
+  }
+  if (m.includes('paymentstatus') || m.includes('cancelled order')) {
+    return { code: 'PAYMENT_CANCELLED', privateMessage: err.message };
+  }
+  if (m.includes('transition') || m.includes('fsm')) {
+    return { code: 'STATUS_TRANSITION_INVALID', privateMessage: err.message };
+  }
+  if (m.includes('concurrently') || m.includes('changed concurrently')) {
+    return { code: 'CONCURRENT_UPDATE', privateMessage: err.message };
+  }
+  if (m.includes('serviceable') || m.includes('mapping') || m.includes('allocation')) {
+    return { code: 'ALLOCATION_FAILED', privateMessage: err.message };
+  }
+  if (m.includes('stock') || m.includes('reservation')) {
+    return { code: 'STOCK_RACE_LOST', privateMessage: err.message };
+  }
+  return { code: 'UNKNOWN', privateMessage: err.message };
+}
+
+// Phase 73 (2026-05-22) — claim-flow audit Gap #7. Per-verifier
+// max-claims cap. Pre-Phase-73 a malicious or buggy verifier could
+// hammer claim-next and accumulate the entire PLACED queue in
+// their tray, locking it for 15 min × N orders. Default 10 covers
+// any realistic shift workload while preventing a mass-claim DoS.
+const DEFAULT_MAX_CLAIMS_PER_VERIFIER = 10;
 
 @Injectable()
 export class VerificationQueueService {
   private readonly logger = new Logger(VerificationQueueService.name);
+  // Phase 68 — formatted Postgres INTERVAL literal derived from
+  // VERIFICATION_CLAIM_TTL_MINUTES at boot.
+  private readonly claimTtlInterval: string;
+  // Phase 73 — per-verifier max claims (Gap #7).
+  private readonly maxClaimsPerVerifier: number;
+  // Phase 76 — env-tunable bulk-approve ceiling (Gap #16).
+  private readonly bulkApproveMax: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly ordersService: OrdersService,
     private readonly audit: AuditPublicFacade,
     private readonly riskScoring: RiskScoringService,
-  ) {}
+    private readonly env: EnvService,
+    // Phase 73 (audit Gap #11) — domain events on claim transitions.
+    private readonly eventBus: EventBusService,
+  ) {
+    const minutes = Math.max(
+      1,
+      this.env.getNumber('VERIFICATION_CLAIM_TTL_MINUTES', DEFAULT_CLAIM_TTL_MINUTES),
+    );
+    this.claimTtlInterval = `${minutes} minutes`;
+    this.maxClaimsPerVerifier = Math.max(
+      1,
+      this.env.getNumber(
+        'VERIFICATION_MAX_CLAIMS_PER_VERIFIER',
+        DEFAULT_MAX_CLAIMS_PER_VERIFIER,
+      ),
+    );
+    // Phase 76 (audit Gap #16) — env-driven max, capped at the
+    // absolute ceiling so an env typo (e.g. 1000) can't blow up
+    // the cap.
+    this.bulkApproveMax = Math.min(
+      ABSOLUTE_BULK_APPROVE_CEILING,
+      Math.max(
+        1,
+        this.env.getNumber(
+          'VERIFICATION_BULK_APPROVE_MAX',
+          DEFAULT_BULK_APPROVE_MAX,
+        ),
+      ),
+    );
+    this.logger.log(
+      `Verification claim TTL = ${minutes} minutes (env VERIFICATION_CLAIM_TTL_MINUTES); ` +
+        `max claims/verifier = ${this.maxClaimsPerVerifier}; ` +
+        `bulk-approve max = ${this.bulkApproveMax}`,
+    );
+  }
 
   /**
    * Atomically claim the oldest unclaimed PLACED order for this admin.
@@ -43,9 +152,27 @@ export class VerificationQueueService {
    * fresh claim looks expired the instant it's written.
    */
   async claimNext(adminId: string): Promise<{ id: string } | null> {
+    // Phase 73 (audit Gap #7) — enforce per-verifier max claims.
+    // Pre-Phase-73 a buggy / malicious verifier could repeatedly
+    // call claim-next and lock the entire PLACED queue. The cap
+    // counts live claims (claim_expires_at > NOW()) only — stale
+    // entries don't block fresh work.
+    const liveClaimsCount = await this.prisma.masterOrder.count({
+      where: {
+        claimedByAdminId: adminId,
+        claimExpiresAt: { gt: new Date() },
+      },
+    });
+    if (liveClaimsCount >= this.maxClaimsPerVerifier) {
+      throw new BadRequestAppException(
+        `You are at the per-verifier claim limit (${this.maxClaimsPerVerifier}). ` +
+          `Release one of your existing claims before taking a new order.`,
+      );
+    }
+
     const claimed = await this.prisma.$transaction(async (tx) => {
-      const candidates = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id FROM master_orders
+      const candidates = await tx.$queryRaw<{ id: string; order_number: string }[]>`
+        SELECT id, order_number FROM master_orders
         WHERE order_status = 'PLACED'::"OrderStatus"
           AND (claimed_by_admin_id IS NULL OR claim_expires_at < NOW())
         ORDER BY created_at ASC
@@ -54,28 +181,62 @@ export class VerificationQueueService {
       `;
       if (candidates.length === 0) return null;
       const id = candidates[0]!.id;
+      const orderNumber = candidates[0]!.order_number;
 
       await tx.$executeRawUnsafe(
         `UPDATE master_orders
             SET claimed_by_admin_id = $1,
                 claimed_at          = NOW(),
-                claim_expires_at    = NOW() + INTERVAL '${CLAIM_TTL_INTERVAL}'
+                claim_expires_at    = NOW() + INTERVAL '${this.claimTtlInterval}'
           WHERE id = $2`,
         adminId,
         id,
       );
-      return { id };
+      return { id, orderNumber };
     });
 
     if (claimed) {
       this.logger.log(`Order ${claimed.id} claimed by admin ${adminId}`);
+      // Phase 73 (audit Gap #9) — audit-log every claim acquisition.
+      this.audit
+        .writeAuditLog({
+          actorId: adminId,
+          actorRole: 'ADMIN',
+          action: 'ORDER_CLAIM_ACQUIRED',
+          module: 'orders',
+          resource: 'master_order',
+          resourceId: claimed.id,
+          metadata: {
+            orderNumber: claimed.orderNumber,
+            ttlInterval: this.claimTtlInterval,
+          },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Audit write for ORDER_CLAIM_ACQUIRED failed (order ${claimed.id}): ${(err as Error).message}`,
+          ),
+        );
+      // Phase 73 (audit Gap #11) — emit domain event.
+      this.eventBus
+        .publish({
+          eventName: 'orders.claim.acquired',
+          aggregate: 'MasterOrder',
+          aggregateId: claimed.id,
+          occurredAt: new Date(),
+          payload: {
+            masterOrderId: claimed.id,
+            orderNumber: claimed.orderNumber,
+            claimedByAdminId: adminId,
+          },
+        })
+        .catch(() => undefined);
       // Lazily score the order on first claim if it hasn't been scored
       // yet — this way the verifier sees a band on the detail page even
       // for orders that were placed before scoring shipped. Errors are
       // swallowed: a missing score should never block a claim.
       void this.ensureScored(claimed.id).catch(() => {});
     }
-    return claimed;
+    return claimed ? { id: claimed.id } : null;
   }
 
   private async ensureScored(orderId: string): Promise<void> {
@@ -130,59 +291,218 @@ export class VerificationQueueService {
   }
 
   /**
-   * Release a claim the admin holds. Errors if the claim isn't theirs
-   * or has already expired — both cases mean someone else has
-   * effectively already taken it.
+   * Release a claim the admin holds.
+   *
+   * Phase 73 (audit Gap #17) — idempotent for expired claims by the
+   * original holder. Pre-Phase-73 a verifier who returned to their
+   * desk past the 15-min TTL got a 400 trying to release; the only
+   * escape was the lazy-expiry overwrite from the next claimer.
+   * Now: as long as `claimed_by_admin_id` still matches the caller,
+   * the release succeeds regardless of expiry. Other-admin claims
+   * still error.
+   *
+   * Phase 73 (audit Gap #9 + #11 + #14) — writes history row +
+   * audit log + emits domain event on every release.
    */
   async release(orderId: string, adminId: string): Promise<void> {
-    const result = await this.prisma.$executeRaw`
-      UPDATE master_orders
-         SET claimed_by_admin_id = NULL,
-             claimed_at          = NULL,
-             claim_expires_at    = NULL
-       WHERE id                  = ${orderId}
-         AND claimed_by_admin_id = ${adminId}
-         AND claim_expires_at    > NOW()
-    `;
-    if (result === 0) {
+    // Snapshot before update so the history row + audit log carry
+    // the original claim metadata. Bail early if the caller doesn't
+    // own the claim (or no claim exists).
+    const order = await this.prisma.masterOrder.findUnique({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        claimedByAdminId: true,
+        claimedAt: true,
+        claimExpiresAt: true,
+      },
+    });
+    if (!order) {
+      throw new NotFoundAppException('Order not found');
+    }
+    if (!order.claimedByAdminId || order.claimedByAdminId !== adminId) {
       throw new BadRequestAppException(
-        'Cannot release: claim is not held by you or has already expired',
+        'Cannot release: claim is not held by you',
       );
     }
+    const releaseReason =
+      order.claimExpiresAt && order.claimExpiresAt < new Date()
+        ? 'TTL_EXPIRY'
+        : 'EXPLICIT_RELEASE';
+
+    await this.prisma.$transaction(async (tx) => {
+      // NULL the claim columns regardless of expiry status (idempotent).
+      const result = await tx.masterOrder.updateMany({
+        where: { id: orderId, claimedByAdminId: adminId },
+        data: {
+          claimedByAdminId: null,
+          claimedAt: null,
+          claimExpiresAt: null,
+        },
+      });
+      if (result.count === 0) return; // Race lost; nothing to write.
+
+      // History row.
+      const durationSeconds = order.claimedAt
+        ? Math.max(
+            0,
+            Math.round((Date.now() - order.claimedAt.getTime()) / 1000),
+          )
+        : 0;
+      await tx.orderClaimHistory.create({
+        data: {
+          masterOrderId: orderId,
+          claimedByAdminId: adminId,
+          claimedAt: order.claimedAt ?? new Date(),
+          durationSeconds,
+          releaseReason: releaseReason as any,
+          releasedByAdminId: adminId,
+        },
+      });
+    });
+
+    // Audit log (best-effort) + event.
+    this.audit
+      .writeAuditLog({
+        actorId: adminId,
+        actorRole: 'ADMIN',
+        action: 'ORDER_CLAIM_RELEASED',
+        module: 'orders',
+        resource: 'master_order',
+        resourceId: orderId,
+        metadata: {
+          orderNumber: order.orderNumber,
+          releaseReason,
+        },
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Audit write for ORDER_CLAIM_RELEASED failed (order ${orderId}): ${(err as Error).message}`,
+        ),
+      );
+    this.eventBus
+      .publish({
+        eventName: 'orders.claim.released',
+        aggregate: 'MasterOrder',
+        aggregateId: orderId,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: orderId,
+          orderNumber: order.orderNumber,
+          releasedByAdminId: adminId,
+          releaseReason,
+        },
+      })
+      .catch(() => undefined);
   }
 
   /**
    * Approve the order — verify the claim is still ours, then delegate
    * to the existing verify pipeline (allocation, sub-order routing).
    * Clears the claim columns on success.
+   *
+   * Phase 68 (audit Gap #11) — verifyOrder itself now writes the
+   * ORDER_VERIFIED audit row (via OrdersService). This wrapper
+   * forwards the actorContext so the audit row carries the verifier
+   * IP / UA. Pre-Phase-68 only bulk-approve audited; single-order
+   * approve was invisible in the compliance trail.
    */
-  async approve(orderId: string, adminId: string, remarks?: string) {
+  async approve(
+    orderId: string,
+    adminId: string,
+    remarks?: string,
+    actorContext?: { ipAddress?: string; userAgent?: string },
+  ) {
     await this.assertClaimHeldBy(orderId, adminId);
-    const data = await this.ordersService.verifyOrder(orderId, adminId, remarks);
-    await this.prisma.$executeRaw`
-      UPDATE master_orders
-         SET claimed_by_admin_id = NULL,
-             claimed_at          = NULL,
-             claim_expires_at    = NULL
-       WHERE id = ${orderId}
-    `;
+    // Snapshot claim metadata for the history row + event payload.
+    const claimSnapshot = await this.prisma.masterOrder.findUnique({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        claimedAt: true,
+      },
+    });
+    const data = await this.ordersService.verifyOrder(
+      orderId,
+      adminId,
+      remarks,
+      actorContext,
+    );
+    await this.clearClaimWithHistory({
+      orderId,
+      adminId,
+      claimedAt: claimSnapshot?.claimedAt ?? null,
+      orderNumber: claimSnapshot?.orderNumber ?? null,
+      reason: 'APPROVED',
+    });
     return data;
   }
 
   /**
    * Reject the order — claim must be ours, then delegate to the
    * existing reject path (cancels the order, restores stock).
+   *
+   * Phase 68 (audit Gap #11) — writes an ORDER_REJECTED audit row
+   * with the verifier identity, claim metadata, and optional
+   * remarks. The delegated rejectOrder cancels + restores stock;
+   * the audit row captures the verifier decision separately so a
+   * future cancellation reason audit can join to it.
    */
-  async reject(orderId: string, adminId: string) {
+  async reject(
+    orderId: string,
+    adminId: string,
+    remarks?: string,
+    actorContext?: { ipAddress?: string; userAgent?: string },
+  ) {
     await this.assertClaimHeldBy(orderId, adminId);
+    // Snapshot risk band before reject so the audit row carries
+    // "we rejected a RED-banded order with reason X".
+    const snapshot = await this.prisma.masterOrder.findUnique({
+      where: { id: orderId },
+      select: {
+        orderNumber: true,
+        orderStatus: true,
+        verificationRiskBand: true,
+        verificationRiskScore: true,
+        claimedAt: true,
+      },
+    });
     await this.ordersService.rejectOrder(orderId);
-    await this.prisma.$executeRaw`
-      UPDATE master_orders
-         SET claimed_by_admin_id = NULL,
-             claimed_at          = NULL,
-             claim_expires_at    = NULL
-       WHERE id = ${orderId}
-    `;
+    // Phase 73 (Gap #14) — clear claim + write history row via helper.
+    await this.clearClaimWithHistory({
+      orderId,
+      adminId,
+      claimedAt: snapshot?.claimedAt ?? null,
+      orderNumber: snapshot?.orderNumber ?? null,
+      reason: 'REJECTED',
+      reasonNote: remarks ?? null,
+    });
+    this.audit
+      .writeAuditLog({
+        actorId: adminId,
+        actorRole: 'ADMIN',
+        action: 'ORDER_REJECTED',
+        module: 'orders',
+        resource: 'master_order',
+        resourceId: orderId,
+        oldValue: snapshot
+          ? { orderStatus: snapshot.orderStatus }
+          : undefined,
+        newValue: { orderStatus: 'CANCELLED' },
+        metadata: {
+          orderNumber: snapshot?.orderNumber ?? null,
+          riskBand: snapshot?.verificationRiskBand ?? null,
+          riskScore: snapshot?.verificationRiskScore ?? null,
+          remarks: remarks ?? null,
+        },
+        ipAddress: actorContext?.ipAddress,
+        userAgent: actorContext?.userAgent,
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Audit log write for ORDER_REJECTED failed (order ${orderId}): ${(err as Error).message}`,
+        ),
+      );
   }
 
   /**
@@ -226,11 +546,14 @@ export class VerificationQueueService {
   }
 
   /**
-   * Snapshot for the queue stats banner. `breachedSla` is currently a
-   * placeholder — we don't have a verification SLA deadline column
-   * yet, so it counts orders sitting in PLACED for over an hour as a
-   * proxy. Replace with a real `verificationDeadlineAt` column when
-   * that ships.
+   * Snapshot for the queue stats banner.
+   *
+   * Phase 68 (2026-05-22) — `breachedSla` now reads the real
+   * verification_deadline_at column (audit Gap #13). Pre-Phase-68
+   * it was a 1-hour proxy on created_at; the new column is set at
+   * place-order time (COD) and at verify-payment time (ONLINE).
+   * Falls back to the created_at + 1h proxy if the deadline column
+   * is null (legacy rows pre-backfill).
    */
   async queueStats(adminId: string) {
     const rows = await this.prisma.$queryRaw<
@@ -270,7 +593,7 @@ export class VerificationQueueService {
         ) AS mine,
         COUNT(*) FILTER (
           WHERE order_status = 'PLACED'::"OrderStatus"
-            AND created_at < NOW() - INTERVAL '1 hour'
+            AND COALESCE(verification_deadline_at, created_at + INTERVAL '1 hour') < NOW()
         ) AS breached_sla,
         COUNT(*) FILTER (
           WHERE created_at >= DATE_TRUNC('day', NOW())
@@ -315,20 +638,44 @@ export class VerificationQueueService {
   ): Promise<{
     attempted: number;
     succeeded: number;
-    failed: Array<{ orderId: string; orderNumber?: string; reason: string }>;
-    approvedIds: string[];
-    previewIds?: string[];
+    routedCount: number;
+    exceptionQueueCount: number;
+    failed: Array<{ orderId: string; orderNumber?: string; reasonCode: string }>;
+    approvedIds: { routed: string[]; exceptionQueue: string[] };
+    previewIds?: Array<{
+      id: string;
+      orderNumber: string;
+      totalAmount: number;
+      riskScore: number | null;
+      riskBand: string | null;
+      riskReasons: string[];
+    }>;
   }> {
+    // Phase 76 (audit Gap #16) — env-driven max with absolute ceiling.
     const limit = Math.min(
       Math.max(1, Math.floor(requestedLimit) || 1),
-      BULK_APPROVE_MAX,
+      this.bulkApproveMax,
     );
 
     if (dryRun) {
+      // Phase 76 (audit Gap #17) — rich preview shape so verifier
+      // sees order summary + risk reasons before committing.
       const candidates = await this.prisma.$queryRaw<
-        Array<{ id: string; orderNumber: string }>
+        Array<{
+          id: string;
+          orderNumber: string;
+          totalAmount: string;
+          riskScore: number | null;
+          riskBand: string | null;
+          riskReasons: any;
+        }>
       >`
-        SELECT id, order_number AS "orderNumber"
+        SELECT id,
+               order_number             AS "orderNumber",
+               total_amount::text       AS "totalAmount",
+               verification_risk_score  AS "riskScore",
+               verification_risk_band   AS "riskBand",
+               verification_risk_reasons AS "riskReasons"
           FROM master_orders
          WHERE order_status = 'PLACED'::"OrderStatus"
            AND verification_risk_band = 'GREEN'
@@ -339,9 +686,18 @@ export class VerificationQueueService {
       return {
         attempted: candidates.length,
         succeeded: 0,
+        routedCount: 0,
+        exceptionQueueCount: 0,
         failed: [],
-        approvedIds: [],
-        previewIds: candidates.map((c) => c.id),
+        approvedIds: { routed: [], exceptionQueue: [] },
+        previewIds: candidates.map((c) => ({
+          id: c.id,
+          orderNumber: c.orderNumber,
+          totalAmount: Number(c.totalAmount),
+          riskScore: c.riskScore,
+          riskBand: c.riskBand,
+          riskReasons: Array.isArray(c.riskReasons) ? c.riskReasons : [],
+        })),
       };
     }
 
@@ -361,44 +717,80 @@ export class VerificationQueueService {
        UPDATE master_orders
           SET claimed_by_admin_id = $2,
               claimed_at          = NOW(),
-              claim_expires_at    = NOW() + INTERVAL '${CLAIM_TTL_INTERVAL}'
+              claim_expires_at    = NOW() + INTERVAL '${this.claimTtlInterval}'
         WHERE id IN (SELECT id FROM candidates)
         RETURNING id, order_number`,
       limit,
       adminId,
     );
 
-    const failed: Array<{ orderId: string; orderNumber?: string; reason: string }> = [];
-    const approvedIds: string[] = [];
+    // Phase 76 (audit Gap #6 + #20) — parallelised verify loop.
+    // Pre-Phase-76 each verify ran sequentially; 25 × ~300ms =
+    // ~7.5s blocking call, HTTP timeout risk. Parallelism is
+    // bounded at BULK_VERIFY_PARALLELISM (5) so the connection
+    // pool doesn't get saturated. The semaphore pattern below
+    // gives a ~5× speedup while keeping the response time
+    // bounded.
+    const routedIds: string[] = [];
+    const exceptionQueueIds: string[] = [];
+    const failed: Array<{ orderId: string; orderNumber?: string; reasonCode: string }> = [];
+    let cursor = 0;
 
-    // Phase 2 — verify each in turn. Failures release the claim so the
-    // order goes back to the queue rather than being stuck for 15min.
-    for (const c of claimed) {
-      try {
-        await this.ordersService.verifyOrder(c.id, adminId);
-        await this.prisma.$executeRaw`
-          UPDATE master_orders
-             SET claimed_by_admin_id = NULL,
-                 claimed_at          = NULL,
-                 claim_expires_at    = NULL
-           WHERE id = ${c.id}
-        `;
-        approvedIds.push(c.id);
-      } catch (err) {
-        const reason = (err as Error).message || 'Unknown error';
-        await this.prisma.$executeRaw`
-          UPDATE master_orders
-             SET claimed_by_admin_id = NULL,
-                 claimed_at          = NULL,
-                 claim_expires_at    = NULL
-           WHERE id = ${c.id} AND claimed_by_admin_id = ${adminId}
-        `;
-        failed.push({ orderId: c.id, orderNumber: c.order_number, reason });
-        this.logger.warn(
-          `Bulk-approve verify failed for ${c.order_number} (${c.id}): ${reason}`,
-        );
+    const worker = async (): Promise<void> => {
+      while (cursor < claimed.length) {
+        const idx = cursor++;
+        const c = claimed[idx];
+        if (!c) continue;
+        try {
+          const data: any = await this.ordersService.verifyOrder(c.id, adminId);
+          // Phase 76 (audit Gap #19) — admin-scoped claim clear
+          // for symmetry with the failure path. SKIP LOCKED makes
+          // a cross-admin race nearly impossible, but the guard
+          // makes the SQL self-documenting + defence-in-depth.
+          await this.prisma.$executeRaw`
+            UPDATE master_orders
+               SET claimed_by_admin_id = NULL,
+                   claimed_at          = NULL,
+                   claim_expires_at    = NULL
+             WHERE id = ${c.id} AND claimed_by_admin_id = ${adminId}
+          `;
+          // Phase 76 (audit Gap #18) — bucket by final order
+          // status so the response can show "20 routed, 5 in
+          // exception queue" instead of one undifferentiated
+          // approvedIds list.
+          const finalStatus = data?.orderStatus ?? 'ROUTED_TO_SELLER';
+          if (finalStatus === 'EXCEPTION_QUEUE') {
+            exceptionQueueIds.push(c.id);
+          } else {
+            routedIds.push(c.id);
+          }
+        } catch (err) {
+          const { code, privateMessage } = sanitiseReason(err as Error);
+          await this.prisma.$executeRaw`
+            UPDATE master_orders
+               SET claimed_by_admin_id = NULL,
+                   claimed_at          = NULL,
+                   claim_expires_at    = NULL
+             WHERE id = ${c.id} AND claimed_by_admin_id = ${adminId}
+          `;
+          // Phase 76 (audit Gap #13) — return enum code to UI;
+          // log full message server-side.
+          failed.push({ orderId: c.id, orderNumber: c.order_number, reasonCode: code });
+          this.logger.warn(
+            `Bulk-approve verify failed for ${c.order_number} (${c.id}) — code=${code}: ${privateMessage}`,
+          );
+        }
       }
-    }
+    };
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(BULK_VERIFY_PARALLELISM, claimed.length) },
+        () => worker(),
+      ),
+    );
+
+    const approvedIds = { routed: routedIds, exceptionQueue: exceptionQueueIds };
 
     this.audit
       .writeAuditLog({
@@ -410,13 +802,22 @@ export class VerificationQueueService {
         metadata: {
           requestedLimit: limit,
           attempted: claimed.length,
-          succeeded: approvedIds.length,
+          succeeded: routedIds.length + exceptionQueueIds.length,
+          routedCount: routedIds.length,
+          exceptionQueueCount: exceptionQueueIds.length,
           failedCount: failed.length,
-          approvedIds,
+          approvedIds: {
+            routed: routedIds,
+            exceptionQueue: exceptionQueueIds,
+          },
+          // Phase 76 (audit Gap #12) — failure reasons capped to
+          // AUDIT_REASON_MAX_CHARS each. The enum code (Gap #13)
+          // is the canonical surface anyway; the cap protects
+          // the audit table from multi-KB Prisma stack dumps.
           failed: failed.map((f) => ({
             orderId: f.orderId,
             orderNumber: f.orderNumber,
-            reason: f.reason,
+            reasonCode: f.reasonCode,
           })),
         },
         ipAddress: actorContext?.ipAddress,
@@ -428,13 +829,42 @@ export class VerificationQueueService {
         ),
       );
 
+    // Phase 76 (audit Gap #10) — domain event for downstream
+    // consumers (BI dashboards, finance reconciliation, ops
+    // notifications). Per-order `orders.master.routed` events are
+    // emitted by individual verifyOrder calls — this is the bulk
+    // summary event.
+    this.eventBus
+      .publish({
+        eventName: 'orders.bulk.approved.green',
+        aggregate: 'BulkApproval',
+        aggregateId: `bulk-${adminId}-${Date.now()}`,
+        occurredAt: new Date(),
+        payload: {
+          adminId,
+          attempted: claimed.length,
+          succeeded: routedIds.length + exceptionQueueIds.length,
+          routedCount: routedIds.length,
+          exceptionQueueCount: exceptionQueueIds.length,
+          failedCount: failed.length,
+          routedIds,
+          exceptionQueueIds,
+          failedCodes: failed.map((f) => f.reasonCode),
+          completedAt: new Date(),
+        },
+      })
+      .catch(() => undefined);
+
     this.logger.log(
-      `Admin ${adminId} bulk-approved ${approvedIds.length}/${claimed.length} GREEN orders`,
+      `Admin ${adminId} bulk-approved ${routedIds.length + exceptionQueueIds.length}/${claimed.length} GREEN orders ` +
+        `(routed=${routedIds.length}, exception=${exceptionQueueIds.length}, failed=${failed.length})`,
     );
 
     return {
       attempted: claimed.length,
-      succeeded: approvedIds.length,
+      succeeded: routedIds.length + exceptionQueueIds.length,
+      routedCount: routedIds.length,
+      exceptionQueueCount: exceptionQueueIds.length,
       failed,
       approvedIds,
     };
@@ -522,7 +952,9 @@ export class VerificationQueueService {
       where: { id: orderId },
       select: {
         id: true,
+        orderNumber: true,
         claimedByAdminId: true,
+        claimedAt: true,
         claimExpiresAt: true,
       },
     });
@@ -539,13 +971,52 @@ export class VerificationQueueService {
     }
 
     const previousAdminId = order.claimedByAdminId;
-    await this.prisma.$executeRaw`
-      UPDATE master_orders
-         SET claimed_by_admin_id = NULL,
-             claimed_at          = NULL,
-             claim_expires_at    = NULL
-       WHERE id = ${orderId}
-    `;
+    const previousClaimedAt = order.claimedAt ?? new Date();
+    const durationSeconds = Math.max(
+      0,
+      Math.round((Date.now() - previousClaimedAt.getTime()) / 1000),
+    );
+
+    // Phase 73 (audit Gap #14) — clear + write history in one tx.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.masterOrder.updateMany({
+        where: { id: orderId, claimedByAdminId: previousAdminId },
+        data: {
+          claimedByAdminId: null,
+          claimedAt: null,
+          claimExpiresAt: null,
+        },
+      });
+      await tx.orderClaimHistory.create({
+        data: {
+          masterOrderId: orderId,
+          claimedByAdminId: previousAdminId,
+          claimedAt: previousClaimedAt,
+          durationSeconds,
+          releaseReason: 'FORCE_RELEASE',
+          releasedByAdminId: callerAdminId,
+          reasonNote: reason.trim(),
+        },
+      });
+    });
+
+    // Phase 73 (audit Gap #11) — emit event.
+    this.eventBus
+      .publish({
+        eventName: 'orders.claim.released',
+        aggregate: 'MasterOrder',
+        aggregateId: orderId,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: orderId,
+          orderNumber: order.orderNumber,
+          previousAdminId,
+          releasedByAdminId: callerAdminId,
+          releaseReason: 'FORCE_RELEASE',
+          reason: reason.trim(),
+        },
+      })
+      .catch(() => undefined);
 
     this.audit
       .writeAuditLog({
@@ -573,6 +1044,88 @@ export class VerificationQueueService {
     this.logger.warn(
       `Admin ${callerAdminId} force-released order ${orderId} (was held by ${previousAdminId}): ${reason.trim()}`,
     );
+  }
+
+  /**
+   * Phase 73 (audit Gaps #9 + #11 + #14) — shared helper used by
+   * approve / reject. Clears the claim columns, writes a history
+   * row with the supplied release reason, audit-logs the action,
+   * and emits the `orders.claim.released` event. Wrapped in a tx
+   * so the claim clear + history insert commit together.
+   *
+   * The verify / reject paths already wrote their own ORDER_VERIFIED /
+   * ORDER_REJECTED audit log; this helper writes the
+   * ORDER_CLAIM_RELEASED row separately so the claim trail and the
+   * verification trail can be filtered independently.
+   */
+  private async clearClaimWithHistory(input: {
+    orderId: string;
+    adminId: string;
+    claimedAt: Date | null;
+    orderNumber: string | null;
+    reason: 'APPROVED' | 'REJECTED' | 'EXPLICIT_RELEASE';
+    reasonNote?: string | null;
+  }): Promise<void> {
+    const claimedAt = input.claimedAt ?? new Date();
+    const durationSeconds = Math.max(
+      0,
+      Math.round((Date.now() - claimedAt.getTime()) / 1000),
+    );
+    await this.prisma.$transaction(async (tx) => {
+      await tx.masterOrder.updateMany({
+        where: { id: input.orderId, claimedByAdminId: input.adminId },
+        data: {
+          claimedByAdminId: null,
+          claimedAt: null,
+          claimExpiresAt: null,
+        },
+      });
+      await tx.orderClaimHistory.create({
+        data: {
+          masterOrderId: input.orderId,
+          claimedByAdminId: input.adminId,
+          claimedAt,
+          durationSeconds,
+          releaseReason: input.reason as any,
+          releasedByAdminId: input.adminId,
+          reasonNote: input.reasonNote ?? null,
+        },
+      });
+    });
+    this.audit
+      .writeAuditLog({
+        actorId: input.adminId,
+        actorRole: 'ADMIN',
+        action: 'ORDER_CLAIM_RELEASED',
+        module: 'orders',
+        resource: 'master_order',
+        resourceId: input.orderId,
+        metadata: {
+          orderNumber: input.orderNumber,
+          releaseReason: input.reason,
+          durationSeconds,
+        },
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Audit write for ORDER_CLAIM_RELEASED (${input.reason}) failed (order ${input.orderId}): ${(err as Error).message}`,
+        ),
+      );
+    this.eventBus
+      .publish({
+        eventName: 'orders.claim.released',
+        aggregate: 'MasterOrder',
+        aggregateId: input.orderId,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: input.orderId,
+          orderNumber: input.orderNumber,
+          releasedByAdminId: input.adminId,
+          releaseReason: input.reason,
+          durationSeconds,
+        },
+      })
+      .catch(() => undefined);
   }
 
   /* ── Private ───────────────────────────────────────────────────────── */

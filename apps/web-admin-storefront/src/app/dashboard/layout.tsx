@@ -73,6 +73,7 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   // Customer Care — escalations and people-facing queues.
   { label: 'Queues', href: '/dashboard/queues', icon: 'inbox', anyOf: ['audit.read'], section: 'care' },
   { label: 'Returns', href: '/dashboard/returns', icon: 'returns', anyOf: ['returns.read'], section: 'care' },
+  { label: 'Seller Reversals', href: '/dashboard/seller-reversals', icon: 'returns', anyOf: ['sellerReversals.read'], section: 'care' },
   { label: 'Disputes', href: '/dashboard/disputes', icon: 'scale', anyOf: ['disputes.read'], section: 'care' },
   { label: 'Support', href: '/dashboard/support', icon: 'message', anyOf: ['support.read'], section: 'care' },
   { label: 'Customers', href: '/dashboard/customers', icon: 'users', anyOf: ['customers.read'], section: 'care' },
@@ -365,6 +366,16 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
               </Link>
               {item.label === 'Products' && pathname.startsWith('/dashboard/products') && (
                 <>
+                  {/* Phase 32 (2026-05-21) — dedicated approval-queue
+                      route. Forwards to the canonical list with
+                      moderationStatus=PENDING pre-applied. */}
+                  <Link
+                    href="/dashboard/products/approval-queue"
+                    className={`sidebar-item${pathname.includes('/approval-queue') || (pathname === '/dashboard/products' && typeof window !== 'undefined' && window.location.search.includes('moderationStatus=PENDING')) ? ' active' : ''}`}
+                    style={{ paddingLeft: 44, fontSize: 13 }}
+                  >
+                    Approval Queue
+                  </Link>
                   <Link
                     href="/dashboard/products/collections"
                     className={`sidebar-item${pathname.includes('/collections') ? ' active' : ''}`}

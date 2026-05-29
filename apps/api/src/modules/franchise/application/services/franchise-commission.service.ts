@@ -6,6 +6,7 @@ import {
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class FranchiseCommissionService {
@@ -28,15 +29,22 @@ export class FranchiseCommissionService {
     items: Array<{ unitPrice: number; quantity: number }>;
     commissionRate: number;
   }) {
-    const baseAmount = params.items.reduce(
-      (sum, item) => sum + item.unitPrice * item.quantity,
-      0,
-    );
-    const computedAmount =
-      Math.round(baseAmount * (params.commissionRate / 100) * 100) / 100;
+    // Phase 159v (audit #9) — Decimal money math. The Σ(unitPrice × qty) reduce
+    // previously accumulated in float across all items before a single round;
+    // Decimal keeps every paisa exact, and rounding the base first keeps the
+    // invariant base = computedAmount + franchiseEarning true at 2dp.
+    const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
+    const HALF_UP = Prisma.Decimal.ROUND_HALF_UP;
+    const baseAmountD = params.items
+      .reduce((sum, item) => sum.plus(D(item.unitPrice).times(D(item.quantity))), D(0))
+      .toDecimalPlaces(2, HALF_UP);
+    const computedAmountD = baseAmountD
+      .times(D(params.commissionRate).dividedBy(100))
+      .toDecimalPlaces(2, HALF_UP);
+    const baseAmount = baseAmountD.toNumber();
+    const computedAmount = computedAmountD.toNumber();
     const platformEarning = computedAmount;
-    const franchiseEarning =
-      Math.round((baseAmount - computedAmount) * 100) / 100;
+    const franchiseEarning = baseAmountD.minus(computedAmountD).toNumber();
 
     const entry = await this.financeRepo.createLedgerEntry({
       franchiseId: params.franchiseId,
@@ -88,12 +96,17 @@ export class FranchiseCommissionService {
     netAmount: number;
     commissionRate: number;
   }) {
-    const baseAmount = Math.round(params.netAmount * 100) / 100;
-    const computedAmount =
-      Math.round(baseAmount * (params.commissionRate / 100) * 100) / 100;
+    // Phase 159v (audit #9) — Decimal money math (see recordOnlineOrderCommission).
+    const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
+    const HALF_UP = Prisma.Decimal.ROUND_HALF_UP;
+    const baseAmountD = D(params.netAmount).toDecimalPlaces(2, HALF_UP);
+    const computedAmountD = baseAmountD
+      .times(D(params.commissionRate).dividedBy(100))
+      .toDecimalPlaces(2, HALF_UP);
+    const baseAmount = baseAmountD.toNumber();
+    const computedAmount = computedAmountD.toNumber();
     const platformEarning = computedAmount;
-    const franchiseEarning =
-      Math.round((baseAmount - computedAmount) * 100) / 100;
+    const franchiseEarning = baseAmountD.minus(computedAmountD).toNumber();
 
     const entry = await this.financeRepo.createLedgerEntry({
       franchiseId: params.franchiseId,
@@ -151,10 +164,39 @@ export class FranchiseCommissionService {
     }
 
     if (original.status === 'ACCRUED' || original.status === 'SETTLED') {
+      // Phase 159r (audit #14) — the commission was already accrued/paid, so we
+      // can't just flip it to REVERSED (settlement has moved on). Post a
+      // compensating ADJUSTMENT that negates the original entry's amounts, so
+      // the clawback nets out in the next settlement cycle, and surface it
+      // loudly for finance instead of silently swallowing the void.
+      const clawback = await this.financeRepo.createLedgerEntry({
+        franchiseId: params.franchiseId,
+        sourceType: 'ADJUSTMENT',
+        sourceId: params.saleId,
+        description: `POS void clawback — commission on voided sale ${params.saleId} was already ${original.status}`,
+        baseAmount: -Number(original.baseAmount ?? 0),
+        rate: 0,
+        computedAmount: -Number(original.computedAmount ?? 0),
+        platformEarning: -Number(original.platformEarning ?? 0),
+        franchiseEarning: -Number(original.franchiseEarning ?? 0),
+      });
       this.logger.warn(
-        `Cannot void POS commission for sale ${params.saleId}: already ${original.status}`,
+        `POS commission for sale ${params.saleId} was already ${original.status}; posted compensating ADJUSTMENT ${clawback.id} (clawback) for the void`,
       );
-      return null;
+      await this.eventBus.publish({
+        eventName: 'franchise.finance.pos_void_clawback_recorded',
+        aggregate: 'FranchiseFinanceLedger',
+        aggregateId: clawback.id,
+        occurredAt: new Date(),
+        payload: {
+          entryId: clawback.id,
+          originalEntryId: original.id,
+          franchiseId: params.franchiseId,
+          saleId: params.saleId,
+          priorStatus: original.status,
+        },
+      });
+      return clawback;
     }
 
     const updated = await this.financeRepo.updateLedgerEntryStatus(
@@ -194,13 +236,18 @@ export class FranchiseCommissionService {
     refundAmount: number;
     commissionRate: number;
   }) {
-    const baseAmount = Math.round(params.refundAmount * 100) / 100;
-    const computedAmount =
-      Math.round(baseAmount * (params.commissionRate / 100) * 100) / 100;
+    // Phase 159v (audit #9) — Decimal money math (see recordOnlineOrderCommission).
+    const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
+    const HALF_UP = Prisma.Decimal.ROUND_HALF_UP;
+    const baseAmountD = D(params.refundAmount).toDecimalPlaces(2, HALF_UP);
+    const computedAmountD = baseAmountD
+      .times(D(params.commissionRate).dividedBy(100))
+      .toDecimalPlaces(2, HALF_UP);
+    const baseAmount = baseAmountD.toNumber();
+    const computedAmount = computedAmountD.toNumber();
     // Reversal entries flip both amounts so aggregation subtracts correctly
     const platformEarning = -computedAmount;
-    const franchiseEarning =
-      -(Math.round((baseAmount - computedAmount) * 100) / 100);
+    const franchiseEarning = -baseAmountD.minus(computedAmountD).toNumber();
 
     const entry = await this.financeRepo.createLedgerEntry({
       franchiseId: params.franchiseId,
@@ -244,8 +291,14 @@ export class FranchiseCommissionService {
     feeRate: number;
   }) {
     const baseAmount = params.totalLandedCost;
-    const computedAmount =
-      Math.round(baseAmount * (params.feeRate / 100) * 100) / 100;
+    // Phase 159l (audit #18) — exact base-10 money math via Prisma.Decimal
+    // instead of float `Math.round(x * (rate/100) * 100) / 100`, which can
+    // drift a paisa on edge values. Matches the Decimal pattern used elsewhere.
+    const computedAmount = new Prisma.Decimal(baseAmount)
+      .mul(params.feeRate)
+      .div(100)
+      .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+      .toNumber();
     const platformEarning = computedAmount;
     const franchiseEarning = 0;
 
@@ -279,6 +332,57 @@ export class FranchiseCommissionService {
 
     this.logger.log(
       `Procurement fee recorded — franchise=${params.franchiseId}, request=${params.procurementRequestId}, cost=${baseAmount}, fee=${computedAmount}`,
+    );
+
+    return entry;
+  }
+
+  /**
+   * Phase 159p (audit #8) — post the PRINCIPAL (landed) cost of a settled
+   * procurement as a franchise payable to HQ. Pre-159p only the platform
+   * procurement FEE was journaled, so "what does Franchise X owe HQ for goods"
+   * could not be answered from the ledger. This records the principal as a
+   * distinct PROCUREMENT_COST row alongside the fee.
+   */
+  async recordProcurementCost(params: {
+    franchiseId: string;
+    procurementRequestId: string;
+    principalAmount: number;
+  }) {
+    const baseAmount = new Prisma.Decimal(params.principalAmount)
+      .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+      .toNumber();
+
+    const entry = await this.financeRepo.createLedgerEntry({
+      franchiseId: params.franchiseId,
+      sourceType: 'PROCUREMENT_COST',
+      sourceId: params.procurementRequestId,
+      description: `Procurement principal cost (HQ payable) for request ${params.procurementRequestId}`,
+      baseAmount,
+      rate: 0,
+      // This is a franchise→HQ payable for goods, not a commission split — no
+      // platform/franchise "earning". computedAmount carries the payable.
+      computedAmount: baseAmount,
+      platformEarning: 0,
+      franchiseEarning: 0,
+    });
+
+    await this.eventBus.publish({
+      eventName: 'franchise.finance.procurement_cost_recorded',
+      aggregate: 'FranchiseFinanceLedger',
+      aggregateId: entry.id,
+      occurredAt: new Date(),
+      payload: {
+        entryId: entry.id,
+        franchiseId: params.franchiseId,
+        sourceType: 'PROCUREMENT_COST',
+        sourceId: params.procurementRequestId,
+        baseAmount,
+      },
+    });
+
+    this.logger.log(
+      `Procurement principal cost recorded — franchise=${params.franchiseId}, request=${params.procurementRequestId}, principal=${baseAmount}`,
     );
 
     return entry;

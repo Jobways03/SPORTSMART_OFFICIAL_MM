@@ -24,6 +24,7 @@ import { Permissions } from '../../../../core/decorators/permissions.decorator';
 @ApiTags('NOVA — Warehouses & Stock')
 @Controller('admin/nova')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('nova.write')
 export class AdminNovaWarehousesController {
   constructor(private readonly service: OwnBrandService) {}
 

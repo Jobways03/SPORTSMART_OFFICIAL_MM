@@ -223,16 +223,48 @@ export const returnsService = {
   },
 };
 
-export const REASON_CATEGORIES = [
-  { value: 'DEFECTIVE', label: 'Defective Product' },
-  { value: 'WRONG_ITEM', label: 'Wrong Item Received' },
-  { value: 'NOT_AS_DESCRIBED', label: 'Not As Described' },
-  { value: 'DAMAGED_IN_TRANSIT', label: 'Damaged In Transit' },
-  { value: 'CHANGED_MIND', label: 'Changed My Mind' },
-  { value: 'SIZE_FIT_ISSUE', label: 'Size or Fit Issue' },
-  { value: 'QUALITY_ISSUE', label: 'Quality Issue' },
-  { value: 'OTHER', label: 'Other' },
-];
+// Phase 92 follow-up (2026-05-23) — Gap #23. Per-item valid reason
+// categories are now driven by the backend (see EligibleItem.
+// validReasonCategories on the eligibility response). Pre-Phase-92
+// this list was the full taxonomy hard-coded on the frontend with no
+// per-product narrowing. Keep this constant as the LABEL dictionary —
+// the backend response decides which entries actually render.
+export const REASON_CATEGORY_LABELS: Record<string, string> = {
+  DEFECTIVE: 'Defective Product',
+  WRONG_ITEM: 'Wrong Item Received',
+  NOT_AS_DESCRIBED: 'Not As Described',
+  DAMAGED_IN_TRANSIT: 'Damaged In Transit',
+  CHANGED_MIND: 'Changed My Mind',
+  SIZE_FIT_ISSUE: 'Size or Fit Issue',
+  QUALITY_ISSUE: 'Quality Issue',
+  OTHER: 'Other',
+};
+
+/**
+ * Phase 92 follow-up — derive the per-item reason picker from the API
+ * response. Falls back to the full taxonomy when the backend didn't
+ * supply a list (older API contract).
+ */
+export function reasonCategoriesForItem(
+  validReasonCategories?: string[] | null,
+): Array<{ value: string; label: string; requiresEvidence?: boolean }> {
+  const list =
+    validReasonCategories && validReasonCategories.length > 0
+      ? validReasonCategories
+      : Object.keys(REASON_CATEGORY_LABELS);
+  return list.map((value) => ({
+    value,
+    label: REASON_CATEGORY_LABELS[value] ?? value,
+  }));
+}
+
+// Backward-compat: the existing wizard imports REASON_CATEGORIES.
+// Keep the named export pointing at the full taxonomy so a stale
+// reference doesn't crash; the wizard SHOULD migrate to
+// `reasonCategoriesForItem(item.validReasonCategories)`.
+export const REASON_CATEGORIES = Object.entries(REASON_CATEGORY_LABELS).map(
+  ([value, label]) => ({ value, label }),
+);
 
 export function getReturnStatusLabel(status: string): string {
   const labels: Record<string, string> = {

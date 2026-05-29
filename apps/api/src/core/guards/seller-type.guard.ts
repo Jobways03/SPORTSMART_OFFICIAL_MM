@@ -25,6 +25,14 @@
 //    seller.retail.*); this guard just narrows wire-level routing.
 //
 // Unauthenticated endpoints should NOT use these guards.
+//
+// STATUS (MVP-1) — intentionally applied to ZERO endpoints today. The flows
+// that span both seller types (disputes, returns, settlements, tax) DELIBERATELY
+// share one code path: D2C and RETAIL sellers traverse the same controllers,
+// gated by SellerAuthGuard + service-level ownership checks. These guards are
+// retained as the ready, DB-authoritative mechanism for any future endpoint
+// that is genuinely type-specific (e.g. a D2C-only promo feature). "Unused"
+// here is by design — do NOT read a shared endpoint as "missing" a type guard.
 
 import {
   CanActivate,

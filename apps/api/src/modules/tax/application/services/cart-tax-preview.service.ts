@@ -39,6 +39,29 @@ export class CartTaxPreviewService {
   async preview(input: {
     customerId: string;
     addressId?: string | null;
+    /**
+     * Phase 65 (2026-05-22) — applied-coupon discount (audit Gaps
+     * #1 + #21). When supplied, the preview runs the canonical
+     * allocateOrderLevel proportional split and feeds per-item
+     * discount through to the tax engine so preview and snapshot
+     * agree byte-for-byte.
+     */
+    discount?: {
+      totalInPaise: bigint;
+      eligibleProductIds?: ReadonlySet<string>;
+      taxTreatment?:
+        | 'PRE_SUPPLY_TRANSACTIONAL'
+        | 'POST_SUPPLY_LINKED'
+        | 'POST_SUPPLY_UNLINKED'
+        | 'DISPLAY_ONLY';
+    };
+    /**
+     * Phase 65 (audit Gap #6) — B2B GSTIN profile. When the
+     * customer has chosen one for this checkout, its stateCode
+     * overrides the address-derived stateCode for place-of-supply
+     * resolution — mirroring the place-order flow.
+     */
+    selectedTaxProfileId?: string | null;
   }): Promise<CheckoutTaxPreviewResult | null> {
     const items = await this.cartFacade.getItemsForTaxPreview(input.customerId);
     if (items.length === 0) return null;
@@ -70,6 +93,26 @@ export class CartTaxPreviewService {
       }
     }
 
+    // Phase 65 (audit Gap #6) — B2B GSTIN profile override. The
+    // profile's stateCode wins over the address-derived stateCode
+    // so the customer sees the same CGST/SGST/IGST split at
+    // preview that they will at invoice time. Ownership is
+    // enforced via the customerId filter — a tampered
+    // selectedTaxProfileId belonging to another customer simply
+    // returns null and the preview falls back to address-state.
+    if (input.selectedTaxProfileId) {
+      const profile = await this.prisma.customerTaxProfile.findFirst({
+        where: {
+          id: input.selectedTaxProfileId,
+          customerId: input.customerId,
+        },
+        select: { stateCode: true },
+      });
+      if (profile && /^[0-9]{2}$/.test(profile.stateCode)) {
+        customerShippingStateCode = profile.stateCode;
+      }
+    }
+
     return this.taxPreview.previewForSession({
       items: items.map((it) => ({
         productId: it.productId,
@@ -79,6 +122,7 @@ export class CartTaxPreviewService {
         sellerId: it.sellerId,
       })),
       customerShippingStateCode,
+      discount: input.discount,
     });
   }
 }

@@ -1,10 +1,17 @@
 import { Injectable, ConflictException } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { IVariantRepository } from '../../domain/repositories/variant.repository.interface';
+import { IVariantRepository, RepoTx } from '../../domain/repositories/variant.repository.interface';
+
+type PrismaLike = PrismaService | Prisma.TransactionClient;
 
 @Injectable()
 export class PrismaVariantRepository implements IVariantRepository {
   constructor(private readonly prisma: PrismaService) {}
+
+  private db(tx?: RepoTx): PrismaLike {
+    return tx ?? this.prisma;
+  }
 
   /**
    * Phase 4.6 (2026-05-16) — pagination.
@@ -45,7 +52,7 @@ export class PrismaVariantRepository implements IVariantRepository {
               optionValue: { include: { optionDefinition: true } },
             },
           },
-          images: { orderBy: { sortOrder: 'asc' } },
+          images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }] },
         },
         orderBy: { sortOrder: 'asc' },
         skip,
@@ -158,7 +165,7 @@ export class PrismaVariantRepository implements IVariantRepository {
       data,
       include: {
         optionValues: { include: { optionValue: { include: { optionDefinition: true } } } },
-        images: { orderBy: { sortOrder: 'asc' } },
+        images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }] },
       },
     });
   }
@@ -193,7 +200,7 @@ export class PrismaVariantRepository implements IVariantRepository {
       data,
       include: {
         optionValues: { include: { optionValue: { include: { optionDefinition: true } } } },
-        images: { orderBy: { sortOrder: 'asc' } },
+        images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }] },
       },
     });
   }
@@ -226,51 +233,100 @@ export class PrismaVariantRepository implements IVariantRepository {
     });
   }
 
+  /**
+   * Phase 41 (2026-05-21) — atomic upsert. Pre-Phase-41 a concurrent
+   * /generate-manual with the same option name could create duplicate
+   * OptionDefinition rows; with the upsert keyed on the natural unique
+   * (name), a concurrent insert collapses to a single row.
+   */
   async findOrCreateOptionDefinition(name: string): Promise<any> {
-    let definition = await this.prisma.optionDefinition.findUnique({ where: { name } });
-    if (!definition) {
-      definition = await this.prisma.optionDefinition.create({
-        data: { name, displayName: name },
-      });
-    }
-    return definition;
+    return this.prisma.optionDefinition.upsert({
+      where: { name },
+      update: {},
+      create: { name, displayName: name },
+    });
   }
 
   async findOrCreateOptionValue(definitionId: string, value: string, sortOrder: number): Promise<any> {
-    let optionValue = await this.prisma.optionValue.findUnique({
+    return this.prisma.optionValue.upsert({
       where: { optionDefinitionId_value: { optionDefinitionId: definitionId, value } },
+      update: {},
+      create: { optionDefinitionId: definitionId, value, displayValue: value, sortOrder },
     });
-    if (!optionValue) {
-      optionValue = await this.prisma.optionValue.create({
-        data: { optionDefinitionId: definitionId, value, displayValue: value, sortOrder },
-      });
+  }
+
+  /**
+   * Phase 41 (2026-05-21) — returns the publicIds of every variant
+   * image about to be wiped so the controller can fire-and-forget
+   * delete them on Cloudinary after the transaction commits. Closes
+   * audit gap #16 (asset leak on /generate re-runs).
+   */
+  async collectVariantImagePublicIds(productId: string): Promise<string[]> {
+    const rows = await this.prisma.productVariantImage.findMany({
+      where: { variant: { productId } },
+      select: { publicId: true },
+    });
+    return rows.map((r) => r.publicId).filter((p): p is string => !!p);
+  }
+
+  async clearProductOptionsAndVariants(productId: string, tx?: RepoTx): Promise<void> {
+    // Phase 42 (2026-05-21) — when called inside an outer tx, reuse it
+    // so the four deletes share the parent's atomicity. Otherwise open
+    // a local transaction (legacy behaviour for callers that haven't
+    // migrated to the outer-tx pattern).
+    const exec = async (db: PrismaLike) => {
+      await db.productVariantOptionValue.deleteMany({ where: { variant: { productId } } });
+      await db.productVariant.deleteMany({ where: { productId } });
+      await db.productOptionValue.deleteMany({ where: { productId } });
+      await db.productOption.deleteMany({ where: { productId } });
+    };
+    if (tx) {
+      await exec(tx);
+    } else {
+      await this.prisma.$transaction(exec);
     }
-    return optionValue;
   }
 
-  async clearProductOptionsAndVariants(productId: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.productVariantOptionValue.deleteMany({ where: { variant: { productId } } });
-      await tx.productVariant.deleteMany({ where: { productId } });
-      await tx.productOptionValue.deleteMany({ where: { productId } });
-      await tx.productOption.deleteMany({ where: { productId } });
-    });
+  /**
+   * Phase 41 (2026-05-21) — guards used by the controller's /generate
+   * confirmation flow. Returns the count of variants with active stock
+   * and the count of cart items referencing variants on this product.
+   * The controller refuses to overwrite when either is non-zero unless
+   * the admin/seller passes ?confirm=true.
+   */
+  async countActiveVariantInventory(productId: string): Promise<{ withStock: number; cartItems: number }> {
+    const [withStock, cartItems] = await Promise.all([
+      this.prisma.productVariant.count({
+        where: {
+          productId,
+          isDeleted: false,
+          OR: [
+            { stock: { gt: 0 } },
+            { sellerMappings: { some: { isActive: true, stockQty: { gt: 0 } } } },
+          ],
+        },
+      }),
+      this.prisma.cartItem.count({
+        where: { variant: { productId } },
+      }),
+    ]);
+    return { withStock, cartItems };
   }
 
-  async createProductOption(productId: string, definitionId: string, sortOrder: number): Promise<void> {
-    await this.prisma.productOption.create({
+  async createProductOption(productId: string, definitionId: string, sortOrder: number, tx?: RepoTx): Promise<void> {
+    await this.db(tx).productOption.create({
       data: { productId, optionDefinitionId: definitionId, sortOrder },
     });
   }
 
-  async createProductOptionValue(productId: string, optionValueId: string): Promise<void> {
-    await this.prisma.productOptionValue.create({
+  async createProductOptionValue(productId: string, optionValueId: string, tx?: RepoTx): Promise<void> {
+    await this.db(tx).productOptionValue.create({
       data: { productId, optionValueId },
     });
   }
 
-  async setHasVariants(productId: string, hasVariants: boolean): Promise<void> {
-    await this.prisma.product.update({
+  async setHasVariants(productId: string, hasVariants: boolean, tx?: RepoTx): Promise<void> {
+    await this.db(tx).product.update({
       where: { id: productId },
       data: { hasVariants },
     });

@@ -13,7 +13,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, PermissionsGuard, PolicyGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  PolicyGuard,
+  RequiresStepUp,
+  StepUpGuard,
+} from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Policy } from '../../../../core/decorators/policy.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
@@ -27,7 +33,7 @@ import { AdminCreditDto, AdminDebitDto } from '../dtos/wallet.dtos';
 
 @ApiTags('Admin Wallets')
 @Controller('admin/wallets')
-@UseGuards(AdminAuthGuard, PermissionsGuard, PolicyGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, PolicyGuard, StepUpGuard)
 export class AdminWalletController {
   constructor(
     private readonly wallet: WalletService,
@@ -88,6 +94,9 @@ export class AdminWalletController {
     action: 'credit',
     context: { amountInPaise: 'body.amountInPaise' },
   })
+  // Phase 26 — credit adjustments move customer-visible money; tight
+  // 1-min window.
+  @RequiresStepUp({ maxAgeMs: 60_000 })
   async creditWallet(
     @Req() req: any,
     @Param('userId') userId: string,
@@ -120,6 +129,8 @@ export class AdminWalletController {
     action: 'debit',
     context: { amountInPaise: 'body.amountInPaise' },
   })
+  // Phase 26 — debit adjustments remove customer-visible money. Tight 1-min.
+  @RequiresStepUp({ maxAgeMs: 60_000 })
   async debitWallet(
     @Req() req: any,
     @Param('userId') userId: string,
@@ -146,6 +157,8 @@ export class AdminWalletController {
   @Patch(':userId/block')
   @HttpCode(HttpStatus.OK)
   @Permissions('wallets.block')
+  // Phase 26 — blocking a wallet freezes outflows; HIGH risk → 5-min.
+  @RequiresStepUp()
   async blockWallet(
     @Req() req: any,
     @Param('userId') userId: string,
@@ -163,6 +176,7 @@ export class AdminWalletController {
   @Patch(':userId/unblock')
   @HttpCode(HttpStatus.OK)
   @Permissions('wallets.block')
+  @RequiresStepUp()
   async unblockWallet(
     @Req() req: any,
     @Param('userId') userId: string,

@@ -71,13 +71,23 @@ export class EnvService {
     if (!this.isProduction()) return;
 
     const PLACEHOLDER_PREFIX = 'replace-me-';
+    // Phase 21 (2026-05-20) — JWT_REFRESH_SECRET dropped from the
+    // required list because refresh tokens are random UUIDs hashed at
+    // rest, not JWTs — the secret was never consumed.
+    //
+    // Phase 25 (2026-05-20) — ADMIN_MFA_ENCRYPTION_KEY added. The
+    // requiredInProd zod check enforces non-empty, but a value of
+    // `replace-me-with-a-strong-random-string-min32-chars` from
+    // .env.example satisfies non-empty while leaving every admin's
+    // TOTP secret decryptable by anyone who reads the example file.
+    // Same foot-gun, same defence.
     const REQUIRED_SECRETS: Array<keyof Env> = [
       'JWT_CUSTOMER_SECRET',
       'JWT_SELLER_SECRET',
       'JWT_FRANCHISE_SECRET',
       'JWT_ADMIN_SECRET',
       'JWT_AFFILIATE_SECRET',
-      'JWT_REFRESH_SECRET',
+      'ADMIN_MFA_ENCRYPTION_KEY',
     ];
 
     const offenders = REQUIRED_SECRETS.filter((k) => {

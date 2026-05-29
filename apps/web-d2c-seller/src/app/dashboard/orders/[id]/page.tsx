@@ -74,11 +74,7 @@ interface SubOrderDetail {
   trackingNumber: string | null;
   courierName: string | null;
   // Delivery method fields surfaced from the API.
-  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
-  ithinkAwb?: string | null;
-  ithinkLogistic?: string | null;
-  ithinkTrackingUrl?: string | null;
-  ithinkOrderRefnum?: string | null;
+  deliveryMethod?: 'SELF_DELIVERY' | null;
   selfDeliveryStatus?:
     | 'PENDING'
     | 'READY_FOR_PICKUP'
@@ -533,8 +529,14 @@ const { id } = useParams<{ id: string }>();
       .map(([orderItemId, v]) => ({
         orderItemId,
         quantity: v.quantity,
-        reason: v.reason,
       }));
+    // The reversal endpoint takes a single reason for the request; combine the
+    // per-item notes the seller entered.
+    const reason = Object.values(returnDraft)
+      .filter((v) => v.include && v.quantity > 0)
+      .map((v) => v.reason?.trim())
+      .filter(Boolean)
+      .join('; ');
     if (items.length === 0) {
       setReturnError(
         'Select at least one item and enter a quantity greater than zero.',
@@ -561,14 +563,22 @@ const { id } = useParams<{ id: string }>();
       }
     }
 
+    if (reason.length < 5) {
+      setReturnError(
+        'Please enter a reason (at least 5 characters) for the reversal.',
+      );
+      return;
+    }
+
     const confirmed = await confirmDialog({
-      title: 'Reverse this delivery?',
+      title: 'Request a reversal?',
       message:
-        `This will mark the selected items as returned to your warehouse, ` +
-        `restore the stock, and cancel the sub-order. Use this ONLY when ` +
-        `the goods came back through a B2B / off-platform channel — not ` +
-        `for a customer-driven return.`,
-      confirmText: 'Initiate return',
+        `This submits a reversal request for the selected items for admin ` +
+        `review. Stock, commission, and settlement are adjusted only after an ` +
+        `admin approves — nothing changes yet. Use this ONLY when the goods ` +
+        `came back through a B2B / off-platform channel, not for a ` +
+        `customer-driven return. The customer's order is not affected.`,
+      confirmText: 'Submit request',
       danger: true,
     });
     if (!confirmed) return;
@@ -576,14 +586,14 @@ const { id } = useParams<{ id: string }>();
     setActionLoading('return');
     setReturnError('');
     try {
-      await apiClient(`/seller/orders/${order.id}/return`, {
+      await apiClient(`/seller/reversals`, {
         method: 'POST',
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ subOrderId: order.id, reason, items }),
       });
       await notify({
-        title: 'Return initiated',
+        title: 'Reversal requested',
         message:
-          'Stock has been restored. The customer is not affected by this action.',
+          'Your reversal request was submitted for admin approval. Stock and commission adjust once approved.',
         kind: 'success',
       });
       closeReturnModal();
@@ -2398,7 +2408,7 @@ const btnBlue: React.CSSProperties = {
 };
 
 /**
- * Delivery section: combines the badge, the iThink-vs-self picker
+ * Delivery section: combines the badge, the self-delivery picker
  * (only shown if no method is yet chosen and the sub-order is
  * accepted), and the self-delivery status buttons (only for sub-orders
  * already on the SELF_DELIVERY path). Hidden for rejected / cancelled
@@ -2418,7 +2428,6 @@ function DeliverySection({
   const accepted = order.acceptStatus === 'ACCEPTED';
   const noMethodYet = !order.deliveryMethod;
   const isSelf = order.deliveryMethod === 'SELF_DELIVERY';
-  const isIThink = order.deliveryMethod === 'ITHINK_LOGISTICS';
 
   return (
     <div style={{ marginBottom: 20 }}>
@@ -2428,23 +2437,7 @@ function DeliverySection({
         <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
           Delivery method:
         </span>
-        <DeliveryMethodBadge
-          method={order.deliveryMethod ?? null}
-          awb={order.ithinkAwb}
-          courier={order.ithinkLogistic}
-          size="md"
-          showAwb={isIThink}
-        />
-        {isIThink && order.ithinkTrackingUrl && (
-          <a
-            href={order.ithinkTrackingUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}
-          >
-            Track on iThink ↗
-          </a>
-        )}
+        <DeliveryMethodBadge method={order.deliveryMethod ?? null} size="md" />
       </div>
 
       {accepted && noMethodYet && (

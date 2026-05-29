@@ -22,7 +22,12 @@ export interface ProductListItem {
   slug: string;
   status: string;
   moderationStatus: string;
+  // Phase 32 (2026-05-21) — `moderationNote` is the legacy column;
+  // `rejectionReason` + `changeRequestNote` are the canonical fields.
+  // Renderers prefer the structured field with moderationNote fallback.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
   hasVariants: boolean;
   basePrice: string | null;
   baseStock: number | null;
@@ -45,7 +50,10 @@ export interface ProductDetail {
   brandId: string | null;
   status: string;
   moderationStatus: string;
+  // Phase 32 — see ProductListItem for dual-field rationale.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
   hasVariants: boolean;
   basePrice: string | null;
   compareAtPrice: string | null;

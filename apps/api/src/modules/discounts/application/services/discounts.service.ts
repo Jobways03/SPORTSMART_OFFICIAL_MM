@@ -426,9 +426,17 @@ export class DiscountsService {
           subtotal,
         });
         if (aff) {
-          // Affiliate fallback predates the `type` field — affiliate
-          // coupons are always treated as ordinary product discounts.
-          return { ...aff, type: 'AMOUNT_OFF_ORDER' };
+          // Phase 158 — map the affiliate valueType to the canonical coupon
+          // `type`. FREE_SHIPPING must flow to the shipping-waiver path
+          // (checkout.service zeros the shipping fee when type==='FREE_SHIPPING');
+          // every other affiliate discount is an ordinary order-level amount off.
+          return {
+            ...aff,
+            type:
+              aff.valueType === 'FREE_SHIPPING'
+                ? 'FREE_SHIPPING'
+                : 'AMOUNT_OFF_ORDER',
+          };
         }
       } catch (err: any) {
         // Facade throws a plain Error with a customer-safe message

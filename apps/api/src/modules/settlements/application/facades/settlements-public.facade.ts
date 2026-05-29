@@ -42,66 +42,19 @@ export class SettlementsPublicFacade {
     );
   }
 
-  /**
-   * Preview a settlement for a seller within a date range.
-   */
-  async previewSettlement(
-    sellerId: string,
-    periodStart: Date,
-    periodEnd: Date,
-  ): Promise<{
-    sellerId: string;
-    periodStart: Date;
-    periodEnd: Date;
-    totalOrders: number;
-    totalItems: number;
-    totalPlatformAmount: number;
-    totalPlatformMargin: number;
-    netPayable: number;
-  }> {
-    const commissions = await this.prisma.commissionRecord.findMany({
-      where: {
-        sellerId,
-        status: 'PENDING',
-        createdAt: { gte: periodStart, lte: periodEnd },
-      },
-    });
+  // Phase 142 — the dead per-seller `previewSettlement` was removed. It had
+  // zero callers and used different aggregation math than createCycle (per-unit
+  // platformPrice×qty vs the snapshotted totals, no settlementId:null filter,
+  // createdAt instead of settlableAt, row-count instead of summed quantity) —
+  // a dry-run that would have misled operators. The real dry-run is
+  // SettlementService.previewCycle, which shares createCycle's aggregator.
 
-    let totalPlatformAmount = 0;
-    let totalPlatformMargin = 0;
-    const orderIds = new Set<string>();
-
-    for (const c of commissions) {
-      totalPlatformAmount += Number(c.platformPrice ?? 0) * (c.quantity ?? 1);
-      totalPlatformMargin += Number(c.platformMargin ?? 0);
-      if (c.masterOrderId) orderIds.add(c.masterOrderId);
-    }
-
-    const netPayable = totalPlatformAmount - totalPlatformMargin;
-
-    return {
-      sellerId,
-      periodStart,
-      periodEnd,
-      totalOrders: orderIds.size,
-      totalItems: commissions.length,
-      totalPlatformAmount,
-      totalPlatformMargin,
-      netPayable,
-    };
-  }
-
-  /**
-   * Approve a settlement cycle run.
-   */
-  async approveSettlementRun(runId: string): Promise<void> {
-    await this.prisma.settlementCycle.update({
-      where: { id: runId },
-      data: { status: 'APPROVED' },
-    });
-
-    this.logger.log(`Settlement run ${runId} approved`);
-  }
+  // Phase 144 — the dead `approveSettlementRun` was removed. It did a bare
+  // `cycle.update({ status: 'APPROVED' })` with no transaction, no
+  // sellerSettlement cascade, no TCS/TDS, no re-validation, no audit, no actor —
+  // if ever called it would leave a corrupt state (cycle APPROVED, settlements
+  // still PENDING). It had zero callers. Approval goes through
+  // SettlementService.approveCycle, the only correct path.
 
   /**
    * Get a payout statement by ID.

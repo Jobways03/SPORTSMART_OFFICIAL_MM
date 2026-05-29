@@ -127,4 +127,57 @@ export class StockRestoreService {
     }
     return { releasedCount };
   }
+
+  /**
+   * Phase 78 (2026-05-22) — reassign audit Gap #9. Scope a release to
+   * exactly the (productId, variantId) lines of a single sub-order
+   * instead of every reservation that seller holds for the master
+   * order.
+   *
+   * The pre-Phase-78 reassign path called `restoreForOrder(masterOrderId,
+   * sellerId)` which over-released: if the master had two sub-orders
+   * BOTH assigned to the same seller (legitimately — e.g. two distinct
+   * products with the same lowest-distance seller), reassigning ONE
+   * sub-order would unreserve stock for BOTH. The other sub-order then
+   * had no reservation but was still "accepted" — the seller's stock
+   * counters drifted from the reservation table.
+   *
+   * This helper builds a `mapping IN { sellerId + productId/variantId }`
+   * filter so only the reservations that match this sub-order's lines
+   * get touched. Other sub-orders to the same seller for different
+   * products are left alone.
+   */
+  async restoreForSubOrderItems(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    sellerId: string,
+    items: Array<{ productId: string; variantId: string | null }>,
+  ): Promise<{ releasedCount: number }> {
+    if (items.length === 0) return { releasedCount: 0 };
+
+    // Collect all matching reservations across the sub-order's lines.
+    // We match by (seller, productId, variantId) on the mapping side so
+    // a variant-specific reservation and a product-level fallback row
+    // both get caught.
+    const reservations = await tx.stockReservation.findMany({
+      where: {
+        orderId,
+        status: { in: ['RESERVED', 'CONFIRMED'] },
+        mapping: {
+          sellerId,
+          OR: items.map((i) => ({
+            productId: i.productId,
+            variantId: i.variantId ?? null,
+          })),
+        },
+      },
+      select: { id: true },
+    });
+    let releasedCount = 0;
+    for (const r of reservations) {
+      const released = await this.restoreForReservation(tx, r.id);
+      if (released) releasedCount++;
+    }
+    return { releasedCount };
+  }
 }

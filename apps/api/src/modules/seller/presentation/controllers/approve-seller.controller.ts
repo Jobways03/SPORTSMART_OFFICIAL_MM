@@ -3,6 +3,7 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Ip,
   Param,
   Post,
   Req,
@@ -37,16 +38,21 @@ export class ApproveSellerController {
     @Param('sellerId') sellerId: string,
     @Body() dto: ApproveSellerDto,
     @Req() req: Request,
+    @Ip() ip: string,
   ) {
     const adminId = (req as unknown as { adminId?: string }).adminId;
     if (!adminId) {
       throw new Error('Admin session not found on request');
     }
 
+    const userAgentHeader = req.headers['user-agent'];
     const data = await this.approveSellerUseCase.execute({
       sellerId,
       adminId,
       notes: dto.notes,
+      ipAddress: ip || req.socket.remoteAddress || undefined,
+      userAgent:
+        typeof userAgentHeader === 'string' ? userAgentHeader : undefined,
     });
 
     return {

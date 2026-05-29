@@ -15,6 +15,10 @@ interface ResendResetOtpInput {
 export class ResendResetOtpUseCase {
   private static readonly OTP_EXPIRY_MINUTES = 10;
   private static readonly COOLDOWN_SECONDS = 60;
+  // Phase 26 (2026-05-20) — hourly cap matches seller / franchise /
+  // affiliate (5/hr). Defends against a low-and-slow email-flooding
+  // attack: the 60s cooldown alone allows 60 resends/hr per account.
+  private static readonly MAX_RESENDS_PER_HOUR = 5;
 
   constructor(
     @Inject(USER_REPOSITORY)
@@ -43,6 +47,14 @@ export class ResendResetOtpUseCase {
     );
 
     if (recentOtp) {
+      return;
+    }
+
+    // Phase 26 (2026-05-20) — hourly resend cap. Silently swallow on
+    // hit (same enumeration-safety stance as the cooldown branch).
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentCount = await this.userRepo.countOtpsSince(user.id, oneHourAgo);
+    if (recentCount >= ResendResetOtpUseCase.MAX_RESENDS_PER_HOUR) {
       return;
     }
 

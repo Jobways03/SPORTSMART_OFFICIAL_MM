@@ -7,11 +7,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { LowStockAlertService } from '../../application/services/low-stock-alert.service';
 
 @ApiTags('Admin Inventory — Low-stock alerts')
 @Controller('admin/inventory/alerts')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('nova.read')
 export class AdminLowStockAlertsController {
   constructor(private readonly service: LowStockAlertService) {}
 

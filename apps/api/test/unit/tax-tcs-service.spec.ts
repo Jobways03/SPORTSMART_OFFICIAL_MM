@@ -41,7 +41,25 @@ function makeService(opts: { rateBps?: number } = {}): {
   const taxConfig: MockTaxConfig = {
     getNumber: jest.fn().mockResolvedValue(opts.rateBps ?? 100),
   };
-  const service = new TcsService(prisma as any, taxConfig as any);
+  // Phase 159z — TcsService now resolves PoS state names at compute
+  // time so the breakdown JSON column carries human-readable PoS labels.
+  // We stub the lookup with the codes we exercise below.
+  const placeOfSupply = {
+    getStateCodeToNameMap: jest
+      .fn()
+      .mockResolvedValue(
+        new Map<string, string>([
+          ['29', 'Karnataka'],
+          ['07', 'Delhi'],
+          ['27', 'Maharashtra'],
+        ]),
+      ),
+  };
+  const service = new TcsService(
+    prisma as any,
+    taxConfig as any,
+    placeOfSupply as any,
+  );
   return { service, prisma };
 }
 
@@ -282,37 +300,64 @@ describe('TcsService.markCollected', () => {
 });
 
 describe('TcsService.markFiled', () => {
-  it('returns 0 on empty input', async () => {
+  it('returns flippedCount=0 / flippedIds=[] on empty input', async () => {
     const { service, prisma } = makeService();
-    const n = await service.markFiled({ ledgerIds: [], filedBy: 'admin-1' });
-    expect(n).toBe(0);
+    const r = await service.markFiled({
+      ledgerIds: [],
+      filedBy: 'admin-1',
+      nicArn: 'AA1234567890123',
+    });
+    expect(r).toEqual({ flippedCount: 0, flippedIds: [] });
     expect(prisma.gstTcsSettlementLedger.updateMany).not.toHaveBeenCalled();
   });
 
-  it('only flips COLLECTED rows', async () => {
+  // Phase 159z (audit #6) — ARN is mandatory; the service refuses to
+  // file without one regardless of caller (DTO validation is the first
+  // line of defence; this is the second).
+  it('refuses to file when nicArn is empty', async () => {
+    const { service } = makeService();
+    await expect(
+      service.markFiled({
+        ledgerIds: ['l-1'],
+        filedBy: 'admin-1',
+        nicArn: '   ',
+      }),
+    ).rejects.toThrow(/requires a non-empty nicArn/);
+  });
+
+  it('only flips COLLECTED rows + persists ARN + returns ids', async () => {
     const { service, prisma } = makeService();
+    prisma.gstTcsSettlementLedger.findMany.mockResolvedValue([
+      { id: 'l-1' },
+      { id: 'l-2' },
+    ]);
     prisma.gstTcsSettlementLedger.updateMany.mockResolvedValue({ count: 2 });
-    const n = await service.markFiled({
+    const r = await service.markFiled({
       ledgerIds: ['l-1', 'l-2', 'l-3'],
       filedBy: 'admin-1',
+      nicArn: 'AA1234567890123',
     });
-    expect(n).toBe(2);
-    const where =
-      prisma.gstTcsSettlementLedger.updateMany.mock.calls[0][0].where;
-    expect(where.status).toBe('COLLECTED');
+    expect(r.flippedCount).toBe(2);
+    expect(r.flippedIds).toEqual(['l-1', 'l-2']);
+    const args = prisma.gstTcsSettlementLedger.updateMany.mock.calls[0][0];
+    expect(args.where.status).toBe('COLLECTED');
+    expect(args.data.nicArn).toBe('AA1234567890123');
+    expect(args.data.status).toBe('FILED');
   });
 });
 
 describe('TcsService.markPaidToGovt', () => {
-  it('only flips FILED rows', async () => {
+  it('only flips FILED rows + returns flippedIds', async () => {
     const { service, prisma } = makeService();
+    prisma.gstTcsSettlementLedger.findMany.mockResolvedValue([{ id: 'l-1' }]);
     prisma.gstTcsSettlementLedger.updateMany.mockResolvedValue({ count: 1 });
-    const n = await service.markPaidToGovt({
+    const r = await service.markPaidToGovt({
       ledgerIds: ['l-1'],
       paidBy: 'admin-1',
       paymentReference: 'BANK-REF-9999',
     });
-    expect(n).toBe(1);
+    expect(r.flippedCount).toBe(1);
+    expect(r.flippedIds).toEqual(['l-1']);
     const args = prisma.gstTcsSettlementLedger.updateMany.mock.calls[0][0];
     expect(args.where.status).toBe('FILED');
     expect(args.data.paymentReference).toBe('BANK-REF-9999');
@@ -332,7 +377,7 @@ describe('TcsService.reverse', () => {
     ).rejects.toThrow(/not found/);
   });
 
-  it('is idempotent on REVERSED', async () => {
+  it('is idempotent on REVERSED (wasAlreadyReversed=true)', async () => {
     const { service, prisma } = makeService();
     prisma.gstTcsSettlementLedger.findUnique.mockResolvedValue({
       id: 'l-r',
@@ -344,10 +389,12 @@ describe('TcsService.reverse', () => {
       reason: 'duplicate',
     });
     expect(prisma.gstTcsSettlementLedger.update).not.toHaveBeenCalled();
-    expect(r.status).toBe('REVERSED');
+    expect(r.wasAlreadyReversed).toBe(true);
+    expect(r.previousStatus).toBe('REVERSED');
+    expect(r.ledger.status).toBe('REVERSED');
   });
 
-  it('flips to REVERSED + preserves reason in computedReason', async () => {
+  it('flips to REVERSED + preserves reason + returns previousStatus', async () => {
     const { service, prisma } = makeService();
     prisma.gstTcsSettlementLedger.findUnique.mockResolvedValue({
       id: 'l-x',
@@ -366,8 +413,10 @@ describe('TcsService.reverse', () => {
       reversedBy: 'admin-2',
       reason: 'finance correction',
     });
-    expect(r.status).toBe('REVERSED');
-    expect(r.computedReason).toMatch(/finance correction/);
-    expect(r.computedReason).toMatch(/auto-compute 2026-04/);
+    expect(r.wasAlreadyReversed).toBe(false);
+    expect(r.previousStatus).toBe('FILED');
+    expect(r.ledger.status).toBe('REVERSED');
+    expect(r.ledger.computedReason).toMatch(/finance correction/);
+    expect(r.ledger.computedReason).toMatch(/auto-compute 2026-04/);
   });
 });

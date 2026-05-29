@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { FranchisePosRepository } from '../../domain/repositories/franchise-pos.repository.interface';
-import { PosSaleStatus } from '@prisma/client';
+import { PosSaleStatus, PosSaleType, PosPaymentMethod, Prisma } from '@prisma/client';
 
 @Injectable()
 export class PrismaFranchisePosRepository implements FranchisePosRepository {
@@ -105,7 +105,8 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
     placeOfSupplyState?: string | null;
     netAmount: number;
     paymentMethod: string;
-    createdByStaffId?: string;
+    createdByStaffId?: string | null;
+    commissionRate?: number | null;
     items: Array<{
       productId: string;
       variantId?: string;
@@ -124,12 +125,16 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
       sgstAmount?: number;
       igstAmount?: number;
     }>;
-  }): Promise<any> {
-    const { items, ...saleData } = data;
+  }, tx?: Prisma.TransactionClient): Promise<any> {
+    const { items, saleType, paymentMethod, ...saleData } = data;
+    const client = tx ?? this.prisma;
 
-    return this.prisma.franchisePosSale.create({
+    return client.franchisePosSale.create({
       data: {
         ...saleData,
+        // DTO-validated values; cast the strings to the column enums.
+        saleType: saleType as PosSaleType,
+        paymentMethod: paymentMethod as PosPaymentMethod,
         status: 'COMPLETED',
         items: {
           create: items.map((item) => ({
@@ -179,8 +184,10 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
     id: string,
     fromStatus: string,
     patch: Record<string, unknown>,
+    tx?: Prisma.TransactionClient,
   ): Promise<number> {
-    const result = await this.prisma.franchisePosSale.updateMany({
+    const client = tx ?? this.prisma;
+    const result = await client.franchisePosSale.updateMany({
       where: { id, status: fromStatus as any },
       data: patch,
     });
@@ -202,7 +209,7 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
 
   async getDailyReport(
     franchiseId: string,
-    date: Date,
+    range: { gte: Date; lte: Date },
   ): Promise<{
     totalSales: number;
     totalGrossAmount: number;
@@ -210,66 +217,100 @@ export class PrismaFranchisePosRepository implements FranchisePosRepository {
     totalNetAmount: number;
     salesByPaymentMethod: Record<string, { count: number; amount: number }>;
     salesByType: Record<string, { count: number; amount: number }>;
+    refundTotal: number;
+    voidedSales: { count: number; amount: number };
+    returnedSales: { count: number };
+    tax: { cgst: number; sgst: number; igst: number; total: number };
   }> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
+    // Phase 159s — `range` is the pre-computed UTC window for the franchise's
+    // business day (built from the report TZ in the service; audit #4). All
+    // aggregation is DB-side via groupBy/aggregate (audit #9) on Decimal columns
+    // (audit #14), so no findMany+JS-loop over every row.
+    const inRange = { franchiseId, soldAt: { gte: range.gte, lte: range.lte } };
+    const nonVoided = { ...inRange, status: { not: PosSaleStatus.VOIDED } };
 
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const sales = await this.prisma.franchisePosSale.findMany({
-      where: {
-        franchiseId,
-        soldAt: {
-          gte: startOfDay,
-          lte: endOfDay,
+    const [byStatus, totals, byMethod, byType] = await Promise.all([
+      // counts/amounts by status → void + return counts (audit #2)
+      this.prisma.franchisePosSale.groupBy({
+        by: ['status'],
+        where: inRange,
+        _count: { _all: true },
+        _sum: { netAmount: true },
+      }),
+      // non-voided overall totals incl. refunds + GST
+      this.prisma.franchisePosSale.aggregate({
+        where: nonVoided,
+        _count: { _all: true },
+        _sum: {
+          grossAmount: true,
+          discountAmount: true,
+          netAmount: true,
+          refundedAmount: true,
+          cgstAmount: true,
+          sgstAmount: true,
+          igstAmount: true,
         },
-        status: { not: 'VOIDED' },
-      },
-    });
+      }),
+      this.prisma.franchisePosSale.groupBy({
+        by: ['paymentMethod'],
+        where: nonVoided,
+        _count: { _all: true },
+        _sum: { netAmount: true, refundedAmount: true },
+      }),
+      this.prisma.franchisePosSale.groupBy({
+        by: ['saleType'],
+        where: nonVoided,
+        _count: { _all: true },
+        _sum: { netAmount: true, refundedAmount: true },
+      }),
+    ]);
 
-    const totalSales = sales.length;
-    let totalGrossAmount = 0;
-    let totalDiscountAmount = 0;
-    let totalNetAmount = 0;
+    const num = (d: unknown) => (d == null ? 0 : Number(d));
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    // Revenue net of refunds: a returned sale keeps its netAmount on the row but
+    // carries refundedAmount, so effective revenue = net − refunded (audit #1/#5).
+    const effAmt = (s: any) => round2(num(s._sum.netAmount) - num(s._sum.refundedAmount));
 
-    const salesByPaymentMethod: Record<
-      string,
-      { count: number; amount: number }
-    > = {};
-    const salesByType: Record<string, { count: number; amount: number }> = {};
-
-    for (const sale of sales) {
-      const gross = Number(sale.grossAmount);
-      const discount = Number(sale.discountAmount);
-      const net = Number(sale.netAmount);
-
-      totalGrossAmount += gross;
-      totalDiscountAmount += discount;
-      totalNetAmount += net;
-
-      // By payment method
-      if (!salesByPaymentMethod[sale.paymentMethod]) {
-        salesByPaymentMethod[sale.paymentMethod] = { count: 0, amount: 0 };
+    let voidedCount = 0;
+    let voidedAmount = 0;
+    let returnedCount = 0;
+    for (const s of byStatus) {
+      if (s.status === PosSaleStatus.VOIDED) {
+        voidedCount = s._count._all;
+        voidedAmount = num(s._sum.netAmount);
+      } else if (
+        s.status === PosSaleStatus.RETURNED ||
+        s.status === PosSaleStatus.PARTIALLY_RETURNED
+      ) {
+        returnedCount += s._count._all;
       }
-      salesByPaymentMethod[sale.paymentMethod]!.count += 1;
-      salesByPaymentMethod[sale.paymentMethod]!.amount += net;
-
-      // By sale type
-      if (!salesByType[sale.saleType]) {
-        salesByType[sale.saleType] = { count: 0, amount: 0 };
-      }
-      salesByType[sale.saleType]!.count += 1;
-      salesByType[sale.saleType]!.amount += net;
     }
 
+    const salesByPaymentMethod: Record<string, { count: number; amount: number }> = {};
+    for (const m of byMethod) {
+      salesByPaymentMethod[m.paymentMethod] = { count: m._count._all, amount: effAmt(m) };
+    }
+    const salesByType: Record<string, { count: number; amount: number }> = {};
+    for (const t of byType) {
+      salesByType[t.saleType] = { count: t._count._all, amount: effAmt(t) };
+    }
+
+    const cgst = num(totals._sum.cgstAmount);
+    const sgst = num(totals._sum.sgstAmount);
+    const igst = num(totals._sum.igstAmount);
+
     return {
-      totalSales,
-      totalGrossAmount: Math.round(totalGrossAmount * 100) / 100,
-      totalDiscountAmount: Math.round(totalDiscountAmount * 100) / 100,
-      totalNetAmount: Math.round(totalNetAmount * 100) / 100,
+      totalSales: totals._count._all,
+      totalGrossAmount: round2(num(totals._sum.grossAmount)),
+      totalDiscountAmount: round2(num(totals._sum.discountAmount)),
+      // audit #1 — refund-adjusted net revenue.
+      totalNetAmount: round2(num(totals._sum.netAmount) - num(totals._sum.refundedAmount)),
       salesByPaymentMethod,
       salesByType,
+      refundTotal: round2(num(totals._sum.refundedAmount)),
+      voidedSales: { count: voidedCount, amount: round2(voidedAmount) },
+      returnedSales: { count: returnedCount },
+      tax: { cgst: round2(cgst), sgst: round2(sgst), igst: round2(igst), total: round2(cgst + sgst + igst) },
     };
   }
 }

@@ -201,12 +201,37 @@ export class OrdersPublicFacade {
    * Find delivered sub-orders past return window with commission not yet processed.
    * Used by commission processor background jobs.
    */
-  async findDeliveredSubOrdersPastReturnWindow() {
+  async findDeliveredSubOrdersPastReturnWindow(limit = 200) {
     return this.prisma.subOrder.findMany({
+      // Phase 135 — bound the per-tick scan. Without `take`, a backlog after a
+      // processor outage would load the entire matching set + nested
+      // items/seller/order joins in one query (OOM + lock-TTL-overrun risk).
+      // `orderBy` drains oldest-first (FIFO) with a stable id tiebreaker so
+      // successive ticks make deterministic forward progress.
+      take: limit,
+      orderBy: [{ returnWindowEndsAt: 'asc' }, { id: 'asc' }],
       where: {
         fulfillmentStatus: 'DELIVERED',
         commissionProcessed: false,
-        returnWindowEndsAt: { lt: new Date() },
+        // Phase 83 (2026-05-23) — delivery audit Gap #2. The cron now
+        // filters by `commissionLockScheduledAt <= now()` which is set
+        // at delivery time to `returnWindowEndsAt`. Pre-Phase-83 the
+        // filter was `returnWindowEndsAt < now()` which forced the
+        // cron to scan all delivered-but-unprocessed rows every tick.
+        // The new column has a dedicated index. Backfill in the
+        // 20260523020000 migration sets it for legacy rows so the
+        // filter behaves identically without a code-side fallback.
+        OR: [
+          { commissionLockScheduledAt: { lte: new Date() } },
+          // Belt-and-braces — also pick up legacy rows where the
+          // column may be null (pre-Phase-83 backfill missed them).
+          {
+            AND: [
+              { commissionLockScheduledAt: null },
+              { returnWindowEndsAt: { lt: new Date() } },
+            ],
+          },
+        ],
         // Skip sub-orders that have a live return. If the return is
         // already terminally-failed (admin rejected it, QC rejected it,
         // or the customer cancelled), commission can still be locked.
@@ -218,6 +243,23 @@ export class OrdersPublicFacade {
           returns: {
             some: {
               status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] },
+            },
+          },
+        },
+        // Phase 136 — also skip sub-orders with an ACTIVE dispute. A customer
+        // can open a dispute (e.g. WRONG_ITEM_RECEIVED) without filing a
+        // return; locking commission at the return window would let payout go
+        // out while the dispute is still being adjudicated. Terminal disputes
+        // (RESOLVED_*/CLOSED) don't block.
+        disputes: {
+          none: {
+            status: {
+              notIn: [
+                'RESOLVED_BUYER',
+                'RESOLVED_SELLER',
+                'RESOLVED_SPLIT',
+                'CLOSED',
+              ],
             },
           },
         },
@@ -255,6 +297,20 @@ export class OrdersPublicFacade {
           returns: {
             some: {
               status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] },
+            },
+          },
+        },
+        // Phase 136 — an active dispute blocks the immediate lock too (a
+        // rejected return doesn't mean the dispute is resolved).
+        disputes: {
+          none: {
+            status: {
+              notIn: [
+                'RESOLVED_BUYER',
+                'RESOLVED_SELLER',
+                'RESOLVED_SPLIT',
+                'CLOSED',
+              ],
             },
           },
         },
@@ -373,8 +429,26 @@ export class OrdersPublicFacade {
     });
   }
 
-  async markSubOrderDelivered(subOrderId: string) {
-    return this.ordersService.deliverSubOrder(subOrderId);
+  /**
+   * Phase 83 (2026-05-23) — delivery confirmation audit Gap #3.
+   * Webhook callers thread their source + actor surrogate through so
+   * the SubOrder row records WEBHOOK_SHIPROCKET and the audit_log row
+   * carries the correct actorRole=SYSTEM.
+   */
+  async markSubOrderDelivered(
+    subOrderId: string,
+    opts?: {
+      source?:
+        | 'WEBHOOK_SHIPROCKET'
+        | 'MANUAL_ADMIN'
+        | 'MANUAL_FRANCHISE';
+      deliveredBy?: string;
+      deliveryProofUrl?: string;
+      deliveryOtpVerified?: boolean;
+      deliverySignatureUrl?: string;
+    },
+  ) {
+    return this.ordersService.deliverSubOrder(subOrderId, opts);
   }
 
   async markSubOrderCommissionProcessed(subOrderId: string) {
@@ -522,10 +596,26 @@ export class OrdersPublicFacade {
   /**
    * Get master order with delivered sub-orders and items.
    * Used by returns module for eligibility checks.
+   *
+   * Phase 92 follow-up (2026-05-23) — Gap #16 facade refactor.
+   * Accepts `excludeMasterStatuses` so the returns module's Phase 92
+   * gap (cancelled/refunded master should NOT surface eligible
+   * items) lands here instead of being re-implemented in the
+   * eligibility service. Defaults to no exclusion for back-compat.
    */
-  async getMasterOrderWithDeliveredSubOrders(masterOrderId: string, customerId: string) {
+  async getMasterOrderWithDeliveredSubOrders(
+    masterOrderId: string,
+    customerId: string,
+    options?: { excludeMasterStatuses?: string[] },
+  ) {
     return this.prisma.masterOrder.findFirst({
-      where: { id: masterOrderId, customerId },
+      where: {
+        id: masterOrderId,
+        customerId,
+        ...(options?.excludeMasterStatuses
+          ? { orderStatus: { notIn: options.excludeMasterStatuses as any } }
+          : {}),
+      },
       include: {
         subOrders: {
           where: { fulfillmentStatus: 'DELIVERED' },

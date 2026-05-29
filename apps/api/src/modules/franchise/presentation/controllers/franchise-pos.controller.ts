@@ -8,28 +8,49 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
-import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
+import { Throttle } from '@nestjs/throttler';
+import { Request, Response } from 'express';
+import { FranchiseAccessGuard } from '../../../../core/guards';
+import { StaffPermissions } from '../../../../core/decorators/staff-permissions.decorator';
 import { FranchisePosService } from '../../application/services/franchise-pos.service';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PosRecordSaleDto } from '../dtos/pos-record-sale.dto';
 import { PosVoidSaleDto } from '../dtos/pos-void-sale.dto';
 import { PosReturnSaleDto } from '../dtos/pos-return-sale.dto';
+import { PosReportQueryDto } from '../dtos/pos-report-query.dto';
 
 @ApiTags('Franchise POS')
 @Controller('franchise/pos')
-@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
+// Phase 159u (staff-auth B3) — accept the OWNER token OR a STAFF token. Owner
+// behaviour is unchanged (delegates to FranchiseAuthGuard + FranchiseActiveGuard);
+// staff must hold the per-route @StaffPermissions (and req.staffId now flows to
+// createdByStaffId / voidedBy / returnedBy, closing #141 B5 / #142). Routes
+// without @StaffPermissions are owner-only.
+@UseGuards(FranchiseAccessGuard)
 export class FranchisePosController {
   constructor(private readonly posService: FranchisePosService) {}
 
   @Post('sales')
+  @StaffPermissions('pos.sell')
   @HttpCode(HttpStatus.CREATED)
+  // Phase 159q (audit #4) — POS terminals re-fire on slow networks. Without
+  // dedup a retry creates a second sale, a second stock deduction, a second
+  // tax invoice and a second receipt number. voidSale already had this; the
+  // most important endpoint did not.
+  @Idempotent()
   async recordSale(@Req() req: Request, @Body() dto: PosRecordSaleDto) {
     const franchiseId = (req as any).franchiseId;
+    // Org-level actor for the inventory ledger (attributed FRANCHISE_OWNER).
     const actorId = (req as any).franchiseId;
+    // Phase 159q (audit #5) — staff attribution. The franchise auth is
+    // org-level today; a per-cashier staff JWT (follow-up) would populate
+    // req.staffId. Pass it through (null today) so createdByStaffId is either a
+    // real FranchiseStaff id or NULL — never the franchise's own id.
+    const staffId = (req as any).staffId ?? (req as any).franchiseUserId ?? null;
 
     const sale = await this.posService.recordSale(
       franchiseId,
@@ -47,6 +68,7 @@ export class FranchisePosController {
         })),
       },
       actorId,
+      staffId,
     );
 
     return {
@@ -57,6 +79,7 @@ export class FranchisePosController {
   }
 
   @Get('sales')
+  @StaffPermissions('report.read')
   async listSales(
     @Req() req: Request,
     @Query('page') page?: string,
@@ -87,14 +110,15 @@ export class FranchisePosController {
   }
 
   @Get('daily-report')
+  @StaffPermissions('report.read')
   async getDailyReport(
     @Req() req: Request,
-    @Query('date') date?: string,
+    @Query() query: PosReportQueryDto,
   ) {
     const franchiseId = (req as any).franchiseId;
-    const reportDate = date ? new Date(date) : new Date();
+    const dateStr = query.date ?? this.posService.todayInReportTz();
 
-    const data = await this.posService.getDailyReport(franchiseId, reportDate);
+    const data = await this.posService.getDailyReport(franchiseId, dateStr);
 
     return {
       success: true,
@@ -103,17 +127,34 @@ export class FranchisePosController {
     };
   }
 
-  @Get('reconciliation')
-  async getDailyReconciliation(
+  // Phase 159s (audit #7) — finance CSV export (RFC-4180 + formula-injection safe).
+  @Get('daily-report.csv')
+  @StaffPermissions('report.read')
+  async getDailyReportCsv(
     @Req() req: Request,
-    @Query('date') date?: string,
+    @Query() query: PosReportQueryDto,
+    @Res() res: Response,
   ) {
     const franchiseId = (req as any).franchiseId;
-    const reportDate = date ? new Date(date) : new Date();
+    const dateStr = query.date ?? this.posService.todayInReportTz();
+    const csv = await this.posService.getDailyReportCsv(franchiseId, dateStr);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="pos-report-${dateStr}.csv"`);
+    res.send(csv);
+  }
+
+  @Get('reconciliation')
+  @StaffPermissions('report.read')
+  async getDailyReconciliation(
+    @Req() req: Request,
+    @Query() query: PosReportQueryDto,
+  ) {
+    const franchiseId = (req as any).franchiseId;
+    const dateStr = query.date ?? this.posService.todayInReportTz();
 
     const data = await this.posService.getDailyReconciliation(
       franchiseId,
-      reportDate,
+      dateStr,
     );
 
     return {
@@ -124,6 +165,7 @@ export class FranchisePosController {
   }
 
   @Get('sales/:saleId')
+  @StaffPermissions('report.read')
   async getSaleDetail(
     @Req() req: Request,
     @Param('saleId') saleId: string,
@@ -140,6 +182,7 @@ export class FranchisePosController {
   }
 
   @Post('sales/:saleId/void')
+  @StaffPermissions('pos.void')
   @HttpCode(HttpStatus.OK)
   // Phase 7 (2026-05-16) — header-level dedup via the
   // `X-Idempotency-Key` header. Service-level CAS in
@@ -147,6 +190,8 @@ export class FranchisePosController {
   // is absent (legacy clients); the decorator adds belt + braces for
   // POS terminals that re-fire on slow network.
   @Idempotent()
+  // Phase 159r (audit #18) — flood-protection on the reversal surface.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async voidSale(
     @Req() req: Request,
     @Param('saleId') saleId: string,
@@ -154,12 +199,14 @@ export class FranchisePosController {
   ) {
     const franchiseId = (req as any).franchiseId;
     const actorId = (req as any).franchiseId;
+    const staffId = (req as any).staffId ?? (req as any).franchiseUserId ?? null;
 
     const data = await this.posService.voidSale(
       franchiseId,
       saleId,
       dto.reason,
       actorId,
+      staffId,
     );
 
     return {
@@ -170,7 +217,13 @@ export class FranchisePosController {
   }
 
   @Post('sales/:saleId/return')
+  @StaffPermissions('pos.return')
   @HttpCode(HttpStatus.OK)
+  // Phase 159q (audit #14) — same retry-dedup as void; the service also gained
+  // a CAS guard so a double-return can't double-restock.
+  @Idempotent()
+  // Phase 159r (audit #18) — flood-protection.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async returnSale(
     @Req() req: Request,
     @Param('saleId') saleId: string,
@@ -178,6 +231,7 @@ export class FranchisePosController {
   ) {
     const franchiseId = (req as any).franchiseId;
     const actorId = (req as any).franchiseId;
+    const staffId = (req as any).staffId ?? (req as any).franchiseUserId ?? null;
 
     const data = await this.posService.returnSale(
       franchiseId,
@@ -185,8 +239,15 @@ export class FranchisePosController {
       dto.items.map((item) => ({
         itemId: item.itemId,
         returnQty: item.returnQty,
+        condition: item.condition,
       })),
       actorId,
+      {
+        refundMethod: dto.refundMethod,
+        returnReason: dto.returnReason ?? null,
+        refundReference: dto.refundReference ?? null,
+        staffId,
+      },
     );
 
     return {

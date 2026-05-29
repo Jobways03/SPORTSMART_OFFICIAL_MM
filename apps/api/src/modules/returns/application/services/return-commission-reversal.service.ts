@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CommissionRecordStatus, Prisma } from '@prisma/client';
+import { CommissionRecordStatus, CommissionReversalSource, Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -53,6 +53,12 @@ export class ReturnCommissionReversalService {
   async reverseCommissionForReturn(
     returnRecord: any,
     tx?: Prisma.TransactionClient,
+    opts?: {
+      source?: CommissionReversalSource;
+      actorType?: string;
+      actorId?: string | null;
+      note?: string;
+    },
   ): Promise<number> {
     const subOrder = returnRecord?.subOrder;
     if (!subOrder) {
@@ -212,18 +218,19 @@ export class ReturnCommissionReversalService {
         await db.commissionReversalRecord.create({
           data: {
             commissionRecordId: commissionRecord.id,
-            source: 'RETURN_QC',
+            source: opts?.source ?? CommissionReversalSource.RETURN_QC,
             returnId: returnRecord.id ?? null,
             returnNumber: returnRecord.returnNumber ?? null,
             reversedQty: approvedQty,
             totalRefundAmount: itemRefund,
             refundedAdminEarning: refundedMargin,
-            actorType: 'SYSTEM',
-            actorId: null,
+            actorType: opts?.actorType ?? 'SYSTEM',
+            actorId: opts?.actorId ?? null,
             note:
-              approvedQty === totalQty
+              opts?.note ??
+              (approvedQty === totalQty
                 ? 'Full return — commission marked REFUNDED'
-                : `Partial return (${approvedQty}/${totalQty})`,
+                : `Partial return (${approvedQty}/${totalQty})`),
           },
         });
 

@@ -189,7 +189,15 @@ async function bootstrap() {
       'X-Requested-With',
       'X-Idempotency-Key',
     ],
-    exposedHeaders: ['X-Request-Id'],
+    // Content-Disposition + X-Export-* let browser download UIs read the
+    // server filename and surface truncation; without exposing them the
+    // fetch() on a cross-origin frontend cannot see these response headers.
+    exposedHeaders: [
+      'X-Request-Id',
+      'Content-Disposition',
+      'X-Export-Total',
+      'X-Export-Truncated',
+    ],
     maxAge: 600,
   });
 

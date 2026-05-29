@@ -2,14 +2,18 @@ import { Module } from '@nestjs/common';
 import {
   AdminAuthGuard,
   SellerAuthGuard,
-  UserAuthGuard,
 } from '../../core/guards';
 import { LiabilityLedgerModule } from '../liability-ledger/module';
 import { RefundInstructionsModule } from '../refund-instructions/module';
 import { WalletModule } from '../wallet/module';
 import { DisputeService } from './application/services/dispute.service';
+import { DisputeRefundRecoverySweepCron } from './application/jobs/dispute-refund-recovery-sweep.cron';
 import { DisputesPublicFacade } from './application/facades/disputes-public.facade';
-import { CustomerDisputesController } from './presentation/controllers/customer-disputes.controller';
+// Phase 110 (2026-05-25) — customer self-service dispute endpoints removed.
+// The customer-facing dispute UI is deliberately retired (the /account/disputes
+// route redirects to /account/support); disputes now reach customers only via
+// admin promotion from a support ticket (promoteFromTicket). The Dispute model,
+// seller filing, and admin queue remain.
 import { AdminDisputesController } from './presentation/controllers/admin-disputes.controller';
 import { SellerDisputesController } from './presentation/controllers/seller-disputes.controller';
 
@@ -34,15 +38,14 @@ import { SellerDisputesController } from './presentation/controllers/seller-disp
     LiabilityLedgerModule,
   ],
   controllers: [
-    CustomerDisputesController,
     AdminDisputesController,
     SellerDisputesController,
   ],
   providers: [
-    UserAuthGuard,
     AdminAuthGuard,
     SellerAuthGuard,
     DisputeService,
+    DisputeRefundRecoverySweepCron,
     DisputesPublicFacade,
   ],
   exports: [DisputesPublicFacade],

@@ -9,6 +9,8 @@ import { apiClient, ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
 import { PricingTiersPanel } from '../../components/PricingTiersPanel';
+// Phase 45 (2026-05-21) — tax-config attestation panel (closes audit Gap #5).
+import { TaxConfigPanel } from '../../components/TaxConfigPanel';
 import '../../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
 
@@ -2094,6 +2096,11 @@ const router = useRouter();
         />
       )}
 
+      {/* Phase 45 (2026-05-21) — admin tax-config attestation panel.
+          Reads the verified flag + audit log and exposes the verify
+          endpoint that previously had no UI. */}
+      {product && <TaxConfigPanel productId={productId} />}
+
       {/* Review timeline — moved to the bottom of the page so it
           reads as historical context rather than top-of-page noise. */}
       {Array.isArray((product as any).statusHistory) &&
@@ -2186,11 +2193,12 @@ function ProductContextBar({ product }: { product: any }) {
   if (moderationStatus === 'REJECTED') {
     label = 'Rejected';
     tone = 'danger';
-    note = product.moderationNote || product.rejectionReason || null;
+    // Phase 32 (2026-05-21) — structured column preferred over legacy moderationNote.
+    note = product.rejectionReason || product.moderationNote || null;
   } else if (moderationStatus === 'CHANGES_REQUESTED') {
     label = 'Changes requested';
     tone = 'warning';
-    note = product.moderationNote || product.changeRequestNote || null;
+    note = product.changeRequestNote || product.moderationNote || null;
   } else if (moderationStatus === 'SUBMITTED' || moderationStatus === 'IN_REVIEW') {
     label = 'Pending review';
     tone = 'warning';

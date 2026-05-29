@@ -16,6 +16,16 @@ export interface RefundSagaInput<TContext> {
   /** Initial context passed to every forward step. */
   context: TContext;
   steps: SagaStep<TContext>[];
+  /**
+   * Phase 96 (2026-05-23) — Phase 99 audit Gap #11 / Gap #15 closure.
+   *
+   * Idempotency key for the saga row. When provided, the executor
+   * uses an upsert keyed on (idempotencyKey) so two concurrent
+   * callers for the same instruction collapse to a single row. Pass
+   * the RefundInstruction.idempotencyKey through to thread the chain.
+   */
+  idempotencyKey?: string;
+  instructionId?: string;
 }
 
 export interface RefundSagaResult<TContext> {
@@ -59,6 +69,50 @@ export class RefundSagaService {
       return this.runWithoutSaga(input);
     }
 
+    // Phase 96 (2026-05-23) — Phase 99 audit Gap #11 / #15 closure.
+    // Idempotency-keyed lookup: if a saga for this instruction already
+    // exists in a terminal state, return its outcome; if it's
+    // in-flight, refuse to spawn a parallel run (the original caller
+    // will finish, and the stuck-sweep cron handles crashes).
+    if (input.idempotencyKey) {
+      const existing = await this.prisma.refundSaga.findUnique({
+        where: { idempotencyKey: input.idempotencyKey } as any,
+      });
+      if (existing) {
+        if (existing.status === 'COMPLETED') {
+          this.logger.log(
+            `Refund saga ${existing.id} already COMPLETED for idempotencyKey=${input.idempotencyKey}; returning cached outcome`,
+          );
+          return {
+            sagaId: existing.id,
+            status: 'COMPLETED',
+            finalContext: input.context,
+          };
+        }
+        const existingStatusStr = String(existing.status);
+        if (
+          existingStatusStr === 'FAILED' ||
+          existingStatusStr === 'COMPENSATED' ||
+          existingStatusStr === 'COMPENSATION_FAILED'
+        ) {
+          this.logger.warn(
+            `Refund saga ${existing.id} already terminal (${existing.status}) for idempotencyKey=${input.idempotencyKey}; returning cached outcome`,
+          );
+          return {
+            sagaId: existing.id,
+            status: 'FAILED',
+            finalContext: input.context,
+            failureReason: existing.failureReason ?? undefined,
+          };
+        }
+        // STARTED / IN_PROGRESS / COMPENSATING — another caller is
+        // already driving the saga. Refuse to spawn a parallel run.
+        throw new Error(
+          `Refund saga already in-flight for idempotencyKey=${input.idempotencyKey} (sagaId=${existing.id}, status=${existing.status})`,
+        );
+      }
+    }
+
     // 1. Open the saga row in STARTED with PENDING step records.
     const saga = await this.prisma.refundSaga.create({
       data: {
@@ -67,12 +121,14 @@ export class RefundSagaService {
         customerId: input.customerId,
         amountInPaise: BigInt(input.amountInPaise),
         status: 'STARTED',
+        instructionId: input.instructionId ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
         steps: input.steps.map<SagaStepRecord>((s) => ({
           name: s.name,
           status: 'PENDING',
           attempts: 0,
         })) as never,
-      },
+      } as any,
     });
 
     let context = { ...input.context };
@@ -161,6 +217,22 @@ export class RefundSagaService {
         for (let j = i + 1; j < stepRecords.length; j++) {
           stepRecords[j] = { ...stepRecords[j]!, status: 'SKIPPED' };
         }
+
+        // Phase 96 (2026-05-23) — Phase 99 audit Gap #9 closure. Pre-
+        // Phase-96 the saga went straight from IN_PROGRESS to FAILED;
+        // the COMPENSATING enum value was dead. We now flip to
+        // COMPENSATING while compensations run so observability
+        // dashboards can see in-flight rollbacks vs. fully-resolved
+        // FAILED ones.
+        await this.prisma.refundSaga.update({
+          where: { id: saga.id },
+          data: {
+            status: 'COMPENSATING',
+            failureReason: message,
+            steps: stepRecords as never,
+          },
+        });
+
         // 3. Compensate previously-succeeded steps in reverse order.
         const compensations = await this.runCompensations(
           input.steps.slice(0, i),
@@ -168,10 +240,23 @@ export class RefundSagaService {
           context,
         );
 
+        // Phase 96 — Phase 99 audit Gap #18 closure. Distinguish
+        // pure-forward failure (compensations clean) from
+        // forward-AND-compensation failure (data drift; needs human).
+        const anyCompFailed = compensations.some(
+          (c: any) => c?.status === 'FAILED',
+        );
+        const finalStatus: 'FAILED' | 'COMPENSATED' | 'COMPENSATION_FAILED' =
+          anyCompFailed
+            ? 'COMPENSATION_FAILED'
+            : compensations.length > 0
+              ? 'COMPENSATED'
+              : 'FAILED';
+
         await this.prisma.refundSaga.update({
           where: { id: saga.id },
           data: {
-            status: 'FAILED',
+            status: finalStatus as any,
             failureReason: message,
             steps: stepRecords as never,
             compensations: compensations as never,
@@ -179,9 +264,15 @@ export class RefundSagaService {
           },
         });
 
-        this.logger.error(
-          `Refund saga ${saga.id} FAILED at step "${step.name}": ${message}`,
-        );
+        if (anyCompFailed) {
+          this.logger.error(
+            `Refund saga ${saga.id} COMPENSATION_FAILED at step "${step.name}": ${message}. Human reconciliation required.`,
+          );
+        } else {
+          this.logger.error(
+            `Refund saga ${saga.id} ${finalStatus} at step "${step.name}": ${message}`,
+          );
+        }
 
         return {
           sagaId: saga.id,
@@ -193,13 +284,20 @@ export class RefundSagaService {
     }
 
     // 4. Forward pass succeeded.
+    // Phase 96 (2026-05-23) — Phase 99 audit Gap #16 closure. Persist
+    // the canonical walletTransactionId + gatewayRefundId on the saga
+    // row so finance dashboards can search without joining the
+    // instruction.
+    const finalCtx = context as any;
     await this.prisma.refundSaga.update({
       where: { id: saga.id },
       data: {
         status: 'COMPLETED',
+        walletTransactionId: finalCtx.walletTransactionId ?? null,
+        gatewayRefundId: finalCtx.gatewayRefundId ?? null,
         steps: stepRecords as never,
         completedAt: new Date(),
-      },
+      } as any,
     });
 
     return {

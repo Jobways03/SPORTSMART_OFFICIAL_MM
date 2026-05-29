@@ -6,6 +6,8 @@ import {
   IsNumber,
   IsInt,
   IsArray,
+  IsIn,
+  Length,
   Min,
   Max,
   Matches,
@@ -119,6 +121,51 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   warrantyInfo?: string;
+
+  // Phase 92 follow-up (2026-05-23) — Gap #22 admin surface for the
+  // typed return-policy columns. `isReturnable=false` flips the row
+  // to non-returnable (eligibility resolver short-circuits).
+  // `nonReturnableReason` is shown to the customer on the eligibility
+  // surface so they know WHY (e.g. "Final sale", "Innerwear").
+  // `returnWindowDaysOverride` lets ops set a different window for
+  // perishables (0d) or electronics (7d) without changing the global.
+  // `allowedReturnReasonsJson` constrains the per-item reason picker.
+  // `allowPartialReturn=false` forces all-or-nothing returns.
+  @IsOptional()
+  @IsBoolean()
+  isReturnable?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 500)
+  nonReturnableReason?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(365)
+  returnWindowDaysOverride?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsIn(
+    [
+      'DEFECTIVE',
+      'WRONG_ITEM',
+      'NOT_AS_DESCRIBED',
+      'DAMAGED_IN_TRANSIT',
+      'CHANGED_MIND',
+      'SIZE_FIT_ISSUE',
+      'QUALITY_ISSUE',
+      'OTHER',
+    ],
+    { each: true },
+  )
+  allowedReturnReasons?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  allowPartialReturn?: boolean;
 
   // ─── Tax fields (Phase 1 GST) ──────────────────────────────────
   // See CreateProductDto for the equivalent block + rationale.

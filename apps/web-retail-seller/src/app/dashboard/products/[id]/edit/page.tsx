@@ -721,19 +721,22 @@ const router = useRouter();
     if (!product) return null;
     const status = product.moderationStatus;
 
+    // Phase 32 (2026-05-21) — structured columns preferred.
     if (status === 'REJECTED') {
+      const note = product.rejectionReason ?? product.moderationNote;
       return (
         <div className="status-banner rejected">
           <strong>Rejected</strong>
-          {product.moderationNote && <> &mdash; {product.moderationNote}</>}
+          {note && <> &mdash; {note}</>}
         </div>
       );
     }
     if (status === 'CHANGES_REQUESTED') {
+      const note = product.changeRequestNote ?? product.moderationNote;
       return (
         <div className="status-banner changes-requested">
           <strong>Changes Requested</strong>
-          {product.moderationNote && <> &mdash; {product.moderationNote}</>}
+          {note && <> &mdash; {note}</>}
         </div>
       );
     }

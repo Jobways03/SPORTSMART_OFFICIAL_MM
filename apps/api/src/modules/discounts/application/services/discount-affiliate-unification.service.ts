@@ -68,11 +68,35 @@ export class DiscountAffiliateUnificationService {
       return { discountId: couponCode.discountId };
     }
 
+    // Phase 158 (audit #8) — the unified Discount model has no
+    // percentage-cap field (DiscountValueType is PERCENTAGE/FIXED_AMOUNT
+    // only). Unifying a coupon that carries maxDiscountAmount would
+    // SILENTLY drop the cap and re-expose the uncapped-percentage money
+    // bug on the core discount path. Refuse loudly instead — the coupon
+    // keeps running (correctly capped) on the affiliate path. Adding a
+    // first-class cap to the core discounts pipeline is a separate,
+    // larger change with its own checkout/reservation validation.
+    if (couponCode.maxDiscountAmount != null) {
+      throw new BadRequestException(
+        'This coupon has a maximum-discount cap that the unified discount pipeline cannot yet represent. Unification is blocked so the cap is not silently lost.',
+      );
+    }
+
     // Translate customer-facing fields. AffiliateCouponCode uses
-    // PERCENT/FIXED; Discount uses PERCENTAGE/FIXED_AMOUNT.
+    // PERCENT/FIXED/FREE_SHIPPING; Discount uses PERCENTAGE/FIXED_AMOUNT
+    // for the value and a separate `type` for the behaviour.
     let valueType: 'PERCENTAGE' | 'FIXED_AMOUNT' = 'PERCENTAGE';
     let value: number = 0;
-    if (couponCode.customerDiscountType && couponCode.customerDiscountValue != null) {
+    let discountType: 'AMOUNT_OFF_ORDER' | 'FREE_SHIPPING' = 'AMOUNT_OFF_ORDER';
+    if (couponCode.customerDiscountType === 'FREE_SHIPPING') {
+      // Phase 158 — carry FREE_SHIPPING across the bridge via type=FREE_SHIPPING
+      // (the value is irrelevant; checkout zeros the shipping fee). Without this
+      // the bridge silently downgraded a free-shipping code to a ₹0 amount-off
+      // discount — the customer lost the waiver after unification.
+      discountType = 'FREE_SHIPPING';
+      valueType = 'PERCENTAGE';
+      value = 0;
+    } else if (couponCode.customerDiscountType && couponCode.customerDiscountValue != null) {
       valueType = couponCode.customerDiscountType === 'FIXED' ? 'FIXED_AMOUNT' : 'PERCENTAGE';
       value = Number(couponCode.customerDiscountValue);
     }
@@ -86,7 +110,7 @@ export class DiscountAffiliateUnificationService {
         data: {
           code: couponCode.code,
           title: 'Affiliate referral',
-          type: valueType === 'FIXED_AMOUNT' ? 'AMOUNT_OFF_ORDER' : 'AMOUNT_OFF_ORDER',
+          type: discountType,
           method: 'CODE',
           valueType,
           value,
@@ -177,6 +201,31 @@ export class DiscountAffiliateUnificationService {
    * Best-effort: failures here MUST NOT roll back the redemption.
    */
   async onUnifiedCouponRedeemed(args: UnifiedCouponRedeemedArgs): Promise<void> {
+    // Phase 67 (audit Gaps #13 + #14) — single attribution write
+    // path. Pre-Phase-67 the checkout repo's placeOrderTransaction
+    // and this hook BOTH wrote ReferralAttribution + incremented
+    // AffiliateCouponCode.usedCount when a unified affiliate coupon
+    // was used. The attribution row create is idempotent (P2002
+    // catch), but the usedCount increment is not — every unified
+    // redemption double-counted.
+    //
+    // Fix: if the checkout repo already wrote the attribution row
+    // (we'd see it via findUnique on orderId, which the schema
+    // declares unique), this hook becomes a no-op. The discount-
+    // reservation-driven path remains the canonical writer for
+    // legacy flows that don't carry attribution through the order tx.
+    const client = args.tx ?? this.prisma;
+    const existing = await client.referralAttribution.findUnique({
+      where: { orderId: args.orderId },
+      select: { id: true },
+    }).catch(() => null);
+    if (existing) {
+      this.logger.debug(
+        `onUnifiedCouponRedeemed: attribution already exists for order ${args.orderId} — repo path won; skipping`,
+      );
+      return;
+    }
+
     // 1. Attribution row. The facade's attach method is itself
     //    idempotent on orderId, so duplicate calls are safe.
     try {
@@ -205,10 +254,12 @@ export class DiscountAffiliateUnificationService {
 
     // 2. Keep the affiliate-side counter in sync. Used in admin
     //    dashboards and quota checks; failing this is non-fatal.
+    //    Only reached when the repo path did NOT write the
+    //    attribution row (legacy / non-affiliate-driven paths).
     if (args.couponCode) {
       try {
-        const client = args.tx ?? this.prisma;
-        await client.affiliateCouponCode.update({
+        const codeClient = args.tx ?? this.prisma;
+        await codeClient.affiliateCouponCode.update({
           where: { code: args.couponCode },
           data: { usedCount: { increment: 1 } },
         });

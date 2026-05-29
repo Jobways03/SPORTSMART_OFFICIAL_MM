@@ -5,9 +5,11 @@ import type {
   DisputeActorType,
   DisputeKind,
   DisputeStatus,
+  ReturnStatus,
 } from '@prisma/client';
 import {
   BadRequestAppException,
+  ConflictAppException,
   ForbiddenAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
@@ -16,6 +18,7 @@ import { EventBusService } from '../../../../bootstrap/events/event-bus.service'
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { CaseDuplicateService } from '../../../../core/case-duplicate/case-duplicate.service';
 import { applyOptimisticTransition } from '../../../../core/fsm/optimistic-transition';
+import { isTransitionAllowed } from '../../../../core/fsm/status-transitions';
 import { RefundInstructionService } from '../../../refund-instructions/application/services/refund-instruction.service';
 import { LiabilityLedgerPublicFacade } from '../../../liability-ledger/application/facades/liability-ledger-public.facade';
 
@@ -151,6 +154,100 @@ export class DisputeService {
 
   // ── Lifecycle ────────────────────────────────────────────────────
 
+  /**
+   * Phase 110 (2026-05-25) — ownership guard for self-service filing.
+   * CUSTOMER / SELLER filers may only dispute their OWN order graph; without
+   * this a logged-in customer could file against any orderId (IDOR), and a
+   * seller against any sub-order. Also enforces cross-link consistency — a
+   * passed subOrderId / masterOrderId must match the linked return's graph.
+   * ADMIN / SUPPORT file via promoteFromTicket / attachContext (own rules), so
+   * they are intentionally not scoped here.
+   */
+  private async assertFilerOwnsLinks(args: FileDisputeArgs): Promise<void> {
+    const { filer } = args;
+    if (filer.type !== 'CUSTOMER' && filer.type !== 'SELLER') return;
+
+    let derivedMasterOrderId: string | null = null;
+    let derivedSubOrderId: string | null = null;
+
+    if (args.returnId) {
+      const ret = await this.prisma.return.findUnique({
+        where: { id: args.returnId },
+        select: { customerId: true, masterOrderId: true, subOrderId: true },
+      });
+      if (!ret) throw new NotFoundAppException('Linked return not found');
+      derivedMasterOrderId = ret.masterOrderId;
+      derivedSubOrderId = ret.subOrderId;
+      if (filer.type === 'CUSTOMER' && ret.customerId !== filer.id) {
+        throw new ForbiddenAppException('Linked return does not belong to you');
+      }
+      if (filer.type === 'SELLER') {
+        const sub = ret.subOrderId
+          ? await this.prisma.subOrder.findUnique({
+              where: { id: ret.subOrderId },
+              select: { sellerId: true },
+            })
+          : null;
+        if (!sub || sub.sellerId !== filer.id) {
+          throw new ForbiddenAppException(
+            'Linked return is not for one of your sub-orders',
+          );
+        }
+      }
+    }
+
+    if (args.subOrderId) {
+      if (derivedSubOrderId && derivedSubOrderId !== args.subOrderId) {
+        throw new BadRequestAppException(
+          'subOrderId does not match the linked return',
+        );
+      }
+      const sub = await this.prisma.subOrder.findUnique({
+        where: { id: args.subOrderId },
+        select: {
+          sellerId: true,
+          masterOrderId: true,
+          masterOrder: { select: { customerId: true } },
+        },
+      });
+      if (!sub) throw new NotFoundAppException('Linked sub-order not found');
+      derivedMasterOrderId = derivedMasterOrderId ?? sub.masterOrderId;
+      if (filer.type === 'CUSTOMER' && sub.masterOrder?.customerId !== filer.id) {
+        throw new ForbiddenAppException(
+          'Linked sub-order does not belong to you',
+        );
+      }
+      if (filer.type === 'SELLER' && sub.sellerId !== filer.id) {
+        throw new ForbiddenAppException(
+          'Linked sub-order does not belong to you',
+        );
+      }
+    }
+
+    if (args.masterOrderId) {
+      if (derivedMasterOrderId && derivedMasterOrderId !== args.masterOrderId) {
+        throw new BadRequestAppException(
+          'masterOrderId does not match the linked return / sub-order',
+        );
+      }
+      const order = await this.prisma.masterOrder.findUnique({
+        where: { id: args.masterOrderId },
+        select: { customerId: true },
+      });
+      if (!order) throw new NotFoundAppException('Linked order not found');
+      if (filer.type === 'CUSTOMER' && order.customerId !== filer.id) {
+        throw new ForbiddenAppException('Linked order does not belong to you');
+      }
+      // A seller can't dispute a bare (multi-seller) master order — they must
+      // anchor on a sub-order or return they fulfil.
+      if (filer.type === 'SELLER' && !args.subOrderId && !args.returnId) {
+        throw new ForbiddenAppException(
+          'Sellers must link a sub-order or return, not a bare order',
+        );
+      }
+    }
+  }
+
   async fileDispute(args: FileDisputeArgs): Promise<Dispute> {
     const summary = args.summary?.trim();
     if (!summary) throw new BadRequestAppException('summary is required');
@@ -158,6 +255,10 @@ export class DisputeService {
     if (!args.masterOrderId && !args.subOrderId && !args.returnId) {
       throw new BadRequestAppException('Must link a masterOrderId, subOrderId, or returnId');
     }
+
+    // Phase 110 — ownership guard (IDOR fix). A CUSTOMER/SELLER filer may only
+    // dispute their own order graph; runs before we burn a dispute number.
+    await this.assertFilerOwnsLinks(args);
 
     // Phase 1.5 — duplicate prevention. Two rules apply at file time:
     //   R2: an active dispute already exists for this returnId
@@ -205,6 +306,26 @@ export class DisputeService {
       `Dispute ${dispute.disputeNumber} filed by ${args.filer.type}:${args.filer.id} (${args.kind})`,
     );
 
+    // Phase 110 — durable compliance trail of who filed what against which
+    // order/return (the event below is best-effort and lossy).
+    this.audit
+      .writeAuditLog({
+        actorId: args.filer.id,
+        actorRole: args.filer.type,
+        action: 'dispute.filed',
+        module: 'disputes',
+        resource: 'dispute',
+        resourceId: dispute.id,
+        metadata: {
+          disputeNumber: dispute.disputeNumber,
+          kind: dispute.kind,
+          masterOrderId: dispute.masterOrderId,
+          subOrderId: dispute.subOrderId,
+          returnId: dispute.returnId,
+        },
+      })
+      .catch(() => undefined);
+
     this.eventBus
       .publish({
         eventName: 'disputes.filed',
@@ -251,6 +372,11 @@ export class DisputeService {
     if (summary.length > 5000) throw new BadRequestAppException('summary too long (max 5000)');
     if (args.severity != null && (args.severity < 1 || args.severity > 100)) {
       throw new BadRequestAppException('severity must be 1-100');
+    }
+    // Backstop the DTO cap — this path is also reachable from the support
+    // service, and an unbounded admin note would otherwise persist verbatim.
+    if (args.internalNote && args.internalNote.length > 2000) {
+      throw new BadRequestAppException('internalNote too long (max 2000)');
     }
 
     const disputeNumber = await this.generateNextDisputeNumber();
@@ -449,6 +575,23 @@ export class DisputeService {
           `Return ${returnNumber} does not belong to the dispute filer`,
         );
       }
+      // Phase 115 — seller-ownership parity (the customer path above had this;
+      // the seller path didn't, letting a seller attach another seller's
+      // return). A seller-filed dispute may only attach a return on one of the
+      // seller's own sub-orders.
+      if (dispute.filedByType === 'SELLER') {
+        const sub = ret.subOrderId
+          ? await this.prisma.subOrder.findUnique({
+              where: { id: ret.subOrderId },
+              select: { sellerId: true },
+            })
+          : null;
+        if (!sub || sub.sellerId !== dispute.filedById) {
+          throw new BadRequestAppException(
+            `Return ${returnNumber} does not belong to the dispute filer`,
+          );
+        }
+      }
       resolvedReturnId = ret.id;
       resolvedMasterOrderId = ret.masterOrderId;
       resolvedSubOrderId = ret.subOrderId;
@@ -482,6 +625,33 @@ export class DisputeService {
         throw new BadRequestAppException(
           `Return ${returnNumber} is not part of order ${orderNumber}`,
         );
+      }
+      // Phase 115 — seller-ownership parity + sub-order backfill. Load the
+      // order's sub-orders so we can (a) reject a seller filer who doesn't own
+      // any of them, and (b) backfill subOrderId when only the order number was
+      // attached, so decide-time SELLER-liability resolution can find it.
+      if (dispute.filedByType === 'SELLER' || !resolvedSubOrderId) {
+        const subs = await this.prisma.subOrder.findMany({
+          where: { masterOrderId: order.id },
+          select: { id: true, sellerId: true },
+        });
+        if (dispute.filedByType === 'SELLER') {
+          const own = subs.filter((s) => s.sellerId === dispute.filedById);
+          if (own.length === 0) {
+            throw new BadRequestAppException(
+              `Order ${orderNumber} has no sub-order belonging to the dispute filer`,
+            );
+          }
+          const onlyOwn = own.length === 1 ? own[0] : undefined;
+          if (!resolvedSubOrderId && onlyOwn) {
+            resolvedSubOrderId = onlyOwn.id;
+          }
+        } else {
+          const onlySub = subs.length === 1 ? subs[0] : undefined;
+          if (!resolvedSubOrderId && onlySub) {
+            resolvedSubOrderId = onlySub.id;
+          }
+        }
       }
       resolvedMasterOrderId = order.id;
     }
@@ -755,6 +925,11 @@ export class DisputeService {
   async reply(args: ReplyArgs) {
     const body = args.body?.trim();
     if (!body) throw new BadRequestAppException('body is required');
+    // Server-side length cap (backstop to the DTO @MaxLength — also guards the
+    // ticket back-mirror path, which calls this service directly, not via DTO).
+    if (body.length > 5000) {
+      throw new BadRequestAppException('body too long (max 5000)');
+    }
     const dispute = await this.prisma.dispute.findUnique({ where: { id: args.disputeId } });
     if (!dispute) throw new NotFoundAppException('Dispute not found');
 
@@ -783,22 +958,45 @@ export class DisputeService {
       }
     }
 
-    const message = await this.prisma.disputeMessage.create({
-      data: {
-        disputeId: args.disputeId,
-        senderType: args.sender.type,
-        senderId: args.sender.id,
-        senderName: args.sender.name,
-        body,
-        isInternalNote,
-      },
+    // Message insert + updatedAt bump in one tx so a crash can't leave a
+    // message without the queue-ordering bump.
+    const message = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.disputeMessage.create({
+        data: {
+          disputeId: args.disputeId,
+          senderType: args.sender.type,
+          senderId: args.sender.id,
+          senderName: args.sender.name,
+          body,
+          isInternalNote,
+        },
+      });
+      await tx.dispute.update({
+        where: { id: args.disputeId },
+        data: { updatedAt: new Date() },
+      });
+      return created;
     });
 
-    // Bump updatedAt so the queue ordering reflects activity.
-    await this.prisma.dispute.update({
-      where: { id: args.disputeId },
-      data: { updatedAt: new Date() },
-    });
+    // Durable compliance trail. Internal notes get NO event (no notification)
+    // but ARE audited — they're the highest-value audit target.
+    this.audit
+      .writeAuditLog({
+        actorId: args.sender.id,
+        actorRole: args.sender.type,
+        action: isInternalNote
+          ? 'dispute.internal_note_added'
+          : 'dispute.message_added',
+        module: 'disputes',
+        resource: 'dispute',
+        resourceId: args.disputeId,
+        metadata: {
+          messageId: message.id,
+          isInternalNote,
+          length: body.length,
+        },
+      })
+      .catch(() => undefined);
 
     // Notify the other side on non-internal messages. Full body
     // included in the payload (not just preview) so the support-module
@@ -815,6 +1013,9 @@ export class DisputeService {
           payload: {
             disputeId: args.disputeId,
             disputeNumber: dispute.disputeNumber,
+            // Always false on this branch (publish is guarded by !isInternalNote);
+            // carried so the notification handler can backstop defensively.
+            isInternalNote,
             // The just-created DisputeMessage row id. The support
             // module's back-mirror handler stores this on the
             // mirrored TicketMessage so a retried event can't
@@ -848,14 +1049,33 @@ export class DisputeService {
 
   // ── Admin actions ────────────────────────────────────────────────
 
-  async assign(disputeId: string, adminId: string | null) {
+  async assign(
+    disputeId: string,
+    adminId: string | null,
+    assignedByAdminId?: string,
+  ) {
     const dispute = await this.prisma.dispute.findUnique({ where: { id: disputeId } });
     if (!dispute) throw new NotFoundAppException('Dispute not found');
+    // When assigning (not un-assigning), the target admin must exist and be
+    // ACTIVE — otherwise the dispute lands on a disabled / non-existent
+    // account and silently stalls. Un-assign (adminId === null) skips this.
+    if (adminId) {
+      const target = await this.prisma.admin.findUnique({
+        where: { id: adminId },
+        select: { status: true },
+      });
+      if (!target) throw new NotFoundAppException('Target admin not found');
+      if (target.status !== 'ACTIVE') {
+        throw new BadRequestAppException(
+          'Cannot assign a dispute to an inactive or suspended admin',
+        );
+      }
+    }
     // Assignment auto-promotes OPEN → UNDER_REVIEW. Any other status
     // keeps its current value (assigning is independent of state).
     const targetStatus =
       dispute.status === 'OPEN' ? 'UNDER_REVIEW' : dispute.status;
-    return applyOptimisticTransition({
+    const updated = await applyOptimisticTransition({
       kind: 'DisputeStatus',
       toStatus: targetStatus,
       current: dispute,
@@ -866,8 +1086,38 @@ export class DisputeService {
             ...statusPatch,
             status: statusPatch.status as DisputeStatus,
             assignedAdminId: adminId,
+            // Stamp who/when for the current assignment; clear both on unassign.
+            assignedAt: adminId ? new Date() : null,
+            assignedByAdminId: adminId ? (assignedByAdminId ?? null) : null,
           },
         }),
+    });
+    // Compliance trail — who routed this dispute to whom (parity with decide).
+    this.audit
+      .writeAuditLog({
+        actorId: assignedByAdminId ?? 'system',
+        action: 'dispute.assigned',
+        module: 'disputes',
+        resource: 'dispute',
+        resourceId: disputeId,
+        oldValue: { assignedAdminId: dispute.assignedAdminId },
+        newValue: { assignedAdminId: adminId },
+      })
+      .catch(() => undefined);
+    return updated;
+  }
+
+  /**
+   * Minimal ACTIVE-admin list for the assign dropdown. Deliberately scoped to
+   * the disputes.assign permission — the full admin directory at
+   * GET /admin/users is SUPER_ADMIN-only, so a dispute operator couldn't
+   * populate the dropdown from it.
+   */
+  async listAssignableAdmins() {
+    return this.prisma.admin.findMany({
+      where: { status: 'ACTIVE' },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: 'asc' },
     });
   }
 
@@ -876,6 +1126,21 @@ export class DisputeService {
     status: DisputeStatus,
     adminId?: string,
   ) {
+    // Resolutions (RESOLVED_*) carry a refund amount, liability party, remedy
+    // and a decision audit — all produced by `decide` (gated by
+    // disputes.decide). This generic status update is gated only by the lower
+    // disputes.statusUpdate. Refuse RESOLVED_* here so a status-only operator
+    // can't shortcut the decision pipeline (and leave the decision columns +
+    // refund instruction unset). Reopen → UNDER_REVIEW is unaffected.
+    if (
+      status === 'RESOLVED_BUYER' ||
+      status === 'RESOLVED_SELLER' ||
+      status === 'RESOLVED_SPLIT'
+    ) {
+      throw new BadRequestAppException(
+        'Use the decide endpoint to resolve a dispute; status updates are limited to UNDER_REVIEW / AWAITING_INFO / CLOSED.',
+      );
+    }
     const dispute = await this.prisma.dispute.findUnique({ where: { id: disputeId } });
     if (!dispute) throw new NotFoundAppException('Dispute not found');
     const updated = await applyOptimisticTransition({
@@ -924,14 +1189,60 @@ export class DisputeService {
         .catch(() => undefined);
     }
 
+    // Compliance trail for procedural status moves (UNDER_REVIEW /
+    // AWAITING_INFO / CLOSED). Resolutions are audited separately by decide.
+    this.audit
+      .writeAuditLog({
+        actorId: adminId ?? 'system',
+        action: 'dispute.status_changed',
+        module: 'disputes',
+        resource: 'dispute',
+        resourceId: disputeId,
+        oldValue: { status: dispute.status },
+        newValue: { status },
+      })
+      .catch(() => undefined);
+
     return updated;
   }
 
-  async setSeverity(disputeId: string, severity: number) {
+  async setSeverity(disputeId: string, severity: number, adminId?: string) {
     if (severity < 1 || severity > 100) {
       throw new BadRequestAppException('severity must be 1-100');
     }
-    return this.prisma.dispute.update({ where: { id: disputeId }, data: { severity } });
+    const dispute = await this.prisma.dispute.findUnique({
+      where: { id: disputeId },
+    });
+    if (!dispute) throw new NotFoundAppException('Dispute not found');
+    // Version-CAS via a same-status transition so a concurrent assign /
+    // status change can't be silently stamped over — parity with assign +
+    // setStatus (this one was previously a bare update).
+    const updated = await applyOptimisticTransition({
+      kind: 'DisputeStatus',
+      toStatus: dispute.status,
+      current: dispute,
+      update: (where, statusPatch) =>
+        this.prisma.dispute.update({
+          where: { id: where.id, version: where.version } as any,
+          data: {
+            ...statusPatch,
+            status: statusPatch.status as DisputeStatus,
+            severity,
+          },
+        }),
+    });
+    this.audit
+      .writeAuditLog({
+        actorId: adminId ?? 'system',
+        action: 'dispute.severity_changed',
+        module: 'disputes',
+        resource: 'dispute',
+        resourceId: disputeId,
+        oldValue: { severity: dispute.severity },
+        newValue: { severity },
+      })
+      .catch(() => undefined);
+    return updated;
   }
 
   /**
@@ -1035,11 +1346,20 @@ export class DisputeService {
         args.customerRemedy === 'PARTIAL_REFUND' ||
         args.customerRemedy === 'GOODWILL_CREDIT')
     ) {
+      // Phase 113 — resolve the ACTUAL order customer from the order/return
+      // graph. NEVER use filedById: a seller- or admin-filed dispute resolved
+      // in the buyer's favour would otherwise credit the FILER's wallet.
+      const refundCustomerId = await this.resolveCustomerForRefund(updated);
       try {
+        if (!refundCustomerId) {
+          throw new Error(
+            'Could not resolve the order customer to credit (refusing to route the refund to the dispute filer)',
+          );
+        }
         await this.refundInstruction.createForDispute({
           disputeId: updated.id,
           disputeNumber: updated.disputeNumber,
-          customerId: updated.filedById,
+          customerId: refundCustomerId,
           masterOrderId: updated.masterOrderId,
           amountInPaise,
           // Phase 12 (ADR-017) — let the threshold gate see the
@@ -1084,7 +1404,7 @@ export class DisputeService {
             payload: {
               disputeId: updated.id,
               disputeNumber: updated.disputeNumber,
-              customerId: updated.filedById,
+              customerId: refundCustomerId,
               masterOrderId: updated.masterOrderId,
               amountInPaise: amountInPaise.toString(),
               reason: (err as Error).message,
@@ -1106,6 +1426,7 @@ export class DisputeService {
     // ── 4. Linked-return status update ──────────────────────────────
     if (updated.returnId) {
       await this.updateLinkedReturnStatus({
+        disputeId: updated.id,
         returnId: updated.returnId,
         outcome: args.outcome,
         customerRemedy: args.customerRemedy,
@@ -1133,6 +1454,88 @@ export class DisputeService {
       .catch(() => undefined);
 
     return updated;
+  }
+
+  /**
+   * Phase 126 — crash-recovery for the post-decision refund step.
+   *
+   * decide() commits the dispute status + `disputes.decided` outbox event
+   * in ONE transaction, then (outside the txn) creates the customer's
+   * RefundInstruction. A process crash in that window leaves a RESOLVED
+   * dispute whose customer is owed money but has no RefundInstruction —
+   * and no `disputes.decided` subscriber mints one (the mirror + the
+   * notification handlers don't move money). DisputeRefundRecoverySweepCron
+   * calls this for each such stranded dispute.
+   *
+   * Idempotent: createForDispute dedups on `dispute:${id}`, so a sweep
+   * racing a slow decide() can't double-refund. The customer resolution +
+   * unresolved-customer fallback mirror decide() exactly — the refund is
+   * NEVER routed to the dispute filer (see resolveCustomerForRefund).
+   *
+   * @returns 'created' (minted a missing instruction) | 'exists'
+   *   (already present) | 'skipped' (no customer-owed remedy / amount /
+   *   resolvable customer).
+   */
+  async ensureRefundInstructionForDecidedDispute(
+    disputeId: string,
+  ): Promise<'created' | 'exists' | 'skipped'> {
+    const dispute = await this.prisma.dispute.findUnique({
+      where: { id: disputeId },
+    });
+    if (!dispute) return 'skipped';
+
+    const amountInPaise = dispute.decisionAmountInPaise;
+    const remedy = dispute.customerRemedy;
+    // Only customer-owed remedies with a positive amount mint a refund —
+    // identical gate to decide()'s step 2.
+    if (!amountInPaise || amountInPaise <= 0) return 'skipped';
+    if (
+      remedy !== 'FULL_REFUND' &&
+      remedy !== 'PARTIAL_REFUND' &&
+      remedy !== 'GOODWILL_CREDIT'
+    ) {
+      return 'skipped';
+    }
+
+    // Already minted (by decide() or an earlier sweep)? createForDispute's
+    // own findUnique would also short-circuit, but checking here keeps the
+    // sweep's accounting honest (exists vs created) and avoids the log noise.
+    const existing = await this.prisma.refundInstruction.findUnique({
+      where: { idempotencyKey: `dispute:${dispute.id}` },
+    });
+    if (existing) return 'exists';
+
+    const refundCustomerId = await this.resolveCustomerForRefund(dispute);
+    if (!refundCustomerId) {
+      // Same recovery channel as decide()'s catch: an admin task so finance
+      // resolves it. Idempotent on (kind, sourceType, sourceId).
+      await this.ledger
+        .enqueueAdminTask({
+          kind: 'REFUND_INSTRUCTION_FAILED',
+          sourceType: 'DISPUTE',
+          sourceId: dispute.id,
+          reason:
+            'Recovery sweep could not resolve the order customer to credit ' +
+            '(refusing to route the refund to the dispute filer)',
+          slaHours: 24,
+        })
+        .catch(() => undefined);
+      return 'skipped';
+    }
+
+    await this.refundInstruction.createForDispute({
+      disputeId: dispute.id,
+      disputeNumber: dispute.disputeNumber,
+      customerId: refundCustomerId,
+      masterOrderId: dispute.masterOrderId,
+      amountInPaise,
+      customerRemedy: remedy as any,
+    });
+    this.logger.warn(
+      `Recovery: minted missing RefundInstruction for decided dispute ` +
+        `${dispute.disputeNumber} (₹${(amountInPaise / 100).toFixed(2)}, remedy=${remedy})`,
+    );
+    return 'created';
   }
 
   /**
@@ -1279,6 +1682,46 @@ export class DisputeService {
    * row. Best-effort: a ledger failure does NOT roll back the
    * dispute (the decision stands; ops sees an admin task).
    */
+  /**
+   * Resolve the customer who should receive a dispute refund — from the
+   * order/return graph, never the dispute filer. A seller- or admin-filed
+   * dispute resolved in the buyer's favour must credit the order's customer,
+   * not whoever opened the dispute. Falls back to filedById ONLY when the
+   * filer is themselves the customer and there is no order linkage.
+   */
+  private async resolveCustomerForRefund(dispute: {
+    returnId: string | null;
+    subOrderId: string | null;
+    masterOrderId: string | null;
+    filedByType: DisputeActorType;
+    filedById: string;
+  }): Promise<string | null> {
+    if (dispute.returnId) {
+      const ret = await this.prisma.return.findUnique({
+        where: { id: dispute.returnId },
+        select: { customerId: true },
+      });
+      if (ret?.customerId) return ret.customerId;
+    }
+    if (dispute.subOrderId) {
+      const sub = await this.prisma.subOrder.findUnique({
+        where: { id: dispute.subOrderId },
+        select: { masterOrder: { select: { customerId: true } } },
+      });
+      if (sub?.masterOrder?.customerId) return sub.masterOrder.customerId;
+    }
+    if (dispute.masterOrderId) {
+      const order = await this.prisma.masterOrder.findUnique({
+        where: { id: dispute.masterOrderId },
+        select: { customerId: true },
+      });
+      if (order?.customerId) return order.customerId;
+    }
+    // No order linkage — only a CUSTOMER filer's id is a real customer id.
+    if (dispute.filedByType === 'CUSTOMER') return dispute.filedById;
+    return null;
+  }
+
   private async recordLiabilityLedger(args: {
     dispute: {
       id: string;
@@ -1365,6 +1808,7 @@ export class DisputeService {
    * shouldn't happen but defensive).
    */
   private async updateLinkedReturnStatus(args: {
+    disputeId: string;
     returnId: string;
     outcome: DecisionArgs['outcome'];
     customerRemedy: DecisionArgs['customerRemedy'];
@@ -1387,27 +1831,81 @@ export class DisputeService {
       nextStatus = 'DISPUTE_OVERTURNED';
     }
 
-    try {
-      const ret = await this.prisma.return.findUnique({
-        where: { id: returnId },
-        select: { id: true, status: true },
-      });
-      if (!ret) return;
-      // Don't bother if the return is already in the same state — a
-      // duplicate decision (which the dup-guard above blocks anyway)
-      // would otherwise hit the FSM's no-self-transition rule.
-      if (ret.status === nextStatus) return;
-      await this.prisma.return.update({
-        where: { id: returnId },
-        data: { status: nextStatus },
-      });
+    const ret = await this.prisma.return.findUnique({
+      where: { id: returnId },
+      select: { id: true, status: true, version: true },
+    });
+    if (!ret) return;
+    // Idempotent: a duplicate decision (blocked upstream anyway) would
+    // otherwise re-apply the same state.
+    if (ret.status === nextStatus) return;
+
+    // Phase 129 — FSM allow-list. If the dispute outcome doesn't map to a
+    // legal move from the return's CURRENT state (e.g. the return is already
+    // terminal in a DISPUTE_* state from a prior decision), skip silently —
+    // that's benign, not a failure worth an ops task. This replaces a blind
+    // update that would happily write an illegal status, and matches the
+    // method's long-standing docstring intent.
+    if (!isTransitionAllowed('ReturnStatus', ret.status, nextStatus)) {
       this.logger.log(
-        `Return ${returnId} → ${nextStatus} (dispute outcome)`,
+        `Skipping linked-return ${returnId}: ${ret.status} → ${nextStatus} is not an allowed transition`,
       );
+      return;
+    }
+
+    try {
+      // Phase 129 — optimistic-lock CAS (Return has a `version` column),
+      // matching how decide() moves the dispute itself. A concurrent
+      // return-side writer now yields a ConflictAppException instead of a
+      // silent last-write-wins clobber.
+      await applyOptimisticTransition({
+        kind: 'ReturnStatus',
+        toStatus: nextStatus,
+        current: ret,
+        update: (where, statusPatch) =>
+          this.prisma.return.update({
+            where: { id: where.id, version: where.version } as any,
+            data: {
+              ...statusPatch,
+              status: statusPatch.status as ReturnStatus,
+            },
+          }),
+      });
+      this.logger.log(`Return ${returnId} → ${nextStatus} (dispute outcome)`);
+      // Audit the cross-module status change — the return side otherwise has
+      // no record that a dispute decision moved it.
+      this.audit
+        .writeAuditLog({
+          actorId: 'system',
+          action: 'return.status_changed_by_dispute',
+          module: 'disputes',
+          resource: 'return',
+          resourceId: returnId,
+          oldValue: { status: ret.status },
+          newValue: { status: nextStatus },
+          metadata: { disputeId: args.disputeId },
+        })
+        .catch(() => undefined);
     } catch (err) {
+      const raced = err instanceof ConflictAppException;
       this.logger.warn(
-        `Failed to update return ${returnId} status to ${nextStatus}: ${(err as Error).message}`,
+        `Linked-return ${returnId} update to ${nextStatus} ${
+          raced ? 'lost a version race' : 'failed'
+        }: ${(err as Error).message}`,
       );
+      // Escalate so a decided dispute can't silently leave its linked return
+      // out of sync — whether a race or a hard failure, ops reconciles.
+      await this.ledger
+        .enqueueAdminTask({
+          kind: 'OTHER',
+          sourceType: 'DISPUTE',
+          sourceId: args.disputeId,
+          reason: `Linked-return ${returnId} status update to ${nextStatus} ${
+            raced ? 'lost a version race' : 'failed'
+          }: ${(err as Error).message}`,
+          slaHours: 24,
+        })
+        .catch(() => undefined);
     }
   }
 
@@ -1419,6 +1917,21 @@ export class DisputeService {
     caption?: string;
     uploader: { type: DisputeActorType; id: string };
   }) {
+    // Phase 110 — the file must exist and (for CUSTOMER / SELLER uploaders)
+    // belong to them; otherwise a customer could attach another customer's
+    // upload, or an admin's internal file, to their dispute. Admins may attach
+    // any file (investigation evidence).
+    const file = await this.prisma.fileMetadata.findUnique({
+      where: { id: args.fileId },
+      select: { uploadedBy: true },
+    });
+    if (!file) throw new NotFoundAppException('Evidence file not found');
+    if (
+      (args.uploader.type === 'CUSTOMER' || args.uploader.type === 'SELLER') &&
+      file.uploadedBy !== args.uploader.id
+    ) {
+      throw new ForbiddenAppException('Evidence file does not belong to you');
+    }
     return this.prisma.disputeEvidence.create({
       data: {
         disputeId: args.disputeId,

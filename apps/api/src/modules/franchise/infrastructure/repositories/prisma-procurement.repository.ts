@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { ProcurementRepository } from '../../domain/repositories/procurement.repository.interface';
 
@@ -12,8 +13,9 @@ export class PrismaProcurementRepository implements ProcurementRepository {
     });
   }
 
-  async findByIdWithItems(id: string): Promise<any | null> {
-    const request = await this.prisma.procurementRequest.findUnique({
+  async findByIdWithItems(id: string, tx?: Prisma.TransactionClient): Promise<any | null> {
+    const client = tx ?? this.prisma;
+    const request = await client.procurementRequest.findUnique({
       where: { id },
       include: {
         items: {
@@ -210,8 +212,13 @@ export class PrismaProcurementRepository implements ProcurementRepository {
     });
   }
 
-  async update(id: string, data: Record<string, unknown>): Promise<any> {
-    return this.prisma.procurementRequest.update({
+  async update(
+    id: string,
+    data: Record<string, unknown>,
+    tx?: Prisma.TransactionClient,
+  ): Promise<any> {
+    const client = tx ?? this.prisma;
+    return client.procurementRequest.update({
       where: { id },
       data,
       include: {
@@ -255,15 +262,18 @@ export class PrismaProcurementRepository implements ProcurementRepository {
   async updateItem(
     itemId: string,
     data: Record<string, unknown>,
+    tx?: Prisma.TransactionClient,
   ): Promise<any> {
-    return this.prisma.procurementRequestItem.update({
+    const client = tx ?? this.prisma;
+    return client.procurementRequestItem.update({
       where: { id: itemId },
       data,
     });
   }
 
-  async findItemById(itemId: string): Promise<any | null> {
-    return this.prisma.procurementRequestItem.findUnique({
+  async findItemById(itemId: string, tx?: Prisma.TransactionClient): Promise<any | null> {
+    const client = tx ?? this.prisma;
+    return client.procurementRequestItem.findUnique({
       where: { id: itemId },
     });
   }
@@ -283,43 +293,52 @@ export class PrismaProcurementRepository implements ProcurementRepository {
     return `SM-PO-${year}-${paddedNumber}`;
   }
 
-  async calculateTotals(id: string): Promise<{
-    totalRequestedAmount: number;
-    totalApprovedAmount: number;
-    procurementFeeAmount: number;
-    finalPayableAmount: number;
+  async calculateTotals(id: string, tx?: Prisma.TransactionClient): Promise<{
+    totalRequestedAmount: Prisma.Decimal;
+    totalApprovedAmount: Prisma.Decimal;
+    procurementFeeAmount: Prisma.Decimal;
+    finalPayableAmount: Prisma.Decimal;
   }> {
-    const request = await this.prisma.procurementRequest.findUnique({
+    const client = tx ?? this.prisma;
+    const zero = new Prisma.Decimal(0);
+    const request = await client.procurementRequest.findUnique({
       where: { id },
       include: { items: true },
     });
 
     if (!request) {
       return {
-        totalRequestedAmount: 0,
-        totalApprovedAmount: 0,
-        procurementFeeAmount: 0,
-        finalPayableAmount: 0,
+        totalRequestedAmount: zero,
+        totalApprovedAmount: zero,
+        procurementFeeAmount: zero,
+        finalPayableAmount: zero,
       };
     }
 
-    let totalApprovedAmount = 0;
-    let procurementFeeAmount = 0;
-    let finalPayableAmount = 0;
+    let totalApprovedAmount = new Prisma.Decimal(0);
+    let procurementFeeAmount = new Prisma.Decimal(0);
+    let finalPayableAmount = new Prisma.Decimal(0);
 
     for (const item of request.items) {
-      const landedCost = Number(item.landedUnitCost ?? 0);
-      const feePerUnit = Number(item.procurementFeePerUnit ?? 0);
-      const finalUnitCost = Number(item.finalUnitCostToFranchise ?? 0);
+      const landedCost = new Prisma.Decimal(item.landedUnitCost ?? 0);
+      const feePerUnit = new Prisma.Decimal(item.procurementFeePerUnit ?? 0);
+      const finalUnitCost = new Prisma.Decimal(item.finalUnitCostToFranchise ?? 0);
+
+      // Phase 159p (audit #14) — ONE denominator for all three aggregates so
+      // finalPayable == totalApproved + procurementFee always holds. Bill the
+      // received quantity once any units have been received (pay-on-receipt),
+      // otherwise the approved quantity (the pre-receipt estimate). Previously
+      // totalApproved used approvedQty while the other two used the
+      // received-or-approved qty, so the books drifted after a partial receipt.
       const qty = item.receivedQty > 0 ? item.receivedQty : item.approvedQty;
 
-      totalApprovedAmount += landedCost * item.approvedQty;
-      procurementFeeAmount += feePerUnit * qty;
-      finalPayableAmount += finalUnitCost * qty;
+      totalApprovedAmount = totalApprovedAmount.plus(landedCost.times(qty));
+      procurementFeeAmount = procurementFeeAmount.plus(feePerUnit.times(qty));
+      finalPayableAmount = finalPayableAmount.plus(finalUnitCost.times(qty));
     }
 
     return {
-      totalRequestedAmount: 0, // Requested amount is not priced yet at request time
+      totalRequestedAmount: zero, // Not priced at request time
       totalApprovedAmount,
       procurementFeeAmount,
       finalPayableAmount,

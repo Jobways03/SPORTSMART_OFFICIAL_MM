@@ -15,8 +15,7 @@ import {
  * physically progress the order. Failed / Cancelled are available at
  * any pre-delivered state via the menu.
  *
- * The picker only renders if the order is on the SELF_DELIVERY path;
- * iThink shipments use courier tracking and no manual buttons.
+ * The picker only renders if the order is on the SELF_DELIVERY path.
  */
 export interface SelfDeliveryStatusButtonsProps {
   subOrderId: string;

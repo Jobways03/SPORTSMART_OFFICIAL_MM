@@ -1,19 +1,29 @@
 import {
+  Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
   Param,
+  Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
+import { StockMovementKind } from '@prisma/client';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { InventoryManagementService } from '../../application/services/inventory-management.service';
+import { AdminAdjustStockDto } from '../dtos/inventory-adjust.dto';
 
 @ApiTags('Admin Inventory')
 @Controller('admin/inventory')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('nova.read')
 export class AdminInventoryController {
   constructor(
     private readonly inventoryService: InventoryManagementService,
@@ -206,6 +216,54 @@ export class AdminInventoryController {
           totalPages: Math.ceil(result.total / limitNum),
         },
       },
+    };
+  }
+
+  /**
+   * POST /admin/inventory/mappings/:mappingId/adjust-stock
+   *
+   * Phase 53 (2026-05-21) — admin-driven stock adjustment. Pre-Phase-53
+   * the admin had NO API to correct seller inventory (audit Gap #3).
+   * Now: requires inventory.adjust permission, mandatory reason,
+   * optional kind selector. WRITE_OFF kind additionally requires
+   * inventory.adjust.write_off (higher-tier signoff).
+   *
+   * The service runs the change inside a SELECT FOR UPDATE
+   * transaction with the floor check + ledger write, so admin
+   * adjustments are race-safe and forensically traceable.
+   */
+  @Post('mappings/:mappingId/adjust-stock')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('inventory.adjust')
+  @Idempotent()
+  async adjustMappingStock(
+    @Param('mappingId') mappingId: string,
+    @Body() dto: AdminAdjustStockDto,
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId as string | undefined;
+    const adminPerms = ((req as any).adminPermissions ?? []) as string[];
+
+    if (
+      dto.kind === StockMovementKind.WRITE_OFF &&
+      !adminPerms.includes('inventory.adjust.write_off')
+    ) {
+      throw new ForbiddenException(
+        'inventory.adjust.write_off permission required for WRITE_OFF kind',
+      );
+    }
+
+    const result = await this.inventoryService.adjustForAdmin(
+      mappingId,
+      dto.adjustment,
+      dto.reason,
+      adminId ?? 'unknown-admin',
+      dto.kind,
+    );
+    return {
+      success: true,
+      message: `Stock adjusted by ${dto.adjustment > 0 ? '+' : ''}${dto.adjustment}`,
+      data: result,
     };
   }
 

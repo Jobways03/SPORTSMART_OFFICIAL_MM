@@ -41,7 +41,16 @@ interface SellerProfile {
   gstin?: string | null;
   gstStateCode?: string | null;
   gstRegistrationType?: GstType | null;
+  /**
+   * Phase 19 (2026-05-20) — API no longer returns the full PAN. The
+   * onboarding page used to read panNumber from the profile to
+   * pre-fill the form on resubmit (post-reject). After Phase 19,
+   * panNumber is undefined; we keep the field on the type so old
+   * cached data still parses, and the form lets the seller re-enter
+   * the full PAN on resubmit (the API cross-checks against GSTIN).
+   */
   panNumber?: string | null;
+  panLast4?: string | null;
   registeredBusinessAddressJson?: {
     line1?: string;
     line2?: string;
@@ -55,7 +64,16 @@ interface SellerProfile {
   state?: string | null;
   country?: string | null;
   sellerZipCode?: string | null;
+  /**
+   * Phase 19 (2026-05-20) — kept for back-compat with rows that still
+   * carry a value in the legacy column. New rejections write to
+   * `kycRejectionReason` instead.
+   */
   gstVerificationNotes?: string | null;
+  kycRejectionReason?: string | null;
+  kycApprovalNotes?: string | null;
+  kycReviewedAt?: string | null;
+  lastProfileUpdatedAt?: string | null;
 }
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -137,6 +155,15 @@ export default function SellerOnboardingPage() {
       setError((err as Error).message || 'Failed to load profile');
     } finally {
       setLoading(false);
+    }
+    // Phase 19 (2026-05-20) — notify the dashboard layout (and any
+    // other tab) to re-read the profile so banners + sidebar gating
+    // refresh without a hard navigation. The layout listens for this
+    // event; absence of a listener is a no-op.
+    try {
+      window.dispatchEvent(new Event('seller-profile-updated'));
+    } catch {
+      // SSR / no-DOM environments
     }
   }, []);
 
@@ -362,10 +389,15 @@ export default function SellerOnboardingPage() {
               <span className="onboarding__rej-tag">Previously rejected</span>
             )}
           </h2>
-          {profile.verificationStatus === 'REJECTED' && profile.gstVerificationNotes && (
+          {profile.verificationStatus === 'REJECTED' &&
+            (profile.kycRejectionReason || profile.gstVerificationNotes) && (
             <div className="onboarding__reject-box">
               <strong>Admin's reason:</strong>
-              <p>{profile.gstVerificationNotes}</p>
+              {/* Phase 19 (2026-05-20) — read from the dedicated
+                  kycRejectionReason column first; fall back to the
+                  legacy overloaded gstVerificationNotes for rows
+                  that haven't been re-rejected post-migration. */}
+              <p>{profile.kycRejectionReason ?? profile.gstVerificationNotes}</p>
               <p className="onboarding__hint">
                 Fix the issue below and re-submit. The reviewer will see the
                 same form again.
@@ -655,10 +687,54 @@ export default function SellerOnboardingPage() {
             (usually within 2-3 business days). You can keep this page open
             or check back later.
           </p>
+
+          {/* Phase 19 (2026-05-20) — read-only submission summary so the
+              seller can verify what's in admin review without leaving
+              the page. PAN is shown as last-4 only; the full value is
+              never returned by the API. */}
+          <div
+            style={{
+              marginTop: 16,
+              padding: 16,
+              background: '#f9fafb',
+              border: '1px solid #e5e7eb',
+              borderRadius: 8,
+              fontSize: 13,
+              color: '#374151',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 8, color: '#111827' }}>
+              Submitted details
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>Legal business name:</strong>{' '}
+              {profile.legalBusinessName ?? '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>GSTIN:</strong> {profile.gstin ?? '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>PAN:</strong>{' '}
+              {profile.panLast4 ? `XXXXXX${profile.panLast4}` : '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>Store address:</strong>{' '}
+              {profile.storeAddress
+                ? `${profile.storeAddress}, ${profile.city ?? ''} ${profile.state ?? ''} ${profile.sellerZipCode ?? ''}`
+                : '—'}
+            </div>
+            {profile.lastProfileUpdatedAt && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
+                Submitted {new Date(profile.lastProfileUpdatedAt).toLocaleString()}
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             onClick={loadProfile}
             className="onboarding__btn onboarding__btn--ghost"
+            style={{ marginTop: 16 }}
           >
             Refresh status
           </button>

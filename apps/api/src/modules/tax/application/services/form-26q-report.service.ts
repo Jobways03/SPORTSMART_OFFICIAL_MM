@@ -18,9 +18,12 @@
 // confirms the integration path. Today, ops imports this CSV into
 // the RPU manually.
 
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { Tds194OService } from './tds-194o.service';
+// Phase 159g — shared CSV escaper with the formula-injection guard. The local
+// csvCell below was RFC-4180-only (no = + - @ guard) — a live injection vuln.
+import { escapeCsvField } from '../../../../core/utils/csv.util';
 import {
   renderForm16AHtml,
   type Form16AInput,
@@ -149,21 +152,28 @@ export class Form26QReportService {
    * only file (NIL return — still must be filed per CBDT).
    */
   async generateCsv(filingPeriod: string): Promise<string> {
+    // Phase 159g — reject a malformed period instead of silently returning an
+    // empty CSV (which an operator could mistake for a NIL return).
+    if (!/^\d{4}-Q[1-4]$/.test(filingPeriod)) {
+      throw new BadRequestException('filingPeriod must be YYYY-Qn (e.g. 2026-Q1).');
+    }
     const rows = await this.tds.listForPeriod(filingPeriod);
-    const lines = [Form26QReportService.CSV_HEADER.join(',')];
+    const lines = [Form26QReportService.CSV_HEADER.map((h) => escapeCsvField(h)).join(',')];
     for (const r of rows) {
+      // Phase 159g — escapeCsvField adds the formula-injection guard. The
+      // highest-risk cell is sellerLegalName (seller-controlled at registration).
       const cells = [
-        csvCell(r.sellerPanNumber ?? ''),
-        csvCell(r.sellerLegalName ?? ''),
+        escapeCsvField(r.sellerPanNumber ?? ''),
+        escapeCsvField(r.sellerLegalName ?? ''),
         '194O',
-        csvCell(r.filingPeriod),
+        escapeCsvField(r.filingPeriod),
         paiseToRupees(r.netSaleInPaise),
-        ((r.tdsRateBps / 100).toFixed(2)),
+        (r.tdsRateBps / 100).toFixed(2),
         paiseToRupees(r.tdsInPaise),
-        csvCell(r.challanReference ?? ''),
+        escapeCsvField(r.challanReference ?? ''),
         r.depositedAt ? formatIstDate(r.depositedAt) : '',
-        csvCell(r.certificateNumber ?? ''),
-        csvCell(r.status),
+        escapeCsvField(r.certificateNumber ?? ''),
+        escapeCsvField(r.status),
       ];
       lines.push(cells.join(','));
     }
@@ -216,15 +226,8 @@ export class Form26QReportService {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
-
-/** RFC-4180 CSV cell — quote if comma/quote/newline; double inner quotes. */
-function csvCell(value: string): string {
-  if (value === '') return '';
-  if (/[,"\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
+// Phase 159g — the local csvCell was removed in favour of the shared
+// core/utils/csv.util escapeCsvField (adds the formula-injection guard).
 
 function paiseToRupees(p: bigint): string {
   const negative = p < 0n;

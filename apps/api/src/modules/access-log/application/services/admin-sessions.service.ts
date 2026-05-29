@@ -2,13 +2,18 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
-// Cross-table session representation. The four session tables (admins,
-// users, sellers, franchises) all have the same essential shape but
-// different foreign-key columns, so we project them into one row type
-// before returning so the FE doesn't need 4 separate fetches.
+// Cross-table session representation. The five session tables (admins,
+// users, sellers, franchises, affiliates) all have the same essential
+// shape but different foreign-key columns, so we project them into one
+// row type before returning so the FE doesn't need 5 separate fetches.
+// Phase 27 (2026-05-21) — AFFILIATE added. Pre-Phase-27 the surface
+// covered 4 actors only, leaving affiliate sessions unrevocable from
+// the admin UI despite the table being fully populated by login + the
+// guard validating revokedAt (Phase 22). Affiliates handle commission
+// payouts so out-of-band session compromise is real.
 export interface ActiveSessionRow {
   id: string;
-  actorType: 'ADMIN' | 'USER' | 'SELLER' | 'FRANCHISE';
+  actorType: 'ADMIN' | 'USER' | 'SELLER' | 'FRANCHISE' | 'AFFILIATE';
   actorId: string;
   actorEmail: string | null;
   actorName: string | null;
@@ -72,7 +77,7 @@ export class AdminSessionsService {
     // result is already sorted+limited per-source.
     const want = (t: ActorType) => !filters.actorType || filters.actorType === t;
 
-    const [adminRows, userRows, sellerRows, franchiseRows] = await Promise.all([
+    const [adminRows, userRows, sellerRows, franchiseRows, affiliateRows] = await Promise.all([
       want('ADMIN')
         ? this.prisma.adminSession.findMany({
             where: activeWhere(filters.actorId ? { adminId: filters.actorId } : {}),
@@ -117,6 +122,25 @@ export class AdminSessionsService {
             include: {
               franchisePartner: {
                 select: { id: true, email: true, businessName: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      // Phase 27 (2026-05-21) — affiliate fan-out, parity with the
+      // other 4 actor tables.
+      want('AFFILIATE')
+        ? this.prisma.affiliateSession.findMany({
+            where: activeWhere(filters.actorId ? { affiliateId: filters.actorId } : {}),
+            orderBy: { createdAt: 'desc' },
+            take: limit,
+            include: {
+              affiliate: {
+                select: {
+                  id: true,
+                  email: true,
+                  firstName: true,
+                  lastName: true,
+                },
               },
             },
           })
@@ -172,6 +196,21 @@ export class AdminSessionsService {
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
       })),
+      ...affiliateRows.map((s: any) => ({
+        id: s.id,
+        actorType: 'AFFILIATE' as const,
+        actorId: s.affiliateId,
+        actorEmail: s.affiliate?.email ?? null,
+        actorName:
+          [s.affiliate?.firstName, s.affiliate?.lastName]
+            .filter(Boolean)
+            .join(' ') || null,
+        actorRole: null,
+        ipAddress: s.ipAddress,
+        userAgent: s.userAgent,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+      })),
     ];
 
     rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -200,6 +239,17 @@ export class AdminSessionsService {
     const now = new Date();
     let actorId: string | null = null;
 
+    // Phase 27 (2026-05-21) — stamp revoker + reason directly on the
+    // session row in addition to the AuditLog write below. The audit
+    // log remains the canonical record (hash-chained, tamper-evident);
+    // the row-level columns make "who killed this session and why?"
+    // answerable via a single SELECT without joining audit_logs.
+    const revokeData = {
+      revokedAt: now,
+      revokedBy: args.revokedByAdminId,
+      revocationReason: args.reason ?? null,
+    } as const;
+
     switch (args.actorType) {
       case 'ADMIN': {
         const row = await this.prisma.adminSession.findUnique({
@@ -219,7 +269,7 @@ export class AdminSessionsService {
         }
         await this.prisma.adminSession.update({
           where: { id: args.sessionId },
-          data: { revokedAt: now, stepUpVerifiedAt: null },
+          data: { ...revokeData, stepUpVerifiedAt: null },
         });
         actorId = row.adminId;
         break;
@@ -235,7 +285,7 @@ export class AdminSessionsService {
         }
         await this.prisma.session.update({
           where: { id: args.sessionId },
-          data: { revokedAt: now },
+          data: revokeData,
         });
         actorId = row.userId;
         break;
@@ -251,7 +301,7 @@ export class AdminSessionsService {
         }
         await this.prisma.sellerSession.update({
           where: { id: args.sessionId },
-          data: { revokedAt: now },
+          data: revokeData,
         });
         actorId = row.sellerId;
         break;
@@ -267,9 +317,26 @@ export class AdminSessionsService {
         }
         await this.prisma.franchiseSession.update({
           where: { id: args.sessionId },
-          data: { revokedAt: now },
+          data: revokeData,
         });
         actorId = row.franchisePartnerId;
+        break;
+      }
+      // Phase 27 (2026-05-21) — affiliate single-session revoke.
+      case 'AFFILIATE': {
+        const row = await this.prisma.affiliateSession.findUnique({
+          where: { id: args.sessionId },
+          select: { affiliateId: true, revokedAt: true },
+        });
+        if (!row) throw new NotFoundException('Session not found');
+        if (row.revokedAt) {
+          return { revoked: true, sessionId: args.sessionId, actorType: 'AFFILIATE', actorId: row.affiliateId };
+        }
+        await this.prisma.affiliateSession.update({
+          where: { id: args.sessionId },
+          data: revokeData,
+        });
+        actorId = row.affiliateId;
         break;
       }
     }
@@ -319,11 +386,18 @@ export class AdminSessionsService {
       );
     }
 
+    // Phase 27 (2026-05-21) — same revoker + reason stamp as revokeOne.
+    const bulkRevokeData = {
+      revokedAt: now,
+      revokedBy: args.revokedByAdminId,
+      revocationReason: args.reason ?? null,
+    } as const;
+
     switch (args.actorType) {
       case 'ADMIN': {
         const r = await this.prisma.adminSession.updateMany({
           where: { adminId: args.actorId, revokedAt: null },
-          data: { revokedAt: now, stepUpVerifiedAt: null },
+          data: { ...bulkRevokeData, stepUpVerifiedAt: null },
         });
         count = r.count;
         break;
@@ -331,7 +405,7 @@ export class AdminSessionsService {
       case 'USER': {
         const r = await this.prisma.session.updateMany({
           where: { userId: args.actorId, revokedAt: null },
-          data: { revokedAt: now },
+          data: bulkRevokeData,
         });
         count = r.count;
         break;
@@ -339,7 +413,7 @@ export class AdminSessionsService {
       case 'SELLER': {
         const r = await this.prisma.sellerSession.updateMany({
           where: { sellerId: args.actorId, revokedAt: null },
-          data: { revokedAt: now },
+          data: bulkRevokeData,
         });
         count = r.count;
         break;
@@ -347,7 +421,15 @@ export class AdminSessionsService {
       case 'FRANCHISE': {
         const r = await this.prisma.franchiseSession.updateMany({
           where: { franchisePartnerId: args.actorId, revokedAt: null },
-          data: { revokedAt: now },
+          data: bulkRevokeData,
+        });
+        count = r.count;
+        break;
+      }
+      case 'AFFILIATE': {
+        const r = await this.prisma.affiliateSession.updateMany({
+          where: { affiliateId: args.actorId, revokedAt: null },
+          data: bulkRevokeData,
         });
         count = r.count;
         break;

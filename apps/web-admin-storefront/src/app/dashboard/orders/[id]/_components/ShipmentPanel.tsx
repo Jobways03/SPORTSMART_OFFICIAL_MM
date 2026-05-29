@@ -336,7 +336,7 @@ function AttachShipmentForm({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
       <div style={{ color: '#6b7280' }}>
-        No shipment recorded yet. Attach courier + AWB manually when iThink/Shiprocket isn't in the loop.
+        No shipment recorded yet. Attach courier + AWB manually when Shiprocket isn't in the loop.
       </div>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <input

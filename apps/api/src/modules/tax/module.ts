@@ -26,6 +26,10 @@ import { SettlementsModule } from '../settlements/module';
 // already imports Tax, so we use a forwardRef to break the cycle.
 import { CartModule } from '../cart/module';
 import { CheckoutModule } from '../checkout/module';
+// Phase 65 (2026-05-22) — server-side coupon resolution in the tax
+// preview (audit Gap #1). forwardRef to break the implicit cycle
+// since DiscountsModule already imports TaxModule via TaxPreviewService.
+import { DiscountsModule } from '../discounts/discounts.module';
 import { forwardRef } from '@nestjs/common';
 import {
   AdminAuthGuard,
@@ -43,6 +47,9 @@ import { CreditNoteEligibilityService } from './application/services/credit-note
 import { WalletAdjustmentService } from './application/services/wallet-adjustment.service';
 import { LegacyReceiptService } from './application/services/legacy-receipt.service';
 import { EWayBillService } from './application/services/eway-bill.service';
+// Phase 89 (2026-05-23) — retry + expiry sweeps.
+import { EWayBillRetryCron } from './application/jobs/eway-bill-retry.cron';
+import { EWayBillExpiryCron } from './application/jobs/eway-bill-expiry.cron';
 import { TcsService } from './application/services/tcs.service';
 import { Gstr8ReportService } from './application/services/gstr8-report.service';
 import { Gstr1ReportService } from './application/services/gstr1-report.service';
@@ -87,6 +94,8 @@ import {
   type EInvoiceProvider,
 } from './infrastructure/einvoice/einvoice-provider';
 import { StubEInvoiceProvider } from './infrastructure/einvoice/stub-einvoice-provider';
+// Phase 90 (2026-05-23) — Gap #2 NIC IRP adapter.
+import { NicEInvoiceProvider } from './infrastructure/einvoice/nic-einvoice-provider';
 import {
   TAX_PDF_STORAGE_PROVIDER,
   type TaxPdfStorageProvider,
@@ -97,6 +106,8 @@ import {
   type EWayBillProvider,
 } from './infrastructure/eway-bill/eway-bill-provider';
 import { StubEWayBillProvider } from './infrastructure/eway-bill/stub-eway-bill-provider';
+// Phase 89 (2026-05-23) — Gap #1 NIC adapter.
+import { NicEWayBillProvider } from './infrastructure/eway-bill/nic-eway-bill-provider';
 import {
   GSTN_PROVIDER,
   type GstnProvider,
@@ -105,25 +116,30 @@ import { StubGstnProvider } from './infrastructure/gstn/stub-gstn-provider';
 import { GstnVerificationService } from './application/services/gstn-verification.service';
 import { EnvService } from '../../bootstrap/env/env.service';
 
-// Phase 15 — Provider selector. Stub-only for now; the NIC adapter
-// lands in a later phase tied to the e-invoicing decision (CA confirms
-// timing). Switching is by env (EWAY_BILL_PROVIDER), not code.
+// Phase 89 (2026-05-23) — Gap #1 / #2. Provider selector with:
+//   • Real NIC adapter (NicEWayBillProvider) for `nic`
+//   • Stub-in-prod refusal: NODE_ENV=production + stub = crash at boot
+//     so a misconfigured deploy never mints `EWB-STUB-{uuid}` fake
+//     numbers under the CGST Rule 138 fraud blast radius.
 const ewayBillProvider = {
   provide: EWAY_BILL_PROVIDER,
   useFactory: (env: EnvService): EWayBillProvider => {
     const choice = env.getString('EWAY_BILL_PROVIDER', 'stub');
+    const nodeEnv = env.getString('NODE_ENV', 'development');
+    if (choice === 'stub' && nodeEnv === 'production') {
+      throw new Error(
+        "EWAY_BILL_PROVIDER='stub' is unsafe in production — the stub mints " +
+          "fake EWB-STUB-{uuid} numbers which under CGST Rule 138 + §122 is " +
+          "GST fraud. Set EWAY_BILL_PROVIDER=nic with NIC_* credentials.",
+      );
+    }
     switch (choice) {
       case 'stub':
         return new StubEWayBillProvider();
       case 'nic':
-        // Real adapter is intentionally not wired yet — refuse loudly
-        // so a deployment that flips the flag without finishing the
-        // NIC integration crashes at boot instead of silently calling
-        // the stub in production.
-        throw new Error(
-          "EWAY_BILL_PROVIDER='nic' selected but NicEWayBillProvider is " +
-            'not yet implemented. Set EWAY_BILL_PROVIDER=stub or wire NIC.',
-        );
+        // Phase 89 — Gap #1 closure. Real adapter; refuses to
+        // construct without all NIC_* env vars set.
+        return new NicEWayBillProvider(env);
       default:
         throw new Error(`Unknown EWAY_BILL_PROVIDER='${choice}'`);
     }
@@ -131,20 +147,30 @@ const ewayBillProvider = {
   inject: [EnvService],
 };
 
-// Phase 22 — E-invoice provider selector. Same crash-loudly pattern:
-// 'nic' refuses at boot until the real NIC IRP adapter is wired.
+// Phase 90 (2026-05-23) — Gap #2 / #3.
+// Provider selector. Real NIC IRP adapter for 'nic'; stub-in-prod
+// refusal: NODE_ENV=production + stub = crash at boot so the deploy
+// never mints fake IRNs which under CGST §122 is GST fraud + buyer
+// ITC denial.
 const einvoiceProvider = {
   provide: EINVOICE_PROVIDER,
   useFactory: (env: EnvService): EInvoiceProvider => {
     const choice = env.getString('EINVOICE_PROVIDER', 'stub');
+    const nodeEnv = env.getString('NODE_ENV', 'development');
+    if (choice === 'stub' && nodeEnv === 'production') {
+      throw new Error(
+        "EINVOICE_PROVIDER='stub' is unsafe in production — the stub mints " +
+          "SHA-256-derived IRNs that resemble NIC's format but are NOT " +
+          "valid CBIC IRNs. Customer invoices would carry forged IRNs = " +
+          "§122 penalty + buyer ITC denial. Set EINVOICE_PROVIDER=nic with " +
+          "NIC_IRP_* credentials.",
+      );
+    }
     switch (choice) {
       case 'stub':
         return new StubEInvoiceProvider();
       case 'nic':
-        throw new Error(
-          "EINVOICE_PROVIDER='nic' selected but NicEInvoiceProvider is " +
-            'not yet implemented. Set EINVOICE_PROVIDER=stub or wire NIC IRP.',
-        );
+        return new NicEInvoiceProvider(env);
       default:
         throw new Error(`Unknown EINVOICE_PROVIDER='${choice}'`);
     }
@@ -207,6 +233,9 @@ const taxPdfStorageProvider = {
     forwardRef(() => SettlementsModule),
     CartModule,
     forwardRef(() => CheckoutModule),
+    // Phase 65 (2026-05-22) — DiscountsModule for server-side
+    // coupon resolution in the tax preview (audit Gap #1).
+    forwardRef(() => DiscountsModule),
   ],
   controllers: [
     CustomerTaxDocumentsController,
@@ -241,6 +270,8 @@ const taxPdfStorageProvider = {
     LegacyReceiptService,
     EWayBillService,
     ewayBillProvider,
+    EWayBillRetryCron,
+    EWayBillExpiryCron,
     TcsService,
     Gstr8ReportService,
     Gstr1ReportService,

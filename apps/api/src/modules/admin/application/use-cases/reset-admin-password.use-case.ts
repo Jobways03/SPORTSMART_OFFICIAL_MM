@@ -5,6 +5,7 @@ import {
   BadRequestAppException,
   UnauthorizedAppException,
 } from '../../../../core/exceptions';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   AdminRepository,
   ADMIN_REPOSITORY,
@@ -13,6 +14,8 @@ import {
 interface ResetAdminPasswordInput {
   resetToken: string;
   newPassword: string;
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 @Injectable()
@@ -23,12 +26,14 @@ export class ResetAdminPasswordUseCase {
     @Inject(ADMIN_REPOSITORY)
     private readonly adminRepo: AdminRepository,
     private readonly logger: AppLoggerService,
+    // Phase 26 (2026-05-20) — audit every reset completion.
+    private readonly audit: AuditPublicFacade,
   ) {
     this.logger.setContext('ResetAdminPasswordUseCase');
   }
 
   async execute(input: ResetAdminPasswordInput): Promise<void> {
-    const { resetToken, newPassword } = input;
+    const { resetToken, newPassword, ipAddress, userAgent } = input;
 
     if (!resetToken) {
       throw new BadRequestAppException('resetToken is required');
@@ -79,5 +84,21 @@ export class ResetAdminPasswordUseCase {
     });
 
     this.logger.log(`Admin password reset for: ${otpRecord.admin.id}`);
+    this.audit
+      .writeAuditLog({
+        actorId: otpRecord.admin.id,
+        actorRole: 'ADMIN',
+        action: 'ADMIN_PASSWORD_RESET_COMPLETED',
+        module: 'admin-auth',
+        resource: 'Admin',
+        resourceId: otpRecord.admin.id,
+        ipAddress,
+        userAgent,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Failed to audit ADMIN_PASSWORD_RESET_COMPLETED for ${otpRecord.admin!.id}: ${(err as Error)?.message}`,
+        ),
+      );
   }
 }

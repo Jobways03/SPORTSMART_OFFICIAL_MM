@@ -34,6 +34,15 @@ import { CronInstrumentationService } from '../../../../core/cron-observability/
  * The ledger approach is correct for the franchise model (inventory
  * is journaled by movement type) — adding a parallel `expiresAt`
  * column would duplicate the source of truth.
+ *
+ * Phase 159p (audit #3) — the scan alone was unsafe: it could not tell a
+ * committed order's hold from an abandoned cart, so it released
+ * committed-but-unshipped reservations (oversell). The reserve now carries a
+ * correlation id (`referenceId`) that is also stamped onto
+ * `OrderItem.stockReservationId` at order placement. `cleanup()` therefore
+ * releases a reservation ONLY when it is uncorrelated to any placed order AND
+ * has no release/ship follow-up — i.e. a genuine abandoned-cart hold. Anything
+ * tied to a placed order is left to that order's own lifecycle.
  */
 @Injectable()
 export class FranchiseReservationCleanupService {
@@ -111,7 +120,33 @@ export class FranchiseReservationCleanupService {
 
     let releasedCount = 0;
     for (const reservation of expiredReservations) {
-      // Check if this reservation was already released or confirmed
+      // Phase 159p (audit #3) — a reservation row with no correlation id
+      // predates the lifecycle fix and can't be safely classified as committed
+      // vs abandoned. Skip it: a leaked straggler is a one-off for an operator
+      // to clear, whereas releasing a committed hold is a customer-facing
+      // oversell. (New reservations always carry a referenceId.)
+      if (!reservation.referenceId) {
+        this.logger.warn(
+          `Skipping franchise reservation ${reservation.id} — no correlation id (pre-159p); needs manual review`,
+        );
+        continue;
+      }
+
+      // Phase 159p (audit #3) — THE oversell fix. If this reservation is linked
+      // to a placed order (its correlation id is stamped on an OrderItem), the
+      // order's own lifecycle owns the stock — shipment consumes the hold,
+      // cancellation releases it. The sweeper must never touch it. Pre-159p the
+      // cron released committed-but-unshipped holds because it couldn't see this
+      // link, freeing stock that a paid order still needed → oversell.
+      const placedOrderItem = await this.prisma.orderItem.findFirst({
+        where: { stockReservationId: reservation.referenceId },
+        select: { id: true },
+      });
+      if (placedOrderItem) continue;
+
+      // No order was ever placed → abandoned checkout. It may already have been
+      // released by a checkout re-run / placeOrder rollback; the follow-up
+      // (now correlated by the shared id) prevents a double release.
       const followUp = await this.prisma.franchiseInventoryLedger.findFirst({
         where: {
           franchiseId: reservation.franchiseId,
@@ -121,21 +156,20 @@ export class FranchiseReservationCleanupService {
           referenceId: reservation.referenceId,
         },
       });
+      if (followUp) continue;
 
-      if (!followUp) {
-        // No follow-up found -- reservation is stale, release it
-        try {
-          await this.inventoryService.unreserveStock(
-            reservation.franchiseId,
-            reservation.productId,
-            reservation.variantId,
-            Math.abs(reservation.quantityDelta),
-            reservation.referenceId || undefined,
-          );
-          releasedCount++;
-        } catch (err) {
-          this.logger.warn(`Failed to release stale reservation: ${(err as Error).message}`);
-        }
+      // Genuinely stale abandoned-cart hold — release it.
+      try {
+        await this.inventoryService.unreserveStock(
+          reservation.franchiseId,
+          reservation.productId,
+          reservation.variantId,
+          Math.abs(reservation.quantityDelta),
+          reservation.referenceId || undefined,
+        );
+        releasedCount++;
+      } catch (err) {
+        this.logger.warn(`Failed to release stale reservation: ${(err as Error).message}`);
       }
     }
 

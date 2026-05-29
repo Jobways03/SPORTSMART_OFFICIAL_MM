@@ -21,11 +21,11 @@ enum WebhookEndpointStatus {
 }
 
 enum WebhookDeliveryStatus {
-  PENDING        // awaiting first attempt
-  IN_PROGRESS    // attempt running
+  PENDING // awaiting first attempt
+  IN_PROGRESS // attempt running
   SUCCEEDED
-  FAILED_RETRY   // failed, scheduled for retry
-  FAILED_DEAD    // exhausted all retries
+  FAILED_RETRY // failed, scheduled for retry
+  FAILED_DEAD // exhausted all retries
 }
 
 model WebhookEndpoint {
@@ -60,7 +60,7 @@ model WebhookEndpoint {
   retrySchedule Int[] @default([]) @map("retry_schedule")
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   deliveries WebhookDelivery[]
 
@@ -73,30 +73,30 @@ model WebhookDelivery {
   endpointId String          @map("endpoint_id")
   endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
 
-  eventName    String  @map("event_name")
+  eventName String @map("event_name")
   /// Idempotency key: same (endpointId, eventName, dedupeKey) collapses
   /// to one delivery. Reasonable dedupeKeys are the originating event's
   /// aggregate id + a stable hash of the payload.
-  dedupeKey    String  @map("dedupe_key")
+  dedupeKey String @map("dedupe_key")
 
-  payload      Json
+  payload   Json
   /// Signature header sent with the POST. Recorded for partner support
   /// ("we sent this exact signature; you can recompute and verify").
-  signature    String
+  signature String
 
-  status       WebhookDeliveryStatus @default(PENDING)
-  attempts     Int      @default(0)
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
   /// When the next attempt should fire. Null when not retryable.
-  nextRetryAt  DateTime? @map("next_retry_at")
+  nextRetryAt    DateTime?             @map("next_retry_at")
   /// Last response code we received (or 0 on transport error).
-  lastStatusCode Int?    @map("last_status_code")
+  lastStatusCode Int?                  @map("last_status_code")
   /// Truncated response body, capped at 4 KB.
-  lastResponse   String? @map("last_response")
+  lastResponse   String?               @map("last_response")
   /// Truncated error message when transport failed.
-  lastError      String? @map("last_error")
+  lastError      String?               @map("last_error")
 
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt      @map("updated_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
   finalizedAt DateTime? @map("finalized_at")
 
   @@unique([endpointId, eventName, dedupeKey])

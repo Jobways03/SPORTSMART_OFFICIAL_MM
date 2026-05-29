@@ -41,7 +41,7 @@ model RetentionPolicy {
   description String?
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@unique([resourceType, purpose])
   @@index([enabled])
@@ -55,16 +55,16 @@ model RetentionPolicy {
 model RetentionExecution {
   id String @id @default(uuid())
 
-  policyId     String           @map("policy_id")
-  resourceType String           @map("resource_type")
-  resourceId   String           @map("resource_id")
+  policyId        String          @map("policy_id")
+  resourceType    String          @map("resource_type")
+  resourceId      String          @map("resource_id")
   /// Snapshot of the action at execution time (the policy might
   /// change later — we want the historical truth).
-  action       RetentionAction
+  action          RetentionAction
   /// True when a legal hold prevented the action. Row is still
   /// recorded so the next run sees that we considered + skipped.
-  legalHold    Boolean          @default(false) @map("legal_hold")
-  legalHoldReason String?       @map("legal_hold_reason")
+  legalHold       Boolean         @default(false) @map("legal_hold")
+  legalHoldReason String?         @map("legal_hold_reason")
 
   executedAt DateTime @default(now()) @map("executed_at")
 

@@ -1,0 +1,342 @@
+{
+  "football-kits": [
+    {
+      "key": "kit_type",
+      "name": "Kit Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Home Kit", "Away Kit", "Third Kit", "Goalkeeper Kit", "Training Kit"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Jersey", "Shorts", "Socks", "Full Set"]
+    },
+    {
+      "key": "sleeve_type",
+      "name": "Sleeve Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Short Sleeve", "Long Sleeve", "Sleeveless"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    },
+    {
+      "key": "size_range",
+      "name": "Size Range",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": ["Kids", "XS", "S", "M", "L", "XL", "2XL", "3XL"]
+    }
+  ],
+  "cricket-uniforms": [
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Test Whites", "ODI Colored", "T20 Colored", "Training Kit", "Practice Whites"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Shirt", "Trousers", "Sweater", "Cap", "Full Set"]
+    },
+    {
+      "key": "sleeve_type",
+      "name": "Sleeve Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Short Sleeve", "Long Sleeve", "Three-Quarter Sleeve"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ],
+  "basketball-uniforms": [
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Game Jersey", "Reversible Jersey", "Shooting Shirt", "Warm-Up Set"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Jersey", "Shorts", "Full Set"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    },
+    {
+      "key": "size_range",
+      "name": "Size Range",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": ["Kids", "XS", "S", "M", "L", "XL", "2XL", "3XL"]
+    }
+  ],
+  "rugby-uniforms": [
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Match Jersey", "Training Jersey", "Full Kit"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Jersey", "Shorts", "Socks", "Full Set"]
+    },
+    {
+      "key": "sleeve_type",
+      "name": "Sleeve Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Short Sleeve", "Long Sleeve"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ],
+  "hockey-uniforms": [
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Match Kit", "Training Kit", "Goalkeeper Kit"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Jersey", "Skirt", "Shorts", "Socks", "Full Set"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ],
+  "volleyball-uniforms": [
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Match Kit", "Training Kit", "Libero Kit"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Jersey", "Shorts", "Full Set"]
+    },
+    {
+      "key": "sleeve_type",
+      "name": "Sleeve Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Sleeveless", "Short Sleeve", "Long Sleeve"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ],
+  "baseball-uniforms": [
+    {
+      "key": "uniform_type",
+      "name": "Uniform Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Full Button Jersey", "Two-Button Jersey", "Pullover Jersey", "Practice Jersey"]
+    },
+    {
+      "key": "kit_includes",
+      "name": "Kit Includes",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Jersey", "Pants", "Cap", "Belt", "Full Set"]
+    },
+    {
+      "key": "pant_style",
+      "name": "Pant Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Full Length", "Knicker", "Short"]
+    },
+    {
+      "key": "custom_name_number",
+      "name": "Custom Name & Number",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ],
+  "custom-printing-services": [
+    {
+      "key": "printing_method",
+      "name": "Printing Method",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Screen Printing", "Sublimation", "Heat Transfer", "Embroidery", "DTG (Direct to Garment)", "Vinyl"]
+    },
+    {
+      "key": "print_area",
+      "name": "Print Area",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Front", "Back", "Left Sleeve", "Right Sleeve", "Collar", "Full Body"]
+    },
+    {
+      "key": "logo_upload",
+      "name": "Custom Logo Upload",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "color_options",
+      "name": "Print Color Options",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Single Color", "Multi Color", "Full Color"]
+    },
+    {
+      "key": "turnaround_time",
+      "name": "Turnaround Time",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["3-5 Days", "5-7 Days", "7-14 Days", "14-21 Days"]
+    }
+  ],
+  "team-training-wear": [
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Training Jersey", "Training Shorts", "Track Jacket", "Track Pants", "Rain Jacket", "Polo Shirt"]
+    },
+    {
+      "key": "custom_branding",
+      "name": "Custom Branding",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Team Logo", "Sponsor Logo", "Player Name", "Player Number"]
+    },
+    {
+      "key": "size_range",
+      "name": "Size Range",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": ["Kids", "XS", "S", "M", "L", "XL", "2XL", "3XL"]
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ],
+  "team-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Team Cap", "Beanie", "Scarf", "Arm Band", "Wristband", "Team Bag"]
+    },
+    {
+      "key": "custom_branding",
+      "name": "Custom Branding",
+      "type": "BOOLEAN",
+      "sortOrder": 2
+    },
+    {
+      "key": "minimum_order_qty",
+      "name": "Minimum Order Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["No Minimum", "5+", "10+", "15+", "20+"]
+    }
+  ]
+}

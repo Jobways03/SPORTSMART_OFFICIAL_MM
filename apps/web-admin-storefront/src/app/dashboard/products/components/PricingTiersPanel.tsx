@@ -20,14 +20,24 @@ interface Props {
 interface DraftTier {
   variantId: string;
   minQuantity: string;
+  maxQuantity: string;
+  pricingMode: 'percent' | 'fixed';
   discountPercent: string;
+  fixedUnitPrice: string;
+  startAt: string;
+  endAt: string;
   displayLabel: string;
 }
 
 const EMPTY_DRAFT: DraftTier = {
   variantId: '',
   minQuantity: '',
+  maxQuantity: '',
+  pricingMode: 'percent',
   discountPercent: '',
+  fixedUnitPrice: '',
+  startAt: '',
+  endAt: '',
   displayLabel: '',
 };
 
@@ -38,6 +48,11 @@ const EMPTY_DRAFT: DraftTier = {
  * add/remove/update/activate/deactivate them. Server is the source of
  * truth for validation — we just translate its 400 responses into a
  * friendly error banner.
+ *
+ * Phase 44 (2026-05-21) — tiers now affect cart/checkout pricing.
+ * The panel also surfaces the new fields: percent-vs-fixed pricing
+ * mode, optional maxQuantity for closed-range tiers, and start/end
+ * scheduling windows.
  */
 export function PricingTiersPanel({ productId, variants }: Props) {
   const { confirmDialog } = useModal();
@@ -68,13 +83,36 @@ export function PricingTiersPanel({ productId, variants }: Props) {
 
   const handleCreate = async () => {
     const minQty = parseInt(draft.minQuantity, 10);
-    const pct = parseFloat(draft.discountPercent);
     if (!Number.isInteger(minQty) || minQty <= 0) {
       setErr('Min quantity must be a positive integer');
       return;
     }
-    if (Number.isNaN(pct) || pct < 0 || pct > 100) {
-      setErr('Discount % must be a number between 0 and 100');
+    let maxQty: number | null = null;
+    if (draft.maxQuantity.trim()) {
+      maxQty = parseInt(draft.maxQuantity, 10);
+      if (!Number.isInteger(maxQty) || maxQty < minQty) {
+        setErr('Max quantity must be a positive integer ≥ Min quantity');
+        return;
+      }
+    }
+    // Phase 44 — XOR of percent vs fixed.
+    let pct: number | null = null;
+    let fixedPrice: number | null = null;
+    if (draft.pricingMode === 'percent') {
+      pct = parseFloat(draft.discountPercent);
+      if (Number.isNaN(pct) || pct < 0 || pct > 100) {
+        setErr('Discount % must be a number between 0 and 100');
+        return;
+      }
+    } else {
+      fixedPrice = parseFloat(draft.fixedUnitPrice);
+      if (Number.isNaN(fixedPrice) || fixedPrice < 0) {
+        setErr('Fixed unit price must be a non-negative number');
+        return;
+      }
+    }
+    if (draft.startAt && draft.endAt && new Date(draft.endAt) <= new Date(draft.startAt)) {
+      setErr('End date must be after start date');
       return;
     }
     setCreating(true);
@@ -83,7 +121,11 @@ export function PricingTiersPanel({ productId, variants }: Props) {
       await adminPricingTiersService.create(productId, {
         variantId: draft.variantId || null,
         minQuantity: minQty,
+        maxQuantity: maxQty,
         discountPercent: pct,
+        fixedUnitPrice: fixedPrice,
+        startAt: draft.startAt ? new Date(draft.startAt).toISOString() : null,
+        endAt: draft.endAt ? new Date(draft.endAt).toISOString() : null,
         displayLabel: draft.displayLabel.trim() || null,
       });
       setDraft(EMPTY_DRAFT);
@@ -145,8 +187,10 @@ export function PricingTiersPanel({ productId, variants }: Props) {
         <div>
           <h2 style={titleStyle}>Volume pricing tiers</h2>
           <p style={subtitleStyle}>
-            Display-only at v1 — these are shown as "Buy N+ save P%" hints on the
-            product page. Cart pricing is not affected yet.
+            Tiers apply automatically when a customer's cart line quantity
+            qualifies. Variant-scoped tiers override product-wide tiers at the
+            same effective price; the best-discount tier wins. Order items
+            snapshot the applied tier for refund and commission audit.
           </p>
         </div>
       </header>
@@ -180,15 +224,67 @@ export function PricingTiersPanel({ productId, variants }: Props) {
               style={inputStyle}
             />
           </Field>
-          <Field label="Discount %">
+          <Field label="Max quantity (optional)">
             <input
               type="number"
-              min={0}
-              max={100}
-              step="0.01"
-              value={draft.discountPercent}
-              placeholder="e.g. 10"
-              onChange={(e) => setDraft({ ...draft, discountPercent: e.target.value })}
+              min={1}
+              value={draft.maxQuantity}
+              placeholder="leave blank for unbounded"
+              onChange={(e) => setDraft({ ...draft, maxQuantity: e.target.value })}
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="Pricing mode">
+            <select
+              value={draft.pricingMode}
+              onChange={(e) =>
+                setDraft({ ...draft, pricingMode: e.target.value as 'percent' | 'fixed' })
+              }
+              style={inputStyle}
+            >
+              <option value="percent">% off list</option>
+              <option value="fixed">Fixed unit price</option>
+            </select>
+          </Field>
+          {draft.pricingMode === 'percent' ? (
+            <Field label="Discount %">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                value={draft.discountPercent}
+                placeholder="e.g. 10"
+                onChange={(e) => setDraft({ ...draft, discountPercent: e.target.value })}
+                style={inputStyle}
+              />
+            </Field>
+          ) : (
+            <Field label="Fixed unit price (₹)">
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={draft.fixedUnitPrice}
+                placeholder="e.g. 999.00"
+                onChange={(e) => setDraft({ ...draft, fixedUnitPrice: e.target.value })}
+                style={inputStyle}
+              />
+            </Field>
+          )}
+          <Field label="Start at (optional)">
+            <input
+              type="datetime-local"
+              value={draft.startAt}
+              onChange={(e) => setDraft({ ...draft, startAt: e.target.value })}
+              style={inputStyle}
+            />
+          </Field>
+          <Field label="End at (optional)">
+            <input
+              type="datetime-local"
+              value={draft.endAt}
+              onChange={(e) => setDraft({ ...draft, endAt: e.target.value })}
               style={inputStyle}
             />
           </Field>
@@ -205,8 +301,16 @@ export function PricingTiersPanel({ productId, variants }: Props) {
         <button
           type="button"
           onClick={handleCreate}
-          disabled={creating || !draft.minQuantity.trim() || !draft.discountPercent.trim()}
-          style={btnPrimary(creating || !draft.minQuantity.trim() || !draft.discountPercent.trim())}
+          disabled={
+            creating
+            || !draft.minQuantity.trim()
+            || (draft.pricingMode === 'percent' ? !draft.discountPercent.trim() : !draft.fixedUnitPrice.trim())
+          }
+          style={btnPrimary(
+            creating
+              || !draft.minQuantity.trim()
+              || (draft.pricingMode === 'percent' ? !draft.discountPercent.trim() : !draft.fixedUnitPrice.trim()),
+          )}
         >
           {creating ? 'Adding…' : '+ Add tier'}
         </button>
@@ -222,9 +326,10 @@ export function PricingTiersPanel({ productId, variants }: Props) {
           <table style={tableStyle}>
             <thead>
               <tr>
-                <th style={th}>Min qty</th>
-                <th style={th}>Discount</th>
+                <th style={th}>Qty range</th>
+                <th style={th}>Pricing</th>
                 <th style={th}>Variant</th>
+                <th style={th}>Schedule</th>
                 <th style={th}>Label</th>
                 <th style={th}>Status</th>
                 <th style={{ ...th, textAlign: 'right' }}>Actions</th>
@@ -235,13 +340,29 @@ export function PricingTiersPanel({ productId, variants }: Props) {
                 const busy = busyRow.has(r.id);
                 return (
                   <tr key={r.id} style={{ borderTop: '1px solid #f3f4f6', opacity: busy ? 0.5 : 1 }}>
-                    <td style={td}>{r.minQuantity}</td>
-                    <td style={td}>{r.discountPercent}%</td>
+                    <td style={td}>
+                      {r.maxQuantity ? `${r.minQuantity}-${r.maxQuantity}` : `${r.minQuantity}+`}
+                    </td>
+                    <td style={td}>
+                      {r.discountPercent !== null ? `${r.discountPercent}% off` : null}
+                      {r.fixedUnitPrice !== null ? `₹${r.fixedUnitPrice}` : null}
+                    </td>
                     <td style={td}>
                       {r.variantId ? (
                         <code style={inlineCode}>{r.variantId.slice(0, 8)}…</code>
                       ) : (
                         <span style={{ color: '#6b7280' }}>All variants</span>
+                      )}
+                    </td>
+                    <td style={td}>
+                      {r.startAt || r.endAt ? (
+                        <span style={{ fontSize: 11, color: '#6b7280' }}>
+                          {r.startAt ? new Date(r.startAt).toLocaleDateString() : '—'}
+                          {' → '}
+                          {r.endAt ? new Date(r.endAt).toLocaleDateString() : '∞'}
+                        </span>
+                      ) : (
+                        <span style={{ color: '#6b7280' }}>Always</span>
                       )}
                     </td>
                     <td style={td}>{r.displayLabel}</td>

@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../../../bootstrap/database/prisma.service';
 import {
   BadRequestAppException,
   ConflictAppException,
+  ForbiddenAppException,
   NotFoundAppException,
 } from '../../../core/exceptions';
+import { ContentAuditService } from '../storefront-content/content-audit.service';
+import { StorefrontContentService } from '../storefront-content/storefront-content.service';
 
 export interface SlotDefinitionDto {
   id: string;
@@ -49,16 +52,24 @@ export class StorefrontSlotsService {
     'brand-chips',
   ]);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: ContentAuditService,
+    @Inject(forwardRef(() => StorefrontContentService))
+    private readonly content: StorefrontContentService,
+  ) {}
 
   async list(): Promise<SlotDefinitionDto[]> {
     const rows = await this.prisma.storefrontSlotDefinition.findMany({
+      // Phase 47 (2026-05-21) — exclude soft-deleted slots from the
+      // admin list. Restore is via the audit log.
+      where: { deletedAt: null },
       orderBy: [{ sectionKey: 'asc' }, { position: 'asc' }],
     });
     return rows.map(this.toDto);
   }
 
-  async create(input: CreateSlotInput): Promise<SlotDefinitionDto> {
+  async create(input: CreateSlotInput, actorId?: string): Promise<SlotDefinitionDto> {
     if (!input.label?.trim()) {
       throw new BadRequestAppException('label is required');
     }
@@ -87,15 +98,45 @@ export class StorefrontSlotsService {
       position = (last?.position ?? 0) + 1;
     }
 
-    const row = await this.prisma.storefrontSlotDefinition.create({
-      data: {
-        sectionKey: input.sectionKey,
-        slotKey,
-        label: input.label.trim(),
-        position,
-        defaultHref: input.defaultHref?.trim() || null,
-        isSystem: false,
+    // Phase 47 (2026-05-21) — race-safe create. Pre-Phase-47 the
+    // resolveUniqueSlotKey did findUnique-then-create, which left a
+    // window for two concurrent creates with the same label to both
+    // pass the uniqueness check; the second would hit Prisma P2002
+    // and 500. Now we catch P2002 and surface ConflictAppException
+    // — admin sees a clean 409.
+    let row;
+    try {
+      row = await this.prisma.storefrontSlotDefinition.create({
+        data: {
+          sectionKey: input.sectionKey,
+          slotKey,
+          label: input.label.trim(),
+          position,
+          defaultHref: input.defaultHref?.trim() || null,
+          isSystem: false,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictAppException(
+          `Slot key "${slotKey}" was claimed by a concurrent request — retry with a different label`,
+        );
+      }
+      throw err;
+    }
+
+    await this.audit.record({
+      resourceType: 'SLOT',
+      resourceId: row.id,
+      action: 'CREATE',
+      newState: {
+        sectionKey: row.sectionKey,
+        slotKey: row.slotKey,
+        label: row.label,
+        position: row.position,
+        isSystem: row.isSystem,
       },
+      actorId,
     });
     this.logger.log(
       `Slot created section=${input.sectionKey} key=${slotKey} pos=${position}`,
@@ -104,26 +145,58 @@ export class StorefrontSlotsService {
   }
 
   /**
-   * Remove a slot definition. Also delete the associated content block
-   * (if any) in the same transaction — otherwise the row is orphaned
-   * and the public map keeps serving it until an admin manually resets
-   * the block.
+   * Remove a slot definition. Phase 47 (2026-05-21) changes:
+   *   - Refuse to delete `isSystem=true` slots. The seeded 38 slots
+   *     are referenced by storefront grid code; removing one drops
+   *     a section tile. Admin must deactivate the underlying content
+   *     block instead (DELETE /admin/storefront-content/:slot).
+   *   - Soft-delete via deletedAt stamp on both rows instead of
+   *     hard-delete; the audit log carries the rollback target.
+   *   - ContentAuditLog row written for the transition.
    */
-  async remove(id: string): Promise<void> {
+  async remove(id: string, actorId?: string): Promise<void> {
     const def = await this.prisma.storefrontSlotDefinition.findUnique({
       where: { id },
     });
-    if (!def) throw new NotFoundAppException('Slot definition not found');
+    if (!def || def.deletedAt) throw new NotFoundAppException('Slot definition not found');
+
+    if (def.isSystem) {
+      throw new ForbiddenAppException(
+        `Slot "${def.slotKey}" is a system slot — deactivate the content block instead of deleting the slot`,
+      );
+    }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.storefrontContentBlock
-        .delete({ where: { slot: def.slotKey } })
-        .catch((err) => {
-          if ((err as { code?: string })?.code !== 'P2025') throw err;
-        });
-      await tx.storefrontSlotDefinition.delete({ where: { id } });
+      // Soft-delete the content block first (if present) so the
+      // public listActiveAsMap stops serving it immediately.
+      await tx.storefrontContentBlock.updateMany({
+        where: { slot: def.slotKey, deletedAt: null },
+        data: { deletedAt: new Date(), active: false },
+      });
+      await tx.storefrontSlotDefinition.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
     });
-    this.logger.log(`Slot deleted section=${def.sectionKey} key=${def.slotKey}`);
+
+    await this.audit.record({
+      resourceType: 'SLOT',
+      resourceId: def.id,
+      action: 'DELETE',
+      prevState: {
+        sectionKey: def.sectionKey,
+        slotKey: def.slotKey,
+        label: def.label,
+        position: def.position,
+        isSystem: def.isSystem,
+      },
+      actorId,
+    });
+    // Phase 47 — soft-deleted content block must drop from the active
+    // map immediately. Best-effort: cache TTL would heal in 30s
+    // anyway.
+    await this.content.invalidateActiveMapCache();
+    this.logger.log(`Slot soft-deleted section=${def.sectionKey} key=${def.slotKey}`);
   }
 
   // ─── helpers ──────────────────────────────────────────────────────
@@ -138,8 +211,12 @@ export class StorefrontSlotsService {
     let candidate = base;
     let attempt = 1;
     while (true) {
-      const clash = await this.prisma.storefrontSlotDefinition.findUnique({
-        where: { slotKey: candidate },
+      // Phase 47 — uniqueness check ignores soft-deleted rows so an
+      // admin can recreate a slot key after a soft-delete. The final
+      // create() still races on the DB unique constraint, but
+      // create() now catches P2002.
+      const clash = await this.prisma.storefrontSlotDefinition.findFirst({
+        where: { slotKey: candidate, deletedAt: null },
         select: { id: true },
       });
       if (!clash) return candidate;

@@ -1,13 +1,16 @@
 import * as jwt from 'jsonwebtoken';
 import { UserAuthGuard } from '../../src/core/guards/user-auth.guard';
 import { UnauthorizedAppException } from '../../src/core/exceptions';
+import { JWT_AUDIENCE_CUSTOMER } from '../../src/core/auth/jwt-constants';
 
 /**
  * Tests for UserAuthGuard — Sprint 1 closed two CRITICAL gaps:
  *   1. The guard now checks Session.revokedAt — stolen JWTs are killed at logout.
  *   2. The guard now checks User.status — deactivated accounts can't use old tokens.
  *
- * This spec pins both behaviours so a future change can't silently regress them.
+ * Phase 17 (2026-05-20) — added: audience claim pinned to
+ * `sportsmart-customer`. Tokens minted without this audience are
+ * rejected by the guard even if the secret matches.
  */
 
 const SECRET = 'unit-test-customer-secret-min16-chars';
@@ -17,6 +20,7 @@ const fakeEnv = {
     if (key === 'JWT_CUSTOMER_SECRET') return SECRET;
     return '';
   },
+  getOptional: (_key: string) => undefined,
 } as any;
 
 const buildContext = (token: string | null) => {
@@ -54,7 +58,12 @@ const activeUser = {
 };
 
 const buildToken = (
-  overrides: Partial<{ sub: string; sessionId: string; roles: string[] }> = {},
+  overrides: Partial<{
+    sub: string;
+    sessionId: string;
+    roles: string[];
+    audience: string;
+  }> = {},
 ) =>
   jwt.sign(
     {
@@ -64,7 +73,7 @@ const buildToken = (
       sessionId: overrides.sessionId ?? 'sess1',
     },
     SECRET,
-    { expiresIn: '1h' },
+    { expiresIn: '1h', audience: overrides.audience ?? JWT_AUDIENCE_CUSTOMER },
   );
 
 describe('UserAuthGuard', () => {
@@ -86,10 +95,27 @@ describe('UserAuthGuard', () => {
     const forged = jwt.sign(
       { sub: 'user1', email: 'a@b.c', roles: ['CUSTOMER'], sessionId: 'sess1' },
       'attacker-secret-min16-chars',
-      { expiresIn: '1h' },
+      { expiresIn: '1h', audience: JWT_AUDIENCE_CUSTOMER },
     );
     const guard = new UserAuthGuard(fakeEnv, buildPrisma({}));
     await expect(guard.canActivate(buildContext(forged))).rejects.toThrow(
+      'Invalid or expired token',
+    );
+  });
+
+  it('rejects a token signed with a different audience (cross-persona)', async () => {
+    const otherActor = jwt.sign(
+      {
+        sub: 'user1',
+        email: 'a@b.c',
+        roles: ['CUSTOMER'],
+        sessionId: 'sess1',
+      },
+      SECRET,
+      { expiresIn: '1h', audience: 'sportsmart-seller' },
+    );
+    const guard = new UserAuthGuard(fakeEnv, buildPrisma({}));
+    await expect(guard.canActivate(buildContext(otherActor))).rejects.toThrow(
       'Invalid or expired token',
     );
   });
@@ -180,7 +206,7 @@ describe('UserAuthGuard', () => {
     const token = jwt.sign(
       { sub: 'user1', email: 'a@b.c', roles: ['CUSTOMER'] },
       SECRET,
-      { expiresIn: '1h' },
+      { expiresIn: '1h', audience: JWT_AUDIENCE_CUSTOMER },
     );
     const guard = new UserAuthGuard(fakeEnv, buildPrisma({}));
     await expect(guard.canActivate(buildContext(token))).rejects.toThrow(

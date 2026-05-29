@@ -1,9 +1,20 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AffiliateCommissionService } from '../../application/services/affiliate-commission.service';
 import { AffiliateCommissionHoldDto } from '../dtos/affiliate-commission-hold.dto';
+
+// Phase 159d — pull the acting admin + request meta for transition audit.
+function actorFrom(req: Request) {
+  const userAgent = req.headers['user-agent'];
+  return {
+    adminId: (req as any).adminId as string | undefined,
+    ipAddress: req.ip,
+    userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+  };
+}
 
 /**
  * Admin browser for affiliate commissions. Separate controller from
@@ -55,10 +66,15 @@ export class AdminAffiliateCommissionController {
   @HttpCode(HttpStatus.OK)
   @Permissions('affiliates.commission')
   async placeOnHold(
+    @Req() req: Request,
     @Param('commissionId') commissionId: string,
     @Body() dto: AffiliateCommissionHoldDto,
   ) {
-    const data = await this.commissionService.hold(commissionId, dto.reason);
+    const data = await this.commissionService.hold(
+      commissionId,
+      dto.reason,
+      actorFrom(req),
+    );
     return { success: true, message: 'Commission placed on hold', data };
   }
 
@@ -71,8 +87,14 @@ export class AdminAffiliateCommissionController {
   @Patch(':commissionId/resume')
   @HttpCode(HttpStatus.OK)
   @Permissions('affiliates.commission')
-  async resumeFromHold(@Param('commissionId') commissionId: string) {
-    const data = await this.commissionService.resumeFromHold(commissionId);
+  async resumeFromHold(
+    @Req() req: Request,
+    @Param('commissionId') commissionId: string,
+  ) {
+    const data = await this.commissionService.resumeFromHold(
+      commissionId,
+      actorFrom(req),
+    );
     return { success: true, message: 'Commission resumed', data };
   }
 }

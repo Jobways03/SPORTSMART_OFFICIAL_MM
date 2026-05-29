@@ -50,9 +50,9 @@ model TaxDocumentDownloadAudit {
   // Audit-only: the URL we minted (when ALLOWED). For replay we trust
   // the URL's own expiry; this column lets incident response answer
   // "this URL leaked — when did we issue it?".
-  issuedUrl     String?   @map("issued_url")
-  urlExpiresAt  DateTime? @map("url_expires_at")
-  ttlSeconds    Int       @default(300) @map("ttl_seconds")
+  issuedUrl    String?   @map("issued_url")
+  urlExpiresAt DateTime? @map("url_expires_at")
+  ttlSeconds   Int       @default(300) @map("ttl_seconds")
 
   ipAddress String? @map("ip_address")
   userAgent String? @map("user_agent")

@@ -93,6 +93,7 @@
 | Linked credit-note recipient ITC reversal notice | "Recipient may need to reverse input tax credit per Section 16(2)" | | |
 | Goodwill credit (no taxable-value change) | NEVER goes through credit note — uses `wallet_adjustments` instead | | |
 | Partial return conservation | Sum of credit-note reversals ≤ original invoice tax; enforced by service-level check | | |
+| B2B / off-platform seller reversal (Phase 108) | No in-system GST adjustment — the customer was NOT refunded (goods came back via a separate B2B / off-platform channel), so no credit note is issued. The seller handles any tax adjustment off-platform. The reversal still reverses platform commission + writes a SellerDebit (non-GST). | | |
 
 ---
 

@@ -95,19 +95,19 @@ enum CreditNoteEligibilityStatus {
 // 28 states + 8 union territories + special-region codes per CBIC.
 // See docs/tax/GST_ASSUMPTIONS.md §1 (state-code source of truth).
 model IndiaState {
-  id                 String   @id @default(uuid())
+  id               String   @id @default(uuid())
   // CBIC 2-digit code as string ("01" .. "38"). Canonical key
   // used across tax-document tables.
-  gstStateCode       String   @unique @map("gst_state_code")
-  stateName          String   @map("state_name")
+  gstStateCode     String   @unique @map("gst_state_code")
+  stateName        String   @map("state_name")
   // ISO 3166-2:IN equivalent ("IN-AP", "IN-AR", ...) for any
   // module that needs ISO format. Tax module always uses
   // gstStateCode.
-  isoCode            String?  @map("iso_code")
-  isUnionTerritory   Boolean  @default(false) @map("is_union_territory")
-  isActive           Boolean  @default(true) @map("is_active")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  isoCode          String?  @map("iso_code")
+  isUnionTerritory Boolean  @default(false) @map("is_union_territory")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@map("india_states")
 }
@@ -134,20 +134,20 @@ model UqcMaster {
 //
 // CA actions: see docs/tax/HSN_RATE_POLICY.md §7.
 model HsnMaster {
-  id                 String           @id @default(uuid())
-  hsnCode            String           @map("hsn_code")
-  description        String           @map("description")
-  defaultGstRateBps  Int              @default(0) @map("default_gst_rate_bps")
-  supplyTaxability   SupplyTaxability @default(TAXABLE) @map("supply_taxability")
-  defaultUqcCode     String?          @map("default_uqc_code")
+  id                String           @id @default(uuid())
+  hsnCode           String           @map("hsn_code")
+  description       String           @map("description")
+  defaultGstRateBps Int              @default(0) @map("default_gst_rate_bps")
+  supplyTaxability  SupplyTaxability @default(TAXABLE) @map("supply_taxability")
+  defaultUqcCode    String?          @map("default_uqc_code")
   // Free-text classification hint: "apparel", "footwear", "equipment".
   // Helps admin UI suggest the right HSN for a category-bulk operation.
-  categoryHint       String?          @map("category_hint")
-  isActive           Boolean          @default(true) @map("is_active")
-  effectiveFrom      DateTime         @map("effective_from")
-  effectiveTo        DateTime?        @map("effective_to")
-  createdAt          DateTime         @default(now()) @map("created_at")
-  updatedAt          DateTime         @updatedAt @map("updated_at")
+  categoryHint      String?          @map("category_hint")
+  isActive          Boolean          @default(true) @map("is_active")
+  effectiveFrom     DateTime         @map("effective_from")
+  effectiveTo       DateTime?        @map("effective_to")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
 
   // A HSN code may have multiple effective-period rows (rate changes).
   // No two rows for the same code can have the same effectiveFrom.
@@ -165,31 +165,31 @@ model HsnMaster {
 //
 // See docs/tax/GST_ASSUMPTIONS.md §11 for composition seller policy.
 model SellerGstin {
-  id                String             @id @default(uuid())
-  sellerId          String             @map("seller_id")
+  id                       String              @id @default(uuid())
+  sellerId                 String              @map("seller_id")
   // Full 15-char GSTIN. Validated by GstinValidator before insert.
-  gstin             String             @map("gstin")
+  gstin                    String              @map("gstin")
   // 2-digit GST state code; MUST equal first 2 chars of gstin.
   // Enforced by application validator + CHECK constraint below.
-  stateCode         String             @map("state_code")
-  legalName         String             @map("legal_name")
-  addressJson       Json               @map("address_json")
-  isPrimary         Boolean            @default(false) @map("is_primary")
-  isActive          Boolean            @default(true) @map("is_active")
-  registrationType  GstRegistrationType @default(REGULAR) @map("registration_type")
-  verifiedAt        DateTime?          @map("verified_at")
-  verifiedBy        String?            @map("verified_by")
-  verificationNotes String?            @map("verification_notes")
+  stateCode                String              @map("state_code")
+  legalName                String              @map("legal_name")
+  addressJson              Json                @map("address_json")
+  isPrimary                Boolean             @default(false) @map("is_primary")
+  isActive                 Boolean             @default(true) @map("is_active")
+  registrationType         GstRegistrationType @default(REGULAR) @map("registration_type")
+  verifiedAt               DateTime?           @map("verified_at")
+  verifiedBy               String?             @map("verified_by")
+  verificationNotes        String?             @map("verification_notes")
   // Phase 22 — drives the e-invoice applicability check. Aggregate
   // annual turnover (paise). Update on annual-return upload. Crossing
   // the env threshold (TAX_EINVOICE_TURNOVER_THRESHOLD_PAISE, default
   // ₹5 crore) makes B2B supplies subject to NIC IRP per CBIC Rule 48(4).
-  aggregateTurnoverInPaise BigInt @default(0) @map("aggregate_turnover_in_paise")
+  aggregateTurnoverInPaise BigInt              @default(0) @map("aggregate_turnover_in_paise")
   // Phase 22 — voluntary opt-in for sub-threshold sellers who want
   // NIC IRP coverage anyway (some buyers require it for ITC reasons).
-  einvoiceOptedIn          Boolean @default(false) @map("einvoice_opted_in")
-  createdAt         DateTime           @default(now()) @map("created_at")
-  updatedAt         DateTime           @updatedAt @map("updated_at")
+  einvoiceOptedIn          Boolean             @default(false) @map("einvoice_opted_in")
+  createdAt                DateTime            @default(now()) @map("created_at")
+  updatedAt                DateTime            @updatedAt @map("updated_at")
 
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
@@ -210,19 +210,19 @@ model SellerGstin {
 //
 // See docs/tax/GST_ASSUMPTIONS.md §12.
 model CustomerTaxProfile {
-  id                 String   @id @default(uuid())
-  customerId         String   @map("customer_id")
-  gstin              String   @map("gstin")
-  legalName          String   @map("legal_name")
-  billingAddressJson Json     @map("billing_address_json")
-  stateCode          String   @map("state_code")
-  isDefault          Boolean  @default(false) @map("is_default")
-  isVerified         Boolean  @default(false) @map("is_verified")
+  id                 String    @id @default(uuid())
+  customerId         String    @map("customer_id")
+  gstin              String    @map("gstin")
+  legalName          String    @map("legal_name")
+  billingAddressJson Json      @map("billing_address_json")
+  stateCode          String    @map("state_code")
+  isDefault          Boolean   @default(false) @map("is_default")
+  isVerified         Boolean   @default(false) @map("is_verified")
   verifiedAt         DateTime? @map("verified_at")
-  verifiedBy         String?  @map("verified_by")
-  verificationNotes  String?  @map("verification_notes")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  verifiedBy         String?   @map("verified_by")
+  verificationNotes  String?   @map("verification_notes")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
 
   customer User @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
@@ -280,4 +280,36 @@ model TaxConfig {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("tax_config")
+}
+
+// Phase 159w (GST Mode Toggle audit) — first-class mode enum, shared by the
+// order/invoice snapshot (audit B2) + the append-only history below (audit B3).
+// The LIVE mode is still persisted in tax_config (key 'tax_mode' authoritative,
+// plus the two legacy boolean flags for back-compat readers); this enum is the
+// common vocabulary for snapshots and history.
+enum GstMode {
+  OFF
+  AUDIT
+  STRICT
+}
+
+// Phase 159w (audit B3 + #9/#11/#16) — append-only record of every tax-mode
+// change. The admin "History" table reads this; the AuditPublicFacade row
+// (module 'tax-mode', action 'TAX_MODE_CHANGED') is the cross-cutting compliance
+// mirror. Written atomically inside TaxModeService.setMode's transaction so a
+// regulatory mode flip can never be unattributable.
+model GstModeHistory {
+  id           String   @id @default(uuid())
+  fromMode     GstMode? @map("from_mode")
+  toMode       GstMode  @map("to_mode")
+  actorId      String?  @map("actor_id")
+  reason       String?  @map("reason") @db.Text
+  // True when an admin overrode the AUDIT-readiness gate to enter STRICT.
+  forced       Boolean  @default(false) @map("forced")
+  // Snapshot of TaxAuditReadinessService.totalBlockers at flip time.
+  blockerCount Int      @default(0) @map("blocker_count")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("gst_mode_history")
 }

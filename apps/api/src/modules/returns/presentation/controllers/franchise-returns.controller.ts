@@ -15,6 +15,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { ReturnService } from '../../application/services/return.service';
 import { MarkReceivedDto } from '../dtos/mark-received.dto';
 
@@ -61,7 +62,10 @@ export class FranchiseReturnsController {
   }
 
   // PATCH /franchise/returns/:returnId/mark-received — mark package received
+  //
+  // Phase 96 (2026-05-23) — Mark Received audit Gap #9 closure.
   @Patch(':returnId/mark-received')
+  @Idempotent()
   async markReceived(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -77,6 +81,7 @@ export class FranchiseReturnsController {
       'FRANCHISE',
       req.franchiseId,
       dto.notes,
+      dto.parcelCondition,
     );
     return { success: true, message: 'Return marked as received', data };
   }

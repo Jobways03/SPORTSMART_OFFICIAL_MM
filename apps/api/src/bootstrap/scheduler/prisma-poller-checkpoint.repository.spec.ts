@@ -12,7 +12,7 @@ import { PrismaPollerCheckpointRepository } from './prisma-poller-checkpoint.rep
  *   - `set(key, at)` upserts so a poller can call it on every
  *     successful run without caring whether a prior row exists.
  *   - the repo uses the table's primary-key on `pollerKey` so
- *     multiple pollers (iThink, Razorpay status, etc.) live as
+ *     multiple pollers (Shiprocket, Razorpay status, etc.) live as
  *     parallel rows.
  */
 
@@ -33,10 +33,10 @@ describe('PrismaPollerCheckpointRepository (PR 1.11)', () => {
     const prisma = buildPrisma({ findUniqueReturn: { lastPolledAt: stored } });
     const repo = new PrismaPollerCheckpointRepository(prisma);
 
-    const result = await repo.get('ithink-tracking');
+    const result = await repo.get('shiprocket-tracking');
     expect(result).toEqual(stored);
     expect(prisma.integrationPollerCheckpoint.findUnique).toHaveBeenCalledWith({
-      where: { pollerKey: 'ithink-tracking' },
+      where: { pollerKey: 'shiprocket-tracking' },
       select: { lastPolledAt: true },
     });
   });
@@ -45,7 +45,7 @@ describe('PrismaPollerCheckpointRepository (PR 1.11)', () => {
     const prisma = buildPrisma({ findUniqueReturn: null });
     const repo = new PrismaPollerCheckpointRepository(prisma);
 
-    const result = await repo.get('ithink-tracking');
+    const result = await repo.get('shiprocket-tracking');
     expect(result).toBeNull();
   });
 
@@ -54,11 +54,11 @@ describe('PrismaPollerCheckpointRepository (PR 1.11)', () => {
     const repo = new PrismaPollerCheckpointRepository(prisma);
 
     const at = new Date('2026-05-12T10:00:00Z');
-    await repo.set('ithink-tracking', at);
+    await repo.set('shiprocket-tracking', at);
 
     expect(prisma.integrationPollerCheckpoint.upsert).toHaveBeenCalledWith({
-      where: { pollerKey: 'ithink-tracking' },
-      create: { pollerKey: 'ithink-tracking', lastPolledAt: at },
+      where: { pollerKey: 'shiprocket-tracking' },
+      create: { pollerKey: 'shiprocket-tracking', lastPolledAt: at },
       update: { lastPolledAt: at },
     });
   });

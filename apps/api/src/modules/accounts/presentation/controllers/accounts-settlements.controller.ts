@@ -14,14 +14,33 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  RolesGuard,
+  PermissionsGuard,
+  RequiresStepUp,
+  StepUpGuard,
+} from '../../../../core/guards';
+import { Throttle } from '@nestjs/throttler';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AccountsSettlementService } from '../../application/services/accounts-settlement.service';
+import { BatchMarkPaidDto } from '../dtos/batch-mark-paid.dto';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
+/**
+ * Phase 24 (2026-05-20) — Class-level @Permissions('settlements.read')
+ * gives every method (reads + writes) at minimum a settlements.read
+ * floor. Write endpoints below additionally require settlements.approve
+ * (or settlements.markPaid where applicable) on top — class-level
+ * @Permissions are merged with method-level by NestJS reflector so
+ * the union of both must be satisfied. Pre-Phase-24 only the writes
+ * declared @Roles('SUPER_ADMIN'); reads passed any logged-in admin.
+ */
 @ApiTags('Admin Accounts - Settlements')
 @Controller('admin/accounts/settlements')
-@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard, StepUpGuard)
+@Permissions('settlements.read')
 export class AccountsSettlementsController {
   constructor(
     private readonly settlementService: AccountsSettlementService,
@@ -333,25 +352,19 @@ export class AccountsSettlementsController {
   /* ── POST /admin/accounts/settlements/mark-paid ── */
   @Post('mark-paid')
   @Roles('SUPER_ADMIN')
-  async batchMarkPaid(
-    @Req() req: Request,
-    @Body()
-    body: {
-      settlements: Array<{
-        id: string;
-        type: 'seller' | 'franchise';
-        reference: string;
-      }>;
-    },
-  ) {
-    if (!body?.settlements || !Array.isArray(body.settlements)) {
-      throw new BadRequestException('settlements array is required');
-    }
-    const adminId = (req as any).adminId;
-    const data = await this.settlementService.batchMarkPaid(
-      body.settlements,
-      { adminId },
-    );
+  @Permissions('settlements.markPaid')
+  // Phase 26 (2026-05-20) — money-state batch transition; tight window.
+  @RequiresStepUp({ maxAgeMs: 60_000 })
+  // Phase 146 — a 100-item batch fans out to 100 transactions + audit + tax
+  // hooks; throttle against scripted abuse (generous for legitimate use).
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async batchMarkPaid(@Req() req: Request, @Body() body: BatchMarkPaidDto) {
+    const data = await this.settlementService.batchMarkPaid(body.settlements, {
+      adminId: (req as any).adminId,
+      // Phase 146 — capture IP/UA so each delegated audit row is attributable.
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    });
     return {
       success: true,
       message: 'Batch mark-paid processed',
@@ -362,6 +375,10 @@ export class AccountsSettlementsController {
   /* ── PATCH /admin/accounts/settlements/cycles/:cycleId/preview ── */
   @Patch('cycles/:cycleId/preview')
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.approve')
+  // Phase 26 — preview pins the ledger's grouping; reversible only
+  // by ops intervention. 5-min window per risk policy.
+  @RequiresStepUp()
   async markCyclePreviewed(@Param('cycleId') cycleId: string) {
     const cycle = await this.settlementService.markCyclePreviewed(cycleId);
     return {
@@ -374,6 +391,10 @@ export class AccountsSettlementsController {
   /* ── POST /admin/accounts/settlements/cycles ── */
   @Post('cycles')
   @Roles('SUPER_ADMIN')
+  @Permissions('settlements.approve')
+  // Phase 26 — creates a new settlement cycle that groups subsequent
+  // money-out batches; defaults to 5-min window.
+  @RequiresStepUp()
   async createCycle(
     @Body() body: { periodStart: string; periodEnd: string },
   ) {

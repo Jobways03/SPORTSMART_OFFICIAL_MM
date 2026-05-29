@@ -6,9 +6,33 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { ServiceabilityService } from '../../../application/services/serviceability.service';
-import { BadRequestAppException } from '../../../../../core/exceptions';
+import { CheckServiceabilityQueryDto } from '../../dtos/storefront-allocation.dto';
 
+/**
+ * Phase 64 (2026-05-22) — PDP serviceability check.
+ *
+ * Pre-Phase-64:
+ *   - No rate limit on this public surface — competitors could
+ *     enumerate every product's seller distribution + warehouses
+ *     by scraping (audit Gap #2).
+ *   - Response carried sellerId, sellerName, mappingId, distance,
+ *     stockQty — too much internal detail for an unauthenticated
+ *     caller.
+ *   - Query parameters were unbounded strings, so a garbage
+ *     pincode `abc123` slipped through to the allocator and
+ *     produced bizarre "serviceable at 999km" results (audit Gap
+ *     #19 surface here).
+ *
+ * Phase 64 closes all three:
+ *   - @Throttle({ limit: 60, ttl: 60_000 }) caps the per-IP burst.
+ *   - The response is now a sanitised aggregate — count of
+ *     fulfillment nodes + best-case delivery estimate. No
+ *     sellerId / mappingId / per-seller stock.
+ *   - DTO with @Matches PIN regex rejects malformed input at the
+ *     pipe layer.
+ */
 @ApiTags('Storefront')
 @Controller('storefront/serviceability')
 export class StorefrontServiceabilityController {
@@ -16,32 +40,21 @@ export class StorefrontServiceabilityController {
     private readonly serviceabilityService: ServiceabilityService,
   ) {}
 
-  /**
-   * Public endpoint — no auth required.
-   * Check if a product/variant can be delivered to a pincode.
-   *
-   * GET /storefront/serviceability/check?productId=xxx&variantId=yyy&pincode=500001
-   */
   @Get('check')
   @HttpCode(HttpStatus.OK)
-  async checkServiceability(
-    @Query('productId') productId?: string,
-    @Query('variantId') variantId?: string,
-    @Query('pincode') pincode?: string,
-  ) {
-    if (!productId) {
-      throw new BadRequestAppException('productId query parameter is required');
-    }
-    if (!pincode) {
-      throw new BadRequestAppException('pincode query parameter is required');
-    }
-
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async checkServiceability(@Query() query: CheckServiceabilityQueryDto) {
     const result = await this.serviceabilityService.checkServiceability(
-      productId,
-      variantId || null,
-      pincode,
+      query.productId,
+      query.variantId || null,
+      query.pincode,
     );
 
+    // Phase 64 (audit Gap #2) — sanitise. Anonymous callers get
+    // only the customer-facing answer: serviceable + estimated
+    // delivery + how many fulfilment options exist. The internal
+    // detail (sellerId, mappingId, distance, stockQty) stays
+    // behind authenticated paths.
     return {
       success: true,
       message: result.serviceable
@@ -51,22 +64,9 @@ export class StorefrontServiceabilityController {
         serviceable: result.serviceable,
         deliveryEstimate: result.deliveryEstimate,
         estimatedDays: result.estimatedDays,
-        sellers: result.sellers.map((s) => ({
-          sellerId: s.sellerId,
-          sellerName: s.sellerName,
-          distance: s.distance,
-          dispatchSla: s.dispatchSla,
-          stockQty: s.stockQty,
-          estimatedDeliveryDays: s.estimatedDeliveryDays,
-        })),
-        franchises: result.franchises.map((f) => ({
-          franchiseId: f.franchiseId,
-          franchiseName: f.franchiseName,
-          distance: f.distance,
-          dispatchSla: f.dispatchSla,
-          stockQty: f.stockQty,
-          estimatedDeliveryDays: f.estimatedDeliveryDays,
-        })),
+        // Counts only; no per-fulfilment-node identifiers.
+        fulfillmentOptions:
+          result.sellers.length + result.franchises.length,
       },
     };
   }

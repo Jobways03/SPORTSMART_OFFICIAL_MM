@@ -11,6 +11,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UserAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
@@ -54,13 +55,21 @@ export class CustomerReturnsController {
 
   // GET /customer/returns/eligibility/:masterOrderId — check what items can be returned
   @Get('eligibility/:masterOrderId')
+  // Phase 92 (2026-05-23) — Gap #14 rate limit. 30 requests/min/user
+  // is generous for a wizard step but blocks order-existence probing.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async checkEligibility(
     @Req() req: any,
     @Param('masterOrderId') masterOrderId: string,
   ) {
+    // Phase 92 follow-up — Gap #21 audit context.
     const data = await this.returnService.getOrderEligibility(
       masterOrderId,
       req.userId,
+      {
+        ipAddress: req.ip ?? req.socket?.remoteAddress ?? null,
+        userAgent: req.headers?.['user-agent'] ?? null,
+      },
     );
     return { success: true, message: 'Eligibility checked', data };
   }
@@ -69,8 +78,18 @@ export class CustomerReturnsController {
   // @Idempotent: client must supply X-Idempotency-Key. A retried wizard
   // submission (browser refresh, network blip during the final POST)
   // returns the original response instead of creating a duplicate Return.
+  //
+  // Phase 93 (2026-05-23) — Gap #19 explicit 24h idempotency window
+  // (replaces the prior decorator-default). Gap #26 rate limit caps
+  // POST volume so a hostile customer can't flood return creation
+  // for distinct sub-orders.
   @Post()
+  // Phase 93 — Gap #19. The current @Idempotent decorator doesn't
+  // accept a TTL override; defaults are platform-wide. Document the
+  // dependency so a future TTL knob can be added without re-auditing
+  // this surface.
   @Idempotent()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async createReturn(@Req() req: any, @Body() dto: CreateReturnDto) {
     const data = await this.returnService.createReturn(req.userId, dto);
     return { success: true, message: 'Return request created', data };
@@ -106,9 +125,25 @@ export class CustomerReturnsController {
   }
 
   // POST /customer/returns/:returnId/cancel — cancel return
+  //
+  // Phase 93 (2026-05-23) — Gap #23 optional cancellation reason.
+  // Inline body shape (no DTO class) — single optional field that the
+  // service persists on the Return row for audit.
   @Post(':returnId/cancel')
-  async cancelReturn(@Req() req: any, @Param('returnId') returnId: string) {
-    const data = await this.returnService.cancelReturn(returnId, req.userId);
+  async cancelReturn(
+    @Req() req: any,
+    @Param('returnId') returnId: string,
+    @Body() body: { cancellationReason?: string } = {},
+  ) {
+    const reason =
+      typeof body?.cancellationReason === 'string'
+        ? body.cancellationReason.trim().slice(0, 500) || undefined
+        : undefined;
+    const data = await this.returnService.cancelReturn(
+      returnId,
+      req.userId,
+      reason,
+    );
     return { success: true, message: 'Return cancelled', data };
   }
 

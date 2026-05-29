@@ -7,6 +7,10 @@ import {
   sellerReturnsService,
   SellerReturn,
 } from '@/services/returns.service';
+import {
+  sellerDisputesService,
+  DisputeKind,
+} from '@/services/disputes.service';
 
 // Match the backend enum. "Requested / Approved" are upstream states
 // the customer or admin drives; seller-side actions start at RECEIVED.
@@ -46,7 +50,7 @@ export default function SellerReturnDetailPage() {
   const [ret, setRet] = useState<SellerReturn | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState<null | 'receive' | 'upload' | 'respond'>(null);
+  const [busy, setBusy] = useState<null | 'receive' | 'upload' | 'respond' | 'dispute'>(null);
   const [actionMsg, setActionMsg] = useState('');
 
   // Mark-received input
@@ -61,6 +65,12 @@ export default function SellerReturnDetailPage() {
     useState<'ACCEPTED' | 'CONTESTED'>('CONTESTED');
   const [respondNotes, setRespondNotes] = useState('');
   const [respondEvidenceUrl, setRespondEvidenceUrl] = useState('');
+
+  // Phase 110 — formal dispute (escalation beyond the seller-response window).
+  const [showDispute, setShowDispute] = useState(false);
+  const [disputeKind, setDisputeKind] = useState<DisputeKind>('RETURN_REJECTED');
+  const [disputeSummary, setDisputeSummary] = useState('');
+  const [disputeIdemKey, setDisputeIdemKey] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -162,6 +172,47 @@ export default function SellerReturnDetailPage() {
     }
   };
 
+  const openDispute = () => {
+    setDisputeIdemKey(
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `dispute-${returnId}-${Date.now()}`,
+    );
+    setDisputeKind('RETURN_REJECTED');
+    setDisputeSummary('');
+    setActionMsg('');
+    setShowDispute(true);
+  };
+
+  const handleFileDispute = async () => {
+    if (disputeSummary.trim().length < 5) {
+      setActionMsg('Please describe the issue (at least 5 characters).');
+      return;
+    }
+    setBusy('dispute');
+    setActionMsg('');
+    try {
+      await sellerDisputesService.file(
+        { kind: disputeKind, summary: disputeSummary.trim(), returnId },
+        disputeIdemKey,
+      );
+      setActionMsg(
+        'Dispute filed — our team will review it; the customer has been notified.',
+      );
+      setShowDispute(false);
+      setDisputeSummary('');
+      await load();
+    } catch (err) {
+      setActionMsg(
+        (err as any)?.body?.message ||
+          (err as Error)?.message ||
+          'Failed to file dispute',
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (loading) {
     return <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Loading...</div>;
   }
@@ -182,14 +233,34 @@ export default function SellerReturnDetailPage() {
   // is valid only when the return is SHIPPED (package in transit back).
   // QC decision requires the return to be RECEIVED. Evidence upload is
   // allowed any time before QC is locked.
-  const canMarkReceived = ret.status === 'SHIPPED';
-  const canSubmitQc = ret.status === 'RECEIVED';
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #1 closure.
+  // Pre-Phase-100 this checked status === 'SHIPPED', which is NOT a
+  // valid ReturnStatus enum. The button NEVER rendered. Aligned with
+  // backend FSM (PICKUP_SCHEDULED | IN_TRANSIT → RECEIVED).
+  const canMarkReceived =
+    ret.status === 'IN_TRANSIT' || ret.status === 'PICKUP_SCHEDULED';
+  // Phase 100 — QC submission is admin-only (backend refuses non-
+  // ADMIN actorType). Kept false so the dead QC block never renders.
+  const canSubmitQc = false;
   // QC evidence is photos of the product as it arrived from the customer,
   // so the form only makes sense once the seller is physically holding
   // the package. Earlier states (pickup not scheduled, in transit) have
   // no product to photograph; later states (admin has already issued a
   // QC decision) have nothing left to add.
   const canUploadEvidence = ret.status === 'RECEIVED';
+  // Phase 110 — formal dispute is available once the return has progressed to
+  // a contestable state. The backend ownership guard + admin triage are the
+  // real gates; this is a UX availability hint.
+  const canFileDispute = [
+    'RECEIVED',
+    'QC_APPROVED',
+    'QC_REJECTED',
+    'PARTIALLY_APPROVED',
+    'REFUND_PROCESSING',
+    'REFUNDED',
+    'REFUND_FAILED',
+    'COMPLETED',
+  ].includes(ret.status);
 
   return (
     <div style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
@@ -458,6 +529,72 @@ export default function SellerReturnDetailPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Phase 110 — file a formal dispute (escalation) */}
+      {canFileDispute && (
+        <Section title="Contest this return">
+          {!showDispute ? (
+            <>
+              <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 10 }}>
+                Disagree with how this return was handled — wrong or damaged
+                item returned, items missing from the parcel, or the QC outcome?
+                File a formal dispute for the Sportsmart team to review.
+              </p>
+              <button
+                type="button"
+                onClick={openDispute}
+                style={{ height: 36, padding: '0 16px', border: '1px solid #b91c1c', background: '#fff', color: '#b91c1c', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+              >
+                File a dispute
+              </button>
+            </>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>Reason</label>
+              <select
+                value={disputeKind}
+                onChange={(e) => setDisputeKind(e.target.value as DisputeKind)}
+                disabled={busy !== null}
+                style={{ padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }}
+              >
+                <option value="RETURN_REJECTED">Disagree with QC / return outcome</option>
+                <option value="WRONG_ITEM_RECEIVED">Wrong item was returned</option>
+                <option value="DAMAGED_IN_TRANSIT">Item returned damaged</option>
+                <option value="MISSING_FROM_PARCEL">Item missing from return parcel</option>
+                <option value="OTHER">Other</option>
+              </select>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>Details</label>
+              <textarea
+                value={disputeSummary}
+                onChange={(e) => setDisputeSummary(e.target.value)}
+                placeholder="Describe the issue (min 5 characters)"
+                rows={4}
+                maxLength={5000}
+                disabled={busy !== null}
+                style={{ padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, resize: 'vertical' }}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={handleFileDispute}
+                  disabled={busy !== null}
+                  style={{ height: 36, padding: '0 16px', border: 'none', background: '#b91c1c', color: '#fff', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1 }}
+                >
+                  {busy === 'dispute' ? 'Filing…' : 'Submit dispute'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDispute(false)}
+                  disabled={busy !== null}
+                  style={{ height: 36, padding: '0 16px', border: '1px solid #d1d5db', background: '#fff', color: '#374151', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
 
       {/* Mark received */}
       {canMarkReceived && (

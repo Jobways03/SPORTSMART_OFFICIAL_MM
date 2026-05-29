@@ -11,6 +11,28 @@ import {
 import { ApiError, apiClient } from '@/lib/api-client';
 import { useModal } from '@sportsmart/ui';
 
+/**
+ * Phase 32 (2026-05-21) — bulk response now has three buckets:
+ *   - ok          : action landed this run
+ *   - alreadyDone : item was already in the target state (retry-safe)
+ *   - failed      : per-item failure with reason
+ *
+ * Pre-Phase-32 the UI lumped alreadyDone into failed which read as
+ * scary "X failed" on a retry. Render the three counts distinctly.
+ */
+function formatBulkSummary(
+  verb: string,
+  data: { ok?: string[]; alreadyDone?: string[]; failed?: Array<{ id: string; reason: string }> },
+): string {
+  const ok = data.ok?.length ?? 0;
+  const already = data.alreadyDone?.length ?? 0;
+  const failed = data.failed?.length ?? 0;
+  const parts = [`${verb} ${ok}`];
+  if (already > 0) parts.push(`${already} already done`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  return parts.join(' — ');
+}
+
 // ── Inventory panel types ───────────────────────────────────────
 // These mirror the response shape of the admin seller-mappings and
 // franchise-mappings endpoints. Defined locally because they're
@@ -261,18 +283,26 @@ export default function ProductsPage() {
 
   const runBulkApprove = async () => {
     if (selected.size === 0) return;
-    if (!(await confirmDialog(`Approve ${selected.size} selected product(s)?`)))
-      return;
+    // Phase 32 (2026-05-21) — explicit batch-size warning. The backend
+    // caps batches at 200 (BULK_MAX_BATCH), but anything north of 50
+    // is a clue the admin may have miss-clicked "select all" and
+    // deserves a louder confirmation before the moderator emails the
+    // batch goes out to every seller.
+    const promptMessage =
+      selected.size > 50
+        ? `Approve ${selected.size} selected product(s)? This will notify all of these sellers and make their listings live. Confirm?`
+        : `Approve ${selected.size} selected product(s)?`;
+    if (!(await confirmDialog(promptMessage))) return;
     setBulkSaving('approve');
     setBulkMessage('');
     try {
       const res = await adminProductsService.bulkApprove([...selected]);
       const d = res.data;
-      setBulkMessage(
-        d
-          ? `Approved ${d.ok.length}${d.failed.length ? ` — ${d.failed.length} failed` : ''}`
-          : 'Done',
-      );
+      // Phase 32 — bulk response now carries `alreadyDone` separately
+      // from `failed`. Surface it in the toast so a partial-retry
+      // doesn't read as "X failed" when those items were actually
+      // already in the target state from an earlier successful run.
+      setBulkMessage(d ? formatBulkSummary('Approved', d) : 'Done');
       clearSelection();
       await fetchProducts({ page: pagination.page });
     } catch (err) {
@@ -303,11 +333,8 @@ export default function ProductsPage() {
           ? await adminProductsService.bulkReject([...selected], text)
           : await adminProductsService.bulkRequestChanges([...selected], text);
       const d = res.data;
-      setBulkMessage(
-        d
-          ? `${bulkModal === 'reject' ? 'Rejected' : 'Changes requested on'} ${d.ok.length}${d.failed.length ? ` — ${d.failed.length} failed` : ''}`
-          : 'Done',
-      );
+      const verb = bulkModal === 'reject' ? 'Rejected' : 'Changes requested on';
+      setBulkMessage(d ? formatBulkSummary(verb, d) : 'Done');
       setBulkModal(null);
       setBulkNote('');
       clearSelection();
@@ -821,6 +848,30 @@ function ProductCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={styles.productTitle}>
             <span title={p.title}>{p.title}</span>
+            {/* Phase 32 (2026-05-21) — re-submission marker. A product
+                that's PENDING + SUBMITTED but has prior APPROVED
+                history is a re-review (seller edited a live product).
+                Moderators want to prioritise these because the seller
+                is already vetted and the change-set is usually small. */}
+            {p.isReSubmission && p.moderationStatus === 'PENDING' && (
+              <span
+                title="This seller previously had this product approved. Edits triggered a re-review."
+                style={{
+                  marginLeft: 8,
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: 0.4,
+                  textTransform: 'uppercase',
+                  borderRadius: 4,
+                  background: '#dbeafe',
+                  color: '#1e3a8a',
+                }}
+              >
+                Re-submission
+              </span>
+            )}
           </div>
           <div
             style={{

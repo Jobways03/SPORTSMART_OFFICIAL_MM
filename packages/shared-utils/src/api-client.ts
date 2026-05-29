@@ -48,6 +48,52 @@ export interface ApiClientConfig {
   defaultHeaders?: Record<string, string>;
 }
 
+/**
+ * Phase 26 (2026-05-20) — Step-up handler registration.
+ *
+ * Wiring: the React layer (StepUpHandlerProvider in the admin app)
+ * calls `registerStepUpHandler(fn)` once on mount. When the apiClient
+ * receives a 403 with `code: 'STEP_UP_REQUIRED'`, it awaits that
+ * function. If the function resolves true, the original request is
+ * retried (with the freshly-stamped step-up). If it resolves false
+ * (user cancelled), the original 403 propagates to the caller.
+ *
+ * Module-level because the apiClient is created at module load time
+ * (before any React provider mounts); a registrar lets the provider
+ * plug in afterwards without coupling shared-utils to React.
+ */
+export type StepUpHandler = (meta: {
+  maxAgeMs?: number;
+  message?: string;
+}) => Promise<boolean>;
+
+let stepUpHandler: StepUpHandler | null = null;
+
+export function registerStepUpHandler(handler: StepUpHandler | null): void {
+  stepUpHandler = handler;
+}
+
+function isStepUpRequiredBody(body: ApiResponse | undefined): boolean {
+  if (!body) return false;
+  if (body.code === 'STEP_UP_REQUIRED') return true;
+  // Nest's GlobalExceptionFilter sometimes nests the structured error
+  // under .data — handle both shapes.
+  const nested = (body as { data?: { code?: string } }).data;
+  return nested?.code === 'STEP_UP_REQUIRED';
+}
+
+function extractStepUpMeta(
+  body: ApiResponse | undefined,
+): { maxAgeMs?: number; message?: string } {
+  if (!body) return {};
+  const direct = (body as { meta?: { maxAgeMs?: number } }).meta;
+  const nested = (body as { data?: { meta?: { maxAgeMs?: number } } }).data?.meta;
+  return {
+    maxAgeMs: direct?.maxAgeMs ?? nested?.maxAgeMs,
+    message: body.message,
+  };
+}
+
 export interface ApiClient {
   apiClient: <T = unknown>(
     endpoint: string,
@@ -246,6 +292,28 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       if (attempt.status === 401) {
         clearTokensAndRedirect();
         throw new ApiError(attempt.status, attempt.body);
+      }
+    }
+
+    // Phase 26 (2026-05-20) — step-up recovery. The backend signals
+    // "this route requires a fresh MFA step-up" with HTTP 403 +
+    // body.code === 'STEP_UP_REQUIRED'. If a handler is registered
+    // (the admin app's StepUpHandlerProvider does so on mount),
+    // hand off — it opens a modal, collects a TOTP, POSTs to
+    // /admin/mfa/step-up, and resolves true on success. We then
+    // retry the original request exactly once. Refresh-failure
+    // path runs first so an expired access token short-circuits to
+    // the login redirect before a step-up modal can confuse the user.
+    if (attempt.status === 403 && isStepUpRequiredBody(attempt.body) && stepUpHandler) {
+      const meta = extractStepUpMeta(attempt.body);
+      let elevated = false;
+      try {
+        elevated = await stepUpHandler(meta);
+      } catch {
+        elevated = false;
+      }
+      if (elevated) {
+        attempt = await makeRequest<T>(url, options);
       }
     }
 

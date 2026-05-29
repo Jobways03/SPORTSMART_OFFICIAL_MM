@@ -42,4 +42,27 @@ export class CommissionPublicFacade {
       50,
     );
   }
+
+  /**
+   * Phase 69 (2026-05-22) — Phase 67 audit Gap #7. Resolve the
+   * commission rate that should be snapshotted onto a sub-order at
+   * place-order time. The Seller model doesn't currently carry a
+   * per-seller commission percentage (only the franchise side does
+   * via FranchisePublicFacade.getCommissionRate), so this returns
+   * the platform-wide CommissionSetting.commissionValue. When a
+   * per-seller commission column lands later, this is the single
+   * place to update — checkout doesn't change.
+   *
+   * Returns null only if the global settings row is missing (boot
+   * race) — the checkout caller treats null as "leave the snapshot
+   * unset; settlement will fall back to live settings at that
+   * time" which matches the legacy pre-Phase-69 behaviour.
+   */
+  async getCommissionRateForSeller(_sellerId: string): Promise<number | null> {
+    const settings = await this.commissionService.getCommissionSettings();
+    if (!settings) return null;
+    const rate = Number(settings.commissionValue);
+    if (!Number.isFinite(rate) || rate < 0) return null;
+    return rate;
+  }
 }

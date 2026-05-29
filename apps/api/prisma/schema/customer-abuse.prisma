@@ -21,14 +21,14 @@ model CustomerAbuseCounter {
 
   // Rolling-90-day aggregates. Updated atomically by the recompute
   // step; readers never see partial state.
-  windowStart    DateTime @map("window_start")
-  windowEnd      DateTime @map("window_end")
-  ordersLast90d  Int      @default(0) @map("orders_last_90d")
-  returnsLast90d Int      @default(0) @map("returns_last_90d")
-  disputesLast90d Int     @default(0) @map("disputes_last_90d")
+  windowStart     DateTime @map("window_start")
+  windowEnd       DateTime @map("window_end")
+  ordersLast90d   Int      @default(0) @map("orders_last_90d")
+  returnsLast90d  Int      @default(0) @map("returns_last_90d")
+  disputesLast90d Int      @default(0) @map("disputes_last_90d")
   /// Returns / Orders × 10000 (basis points). Null when ordersLast90d
   /// is zero — the customer hasn't ordered enough to have a rate.
-  returnRateBps  Int?     @map("return_rate_bps")
+  returnRateBps   Int?     @map("return_rate_bps")
 
   /// Set true by the recompute step when the customer crosses the
   /// configured abuse threshold (CUSTOMER_ABUSE_MIN_RETURNS +
@@ -43,7 +43,7 @@ model CustomerAbuseCounter {
   flagReason String? @map("flag_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([requiresManualApproval])
   @@index([returnRateBps])

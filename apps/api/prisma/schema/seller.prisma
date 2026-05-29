@@ -37,6 +37,13 @@ model Seller {
   sellerShopLogoPublicId      String?                  @map("seller_shop_logo_public_id")
   profileCompletionPercentage Int                      @default(0) @map("profile_completion_percentage")
   isEmailVerified             Boolean                  @default(false) @map("is_email_verified")
+  /// Phase 18 (2026-05-20) — exact verification timestamp. The
+  /// boolean isEmailVerified answers "verified now?"; the timestamp
+  /// answers "exactly when did the OTP-verify transaction land?"
+  /// Needed for compliance audit + the future re-verify-on-email-change
+  /// path. Nullable because legacy rows verified before this column
+  /// existed have no timestamp.
+  emailVerifiedAt             DateTime?                @map("email_verified_at")
   verificationStatus          SellerVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
   isProfileCompleted          Boolean                  @default(false) @map("is_profile_completed")
   lastProfileUpdatedAt        DateTime?                @map("last_profile_updated_at")
@@ -58,20 +65,60 @@ model Seller {
   // sellers issue Bill of Supply rather than Tax Invoice.
   //
   // See docs/tax/GST_ASSUMPTIONS.md §11 (composition seller policy).
-  gstin                         String?              @map("gstin")
-  legalBusinessName             String?              @map("legal_business_name")
-  registeredBusinessAddressJson Json?                @map("registered_business_address_json")
-  gstStateCode                  String?              @map("gst_state_code")
-  gstRegistrationType           GstRegistrationType  @default(REGULAR) @map("gst_registration_type")
-  isGstVerified                 Boolean              @default(false) @map("is_gst_verified")
-  gstVerifiedAt                 DateTime?            @map("gst_verified_at")
-  gstVerifiedBy                 String?              @map("gst_verified_by")
-  gstVerificationNotes          String?              @map("gst_verification_notes")
-  // PAN (positions 3-12 of GSTIN). Stored separately for cross-
-  // validation. panLast4 used for masked display in admin UI.
-  panNumber                     String?              @map("pan_number")
-  panLast4                      String?              @map("pan_last_4")
-  panVerified                   Boolean              @default(false) @map("pan_verified")
+  /// Phase 19 (2026-05-20) — @unique pins legal-entity uniqueness.
+  /// Two sellers cannot claim the same GSTIN. Postgres treats NULL
+  /// as distinct so multiple pre-onboarding rows with `gstin=NULL`
+  /// coexist; once submitted, the value must be unique.
+  gstin                         String?             @unique @map("gstin")
+  legalBusinessName             String?             @map("legal_business_name")
+  registeredBusinessAddressJson Json?               @map("registered_business_address_json")
+  gstStateCode                  String?             @map("gst_state_code")
+  gstRegistrationType           GstRegistrationType @default(REGULAR) @map("gst_registration_type")
+  isGstVerified                 Boolean             @default(false) @map("is_gst_verified")
+  gstVerifiedAt                 DateTime?           @map("gst_verified_at")
+  gstVerifiedBy                 String?             @map("gst_verified_by")
+  /// Phase 19 (2026-05-20) — historical "admin notes" column. Kept
+  /// for backward-compat reads on legacy rows; new approvals write to
+  /// `kycApprovalNotes` and rejections write to `kycRejectionReason`
+  /// instead of overloading this field.
+  gstVerificationNotes          String?             @map("gst_verification_notes")
+  /// Phase 19 (2026-05-20) — split from the overloaded
+  /// `gstVerificationNotes`. Free-text notes the admin attached on
+  /// the approve action (e.g. "verified GSTIN against GSTN portal,
+  /// match confirmed").
+  kycApprovalNotes              String?             @map("kyc_approval_notes")
+  /// Phase 19 (2026-05-20) — split from the overloaded
+  /// `gstVerificationNotes`. The exact reason the admin gave for
+  /// rejection. Surfaced to the seller in the onboarding UI so they
+  /// can fix and resubmit. Replaced by a fresh value on each reject.
+  kycRejectionReason            String?             @map("kyc_rejection_reason")
+  /// Phase 19 (2026-05-20) — when the most recent admin review
+  /// (approve OR reject) was decided. Distinct from
+  /// `gstVerifiedAt` which is now reserved for actual GSTN-portal
+  /// verification (Phase 19 split).
+  kycReviewedAt                 DateTime?           @map("kyc_reviewed_at")
+  /// Phase 19 (2026-05-20) — the admin who decided.
+  kycReviewedBy                 String?             @map("kyc_reviewed_by")
+  /// Phase 19 (2026-05-20) — DPDP / consent-archive: stamps when the
+  /// seller ticked "I confirm the information is accurate" on the
+  /// KYC submit form. Required for the audit trail; complements the
+  /// AuditLog row written by the use case.
+  kycConfirmedAccurateAt        DateTime?           @map("kyc_confirmed_accurate_at")
+  /// Phase 19 (2026-05-20) — split from `isGstVerified` which was
+  /// auto-flipped on admin approval (the audit flagged that as
+  /// misleading: approval ≠ GSTN-portal verification). This new
+  /// flag flips true ONLY when a separate admin action runs an
+  /// actual GSTN-portal lookup. `isGstVerified` is now retained for
+  /// backward-compat but no longer auto-flipped by approve.
+  isGstinManuallyVerified       Boolean             @default(false) @map("is_gstin_manually_verified")
+  /// PAN (positions 3-12 of GSTIN). Stored separately for cross-
+  /// validation. panLast4 used for masked display in admin UI.
+  ///
+  /// Phase 19 (2026-05-20) — @unique pins legal-entity uniqueness.
+  /// Same NULL-distinctness as the GSTIN field above.
+  panNumber                     String?             @unique @map("pan_number")
+  panLast4                      String?             @map("pan_last_4")
+  panVerified                   Boolean             @default(false) @map("pan_verified")
 
   // Phase 27 — Section 194-O sub-threshold exemption.
   // Individual / HUF sellers whose projected aggregate FY gross sale
@@ -79,28 +126,27 @@ model Seller {
   // from Section 194-O TDS. Admin attests this at onboarding /
   // annual review; flipping back to false re-arms TDS deduction
   // from the next settlement cycle. See docs/tax/TDS_194O_POLICY.md.
-  is194OExempt                  Boolean              @default(false) @map("is_194o_exempt")
-  exempt194OReason              String?              @map("exempt_194o_reason")
-  exempt194OAttestedBy          String?              @map("exempt_194o_attested_by")
-  exempt194OAttestedAt          DateTime?            @map("exempt_194o_attested_at")
+  is194OExempt         Boolean   @default(false) @map("is_194o_exempt")
+  exempt194OReason     String?   @map("exempt_194o_reason")
+  exempt194OAttestedBy String?   @map("exempt_194o_attested_by")
+  exempt194OAttestedAt DateTime? @map("exempt_194o_attested_at")
 
   // ─── Logistics entitlements (admin-controlled) ────────────────
-  // Toggled by marketplace admin in web-admin-storefront. The seller
-  // picks the actual delivery method per shipment from whatever is
-  // enabled here.
-  ithinkEnabled         Boolean                       @default(false) @map("ithink_enabled")
-  ithinkPickupAddressId String?                       @map("ithink_pickup_address_id")
-  ithinkWarehouseStatus IThinkWarehouseApprovalStatus @default(NOT_REGISTERED) @map("ithink_warehouse_status")
-  ithinkRegisteredAt    DateTime?                     @map("ithink_registered_at")
-  // SHA-256 of (storeAddress + city + state + sellerZipCode +
-  // sellerContactNumber) captured at registration time. Profile
-  // updates re-compute and compare to detect drift.
-  ithinkRegisteredAddressHash String?                 @map("ithink_registered_address_hash")
-  selfDeliveryEnabled   Boolean                       @default(false) @map("self_delivery_enabled")
+  // Toggled by marketplace admin in web-admin-storefront. Self-delivery
+  // is the only delivery method today (iThink removed).
+  selfDeliveryEnabled         Boolean                       @default(false) @map("self_delivery_enabled")
   // Optional pincode allowlist for self-delivery service area. JSON
   // array of pincode strings. NULL = serve everywhere the seller
   // operates; empty array = self-delivery disabled by area.
-  selfDeliveryPincodes Json? @map("self_delivery_pincodes")
+  selfDeliveryPincodes        Json?                         @map("self_delivery_pincodes")
+
+  // Phase 75 (2026-05-22) — Phase 73 reject-flow audit Gap #25.
+  // Per-seller accept SLA. Pre-Phase-75 every sub-order got the
+  // hard-coded 24h `ACCEPT_DEADLINE_MS`; a premium seller with a
+  // contractual 1h SLA got the same window as a slow seller. NULL
+  // falls back to the platform default (24h). Range 1..168 (1h to
+  // 7d) — service-layer guard.
+  acceptSlaHours Int? @map("accept_sla_hours")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -113,7 +159,7 @@ model Seller {
   subOrders         SubOrder[]
   commissionRecords CommissionRecord[]
   sellerSettlements SellerSettlement[]
-  gstins            SellerGstin[]      // Phase 1 GST — multi-GSTIN support
+  gstins            SellerGstin[] // Phase 1 GST — multi-GSTIN support
   // Phase 16 GST — TCS (Section 52) settlement ledger rows per
   // (sellerId, filingPeriod). One ACTIVE (non-REVERSED) row per
   // pairing enforced by partial UNIQUE index in the migration.
@@ -122,6 +168,10 @@ model Seller {
   // (sellerId, filingPeriod) quarterly. One active row per pairing
   // enforced by partial UNIQUE index in the migration.
   tds194OLedgers    Section194OTdsLedger[]
+  // Phase 19 (2026-05-20) — single-row 1:1 back-relation. Most
+  // sellers will have exactly one bank-details record; the unique
+  // constraint on SellerBankDetails.sellerId enforces 1:1.
+  bankDetails       SellerBankDetails?
 
   @@index([status])
   @@index([isProfileCompleted])
@@ -132,26 +182,50 @@ model Seller {
 }
 
 model SellerSession {
-  id           String    @id @default(uuid())
-  sellerId     String    @map("seller_id")
-  refreshToken String    @map("refresh_token")
+  id                       String    @id @default(uuid())
+  sellerId                 String    @map("seller_id")
+  /// Phase 21 (2026-05-20) — Stored as SHA-256 hex of the raw refresh
+  /// token via `hashRefreshToken()` in core/auth/refresh-token.ts. The
+  /// DB column is `refresh_token_hash` (see migration
+  /// 20260520180000_seller_session_hardening). The Prisma field name
+  /// stays `refreshToken` for backward-compat with existing callers.
+  refreshToken             String    @map("refresh_token_hash")
   // Phase 1 / C6 — refresh-token reuse detection. See AdminSession
   // for the contract.
-  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
-  userAgent    String?   @map("user_agent")
-  ipAddress    String?   @map("ip_address")
-  expiresAt    DateTime  @map("expires_at")
-  revokedAt    DateTime? @map("revoked_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  previousRefreshTokenHash String?   @map("previous_refresh_token_hash")
+  userAgent                String?   @map("user_agent")
+  ipAddress                String?   @map("ip_address")
+  expiresAt                DateTime  @map("expires_at")
+  revokedAt                DateTime? @map("revoked_at")
+  /// Phase 27 (2026-05-21) — forensic columns; see identity.prisma.
+  revokedBy                String?   @map("revoked_by")
+  revocationReason         String?   @map("revocation_reason") @db.Text
+  /// Phase 27 (2026-05-21) — bumped on each refresh-rotation.
+  lastUsedAt               DateTime? @map("last_used_at")
+  /// Phase 27 (2026-05-21) — UA-derived label.
+  deviceLabel              String?   @map("device_label") @db.VarChar(64)
+  createdAt                DateTime  @default(now()) @map("created_at")
 
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
   @@index([sellerId])
   @@index([refreshToken])
   @@index([previousRefreshTokenHash])
+  // Phase 21 (2026-05-20) — composite index for SellerAuthGuard's
+  // per-request "is this session still valid for this seller" lookup.
+  @@index([sellerId, revokedAt])
   @@map("seller_sessions")
 }
 
+/// Phase 18 (2026-05-20) — Seller OTP table.
+///
+/// Despite the historical name `SellerPasswordResetOtp`, this table
+/// now stores OTPs for BOTH password-reset and email-verification
+/// purposes — distinguished by the `purpose` column. We deliberately
+/// did NOT rename the model: renaming would force a Prisma client
+/// regen + touch 30+ callers. The TypeScript-side `SellerOtpPurpose`
+/// union pins the legal values; new purposes added here must update
+/// the union in `seller.repository.interface.ts`.
 model SellerPasswordResetOtp {
   id          String    @id @default(uuid())
   sellerId    String    @map("seller_id")
@@ -168,5 +242,54 @@ model SellerPasswordResetOtp {
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
   @@index([sellerId])
+  /// Phase 18 (2026-05-20) — every OTP lookup queries by (sellerId,
+  /// purpose, status fields). The composite index removes the
+  /// sequential scan over the seller's full OTP history when the
+  /// table grows.
+  @@index([sellerId, purpose])
+  /// Phase 18 (2026-05-20) — expiry sweep job's predicate.
+  @@index([expiresAt])
   @@map("seller_password_reset_otps")
+}
+
+/// Phase 19 (2026-05-20) — Seller payout bank details.
+///
+/// One-to-one with Seller (the @unique on sellerId enforces it).
+/// Holds the encrypted account number + last-4 + IFSC + optional
+/// UPI VPA so the platform can settle commissions on completed
+/// orders. Account number is AES-256 encrypted at rest (mirrors
+/// the AFFILIATE_ENCRYPTION_KEY pattern); the API exposes only
+/// `accountNumberLast4` outside the encryption boundary.
+///
+/// `verifiedAt` / `verifiedBy` are admin-side fields for a future
+/// penny-drop verification step. The Phase 19 PR only stores the
+/// raw details; the verification action is a follow-up.
+model SellerBankDetails {
+  id                 String    @id @default(uuid())
+  sellerId           String    @unique @map("seller_id")
+  accountHolderName  String    @map("account_holder_name") @db.VarChar(150)
+  /// Stores the AES-256 ciphertext (hex) of the raw account number.
+  /// Never the plaintext.
+  accountNumberEnc   String    @map("account_number_enc")
+  /// Last 4 digits for masked display (admin payout queue, seller
+  /// profile reveal). Never used as a lookup key.
+  accountNumberLast4 String    @map("account_number_last_4") @db.VarChar(4)
+  /// IFSC code (e.g. HDFC0001234). Validated against RBI's regex
+  /// at write time.
+  ifscCode           String    @map("ifsc_code") @db.VarChar(11)
+  bankName           String?   @map("bank_name") @db.VarChar(150)
+  upiVpa             String?   @map("upi_vpa") @db.VarChar(100)
+  // Phase 153 — optional payout-rail preference (UPI / IMPS / NEFT). The
+  // export honours it when the amount is valid for that rail, else falls back
+  // to amount-based routing. Plain string (validated in app) to avoid a DB
+  // enum migration; RTGS can be added as a rail later.
+  preferredPayoutMethod String? @map("preferred_payout_method") @db.VarChar(8)
+  verifiedAt         DateTime? @map("verified_at")
+  verifiedBy         String?   @map("verified_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@map("seller_bank_details")
 }

@@ -16,6 +16,7 @@ import {
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
 
@@ -42,6 +43,9 @@ const TYPE_COLUMN_MAP: Record<string, string> = {
 @ApiTags('Admin - Product Metafields')
 @Controller({ path: 'admin/products', version: '1' })
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+// Phase 29 (2026-05-21) — class-level `catalog.write` removed in favour
+// of per-method granularity. GET = catalog.read, write paths =
+// catalog.write below.
 export class AdminProductMetafieldsController {
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
@@ -52,6 +56,7 @@ export class AdminProductMetafieldsController {
 
   @Get(':productId/metafields')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.read')
   @ApiOperation({ summary: 'Get all metafield values for a product' })
   async getMetafields(@Param('productId') productId: string) {
     const product = await this.productRepo.findByIdBasic(productId);
@@ -86,6 +91,7 @@ export class AdminProductMetafieldsController {
 
   @Put(':productId/metafields')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.write')
   @ApiOperation({ summary: 'Bulk upsert metafield values for a product' })
   async upsertMetafields(
     @Param('productId') productId: string,
@@ -138,6 +144,7 @@ export class AdminProductMetafieldsController {
 
   @Delete(':productId/metafields/:metafieldId')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.write')
   @ApiOperation({ summary: 'Delete a specific product metafield value' })
   async deleteMetafield(
     @Param('productId') productId: string,

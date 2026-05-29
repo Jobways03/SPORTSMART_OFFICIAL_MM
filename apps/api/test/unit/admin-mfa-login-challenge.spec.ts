@@ -59,6 +59,7 @@ interface AdminRow {
   createdAt: Date;
   mfaEnabledAt?: Date | null;
   mfaSecretCiphertext?: string | null;
+  mfaLastUsedStep?: number | null;
 }
 
 class FakeAdminRepo {
@@ -78,6 +79,22 @@ class FakeAdminRepo {
   async updateAdmin(adminId: string, data: Record<string, unknown>) {
     const row = this.rows.get(adminId);
     if (row) Object.assign(row, data);
+  }
+
+  // Phase 1 / H3 — atomic CAS advance for the TOTP anti-replay step
+  // counter. The verify-challenge use-case calls this on every
+  // successful TOTP verify; without the fake, the path crashes.
+  async advanceMfaLastUsedStepCas(
+    adminId: string,
+    step: number,
+  ): Promise<boolean> {
+    const row = this.rows.get(adminId);
+    if (!row) return false;
+    if (row.mfaLastUsedStep != null && row.mfaLastUsedStep >= step) {
+      return false;
+    }
+    row.mfaLastUsedStep = step;
+    return true;
   }
 
   async createAdminSession(data: any) {
@@ -115,11 +132,27 @@ function makeVerifyUseCase(repo: FakeAdminRepo): AdminMfaVerifyChallengeUseCase 
     consume: async () => false,
     remainingCount: async () => 0,
   } as any;
+  // Phase 23 (2026-05-20) — AdminMfaVerifyChallengeUseCase gained
+  // AuditPublicFacade + EventBusService deps for verify-outcome
+  // audit + admin.mfa.backup_code_used emission. These tests don't
+  // assert on either path; stub them.
+  // Phase 26 (2026-05-20) — additionally gained AccessLogService
+  // (LOGIN_SUCCESS row on MFA-pass) + RedisService (challenge JTI
+  // one-time-use). Stub both as no-ops; redis.acquireLock returns
+  // true so the JTI consume always succeeds (single-attempt tests).
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+  const eventBus = { publish: jest.fn().mockResolvedValue(undefined) } as any;
+  const accessLog = { record: jest.fn().mockResolvedValue(undefined) } as any;
+  const redis = { acquireLock: jest.fn().mockResolvedValue(true) } as any;
   return new AdminMfaVerifyChallengeUseCase(
     repo as any,
     makeEnv(),
     makeCipher(),
     backupCodes,
+    audit,
+    eventBus,
+    accessLog,
+    redis,
   );
 }
 

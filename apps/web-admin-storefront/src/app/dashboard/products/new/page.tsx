@@ -251,12 +251,16 @@ export default function CreateProductPage() {
       const payload = buildPayload();
       const res = await adminProductsService.createProduct(payload);
 
+      // Phase 32 (2026-05-21) — POST /admin/products always returns
+      // `data.id` on success; the missing-id branch was previously
+      // treated as "saved as draft" which silently swallowed a
+      // server-shape regression. Surface it as an error so the admin
+      // doesn't think the product landed when it actually didn't.
       if (res.data?.id) {
         showToast('success', 'Product created! Redirecting to add images and variants...');
         setTimeout(() => router.push(`/dashboard/products/${res.data!.id}/edit`), 1200);
       } else {
-        showToast('success', 'Product saved as draft.');
-        setTimeout(() => router.push('/dashboard/products'), 800);
+        showToast('error', 'Product creation returned an unexpected response. Please refresh and check the products list.');
       }
     } catch (err) {
       if (err instanceof ApiError) {

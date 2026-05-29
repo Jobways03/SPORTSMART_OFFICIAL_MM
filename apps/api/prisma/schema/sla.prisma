@@ -44,17 +44,17 @@ model SlaPolicy {
 
   /// Optional escalation: re-assign / boost severity after the deadline
   /// elapses by this many minutes. Null = no auto-escalation.
-  escalateAfterMinutes Int? @map("escalate_after_minutes")
+  escalateAfterMinutes Int?    @map("escalate_after_minutes")
   /// What "escalate" means in this context: "REASSIGN_SENIOR" |
   /// "BOOST_SEVERITY" | "NOTIFY_MANAGER". The escalation service
   /// branches on this — kept as text so we can add tactics without
   /// a schema change.
-  escalateAction String? @map("escalate_action")
+  escalateAction       String? @map("escalate_action")
 
   enabled Boolean @default(true)
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   breaches SlaBreach[]
 
@@ -97,7 +97,7 @@ model SlaBreach {
   overdueMinutes Int? @map("overdue_minutes")
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   /// One open breach per (resource, policy). Re-runs of the detector
   /// cron upsert against this — they don't write a fresh row every

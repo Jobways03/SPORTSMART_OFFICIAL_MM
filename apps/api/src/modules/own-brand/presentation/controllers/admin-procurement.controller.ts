@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { OwnBrandService } from '../../application/services/own-brand.service';
 import {
@@ -22,6 +23,7 @@ import {
 @ApiTags('NOVA — Procurement')
 @Controller('admin/nova/procurement')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('nova.procurement')
 export class AdminNovaProcurementController {
   constructor(private readonly service: OwnBrandService) {}
 

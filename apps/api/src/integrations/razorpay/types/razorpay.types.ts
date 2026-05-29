@@ -10,11 +10,22 @@ export interface NormalizedPaymentCaptureResult {
   capturedAt: Date;
 }
 
+// Phase 96 (2026-05-23) — Phase 98 audit Gap #1/#22 closure.
+//
+// Pre-Phase-96 the union was `'processed' | 'failed'` and the adapter
+// coerced everything not-processed (including the normal `pending`
+// initial state) to `'failed'`. The gateway service then treated the
+// false `'failed'` as success — a critical accounting drift.
+//
+// Razorpay's documented refund statuses are: pending, processed,
+// failed. We propagate the real string so callers can branch
+// correctly + the webhook handler can reconcile asynchronously
+// confirmed refunds.
 export interface NormalizedRefundResult {
   providerRefundId: string;
   paymentId: string;
   amountInPaise: bigint;
-  status: 'processed' | 'failed';
+  status: 'processed' | 'pending' | 'failed';
   processedAt: Date;
 }
 

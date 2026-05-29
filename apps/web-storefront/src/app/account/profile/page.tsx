@@ -331,28 +331,7 @@ export default function ProfilePage() {
               </div>
 
               <div className="profile-field">
-                <label htmlFor="phone">
-                  Phone
-                  {profile && profile.phone && (
-                    <span
-                      className={
-                        profile.phoneVerified ? 'profile-verified-badge' : 'profile-unverified-badge'
-                      }
-                    >
-                      {profile.phoneVerified ? (
-                        <>
-                          <span className="profile-badge-icon">{ICONS.check}</span>
-                          Verified
-                        </>
-                      ) : (
-                        <>
-                          <span className="profile-badge-icon">{ICONS.alert}</span>
-                          Unverified
-                        </>
-                      )}
-                    </span>
-                  )}
-                </label>
+                <label htmlFor="phone">Phone</label>
                 <input
                   id="phone"
                   type="tel"

@@ -73,7 +73,10 @@ describe('ProcurementService.approveRequest — write-back variant.costPrice', (
         findUnique: jest.fn().mockResolvedValue(null),
         update: jest.fn().mockResolvedValue({}),
       },
+      // Phase 159p — approveRequest now runs in a tx + writes a history row.
+      procurementRequestEvent: { create: jest.fn().mockResolvedValue({}) },
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
 
     const franchiseRepo: any = {};
     const catalogRepo: any = {};
@@ -88,7 +91,7 @@ describe('ProcurementService.approveRequest — write-back variant.costPrice', (
     };
 
     // Constructor order: procurementRepo, catalogRepo, franchiseRepo,
-    // inventoryService, commissionService, eventBus, logger, prisma.
+    // inventoryService, commissionService, eventBus, logger, prisma, env.
     const svc = new ProcurementService(
       procurementRepo,
       catalogRepo,
@@ -98,6 +101,7 @@ describe('ProcurementService.approveRequest — write-back variant.costPrice', (
       eventBus,
       logger,
       prisma,
+      { get: jest.fn(), getOptional: jest.fn() } as any, // env
     );
 
     return { svc, prisma, procurementRepo, variantUpdate, productUpdate, logger };

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AffiliatePublicFacade } from '../facades/affiliate-public.facade';
 
 /**
@@ -17,7 +18,13 @@ import { AffiliatePublicFacade } from '../facades/affiliate-public.facade';
 export class AffiliateOrderEventHandler {
   private readonly logger = new Logger(AffiliateOrderEventHandler.name);
 
-  constructor(private readonly affiliateFacade: AffiliatePublicFacade) {}
+  constructor(
+    private readonly affiliateFacade: AffiliatePublicFacade,
+    // Phase 87 — sub-order lookup for the shipping.rto.delivered
+    // subscriber (RTO events carry subOrderId, the facade needs
+    // masterOrderId).
+    private readonly prismaForSubLookup: PrismaService,
+  ) {}
 
   /**
    * Online payments emit this once Razorpay confirms capture; the COD
@@ -100,6 +107,40 @@ export class AffiliateOrderEventHandler {
     } catch (err) {
       this.logger.error(
         `Failed to reverse affiliate commission for order ${orderId}: ${(err as Error)?.message}`,
+      );
+    }
+  }
+
+  /**
+   * Phase 87 (2026-05-23) — NDR/RTO audit Gap #9. RTO_DELIVERED is
+   * a deemed-cancellation: customer paid → goods came back → seller
+   * does NOT keep the sale → affiliate commission must reverse. Pre-
+   * Phase-87 the event was published but no subscriber existed and
+   * affiliates got paid for orders that had been returned at the
+   * carrier hand-off.
+   *
+   * Resolves the masterOrderId from the sub-order id in the payload
+   * (the shipping event is sub-order-scoped because RTO is per-shipment).
+   */
+  @OnEvent('shipping.rto.delivered')
+  async onShippingRtoDelivered(event: any) {
+    const subOrderId = event?.payload?.subOrderId;
+    if (!subOrderId) return;
+    try {
+      const sub = await this.prismaForSubLookup.subOrder.findUnique({
+        where: { id: subOrderId },
+        select: { masterOrderId: true },
+      });
+      if (!sub?.masterOrderId) return;
+      await this.affiliateFacade.cancelOrReverseForOrder(
+        sub.masterOrderId,
+        'RTO_DELIVERED',
+      );
+    } catch (err) {
+      this.logger.error(
+        `Failed to reverse affiliate commission on RTO_DELIVERED for sub-order ${subOrderId}: ${
+          (err as Error)?.message
+        }`,
       );
     }
   }

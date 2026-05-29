@@ -136,33 +136,33 @@ model OwnBrandProcurementSequence {
 // ─────────────────────────────────────────────────────────────────
 
 enum OwnBrandStockMovementKind {
-  RECEIPT      // PO receive — supplier shipment landed
-  ADJUSTMENT   // admin manual correction (damage, loss, recount)
-  SALE         // own-brand order picked + dispatched
-  TRANSFER_IN  // moved in from another warehouse
+  RECEIPT // PO receive — supplier shipment landed
+  ADJUSTMENT // admin manual correction (damage, loss, recount)
+  SALE // own-brand order picked + dispatched
+  TRANSFER_IN // moved in from another warehouse
   TRANSFER_OUT // moved out to another warehouse
 }
 
 model OwnBrandStockMovement {
-  id           String                    @id @default(uuid())
-  warehouseId  String                    @map("warehouse_id")
-  productId    String                    @map("product_id")
-  variantId    String?                   @map("variant_id")
-  kind         OwnBrandStockMovementKind
+  id               String                    @id @default(uuid())
+  warehouseId      String                    @map("warehouse_id")
+  productId        String                    @map("product_id")
+  variantId        String?                   @map("variant_id")
+  kind             OwnBrandStockMovementKind
   // Signed delta in units. Receipts/transfer-in positive,
   // sales/adjustments-down/transfer-out negative.
-  delta        Int
+  delta            Int
   // Stock balance immediately after this row was applied. Lets us
   // reconstruct point-in-time stock without re-summing.
-  stockAfter   Int                       @map("stock_after")
+  stockAfter       Int                       @map("stock_after")
   // Why — required for ADJUSTMENT, snapshotted from PO/sale ref otherwise.
-  reason       String?
+  reason           String?
   // Polymorphic linkage: which PO / order / transfer caused this.
-  refType      String?                   @map("ref_type")
-  refId        String?                   @map("ref_id")
+  refType          String?                   @map("ref_type")
+  refId            String?                   @map("ref_id")
   // Admin actor for manual adjustments (null for system-generated).
-  createdByAdminId String?               @map("created_by_admin_id")
-  createdAt    DateTime                  @default(now()) @map("created_at")
+  createdByAdminId String?                   @map("created_by_admin_id")
+  createdAt        DateTime                  @default(now()) @map("created_at")
 
   @@index([warehouseId, productId, variantId, createdAt(sort: Desc)])
   @@index([refType, refId])
@@ -177,13 +177,13 @@ model OwnBrandStockMovement {
 // ─────────────────────────────────────────────────────────────────
 
 model OwnBrandProcurementReceipt {
-  id               String   @id @default(uuid())
-  poId             String   @map("po_id")
-  poItemId         String   @map("po_item_id")
-  quantityReceived Int      @map("quantity_received")
-  notes            String?
-  receivedByAdminId String? @map("received_by_admin_id")
-  createdAt        DateTime @default(now()) @map("created_at")
+  id                String   @id @default(uuid())
+  poId              String   @map("po_id")
+  poItemId          String   @map("po_item_id")
+  quantityReceived  Int      @map("quantity_received")
+  notes             String?
+  receivedByAdminId String?  @map("received_by_admin_id")
+  createdAt         DateTime @default(now()) @map("created_at")
 
   @@index([poId, createdAt])
   @@index([poItemId])

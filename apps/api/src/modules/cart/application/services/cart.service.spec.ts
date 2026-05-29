@@ -1,6 +1,24 @@
 import 'reflect-metadata';
 import { CartService } from './cart.service';
 import { CartRepository } from '../../domain/repositories/cart.repository.interface';
+import type { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
+
+// Phase 44 (2026-05-21) — minimal CatalogPublicFacade stub for the
+// CartService unit tests. resolveBatchUnitPrices returns a pass-
+// through (list price = effective price, no tier applied) so addItem
+// / quantity-update specs that don't care about tiers stay green.
+const makeCatalogStub = (): jest.Mocked<Pick<CatalogPublicFacade, 'resolveBatchUnitPrices' | 'resolveUnitPrice'>> => ({
+  resolveBatchUnitPrices: jest.fn(async (items: ReadonlyArray<{ listUnitPrice: number }>) =>
+    items.map((i) => ({
+      effectiveUnitPrice: i.listUnitPrice,
+      appliedTierId: null,
+      appliedDiscountPercent: null,
+      appliedFixedUnitPrice: null,
+      listUnitPrice: i.listUnitPrice,
+    })),
+  ),
+  resolveUnitPrice: jest.fn(),
+} as any);
 
 /**
  * Phase 1 (PR 1.9) — Cart add-item atomicity.
@@ -46,7 +64,9 @@ function makeRepo(overrides: Partial<CartRepository> = {}): jest.Mocked<CartRepo
     findByCustomerId: jest.fn().mockResolvedValue(null),
     upsertCart: jest.fn().mockResolvedValue({ id: 'cart-1' }),
     findCartItem: jest.fn().mockResolvedValue(null),
-    addCartItem: jest.fn().mockResolvedValue(undefined),
+    // Phase 61 (2026-05-22) — addCartItem removed from the
+    // interface (audit Gap #16); the legacy non-atomic write path
+    // is dead. Tests no longer mock it.
     updateCartItemQuantity: jest.fn().mockResolvedValue(undefined),
     deleteCartItem: jest.fn().mockResolvedValue(undefined),
     clearCart: jest.fn().mockResolvedValue(undefined),
@@ -57,7 +77,10 @@ function makeRepo(overrides: Partial<CartRepository> = {}): jest.Mocked<CartRepo
     validateVariant: jest.fn().mockResolvedValue(true),
     countActiveItemsForVariant: jest.fn().mockResolvedValue(0),
     countActiveItemsForProduct: jest.fn().mockResolvedValue(0),
-    // PR 1.9 — new atomic primitive
+    countCartItemsForCustomer: jest.fn().mockResolvedValue(0),
+    deleteAbandonedCartsOlderThan: jest.fn().mockResolvedValue(0),
+    // PR 1.9 — new atomic primitive (Phase 61 signature with
+    // availableStock + price snapshot + cart-line cap)
     incrementOrCreateCartItem: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as jest.Mocked<CartRepository>;
@@ -66,22 +89,30 @@ function makeRepo(overrides: Partial<CartRepository> = {}): jest.Mocked<CartRepo
 describe('CartService.addItem (PR 1.9 — atomicity)', () => {
   it('delegates the find+create/update step to incrementOrCreateCartItem (atomic)', async () => {
     const repo = makeRepo();
-    const svc = new CartService(repo);
+    const svc = new CartService(repo, makeCatalogStub() as any);
 
     await svc.addItem('cust-1', 'prod-1', 'var-1', 3);
 
+    // Phase 61 — the primitive now takes a 5th args object
+    // (availableStock + price snapshot + cart-line cap) so the
+    // stock floor is enforced inside the FOR UPDATE.
     expect(repo.incrementOrCreateCartItem).toHaveBeenCalledTimes(1);
     expect(repo.incrementOrCreateCartItem).toHaveBeenCalledWith(
       'cart-1',
       'prod-1',
       'var-1',
       3,
+      expect.objectContaining({
+        availableStock: expect.any(Number),
+        unitPriceInPaiseSnapshot: expect.anything(),
+        cartLineCap: expect.any(Number),
+      }),
     );
   });
 
   it('passes variantId=null when no variant is given', async () => {
     const repo = makeRepo();
-    const svc = new CartService(repo);
+    const svc = new CartService(repo, makeCatalogStub() as any);
 
     await svc.addItem('cust-1', 'prod-1', undefined, 2);
 
@@ -90,6 +121,11 @@ describe('CartService.addItem (PR 1.9 — atomicity)', () => {
       'prod-1',
       null,
       2,
+      expect.objectContaining({
+        availableStock: expect.any(Number),
+        unitPriceInPaiseSnapshot: expect.anything(),
+        cartLineCap: expect.any(Number),
+      }),
     );
   });
 
@@ -99,11 +135,12 @@ describe('CartService.addItem (PR 1.9 — atomicity)', () => {
     // pre-write stock check (existingQty), but the create/update side
     // must go through the atomic primitive only.
     const repo = makeRepo();
-    const svc = new CartService(repo);
+    const svc = new CartService(repo, makeCatalogStub() as any);
 
     await svc.addItem('cust-1', 'prod-1', 'var-1', 1);
 
-    expect(repo.addCartItem).not.toHaveBeenCalled();
+    // Phase 61 — addCartItem fully removed; updateCartItemQuantity
+    // is still used by updateItem but never by addItem.
     expect(repo.updateCartItemQuantity).not.toHaveBeenCalled();
   });
 
@@ -111,7 +148,7 @@ describe('CartService.addItem (PR 1.9 — atomicity)', () => {
     const repo = makeRepo({
       validateProduct: jest.fn().mockResolvedValue(false),
     });
-    const svc = new CartService(repo);
+    const svc = new CartService(repo, makeCatalogStub() as any);
 
     await expect(
       svc.addItem('cust-1', 'prod-missing', 'var-1', 1),
@@ -122,7 +159,7 @@ describe('CartService.addItem (PR 1.9 — atomicity)', () => {
 
   it('still rejects quantity < 1 before any repo call', async () => {
     const repo = makeRepo();
-    const svc = new CartService(repo);
+    const svc = new CartService(repo, makeCatalogStub() as any);
 
     await expect(svc.addItem('cust-1', 'prod-1', 'var-1', 0)).rejects.toThrow(
       /at least 1/,
@@ -131,18 +168,28 @@ describe('CartService.addItem (PR 1.9 — atomicity)', () => {
     expect(repo.incrementOrCreateCartItem).not.toHaveBeenCalled();
   });
 
-  it('still enforces aggregated stock against existing-in-cart + requested', async () => {
+  it('still enforces aggregated stock against existing-in-cart + requested (Phase 61 — inside the primitive)', async () => {
+    // Phase 61 — the stock floor moved INSIDE the FOR UPDATE
+    // primitive (audit Gap #7). The service no longer pre-checks
+    // existingQty + availableStock; instead the primitive sees the
+    // row-locked existingQty and throws INSUFFICIENT_STOCK when
+    // the floor would be violated. The service maps that to a 400.
     const repo = makeRepo({
       getAggregatedStock: jest.fn().mockResolvedValue(5),
       findCartByCustomerId: jest.fn().mockResolvedValue({ id: 'cart-1' }),
       findCartItem: jest.fn().mockResolvedValue({ id: 'item-1', quantity: 3 }),
+      incrementOrCreateCartItem: jest.fn().mockRejectedValue(
+        Object.assign(new Error('Insufficient stock'), {
+          code: 'INSUFFICIENT_STOCK',
+        }),
+      ),
     });
-    const svc = new CartService(repo);
+    const svc = new CartService(repo, makeCatalogStub() as any);
 
-    // existing=3, requested=3, available=5 → reject (would exceed by 1)
     await expect(svc.addItem('cust-1', 'prod-1', 'var-1', 3)).rejects.toThrow(
       /Insufficient stock/,
     );
-    expect(repo.incrementOrCreateCartItem).not.toHaveBeenCalled();
+    // primitive WAS called this time (the floor is inside it)
+    expect(repo.incrementOrCreateCartItem).toHaveBeenCalled();
   });
 });

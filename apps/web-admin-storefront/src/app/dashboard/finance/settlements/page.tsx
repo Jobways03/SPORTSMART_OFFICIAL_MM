@@ -15,7 +15,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { usePermissions } from '@/lib/permissions';
 import { paiseToRupeesString } from '@sportsmart/shared-utils';
+
+interface CyclePreview {
+  recordCount: number;
+  sellerCount: number;
+  totalSettlementAmount: string;
+  totalMargin: string;
+  overlap: { id: string; status: string } | null;
+  asOf?: string;
+}
 
 interface SettlementCycle {
   id: string;
@@ -56,6 +66,17 @@ export default function SettlementCyclesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const { hasPermission } = usePermissions();
+  const canCreate = hasPermission('settlements.createCycle');
+
+  // Create-cycle modal (preview → confirm)
+  const [showCreate, setShowCreate] = useState(false);
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const [preview, setPreview] = useState<CyclePreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [modalError, setModalError] = useState('');
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -71,6 +92,67 @@ export default function SettlementCyclesPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const openCreate = () => {
+    setShowCreate(true);
+    setPeriodStart('');
+    setPeriodEnd('');
+    setPreview(null);
+    setModalError('');
+  };
+
+  const doPreview = async () => {
+    if (!periodStart || !periodEnd) {
+      setModalError('Pick both a start and end date.');
+      return;
+    }
+    setBusy(true);
+    setModalError('');
+    try {
+      const res = await apiClient<CyclePreview>('/admin/settlements/preview-cycle', {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      });
+      setPreview((res?.data as CyclePreview) ?? (res as unknown as CyclePreview));
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : 'Preview failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doCreate = async () => {
+    setBusy(true);
+    setModalError('');
+    try {
+      await apiClient('/admin/settlements/create-cycle', {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      });
+      setShowCreate(false);
+      await load();
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : 'Create failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doCancel = async (cycle: SettlementCycle) => {
+    const reason = window.prompt(
+      `Cancel cycle ${cycle.id.slice(0, 8)}… ? This releases its claimed commission records back to the pool. Enter a reason:`,
+    );
+    if (!reason || reason.trim().length < 3) return;
+    try {
+      await apiClient(`/admin/settlements/cycles/${cycle.id}/cancel`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cancel failed');
+    }
+  };
 
   const counts = useMemo(() => {
     const byStatus: Record<string, number> = {};
@@ -99,14 +181,22 @@ export default function SettlementCyclesPage() {
 
   return (
     <main style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>
-          Settlement cycles
-        </h1>
-        <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', maxWidth: 720, lineHeight: 1.5 }}>
-          Weekly aggregation of seller commissions into payable settlements. Click a row to see the
-          per-seller margin breakdown, opening / closing balance, and Tally CSV export.
-        </p>
+      <div style={{
+        marginBottom: 16, display: 'flex', justifyContent: 'space-between',
+        alignItems: 'flex-start', gap: 16, flexWrap: 'wrap',
+      }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0F1115' }}>
+            Settlement cycles
+          </h1>
+          <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', maxWidth: 720, lineHeight: 1.5 }}>
+            Weekly aggregation of seller commissions into payable settlements. Click a row to see the
+            per-seller margin breakdown, opening / closing balance, and Tally CSV export.
+          </p>
+        </div>
+        {canCreate && (
+          <button onClick={openCreate} style={btnPrimary}>+ New cycle</button>
+        )}
       </div>
 
       <KpiStrip counts={counts} loading={loading && items.length === 0} />
@@ -147,15 +237,116 @@ export default function SettlementCyclesPage() {
             </thead>
             <tbody>
               {items.map((cy) => (
-                <Row key={cy.id} cycle={cy} />
+                <Row
+                  key={cy.id}
+                  cycle={cy}
+                  canCancel={canCreate}
+                  onCancel={() => doCancel(cy)}
+                />
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {showCreate && (
+        <div
+          onClick={() => !busy && setShowCreate(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 50, padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 14, padding: 24, width: 460, maxWidth: '100%' }}
+          >
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F1115' }}>
+              New settlement cycle
+            </h3>
+            <p style={{ fontSize: 13, color: '#525A65', marginTop: 8, lineHeight: 1.5 }}>
+              Groups all unsettled commissions whose return window closed in the period (IST).
+              Preview first to see what would be included.
+            </p>
+            <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+              <label style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#525A65' }}>
+                From
+                <input type="date" value={periodStart}
+                  onChange={(e) => { setPeriodStart(e.target.value); setPreview(null); }}
+                  style={modalInput} />
+              </label>
+              <label style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#525A65' }}>
+                To
+                <input type="date" value={periodEnd}
+                  onChange={(e) => { setPeriodEnd(e.target.value); setPreview(null); }}
+                  style={modalInput} />
+              </label>
+            </div>
+
+            {preview && (
+              <div style={{
+                marginTop: 12, padding: '10px 12px', borderRadius: 10,
+                background: '#F9FAFB', border: '1px solid #F3F4F6', fontSize: 13, color: '#0F1115',
+              }}>
+                {preview.recordCount === 0 ? (
+                  <span style={{ color: '#92400e' }}>No unsettled commission records in this period.</span>
+                ) : (
+                  <>
+                    <strong>{preview.recordCount.toLocaleString('en-IN')}</strong> records ·{' '}
+                    <strong>{preview.sellerCount}</strong> sellers · settlement{' '}
+                    <strong>₹{preview.totalSettlementAmount}</strong> · margin{' '}
+                    <strong>₹{preview.totalMargin}</strong>
+                  </>
+                )}
+                {preview.overlap && (
+                  <div style={{ marginTop: 6, color: '#b91c1c' }}>
+                    ⚠ Overlaps existing cycle {preview.overlap.id.slice(0, 8)}… ({preview.overlap.status}).
+                    Creation will be rejected.
+                  </div>
+                )}
+                {preview.asOf && preview.recordCount > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 11, color: '#9CA3AF' }}>
+                    Snapshot as of {new Date(preview.asOf).toLocaleString('en-IN')} — totals may
+                    change if commissions are confirmed before you create.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {modalError && (
+              <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8 }}>{modalError}</div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button onClick={() => setShowCreate(false)} disabled={busy} style={btnGhost}>Cancel</button>
+              <button onClick={doPreview} disabled={busy} style={btnGhost}>
+                {busy ? 'Working…' : 'Preview'}
+              </button>
+              <button
+                onClick={doCreate}
+                disabled={busy || !preview || preview.recordCount === 0 || !!preview.overlap}
+                style={
+                  busy || !preview || preview.recordCount === 0 || !!preview.overlap
+                    ? { ...btnPrimary, opacity: 0.5, cursor: 'not-allowed' }
+                    : btnPrimary
+                }
+                title={!preview ? 'Preview first' : undefined}
+              >
+                Create cycle
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
+
+const modalInput: React.CSSProperties = {
+  width: '100%', marginTop: 4, height: 38, padding: '0 10px',
+  border: '1px solid #E5E7EB', borderRadius: 10, fontSize: 13, color: '#0F1115',
+};
 
 // ── KPI strip ─────────────────────────────────────────────────────
 
@@ -237,8 +428,17 @@ function Kpi({
 
 // ── Row ───────────────────────────────────────────────────────────
 
-function Row({ cycle: cy }: { cycle: SettlementCycle }) {
+function Row({
+  cycle: cy,
+  canCancel,
+  onCancel,
+}: {
+  cycle: SettlementCycle;
+  canCancel: boolean;
+  onCancel: () => void;
+}) {
   const tone = STATUS_TONE[cy.status] ?? { color: '#525A65', chip: '#F3F4F6' };
+  const cancellable = cy.status === 'DRAFT' || cy.status === 'PREVIEWED';
   return (
     <tr style={{ borderTop: '1px solid #F3F4F6' }}>
       <td style={td}>
@@ -280,9 +480,14 @@ function Row({ cycle: cy }: { cycle: SettlementCycle }) {
         {relTime(new Date(cy.createdAt))}
       </td>
       <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
-        <Link href={`/dashboard/finance/settlements/${cy.id}`} style={btnPrimary}>
-          View detail <ArrowRight />
-        </Link>
+        <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          {canCancel && cancellable && (
+            <button onClick={onCancel} style={btnGhost}>Cancel</button>
+          )}
+          <Link href={`/dashboard/finance/settlements/${cy.id}`} style={btnPrimary}>
+            View detail <ArrowRight />
+          </Link>
+        </div>
       </td>
     </tr>
   );
@@ -381,7 +586,15 @@ const btnPrimary: React.CSSProperties = {
   background: '#0F1115', color: '#fff',
   border: '1px solid #0F1115', borderRadius: 9999,
   fontSize: 12, fontWeight: 600, textDecoration: 'none',
-  whiteSpace: 'nowrap',
+  whiteSpace: 'nowrap', cursor: 'pointer',
+};
+const btnGhost: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+  height: 32, padding: '0 14px',
+  background: '#fff', color: '#0F1115',
+  border: '1px solid #E5E7EB', borderRadius: 9999,
+  fontSize: 12, fontWeight: 600, textDecoration: 'none',
+  whiteSpace: 'nowrap', cursor: 'pointer',
 };
 const th: React.CSSProperties = {
   padding: '12px 16px', textAlign: 'left',

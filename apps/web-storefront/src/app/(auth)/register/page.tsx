@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useCallback, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -21,27 +21,50 @@ import {
   validateLastName,
   validateEmail,
   validatePassword,
+  validateConfirmPassword,
 } from '@/lib/validators';
+import { CaptchaWidget } from '@/components/CaptchaWidget';
 
 interface FormErrors {
   firstName?: string;
   lastName?: string;
   email?: string;
+  phone?: string;
   password?: string;
+  confirmPassword?: string;
+  acceptTerms?: string;
+  acceptPrivacy?: string;
+  captchaToken?: string;
 }
+
+const CAPTCHA_REQUIRED =
+  (process.env.NEXT_PUBLIC_CAPTCHA_PROVIDER ?? 'disabled').toLowerCase() !==
+  'disabled';
 
 export default function RegisterPage() {
   const router = useRouter();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acceptPrivacy, setAcceptPrivacy] = useState(false);
+  const [acceptMarketing, setAcceptMarketing] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  const onCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+  }, []);
 
   const validateField = (field: string, value: string): string | null => {
     switch (field) {
@@ -53,8 +76,6 @@ export default function RegisterPage() {
     }
   };
 
-  // Don't surface "required" errors on blur of empty fields; only validate
-  // format / length once the user has actually typed something.
   const handleBlur = (field: keyof FormErrors, value: string) => {
     if (!value.trim()) {
       setErrors((prev) => ({ ...prev, [field]: undefined }));
@@ -70,10 +91,23 @@ export default function RegisterPage() {
     const lnErr = validateLastName(lastName);
     const emErr = validateEmail(email);
     const pwErr = validatePassword(password);
+    const cpErr = validateConfirmPassword(password, confirmPassword);
     if (fnErr) newErrors.firstName = fnErr;
     if (lnErr) newErrors.lastName = lnErr;
     if (emErr) newErrors.email = emErr;
+    // Phone is optional — but if provided, must be a 10-digit India
+    // mobile starting with 6/7/8/9 (matches backend DTO regex).
+    if (phone && !/^[6-9]\d{9}$/.test(phone)) {
+      newErrors.phone =
+        'Enter a 10-digit Indian mobile starting with 6, 7, 8, or 9';
+    }
     if (pwErr) newErrors.password = pwErr;
+    if (cpErr) newErrors.confirmPassword = cpErr;
+    if (!acceptTerms) newErrors.acceptTerms = 'You must agree to the Terms of Service';
+    if (!acceptPrivacy) newErrors.acceptPrivacy = 'You must agree to the Privacy Policy';
+    if (CAPTCHA_REQUIRED && !captchaToken) {
+      newErrors.captchaToken = 'Please complete the captcha';
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -93,15 +127,27 @@ export default function RegisterPage() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         email: email.trim().toLowerCase(),
+        phone: phone.trim() || undefined,
         password,
+        confirmPassword,
+        acceptTerms,
+        acceptPrivacy,
+        acceptMarketing,
+        captchaToken: captchaToken || undefined,
       });
       setIsSuccess(true);
-      setTimeout(() => router.push('/login'), 1500);
+      // Redirect immediately to the verify page — the API has already
+      // dispatched (or absorbed) the OTP email. The verify page
+      // accepts ?email=... so the user doesn't have to retype it.
+      router.replace(`/register/verify?email=${encodeURIComponent(email.trim().toLowerCase())}`);
     } catch (err) {
+      // Force a fresh captcha challenge on every failed submit —
+      // Turnstile / hCaptcha tokens are single-use, so a 4xx without
+      // resetting would leave the form unsubmittable.
+      setCaptchaResetKey((k) => k + 1);
+      setCaptchaToken('');
       if (err instanceof ApiError) {
-        if (err.status === 409) {
-          setErrors((prev) => ({ ...prev, email: 'An account with this email already exists' }));
-        } else if (err.status === 422 && err.body.errors) {
+        if (err.status === 422 && err.body.errors) {
           const fieldErrors: FormErrors = {};
           for (const e of err.body.errors) {
             if (!(e.field in fieldErrors)) {
@@ -109,13 +155,16 @@ export default function RegisterPage() {
             }
           }
           setErrors(fieldErrors);
+        } else if (err.status === 400) {
+          setServerError(err.message || 'Please check the form and try again.');
+        } else if (err.status === 429) {
+          setServerError('Too many registration attempts. Please try again in a moment.');
         } else {
           setServerError(err.message || 'Something went wrong. Please try again.');
         }
       } else {
         setServerError('Something went wrong. Please try again.');
       }
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -130,10 +179,12 @@ export default function RegisterPage() {
         : 'border-ink-300 hover:border-ink-500 focus:border-ink-900'
     }`;
 
-  const eFirstName = showErr('firstName', firstName);
-  const eLastName  = showErr('lastName', lastName);
-  const eEmail     = showErr('email', email);
-  const ePassword  = showErr('password', password);
+  const eFirstName        = showErr('firstName', firstName);
+  const ePhone            = showErr('phone', phone);
+  const eLastName         = showErr('lastName', lastName);
+  const eEmail            = showErr('email', email);
+  const ePassword         = showErr('password', password);
+  const eConfirmPassword  = showErr('confirmPassword', confirmPassword);
 
   return (
     <div className="min-h-screen bg-ink-50 flex justify-center">
@@ -146,7 +197,6 @@ export default function RegisterPage() {
             'radial-gradient(ellipse 80% 60% at 85% 15%, rgba(63, 161, 174, 0.45), transparent 60%), radial-gradient(ellipse 70% 50% at 15% 85%, rgba(220, 38, 38, 0.22), transparent 60%), radial-gradient(ellipse 50% 40% at 50% 50%, rgba(250, 204, 21, 0.18), transparent 60%)',
         }}
       >
-        {/* Decorative pattern */}
         <div
           aria-hidden
           className="absolute inset-0 pointer-events-none opacity-[0.04] mix-blend-multiply"
@@ -179,7 +229,6 @@ export default function RegisterPage() {
               Sign up to track orders, save addresses, and unlock early sale access.
             </p>
 
-            {/* Benefit cards — replacing the old bullet list */}
             <ul className="mt-10 grid sm:grid-cols-2 gap-3 max-w-lg">
               {[
                 { icon: RefreshCw, title: 'Free 7-day returns', desc: 'No-questions easy returns' },
@@ -201,7 +250,6 @@ export default function RegisterPage() {
             </ul>
           </div>
 
-          {/* Footer line — small stat row */}
           <div className="grid grid-cols-3 gap-4 max-w-lg">
             {[
               { v: '50k+', l: 'Happy buyers' },
@@ -240,13 +288,13 @@ export default function RegisterPage() {
           <div className="w-full max-w-md mx-auto">
             <h1 className="font-display text-h1 text-ink-900 leading-none">Create account</h1>
             <p className="mt-3 text-body-lg text-ink-600">
-              Takes a minute. We won&apos;t spam you.
+              We&apos;ll send a 6-digit code to verify your email.
             </p>
 
             {isSuccess && (
               <div role="alert" className="mt-6 flex items-start gap-2 p-3 border border-success/30 bg-green-50 text-success text-body">
                 <CheckCircle2 className="size-4 mt-0.5 shrink-0" />
-                Account created. Redirecting to sign in…
+                Account created. Sending you to verify your email…
               </div>
             )}
             {serverError && (
@@ -257,6 +305,7 @@ export default function RegisterPage() {
             )}
 
             <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
+              <fieldset disabled={isSubmitting || isSuccess} className="space-y-4 border-0 p-0">
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="firstName" className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
@@ -267,10 +316,10 @@ export default function RegisterPage() {
                     type="text"
                     placeholder="Riya"
                     value={firstName}
+                    maxLength={50}
                     onChange={(e) => setFirstName(e.target.value)}
                     onBlur={() => handleBlur('firstName', firstName)}
                     aria-invalid={!!eFirstName}
-                    disabled={isSubmitting || isSuccess}
                     autoComplete="given-name"
                     className={inputClass(!!eFirstName)}
                   />
@@ -287,10 +336,10 @@ export default function RegisterPage() {
                     type="text"
                     placeholder="Sharma"
                     value={lastName}
+                    maxLength={50}
                     onChange={(e) => setLastName(e.target.value)}
                     onBlur={() => handleBlur('lastName', lastName)}
                     aria-invalid={!!eLastName}
-                    disabled={isSubmitting || isSuccess}
                     autoComplete="family-name"
                     className={inputClass(!!eLastName)}
                   />
@@ -309,16 +358,55 @@ export default function RegisterPage() {
                   type="email"
                   placeholder="you@example.com"
                   value={email}
+                  maxLength={255}
                   onChange={(e) => setEmail(e.target.value)}
                   onBlur={() => handleBlur('email', email)}
                   aria-invalid={!!eEmail}
-                  disabled={isSubmitting || isSuccess}
                   autoComplete="email"
                   className={inputClass(!!eEmail)}
                 />
                 {eEmail && (
                   <p role="alert" className="mt-1.5 text-caption text-danger flex items-center gap-1">
                     <AlertCircle className="size-3" /> {eEmail}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="phone" className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
+                  Phone Number <span className="text-ink-500 normal-case font-normal">(optional)</span>
+                </label>
+                <input
+                  id="phone"
+                  type="tel"
+                  placeholder="10-digit Indian mobile starting with 6, 7, 8, or 9"
+                  value={phone}
+                  inputMode="numeric"
+                  maxLength={10}
+                  onChange={(e) => {
+                    // Strip non-digits, strip a leading 91 if pasted with country code,
+                    // refuse leading 0-5, cap at 10 digits.
+                    let next = e.target.value.replace(/\D/g, '');
+                    if (next.startsWith('91') && next.length > 10) {
+                      next = next.slice(2);
+                    }
+                    next = next.replace(/^[0-5]+/, '');
+                    next = next.slice(0, 10);
+                    setPhone(next);
+                  }}
+                  onKeyDown={(e) => {
+                    if (['e', 'E', '+', '-', '.', ' '].includes(e.key)) {
+                      e.preventDefault();
+                    }
+                  }}
+                  aria-invalid={!!ePhone}
+                  autoComplete="tel"
+                  pattern="[6-9][0-9]{9}"
+                  className={inputClass(!!ePhone)}
+                />
+                {ePhone && (
+                  <p role="alert" className="mt-1.5 text-caption text-danger flex items-center gap-1">
+                    <AlertCircle className="size-3" /> {ePhone}
                   </p>
                 )}
               </div>
@@ -333,10 +421,10 @@ export default function RegisterPage() {
                     type={showPassword ? 'text' : 'password'}
                     placeholder="Min. 8 characters"
                     value={password}
+                    maxLength={128}
                     onChange={(e) => setPassword(e.target.value)}
                     onBlur={() => handleBlur('password', password)}
                     aria-invalid={!!ePassword}
-                    disabled={isSubmitting || isSuccess}
                     autoComplete="new-password"
                     className={`${inputClass(!!ePassword)} pr-12`}
                   />
@@ -356,28 +444,123 @@ export default function RegisterPage() {
                   </p>
                 ) : (
                   <p className="mt-1.5 text-caption text-ink-500">
-                    At least 8 characters with letters and numbers.
+                    At least 8 chars with upper-, lower-case, number and special character.
                   </p>
                 )}
               </div>
 
+              <div>
+                <label htmlFor="confirmPassword" className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
+                  Confirm password
+                </label>
+                <div className="relative">
+                  <input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    placeholder="Re-enter password"
+                    value={confirmPassword}
+                    maxLength={128}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    aria-invalid={!!eConfirmPassword}
+                    autoComplete="new-password"
+                    className={`${inputClass(!!eConfirmPassword)} pr-12`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                    tabIndex={-1}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 size-8 grid place-items-center text-ink-500 hover:text-ink-900"
+                  >
+                    {showConfirmPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </button>
+                </div>
+                {eConfirmPassword && (
+                  <p role="alert" className="mt-1.5 text-caption text-danger flex items-center gap-1">
+                    <AlertCircle className="size-3" /> {eConfirmPassword}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-start gap-2 text-body text-ink-700">
+                  <input
+                    type="checkbox"
+                    checked={acceptTerms}
+                    onChange={(e) => setAcceptTerms(e.target.checked)}
+                    aria-invalid={!!errors.acceptTerms && submitAttempted}
+                    className="mt-1 size-4 accent-ink-900"
+                  />
+                  <span>
+                    I agree to the{' '}
+                    <Link href="/legal/terms" className="text-ink-900 underline hover:text-accent-dark" target="_blank">
+                      Terms of Service
+                    </Link>
+                    <span className="text-danger">*</span>
+                  </span>
+                </label>
+                {errors.acceptTerms && submitAttempted && (
+                  <p role="alert" className="text-caption text-danger ml-6">{errors.acceptTerms}</p>
+                )}
+
+                <label className="flex items-start gap-2 text-body text-ink-700">
+                  <input
+                    type="checkbox"
+                    checked={acceptPrivacy}
+                    onChange={(e) => setAcceptPrivacy(e.target.checked)}
+                    aria-invalid={!!errors.acceptPrivacy && submitAttempted}
+                    className="mt-1 size-4 accent-ink-900"
+                  />
+                  <span>
+                    I agree to the{' '}
+                    <Link href="/legal/privacy" className="text-ink-900 underline hover:text-accent-dark" target="_blank">
+                      Privacy Policy
+                    </Link>
+                    <span className="text-danger">*</span>
+                  </span>
+                </label>
+                {errors.acceptPrivacy && submitAttempted && (
+                  <p role="alert" className="text-caption text-danger ml-6">{errors.acceptPrivacy}</p>
+                )}
+
+                <label className="flex items-start gap-2 text-body text-ink-700">
+                  <input
+                    type="checkbox"
+                    checked={acceptMarketing}
+                    onChange={(e) => setAcceptMarketing(e.target.checked)}
+                    className="mt-1 size-4 accent-ink-900"
+                  />
+                  <span className="text-ink-600">
+                    Send me deals, drop alerts and newsletters (optional).
+                  </span>
+                </label>
+              </div>
+
+              {CAPTCHA_REQUIRED && (
+                <div className="pt-2">
+                  <CaptchaWidget
+                    onToken={onCaptchaToken}
+                    resetKey={captchaResetKey}
+                    className="flex justify-center"
+                  />
+                  {errors.captchaToken && submitAttempted && (
+                    <p role="alert" className="text-caption text-danger text-center mt-2">
+                      {errors.captchaToken}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={isSubmitting || isSuccess}
                 aria-busy={isSubmitting}
                 className="w-full h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-50 inline-flex items-center justify-center gap-2 transition-colors rounded-full"
               >
                 {isSubmitting ? 'Creating account…' : <>Create account <ArrowRight className="size-4" /></>}
               </button>
-
-              <p className="text-caption text-ink-500 text-center">
-                By signing up you agree to our{' '}
-                <Link href="/legal/terms" className="text-ink-700 underline hover:text-ink-900">Terms</Link> &amp;{' '}
-                <Link href="/legal/privacy" className="text-ink-700 underline hover:text-ink-900">Privacy Policy</Link>.
-              </p>
+              </fieldset>
             </form>
 
-            {/* Trust strip */}
             <div className="mt-8 grid grid-cols-3 gap-3 pt-6 border-t border-ink-200">
               {[
                 { icon: ShieldCheck, label: 'Privacy first' },

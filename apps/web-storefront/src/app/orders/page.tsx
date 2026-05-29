@@ -28,10 +28,7 @@ interface SubOrder {
   id: string;
   fulfillmentStatus: string;
   acceptStatus: string;
-  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
-  ithinkAwb?: string | null;
-  ithinkLogistic?: string | null;
-  ithinkTrackingUrl?: string | null;
+  deliveryMethod?: 'SELF_DELIVERY' | null;
   selfDeliveryStatus?:
     | 'PENDING'
     | 'READY_FOR_PICKUP'
@@ -531,13 +528,7 @@ export default function OrdersPage() {
                           {(() => {
                             const so = order.subOrders[0];
                             if (!so?.deliveryMethod) return null;
-                            return (
-                              <DeliveryMethodBadge
-                                method={so.deliveryMethod}
-                                awb={so.ithinkAwb}
-                                courier={so.ithinkLogistic}
-                              />
-                            );
+                            return <DeliveryMethodBadge method={so.deliveryMethod} />;
                           })()}
                           <ProgressTrack progressIdx={progressIdx} tone={tone} />
                           <span className="ml-auto inline-flex items-center gap-1 text-caption font-semibold text-ink-700 group-hover:text-ink-900">

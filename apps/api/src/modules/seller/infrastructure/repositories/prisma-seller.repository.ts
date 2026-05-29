@@ -29,6 +29,26 @@ export class PrismaSellerRepository implements SellerRepository {
     });
   }
 
+  /**
+   * Phase 19 (2026-05-20) — duplicate GSTIN pre-check for onboarding.
+   * Excludes soft-deleted rows so a deleted seller's old GSTIN can be
+   * re-claimed. Returns only the `id` — the caller's only decision is
+   * "is this someone else's row?" so a wider select is wasted IO.
+   */
+  async findByGstin(gstin: string): Promise<{ id: string } | null> {
+    return this.prisma.seller.findFirst({
+      where: { gstin, isDeleted: false },
+      select: { id: true },
+    });
+  }
+
+  async findByPanNumber(panNumber: string): Promise<{ id: string } | null> {
+    return this.prisma.seller.findFirst({
+      where: { panNumber, isDeleted: false },
+      select: { id: true },
+    });
+  }
+
   async findById(id: string): Promise<Seller | null> {
     return this.prisma.seller.findFirst({
       where: { id, isDeleted: false },
@@ -95,15 +115,29 @@ export class PrismaSellerRepository implements SellerRepository {
     });
   }
 
+  async revokeSession(sessionId: string): Promise<void> {
+    await this.prisma.sellerSession.updateMany({
+      where: { id: sessionId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
   async findSessionByRefreshToken(rawToken: string): Promise<{
     id: string;
     sellerId: string;
     expiresAt: Date;
     revokedAt: Date | null;
+    createdAt: Date;
   } | null> {
     return this.prisma.sellerSession.findFirst({
       where: { refreshToken: hashRefreshToken(rawToken) },
-      select: { id: true, sellerId: true, expiresAt: true, revokedAt: true },
+      select: {
+        id: true,
+        sellerId: true,
+        expiresAt: true,
+        revokedAt: true,
+        createdAt: true,
+      },
     });
   }
 
@@ -247,6 +281,36 @@ export class PrismaSellerRepository implements SellerRepository {
     });
   }
 
+  /**
+   * Phase 18 (2026-05-20) — atomic CAS attempt increment. The WHERE
+   * clause asserts "still active AND below cap" inside the same
+   * UPDATE statement so two parallel verify requests cannot both
+   * pass the eligibility check. `updateMany` returns `count` so the
+   * caller can tell whether the row was eligible; a follow-up
+   * findUnique fetches the post-increment attempts value.
+   */
+  async incrementOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }> {
+    const res = await this.prisma.sellerPasswordResetOtp.updateMany({
+      where: {
+        id: otpId,
+        attempts: { lt: maxAttempts },
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (res.count !== 1) return { ok: false };
+    const after = await this.prisma.sellerPasswordResetOtp.findUnique({
+      where: { id: otpId },
+      select: { attempts: true },
+    });
+    return { ok: true, attempts: after?.attempts ?? 0 };
+  }
+
   // ── Transactional operations ────────────────────────────────
 
   async resetPasswordTransaction(params: {
@@ -309,14 +373,20 @@ export class PrismaSellerRepository implements SellerRepository {
     sellerId: string;
     otpId: string;
   }): Promise<void> {
+    // Phase 18 (2026-05-20) — same now() across both writes so the
+    // boolean flip and the timestamp stamp always agree to the ms.
+    const now = new Date();
     await this.prisma.$transaction([
       this.prisma.sellerPasswordResetOtp.update({
         where: { id: params.otpId },
-        data: { verifiedAt: new Date(), usedAt: new Date() },
+        data: { verifiedAt: now, usedAt: now },
       }),
       this.prisma.seller.update({
         where: { id: params.sellerId },
-        data: { isEmailVerified: true },
+        data: {
+          isEmailVerified: true,
+          emailVerifiedAt: now,
+        },
       }),
     ]);
   }

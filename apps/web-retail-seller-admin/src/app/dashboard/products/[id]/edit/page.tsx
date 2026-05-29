@@ -2036,11 +2036,12 @@ function ProductContextBar({ product }: { product: any }) {
   if (moderationStatus === 'REJECTED') {
     label = 'Rejected';
     tone = 'danger';
-    note = product.moderationNote || product.rejectionReason || null;
+    // Phase 32 (2026-05-21) — prefer structured column.
+    note = product.rejectionReason || product.moderationNote || null;
   } else if (moderationStatus === 'CHANGES_REQUESTED') {
     label = 'Changes requested';
     tone = 'warning';
-    note = product.moderationNote || product.changeRequestNote || null;
+    note = product.changeRequestNote || product.moderationNote || null;
   } else if (moderationStatus === 'SUBMITTED' || moderationStatus === 'IN_REVIEW' || status === 'SUBMITTED') {
     label = 'Pending review';
     tone = 'warning';

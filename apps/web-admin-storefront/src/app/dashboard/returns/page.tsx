@@ -7,6 +7,7 @@ import {
   ReturnListItem,
   ReturnStatus,
 } from '@/services/admin-returns.service';
+import { usePermissions } from '@/lib/permissions';
 
 type PillTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
 
@@ -106,6 +107,12 @@ const fmtDate = (d: string) =>
 
 export default function AdminReturnsListPage() {
   const router = useRouter();
+  // Phase 105 (2026-05-23) — Phase 104 audit Gap #1 closure. Gate the
+  // bulk action panel by isSuperAdmin so non-SUPER_ADMINs don't see
+  // buttons they can't use (backend already 403s on click). Defense-
+  // in-depth UX: hint stays visible to remind operators the actions
+  // are restricted; buttons are hidden.
+  const { isSuperAdmin } = usePermissions();
   const [loading, setLoading] = useState(true);
   const [returns, setReturns] = useState<ReturnListItem[]>([]);
   const [pagination, setPagination] = useState({
@@ -130,6 +137,7 @@ export default function AdminReturnsListPage() {
   } | null>(null);
   const [exportBusy, setExportBusy] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   const fetchReturns = useCallback(
     async (page: number) => {
@@ -190,6 +198,58 @@ export default function AdminReturnsListPage() {
     });
   };
 
+  // Phase 106 (2026-05-23) — Phase 104 audit Gap #13 closure. Scope
+  // selection to rows that are actually eligible for the chosen
+  // action. Bulk-approve only accepts REQUESTED; bulk-close only
+  // accepts REFUNDED + QC_REJECTED. Pre-Phase-106 operators could
+  // multi-select a mix and watch 80% fail per-row in the result panel.
+  const selectAllEligibleApprove = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      returns.forEach((r) => {
+        if (r.status === 'REQUESTED') next.add(r.id);
+      });
+      return next;
+    });
+  };
+  const selectAllEligibleClose = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      returns.forEach((r) => {
+        if (r.status === 'REFUNDED' || r.status === 'QC_REJECTED') {
+          next.add(r.id);
+        }
+      });
+      return next;
+    });
+  };
+
+  // Phase 106 (2026-05-23) — Phase 104 audit Gap #12 closure. Download
+  // the failures from the last bulk run as CSV so operators can
+  // share with finance / open tickets without scraping the inline
+  // list.
+  const downloadFailuresCsv = () => {
+    if (!bulkResult || bulkResult.failures.length === 0) return;
+    const escape = (s: string) =>
+      `"${String(s ?? '').replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+    const rows = [
+      ['return_id', 'error'].map(escape).join(','),
+      ...bulkResult.failures.map((f) =>
+        [escape(f.id), escape(f.error ?? '')].join(','),
+      ),
+    ];
+    const csv = rows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bulk-failures-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const runBulk = async (action: 'approve' | 'close') => {
     if (selectedIds.size === 0 || bulkBusy) return;
     const ids = Array.from(selectedIds);
@@ -204,11 +264,16 @@ export default function AdminReturnsListPage() {
       });
       return;
     }
-    if (
-      !window.confirm(
-        `${action === 'approve' ? 'Approve' : 'Close'} ${ids.length} return${ids.length === 1 ? '' : 's'}? This bypasses per-record review.`,
-      )
-    ) {
+    // Phase 105 (2026-05-23) — Phase 104 audit Gap #23 closure.
+    // Typed-confirm for the destructive bulk action. The user has to
+    // type the verb + count exactly (case-insensitive). Reduces
+    // accident-click risk for large batches.
+    const verb = action === 'approve' ? 'APPROVE' : 'CLOSE';
+    const expected = `${verb}-${ids.length}`;
+    const typed = window.prompt(
+      `${action === 'approve' ? 'Approve' : 'Close'} ${ids.length} return${ids.length === 1 ? '' : 's'}? This bypasses per-record review.\n\nType "${expected}" to confirm.`,
+    );
+    if (!typed || typed.trim().toUpperCase() !== expected) {
       return;
     }
     setBulkBusy(action);
@@ -248,8 +313,9 @@ export default function AdminReturnsListPage() {
     if (exportBusy) return;
     setExportBusy(true);
     setExportError(null);
+    setExportNotice(null);
     try {
-      const blob = await adminReturnsService.exportCsv({
+      const { blob, total, truncated, filename } = await adminReturnsService.exportCsv({
         status: statusFilter || undefined,
         dateFrom: fromDate || undefined,
         dateTo: toDate || undefined,
@@ -258,12 +324,18 @@ export default function AdminReturnsListPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      const stamp = new Date().toISOString().slice(0, 10);
-      a.download = `returns-${stamp}.csv`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      if (truncated) {
+        setExportNotice(
+          `Export capped at 50,000 rows${
+            total != null ? ` of ${total.toLocaleString()} matched` : ''
+          }. Narrow the filters to export the remaining rows.`,
+        );
+      }
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Export failed');
     } finally {
@@ -331,7 +403,23 @@ export default function AdminReturnsListPage() {
         </div>
       )}
 
-      {selectedIds.size > 0 && (
+      {exportNotice && (
+        <div
+          style={{
+            margin: '12px 0',
+            padding: '10px 14px',
+            background: '#fffbeb',
+            border: '1px solid #fde68a',
+            color: '#92400e',
+            borderRadius: 10,
+            fontSize: 13,
+          }}
+        >
+          {exportNotice}
+        </div>
+      )}
+
+      {selectedIds.size > 0 && isSuperAdmin && (
         <div
           style={{
             display: 'flex',
@@ -351,6 +439,65 @@ export default function AdminReturnsListPage() {
           <span style={{ color: '#9a3412', fontSize: 12 }}>
             (SUPER_ADMIN only — cap 100)
           </span>
+          {/* Phase 105 (2026-05-23) — Phase 104 audit Gap #24 closure.
+             Cross-page selection hint + clear button so operators
+             know stale selections on other pages are still active. */}
+          {selectedIds.size >
+            returns.filter((r) => selectedIds.has(r.id)).length && (
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              style={{
+                background: 'transparent',
+                border: '1px solid #9a3412',
+                color: '#9a3412',
+                borderRadius: 9999,
+                padding: '4px 10px',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+              title="You have selections from other pages still active"
+            >
+              Clear all selections
+            </button>
+          )}
+          {/* Phase 106 (2026-05-23) — Phase 104 audit Gap #13 closure.
+             "Select eligible only" helpers. Bulk-approve only succeeds
+             for REQUESTED; bulk-close only for REFUNDED + QC_REJECTED.
+             These buttons scope the selection so operators don't
+             hit 80% per-row failures. */}
+          <button
+            type="button"
+            onClick={selectAllEligibleApprove}
+            style={{
+              background: '#fff7ed',
+              border: '1px solid #9a3412',
+              color: '#9a3412',
+              borderRadius: 9999,
+              padding: '4px 10px',
+              fontSize: 11,
+              cursor: 'pointer',
+            }}
+            title="Select all REQUESTED rows on this page (eligible for bulk approve)"
+          >
+            + REQUESTED
+          </button>
+          <button
+            type="button"
+            onClick={selectAllEligibleClose}
+            style={{
+              background: '#fff7ed',
+              border: '1px solid #9a3412',
+              color: '#9a3412',
+              borderRadius: 9999,
+              padding: '4px 10px',
+              fontSize: 11,
+              cursor: 'pointer',
+            }}
+            title="Select all REFUNDED + QC_REJECTED rows on this page (eligible for bulk close)"
+          >
+            + REFUNDED/QC_REJECTED
+          </button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             <button
               type="button"
@@ -427,6 +574,27 @@ export default function AdminReturnsListPage() {
           <div>
             Bulk: <strong>{bulkResult.succeeded}</strong> succeeded,{' '}
             <strong>{bulkResult.failed}</strong> failed.{' '}
+            {/* Phase 106 (2026-05-23) — Phase 104 audit Gap #12 closure.
+               Download failures as CSV so ops can share with finance
+               or open tickets without scrolling the inline list. */}
+            {bulkResult.failures.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadFailuresCsv}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid currentColor',
+                  borderRadius: 6,
+                  color: 'inherit',
+                  cursor: 'pointer',
+                  padding: '2px 8px',
+                  fontSize: 12,
+                  marginRight: 8,
+                }}
+              >
+                Download CSV
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setBulkResult(null)}

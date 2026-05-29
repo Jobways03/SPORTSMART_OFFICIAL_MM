@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EmailModule } from '../../integrations/email/email.module';
 import { WhatsAppModule } from '../../integrations/whatsapp/whatsapp.module';
+import { IdentityModule } from '../identity/module';
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
 import { NotificationsPublicFacade } from './application/facades/notifications-public.facade';
 import { NotificationRouter } from './application/services/notification-router.service';
@@ -12,6 +13,7 @@ import { OrderNotificationHandler } from './application/event-handlers/order-not
 import { WalletNotificationHandler } from './application/event-handlers/wallet-notification.handler';
 import { TicketNotificationHandler } from './application/event-handlers/ticket-notification.handler';
 import { RefundCompletedNotificationHandler } from './application/event-handlers/refund-completed.handler';
+import { RefundInstructionNotificationHandler } from './application/event-handlers/refund-instruction-notification.handler';
 import { DisputeNotificationHandler } from './application/event-handlers/dispute-notification.handler';
 import { ReconciliationNotificationHandler } from './application/event-handlers/reconciliation-notification.handler';
 import { EmailNotificationProvider } from './infrastructure/providers/email.provider';
@@ -28,7 +30,9 @@ import { AdminNotificationDispatchController } from './presentation/controllers/
 import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port';
 
 @Module({
-  imports: [EmailModule, WhatsAppModule],
+  // Phase 28 (2026-05-21) — IdentityModule import gives the gate
+  // access to ConsentService for the DPDP marketing-consent check.
+  imports: [EmailModule, WhatsAppModule, IdentityModule],
   controllers: [
     CustomerNotificationsController,
     AdminNotificationLogsController,
@@ -72,6 +76,7 @@ import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port'
     WalletNotificationHandler,
     TicketNotificationHandler,
     RefundCompletedNotificationHandler,
+    RefundInstructionNotificationHandler,
     DisputeNotificationHandler,
     ReconciliationNotificationHandler,
   ],

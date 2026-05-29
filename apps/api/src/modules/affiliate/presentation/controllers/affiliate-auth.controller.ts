@@ -1,11 +1,14 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
+  Query,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -14,7 +17,10 @@ import { AffiliateAuthService } from '../../application/services/affiliate-auth.
 import { AffiliateRefreshSessionService } from '../../application/services/affiliate-refresh-session.service';
 import { AffiliatePasswordResetService } from '../../application/services/affiliate-password-reset.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { AffiliateAuthGuard } from '../../../../core/guards';
 import {
+  clearAuthCookies,
   readRefreshCookie,
   setAuthCookies,
 } from '../../../../core/auth/auth-cookie.helper';
@@ -25,6 +31,7 @@ import { AffiliateResendResetOtpDto } from '../dtos/affiliate-resend-reset-otp.d
 import { AffiliateResetPasswordDto } from '../dtos/affiliate-reset-password.dto';
 import { UnauthorizedAppException } from '../../../../core/exceptions';
 import { AccessLogService } from '../../../access-log/application/services/access-log.service';
+import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
 
 @ApiTags('Affiliate Auth')
 @Controller('affiliate/auth')
@@ -35,6 +42,8 @@ export class AffiliateAuthController {
     private readonly passwordResetService: AffiliatePasswordResetService,
     private readonly accessLog: AccessLogService,
     private readonly env: EnvService,
+    private readonly captcha: CaptchaVerifierService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private cookieSettings() {
@@ -61,8 +70,16 @@ export class AffiliateAuthController {
   ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
+    // Phase 22 (2026-05-20) — captcha BEFORE bcrypt so credential-spray
+    // bots burn cheap captcha checks, not expensive hash compares.
+    await this.captcha.verify(dto.captchaToken, ipAddress);
     try {
-      const data = await this.authService.login(dto);
+      const data = await this.authService.login({
+        email: dto.email,
+        password: dto.password,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+        ipAddress,
+      });
 
       // Follow-up #H40 — mirror tokens to httpOnly cookies.
       const accessToken = (data as { accessToken?: string })?.accessToken;
@@ -146,7 +163,13 @@ export class AffiliateAuthController {
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async forgotPassword(@Body() dto: AffiliateForgotPasswordDto) {
+  async forgotPassword(
+    @Body() dto: AffiliateForgotPasswordDto,
+    @Req() req: Request,
+  ) {
+    // Phase 22 (2026-05-20) — captcha gate before OTP send so a
+    // scripted attacker can't burn the cooldown to enumerate emails.
+    await this.captcha.verify(dto.captchaToken, req.ip);
     await this.passwordResetService.forgotPassword(dto.email);
     return {
       success: true,
@@ -188,6 +211,105 @@ export class AffiliateAuthController {
     return {
       success: true,
       message: 'Password has been reset successfully. Please log in with your new password.',
+    };
+  }
+
+  /**
+   * Phase 22 (2026-05-20) — Logout.
+   *
+   * Default mode revokes ONLY the current session (so an affiliate
+   * signed in on desktop + phone doesn't nuke every session when one
+   * device logs out). Pass `?all=true` for the "log out of all
+   * devices" option. Always clears the sm_access_affiliate +
+   * sm_refresh_affiliate cookies on the response — stale cookies in
+   * the browser are worse than a noisy log line, so the cookie clear
+   * runs in a finally block even if the DB write throws.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AffiliateAuthGuard)
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Query('all') all?: string,
+  ) {
+    const affiliateId = (req as unknown as { affiliateId?: string }).affiliateId;
+    const sessionId = (req as unknown as { sessionId?: string }).sessionId;
+    const revokeAll = all === 'true' || all === '1';
+
+    try {
+      if (revokeAll && affiliateId) {
+        await this.prisma.affiliateSession.updateMany({
+          where: { affiliateId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      } else if (sessionId) {
+        await this.prisma.affiliateSession.updateMany({
+          where: { id: sessionId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      }
+    } finally {
+      clearAuthCookies(
+        res,
+        'affiliate',
+        this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
+      );
+    }
+
+    return {
+      success: true,
+      message: revokeAll
+        ? 'Logged out of all devices. Every active session has been revoked.'
+        : 'Logged out successfully.',
+      data: { revokedAll: revokeAll },
+    };
+  }
+
+  /**
+   * Phase 22 (2026-05-20) — Cookie-validated session probe. Replaces
+   * the frontend's sessionStorage-based "am I logged in?" check.
+   * Returns only the safe profile fields needed to render the
+   * dashboard shell — tokens are deliberately NOT echoed; they live
+   * in the httpOnly cookies.
+   */
+  @Get('me')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AffiliateAuthGuard)
+  async me(@Req() req: Request) {
+    const affiliateId = (req as unknown as { affiliateId?: string }).affiliateId;
+    if (!affiliateId) {
+      throw new UnauthorizedAppException();
+    }
+    const affiliate = await this.prisma.affiliate.findUnique({
+      where: { id: affiliateId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        status: true,
+        kycStatus: true,
+        kycVerifiedAt: true,
+      },
+    });
+    if (!affiliate) {
+      throw new UnauthorizedAppException();
+    }
+    return {
+      success: true,
+      message: 'Session valid',
+      data: {
+        affiliateId: affiliate.id,
+        email: affiliate.email,
+        firstName: affiliate.firstName,
+        lastName: affiliate.lastName,
+        phone: affiliate.phone,
+        status: affiliate.status,
+        kycStatus: affiliate.kycStatus,
+        kycVerifiedAt: affiliate.kycVerifiedAt,
+      },
     };
   }
 }

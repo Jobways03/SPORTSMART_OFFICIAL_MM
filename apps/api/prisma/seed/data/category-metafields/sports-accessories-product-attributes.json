@@ -1,0 +1,424 @@
+{
+  "water-bottles": [
+    {
+      "key": "bottle_type",
+      "name": "Bottle Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "squeeze", "label": "Squeeze Bottle" },
+        { "value": "insulated", "label": "Insulated / Stainless Steel" },
+        { "value": "shaker", "label": "Shaker Bottle" },
+        { "value": "collapsible", "label": "Collapsible / Soft Flask" },
+        { "value": "hydration_bladder", "label": "Hydration Bladder" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "350ml", "label": "350ml" },
+        { "value": "500ml", "label": "500ml" },
+        { "value": "750ml", "label": "750ml" },
+        { "value": "1l", "label": "1L" },
+        { "value": "1_5l", "label": "1.5L" },
+        { "value": "2l_plus", "label": "2L+" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "clear", "label": "Clear" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "gym-towels": [
+    {
+      "key": "towel_type",
+      "name": "Towel Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "gym", "label": "Gym Towel" },
+        { "value": "microfibre", "label": "Microfibre Quick-Dry" },
+        { "value": "cooling", "label": "Cooling Towel" },
+        { "value": "yoga", "label": "Yoga Mat Towel" },
+        { "value": "swim", "label": "Swim / Sports Towel" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Hand / Face)" },
+        { "value": "medium", "label": "Medium (Gym)" },
+        { "value": "large", "label": "Large (Bath / Beach)" },
+        { "value": "xl", "label": "XL (Oversized)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "sports-tape-supports": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "kinesiology_tape", "label": "Kinesiology Tape" },
+        { "value": "athletic_tape", "label": "Athletic / Zinc Oxide Tape" },
+        { "value": "cohesive_bandage", "label": "Cohesive Bandage" },
+        { "value": "knee_support", "label": "Knee Support / Sleeve" },
+        { "value": "ankle_support", "label": "Ankle Support / Brace" },
+        { "value": "wrist_support", "label": "Wrist Support / Wrap" },
+        { "value": "elbow_support", "label": "Elbow Support / Sleeve" },
+        { "value": "back_support", "label": "Back Support / Belt" },
+        { "value": "calf_sleeve", "label": "Calf / Shin Sleeve" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "one_size", "label": "One Size" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "beige", "label": "Beige / Skin" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "white", "label": "White" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "wristbands-sweatbands": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "wristband", "label": "Wristband" },
+        { "value": "headband", "label": "Sweat Headband" },
+        { "value": "arm_sleeve", "label": "Arm Sleeve" },
+        { "value": "wristband_set", "label": "Wristband + Headband Set" }
+      ]
+    },
+    {
+      "key": "pack_quantity",
+      "name": "Pack Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "single", "label": "Single" },
+        { "value": "pair", "label": "Pair" },
+        { "value": "3_pack", "label": "3 Pack" },
+        { "value": "6_pack", "label": "6 Pack" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color / Assorted" }
+      ]
+    }
+  ],
+  "sports-sunglasses": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "lens_type",
+      "name": "Lens Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "polarized", "label": "Polarized" },
+        { "value": "photochromic", "label": "Photochromic (Transition)" },
+        { "value": "mirrored", "label": "Mirrored" },
+        { "value": "interchangeable", "label": "Interchangeable Lenses" },
+        { "value": "standard", "label": "Standard Tinted" }
+      ]
+    },
+    {
+      "key": "sport_use",
+      "name": "Sport Use",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "running", "label": "Running" },
+        { "value": "cycling", "label": "Cycling" },
+        { "value": "golf", "label": "Golf" },
+        { "value": "water", "label": "Water Sports" },
+        { "value": "general", "label": "General / Multi-Sport" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Frame Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "first-aid-kits": [
+    {
+      "key": "kit_type",
+      "name": "Kit Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "personal", "label": "Personal / Individual" },
+        { "value": "team", "label": "Team / Club" },
+        { "value": "event", "label": "Event / Tournament" },
+        { "value": "refill", "label": "Refill Pack" }
+      ]
+    },
+    {
+      "key": "kit_size",
+      "name": "Kit Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (10-25 pieces)" },
+        { "value": "medium", "label": "Medium (25-75 pieces)" },
+        { "value": "large", "label": "Large (75-150 pieces)" },
+        { "value": "xl", "label": "XL (150+ pieces)" }
+      ]
+    }
+  ],
+  "whistles-coaching": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "whistle", "label": "Whistle" },
+        { "value": "coaching_board", "label": "Coaching / Tactics Board" },
+        { "value": "stopwatch", "label": "Stopwatch / Timer" },
+        { "value": "scoreboard", "label": "Scoreboard" },
+        { "value": "pennies_bibs", "label": "Training Bibs / Pennies" },
+        { "value": "captain_armband", "label": "Captain's Armband" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color / Assorted" }
+      ]
+    }
+  ],
+  "cones-markers": [
+    {
+      "key": "marker_type",
+      "name": "Marker Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "dome_cone", "label": "Dome / Saucer Cone" },
+        { "value": "tall_cone", "label": "Tall Cone (9-12\")" },
+        { "value": "agility_pole", "label": "Agility Pole / Slalom" },
+        { "value": "boundary_marker", "label": "Boundary Marker / Flag" },
+        { "value": "flat_marker", "label": "Flat Disc Marker" }
+      ]
+    },
+    {
+      "key": "pack_quantity",
+      "name": "Pack Quantity",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "10", "label": "10 Pack" },
+        { "value": "20", "label": "20 Pack" },
+        { "value": "40", "label": "40 Pack" },
+        { "value": "50", "label": "50 Pack" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "orange", "label": "Orange" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color / Assorted" }
+      ]
+    }
+  ],
+  "agility-speed-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "agility_ladder", "label": "Agility Ladder" },
+        { "value": "hurdles", "label": "Speed Hurdles / Mini Hurdles" },
+        { "value": "resistance_parachute", "label": "Resistance Parachute" },
+        { "value": "reaction_ball", "label": "Reaction Ball" },
+        { "value": "speed_rings", "label": "Speed Rings" },
+        { "value": "battle_rope", "label": "Battle Rope" },
+        { "value": "resistance_sled", "label": "Resistance Sled" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "ball-pumps-accessories": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "hand_pump", "label": "Hand Pump" },
+        { "value": "electric_pump", "label": "Electric / Auto Pump" },
+        { "value": "needles", "label": "Pump Needles" },
+        { "value": "ball_bag", "label": "Ball Carry Bag / Net" },
+        { "value": "ball_rack", "label": "Ball Storage Rack" },
+        { "value": "pressure_gauge", "label": "Pressure Gauge" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "silver", "label": "Silver" }
+      ]
+    }
+  ],
+  "phone-armbands-holders": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "armband", "label": "Phone Armband" },
+        { "value": "running_belt", "label": "Running Belt / Waist Pack" },
+        { "value": "flip_belt", "label": "Flip Belt" },
+        { "value": "wrist_pouch", "label": "Wrist Pouch" }
+      ]
+    },
+    {
+      "key": "phone_size",
+      "name": "Phone Size Compatibility",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "up_to_5_5", "label": "Up to 5.5\"" },
+        { "value": "up_to_6_1", "label": "Up to 6.1\"" },
+        { "value": "up_to_6_7", "label": "Up to 6.7\"" },
+        { "value": "universal", "label": "Universal" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "pink", "label": "Pink" }
+      ]
+    }
+  ]
+}

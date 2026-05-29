@@ -1,0 +1,247 @@
+{
+  "skateboards-completes": [
+    {
+      "key": "board_type",
+      "name": "Board Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Street", "Cruiser", "Longboard", "Old School", "Mini/Kids"]
+    },
+    {
+      "key": "deck_width",
+      "name": "Deck Width (inch)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["7.0-7.5", "7.5-7.75", "7.75-8.0", "8.0-8.25", "8.25-8.5", "8.5+"]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Beginner", "Intermediate", "Advanced"]
+    },
+    {
+      "key": "age_group",
+      "name": "Age Group",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Kids (Under 12)", "Youth (12-17)", "Adult"]
+    }
+  ],
+  "skateboard-decks": [
+    {
+      "key": "deck_shape",
+      "name": "Deck Shape",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Popsicle", "Shaped", "Cruiser", "Old School", "Longboard"]
+    },
+    {
+      "key": "deck_width",
+      "name": "Deck Width (inch)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["7.0-7.5", "7.5-7.75", "7.75-8.0", "8.0-8.25", "8.25-8.5", "8.5+"]
+    },
+    {
+      "key": "deck_length",
+      "name": "Deck Length (inch)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["28-30", "30-32", "32-33", "33+"]
+    },
+    {
+      "key": "concave",
+      "name": "Concave",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Low", "Medium", "High"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["7-Ply Maple", "8-Ply Maple", "Bamboo", "Carbon Fiber", "Fiberglass Composite"]
+    }
+  ],
+  "skateboard-trucks": [
+    {
+      "key": "truck_width",
+      "name": "Truck Width (inch)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["7.5", "7.75", "8.0", "8.25", "8.5", "9.0", "10.0"]
+    },
+    {
+      "key": "truck_height",
+      "name": "Truck Height",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Low", "Mid", "High"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Aluminium", "Titanium", "Magnesium", "Hollow"]
+    },
+    {
+      "key": "sold_as",
+      "name": "Sold As",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Single", "Pair"]
+    }
+  ],
+  "skateboard-wheels": [
+    {
+      "key": "wheel_diameter_mm",
+      "name": "Wheel Diameter (mm)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["48-52", "52-54", "54-56", "56-60", "60-75", "75+"]
+    },
+    {
+      "key": "durometer",
+      "name": "Durometer (Hardness)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["78A-87A (Soft/Cruiser)", "88A-95A (Medium)", "96A-99A (Hard)", "100A-101A (Extra Hard)", "83B-84B (Street)"]
+    },
+    {
+      "key": "wheel_shape",
+      "name": "Wheel Shape",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Conical", "Classic", "Radial", "Slim"]
+    }
+  ],
+  "skateboard-bearings": [
+    {
+      "key": "abec_rating",
+      "name": "ABEC Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["ABEC 3", "ABEC 5", "ABEC 7", "ABEC 9", "Swiss", "Ceramic"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Steel", "Ceramic", "Titanium"]
+    },
+    {
+      "key": "shield_type",
+      "name": "Shield Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Rubber Shielded", "Metal Shielded", "Non-Contact"]
+    }
+  ],
+  "longboard-components": [
+    {
+      "key": "component_type",
+      "name": "Component Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Complete Longboard", "Longboard Deck", "Longboard Trucks", "Longboard Wheels"]
+    },
+    {
+      "key": "riding_style",
+      "name": "Riding Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Cruising", "Downhill", "Freeride", "Dancing", "Carving", "Commuting"]
+    },
+    {
+      "key": "deck_length",
+      "name": "Deck Length (inch)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["28-32", "32-38", "38-42", "42-46", "46+"]
+    },
+    {
+      "key": "flex",
+      "name": "Flex",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Stiff", "Medium", "Flexy"]
+    }
+  ],
+  "skateboard-grip-tape": [
+    {
+      "key": "grip_type",
+      "name": "Grip Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Standard", "Coarse", "Fine", "Clear", "Foam/Soft"]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["9 x 33 inch", "10 x 33 inch", "11 x 44 inch (Longboard)", "Pre-Cut"]
+    }
+  ],
+  "skateboard-hardware": [
+    {
+      "key": "hardware_type",
+      "name": "Hardware Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Mounting Bolts", "Riser Pads", "Shock Pads", "Pivot Cups", "Bushings"]
+    },
+    {
+      "key": "bolt_length",
+      "name": "Bolt Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "description": "Applicable for mounting bolts",
+      "choices": ["7/8 inch", "1 inch", "1-1/8 inch", "1-1/4 inch", "1-1/2 inch"]
+    },
+    {
+      "key": "bolt_head",
+      "name": "Bolt Head Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Allen", "Phillips"]
+    }
+  ],
+  "skateboard-protective-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Helmet", "Knee Pads", "Elbow Pads", "Wrist Guards", "Pad Set"]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Kids", "XS", "S", "M", "L", "XL"]
+    },
+    {
+      "key": "certification",
+      "name": "Certification",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": ["CPSC", "ASTM", "CE EN 1078", "Dual Certified"]
+    }
+  ],
+  "skateboard-tools-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Skate Tool", "Bearing Cleaner", "Wax", "Rail Guards", "Tail Guard", "Nose Guard"]
+    }
+  ]
+}

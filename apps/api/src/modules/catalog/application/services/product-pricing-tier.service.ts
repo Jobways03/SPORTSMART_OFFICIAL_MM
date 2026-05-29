@@ -9,13 +9,22 @@ import {
 // Shape returned to API callers. We surface the percent + a
 // pre-formatted display label so the frontend doesn't need to
 // duplicate the "Buy N+ save P%" template.
+//
+// Phase 44 (2026-05-21) — discountPercent and fixedUnitPrice are
+// mutually exclusive; exactly one is non-null on every row. New
+// optional fields maxQuantity / startAt / endAt surface the
+// closed-range + scheduled-window features added in Phase 44.
 export interface PricingTierResponse {
   id: string;
   productId: string;
   variantId: string | null;
   minQuantity: number;
-  discountPercent: number;
+  maxQuantity: number | null;
+  discountPercent: number | null;
+  fixedUnitPrice: number | null;
   displayLabel: string;
+  startAt: string | null;
+  endAt: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -24,7 +33,14 @@ export interface PricingTierResponse {
 export interface PricingTierWriteInput {
   variantId?: string | null;
   minQuantity: number;
-  discountPercent: number;
+  maxQuantity?: number | null;
+  // Phase 44 — exactly one of these is required. The DTO layer
+  // enforces XOR via @ValidateIf; the service double-checks at
+  // assertWriteShape so direct service callers can't bypass.
+  discountPercent?: number | null;
+  fixedUnitPrice?: number | null;
+  startAt?: string | Date | null;
+  endAt?: string | Date | null;
   displayLabel?: string | null;
   isActive?: boolean;
 }
@@ -126,7 +142,11 @@ export class ProductPricingTierService {
           productId,
           variantId: input.variantId ?? null,
           minQuantity: input.minQuantity,
-          discountPercent: input.discountPercent,
+          maxQuantity: input.maxQuantity ?? null,
+          discountPercent: input.discountPercent ?? null,
+          fixedUnitPrice: input.fixedUnitPrice ?? null,
+          startAt: input.startAt ? new Date(input.startAt) : null,
+          endAt: input.endAt ? new Date(input.endAt) : null,
           displayLabel: input.displayLabel?.trim() || null,
           isActive: input.isActive ?? true,
         },
@@ -161,8 +181,13 @@ export class ProductPricingTierService {
     if (input.minQuantity !== undefined) {
       this.assertMinQuantity(input.minQuantity);
     }
-    if (input.discountPercent !== undefined) {
+    if (input.discountPercent !== undefined && input.discountPercent !== null) {
       this.assertDiscountPercent(input.discountPercent);
+    }
+    if (input.fixedUnitPrice !== undefined && input.fixedUnitPrice !== null) {
+      if (input.fixedUnitPrice < 0) {
+        throw new BadRequestAppException('fixedUnitPrice must be >= 0');
+      }
     }
     if (input.variantId) {
       const variantOk = await this.prisma.productVariant.count({
@@ -181,8 +206,18 @@ export class ProductPricingTierService {
         data: {
           ...(input.variantId !== undefined ? { variantId: input.variantId } : {}),
           ...(input.minQuantity !== undefined ? { minQuantity: input.minQuantity } : {}),
+          ...(input.maxQuantity !== undefined ? { maxQuantity: input.maxQuantity } : {}),
           ...(input.discountPercent !== undefined
             ? { discountPercent: input.discountPercent }
+            : {}),
+          ...(input.fixedUnitPrice !== undefined
+            ? { fixedUnitPrice: input.fixedUnitPrice }
+            : {}),
+          ...(input.startAt !== undefined
+            ? { startAt: input.startAt ? new Date(input.startAt) : null }
+            : {}),
+          ...(input.endAt !== undefined
+            ? { endAt: input.endAt ? new Date(input.endAt) : null }
             : {}),
           ...(input.displayLabel !== undefined
             ? { displayLabel: input.displayLabel?.trim() || null }
@@ -217,7 +252,35 @@ export class ProductPricingTierService {
 
   private assertWriteShape(input: PricingTierWriteInput): void {
     this.assertMinQuantity(input.minQuantity);
-    this.assertDiscountPercent(input.discountPercent);
+    // Phase 44 (2026-05-21) — exactly one of discountPercent /
+    // fixedUnitPrice must be set. The DTO + DB CHECK both enforce
+    // this; the service double-checks so direct callers (tests,
+    // future code paths) can't bypass.
+    const hasPercent = input.discountPercent !== undefined && input.discountPercent !== null;
+    const hasFixed = input.fixedUnitPrice !== undefined && input.fixedUnitPrice !== null;
+    if (hasPercent === hasFixed) {
+      throw new BadRequestAppException(
+        'Tier must set exactly one of discountPercent (0-100) or fixedUnitPrice (>0).',
+      );
+    }
+    if (hasPercent) this.assertDiscountPercent(input.discountPercent as number);
+    if (hasFixed && (input.fixedUnitPrice as number) < 0) {
+      throw new BadRequestAppException('fixedUnitPrice must be >= 0');
+    }
+    if (input.maxQuantity !== undefined && input.maxQuantity !== null) {
+      if (!Number.isInteger(input.maxQuantity) || input.maxQuantity < input.minQuantity) {
+        throw new BadRequestAppException(
+          'maxQuantity must be a positive integer >= minQuantity',
+        );
+      }
+    }
+    if (input.startAt && input.endAt) {
+      const start = new Date(input.startAt);
+      const end = new Date(input.endAt);
+      if (end <= start) {
+        throw new BadRequestAppException('endAt must be after startAt');
+      }
+    }
   }
 
   private assertMinQuantity(n: number): void {
@@ -252,29 +315,52 @@ export class ProductPricingTierService {
     productId: string;
     variantId: string | null;
     minQuantity: number;
-    discountPercent: Prisma.Decimal | number | string;
+    maxQuantity: number | null;
+    discountPercent: Prisma.Decimal | number | string | null;
+    fixedUnitPrice: Prisma.Decimal | number | string | null;
+    startAt: Date | null;
+    endAt: Date | null;
     displayLabel: string | null;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
   }): PricingTierResponse {
-    const pct = Number(row.discountPercent);
+    const pct = row.discountPercent !== null ? Number(row.discountPercent) : null;
+    const fixed = row.fixedUnitPrice !== null ? Number(row.fixedUnitPrice) : null;
     return {
       id: row.id,
       productId: row.productId,
       variantId: row.variantId,
       minQuantity: row.minQuantity,
+      maxQuantity: row.maxQuantity,
       discountPercent: pct,
-      // Default copy when ops didn't override. Frontend can still
-      // re-format if they want a different shape.
+      fixedUnitPrice: fixed,
+      startAt: row.startAt ? row.startAt.toISOString() : null,
+      endAt: row.endAt ? row.endAt.toISOString() : null,
       displayLabel:
         row.displayLabel?.trim() ||
-        `Buy ${row.minQuantity}+ save ${formatPercent(pct)}`,
+        defaultDisplayLabel(row.minQuantity, row.maxQuantity, pct, fixed),
       isActive: row.isActive,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
   }
+}
+
+function defaultDisplayLabel(
+  minQty: number,
+  maxQty: number | null,
+  pct: number | null,
+  fixed: number | null,
+): string {
+  const qtyClause = maxQty ? `Buy ${minQty}-${maxQty}` : `Buy ${minQty}+`;
+  if (pct !== null) return `${qtyClause} save ${formatPercent(pct)}`;
+  if (fixed !== null) return `${qtyClause} @ ${formatRupees(fixed)} each`;
+  return `${qtyClause}`;
+}
+
+function formatRupees(n: number): string {
+  return `₹${n.toFixed(2).replace(/\.00$/, '')}`;
 }
 
 function formatPercent(p: number): string {

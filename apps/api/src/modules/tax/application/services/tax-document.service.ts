@@ -25,9 +25,12 @@
 //   - docs/tax/INVOICE_CANCELLATION_POLICY.md (status semantics)
 //   - docs/tax/HSN_RATE_POLICY.md (HSN/UQC on lines)
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EWayBillService } from './eway-bill.service';
+import { TaxModeService } from './tax-mode.service';
+// Phase 90 (2026-05-23) — auto-classify hook (Gap #1).
+import { EInvoiceService } from './einvoice.service';
 import {
   DocumentSequenceService,
 } from './document-sequence.service';
@@ -78,7 +81,90 @@ export class TaxDocumentService {
     private readonly prisma: PrismaService,
     private readonly docSequence: DocumentSequenceService,
     private readonly ewayBill: EWayBillService,
+    // Phase 45 (2026-05-21) — TaxModeService.report() now gates
+    // invoice generation. Before Phase 45 the three modes
+    // (OFF/AUDIT/STRICT) only controlled the PDF DRAFT watermark;
+    // the underlying invoice always succeeded. Now STRICT throws on
+    // missing-HSN / missing-rate / unverified-config and the
+    // generation aborts before document_number is allocated.
+    private readonly taxMode: TaxModeService,
+    // Phase 90 (2026-05-23) — Gap #1 auto-classify hook. @Optional
+    // because the legacy spec harnesses instantiate TaxDocumentService
+    // directly without DI; e-invoice path is no-op when undefined.
+    @Optional()
+    private readonly einvoice?: EInvoiceService,
   ) {}
+
+  /**
+   * Phase 45 (2026-05-21) — invoice-generation pre-flight gate.
+   *
+   * For every product referenced by the snapshot rows, fetch the
+   * current tax columns and emit a violation via TaxModeService.report()
+   * for each missing/invalid field. Behaviour per mode:
+   *   - OFF:    .report() is a no-op (silent).
+   *   - AUDIT:  logs the violation, generation proceeds.
+   *   - STRICT: throws TaxStrictModeViolationError, generation aborts.
+   *
+   * Closes audit gaps #2 (TaxModeService.report never invoked) and
+   * #15 (invoice generation doesn't read tax mode for content gating).
+   *
+   * Uses a single product fetch keyed on the de-duplicated set of
+   * productIds in the snapshot — no per-line N+1.
+   */
+  private async assertInvoiceLinesAreTaxReady(snapshots: ReadonlyArray<{ productId: string | null; isTaxable?: boolean }>): Promise<void> {
+    const productIds = Array.from(
+      new Set(snapshots.map((s) => s.productId).filter((id): id is string => !!id)),
+    );
+    if (productIds.length === 0) return;
+
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: {
+        id: true,
+        hsnCode: true,
+        gstRateBps: true,
+        supplyTaxability: true,
+        taxConfigVerified: true,
+      },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+
+    for (const snap of snapshots) {
+      if (!snap.productId) continue;
+      const p = byId.get(snap.productId);
+      if (!p) continue;
+
+      // TAXABLE products must have a valid HSN.
+      const taxability = p.supplyTaxability ?? 'TAXABLE';
+      if (taxability === 'TAXABLE') {
+        if (!p.hsnCode || !/^\d{4,8}$/.test(p.hsnCode)) {
+          await this.taxMode.report({
+            code: 'product.missing_hsn',
+            message: `Product ${p.id} has no valid HSN — strict mode requires HSN on every taxable invoice line`,
+            context: { productId: p.id, hsnCode: p.hsnCode },
+          });
+        }
+        if (p.gstRateBps === null || p.gstRateBps === undefined || p.gstRateBps <= 0) {
+          await this.taxMode.report({
+            code: 'product.missing_rate',
+            message: `Product ${p.id} has no GST rate — strict mode requires a non-zero rate on every taxable invoice line`,
+            context: { productId: p.id, gstRateBps: p.gstRateBps },
+          });
+        }
+      }
+
+      // All products (taxable + exempt) must have an admin attestation
+      // on file. Closes audit Gap #1 + #15 — the verified flag now
+      // gates invoice content, not just the readiness dashboard.
+      if (!p.taxConfigVerified) {
+        await this.taxMode.report({
+          code: 'product.unverified_config',
+          message: `Product ${p.id} tax config has not been attested by an admin — strict mode requires admin sign-off before invoicing`,
+          context: { productId: p.id },
+        });
+      }
+    }
+  }
 
   /**
    * Generate (or return existing) tax document for one SubOrder.
@@ -130,6 +216,12 @@ export class TaxDocumentService {
     if (snapshots.length === 0) {
       throw new Error(`No tax-line snapshots for sub-order ${subOrderId}`);
     }
+
+    // Phase 45 (2026-05-21) — TaxModeService gate. Runs before we
+    // allocate a document number so a STRICT failure doesn't burn a
+    // sequence slot or leave a half-written row. AUDIT mode logs and
+    // proceeds; OFF is silent.
+    await this.assertInvoiceLinesAreTaxReady(snapshots);
 
     // 3. Load sub-order + master + seller + customer context.
     const subOrder = await this.prisma.subOrder.findUnique({
@@ -326,6 +418,10 @@ export class TaxDocumentService {
           customerId: subOrder.masterOrder.customerId,
           supplierType: summary.supplierType ?? ('MARKETPLACE_SELLER' as SupplierType),
           invoiceType,
+          // Phase 159w (audit B2) — stamp the GST mode this invoice was issued
+          // under, so a later re-export / refund recompute can validate against
+          // the mode in effect at issue time rather than the live mode.
+          gstModeSnapshot: await this.taxMode.getMode(),
 
           supplierGstin,
           sellerRegistrationType,
@@ -385,6 +481,10 @@ export class TaxDocumentService {
             discountAmountInPaise: s.discountAmountInPaise,
             taxableAmountInPaise: s.taxableAmountInPaise,
             gstRateBps: s.gstRateBps,
+            // Phase 159y (GSTR-3B audit #2) — carry the line's supply
+            // classification onto the invoice line for the GSTR-3B §3.1(b/c/e)
+            // split. POS lines (other create site) stay null = TAXABLE default.
+            supplyTaxability: s.supplyTaxability,
             cgstAmountInPaise: s.cgstAmountInPaise,
             sgstAmountInPaise: s.sgstAmountInPaise,
             igstAmountInPaise: s.igstAmountInPaise,
@@ -414,6 +514,23 @@ export class TaxDocumentService {
       this.logger.warn(
         `EWB classification failed for sub-order ${subOrderId} after invoice ${doc.documentNumber}: ${(err as Error).message}`,
       );
+    }
+
+    // Phase 90 (2026-05-23) — Gap #1. Auto e-invoice classification.
+    // Pre-Phase-90 every TaxDocument was inserted with
+    // einvoiceStatus=NOT_APPLICABLE; the retry cron filter
+    // (PENDING/FAILED) never picked them up, so B2B documents
+    // required a manual admin click to ever flip to PENDING. Fire
+    // the hook here in best-effort mode so the typed-path cron + UI
+    // picks up applicable rows automatically.
+    if (this.einvoice) {
+      try {
+        await this.einvoice.classifyForDocument(doc.id);
+      } catch (err) {
+        this.logger.warn(
+          `E-invoice classification failed for ${doc.documentNumber}: ${(err as Error).message}`,
+        );
+      }
     }
 
     return {
@@ -577,6 +694,8 @@ export class TaxDocumentService {
           // Walk-in B2C is the default; B2B GSTIN capture at register
           // is a future enhancement (sale.customerGstin column).
           invoiceType: 'B2C' as InvoiceType,
+          // Phase 159w (audit B2) — GST mode at issue time (see above).
+          gstModeSnapshot: await this.taxMode.getMode(),
 
           supplierGstin,
           sellerRegistrationType: 'REGULAR' as GstRegistrationType,
@@ -659,6 +778,21 @@ export class TaxDocumentService {
     this.logger.log(
       `Generated POS ${documentType} ${doc.documentNumber} (FY ${fy}) for sale ${sale.saleNumber}: ${typeDecision.reason}`,
     );
+
+    // Phase 90 (2026-05-23) — Gap #1. POS-sale invoices follow the
+    // same auto-classify flow as sub-order invoices. POS sales are
+    // mostly B2C (walk-in) and will fall to NOT_APPLICABLE via the
+    // buyerGstin gate — but the hook stays so a B2B POS sale (legacy
+    // bulk purchase) auto-classifies the same way.
+    if (this.einvoice) {
+      try {
+        await this.einvoice.classifyForDocument(doc.id);
+      } catch (err) {
+        this.logger.warn(
+          `E-invoice classification failed for POS ${doc.documentNumber}: ${(err as Error).message}`,
+        );
+      }
+    }
 
     return {
       document: {

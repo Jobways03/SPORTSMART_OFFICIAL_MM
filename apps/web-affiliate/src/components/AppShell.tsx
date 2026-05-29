@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { apiFetch, clearSession } from '../lib/api';
+import { apiFetch, logout as apiLogout } from '../lib/api';
 
 interface Profile {
   firstName: string;
@@ -52,8 +52,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       .catch(() => setAuthError(true));
   }, [router]);
 
-  const handleLogout = () => {
-    clearSession();
+  const handleLogout = async () => {
+    // Phase 22 (2026-05-20) — server-side revoke + cookie clear via
+    // POST /affiliate/auth/logout, then drop local sessionStorage and
+    // navigate. apiLogout() swallows transport errors so the UI still
+    // lands at /login even if the access token expired mid-call.
+    await apiLogout();
     router.replace('/login');
   };
 

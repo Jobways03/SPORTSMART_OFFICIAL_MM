@@ -7,6 +7,7 @@ import { LoginSellerUseCase } from '../../application/use-cases/login-seller.use
 import { AccessLogService } from '../../../access-log/application/services/access-log.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { setAuthCookies } from '../../../../core/auth/auth-cookie.helper';
+import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
 
 @ApiTags('Seller Auth')
 @Controller('seller/auth')
@@ -15,6 +16,7 @@ export class SellerLoginController {
     private readonly loginSellerUseCase: LoginSellerUseCase,
     private readonly accessLog: AccessLogService,
     private readonly env: EnvService,
+    private readonly captcha: CaptchaVerifierService,
   ) {}
 
   @Post('login')
@@ -27,6 +29,10 @@ export class SellerLoginController {
   ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
+    // Phase 21 (2026-05-20) — CAPTCHA verification BEFORE bcrypt so
+    // scripted credential-stuffing wastes cheap captcha checks, not
+    // expensive password hashes.
+    await this.captcha.verify(dto.captchaToken, ipAddress);
     try {
       const data = await this.loginSellerUseCase.execute({
         identifier: dto.identifier,

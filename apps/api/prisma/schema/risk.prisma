@@ -22,9 +22,9 @@ enum RiskTier {
 }
 
 model RiskScore {
-  id           String   @id @default(uuid())
-  resourceType String   @map("resource_type")
-  resourceId   String   @map("resource_id")
+  id           String @id @default(uuid())
+  resourceType String @map("resource_type")
+  resourceId   String @map("resource_id")
 
   /// Integer 0-100. Higher = riskier. Tiers split at 40 / 70.
   score Int
@@ -39,7 +39,7 @@ model RiskScore {
   version Int @default(0)
 
   computedAt DateTime @default(now()) @map("computed_at")
-  updatedAt  DateTime @updatedAt      @map("updated_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@unique([resourceType, resourceId])
   @@index([resourceType, score])

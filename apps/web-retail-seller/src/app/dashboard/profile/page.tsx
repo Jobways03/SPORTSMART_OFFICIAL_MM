@@ -1275,7 +1275,7 @@ export default function SellerProfilePage() {
                 to the onboarding flow instead of leaving the user stranded on
                 read-only placeholders. Once any of the three core fields is set
                 we assume onboarding was completed and the banner hides. */}
-            {!profile.gstin && !profile.panNumber && !profile.legalBusinessName && (
+            {!profile.gstin && !profile.panLast4 && !profile.legalBusinessName && (
               <div
                 style={{
                   marginTop: 12,
@@ -1376,9 +1376,7 @@ export default function SellerProfilePage() {
               <span className="lock-icon">&#128274;</span>
               {profile.panLast4
                 ? `XXXXX${profile.panLast4}`
-                : profile.panNumber
-                  ? `XXXXX${profile.panNumber.slice(-4)}`
-                  : <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted — required to sell</span>}
+                : <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted — required to sell</span>}
             </div>
           </div>
 

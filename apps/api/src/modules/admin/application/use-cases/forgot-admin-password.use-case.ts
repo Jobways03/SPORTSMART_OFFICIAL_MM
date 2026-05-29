@@ -2,6 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { createHash, randomInt } from 'crypto';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EmailOtpAdapter } from '../../../../integrations/email/adapters/email-otp.adapter';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   AdminRepository,
   ADMIN_REPOSITORY,
@@ -9,6 +10,8 @@ import {
 
 interface ForgotAdminPasswordInput {
   email: string;
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 /**
@@ -31,12 +34,18 @@ export class ForgotAdminPasswordUseCase {
     private readonly adminRepo: AdminRepository,
     private readonly emailOtp: EmailOtpAdapter,
     private readonly logger: AppLoggerService,
+    // Phase 26 (2026-05-20) — admin password reset is the highest-
+    // privilege recovery action in the system; every step must land
+    // in the unified audit log so compliance can answer "who requested
+    // / verified / completed / failed an admin password reset, when,
+    // from where". Best-effort write — never blocks the user flow.
+    private readonly audit: AuditPublicFacade,
   ) {
     this.logger.setContext('ForgotAdminPasswordUseCase');
   }
 
   async execute(input: ForgotAdminPasswordInput): Promise<void> {
-    const { email } = input;
+    const { email, ipAddress, userAgent } = input;
 
     const admin = await this.adminRepo.findAdminByEmail(email);
     if (!admin || admin.status !== 'ACTIVE') {
@@ -74,6 +83,22 @@ export class ForgotAdminPasswordUseCase {
     await this.emailOtp.sendOtp(email, otp);
 
     this.logger.log(`Admin password reset OTP sent for: ${admin.id}`);
+    this.audit
+      .writeAuditLog({
+        actorId: admin.id,
+        actorRole: 'ADMIN',
+        action: 'ADMIN_PASSWORD_RESET_REQUESTED',
+        module: 'admin-auth',
+        resource: 'Admin',
+        resourceId: admin.id,
+        ipAddress,
+        userAgent,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Failed to audit ADMIN_PASSWORD_RESET_REQUESTED for ${admin.id}: ${(err as Error)?.message}`,
+        ),
+      );
   }
 
   private simulateDelay(): Promise<void> {

@@ -34,7 +34,7 @@ type SubPage = {
   title: string;
   desc: string;
   icon: IconName;
-  group: 'queues' | 'verify' | 'masters';
+  group: 'queues' | 'verify' | 'masters' | 'bulk';
 };
 
 const SUB_PAGES: SubPage[] = [
@@ -51,12 +51,23 @@ const SUB_PAGES: SubPage[] = [
   { group: 'masters', href: '/dashboard/tax/uqc-master',               title: 'UQC master',            desc: 'CBIC Unit Quantity Codes — required on Tax Invoices under Section 31 / Rule 46.',     icon: 'ruler' },
   { group: 'masters', href: '/dashboard/tax/config',                   title: 'Tax config',            desc: 'Runtime knobs — EWB threshold, TCS rate, shipping SAC, and other policy values.',      icon: 'sliders' },
   { group: 'masters', href: '/dashboard/tax/platform-gst',             title: 'Platform GST profiles', desc: "Sportsmart's own GSTINs used for OWN_BRAND supply and platform-side filings.",        icon: 'store' },
+
+  // Phase 45 / 46 (2026-05-21) — SUPER_ADMIN-only bulk tools. The
+  // backend permission guards (tax.bulk-config / tax.bulk-verify +
+  // @Roles('SUPER_ADMIN')) reject non-SUPER_ADMIN actors with 403;
+  // these tiles still render in the hub but the destination pages
+  // gracefully error for unauthorized actors. Listing them here makes
+  // the tools discoverable for SUPER_ADMIN ops without adding noise
+  // to the sidebar.
+  { group: 'bulk',    href: '/dashboard/tax/bulk-config',               title: 'Bulk update tax config', desc: 'SUPER_ADMIN only — rewrite HSN / GST / cess / UQC across up to 500 products; resets attestation.', icon: 'sliders' },
+  { group: 'bulk',    href: '/dashboard/tax/bulk-verify',               title: 'Bulk verify tax config', desc: 'SUPER_ADMIN only — bulk-attest products whose tax config has already been reviewed offline.', icon: 'shield' },
 ];
 
 const GROUP_META: Record<SubPage['group'], { title: string; hint: string }> = {
   queues:  { title: 'Compliance queues',  hint: 'Work that needs an admin action — returns, e-way bills, TDS deposits.' },
   verify:  { title: 'GSTN verifications', hint: 'Confirm GSTINs against the GSTN portal before they appear on invoices.' },
   masters: { title: 'Reference data',     hint: 'Codes & runtime config the tax engine reads at invoice time.' },
+  bulk:    { title: 'Bulk operations',    hint: 'SUPER_ADMIN-only bulk writes — wide blast radius, audit-logged per row.' },
 };
 
 // Friendlier title for blocker codes (shown next to the raw code).
@@ -581,21 +592,70 @@ function VerdictPill({ ready, count }: { ready: boolean; count: number }) {
 }
 
 // ── GSTR-8 (platform-side TCS) ────────────────────────────────────
+//
+// Phase 159z (GSTR-8 export-flow audit remediation):
+//   #9   Download JSON button alongside CSV.
+//   #6   ARN input required before bulk Mark-FILED.
+//   #10  Per-row Reverse action surfaces the correction flow.
+//   #12  Period picker disallows future months.
+//   #14  Paginated summary — controls in the table footer.
+
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 500;
+
+/** Phase 159z (audit #12) — current IST month as `YYYY-MM`. */
+function currentIstFilingPeriod(): string {
+  const now = new Date();
+  const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  const y = ist.getUTCFullYear();
+  const m = ist.getUTCMonth() + 1;
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+function isFuturePeriod(p: string): boolean {
+  if (!/^\d{4}-\d{2}$/.test(p)) return false;
+  const current = currentIstFilingPeriod();
+  return p > current;
+}
 
 function Gstr8Section() {
   const [period, setPeriod] = useState(defaultFilingPeriod());
   const [summary, setSummary] = useState<Gstr8Summary | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(DEFAULT_PAGE_SIZE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payRef, setPayRef] = useState('');
+  // Phase 159z (audit #6) — captured in the UI alongside the FILED click.
+  const [nicArn, setNicArn] = useState('');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
-  const [busy, setBusy] = useState<'load' | 'filed' | 'paid' | 'csv' | null>(null);
+  const [busy, setBusy] = useState<
+    'load' | 'filed' | 'paid' | 'csv' | 'json' | 'reverse' | null
+  >(null);
+  const [reversingId, setReversingId] = useState<string | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
 
-  const loadSummary = async () => {
+  const periodInvalid = !/^\d{4}-\d{2}$/.test(period);
+  const periodIsFuture = isFuturePeriod(period);
+  const periodBlocked = periodInvalid || periodIsFuture;
+
+  const loadSummary = async (nextPage = page) => {
+    if (periodBlocked) {
+      setMsg({
+        kind: 'err',
+        text: periodInvalid
+          ? 'Filing period must be in YYYY-MM format'
+          : `Filing period ${period} is in the future — pick a completed month.`,
+      });
+      return;
+    }
     setMsg(null);
     setBusy('load');
     try {
-      const res = await adminTaxService.getGstr8Summary(period);
+      const res = await adminTaxService.getGstr8Summary(period, {
+        page: nextPage,
+        pageSize,
+      });
       setSummary(res.data ?? null);
+      setPage(res.data?.page ?? nextPage);
       setSelected(new Set());
     } catch (err: any) {
       setMsg({ kind: 'err', text: err?.message ?? 'Failed to load summary' });
@@ -615,11 +675,19 @@ function Gstr8Section() {
 
   const markFiled = async () => {
     if (selected.size === 0) return;
+    if (!nicArn.trim()) {
+      setMsg({ kind: 'err', text: 'Enter the GSTN ARN (NIC acknowledgement number) to mark FILED.' });
+      return;
+    }
     setBusy('filed');
     try {
-      const res = await adminTaxService.markFiled([...selected]);
-      setMsg({ kind: 'ok', text: `Marked FILED — ${res.data?.flipped} of ${res.data?.requested} rows.` });
-      await loadSummary();
+      const res = await adminTaxService.markFiled([...selected], nicArn.trim());
+      setMsg({
+        kind: 'ok',
+        text: `Marked FILED — ${res.data?.flipped} of ${res.data?.requested} rows (ARN ${res.data?.nicArn}).`,
+      });
+      setNicArn('');
+      await loadSummary(page);
     } catch (err: any) {
       setMsg({ kind: 'err', text: err?.message ?? 'markFiled failed' });
     } finally { setBusy(null); }
@@ -632,18 +700,59 @@ function Gstr8Section() {
       const res = await adminTaxService.markPaid([...selected], payRef);
       setMsg({ kind: 'ok', text: `Marked PAID_TO_GOVT — ${res.data?.flipped} of ${res.data?.requested} rows.` });
       setPayRef('');
-      await loadSummary();
+      await loadSummary(page);
     } catch (err: any) {
       setMsg({ kind: 'err', text: err?.message ?? 'markPaid failed' });
     } finally { setBusy(null); }
   };
 
   const downloadCsv = async () => {
+    if (periodBlocked) return;
     setBusy('csv');
     setMsg(null);
     try { await adminTaxService.gstr8Csv(period); }
     catch (err: any) { setMsg({ kind: 'err', text: err?.message ?? 'CSV download failed' }); }
     finally { setBusy(null); }
+  };
+
+  // Phase 159z (audit #9) — JSON download. Operator GSTIN is resolved
+  // server-side from PlatformGstProfile (B3); the UI never sees it.
+  const downloadJson = async () => {
+    if (periodBlocked) return;
+    setBusy('json');
+    setMsg(null);
+    try { await adminTaxService.gstr8Json(period); }
+    catch (err: any) { setMsg({ kind: 'err', text: err?.message ?? 'JSON download failed' }); }
+    finally { setBusy(null); }
+  };
+
+  // Phase 159z (audit #10) — correction flow per row.
+  const openReverse = (id: string) => {
+    setReversingId(id);
+    setReverseReason('');
+    setMsg(null);
+  };
+  const confirmReverse = async () => {
+    if (!reversingId) return;
+    if (reverseReason.trim().length < 6) {
+      setMsg({ kind: 'err', text: 'Reason must be at least 6 characters' });
+      return;
+    }
+    setBusy('reverse');
+    try {
+      const res = await adminTaxService.reverseTcs(reversingId, reverseReason.trim());
+      setMsg({
+        kind: 'ok',
+        text: res.data?.wasAlreadyReversed
+          ? 'Row was already REVERSED (no-op)'
+          : `Row ${reversingId} reversed (was ${res.data?.previousStatus}).`,
+      });
+      setReversingId(null);
+      setReverseReason('');
+      await loadSummary(page);
+    } catch (err: any) {
+      setMsg({ kind: 'err', text: err?.message ?? 'reverse failed' });
+    } finally { setBusy(null); }
   };
 
   return (
@@ -661,16 +770,31 @@ function Gstr8Section() {
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <Field label="Filing period">
           <input
-            value={period} onChange={(e) => setPeriod(e.target.value)}
-            placeholder="2026-04" style={input}
+            type="month"
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            max={currentIstFilingPeriod()}
+            style={input}
           />
         </Field>
-        <button onClick={loadSummary} style={btnPrimary} disabled={busy === 'load' || !period}>
+        <button
+          onClick={() => loadSummary(1)}
+          style={btnPrimary}
+          disabled={busy === 'load' || !period || periodBlocked}
+        >
           {busy === 'load' ? 'Loading…' : 'Load summary'}
         </button>
-        <button onClick={downloadCsv} style={btnGhost} disabled={busy === 'csv' || !period}>
+        <button onClick={downloadCsv} style={btnGhost} disabled={busy === 'csv' || !period || periodBlocked}>
           <Icon name="download" size={14} /> {busy === 'csv' ? 'Downloading…' : 'Download CSV'}
         </button>
+        <button onClick={downloadJson} style={btnGhost} disabled={busy === 'json' || !period || periodBlocked}>
+          <Icon name="download" size={14} /> {busy === 'json' ? 'Downloading…' : 'Download JSON'}
+        </button>
+        {periodIsFuture && (
+          <span style={{ fontSize: 12, color: '#b91c1c', fontWeight: 600 }}>
+            Period is in the future — exports disabled.
+          </span>
+        )}
       </div>
 
       {msg && <Banner msg={msg} />}
@@ -700,10 +824,13 @@ function Gstr8Section() {
                     )}
                   </th>
                   <th style={th}>Supplier GSTIN</th>
+                  <th style={th}>Trade Name</th>
                   <th style={{ ...th, textAlign: 'right' }}>Gross</th>
                   <th style={{ ...th, textAlign: 'right' }}>Net</th>
                   <th style={{ ...th, textAlign: 'right' }}>TCS</th>
                   <th style={th}>Status</th>
+                  <th style={th}>NIC ARN</th>
+                  <th style={th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -718,6 +845,11 @@ function Gstr8Section() {
                     <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 12, color: '#0F1115' }}>
                       {r.supplierGstin ?? <span style={{ color: '#7A828F' }}>—</span>}
                     </td>
+                    <td style={td}>
+                      {r.seller?.sellerShopName || r.seller?.sellerName || (
+                        <span style={{ color: '#7A828F' }}>—</span>
+                      )}
+                    </td>
                     <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                       ₹{paiseToRupees(r.grossTaxableSupplyInPaise)}
                     </td>
@@ -730,16 +862,55 @@ function Gstr8Section() {
                     <td style={td}>
                       <StatusPill status={r.status} />
                     </td>
+                    <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
+                      {r.nicArn ?? <span style={{ color: '#7A828F' }}>—</span>}
+                    </td>
+                    <td style={td}>
+                      {r.status !== 'REVERSED' && (
+                        <button
+                          onClick={() => openReverse(r.id)}
+                          style={{ ...btnGhost, padding: '4px 8px', fontSize: 12 }}
+                          disabled={busy === 'reverse'}
+                        >
+                          Reverse
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {summary.rows.length === 0 && (
-                  <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 24 }}>
+                  <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 24 }}>
                     No TCS rows for {period} (NIL filing).
                   </td></tr>
                 )}
               </tbody>
             </table>
           </div>
+
+          {/* Phase 159z (audit #14) — pagination controls. */}
+          {summary.totalPages > 1 && (
+            <div style={{
+              marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap',
+            }}>
+              <span style={{ fontSize: 12, color: '#525A65' }}>
+                Page {summary.page} of {summary.totalPages} · {summary.sellerCount.toLocaleString('en-IN')} suppliers
+              </span>
+              <button
+                onClick={() => loadSummary(Math.max(1, summary.page - 1))}
+                style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}
+                disabled={summary.page <= 1 || busy === 'load'}
+              >
+                ← Prev
+              </button>
+              <button
+                onClick={() => loadSummary(Math.min(summary.totalPages, summary.page + 1))}
+                style={{ ...btnGhost, padding: '6px 10px', fontSize: 12 }}
+                disabled={summary.page >= summary.totalPages || busy === 'load'}
+              >
+                Next →
+              </button>
+            </div>
+          )}
 
           {summary.rows.length > 0 && (
             <div style={{
@@ -750,9 +921,15 @@ function Gstr8Section() {
               <span style={{ fontSize: 13, color: '#525A65', fontWeight: 600 }}>
                 {selected.size === 0 ? 'Select rows to act on' : `${selected.size} row${selected.size === 1 ? '' : 's'} selected`}
               </span>
-              <button onClick={markFiled} style={btnSecondary} disabled={selected.size === 0 || busy === 'filed'}>
-                {busy === 'filed' ? 'Marking…' : `Mark FILED`}
-              </button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  value={nicArn} onChange={(e) => setNicArn(e.target.value.toUpperCase())}
+                  placeholder="GSTN ARN (mandatory)" style={{ ...input, width: 220 }}
+                />
+                <button onClick={markFiled} style={btnSecondary} disabled={selected.size === 0 || !nicArn.trim() || busy === 'filed'}>
+                  {busy === 'filed' ? 'Marking…' : `Mark FILED`}
+                </button>
+              </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
                   value={payRef} onChange={(e) => setPayRef(e.target.value)}
@@ -766,6 +943,39 @@ function Gstr8Section() {
                   {busy === 'paid' ? 'Marking…' : 'Mark PAID_TO_GOVT'}
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Phase 159z (audit #10) — inline reverse-confirm prompt. */}
+          {reversingId && (
+            <div style={{
+              marginTop: 12, padding: 12, background: '#fff4f4',
+              border: '1px solid #fecaca', borderRadius: 12,
+              display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+            }}>
+              <span style={{ fontSize: 13, color: '#b91c1c', fontWeight: 700 }}>
+                Reverse row {reversingId.slice(0, 8)}…
+              </span>
+              <input
+                value={reverseReason}
+                onChange={(e) => setReverseReason(e.target.value)}
+                placeholder="Reason (min 6 chars)"
+                style={{ ...input, width: 280 }}
+              />
+              <button
+                onClick={confirmReverse}
+                style={btnSecondary}
+                disabled={busy === 'reverse' || reverseReason.trim().length < 6}
+              >
+                {busy === 'reverse' ? 'Reversing…' : 'Confirm reverse'}
+              </button>
+              <button
+                onClick={() => setReversingId(null)}
+                style={{ ...btnGhost, padding: '6px 12px' }}
+                disabled={busy === 'reverse'}
+              >
+                Cancel
+              </button>
             </div>
           )}
         </>

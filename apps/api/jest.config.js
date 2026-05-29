@@ -33,6 +33,12 @@ module.exports = {
           emitDecoratorMetadata: true,
           strict: true,
           strictPropertyInitialization: false,
+          // Production tsconfig keeps noUncheckedIndexedAccess ON (it catches
+          // real index bugs in shipped code). Test files index known-shape
+          // fixtures constantly (arr[0], match[1]); applying it there only
+          // produced compile noise — ~50 committed specs failed to LOAD with
+          // no runtime signal. Off for tests only; src strictness is unchanged.
+          noUncheckedIndexedAccess: false,
           skipLibCheck: true,
           paths: {
             '@src/*': ['src/*'],

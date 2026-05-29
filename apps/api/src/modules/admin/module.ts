@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 
-import { IThinkModule } from '../../integrations/ithink/ithink.module';
 
 // Guards
 import { AdminAuthGuard } from '../../core/guards';
+import { RolesGuard } from '../../core/guards/roles.guard';
+import { StepUpGuard } from '../../core/step-up/step-up.guard';
 
 // Repository
 import { ADMIN_REPOSITORY } from './domain/repositories/admin.repository.interface';
@@ -26,6 +27,7 @@ import { AdminEditSellerUseCase } from './application/use-cases/admin-edit-selle
 import { AdminUpdateSellerStatusUseCase } from './application/use-cases/admin-update-seller-status.use-case';
 import { AdminUpdateSellerVerificationUseCase } from './application/use-cases/admin-update-seller-verification.use-case';
 import { AdminImpersonateSellerUseCase } from './application/use-cases/admin-impersonate-seller.use-case';
+import { AdminEndImpersonationUseCase } from './application/use-cases/admin-end-impersonation.use-case';
 import { AdminSendSellerMessageUseCase } from './application/use-cases/admin-send-seller-message.use-case';
 import { AdminChangeSellerPasswordUseCase } from './application/use-cases/admin-change-seller-password.use-case';
 import { AdminDeleteSellerUseCase } from './application/use-cases/admin-delete-seller.use-case';
@@ -54,7 +56,6 @@ import { RoleService } from './application/services/role.service';
 import { SellerStatusTransitionPolicy } from '../seller/application/policies/seller-status-transition.policy';
 
 @Module({
-  imports: [IThinkModule],
   controllers: [
     AdminAuthController,
     AdminSellersController,
@@ -67,6 +68,11 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
   ],
   providers: [
     AdminAuthGuard,
+    // Phase 23 (2026-05-20) — admin-users controller composes
+    // RolesGuard + StepUpGuard on top of AdminAuthGuard + PermissionsGuard.
+    // PermissionsGuard is provided by the global GuardsModule.
+    RolesGuard,
+    StepUpGuard,
     RoleService,
     AdminUserService,
     AdminDeliveryMethodsService,
@@ -88,6 +94,7 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     AdminUpdateSellerVerificationUseCase,
     SellerStatusTransitionPolicy,
     AdminImpersonateSellerUseCase,
+    AdminEndImpersonationUseCase,
     AdminSendSellerMessageUseCase,
     AdminChangeSellerPasswordUseCase,
     AdminDeleteSellerUseCase,
@@ -99,6 +106,12 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
   // Phase 10 (PR 10.5) — Export the repository binding so the
   // admin-mfa module (which composes the existing AdminRepository
   // for MFA writes) can inject it without redeclaring the provider.
-  exports: [ADMIN_REPOSITORY],
+  exports: [
+    ADMIN_REPOSITORY,
+    // Phase 28 (2026-05-21) — exported so the franchise module's
+    // end-impersonation route can reuse the same shared use case
+    // instead of duplicating the Redis + audit + event-bus wiring.
+    AdminEndImpersonationUseCase,
+  ],
 })
 export class AdminModule {}

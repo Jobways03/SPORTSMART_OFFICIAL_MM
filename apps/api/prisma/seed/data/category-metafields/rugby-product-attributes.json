@@ -1,0 +1,470 @@
+{
+  "rugby-balls": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "match", "label": "Match Ball" },
+        { "value": "training", "label": "Training Ball" },
+        { "value": "replica", "label": "Replica / Supporter" },
+        { "value": "mini", "label": "Mini / Skills Ball" }
+      ]
+    },
+    {
+      "key": "ball_size",
+      "name": "Ball Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "3", "label": "Size 3 (Under 9)" },
+        { "value": "4", "label": "Size 4 (Under 14)" },
+        { "value": "5", "label": "Size 5 (Adult)" }
+      ]
+    },
+    {
+      "key": "rugby_format",
+      "name": "Rugby Format",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "union", "label": "Rugby Union" },
+        { "value": "league", "label": "Rugby League" },
+        { "value": "sevens", "label": "Sevens" },
+        { "value": "touch", "label": "Touch / Tag" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "yellow", "label": "Yellow (Hi-Vis)" },
+        { "value": "black", "label": "Black" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-boots": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "stud_type",
+      "name": "Stud Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "soft_ground", "label": "Soft Ground (SG – Metal Studs)" },
+        { "value": "firm_ground", "label": "Firm Ground (FG – Moulded)" },
+        { "value": "hybrid", "label": "Hybrid (SG/FG)" },
+        { "value": "astro", "label": "Astro Turf" }
+      ]
+    },
+    {
+      "key": "position_fit",
+      "name": "Position Fit",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "forwards", "label": "Forwards" },
+        { "value": "backs", "label": "Backs" },
+        { "value": "all_round", "label": "All-Round" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "1", "label": "1" },
+        { "value": "2", "label": "2" },
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "cut_style",
+      "name": "Cut Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "low", "label": "Low Cut" },
+        { "value": "mid", "label": "Mid Cut" },
+        { "value": "high", "label": "High Top" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-headguards": [
+    {
+      "key": "age_group",
+      "name": "Age Group",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "adult", "label": "Adult" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "world_rugby_approved",
+      "name": "World Rugby Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "white", "label": "White" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-body-armour": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "armour_type",
+      "name": "Armour Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "full_body", "label": "Full Body Armour Top" },
+        { "value": "shoulder_pads", "label": "Shoulder Pads" },
+        { "value": "padded_shorts", "label": "Padded Shorts" },
+        { "value": "padded_undershirt", "label": "Padded Undershirt" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "world_rugby_approved",
+      "name": "World Rugby Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" }
+      ]
+    }
+  ],
+  "rugby-mouthguards": [
+    {
+      "key": "mouthguard_type",
+      "name": "Mouthguard Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "boil_bite", "label": "Boil & Bite" },
+        { "value": "pre_formed", "label": "Pre-Formed" },
+        { "value": "custom_fit", "label": "Custom Fit" }
+      ]
+    },
+    {
+      "key": "age_group",
+      "name": "Age Group",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "adult", "label": "Adult" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "clear", "label": "Clear" },
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "jersey", "label": "Jersey / Match Shirt" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "socks", "label": "Socks" },
+        { "value": "base_layer", "label": "Base Layer / Compression" },
+        { "value": "training_top", "label": "Training Top" },
+        { "value": "jacket", "label": "Jacket / Rain Top" },
+        { "value": "hoodie", "label": "Hoodie / Sweatshirt" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "fit_type",
+      "name": "Fit Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "tight", "label": "Tight / Compression" },
+        { "value": "athletic", "label": "Athletic Fit" },
+        { "value": "loose", "label": "Loose / Classic" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-gloves": [
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "grip_gloves", "label": "Grip / Receiver Gloves" },
+        { "value": "thermal", "label": "Thermal / Training Gloves" },
+        { "value": "fingerless", "label": "Fingerless Grip Gloves" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-kicking-tees": [
+    {
+      "key": "tee_type",
+      "name": "Tee Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "standard", "label": "Standard Kicking Tee" },
+        { "value": "high", "label": "High Kicking Tee" },
+        { "value": "adjustable", "label": "Adjustable Tee" },
+        { "value": "sand", "label": "Sand Tee" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "yellow", "label": "Yellow" }
+      ]
+    }
+  ],
+  "rugby-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "backpack", "label": "Backpack" },
+        { "value": "holdall", "label": "Holdall / Duffle" },
+        { "value": "boot_bag", "label": "Boot Bag" },
+        { "value": "team_bag", "label": "Team Kit Bag" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "rugby-training-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "tackle_bag", "label": "Tackle Bag / Shield" },
+        { "value": "tackle_pad", "label": "Tackle Pad / Hit Shield" },
+        { "value": "scrum_machine", "label": "Scrum Machine" },
+        { "value": "passing_trainer", "label": "Passing Trainer" },
+        { "value": "cones_markers", "label": "Cones / Markers" },
+        { "value": "agility_ladder", "label": "Agility Ladder" },
+        { "value": "tag_belts", "label": "Tag / Touch Belts" },
+        { "value": "contact_suit", "label": "Contact Suit" }
+      ]
+    },
+    {
+      "key": "age_group",
+      "name": "Age Group",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "adult", "label": "Adult" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    }
+  ]
+}

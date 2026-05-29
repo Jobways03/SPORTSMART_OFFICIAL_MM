@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState, FormEvent } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { franchiseAuthService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
@@ -13,15 +13,25 @@ interface FormErrors {
   password?: string;
 }
 
-export default function FranchiseLoginPage() {
+function FranchiseLoginInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const justVerified = searchParams.get('verified') === '1';
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [serverError, setServerError] = useState('');
-  const [serverErrorType, setServerErrorType] = useState<'error' | 'warning' | 'info'>('error');
+  const [serverErrorType, setServerErrorType] = useState<'error' | 'warning' | 'info' | 'success'>('error');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [verifyEmailHint, setVerifyEmailHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (justVerified) {
+      setServerErrorType('success');
+      setServerError('Email verified. Please sign in to continue.');
+    }
+  }, [justVerified]);
 
   const handleBlur = (field: string, value: string) => {
     let error: string | null = null;
@@ -80,10 +90,24 @@ export default function FranchiseLoginPage() {
           setServerError('Invalid email/phone number or password');
           setPassword('');
         } else if (err.status === 403) {
-          setServerErrorType('info');
-          setServerError(
-            'Your franchise account is pending admin approval. You will be able to sign in once your account is approved.',
-          );
+          const code = (err.body && (err.body as { code?: string }).code) ?? '';
+          if (code === 'EMAIL_NOT_VERIFIED') {
+            setServerErrorType('warning');
+            setServerError(
+              'Please verify your email before signing in. We can resend the verification code below.',
+            );
+            const trimmedIdentifier = identifier.trim();
+            setVerifyEmailHint(
+              trimmedIdentifier.includes('@')
+                ? trimmedIdentifier.toLowerCase()
+                : '',
+            );
+          } else {
+            setServerErrorType('info');
+            setServerError(
+              'Your franchise account is pending admin approval. You will be able to sign in once your account is approved.',
+            );
+          }
         } else if (err.status === 429) {
           setServerErrorType('warning');
           const msg = err.body.message || 'Too many failed attempts. Please try again later.';
@@ -112,7 +136,9 @@ export default function FranchiseLoginPage() {
       ? 'alert alert-warning'
       : serverErrorType === 'info'
         ? 'alert alert-info'
-        : 'alert alert-error';
+        : serverErrorType === 'success'
+          ? 'alert alert-success'
+          : 'alert alert-error';
 
   return (
     <div className="auth-page">
@@ -132,6 +158,20 @@ export default function FranchiseLoginPage() {
         {serverError && (
           <div className={alertClass} role="alert">
             {serverError}
+            {verifyEmailHint !== null && (
+              <div style={{ marginTop: 8 }}>
+                <Link
+                  href={
+                    verifyEmailHint
+                      ? `/register/verify?email=${encodeURIComponent(verifyEmailHint)}`
+                      : '/register/verify'
+                  }
+                  style={{ color: 'var(--color-primary)', fontWeight: 600 }}
+                >
+                  Go to email verification →
+                </Link>
+              </div>
+            )}
           </div>
         )}
 
@@ -211,5 +251,13 @@ export default function FranchiseLoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function FranchiseLoginPage() {
+  return (
+    <Suspense>
+      <FranchiseLoginInner />
+    </Suspense>
   );
 }

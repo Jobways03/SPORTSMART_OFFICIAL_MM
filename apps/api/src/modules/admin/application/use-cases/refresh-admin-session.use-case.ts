@@ -3,7 +3,10 @@ import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE_ADMIN,
+} from '../../../../core/auth/jwt-constants';
 import {
   UnauthorizedAppException,
   ForbiddenAppException,
@@ -29,6 +32,13 @@ export interface RefreshAdminSessionResult {
 // before expiry doesn't force a re-login. Mirrors the customer refresh
 // for consistency across actors.
 const REFRESH_EXPIRY_GRACE_MS = 60_000;
+
+// Phase 23 (2026-05-20) — Absolute session lifetime cap. Without this,
+// sliding refresh keeps a daily-active admin session alive indefinitely
+// — a stolen cookie can be kept fresh forever. Cap measured from
+// AdminSession.createdAt; past this we revoke and force a fresh login.
+// Default 60 days; configurable.
+const SESSION_ABSOLUTE_LIFETIME_DAYS_DEFAULT = 60;
 
 @Injectable()
 export class RefreshAdminSessionUseCase {
@@ -81,6 +91,26 @@ export class RefreshAdminSessionUseCase {
       throw new UnauthorizedAppException('Refresh token expired');
     }
 
+    // Phase 23 (2026-05-20) — Absolute-lifetime cap. Even with
+    // continuous rotation a session cannot live beyond
+    // createdAt + SESSION_ABSOLUTE_LIFETIME_DAYS. Past that we revoke
+    // every active session for the admin and force a fresh login.
+    const absoluteLifetimeDays = Number(
+      this.envService.getString(
+        'SESSION_ABSOLUTE_LIFETIME_DAYS',
+        String(SESSION_ABSOLUTE_LIFETIME_DAYS_DEFAULT),
+      ),
+    );
+    const absoluteCutoffMs =
+      session.createdAt.getTime() +
+      absoluteLifetimeDays * 24 * 60 * 60 * 1000;
+    if (absoluteCutoffMs < Date.now()) {
+      await this.adminRepo.revokeAdminSessions(session.adminId);
+      throw new UnauthorizedAppException(
+        'Session expired. Please sign in again.',
+      );
+    }
+
     const admin = await this.adminRepo.findAdminById(session.adminId);
     if (!admin) {
       // Admin row gone but session row survived — revoke the orphan and reject.
@@ -105,8 +135,9 @@ export class RefreshAdminSessionUseCase {
       newExpiresAt,
     );
 
+    // Phase 23 (2026-05-20) — fallback tightened from '7d' → '15m'.
     const accessTtlSeconds = Math.floor(
-      this.parseTimeToMs(this.envService.getString('JWT_ACCESS_TTL', '7d')) /
+      this.parseTimeToMs(this.envService.getString('JWT_ACCESS_TTL', '15m')) /
         1000,
     );
     // JWT_ADMIN_SECRET — must match what AdminLoginUseCase signs with,
@@ -119,7 +150,13 @@ export class RefreshAdminSessionUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_ADMIN_SECRET'),
-      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
+      {
+        expiresIn: accessTtlSeconds,
+        algorithm: JWT_ALGORITHM,
+        // Phase 26 (2026-05-20) — audience pin parity with the login
+        // + mfa-verify token; AdminAuthGuard requires this.
+        audience: JWT_AUDIENCE_ADMIN,
+      },
     );
 
     this.logger.log(`Admin session refreshed: ${admin.id}`);

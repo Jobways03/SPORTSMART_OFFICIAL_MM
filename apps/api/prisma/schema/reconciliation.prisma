@@ -3,11 +3,11 @@
 // remittance, payouts to sellers, refunds disbursed).
 
 enum ReconciliationKind {
-  PAYMENT       // gateway captures vs MasterOrder.totalAmount
-  COD           // courier-collected COD vs MasterOrder.totalAmount
-  SETTLEMENT    // seller settlement record vs commission engine
-  REFUND        // gateway refund disbursements vs Return.refundAmount
-  WALLET        // sum(WalletTransaction.amountInPaise) per wallet vs Wallet.balanceInPaise
+  PAYMENT // gateway captures vs MasterOrder.totalAmount
+  COD // courier-collected COD vs MasterOrder.totalAmount
+  SETTLEMENT // seller settlement record vs commission engine
+  REFUND // gateway refund disbursements vs Return.refundAmount
+  WALLET // sum(WalletTransaction.amountInPaise) per wallet vs Wallet.balanceInPaise
 }
 
 enum ReconciliationStatus {
@@ -17,8 +17,8 @@ enum ReconciliationStatus {
 }
 
 enum DiscrepancyKind {
-  EXPECTED_NOT_FOUND       // we expected a record, none from the source
-  UNEXPECTED_RECORD        // source has a record we didn't expect
+  EXPECTED_NOT_FOUND // we expected a record, none from the source
+  UNEXPECTED_RECORD // source has a record we didn't expect
   AMOUNT_MISMATCH
   STATUS_MISMATCH
 }
@@ -73,16 +73,16 @@ model ReconciliationDiscrepancy {
   status DiscrepancyStatus @default(OPEN)
 
   // Linked context (any may be null).
-  masterOrderId   String? @map("master_order_id")
-  orderNumber     String? @map("order_number")
-  externalRef     String? @map("external_ref")
+  masterOrderId String? @map("master_order_id")
+  orderNumber   String? @map("order_number")
+  externalRef   String? @map("external_ref")
 
   // Phase 2 (PR 2.3) — BigInt. Discrepancy rows carry per-order paise
   // amounts; a single B2B order can already approach INT max, so the
   // safety floor matches the run-level aggregates above.
   expectedInPaise BigInt? @map("expected_in_paise")
   actualInPaise   BigInt? @map("actual_in_paise")
-  description     String @db.Text
+  description     String  @db.Text
 
   resolutionNotes   String?   @map("resolution_notes") @db.Text
   resolvedByAdminId String?   @map("resolved_by_admin_id")

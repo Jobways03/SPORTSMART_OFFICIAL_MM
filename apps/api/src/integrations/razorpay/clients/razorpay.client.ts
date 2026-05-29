@@ -63,6 +63,27 @@ export class RazorpayClient implements OnModuleInit {
   }
 
   /**
+   * Phase 69 (2026-05-22) — Phase 66 audit Gap #9 fix. The checkout
+   * service previously read `process.env.RAZORPAY_KEY_*` directly in
+   * its verify-payment and place-order paths. Now exposed through
+   * the same client the adapter already uses, so every Razorpay
+   * config access flows through one boundary (single test seam,
+   * single source of truth for what "configured" means).
+   *
+   * Both getters return empty string when unset rather than throwing
+   * — the caller already has a fail-closed branch keyed on empty
+   * string (`if (!keySecret) throw` in verifyPayment) and we want to
+   * preserve the exact failure mode.
+   */
+  getKeyId(): string {
+    return this.keyId;
+  }
+
+  getKeySecret(): string {
+    return this.keySecret;
+  }
+
+  /**
    * Internal HTTP call. `retryable` defaults to true for GETs and false
    * for everything else — a POST/PATCH/DELETE retry without an
    * idempotency key risks double-writes.

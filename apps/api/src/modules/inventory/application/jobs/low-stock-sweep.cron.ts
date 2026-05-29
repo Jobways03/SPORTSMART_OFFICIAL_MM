@@ -1,4 +1,10 @@
-// Sprint 4 Story 3.4 — auto-detect low-stock conditions every 30 min.
+// Sprint 4 Story 3.4 — auto-detect low-stock conditions.
+//
+// Phase 54 (2026-05-21) — tick interval tightened from 30 min to
+// 15 min (audit Gap #2). Combined with the new event-driven trigger
+// path (LowStockAlertEventSubscriber) the worst-case detection lag
+// drops from 30 min to ≤15 min on the cron tail, and near-zero on
+// the event path.
 //
 // The manual `POST /admin/inventory/alerts/sweep` is the operator
 // escape hatch. This cron is the steady-state detector — without it,
@@ -10,12 +16,13 @@
 //   - Feature-flagged (LOW_STOCK_SWEEP_CRON_ENABLED, default true).
 //   - Never throws — silent failure logged + counted, doesn't kill cron.
 //
-// Failure mode if this cron is silent: alerts stop being created.
-// Existing alerts still resolve correctly (resolved counter), and the
-// manual sweep endpoint still works.
+// Failure mode if this cron is silent: alerts stop being created
+// from the periodic scan. The event-driven path still fires on every
+// stock change, so the cron is now the backstop rather than the
+// primary detector.
 
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { LowStockAlertService } from '../services/low-stock-alert.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
@@ -32,18 +39,17 @@ export class LowStockSweepCron {
     private readonly instr: CronInstrumentationService,
   ) {}
 
-  // Every 30 minutes — frequent enough to catch fast-moving SKUs, slow
-  // enough that a sweep across all mappings stays cheap.
-  @Cron(CronExpression.EVERY_30_MINUTES)
+  // Phase 54 — every 15 minutes (00/15/30/45 of each hour).
+  @Cron('*/15 * * * *')
   async run(): Promise<void> {
     if (!this.enabled()) return;
-    // 35-minute lock — slightly longer than the tick interval so a
-    // slow sweep on a previous tick can't be double-claimed.
-    await this.leader.run('low-stock-sweep', 35 * 60, async () => {
+    // Phase 54 — 20-minute lock; slightly longer than the new 15-min
+    // tick so a slow sweep can't be double-claimed by the next tick.
+    await this.leader.run('low-stock-sweep', 20 * 60, async () => {
       try {
         await this.instr.wrap('low-stock-sweep', async () => {
-          const { created, resolved } = await this.alerts.sweep();
-          return { created, resolved };
+          const { created, resolved, scanned } = await this.alerts.sweep();
+          return { created, resolved, scanned };
         });
       } catch (err) {
         this.logger.error('Low-stock sweep failed', err as Error);

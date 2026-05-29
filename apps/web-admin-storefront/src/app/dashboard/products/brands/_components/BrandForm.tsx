@@ -46,6 +46,10 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
   // Image
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Phase 36 (2026-05-21) — pending File before brand exists. On
+  // create we send this in the same multipart POST as the brand row.
+  // On edit we use the per-id upload endpoint immediately.
+  const [pendingLogoFile, setPendingLogoFile] = useState<File | null>(null);
 
   // SEO
   const [seoOpen, setSeoOpen] = useState(false);
@@ -83,24 +87,50 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
     if (!name.trim()) return;
     setSaving(true);
     try {
+      // Phase 35 (2026-05-21) — full payload incl. description + SEO.
+      // Phase 36 (2026-05-21) — when creating with a logo selected,
+      // send everything in a single multipart POST so a network blip
+      // between the brand-create and logo-upload calls can't leave a
+      // brand without its logo (pre-Phase-36 the upload was a separate
+      // request).
+      const fields: Record<string, string> = {
+        name,
+      };
+      if (urlHandle) fields.slug = urlHandle;
+      if (description) fields.description = description;
+      if (pageTitle?.trim()) fields.metaTitle = pageTitle.trim();
+      if (metaDescription?.trim()) fields.metaDescription = metaDescription.trim();
+
       if (isEdit) {
         await apiClient(`/admin/brands/${brandId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name, description: description || undefined, slug: urlHandle || undefined }),
+          body: JSON.stringify(fields),
         });
       } else {
-        const res = await apiClient<{ brand: { id: string } }>('/admin/brands', {
-          method: 'POST',
-          body: JSON.stringify({ name, slug: urlHandle || undefined }),
-        });
-        if (res.data?.brand?.id) {
+        // Phase 36 — multipart when a logo file is queued, JSON otherwise.
+        let createRes: { data?: { brand?: { id: string } } };
+        if (pendingLogoFile) {
+          const formData = new FormData();
+          for (const [k, v] of Object.entries(fields)) formData.append(k, v);
+          formData.append('logo', pendingLogoFile);
+          createRes = await apiClient<{ brand: { id: string } }>('/admin/brands', {
+            method: 'POST',
+            body: formData,
+          });
+        } else {
+          createRes = await apiClient<{ brand: { id: string } }>('/admin/brands', {
+            method: 'POST',
+            body: JSON.stringify(fields),
+          });
+        }
+        if (createRes.data?.brand?.id) {
           if (products.length > 0) {
-            await apiClient(`/admin/brands/${res.data.brand.id}/products`, {
+            await apiClient(`/admin/brands/${createRes.data.brand.id}/products`, {
               method: 'POST',
               body: JSON.stringify({ productIds: products.map((p) => p.id) }),
             });
           }
-          router.push(`/dashboard/products/brands/${res.data.brand.id}`);
+          router.push(`/dashboard/products/brands/${createRes.data.brand.id}`);
           return;
         }
       }
@@ -151,7 +181,36 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !brandId) return;
+    if (!file) return;
+
+    // Phase 35 (2026-05-21) — client-side guards mirror the new
+    // backend Multer config. Pre-Phase-35 a 50 MB upload would push
+    // bytes through to Cloudinary before being rejected — wasted
+    // bandwidth + a janky user wait. Catching it here fails fast.
+    const MAX_BYTES = 2 * 1024 * 1024;
+    const ALLOWED = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!ALLOWED.includes(file.type)) {
+      alert('Logo must be a JPEG, PNG, or WebP image.');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > MAX_BYTES) {
+      alert(`Logo must be 2MB or smaller (got ${(file.size / 1024 / 1024).toFixed(1)}MB).`);
+      e.target.value = '';
+      return;
+    }
+
+    // Phase 36 (2026-05-21) — split paths:
+    //   - Create flow (!isEdit): queue the file locally and preview it.
+    //     The Save click sends one multipart POST with brand + logo.
+    //   - Edit flow (isEdit): upload immediately via the per-id endpoint.
+    if (!isEdit) {
+      setPendingLogoFile(file);
+      setLogoUrl(URL.createObjectURL(file));
+      e.target.value = '';
+      return;
+    }
+
     setUploading(true);
     try {
       const formData = new FormData();
@@ -167,7 +226,13 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
   };
 
   const handleImageRemove = async () => {
-    if (!brandId) { setLogoUrl(null); return; }
+    // Phase 36 (2026-05-21) — on create flow, just discard the
+    // pending file. On edit, delete from server.
+    if (!brandId) {
+      setPendingLogoFile(null);
+      setLogoUrl(null);
+      return;
+    }
     await apiClient(`/admin/brands/${brandId}/logo`, { method: 'DELETE' });
     setLogoUrl(null);
   };
@@ -185,6 +250,26 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
           {isEdit ? name || 'Edit brand' : 'Add brand'}
         </h1>
+        {/* Phase 36 (2026-05-21) — audit log link visible only on
+            edit; new brand has no history yet. */}
+        {isEdit && brandId && (
+          <Link
+            href={`/dashboard/products/brands/${brandId}/audit-log`}
+            style={{
+              marginLeft: 'auto',
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              color: '#374151',
+              background: '#fff',
+              textDecoration: 'none',
+            }}
+          >
+            View audit log
+          </Link>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
@@ -356,10 +441,13 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
                 </button>
               </div>
             ) : (
+              // Phase 36 (2026-05-21) — image input now active on
+              // create too. The file is queued locally and submitted
+              // as part of the multipart POST when admin clicks Save.
               <label style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                 padding: '28px 16px', border: '2px dashed #d1d5db', borderRadius: 10,
-                cursor: isEdit ? 'pointer' : 'default', background: '#fafbfc',
+                cursor: 'pointer', background: '#fafbfc',
                 transition: 'border-color 0.2s',
               }}>
                 {uploading ? (
@@ -371,24 +459,18 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
                       <circle cx="8.5" cy="8.5" r="1.5" />
                       <path d="m21 15-5-5L5 21" />
                     </svg>
-                    {isEdit ? (
-                      <>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Add image</span>
-                        <span style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>or drop an image to upload</span>
-                      </>
-                    ) : (
-                      <span style={{ fontSize: 12, color: '#9ca3af' }}>Save the brand first, then add an image</span>
-                    )}
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Add image</span>
+                    <span style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                      {isEdit ? 'or drop an image to upload' : 'will upload when you click Save'}
+                    </span>
                   </>
                 )}
-                {isEdit && (
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleImageUpload}
-                    style={{ display: 'none' }}
-                  />
-                )}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleImageUpload}
+                  style={{ display: 'none' }}
+                />
               </label>
             )}
           </section>

@@ -126,6 +126,24 @@ export class FranchisePublicFacade {
   }
 
   /**
+   * Phase 80 (2026-05-22) — acceptance audit Gap #5. The orders
+   * module's unified SLA cron now auto-rejects FRANCHISE sub-orders
+   * too. The cron lives in OrdersModule, so it accesses the franchise
+   * reject path through this facade (cross-module boundary).
+   *
+   * `auto: true` flag flows through to `rejectOrder` so the
+   * rejection row gets rejectionType=AUTO_SLA + autoRejectedAt
+   * stamped instead of being indistinguishable from a manual reject.
+   */
+  async rejectFranchiseOrder(
+    subOrderId: string,
+    franchiseId: string,
+    options: { reason?: string; note?: string; auto?: boolean },
+  ) {
+    return this.ordersService.rejectOrder(subOrderId, franchiseId, options);
+  }
+
+  /**
    * Record online order commission for a franchise-fulfilled order.
    * Called by the commission processor after delivery + return window passes.
    */

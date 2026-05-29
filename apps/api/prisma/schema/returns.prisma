@@ -2,6 +2,31 @@
 // Returns Module - owned tables
 // ============================================
 
+// Phase 92 follow-up (2026-05-23) — Gap #21 chain of custody on
+// eligibility checks. Pre-Phase-92 there was no record of who-checked-
+// what; insider abuse (admin enumerating order contents by repeatedly
+// hitting eligibility) was invisible. This append-only log records
+// every call with the caller's actor id + the result summary.
+//
+// Best-effort write: a failure to log MUST NOT break the eligibility
+// response (which is on the customer's checkout path).
+model ReturnEligibilityAudit {
+  id             String   @id @default(uuid())
+  masterOrderId  String   @map("master_order_id")
+  customerId     String   @map("customer_id")
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  resultEligible Boolean  @map("result_eligible")
+  resultReason   String?  @map("result_reason")
+  itemCount      Int      @default(0) @map("item_count")
+  eligibleCount  Int      @default(0) @map("eligible_count")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([masterOrderId, createdAt(sort: Desc)])
+  @@index([customerId, createdAt])
+  @@map("return_eligibility_audits")
+}
+
 model Return {
   id            String @id @default(uuid())
   returnNumber  String @unique @map("return_number") // RET-2026-000001
@@ -9,12 +34,12 @@ model Return {
   masterOrderId String @map("master_order_id")
   customerId    String @map("customer_id")
 
-  status ReturnStatus @default(REQUESTED)
+  status  ReturnStatus @default(REQUESTED)
   // Phase 5 (PR 5.1) — optimistic-lock counter. Incremented on every
   // status mutation. Concurrent writers compare against the version they
   // read; a CAS mismatch surfaces as a 409 instead of a silent state
   // overwrite (e.g. a stale "mark-received" stomping a fresh "rejected").
-  version Int @default(0)
+  version Int          @default(0)
 
   // Initiator
   initiatedBy String  @default("CUSTOMER") @map("initiated_by") // CUSTOMER, ADMIN, SELLER, FRANCHISE
@@ -36,6 +61,27 @@ model Return {
   // Receipt at warehouse
   receivedAt DateTime? @map("received_at")
   receivedBy String?   @map("received_by")
+  // Phase 96 (2026-05-23) — Mark Received audit Gap #20.
+  // ADMIN / SELLER / FRANCHISE / SYSTEM. Without this the audit log
+  // is the only record of which actor type physically received the
+  // parcel; queries can't filter (e.g. "all SYSTEM auto-receipts via
+  // webhook").
+  receivedByActorType         String?  @map("received_by_actor_type")
+  // Phase 96 — Gap #17 parcel condition (OK / BOX_DAMAGED /
+  // ITEM_MISSING / OTHER). Free-form on the DB; DTO constrains.
+  parcelCondition             String?  @map("parcel_condition")
+  // Phase 96 — Gap #14. PICKUP_SCHEDULED → RECEIVED shortcut audit.
+  // True when the admin skipped IN_TRANSIT (courier never scanned).
+  receivedBypassedInTransit   Boolean  @default(false) @map("received_bypassed_in_transit")
+  receivedBypassReason        String?  @map("received_bypass_reason")
+  // Phase 97 (2026-05-23) — QC audit Gap #20.
+  // Surrogate status for the QC workflow. Pre-Phase-97 the QC queue
+  // was implicit ("status = RECEIVED"); now PENDING_QC is the explicit
+  // surface that survives a future FSM rename.
+  qcStatus                    String?  @map("qc_status")
+  qcClaimedBy                 String?  @map("qc_claimed_by")
+  qcClaimedAt                 DateTime? @map("qc_claimed_at")
+  qcLockExpiresAt             DateTime? @map("qc_lock_expires_at")
 
   // QC
   qcCompletedAt DateTime?  @map("qc_completed_at")
@@ -48,12 +94,12 @@ model Return {
   // Both columns are nullable for back-compat with rows decided
   // before this migration; the QC controller requires them on new
   // submissions whenever any item is approved.
-  liabilityParty  LiabilityParty?  @map("liability_party")
-  customerRemedy  CustomerRemedy?  @map("customer_remedy")
-  qcRationale     String?          @map("qc_rationale")
-  qcInternalNotes String?          @map("qc_internal_notes")
-  qcCourierName   String?          @map("qc_courier_name")
-  qcAwbNumber     String?          @map("qc_awb_number")
+  liabilityParty  LiabilityParty? @map("liability_party")
+  customerRemedy  CustomerRemedy? @map("customer_remedy")
+  qcRationale     String?         @map("qc_rationale")
+  qcInternalNotes String?         @map("qc_internal_notes")
+  qcCourierName   String?         @map("qc_courier_name")
+  qcAwbNumber     String?         @map("qc_awb_number")
 
   // Phase 13 (P1.8) — seller-response lifecycle. Set at return-creation
   // time based on per-item reasonCategory (see classifyReasonForSellerResponse).
@@ -64,15 +110,24 @@ model Return {
   sellerResponseDueAt  DateTime?             @map("seller_response_due_at")
   sellerRespondedAt    DateTime?             @map("seller_responded_at")
   sellerResponseNotes  String?               @map("seller_response_notes")
+  // Phase 95 (2026-05-23) — Phase 94 deferred. Structured contest
+  // reason for analytics (top-N contest reasons, admin dashboards).
+  sellerContestReasonCategory String? @map("seller_contest_reason_category")
+  // Phase 95 — Phase 94 deferred #28. Admin-extended window pointer
+  // so audits can distinguish "seller raced cron" vs "admin granted
+  // an extension".
+  sellerResponseExtendedBy    String? @map("seller_response_extended_by")
+  sellerResponseExtendedAt    DateTime? @map("seller_response_extended_at")
+  sellerResponseExtensionHours Int?     @map("seller_response_extension_hours")
 
   // Phase 13 (P1.11) — risk scoring at intake. 0-100; null on legacy
   // rows. risk_flags is a list of short codes (e.g. ['HIGH_VALUE_NO_EVIDENCE',
   // 'CUSTOMER_ABUSE']) so admin can see which dimensions fired without
   // re-running the scorer. risk_scored_at is the timestamp of the
   // most recent score computation for staleness checks.
-  riskScore     Int?      @map("risk_score")
-  riskFlags     Json?     @map("risk_flags")
-  riskScoredAt  DateTime? @map("risk_scored_at")
+  riskScore    Int?      @map("risk_score")
+  riskFlags    Json?     @map("risk_flags")
+  riskScoredAt DateTime? @map("risk_scored_at")
 
   // Phase 13 (P1.14) — replacement / exchange request lifecycle.
   // replacementStatus stays NULL on legacy rows AND on returns whose
@@ -85,37 +140,75 @@ model Return {
   // below. onDelete: SetNull preserves the return row when the
   // replacement order is admin-deleted (rare; usually returns travel
   // through the standard close path instead).
-  replacementStatus       ReplacementRequestStatus? @map("replacement_status")
-  replacementOrderId      String?                   @map("replacement_order_id")
-  exchangeOrderId         String?                   @map("exchange_order_id")
-  exchangeTargetVariantId String?                   @map("exchange_target_variant_id")
-  exchangePriceDiffPaise  BigInt?                   @map("exchange_price_diff_paise")
+  replacementStatus          ReplacementRequestStatus? @map("replacement_status")
+  replacementOrderId         String?                   @map("replacement_order_id")
+  exchangeOrderId            String?                   @map("exchange_order_id")
+  exchangeTargetVariantId    String?                   @map("exchange_target_variant_id")
+  exchangePriceDiffPaise     BigInt?                   @map("exchange_price_diff_paise")
   // Phase 13 (P1.14 follow-up) — Razorpay payment for the price-up
   // exchange diff. Stamped at initiateExchangePayment, cleared once
   // verifyExchangePayment confirms the signature.
-  exchangeRazorpayOrderId   String?   @map("exchange_razorpay_order_id")
-  exchangePaymentCompletedAt DateTime? @map("exchange_payment_completed_at")
+  exchangeRazorpayOrderId    String?                   @map("exchange_razorpay_order_id")
+  exchangePaymentCompletedAt DateTime?                 @map("exchange_payment_completed_at")
 
   // Refund
-  refundMethod      ReturnRefundMethod? @map("refund_method")
-  refundAmount      Decimal?            @map("refund_amount") @db.Decimal(10, 2)
+  refundMethod        ReturnRefundMethod? @map("refund_method")
+  refundAmount        Decimal?            @map("refund_amount") @db.Decimal(10, 2)
   // Phase 1.4 — paise sibling (ADR-007). Authoritative once dual-write
   // soak completes; until then both columns are kept in lockstep by
   // MoneyDualWriteMiddleware whenever MONEY_DUAL_WRITE_ENABLED=true.
-  refundAmountInPaise BigInt?           @map("refund_amount_in_paise")
-  refundProcessedAt DateTime?           @map("refund_processed_at")
-  refundReference   String?             @map("refund_reference")
+  refundAmountInPaise BigInt?             @map("refund_amount_in_paise")
+  refundProcessedAt   DateTime?           @map("refund_processed_at")
+  refundReference     String?             @map("refund_reference")
 
   // Refund processing tracking (Phase R4)
   refundAttempts      Int       @default(0) @map("refund_attempts")
   refundLastAttemptAt DateTime? @map("refund_last_attempt_at")
   refundFailureReason String?   @map("refund_failure_reason")
+  // Phase 106 (2026-05-23) — Phase 101 audit Gap #28 closure.
+  // Pre-Phase-106 the latest reason overwrote the previous one on
+  // every retry, and full history lived only in RefundTransaction
+  // rows (which the admin UI didn't always surface). We now keep a
+  // bounded ring of the last 10 failure reasons on the row itself
+  // so the return detail page can render "history of attempts"
+  // without joining the audit table.
+  //
+  // Shape: { attemptNumber: int, reason: string, occurredAt: ISO,
+  //          actorType?: string, actorId?: string }[]
+  refundFailureHistory Json? @map("refund_failure_history")
+  // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure. The
+  // raw refundFailureReason can contain gateway internals (e.g.
+  // "Razorpay: card declined CVV mismatch") — safe for admin audit
+  // but unsafe for the customer order page. We store a sanitized,
+  // customer-friendly mirror here; customer return endpoints return
+  // ONLY this field, never refundFailureReason.
+  refundFailureMessageCustomer String? @map("refund_failure_message_customer")
   refundInitiatedBy   String?   @map("refund_initiated_by") // ADMIN, SYSTEM
   refundInitiatedAt   DateTime? @map("refund_initiated_at")
 
   // Misc
   customerNotes String?   @map("customer_notes")
   closedAt      DateTime? @map("closed_at")
+  // Phase 101 (2026-05-23) — Return Close audit Gap #2/#3 closure.
+  // Who closed the return + why so finance reports can answer "who
+  // closed this batch?" without joining audit_logs.
+  closedBy             String? @map("closed_by")
+  closedByActorType    String? @map("closed_by_actor_type")
+  closeReason          String? @map("close_reason") @db.VarChar(500)
+  // Phase 101 — Refund Failure Marking audit Gap #7 closure. Symmetric
+  // pair to refundInitiatedBy/At for the manual-fail path.
+  refundFailedBy       String?   @map("refund_failed_by")
+  refundFailedByActor  String?   @map("refund_failed_by_actor_type")
+  refundFailedAt       DateTime? @map("refund_failed_at")
+  // Phase 101 — Refund Retry audit Gap #8 closure. Persistent
+  // computed nextRetryAt so the UI can show "next attempt in X min"
+  // without re-computing client-side + so the retry cron can index
+  // on it.
+  refundNextRetryAt    DateTime? @map("refund_next_retry_at")
+  // Phase 101 — Refund Retry audit Gap #6 closure. Per-return cap
+  // override so high-value refunds can have a tighter cap without
+  // a code change.
+  refundMaxRetries     Int?      @map("refund_max_retries")
 
   // Phase 12 GST — Section 34 credit-note eligibility. NULL on legacy
   // rows and on returns that haven't reached QC yet. The daily cron
@@ -137,6 +230,39 @@ model Return {
   creditNoteTimeBarReason        String?                      @map("credit_note_time_bar_reason")
   financeReviewedBy              String?                      @map("finance_reviewed_by")
   financeReviewedAt              DateTime?                    @map("finance_reviewed_at")
+
+  // Phase 92 (2026-05-23) — Return Eligibility audit Gap #20.
+  // Snapshot of the effective return policy at the moment the
+  // customer submitted. Shape:
+  //   {
+  //     source: 'PRODUCT' | 'CATEGORY' | 'GLOBAL',
+  //     windowDays: number,
+  //     allowedReasons: ReturnReasonCategory[],
+  //     isReturnable: boolean,
+  //     allowPartialReturn: boolean,
+  //     resolvedAt: ISO timestamp,
+  //   }
+  // Without this snapshot a retroactive policy edit (window shortened,
+  // reasons trimmed) would silently change what was "allowed" when
+  // the return was filed. Snapshot guarantees the original contract
+  // survives later admin policy churn.
+  returnPolicySnapshotJson Json? @map("return_policy_snapshot_json")
+
+  // Phase 93 (2026-05-23) — Customer Return Request audit Gap #8.
+  // Snapshot of the fulfillment node at return creation. Pre-Phase-93
+  // "which seller owned this when the return was raised" was lossy
+  // after reassignment (Flow #59). Snapshot resolves the historical
+  // attribution + lets dashboard queries filter `WHERE
+  // sellerIdSnapshot = X` without joining subOrders.
+  sellerIdSnapshot    String? @map("seller_id_snapshot")
+  franchiseIdSnapshot String? @map("franchise_id_snapshot")
+  nodeTypeSnapshot    String? @map("node_type_snapshot")
+
+  // Phase 93 — Gap #23 cancellation detail.
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancelledBy        String?   @map("cancelled_by")
+  cancelledByRole    String?   @map("cancelled_by_role")
+  cancellationReason String?   @map("cancellation_reason") @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -171,6 +297,10 @@ model Return {
   @@index([liabilityParty])
   @@index([customerRemedy])
   @@index([sellerResponseStatus, sellerResponseDueAt])
+  // Phase 93 (2026-05-23) — seller-dashboard hot queries on the
+  // snapshot columns.
+  @@index([sellerIdSnapshot, status, createdAt(sort: Desc)])
+  @@index([franchiseIdSnapshot, status, createdAt(sort: Desc)])
   @@index([riskScore])
   @@index([replacementStatus])
   // Phase 2 (PR 2.1) — admin returns queue: `WHERE status = ?
@@ -178,6 +308,20 @@ model Return {
   // `status` index narrows but doesn't help the sort — Postgres
   // re-sorts every page. The composite serves both in index order.
   @@index([status, createdAt(sort: Desc)])
+  // Phase 97 (2026-05-23) — QC audit Gap #25 / Gap #26 closures.
+  // "all returns awaiting QC" hot query + analytics by liability.
+  @@index([status, receivedAt])
+  @@index([qcDecision, qcCompletedAt])
+  @@index([liabilityParty, qcCompletedAt])
+  // Phase 101 (2026-05-23) — Refund Retry audit close-time analytics
+  // + retry cron's "next attempt due" sweep query.
+  @@index([closedAt(sort: Desc)])
+  @@index([status, refundNextRetryAt])
+  // Phase 107 (2026-05-25) — CSV export with a date-only filter (no
+  // status) couldn't use the [status, createdAt] composite (status is the
+  // leading column); this serves the bare `ORDER BY created_at DESC` range
+  // scan + the export's keyset cursor.
+  @@index([createdAt(sort: Desc)])
   // Phase 12 GST — partial indexes for the Sec 34 time-bar cron live
   // in the migration SQL (`returns_credit_note_eligibility_idx` +
   // `returns_credit_note_eligibility_pending_idx`). Prisma can't
@@ -192,6 +336,28 @@ model ReturnItem {
   quantity       Int
   reasonCategory ReturnReasonCategory @map("reason_category")
   reasonDetail   String?              @map("reason_detail")
+
+  // Phase 95 (2026-05-23) — Phase 94 deferred #20 closure. Per-item
+  // seller response so multi-item returns can record "I agree on
+  // item 1, contest item 2" without forcing a single stance on the
+  // whole return. Null on legacy rows + on returns whose
+  // sellerResponseStatus is NOT_REQUIRED. The aggregate
+  // Return.sellerResponseStatus stays the rollup (any CONTESTED =
+  // CONTESTED at the return level so admin/email handlers don't
+  // need item-level awareness).
+  sellerItemResponse     SellerResponseStatus? @map("seller_item_response")
+  sellerItemRespondedAt  DateTime?             @map("seller_item_responded_at")
+  sellerItemResponseNote String?               @map("seller_item_response_note") @db.VarChar(2000)
+
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #17 closure.
+  // Per-item received quantity + condition. Pre-Phase-100 receive
+  // was a whole-return boolean; ops couldn't distinguish "received
+  // 2 of 3 items, one missing in the box" from "all items received."
+  // Nullable for legacy rows + for the common case where the admin
+  // marks-received without per-item granularity (the row defaults to
+  // quantity at QC time if still null).
+  receivedQty       Int?    @map("received_qty")
+  receivedCondition String? @map("received_condition")
 
   // QC outcome per item
   qcOutcome          QcOutcome? @map("qc_outcome")
@@ -210,14 +376,34 @@ model ReturnItem {
   // Phase B (P0.2) — per-return-item tax reversal lines.
   taxReversalLines ReturnTaxReversalLine[]
 
+  // Phase 97 (2026-05-23) — QC audit Gap #8 reverse relation for the
+  // per-item evidence linkage column.
+  evidence ReturnEvidence[]
+
   @@index([returnId])
   @@index([orderItemId])
+  // Phase 97 — Gap #26 analytics: "all DAMAGED items in last 30 days"
+  @@index([qcOutcome])
   @@map("return_items")
 }
 
 model ReturnEvidence {
   id          String   @id @default(uuid())
   returnId    String   @map("return_id")
+  // Phase 97 (2026-05-23) — QC audit Gap #8 closure. Per-item evidence
+  // linkage so the QC modal can render "photo X is for item Y".
+  // Nullable for legacy rows + for return-level evidence (e.g. parcel
+  // arrival photo not tied to a specific item).
+  returnItemId String? @map("return_item_id")
+  // Phase 97 — Gap #8 evidenceType classification. CUSTOMER_PROOF /
+  // ARRIVAL_PHOTO / DAMAGE_PHOTO / INSPECTOR_NOTE_PHOTO / SELLER_EVIDENCE.
+  evidenceType String? @map("evidence_type")
+  // Phase 97 — Gap #27 content metadata so the UI can preview without
+  // re-fetching from Cloudinary + dedupe via contentHash.
+  width        Int?    @map("width")
+  height       Int?    @map("height")
+  bytes        Int?    @map("bytes")
+  contentHash  String? @map("content_hash")
   uploadedBy  String   @map("uploaded_by") // CUSTOMER, FRANCHISE, SELLER, ADMIN
   uploaderId  String?  @map("uploader_id")
   fileType    String   @map("file_type")
@@ -226,9 +412,11 @@ model ReturnEvidence {
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
 
-  return Return @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  return     Return      @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  returnItem ReturnItem? @relation(fields: [returnItemId], references: [id], onDelete: SetNull)
 
   @@index([returnId])
+  @@index([returnItemId])
   @@map("return_evidence")
 }
 
@@ -280,6 +468,12 @@ model RefundTransaction {
   @@index([returnId])
   @@index([status])
   @@index([createdAt])
+  // Phase 96 (2026-05-23) — Phase 98 audit Gap #17 closure. Pre-Phase-
+  // 96 a manual retry would insert a fresh RefundTransaction row each
+  // time, leaving finance with multiple INITIATED audit rows for what
+  // is actually a single gateway refund (idempotency-keyed at the
+  // gateway). Compound uniques dedupe the audit table.
+  @@unique([returnId, attemptNumber])
   @@map("refund_transactions")
 }
 
@@ -299,30 +493,30 @@ model ReturnSequence {
 // for a return cannot exceed the GST originally collected.
 // ============================================
 model ReturnTaxReversalLine {
-  id                          String   @id @default(uuid())
-  returnId                    String   @map("return_id")
-  returnItemId                String   @map("return_item_id")
-  orderItemId                 String   @map("order_item_id")
+  id                           String   @id @default(uuid())
+  returnId                     String   @map("return_id")
+  returnItemId                 String   @map("return_item_id")
+  orderItemId                  String   @map("order_item_id")
   // Pre-discount value of the returned quantity (gross unit × qty
   // approved).
-  grossReturnedAmountInPaise  BigInt   @default(0) @map("gross_returned_amount_in_paise")
+  grossReturnedAmountInPaise   BigInt   @default(0) @map("gross_returned_amount_in_paise")
   // Proportional discount reversal (`unitDiscount × approvedQty`).
-  discountReversalInPaise     BigInt   @default(0) @map("discount_reversal_in_paise")
+  discountReversalInPaise      BigInt   @default(0) @map("discount_reversal_in_paise")
   // Net taxable value being reversed (gross - discount). The base
   // for the GST reversal calculation.
-  taxableReversalInPaise      BigInt   @default(0) @map("taxable_reversal_in_paise")
+  taxableReversalInPaise       BigInt   @default(0) @map("taxable_reversal_in_paise")
   // CGST + SGST + IGST reversal — mirror of the original snapshot
   // proportions for the returned quantity.
-  cgstReversalInPaise         BigInt   @default(0) @map("cgst_reversal_in_paise")
-  sgstReversalInPaise         BigInt   @default(0) @map("sgst_reversal_in_paise")
-  igstReversalInPaise         BigInt   @default(0) @map("igst_reversal_in_paise")
-  totalTaxReversalInPaise     BigInt   @default(0) @map("total_tax_reversal_in_paise")
+  cgstReversalInPaise          BigInt   @default(0) @map("cgst_reversal_in_paise")
+  sgstReversalInPaise          BigInt   @default(0) @map("sgst_reversal_in_paise")
+  igstReversalInPaise          BigInt   @default(0) @map("igst_reversal_in_paise")
+  totalTaxReversalInPaise      BigInt   @default(0) @map("total_tax_reversal_in_paise")
   // Final credit-note line total = taxable + total tax reversal.
-  totalCreditNoteAmountInPaise BigInt  @default(0) @map("total_credit_note_amount_in_paise")
-  gstRateBps                  Int      @default(0) @map("gst_rate_bps")
-  hsnCode                     String?  @map("hsn_code")
-  createdAt                   DateTime @default(now()) @map("created_at")
-  updatedAt                   DateTime @updatedAt @map("updated_at")
+  totalCreditNoteAmountInPaise BigInt   @default(0) @map("total_credit_note_amount_in_paise")
+  gstRateBps                   Int      @default(0) @map("gst_rate_bps")
+  hsnCode                      String?  @map("hsn_code")
+  createdAt                    DateTime @default(now()) @map("created_at")
+  updatedAt                    DateTime @updatedAt @map("updated_at")
 
   return     Return     @relation(fields: [returnId], references: [id], onDelete: Cascade)
   returnItem ReturnItem @relation(fields: [returnItemId], references: [id], onDelete: Cascade)

@@ -16,6 +16,7 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { SettlementsPublicFacade } from '../../../settlements/application/facades/settlements-public.facade';
+import { escapeCsvField } from '../../../../core/utils/csv.util';
 
 export interface MarketplaceCommissionGstrRow {
   /** Seller's GSTIN — receiver of the commission service. */
@@ -206,12 +207,10 @@ export class MarketplaceCommissionGstrService {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+// Phase 159x (audit B1) — delegate to the shared core helper (RFC-4180 +
+// CWE-1236 formula-injection guard). See gstr1-report.service.ts.
 function csvCell(value: string): string {
-  if (value === '') return '';
-  if (/[,"\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
+  return escapeCsvField(value);
 }
 
 function paiseToRupees(p: bigint): string {

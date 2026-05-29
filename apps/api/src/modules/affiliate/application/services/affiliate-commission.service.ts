@@ -2,10 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+
+// Phase 159d — actor for a manual commission transition (admin + request meta).
+// All fields optional: a SYSTEM/cron-driven transition passes none.
+export interface CommissionTransitionActor {
+  adminId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+}
 
 /**
  * SRS §8 + §9 — affiliate commission lifecycle. State machine:
@@ -31,7 +40,41 @@ export class AffiliateCommissionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
+    private readonly audit: AuditPublicFacade,
   ) {}
+
+  /**
+   * Phase 159d — write a best-effort audit_logs row for a commission state
+   * change (audit: transitions left only the row's timestamp columns as
+   * evidence — no actor / before-after / IP-UA trail).
+   */
+  private writeTransitionAudit(args: {
+    action: string;
+    commissionId: string;
+    fromStatus: string;
+    toStatus: string;
+    actor?: CommissionTransitionActor;
+    reason?: string | null;
+  }): void {
+    this.audit
+      .writeAuditLog({
+        actorId: args.actor?.adminId,
+        actorRole: 'ADMIN',
+        action: args.action,
+        module: 'affiliate',
+        resource: 'AffiliateCommission',
+        resourceId: args.commissionId,
+        oldValue: { status: args.fromStatus },
+        newValue: { status: args.toStatus, reason: args.reason ?? null },
+        ipAddress: args.actor?.ipAddress,
+        userAgent: args.actor?.userAgent,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Audit log write failed for ${args.action} (${args.commissionId}): ${err}`,
+        ),
+      );
+  }
 
   /**
    * Create a PENDING commission for an affiliate-attributed order.
@@ -188,7 +231,11 @@ export class AffiliateCommissionService {
    * exchange resolves. HOLD overrides everything else; this method
    * accepts PENDING and CONFIRMED as starting states.
    */
-  async hold(commissionId: string, reason?: string) {
+  async hold(
+    commissionId: string,
+    reason?: string,
+    actor?: CommissionTransitionActor,
+  ) {
     const c = await this.requireById(commissionId);
     if (c.status === 'HOLD') return c;
     if (!['PENDING', 'CONFIRMED'].includes(c.status)) {
@@ -196,10 +243,20 @@ export class AffiliateCommissionService {
         `Cannot put a commission on hold from ${c.status} state`,
       );
     }
-    return this.prisma.affiliateCommission.update({
+    const updated = await this.prisma.affiliateCommission.update({
       where: { id: commissionId },
-      data: { status: 'HOLD', holdReason: reason ?? null },
+      // Phase 159d — persist the acting admin (audit: actor was dropped).
+      data: { status: 'HOLD', holdReason: reason ?? null, heldById: actor?.adminId ?? null },
     });
+    this.writeTransitionAudit({
+      action: 'AFFILIATE_COMMISSION_HELD',
+      commissionId,
+      fromStatus: c.status,
+      toStatus: 'HOLD',
+      actor,
+      reason: reason ?? null,
+    });
+    return updated;
   }
 
   /**
@@ -208,17 +265,25 @@ export class AffiliateCommissionService {
    * order value isn't higher than the original; if it's lower, also
    * call applyAdjustment with the partial-refund delta first.
    */
-  async resumeFromHold(commissionId: string) {
+  async resumeFromHold(commissionId: string, actor?: CommissionTransitionActor) {
     const c = await this.requireById(commissionId);
     if (c.status !== 'HOLD') {
       throw new BadRequestAppException(
         `Cannot resume from HOLD — current state is ${c.status}`,
       );
     }
-    return this.prisma.affiliateCommission.update({
+    const updated = await this.prisma.affiliateCommission.update({
       where: { id: commissionId },
       data: { status: 'PENDING', holdReason: null },
     });
+    this.writeTransitionAudit({
+      action: 'AFFILIATE_COMMISSION_RESUMED',
+      commissionId,
+      fromStatus: 'HOLD',
+      toStatus: 'PENDING',
+      actor,
+    });
+    return updated;
   }
 
   /**

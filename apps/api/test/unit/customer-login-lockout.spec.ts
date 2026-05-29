@@ -2,18 +2,13 @@ import 'reflect-metadata';
 import { LoginUserUseCase } from '../../src/modules/identity/application/use-cases/login-user.use-case';
 
 /**
- * Regression test for customer login brute-force protection.
+ * Customer login brute-force protection.
  *
- * Before: Seller / Franchise / Admin login all had `failedLoginAttempts`
- * + `lockUntil` lockout logic (see e.g. admin-login.use-case.ts:107-146).
- * Customer login skipped it — the User schema didn't even have those
- * columns. Per-IP throttling (5/min) helped but didn't stop distributed
- * credential-stuffing spraying one account across many IPs.
- *
- * After: User model has failedLoginAttempts + lockUntil (see
- * prisma/schema/identity.prisma), repo has recordFailedLogin +
- * clearLoginLockout, and this use-case enforces the same 5-attempts-then-
- * 15-min-lock policy as the other actors.
+ * Phase 17 (2026-05-20) — the use case now uses
+ * `recordFailedLoginAtomic` (Prisma `{ increment: 1 }`) instead of
+ * the racy read-then-set pattern, and consults the
+ * EmailBruteForceService for distributed credential-stuffing
+ * across rotating IPs.
  */
 
 describe('LoginUserUseCase — brute-force lockout', () => {
@@ -21,33 +16,66 @@ describe('LoginUserUseCase — brute-force lockout', () => {
   const passwordHash =
     '$2a$12$LJ3m4ys3Lg7VhMQdxlGC7.BQJ1HFpR9PQXHs1GKTTl1C5KVhJvtNi'; // dummy
 
-  const makeSvc = (user: any) => {
+  const makeSvc = (
+    user: any,
+    overrides: {
+      emailLocked?: boolean;
+      atomicResult?: { failedLoginAttempts: number; lockUntil: Date | null };
+    } = {},
+  ) => {
     const userRepo: any = {
       findByEmailWithRoles: jest.fn().mockResolvedValue(user),
       recordFailedLogin: jest.fn().mockResolvedValue(undefined),
+      recordFailedLoginAtomic: jest
+        .fn()
+        .mockResolvedValue(
+          overrides.atomicResult ?? {
+            failedLoginAttempts: (user?.failedLoginAttempts ?? 0) + 1,
+            lockUntil: null,
+          },
+        ),
       clearLoginLockout: jest.fn().mockResolvedValue(undefined),
+      touchLastLogin: jest.fn().mockResolvedValue(undefined),
+      updatePassword: jest.fn().mockResolvedValue(undefined),
     };
     const sessionRepo: any = {
       createSession: jest.fn().mockResolvedValue({ id: 'sess-1' }),
     };
     const envService: any = {
       getString: (k: string, d: string) =>
-        k === 'JWT_CUSTOMER_SECRET' ? 'x'.repeat(32) : d ?? '7d',
+        k === 'JWT_CUSTOMER_SECRET' ? 'x'.repeat(32) : d ?? '15m',
+      getOptional: (_k: string) => undefined,
+      isProduction: () => false,
     };
     const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
+    const emailBruteForce: any = {
+      assertNotLocked: jest
+        .fn()
+        .mockImplementation(async () => {
+          if (overrides.emailLocked) {
+            const err: any = new Error('locked');
+            err.code = 'TOO_MANY_REQUESTS';
+            throw err;
+          }
+        }),
+      recordFailure: jest.fn().mockResolvedValue(undefined),
+      clear: jest.fn().mockResolvedValue(undefined),
+    };
     const logger: any = {
       setContext: jest.fn(),
       log: jest.fn(),
       error: jest.fn(),
+      warn: jest.fn(),
     };
     const svc = new LoginUserUseCase(
       userRepo,
       sessionRepo,
       envService,
       eventBus,
+      emailBruteForce,
       logger,
     );
-    return { svc, userRepo };
+    return { svc, userRepo, emailBruteForce };
   };
 
   const buildUser = (overrides: Partial<any> = {}) => ({
@@ -56,6 +84,7 @@ describe('LoginUserUseCase — brute-force lockout', () => {
     firstName: 'A',
     lastName: 'B',
     status: 'ACTIVE',
+    emailVerified: true,
     passwordHash,
     failedLoginAttempts: 0,
     lockUntil: null,
@@ -63,32 +92,38 @@ describe('LoginUserUseCase — brute-force lockout', () => {
     ...overrides,
   });
 
-  it('rejects and increments counter on wrong password', async () => {
-    const { svc, userRepo } = makeSvc(buildUser({ failedLoginAttempts: 2 }));
+  it('wrong password: atomic-increments counter and records per-email failure', async () => {
+    const { svc, userRepo, emailBruteForce } = makeSvc(
+      buildUser({ failedLoginAttempts: 2 }),
+      { atomicResult: { failedLoginAttempts: 3, lockUntil: null } },
+    );
 
     await expect(
       svc.execute({ email: 'test@example.com', password: 'wrong' }),
     ).rejects.toThrow(/Invalid email or password/);
 
-    expect(userRepo.recordFailedLogin).toHaveBeenCalledWith('u-1', 3, null);
+    expect(userRepo.recordFailedLoginAtomic).toHaveBeenCalledWith(
+      'u-1',
+      MAX_ATTEMPTS,
+      15 * 60 * 1000,
+    );
+    expect(emailBruteForce.recordFailure).toHaveBeenCalledWith(
+      'test@example.com',
+    );
   });
 
-  it('locks the account on the MAX_ATTEMPTS-th consecutive failure', async () => {
-    const { svc, userRepo } = makeSvc(
-      buildUser({ failedLoginAttempts: MAX_ATTEMPTS - 1 }),
-    );
+  it('locks the account when atomic increment returns lockUntil', async () => {
+    const future = new Date(Date.now() + 15 * 60 * 1000);
+    const { svc } = makeSvc(buildUser({ failedLoginAttempts: 4 }), {
+      atomicResult: { failedLoginAttempts: 5, lockUntil: future },
+    });
 
     await expect(
       svc.execute({ email: 'test@example.com', password: 'wrong' }),
-    ).rejects.toThrow(/Account locked/);
-
-    const call = userRepo.recordFailedLogin.mock.calls[0];
-    expect(call[0]).toBe('u-1');
-    expect(call[1]).toBe(MAX_ATTEMPTS);
-    expect(call[2]).toBeInstanceOf(Date); // lockUntil set
+    ).rejects.toThrow(/Account locked due to too many failed attempts/);
   });
 
-  it('rejects immediately when lockUntil is in the future (no bcrypt work)', async () => {
+  it('refuses immediately when lockUntil is in the future (no bcrypt work)', async () => {
     const future = new Date(Date.now() + 5 * 60 * 1000);
     const { svc, userRepo } = makeSvc(buildUser({ lockUntil: future }));
 
@@ -96,22 +131,30 @@ describe('LoginUserUseCase — brute-force lockout', () => {
       svc.execute({ email: 'test@example.com', password: 'anything' }),
     ).rejects.toThrow(/Account locked/);
 
-    expect(userRepo.recordFailedLogin).not.toHaveBeenCalled();
+    expect(userRepo.recordFailedLoginAtomic).not.toHaveBeenCalled();
   });
 
-  it('clears counters on successful login when attempts > 0', async () => {
-    const { svc, userRepo } = makeSvc(
+  it('rejects per-email soft-lock before bcrypt', async () => {
+    const { svc, userRepo } = makeSvc(buildUser(), { emailLocked: true });
+    await expect(
+      svc.execute({ email: 'test@example.com', password: 'anything' }),
+    ).rejects.toThrow();
+    expect(userRepo.findByEmailWithRoles).not.toHaveBeenCalled();
+  });
+
+  it('clears counters + per-email lock on successful login', async () => {
+    const { svc, userRepo, emailBruteForce } = makeSvc(
       buildUser({ failedLoginAttempts: 3 }),
     );
-
-    // Stub bcrypt.compare to succeed.
     const bcrypt = require('bcrypt');
-    jest.spyOn(bcrypt, 'compare').mockResolvedValue(true as never);
+    const spy = jest.spyOn(bcrypt, 'compare').mockResolvedValue(true as never);
 
     await svc.execute({ email: 'test@example.com', password: 'ok' });
 
     expect(userRepo.clearLoginLockout).toHaveBeenCalledWith('u-1');
+    expect(userRepo.touchLastLogin).toHaveBeenCalledWith('u-1');
+    expect(emailBruteForce.clear).toHaveBeenCalledWith('test@example.com');
 
-    (bcrypt.compare as jest.Mock).mockRestore?.();
+    spy.mockRestore();
   });
 });

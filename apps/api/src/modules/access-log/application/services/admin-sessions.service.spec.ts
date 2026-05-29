@@ -46,6 +46,12 @@ describe('AdminSessionsService', () => {
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      affiliateSession: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue(null),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       ...prismaOverrides,
     };
 
@@ -150,9 +156,11 @@ describe('AdminSessionsService', () => {
 
       expect(update).toHaveBeenCalledTimes(1);
       // No stepUpVerifiedAt reset for customer sessions — they don't
-      // have admin MFA.
+      // have admin MFA. Revoker stamp (Phase 27) is included.
       expect(update.mock.calls[0][0].data).toEqual({
         revokedAt: expect.any(Date),
+        revokedBy: 'admin-1',
+        revocationReason: null,
       });
       expect(prisma.adminSession.update).not.toHaveBeenCalled();
     });

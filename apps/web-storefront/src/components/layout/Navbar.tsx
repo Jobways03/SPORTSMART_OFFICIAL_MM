@@ -18,13 +18,8 @@ import { apiClient } from '@/lib/api-client';
 import { fetchMenuClient } from '@/lib/menu';
 import { type MenuNode, type MenuTree, nodeHref } from '@/data/menuTypes';
 import { MegaMenu } from './MegaMenu';
-
-interface UserInfo {
-  userId: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-}
+import { useSession, broadcastAuthChange } from '@/lib/auth-context';
+import { authService } from '@/services/auth.service';
 
 interface CartData {
   itemCount: number;
@@ -39,7 +34,7 @@ interface SearchSuggestion {
 
 export function Navbar() {
   const router = useRouter();
-  const [user, setUser] = useState<UserInfo | null>(null);
+  const { user, status, clearUser } = useSession();
   const [cartCount, setCartCount] = useState(0);
 
   const [menu, setMenu] = useState<MenuTree | null>(null);
@@ -65,19 +60,19 @@ export function Navbar() {
     };
   }, []);
 
-  // Auth + cart
+  // Cart count — only fetched once the auth context confirms the
+  // user is signed in. The cart endpoint requires a valid session;
+  // calling it as `unauthed` would 401 + force a redirect loop with
+  // the apiClient's session-expiry handler.
   useEffect(() => {
-    try {
-      const userData = sessionStorage.getItem('user');
-      const token = sessionStorage.getItem('accessToken');
-      if (userData && token) {
-        setUser(JSON.parse(userData));
-        apiClient<CartData>('/customer/cart')
-          .then((res) => res.data && setCartCount(res.data.itemCount))
-          .catch(() => {});
-      }
-    } catch {}
-  }, []);
+    if (status !== 'authed') {
+      setCartCount(0);
+      return;
+    }
+    apiClient<CartData>('/customer/cart')
+      .then((res) => res.data && setCartCount(res.data.itemCount))
+      .catch(() => {});
+  }, [status]);
 
   useEffect(() => {
     const handler = () => {
@@ -163,16 +158,23 @@ export function Navbar() {
     else router.push(`/products?search=${encodeURIComponent(s.text)}`);
   };
 
-  const onLogout = () => {
-    try {
-      sessionStorage.removeItem('accessToken');
-      sessionStorage.removeItem('refreshToken');
-      sessionStorage.removeItem('user');
-    } catch {}
-    setUser(null);
-    setCartCount(0);
+  const onLogout = async () => {
+    // Phase 17 (2026-05-20) — the navbar logout now calls the
+    // server-side endpoint. Without it, the access cookie sits in
+    // the browser and the server session row stays active — a
+    // stolen cookie keeps working past the user's intent to sign
+    // out. authService.logout() also clears the legacy
+    // sessionStorage keys so a partially-migrated client doesn't
+    // leak the old tokens.
     setUserMenuOpen(false);
-    router.push('/');
+    try {
+      await authService.logout();
+    } finally {
+      clearUser();
+      setCartCount(0);
+      broadcastAuthChange();
+      router.replace('/');
+    }
   };
 
   const topItems: MenuNode[] = menu?.items ?? [];

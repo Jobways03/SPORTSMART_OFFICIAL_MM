@@ -3,19 +3,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
+import { franchiseAuthService } from '@/services/auth.service';
+import { franchiseProfileService, FranchiseProfile } from '@/services/profile.service';
+import { ApiError } from '@/lib/api-client';
+import { deriveBanner } from '@/lib/dashboard-banner';
 import './dashboard.css';
-
-interface FranchiseInfo {
-  franchiseId: string;
-  franchiseCode: string;
-  ownerName: string;
-  businessName: string;
-  email: string;
-  phoneNumber: string;
-  status?: string;
-  isEmailVerified?: boolean;
-  roles?: string[];
-}
 
 function getInitials(name: string): string {
   return name
@@ -49,6 +41,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },
 ];
 
+
 export default function DashboardLayout({
   children,
 }: {
@@ -56,26 +49,66 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [franchise, setFranchise] = useState<FranchiseInfo | null>(null);
+  const [profile, setProfile] = useState<FranchiseProfile | null>(null);
+  const [loading, setLoading] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Phase 20 (2026-05-20) — refetch profile from /franchise/profile on
+  // mount so banners reflect the latest server state (status,
+  // verificationStatus, isEmailVerified) rather than the stale
+  // sessionStorage snapshot captured at login.
   useEffect(() => {
-    try {
-      const token = sessionStorage.getItem('accessToken');
-      const data = sessionStorage.getItem('franchise');
-      if (!token || !data) {
-        router.replace('/login');
-        return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = sessionStorage.getItem('accessToken');
+        if (!token) {
+          router.replace('/login');
+          return;
+        }
+        const res = await franchiseProfileService.getProfile();
+        if (cancelled) return;
+        if (res.data) {
+          setProfile(res.data);
+          try {
+            sessionStorage.setItem(
+              'franchise',
+              JSON.stringify({
+                franchiseId: res.data.franchiseId,
+                franchiseCode: res.data.franchiseCode,
+                ownerName: res.data.ownerName,
+                businessName: res.data.businessName,
+                email: res.data.email,
+                phoneNumber: res.data.phoneNumber,
+                status: res.data.status,
+                isEmailVerified: res.data.isEmailVerified,
+              }),
+            );
+          } catch {
+            // Storage unavailable
+          }
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) {
+          try {
+            sessionStorage.clear();
+          } catch {
+            // Storage unavailable
+          }
+          router.replace('/login');
+          return;
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setFranchise(JSON.parse(data));
-    } catch {
-      router.replace('/login');
-    }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  // Close dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -86,29 +119,22 @@ export default function DashboardLayout({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Close sidebar on route change
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
 
-  const handleLogout = useCallback(() => {
-    try {
-      sessionStorage.removeItem('accessToken');
-      sessionStorage.removeItem('refreshToken');
-      sessionStorage.removeItem('franchise');
-    } catch {
-      // Storage unavailable
-    }
+  const handleLogout = useCallback(async () => {
+    await franchiseAuthService.logout();
     router.push('/login');
   }, [router]);
 
-  if (!franchise) return null;
+  if (loading || !profile) return null;
 
-  const initials = getInitials(franchise.ownerName);
+  const initials = getInitials(profile.ownerName);
+  const banner = deriveBanner(profile);
 
   return (
     <div className="dashboard-shell">
-      {/* Top Navbar */}
       <nav className="dashboard-navbar">
         <div className="navbar-left">
           <button
@@ -139,8 +165,8 @@ export default function DashboardLayout({
               aria-haspopup="true"
             >
               <div className="navbar-user-info">
-                <div className="navbar-user-name">{franchise.ownerName}</div>
-                <div className="navbar-user-shop">{franchise.businessName}</div>
+                <div className="navbar-user-name">{profile.ownerName}</div>
+                <div className="navbar-user-shop">{profile.businessName}</div>
               </div>
               <div className="navbar-avatar">{initials}</div>
               <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`}>
@@ -152,14 +178,14 @@ export default function DashboardLayout({
               <div className="navbar-dropdown">
                 <div style={{ padding: '10px 12px', borderBottom: '1px solid #e5e7eb', marginBottom: 4 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-text)' }}>
-                    {franchise.ownerName}
+                    {profile.ownerName}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                    {franchise.email}
+                    {profile.email}
                   </div>
-                  {franchise.franchiseCode && (
+                  {profile.franchiseCode && (
                     <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                      Code: {franchise.franchiseCode}
+                      Code: {profile.franchiseCode}
                     </div>
                   )}
                 </div>
@@ -185,13 +211,11 @@ export default function DashboardLayout({
         </div>
       </nav>
 
-      {/* Sidebar Overlay (mobile) */}
       <div
         className={`sidebar-overlay${sidebarOpen ? ' visible' : ''}`}
         onClick={() => setSidebarOpen(false)}
       />
 
-      {/* Sidebar */}
       <aside className={`dashboard-sidebar${sidebarOpen ? ' mobile-open' : ''}`}>
         <div className="sidebar-section">
           <div className="sidebar-section-label">Menu</div>
@@ -215,8 +239,65 @@ export default function DashboardLayout({
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="dashboard-content">{children}</main>
+      <main className="dashboard-content">
+        {banner && (
+          <div
+            role={banner.kind === 'error' || banner.kind === 'warning' ? 'alert' : 'status'}
+            style={{
+              padding: '12px 16px',
+              marginBottom: 16,
+              borderRadius: 8,
+              border: '1px solid',
+              borderColor:
+                banner.kind === 'error'
+                  ? '#fca5a5'
+                  : banner.kind === 'warning'
+                    ? '#fcd34d'
+                    : banner.kind === 'success'
+                      ? '#86efac'
+                      : '#93c5fd',
+              backgroundColor:
+                banner.kind === 'error'
+                  ? '#fef2f2'
+                  : banner.kind === 'warning'
+                    ? '#fffbeb'
+                    : banner.kind === 'success'
+                      ? '#f0fdf4'
+                      : '#eff6ff',
+              color:
+                banner.kind === 'error'
+                  ? '#991b1b'
+                  : banner.kind === 'warning'
+                    ? '#92400e'
+                    : banner.kind === 'success'
+                      ? '#166534'
+                      : '#1e40af',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 16,
+              flexWrap: 'wrap',
+              fontSize: 14,
+            }}
+          >
+            <span>{banner.text}</span>
+            {banner.ctaHref && banner.ctaLabel && (
+              <Link
+                href={banner.ctaHref}
+                style={{
+                  color: 'inherit',
+                  fontWeight: 600,
+                  textDecoration: 'underline',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {banner.ctaLabel}
+              </Link>
+            )}
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }

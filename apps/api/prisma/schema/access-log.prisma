@@ -22,23 +22,23 @@ enum AccessEventKind {
 }
 
 model AccessLog {
-  id          String          @id @default(uuid())
-  actorType   AccessActorType @map("actor_type")
-  actorId     String          @map("actor_id")
+  id         String          @id @default(uuid())
+  actorType  AccessActorType @map("actor_type")
+  actorId    String          @map("actor_id")
   // Free-form role within the actorType. For ADMIN actors this is one of
   // SUPER_ADMIN / SELLER_ADMIN / SELLER_SUPPORT / SELLER_OPERATIONS /
   // AFFILIATE_ADMIN (see core/guards/admin-auth.guard.ts ADMIN_ROLES).
   // Nullable because failed-login rows attribute by email before any
   // role is known, and non-admin actor types don't carry sub-roles today.
-  actorRole   String?         @map("actor_role")
-  kind        AccessEventKind
-  ipAddress   String?         @map("ip_address")
-  userAgent   String?         @map("user_agent")
-  deviceHash  String?         @map("device_hash") // sha256(userAgent + ip prefix)
-  succeeded   Boolean         @default(true)
-  reason      String?
-  metadata    Json?
-  createdAt   DateTime        @default(now()) @map("created_at")
+  actorRole  String?         @map("actor_role")
+  kind       AccessEventKind
+  ipAddress  String?         @map("ip_address")
+  userAgent  String?         @map("user_agent")
+  deviceHash String?         @map("device_hash") // sha256(userAgent + ip prefix)
+  succeeded  Boolean         @default(true)
+  reason     String?
+  metadata   Json?
+  createdAt  DateTime        @default(now()) @map("created_at")
 
   @@index([actorType, actorId])
   @@index([actorType, actorRole, createdAt])

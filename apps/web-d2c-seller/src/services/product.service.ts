@@ -1,3 +1,27 @@
+/**
+ * Phase 32 (2026-05-21) — cookie-auth migration (transitional step).
+ *
+ * Pre-Phase-32 every method explicitly forwarded `Authorization:
+ * Bearer ${token}` from a `token` parameter the caller had read from
+ * sessionStorage. The shared `@/lib/api-client` (from
+ * `@sportsmart/shared-utils`) already:
+ *   - Sends `credentials: 'include'` so the httpOnly cookie set on
+ *     login authenticates the request.
+ *   - Auto-reads `sessionStorage.getItem('accessToken')` and stamps
+ *     it as a Bearer header when the cookie is unavailable
+ *     (transitional fallback during the cookie-auth rollout).
+ *
+ * The explicit `headers: { Authorization: ... }` per-call was
+ * redundant — it overwrote the apiClient's own auto-Bearer with the
+ * same value. Removing it lets the request flow through the
+ * apiClient's standard auth pipeline. The `token` parameter is kept
+ * for backwards compatibility with the ~20 existing call-sites; once
+ * every caller drops the argument the param can be removed entirely.
+ *
+ * This is the safe first step of the cookie-only migration: no
+ * caller breaks, no behaviour change, but the explicit token
+ * plumbing no longer perpetuates the sessionStorage dependency.
+ */
 import { apiClient, ApiError, ApiResponse } from '@/lib/api-client';
 
 
@@ -22,7 +46,14 @@ export interface ProductListItem {
   slug: string;
   status: string;
   moderationStatus: string;
+  // Phase 32 (2026-05-21) — `moderationNote` is the legacy column.
+  // The canonical fields are `rejectionReason` (REJECTED) +
+  // `changeRequestNote` (CHANGES_REQUESTED). All renderers should
+  // prefer the structured field, falling back to moderationNote
+  // for rows written before the dual-write landed.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
   hasVariants: boolean;
   basePrice: string | null;
   baseStock: number | null;
@@ -45,7 +76,10 @@ export interface ProductDetail {
   brandId: string | null;
   status: string;
   moderationStatus: string;
+  // Phase 32 — see ProductListItem for the dual-field rationale.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
   hasVariants: boolean;
   basePrice: string | null;
   compareAtPrice: string | null;
@@ -163,21 +197,18 @@ export const sellerProductService = {
     const qs = query.toString();
     return apiClient<ProductListResponse>(`/seller/products${qs ? `?${qs}` : ''}`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   getProduct(token: string, productId: string): Promise<ApiResponse<ProductDetail>> {
     return apiClient<ProductDetail>(`/seller/products/${productId}`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   createProduct(token: string, payload: CreateProductPayload): Promise<ApiResponse<ProductDetail>> {
     return apiClient<ProductDetail>('/seller/products', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
   },
@@ -185,7 +216,6 @@ export const sellerProductService = {
   updateProduct(token: string, productId: string, payload: UpdateProductPayload): Promise<ApiResponse<ProductDetail>> {
     return apiClient<ProductDetail>(`/seller/products/${productId}`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
   },
@@ -193,14 +223,12 @@ export const sellerProductService = {
   deleteProduct(token: string, productId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   submitForReview(token: string, productId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}/submit`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({}),
     });
   },
@@ -219,8 +247,7 @@ export const sellerProductService = {
       `/seller/products/${productId}/self-status`,
       {
         method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status, reason }),
+          body: JSON.stringify({ status, reason }),
       },
     );
   },
@@ -228,7 +255,6 @@ export const sellerProductService = {
   generateVariants(token: string, productId: string, optionValueIds: string[][]): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants/generate`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ optionValueIds }),
     });
   },
@@ -236,7 +262,6 @@ export const sellerProductService = {
   generateManualVariants(token: string, productId: string, options: { name: string; values: string[] }[]): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants/generate-manual`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ options }),
     });
   },
@@ -244,7 +269,6 @@ export const sellerProductService = {
   updateVariant(token: string, productId: string, variantId: string, payload: any): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants/${variantId}`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
   },
@@ -252,7 +276,6 @@ export const sellerProductService = {
   bulkUpdateVariants(token: string, productId: string, variants: any[]): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants/bulk`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ variants }),
     });
   },
@@ -260,7 +283,6 @@ export const sellerProductService = {
   createVariant(token: string, productId: string, payload: any): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
   },
@@ -268,7 +290,6 @@ export const sellerProductService = {
   deleteVariant(token: string, productId: string, variantId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}/variants/${variantId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
@@ -277,7 +298,6 @@ export const sellerProductService = {
     formData.append('image', file);
     return apiClient<any>(`/seller/products/${productId}/images`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
   },
@@ -285,14 +305,12 @@ export const sellerProductService = {
   deleteImage(token: string, productId: string, imageId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}/images/${imageId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   reorderImages(token: string, productId: string, imageIds: string[]): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}/images/reorder`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ imageIds }),
     });
   },
@@ -323,8 +341,7 @@ export const sellerProductService = {
       `/seller/products/${productId}/variants/${variantId}/images`,
       {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
+          body: formData,
       },
     );
   },
@@ -332,14 +349,12 @@ export const sellerProductService = {
   deleteVariantImage(token: string, productId: string, variantId: string, imageId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}/variants/${variantId}/images/${imageId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   reorderVariantImages(token: string, productId: string, variantId: string, imageIds: string[]): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/products/${productId}/variants/${variantId}/images/reorder`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ imageIds }),
     });
   },
@@ -358,14 +373,12 @@ export const sellerProductService = {
     if (params.search) qs.set('search', params.search);
     return apiClient<any>(`/seller/catalog/browse?${qs}`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   mapToProduct(token: string, payload: any): Promise<ApiResponse<any>> {
     return apiClient<any>('/seller/catalog/map', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
   },
@@ -377,14 +390,12 @@ export const sellerProductService = {
     if (params.search) qs.set('search', params.search);
     return apiClient<any>(`/seller/catalog/my-products?${qs}`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   updateMapping(token: string, mappingId: string, payload: any): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/catalog/mapping/${mappingId}`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
   },
@@ -392,14 +403,12 @@ export const sellerProductService = {
   removeMapping(token: string, mappingId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/catalog/mapping/${mappingId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   bulkUpdateStock(token: string, updates: { mappingId: string; stockQty: number }[]): Promise<ApiResponse<any>> {
     return apiClient<any>('/seller/catalog/mapping/bulk-stock', {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ updates }),
     });
   },
@@ -411,14 +420,12 @@ export const sellerProductService = {
     if (params.limit) qs.set('limit', String(params.limit));
     return apiClient<any>(`/seller/service-areas?${qs}`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
   addServiceAreas(token: string, pincodes: string[]): Promise<ApiResponse<any>> {
     return apiClient<any>('/seller/service-areas', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ pincodes }),
     });
   },
@@ -426,7 +433,6 @@ export const sellerProductService = {
   removeServiceArea(token: string, pincode: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/service-areas/${pincode}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
     });
   },
 
@@ -442,7 +448,6 @@ export const sellerProductService = {
   ): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/service-areas/${pincode}/cod`, {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ codEligible }),
     });
   },

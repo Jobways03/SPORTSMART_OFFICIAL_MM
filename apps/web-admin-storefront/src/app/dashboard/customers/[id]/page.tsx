@@ -27,7 +27,6 @@ interface Customer {
   phone: string | null;
   status: string;
   emailVerified: boolean;
-  phoneVerified: boolean;
   createdAt: string;
   addresses: Address[];
 }
@@ -362,7 +361,6 @@ export default function CustomerDetailPage() {
 
           <SectionCard title="Verification">
             <VerificationRow label="Email" verified={customer.emailVerified} />
-            <VerificationRow label="Phone" verified={customer.phoneVerified} />
           </SectionCard>
 
           <SectionCard title="Notes">

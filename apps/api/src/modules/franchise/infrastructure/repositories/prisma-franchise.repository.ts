@@ -29,6 +29,26 @@ export class PrismaFranchiseRepository implements FranchisePartnerRepository {
     });
   }
 
+  /**
+   * Phase 20 (2026-05-20) — duplicate-GSTIN pre-check. Excludes
+   * soft-deleted rows so a deleted franchise's old GSTIN can be
+   * re-claimed. Returns only the id — the caller's only decision is
+   * "is this someone else's row?" so a wider select is wasted IO.
+   */
+  async findByGstNumber(gstNumber: string): Promise<{ id: string } | null> {
+    return this.prisma.franchisePartner.findFirst({
+      where: { gstNumber, isDeleted: false },
+      select: { id: true },
+    });
+  }
+
+  async findByPanNumber(panNumber: string): Promise<{ id: string } | null> {
+    return this.prisma.franchisePartner.findFirst({
+      where: { panNumber, isDeleted: false },
+      select: { id: true },
+    });
+  }
+
   async findById(id: string): Promise<FranchisePartner | null> {
     return this.prisma.franchisePartner.findFirst({
       where: { id, isDeleted: false },
@@ -260,6 +280,33 @@ export class PrismaFranchiseRepository implements FranchisePartnerRepository {
     });
   }
 
+  /**
+   * Phase 20 (2026-05-20) — atomic CAS attempt increment. WHERE
+   * asserts "still active AND below cap" inside the same UPDATE so
+   * concurrent verify calls cannot bypass the cap.
+   */
+  async incrementOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }> {
+    const res = await this.prisma.franchisePasswordResetOtp.updateMany({
+      where: {
+        id: otpId,
+        attempts: { lt: maxAttempts },
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (res.count !== 1) return { ok: false };
+    const after = await this.prisma.franchisePasswordResetOtp.findUnique({
+      where: { id: otpId },
+      select: { attempts: true },
+    });
+    return { ok: true, attempts: after?.attempts ?? 0 };
+  }
+
   // ── Transactional operations ────────────────────────────────
 
   async resetPasswordTransaction(params: {
@@ -322,14 +369,20 @@ export class PrismaFranchiseRepository implements FranchisePartnerRepository {
     franchisePartnerId: string;
     otpId: string;
   }): Promise<void> {
+    // Phase 20 (2026-05-20) — same now() across both writes so the
+    // boolean and the new timestamp column stay in lockstep.
+    const now = new Date();
     await this.prisma.$transaction([
       this.prisma.franchisePasswordResetOtp.update({
         where: { id: params.otpId },
-        data: { verifiedAt: new Date(), usedAt: new Date() },
+        data: { verifiedAt: now, usedAt: now },
       }),
       this.prisma.franchisePartner.update({
         where: { id: params.franchisePartnerId },
-        data: { isEmailVerified: true },
+        data: {
+          isEmailVerified: true,
+          emailVerifiedAt: now,
+        },
       }),
     ]);
   }

@@ -1,42 +1,34 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { StockReservationStatus } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
+import { StockMovementLedgerService } from '../services/stock-movement-ledger.service';
 
 /**
  * Phase 4.4 (2026-05-16) — Reservation expiry sweep.
  *
- * Background: every checkout creates `StockReservation` rows with a
- * 15-minute TTL (`expiresAt`). When the customer completes payment
- * within the window, the reservation transitions to CONFIRMED; when
- * they cancel, it transitions to RELEASED. Anything else — abandoned
- * carts, browser crashes, payment failures with no explicit cleanup
- * — leaves the reservation in RESERVED status past `expiresAt`,
- * **artificially blocking stock** from being sold to other customers.
- *
- * Previously the only cleanup was a module-local `setInterval` inside
- * `SellerAllocationService` that ran every 60s, but it would die with
- * the pod and didn't survive replica restarts cleanly. This dedicated
- * cron:
- *   1. Runs on the leader replica only (no double-write).
- *   2. Walks every RESERVED row past `expiresAt` in batches.
- *   3. For each row: in a single transaction, flips status to EXPIRED
- *      and decrements `SellerProductMapping.reservedQty` by the row's
- *      quantity. The CAS-style updateMany ensures concurrent flips
- *      can't double-decrement.
- *   4. Emits `inventory.reservation.expired` for downstream alerting
- *      (e.g. if a single mapping consistently expires, it suggests
- *      a checkout flow that's not completing).
- *
- * Idempotent end-to-end: re-running has no effect on already-EXPIRED
- * rows.
- *
- * Tunables:
- *   - `RESERVATION_EXPIRY_SWEEP_ENABLED` (default true)
- *   - `RESERVATION_EXPIRY_BATCH_SIZE` (default 500)
+ * Phase 52 (2026-05-21) changes:
+ *   - sweepOnce now LOOPS over multiple batches inside a single run
+ *     (audit Gap #8). Pre-Phase-52 a 2000-row backlog took 4 cron
+ *     ticks (~4 minutes) to clear because each tick fetched only
+ *     500 rows. Safety cap of MAX_SWEEP_ITERATIONS keeps a runaway
+ *     bug from monopolizing the leader's runtime.
+ *   - Emits a single inventory.reservation.expired_batch event per
+ *     sweep with aggregate counts (Gap #12). Per-row events still
+ *     fire for fine-grained ops alerting.
+ *   - Stamps StockReservation.expiredAt on the flipped row (Gap #5
+ *     telemetry).
+ *   - Writes a StockMovement RELEASED ledger row with
+ *     referenceType='RESERVATION_EXPIRY' so forensic queries can
+ *     distinguish sweep-driven releases from explicit cancel-driven
+ *     releases (Gap #9).
  */
+
+const MAX_SWEEP_ITERATIONS = 10;
+
 @Injectable()
 export class ReservationExpirySweepCron {
   private readonly logger = new Logger(ReservationExpirySweepCron.name);
@@ -46,20 +38,19 @@ export class ReservationExpirySweepCron {
     private readonly env: EnvService,
     private readonly eventBus: EventBusService,
     private readonly leader: LeaderElectedCron,
+    private readonly ledger: StockMovementLedgerService,
   ) {}
 
   enabled(): boolean {
     return this.env.getBoolean('RESERVATION_EXPIRY_SWEEP_ENABLED', true);
   }
 
-  // Every minute. Reservations have a 15-min TTL; a minute of latency
-  // on expiry is acceptable and the lock prevents thundering-herd.
   @Cron(CronExpression.EVERY_MINUTE)
   async sweep(): Promise<void> {
     if (!this.enabled()) return;
     await this.leader.run('reservation-expiry-sweep', 5 * 60, async () => {
       try {
-        await this.sweepOnce();
+        await this.sweepUntilEmpty();
       } catch (err) {
         this.logger.error(
           `Reservation expiry sweep failed: ${(err as Error).message}`,
@@ -68,13 +59,52 @@ export class ReservationExpirySweepCron {
     });
   }
 
+  /**
+   * Phase 52 — loop variant. Calls sweepOnce repeatedly until the
+   * batch comes back empty OR we hit MAX_SWEEP_ITERATIONS. Emits a
+   * batch-level event at the end with totals.
+   */
+  async sweepUntilEmpty(): Promise<{
+    iterations: number;
+    expired: number;
+    failed: number;
+  }> {
+    let totalExpired = 0;
+    let totalFailed = 0;
+    let iterations = 0;
+    for (let i = 0; i < MAX_SWEEP_ITERATIONS; i++) {
+      iterations += 1;
+      const { expired, failed } = await this.sweepOnce();
+      totalExpired += expired;
+      totalFailed += failed;
+      if (expired === 0 && failed === 0) break;
+    }
+
+    if (totalExpired > 0 || totalFailed > 0) {
+      this.eventBus
+        .publish({
+          eventName: 'inventory.reservation.expired_batch',
+          aggregate: 'StockReservation',
+          aggregateId: 'batch',
+          occurredAt: new Date(),
+          payload: { expired: totalExpired, failed: totalFailed, iterations },
+        })
+        .catch(() => {});
+      this.logger.log(
+        `Reservation expiry sweep run complete — totalExpired=${totalExpired} totalFailed=${totalFailed} iterations=${iterations}`,
+      );
+    }
+
+    return { iterations, expired: totalExpired, failed: totalFailed };
+  }
+
   async sweepOnce(): Promise<{ expired: number; failed: number }> {
     const batchSize = this.env.getNumber('RESERVATION_EXPIRY_BATCH_SIZE', 500);
     const cutoff = new Date();
 
     const candidates = await this.prisma.stockReservation.findMany({
       where: {
-        status: 'RESERVED',
+        status: StockReservationStatus.RESERVED,
         expiresAt: { lt: cutoff },
       },
       select: {
@@ -99,52 +129,68 @@ export class ReservationExpirySweepCron {
     let failed = 0;
     for (const r of candidates) {
       try {
-        await this.prisma.$transaction(async (tx) => {
-          // CAS-flip: only this replica's update succeeds if the row
-          // is still RESERVED. Concurrent flips (the in-flight
-          // checkout, another sweep replica that lost leader-election
-          // and somehow raced past the lock) get count=0 and skip
-          // the decrement.
-          const result = await tx.stockReservation.updateMany({
-            where: { id: r.id, status: 'RESERVED' },
-            data: { status: 'EXPIRED' },
+        const result = await this.prisma.$transaction(async (tx) => {
+          const flip = await tx.stockReservation.updateMany({
+            where: { id: r.id, status: StockReservationStatus.RESERVED },
+            data: {
+              status: StockReservationStatus.EXPIRED,
+              expiredAt: new Date(),
+            },
           });
-          if (result.count === 0) {
-            // Already handled by another path (CONFIRMED via checkout,
-            // RELEASED via cart abandonment, or another sweep).
-            return;
+          if (flip.count === 0) {
+            return null;
           }
-          // Decrement reservedQty on the mapping. Math.max guards
-          // against any prior under-tracked decrement that would push
-          // reservedQty negative.
+          const mappingBefore = await tx.sellerProductMapping.findUnique({
+            where: { id: r.mappingId },
+            select: { stockQty: true, reservedQty: true },
+          });
+          if (!mappingBefore) return null;
+          const newReserved = Math.max(mappingBefore.reservedQty - r.quantity, 0);
           await tx.sellerProductMapping.update({
             where: { id: r.mappingId },
-            data: {
-              reservedQty: {
-                decrement: r.quantity,
-              },
-            },
+            data: { reservedQty: newReserved },
           });
+          return {
+            before: { stockQty: mappingBefore.stockQty, reservedQty: mappingBefore.reservedQty },
+            after: { stockQty: mappingBefore.stockQty, reservedQty: newReserved },
+          };
         });
-        expired += 1;
 
-        // Fire-and-forget event for ops alerting.
-        this.eventBus
-          .publish({
-            eventName: 'inventory.reservation.expired',
-            aggregate: 'StockReservation',
-            aggregateId: r.id,
-            occurredAt: new Date(),
-            payload: {
-              reservationId: r.id,
-              mappingId: r.mappingId,
-              quantity: r.quantity,
-              orderId: r.orderId,
-            },
-          })
-          .catch(() => {
-            /* events are best-effort */
+        if (result) {
+          expired += 1;
+          // Phase 52 — ledger entry distinguishes sweep-driven
+          // releases (referenceType='RESERVATION_EXPIRY') from
+          // explicit cancellations (referenceType='RESERVATION').
+          await this.ledger.record({
+            resource: 'SellerProductMapping',
+            resourceId: r.mappingId,
+            kind: 'RELEASED',
+            quantityDelta: r.quantity,
+            beforeStockQty: result.before.stockQty,
+            afterStockQty: result.after.stockQty,
+            beforeReservedQty: result.before.reservedQty,
+            afterReservedQty: result.after.reservedQty,
+            reason: 'Reservation expired (TTL sweep)',
+            referenceType: 'RESERVATION_EXPIRY',
+            referenceId: r.id,
+            actorRole: 'SYSTEM',
           });
+
+          this.eventBus
+            .publish({
+              eventName: 'inventory.reservation.expired',
+              aggregate: 'StockReservation',
+              aggregateId: r.id,
+              occurredAt: new Date(),
+              payload: {
+                reservationId: r.id,
+                mappingId: r.mappingId,
+                quantity: r.quantity,
+                orderId: r.orderId,
+              },
+            })
+            .catch(() => {});
+        }
       } catch (err) {
         failed += 1;
         this.logger.warn(
@@ -154,7 +200,7 @@ export class ReservationExpirySweepCron {
     }
 
     this.logger.log(
-      `Reservation expiry sweep complete — expired=${expired} failed=${failed}`,
+      `Reservation expiry sweep batch complete — expired=${expired} failed=${failed}`,
     );
     return { expired, failed };
   }

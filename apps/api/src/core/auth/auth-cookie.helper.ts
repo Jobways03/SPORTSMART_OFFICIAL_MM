@@ -127,17 +127,26 @@ export function setAuthCookies(res: Response, input: SetAuthCookiesInput): void 
 
 /**
  * Clear the access + refresh cookies on logout. Express requires the
- * same path + domain as the original `cookie(...)` call to clear them.
+ * same path + domain + secure flag as the original `cookie(...)` call
+ * to actually clear them — passing `secure: true` to clearCookie when
+ * the original was set with `secure: false` makes the browser ignore
+ * the Set-Cookie response in dev (Chrome treats it as a separate
+ * cookie because the secure attribute is a distinguishing axis).
+ *
+ * @param secure  Phase 17 (2026-05-20) — mirror the Secure flag the
+ *                cookie was originally set with. Defaults to true for
+ *                back-compat with callers that don't supply it.
  */
 export function clearAuthCookies(
   res: Response,
   persona: AuthCookiePersona,
   domain?: string | null,
+  secure: boolean = true,
 ): void {
   const baseOptions = {
     httpOnly: true,
     sameSite: 'lax' as const,
-    secure: true,
+    secure,
     domain: domain ?? undefined,
   };
   res.clearCookie(accessCookieName(persona), { ...baseOptions, path: '/' });

@@ -1,0 +1,52 @@
+// Phase 105 (2026-05-23) — Phase 104 audit Gap #11 closure.
+//
+// BulkJob tracks fan-out operations (bulk approve, bulk close) so
+// investigators can find a batch by its actor + timestamp + see the
+// per-row outcomes without scraping N audit_logs rows.
+//
+// Today only bulk approve / close write to this table; future
+// bulk surfaces (mass-cancel, payout-trigger-batch) plug in via the
+// same kind enum.
+
+model BulkJob {
+  id              String         @id @default(uuid())
+  kind            BulkJobKind
+  actorId         String         @map("actor_id")
+  actorRole       String?        @map("actor_role")
+  totalCount      Int            @map("total_count")
+  succeededCount  Int?           @map("succeeded_count")
+  failedCount     Int?           @map("failed_count")
+  status          BulkJobStatus  @default(PROCESSING)
+  reason          String?        @db.VarChar(500)
+  // inputs holds the original IDs + any extra arguments so a replay
+  // can reconstruct the call without re-fetching state.
+  inputs          Json
+  // results is the per-row outcome array { id, success, error? }.
+  // Null while in-flight; populated atomically when the worker
+  // transitions to COMPLETED / PARTIALLY_FAILED / FAILED.
+  results         Json?
+  idempotencyKey  String?        @unique @map("idempotency_key")
+  startedAt       DateTime       @default(now()) @map("started_at")
+  completedAt     DateTime?      @map("completed_at")
+
+  @@index([actorId, startedAt(sort: Desc)])
+  @@index([status])
+  @@index([kind, startedAt(sort: Desc)])
+  @@map("bulk_jobs")
+}
+
+enum BulkJobKind {
+  RETURN_APPROVE
+  RETURN_CLOSE
+  // Reserved for future surfaces.
+  OTHER
+}
+
+enum BulkJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  PARTIALLY_FAILED
+  FAILED
+  CANCELLED
+}

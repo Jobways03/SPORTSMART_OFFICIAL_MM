@@ -20,16 +20,21 @@ import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.se
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { ReorderImagesDto } from '../../dtos/reorder-images.dto';
 import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
-
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
-const MULTER_OPTIONS = { limits: { fileSize: MAX_FILE_SIZE } };
+import {
+  ALLOWED_IMAGE_MIME_TYPES,
+  IMAGE_MULTER_OPTIONS,
+  MAX_IMAGE_BYTES,
+  sanitizeAltText,
+} from '../_helpers/image-upload';
 
 @ApiTags('Admin Products')
 @Controller('admin/products/:productId/variants/:variantId/images')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('catalog.write')
 export class AdminVariantImagesController {
   constructor(
     @Inject(PRODUCT_IMAGE_REPOSITORY) private readonly imageRepo: IProductImageRepository,
@@ -41,14 +46,22 @@ export class AdminVariantImagesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseInterceptors(FileInterceptor('image', MULTER_OPTIONS))
-  async uploadVariantImage(@Req() req: Request, @Param('productId') productId: string, @Param('variantId') variantId: string, @UploadedFile() file: Express.Multer.File) {
+  @UseInterceptors(FileInterceptor('image', IMAGE_MULTER_OPTIONS))
+  async uploadVariantImage(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('altText') altTextRaw?: string,
+  ) {
     const adminId = (req as any).adminId;
     const variant = await this.imageRepo.findVariant(variantId, productId);
     if (!variant) throw new NotFoundAppException('Variant not found');
     if (!file || !file.buffer) throw new AppException('No image file provided', 'BAD_REQUEST');
-    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) throw new AppException('Only JPG, PNG, and WEBP images are allowed', 'BAD_REQUEST');
-    if (file.size > MAX_FILE_SIZE) throw new AppException('Image must not exceed 5MB', 'BAD_REQUEST');
+    if (!(ALLOWED_IMAGE_MIME_TYPES as readonly string[]).includes(file.mimetype)) {
+      throw new AppException('Only JPG, PNG, and WEBP images are allowed', 'BAD_REQUEST');
+    }
+    if (file.size > MAX_IMAGE_BYTES) throw new AppException('Image must not exceed 5MB', 'BAD_REQUEST');
 
     let uploadResult;
     try {
@@ -58,12 +71,34 @@ export class AdminVariantImagesController {
       throw new AppException('Image upload failed. Please try again.', 'EXTERNAL_SERVICE_ERROR');
     }
 
+    const altText = sanitizeAltText(altTextRaw);
     const siblingVariantIds = await this.imageRepo.findColorSiblingVariantIds(productId, variantId);
     const createdImages = [];
-    for (const vId of siblingVariantIds) {
-      const existingCount = await this.imageRepo.countByVariant(vId);
-      const image = await this.imageRepo.createVariantImage({ variantId: vId, url: uploadResult.secureUrl, publicId: uploadResult.publicId, sortOrder: existingCount });
-      createdImages.push(image);
+    // Phase 41 (2026-05-21) — Gap #7. First image per variant gets
+    // isPrimary=true; subsequent stay false (partial-unique enforced
+    // at the DB layer).
+    //
+    // Phase 42 (2026-05-21) — Gap #7 (this audit): if any DB write
+    // fails mid color-sibling fan-out the Cloudinary asset is
+    // orphaned. Wrap in try/catch + best-effort delete on throw.
+    try {
+      for (const vId of siblingVariantIds) {
+        const existingCount = await this.imageRepo.countByVariant(vId);
+        const image = await this.imageRepo.createVariantImage({
+          variantId: vId,
+          url: uploadResult.secureUrl,
+          publicId: uploadResult.publicId,
+          sortOrder: existingCount,
+          isPrimary: existingCount === 0,
+          altText,
+        });
+        createdImages.push(image);
+      }
+    } catch (err) {
+      this.cloudinary.delete(uploadResult.publicId).catch((e) =>
+        this.logger.error(`Cloudinary cleanup failed for orphaned ${uploadResult.publicId}: ${(e as Error).message}`),
+      );
+      throw err;
     }
 
     this.logger.log(`Image uploaded for variant ${variantId} (shared with ${siblingVariantIds.length} variants) of product ${productId} by admin ${adminId}`);
@@ -88,6 +123,11 @@ export class AdminVariantImagesController {
       await this.imageRepo.deleteVariantImage(imageId);
     }
 
+    // Phase 41 (2026-05-21) — Gap #7. Promote next survivor per sibling.
+    for (const vId of siblingVariantIds) {
+      await this.imageRepo.ensureVariantHasPrimary(vId);
+    }
+
     if (image.publicId) {
       this.cloudinary.delete(image.publicId).catch((err) => this.logger.warn(`Failed to delete Cloudinary asset ${image.publicId}: ${err?.message}`));
     }
@@ -98,11 +138,36 @@ export class AdminVariantImagesController {
 
   @Patch('reorder')
   @HttpCode(HttpStatus.OK)
-  async reorderVariantImages(@Req() req: Request, @Param('productId') productId: string, @Param('variantId') variantId: string, @Body() body: { imageIds: string[] }) {
-    if (!body.imageIds || !Array.isArray(body.imageIds) || body.imageIds.length === 0) {
-      throw new AppException('imageIds array is required', 'BAD_REQUEST');
-    }
-    await this.imageRepo.reorderVariantImages(variantId, body.imageIds);
+  async reorderVariantImages(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+    @Body() dto: ReorderImagesDto,
+  ) {
+    await this.imageRepo.reorderVariantImages(variantId, dto.imageIds);
     return { success: true, message: 'Variant images reordered successfully', data: null };
+  }
+
+  /**
+   * Phase 42 (2026-05-21) — admin variant set-primary endpoint.
+   * Mirrors the seller controller; the partial unique on
+   * product_variant_images (variant_id) WHERE is_primary = true keeps
+   * the constraint at one row per variant.
+   */
+  @Patch(':imageId/primary')
+  @HttpCode(HttpStatus.OK)
+  async setVariantImagePrimary(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('variantId') variantId: string,
+    @Param('imageId') imageId: string,
+  ) {
+    const adminId = (req as any).adminId;
+    const image = await this.imageRepo.findVariantImage(imageId, variantId);
+    if (!image) throw new NotFoundAppException('Variant image not found');
+
+    await this.imageRepo.setVariantImagePrimary(imageId);
+    this.logger.log(`Primary variant image set on variant ${variantId} of product ${productId} by admin ${adminId}: ${imageId}`);
+    return { success: true, message: 'Variant primary image updated', data: { id: imageId } };
   }
 }

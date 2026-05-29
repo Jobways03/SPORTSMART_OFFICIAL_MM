@@ -15,36 +15,36 @@
 //     misclick or compromised account before destroying data.
 
 enum ErasureSubjectType {
-  USER       // customer
+  USER // customer
   SELLER
   AFFILIATE
   FRANCHISE
 }
 
 enum ErasureStatus {
-  PENDING       // queued, awaiting cron / 24h cooldown
-  IN_PROGRESS   // cron picked it up, redaction running
-  COMPLETED     // all reachable PII redacted, residual list documented
-  REJECTED      // legal-hold prevented erasure (open dispute / unpaid balance)
-  CANCELLED     // requester withdrew the request before processing
+  PENDING // queued, awaiting cron / 24h cooldown
+  IN_PROGRESS // cron picked it up, redaction running
+  COMPLETED // all reachable PII redacted, residual list documented
+  REJECTED // legal-hold prevented erasure (open dispute / unpaid balance)
+  CANCELLED // requester withdrew the request before processing
 }
 
 model DataErasureRequest {
   id String @id @default(uuid())
 
-  subjectType ErasureSubjectType @map("subject_type")
-  subjectId   String             @map("subject_id")
+  subjectType          ErasureSubjectType @map("subject_type")
+  subjectId            String             @map("subject_id")
   /// Snapshot of subject's email at request time. Useful when the user
   /// table row has been redacted — we still have a paper trail of which
   /// account the request applied to.
-  subjectEmailSnapshot String? @map("subject_email_snapshot")
+  subjectEmailSnapshot String?            @map("subject_email_snapshot")
 
   status ErasureStatus @default(PENDING)
 
   /// "USER_REQUEST" | "ADMIN_ACTION" | "REGULATOR_NOTICE". Drives
   /// the cooldown — admin / regulator actions can bypass the 24h
   /// delay, user requests respect it.
-  source String @default("USER_REQUEST")
+  source               String  @default("USER_REQUEST")
   /// Set when source != USER_REQUEST. Recorded so the audit trail
   /// shows who initiated.
   requestedByActorType String? @map("requested_by_actor_type")
@@ -67,7 +67,7 @@ model DataErasureRequest {
   outcome Json?
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([status, notBefore])
   @@index([subjectType, subjectId])

@@ -32,11 +32,26 @@ export interface Gstr8SummaryRow {
   grossTaxableSupplyInPaise: string;
   netTaxableSupplyInPaise: string;
   totalTcsInPaise: string;
+  // Phase 159z (audit B1) — the seller relation is now included so the
+  // admin UI can show the trade name alongside the GSTIN.
+  seller?: {
+    id: string;
+    sellerName: string;
+    sellerShopName: string;
+  } | null;
+  // Phase 159z (audit #6) — populated after the row flips to FILED.
+  nicArn?: string | null;
 }
 
 export interface Gstr8Summary {
   filingPeriod: string;
   sellerCount: number;
+  // Phase 159z (audit #14) — paginated. The UI fetches one page at a
+  // time; totals are computed across the whole period regardless of
+  // page so the headline numbers stay honest.
+  page: number;
+  pageSize: number;
+  totalPages: number;
   totalGrossInPaise: string;
   totalNetTaxableInPaise: string;
   totalTcsInPaise: string;
@@ -59,21 +74,52 @@ class AdminTaxService {
     return apiClient('/admin/tax/audit-readiness');
   }
 
-  getGstr8Summary(filingPeriod: string): Promise<ApiResponse<Gstr8Summary>> {
-    return apiClient(`/admin/tax/reports/gstr8/summary?filingPeriod=${filingPeriod}`);
+  getGstr8Summary(
+    filingPeriod: string,
+    opts: { page?: number; pageSize?: number } = {},
+  ): Promise<ApiResponse<Gstr8Summary>> {
+    const qs = new URLSearchParams({ filingPeriod });
+    if (opts.page !== undefined) qs.set('page', String(opts.page));
+    if (opts.pageSize !== undefined) qs.set('pageSize', String(opts.pageSize));
+    return apiClient(`/admin/tax/reports/gstr8/summary?${qs.toString()}`);
   }
 
-  markFiled(ledgerIds: string[]): Promise<ApiResponse<{ flipped: number; requested: number }>> {
+  // Phase 159z (audit #6) — ARN required on mark-filed.
+  markFiled(
+    ledgerIds: string[],
+    nicArn: string,
+  ): Promise<ApiResponse<{ flipped: number; requested: number; nicArn: string }>> {
     return apiClient('/admin/tax/tcs/mark-filed', {
       method: 'POST',
-      body: JSON.stringify({ ledgerIds }),
+      body: JSON.stringify({ ledgerIds, nicArn }),
     });
   }
 
-  markPaid(ledgerIds: string[], paymentReference: string): Promise<ApiResponse<{ flipped: number; requested: number }>> {
+  markPaid(
+    ledgerIds: string[],
+    paymentReference: string,
+  ): Promise<ApiResponse<{ flipped: number; requested: number }>> {
     return apiClient('/admin/tax/tcs/mark-paid', {
       method: 'POST',
       body: JSON.stringify({ ledgerIds, paymentReference }),
+    });
+  }
+
+  // Phase 159z (audit #10) — correction flow. UI surfaces a per-row
+  // "Reverse" button gated on `tax.tcs.reverse` permission.
+  reverseTcs(
+    ledgerId: string,
+    reason: string,
+  ): Promise<
+    ApiResponse<{
+      ledgerId: string;
+      previousStatus: string;
+      wasAlreadyReversed: boolean;
+    }>
+  > {
+    return apiClient(`/admin/tax/tcs/${encodeURIComponent(ledgerId)}/reverse`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     });
   }
 
@@ -124,6 +170,37 @@ class AdminTaxService {
       `/admin/tax/reports/gstr8.csv?filingPeriod=${filingPeriod}`,
       `gstr8-${filingPeriod}.csv`,
     );
+  }
+
+  // Phase 159z (audit #9) — JSON download button. The server resolves
+  // the operator GSTIN from PlatformGstProfile (B3), so the UI does
+  // NOT pass it as a query param. The download triggers an `<a>`-style
+  // file save with the deterministic `gstr8-<period>.json` name.
+  async gstr8Json(filingPeriod: string): Promise<void> {
+    const res = await apiClient<{
+      gstin: string;
+      ret_period: string;
+      schema_version: string;
+      tot_supp_in_paise: string;
+      tot_tcs_in_paise: string;
+      details: unknown[];
+    }>(
+      `/admin/tax/reports/gstr8.json?filingPeriod=${encodeURIComponent(filingPeriod)}`,
+    );
+    if (!res?.success || !res.data) {
+      throw new Error(res?.message ?? 'GSTR-8 JSON download failed');
+    }
+    const blob = new Blob([JSON.stringify(res.data, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gstr8-${filingPeriod}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   // ── Phase 12 — Time-bar review queue ────────────────────────────

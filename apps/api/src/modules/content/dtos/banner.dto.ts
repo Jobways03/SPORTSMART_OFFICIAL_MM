@@ -139,10 +139,20 @@ export class UpsertStaticPageDto {
   published?: boolean;
 }
 
+// Phase 49 (2026-05-21) — optional FAQ slug for SEO landing pages.
+const FAQ_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 export class CreateFaqDto {
   @IsString()
   @MaxLength(100)
   category!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  // Phase 49 — optional per-question slug (Gap #11). Storefront can
+  // render /faqs/[slug] for SEO long-tail.
+  slug?: string;
 
   @IsString()
   @MaxLength(500)
@@ -170,6 +180,11 @@ export class UpdateFaqDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(80)
+  slug?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(500)
   question?: string;
 
@@ -187,3 +202,7 @@ export class UpdateFaqDto {
   @IsBoolean()
   active?: boolean;
 }
+
+// Phase 49 — slug regex matcher exported for the FAQ service to
+// validate at write time.
+export { FAQ_SLUG_PATTERN };

@@ -3,8 +3,18 @@
 // ============================================
 
 enum OrderPaymentStatus {
+  // Phase 66 (2026-05-22) — explicit "intent minted, awaiting
+  // customer modal interaction" state (audit Gap #11). Pre-Phase-66
+  // there was no way to distinguish "Razorpay order created, modal
+  // unopened" from PENDING, so the payment-expiry sweep cron
+  // couldn't tell apart never-attempted-by-customer rows.
+  CREATED
   PENDING
   PAID
+  // Phase 66 (audit Gap #11) — explicit terminal "payment window
+  // closed" state, set by the expiry sweep cron. Pre-Phase-66
+  // expired orders sat in PENDING forever.
+  EXPIRED
   VOIDED
   CANCELLED
 }
@@ -25,19 +35,140 @@ enum OrderAcceptStatus {
   CANCELLED
 }
 
+// Phase 80 (2026-05-22) — sub-order acceptance audit Gap #19.
+// Discriminates the cause of a REJECTED transition so the analytics
+// dashboard can split "seller actively rejected" from "cron auto-
+// rejected after SLA expiry". Pre-Phase-80 both looked identical in
+// the DB → SLA-breach % was unmeasurable.
+enum SubOrderRejectionType {
+  // Seller or franchise actively clicked Reject (rejectionReason
+  // typically a member-of the user-facing enum).
+  MANUAL
+  // Cron auto-rejected after acceptDeadlineAt passed.
+  AUTO_SLA
+  // Future: admin force-rejected from the ops dashboard.
+  ADMIN_FORCE
+}
+
+// Phase 81 (2026-05-22) — sub-order cancel audit Gap #2.
+// Distinguishes the actor type behind a cancellation transition.
+// Pre-Phase-81 every cancelled row looked identical in the DB; an
+// auto-cascade cancel (from a system process) was indistinguishable
+// from an explicit admin decision or a customer self-cancel.
+enum CancellationSource {
+  // Admin manually clicked Cancel on the order-detail page.
+  ADMIN
+  // Future: customer-initiated cancel within their own order.
+  CUSTOMER
+  // Auto-cascade cancel (e.g. payment expiry sweep, exception-queue
+  // remediation). System actor with no human in the loop.
+  SYSTEM
+}
+
+// Phase 83 (2026-05-23) — delivery confirmation audit Gap #3.
+// Pre-Phase-83 the schema had no way to tell a courier webhook
+// confirmation apart from an admin manual override. The four
+// channels feeding into deliverSubOrder are now persistently
+// distinguishable on the row.
+enum DeliveryConfirmationSource {
+  // Shiprocket webhook with HMAC-verified signature.
+  WEBHOOK_SHIPROCKET
+  // Admin clicked "Mark delivered" on the order-detail page.
+  MANUAL_ADMIN
+  // Franchise-admin endpoint (admin-franchise-orders.controller).
+  MANUAL_FRANCHISE
+}
+
+// Phase 85 (2026-05-23) — manual AWB attachment audit Gap #11.
+// Distinguishes the channel that wrote the AWB onto a sub-order.
+// Pre-Phase-85 there was no way to tell a seller-driven SHIPPED
+// transition apart from an admin-override SHIPPED. Both wrote the
+// same trackingNumber/courierName columns; auditing "who attached
+// this AWB?" required cross-referencing audit_logs + timestamps.
+enum AwbAttachmentSource {
+  // PATCH /seller/orders/:id/status with status='SHIPPED'.
+  SELLER_MANUAL
+  // PATCH /franchise/orders/:subOrderId/status with status='SHIPPED'.
+  FRANCHISE_MANUAL
+  // POST /admin/shipping/sub-orders/:subOrderId — admin override.
+  ADMIN_OVERRIDE
+  // Future: programmatic Shiprocket booking (not yet implemented).
+  SHIPROCKET_BOOKING
+}
+
+// Phase 81 (2026-05-22) — cancel audit Gap #15/#21. Mirrors the
+// SubOrder.commissionDecision enum extension — adds a terminal
+// CANCELLED state so the settlement sweep can skip cancelled
+// sub-orders without misusing the legacy `commissionProcessed`
+// boolean. The pre-Phase-75 path overloaded that boolean to mean
+// both "settled" AND "intentionally skipped"; Phase 75 split out
+// NOT_APPLICABLE for verification-reject. Phase 81 adds CANCELLED
+// for the admin mid-flow cancel branch (semantically the same as
+// NOT_APPLICABLE but the discriminator makes finance reports
+// readable).
+//
+// (The existing CommissionDecision enum already carries PENDING /
+// PROCESSED / NOT_APPLICABLE. The new value is appended below
+// via the unchanged enum — see _base.prisma. Kept in this comment
+// block for documentation co-location.)
+
 enum OrderPaymentMethod {
   COD
   ONLINE
 }
 
+// Phase 71 (2026-05-22) — Phase 70 risk-scoring audit Gap #7.
+// Free-text verificationRiskBand silently accepted typos ("yellow"
+// vs "YELLOW") which broke the bulk-approve filter. Enum makes
+// the constraint DB-enforced.
+enum OrderRiskBand {
+  GREEN
+  YELLOW
+  RED
+}
+
+// Phase 75 (2026-05-22) — Phase 73 reject audit Gap #10.
+// Differentiates "settlement done" from "settlement intentionally
+// skipped because the order/sub-order was rejected or cancelled".
+// Pre-Phase-75 `commissionProcessed: true` was used for both,
+// which made finance reconciliation reports lie ("processed N
+// orders" included rejected ones with zero actual commission).
+enum CommissionDecision {
+  // Row hasn't been swept by the commission processor yet.
+  PENDING
+  // Commission was computed and the platform earnings + seller
+  // payout have been booked.
+  PROCESSED
+  // Sub-order will never accrue commission (rejected at
+  // verification, cancelled by customer / system, etc.). The
+  // settlement sweep skips these.
+  NOT_APPLICABLE
+}
+
+// Phase 71 (2026-05-22) — Phase 70 risk-scoring audit Gap #9.
+// Pre-Phase-71 there was no way to tell a rules-computed score
+// from an admin manual override — both wrote the same column.
+// The new column captures provenance so admin rescores are
+// auditable.
+enum OrderRiskScoreSource {
+  RULES
+  MANUAL
+}
+
 model CustomerAddress {
-  id           String   @id @default(uuid())
-  customerId   String   @map("customer_id")
-  fullName     String   @map("full_name")
+  id           String       @id @default(uuid())
+  customerId   String       @map("customer_id")
+  fullName     String       @map("full_name")
   phone        String
-  addressLine1 String   @map("address_line_1")
-  addressLine2 String?  @map("address_line_2")
+  addressLine1 String       @map("address_line_1")
+  addressLine2 String?      @map("address_line_2")
   locality     String?
+  // Phase 63 (2026-05-22) — customer-supplied landmark for courier
+  // labels (audit Gap #6). Indian e-comm conventionally requires
+  // this for last-mile delivery; pre-Phase-63 the schema had no
+  // home for it and customers were jamming landmark text into
+  // addressLine2.
+  landmark     String?
   city         String
   state        String
   // Phase 34 — canonical CBIC 2-digit GST state code. Coexists with
@@ -48,18 +179,45 @@ model CustomerAddress {
   // (e.g. an address whose `state` doesn't match any india_states
   // row exactly — typo, alternate spelling). Backfill runs in the
   // migration via JOIN on UPPER(TRIM(state_name)).
-  stateCode    String?  @map("state_code")
-  postalCode   String   @map("postal_code")
-  country      String   @default("India")
-  isDefault    Boolean  @default(false) @map("is_default")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  stateCode    String?      @map("state_code")
+  postalCode   String       @map("postal_code")
+  country      String       @default("India")
+  isDefault    Boolean      @default(false) @map("is_default")
+  // Phase 63 (2026-05-22) — addressType tag (audit Gap #6). Lets
+  // customers label HOME vs WORK vs OTHER for fast cart-time
+  // selection and analytics on delivery patterns.
+  addressType  AddressType? @map("address_type")
+  // Phase 63 (2026-05-22) — soft delete (audit Gaps #2 + #3).
+  // Pre-Phase-63 deleteAddress was an unconditional hard delete;
+  // a customer who deleted their only default left a zero-default
+  // gap (next checkout silently picked most-recent — Gap #5) and
+  // order history references became un-traceable. The deletedAt
+  // stamp keeps the row queryable for forensic + order detail
+  // pages; list/get queries filter it out.
+  deletedAt    DateTime?    @map("deleted_at")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
 
   customer User @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@index([customerId])
   @@index([stateCode])
+  @@index([deletedAt])
+  // Phase 63 (2026-05-22) — partial unique index enforces the
+  // one-default invariant at the DB level (audit Gap #1). The
+  // application-level clearDefaults + create pattern is now also
+  // wrapped in a $transaction; this index is the defence-in-depth
+  // backstop that catches any direct-SQL writer or future code
+  // path that bypasses the service.
   @@map("customer_addresses")
+}
+
+// Phase 63 (2026-05-22) — addressType enum for the customer
+// address-book UI (audit Gap #6).
+enum AddressType {
+  HOME
+  WORK
+  OTHER
 }
 
 model Cart {
@@ -75,14 +233,14 @@ model Cart {
 }
 
 model CartItem {
-  id        String  @id @default(uuid())
-  cartId    String  @map("cart_id")
-  productId String  @map("product_id")
-  variantId String? @map("variant_id")
+  id            String  @id @default(uuid())
+  cartId        String  @map("cart_id")
+  productId     String  @map("product_id")
+  variantId     String? @map("variant_id")
   // Phase 2 (PR 2.5) — DB-level invariant: quantity > 0. See
   // migration 20260512160000. PR 1.9's atomic increment-or-create
   // is the primary guard; this CHECK covers any future direct insert.
-  quantity  Int     @default(1)
+  quantity      Int     @default(1)
   // Sprint 3 Story 2.3 — save-for-later flag. Default false (item is
   // active in the cart). Toggled via /save-for-later and /move-to-cart
   // endpoints. Active and saved items share the same (cart, product,
@@ -91,50 +249,134 @@ model CartItem {
   // items "snap back" into the active cart when the user re-adds them.
   savedForLater Boolean @default(false) @map("saved_for_later")
 
-  cart    Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
-  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  // Phase 44 (2026-05-21) — pricing-tier snapshot. NULL when no tier
+  // applied. `appliedListUnitPrice` records the would-be base price
+  // so refunds + dispute review can prove the discount delta.
+  appliedPricingTierId   String?  @map("applied_pricing_tier_id")
+  appliedDiscountPercent Decimal? @map("applied_discount_percent") @db.Decimal(5, 2)
+  appliedFixedUnitPrice  Decimal? @map("applied_fixed_unit_price") @db.Decimal(10, 2)
+  appliedListUnitPrice   Decimal? @map("applied_list_unit_price") @db.Decimal(10, 2)
 
-  @@unique([cartId, productId, variantId])
+  // Phase 61 (2026-05-22) — add-time price snapshot in paise (audit
+  // Gap #22). Pre-Phase-61 the line price was always re-derived from
+  // live product/variant, so a seller bumping price mid-shopping
+  // session silently changed the customer's cart total without any
+  // signal. The cart service now surfaces `priceChanged: true` on
+  // getCart when the live price drifts from this snapshot.
+  unitPriceAtAddInPaise BigInt? @map("unit_price_at_add_in_paise")
+
+  // Phase 61 (2026-05-22) — per-row timestamps (audit Gap #13).
+  // Required for the abandonment-sweep cron's "items older than 90
+  // days" query and for any future abandonment-recovery email flow.
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  cart        Cart                @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product     Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // Phase 61 (2026-05-22) — Restrict (was SetNull, audit Gap #10).
+  // Hard-deleting a variant referenced by a live cart now fails at
+  // the DB level; CatalogPublicFacade.countActiveItemsForVariant
+  // remains the application-level gate for soft-deletes.
+  variant     ProductVariant?     @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  // Phase 44 — SetNull so an admin-driven tier delete doesn't cascade
+  // through live carts.
+  appliedTier ProductPricingTier? @relation(fields: [appliedPricingTierId], references: [id], onDelete: SetNull)
+
+  // Phase 61 (2026-05-22) — the original `@@unique([cartId,
+  // productId, variantId])` did NOT protect no-variant lines because
+  // Postgres treats NULL as not-equal-to-NULL in compound unique
+  // indexes (audit Gap #17). The Prisma-level @@unique is removed
+  // here; the migration creates two partial unique indexes — one for
+  // variant-bearing rows and one for variantId IS NULL — which give
+  // a real DB-level dedup in both cases. The FOR UPDATE primitive
+  // remains the primary guard; the partial indexes are
+  // defence-in-depth so a direct insert can't sneak duplicates past
+  // the application.
   @@index([cartId])
+  @@index([updatedAt])
   @@map("cart_items")
 }
 
 model MasterOrder {
-  id                      String             @id @default(uuid())
-  orderNumber             String             @unique @map("order_number")
-  customerId              String             @map("customer_id")
-  shippingAddressSnapshot Json               @map("shipping_address_snapshot")
-  totalAmount             Decimal            @map("total_amount") @db.Decimal(10, 2)
+  id                      String              @id @default(uuid())
+  orderNumber             String              @unique @map("order_number")
+  customerId              String              @map("customer_id")
+  shippingAddressSnapshot Json                @map("shipping_address_snapshot")
+  totalAmount             Decimal             @map("total_amount") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007). BigInt — master order totals can exceed
   // INTEGER's ~₹21M cap on bulk B2B orders.
   // Phase 2 (PR 2.5) — DB-level invariant: total_amount_in_paise >= 0.
   // See migration 20260512160000.
-  totalAmountInPaise      BigInt             @default(0) @map("total_amount_in_paise")
-  paymentMethod           OrderPaymentMethod @default(COD) @map("payment_method")
-  paymentStatus           OrderPaymentStatus @default(PENDING) @map("payment_status")
-  verified                Boolean            @default(false)
-  verifiedAt              DateTime?          @map("verified_at")
-  orderStatus             OrderStatus        @default(PLACED) @map("order_status")
-  verifiedBy              String?            @map("verified_by")
-  verificationRemarks     String?            @map("verification_remarks")
+  totalAmountInPaise      BigInt              @default(0) @map("total_amount_in_paise")
+  paymentMethod           OrderPaymentMethod  @default(COD) @map("payment_method")
+  paymentStatus           OrderPaymentStatus  @default(PENDING) @map("payment_status")
+  verified                Boolean             @default(false)
+  verifiedAt              DateTime?           @map("verified_at")
+  orderStatus             OrderStatus         @default(PLACED) @map("order_status")
+  verifiedBy              String?             @map("verified_by")
+  verificationRemarks     String?             @map("verification_remarks")
+  // Phase 74 (2026-05-22) — Phase 73 approve/reject audit Gap #2.
+  // Pre-Phase-74 rejectOrder took only `id` — no rejecter id, no
+  // reason. The schema had subOrder.rejectionReason but
+  // rejectOrder never wrote it, and no field captured the
+  // verifier identity. These three columns close that surface.
+  // FK on rejecter (SetNull) so a staff churn doesn't break
+  // historical reporting.
+  rejectedAt              DateTime?           @map("rejected_at")
+  rejectedBy              String?             @map("rejected_by")
+  rejectionReason         String?             @map("rejection_reason") @db.Text
+  // Phase 74 — audit Gap #12. The reject path overwrites
+  // paymentStatus to CANCELLED; without a snapshot a downstream
+  // refund-saga / reconciliation cannot tell "was this order PAID
+  // when it was rejected?" Stamped before the reject status flip.
+  previousPaymentStatus   OrderPaymentStatus? @map("previous_payment_status")
+  // Phase 159w (GST Mode Toggle audit B2) — the GST mode in effect when this
+  // order was placed. Refund / credit-note / GSTR re-export should recompute
+  // against THIS snapshot, not the live mode, so a later OFF→STRICT flip can't
+  // retroactively fail an order placed under OFF. Nullable: pre-159w orders
+  // have no snapshot (consumers fall back to live mode).
+  gstModeSnapshot         GstMode?            @map("gst_mode_snapshot")
 
   // Verification queue claim (migration 20260504120000_add_verification_claim).
   // Ops verifier holds an exclusive claim on a PLACED order; auto-expires
-  // after 15 minutes so abandoned claims don't block the queue.
+  // after the env-driven VERIFICATION_CLAIM_TTL_MINUTES (default 15) so
+  // abandoned claims don't block the queue. Phase 68 (2026-05-22) — TTL
+  // moved from a hardcoded SQL interval to an env var (audit Gap #16).
   claimedByAdminId String?   @map("claimed_by_admin_id")
   claimedAt        DateTime? @map("claimed_at")
   claimExpiresAt   DateTime? @map("claim_expires_at")
 
-  // Verification pre-screening risk band (migration 20260504130000_add_verification_risk_score).
-  // GREEN/YELLOW/RED computed lazily on first queue interaction; reasons
-  // is a JSON array of human-readable signals that drove the band.
-  verificationRiskScore   Int?      @map("verification_risk_score")
-  verificationRiskBand    String?   @map("verification_risk_band")
-  verificationRiskReasons Json?     @map("verification_risk_reasons")
-  verificationScoredAt    DateTime? @map("verification_scored_at")
+  // Phase 68 (2026-05-22) — real SLA deadline (audit Gap #13).
+  // Pre-Phase-68 the queue-stats `breachedSla` field was a 1-hour
+  // proxy on created_at because no deadline column existed. The
+  // service-side place-order path stamps this to NOW() + 1h on COD,
+  // and the payment-verified path stamps it on ONLINE flip-to-PLACED.
+  // The breach detector cron + queue-stats banner read this column
+  // directly.
+  verificationDeadlineAt DateTime? @map("verification_deadline_at")
 
-  itemCount               Int                @map("item_count")
+  // Verification pre-screening risk band (migration 20260504130000_add_verification_risk_score).
+  // GREEN/YELLOW/RED scored at order placement via the
+  // OrderRiskScoringHandler event subscriber and re-scoreable via the
+  // admin rescore endpoint.
+  //
+  // Phase 71 (2026-05-22) — audit Gap #7: verificationRiskBand
+  // promoted from free-text String to OrderRiskBand enum so a
+  // typo ("yellow" vs "YELLOW") can't silently break the
+  // bulk-approve filter. Gap #9: verificationScoredBy +
+  // verificationScoreSource record whether a band came from rules
+  // or an admin manual override (and which admin). Gap #10:
+  // verificationScoreVersion stamps the rule-set version so a
+  // future rule change can re-score only stale rows.
+  verificationRiskScore    Int?                  @map("verification_risk_score")
+  verificationRiskBand     OrderRiskBand?        @map("verification_risk_band")
+  verificationRiskReasons  Json?                 @map("verification_risk_reasons")
+  verificationScoredAt     DateTime?             @map("verification_scored_at")
+  verificationScoredBy     String?               @map("verification_scored_by")
+  verificationScoreSource  OrderRiskScoreSource? @map("verification_score_source")
+  verificationScoreVersion Int                   @default(1) @map("verification_score_version")
+
+  itemCount Int @map("item_count")
 
   // Discount / coupon (AMOUNT_OFF_ORDER applied at checkout). totalAmount
   // above is the post-discount charged amount; subtract discountAmount to
@@ -148,9 +390,30 @@ model MasterOrder {
   // is server-computed at place-order and stored as the source of truth; the
   // name is snapshotted so historical orders render correctly even if the
   // option is later renamed or deleted.
-  shippingOptionId    String? @map("shipping_option_id")
-  shippingOptionName  String? @map("shipping_option_name")
-  shippingFeeInPaise  BigInt  @default(0) @map("shipping_fee_in_paise")
+  shippingOptionId                       String? @map("shipping_option_id")
+  shippingOptionName                     String? @map("shipping_option_name")
+  shippingFeeInPaise                     BigInt  @default(0) @map("shipping_fee_in_paise")
+  // Phase 91 (2026-05-23) — Gap #13 version snapshot.
+  // Pre-Phase-91 only the name was frozen; price/threshold/rateType
+  // could drift if the admin edited the option after orders were
+  // placed, leaving the admin queue + return/CN tooling confused
+  // about "what was the shipping at order time?".
+  shippingOptionPriceInPaiseSnapshot     BigInt? @map("shipping_option_price_in_paise_snapshot")
+  shippingOptionRateTypeSnapshot         String? @map("shipping_option_rate_type_snapshot")
+  shippingOptionThresholdInPaiseSnapshot BigInt? @map("shipping_option_threshold_in_paise_snapshot")
+  // Phase 91 — Gap #1 / #4 zone snapshot for analytics + dispute review.
+  shippingZoneIdSnapshot                 String? @map("shipping_zone_id_snapshot")
+  // Phase 91 — Gap #3 surcharges breakdown frozen on the row so the
+  // admin order page + invoice PDF can render the COD/FUEL/etc lines.
+  shippingSurchargesJsonSnapshot         Json?   @map("shipping_surcharges_json_snapshot")
+  // Phase 91 — Gap #6 GST on shipping. Tax engine fans the shipping
+  // fee into a TaxDocumentLine; these row-level columns are the
+  // dashboard-readable rollup so admin queries don't have to join
+  // tax_document_lines.
+  shippingTaxableInPaise                 BigInt  @default(0) @map("shipping_taxable_in_paise")
+  shippingCgstInPaise                    BigInt  @default(0) @map("shipping_cgst_in_paise")
+  shippingSgstInPaise                    BigInt  @default(0) @map("shipping_sgst_in_paise")
+  shippingIgstInPaise                    BigInt  @default(0) @map("shipping_igst_in_paise")
 
   // Phase 37 — checkout-time B2B GSTIN picker. Snapshots which
   // CustomerTaxProfile the buyer chose for this order's invoice.
@@ -163,28 +426,109 @@ model MasterOrder {
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
   paymentExpiresAt  DateTime? @map("payment_expires_at")
+  // Phase 66 (2026-05-22) — currency column (audit Gap #21).
+  // Pre-Phase-66 currency was hard-coded as INR in code with no
+  // schema record. The new column defaults to 'INR' so existing
+  // rows are valid; multi-currency work can vary the default.
+  currency          String    @default("INR")
+
+  // Phase 67 (2026-05-22) — DB-level idempotency (audit Gap #3).
+  // Pre-Phase-67 the only safeguards against a duplicate order from
+  // a crashed-then-retried place-order POST were the Redis lock
+  // (released on `finally`) and the @Idempotent decorator (24h TTL
+  // keyed on the X-Idempotency-Key header). A retry that fired
+  // past the lock release without the header — or against a
+  // replica whose decorator cache hadn't warmed — created a
+  // second MasterOrder. The new column carries a deterministic
+  // sha-256(customerId|session.createdAt) hash; the partial unique
+  // index in the same migration is the DB-level backstop and the
+  // service does a findFirst on conflict-recovery to return the
+  // pre-existing order's response instead of failing the retry.
+  idempotencyKey     String?   @unique @map("idempotency_key")
+  // Phase 67 (audit Gap #9) — forensic linkage from order back to
+  // the source cart. Pre-Phase-67 cart items were deleteMany'd
+  // inside the order tx, leaving no trail of which cart became
+  // which order. Stored as a string id (no FK) so a later cart
+  // hard-delete doesn't cascade-erase order history.
+  sourceCartId       String?   @map("source_cart_id")
+  // Phase 69 (2026-05-22) — Phase 67 audit Gap #8 (cart soft-
+  // archive). Snapshot of the cart line items at place-order time
+  // so the order-cancel + cart-restore path has something to
+  // rehydrate from. The order tx still deletes the live CartItem
+  // rows (we don't want a customer to "re-checkout" the same cart
+  // accidentally) — the snapshot is the recovery surface. JSON,
+  // not a new table, because the data is read-mostly + only on
+  // the rare cancel-with-restore path.
+  sourceCartSnapshot Json?     @map("source_cart_snapshot")
+  // Phase 67 (audit Gaps #1 + #5) — stamps the moment the order
+  // crossed from "tx committed" to "all post-tx side effects
+  // succeeded" (discount allocation + tax snapshot + stock confirm).
+  // Listing / detail queries that need ledger-complete orders can
+  // filter on finalizedAt IS NOT NULL; the recovery cron flips
+  // this once snapshot + allocation are persisted.
+  finalizedAt        DateTime? @map("finalized_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  customer          User               @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  subOrders         SubOrder[]
-  commissionRecords CommissionRecord[]
-  returns           Return[]           @relation("ReturnMasterOrder")
+  customer              User                        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  // Phase 68 (2026-05-22) — verifier + claim-holder FK relations
+  // (audit Gaps #9 + #10). Pre-Phase-68 verifiedBy and
+  // claimedByAdminId were bare strings — admin deletion silently
+  // orphaned the columns and team-status JOINed admins without an
+  // enforced relationship. Both relations are SetNull so deleting
+  // an admin doesn't cascade through order history; the admin
+  // identity is dropped but the order is preserved.
+  verifier              Admin?                      @relation("VerifierOrders", fields: [verifiedBy], references: [id], onDelete: SetNull)
+  claimedByAdmin        Admin?                      @relation("ClaimedOrders", fields: [claimedByAdminId], references: [id], onDelete: SetNull)
+  // Phase 74 (2026-05-22) — Phase 73 approve/reject audit Gap #8.
+  // Rejecter FK. SetNull preserves order history on admin delete.
+  rejecter              Admin?                      @relation("RejecterOrders", fields: [rejectedBy], references: [id], onDelete: SetNull)
+  // Phase 74 — Phase 73 audit Gap #3/#18 back-relation.
+  verificationDecisions OrderVerificationDecision[]
+  subOrders             SubOrder[]
+  commissionRecords     CommissionRecord[]
+  // Phase 159c — affiliate referral attribution (at most one per order; FK
+  // hardened from a bare orderId String on ReferralAttribution).
+  referralAttribution   ReferralAttribution?
+  // Phase 159d — affiliate commission (at most one per order; FK hardened
+  // from a bare orderId String on AffiliateCommission).
+  affiliateCommission   AffiliateCommission?
+  returns               Return[]                    @relation("ReturnMasterOrder")
   // Phase 5 (2026-05-16) — back-relations for the replacement and
   // exchange order pointers on Return. A given MasterOrder can be
   // referenced as a replacement / exchange target by at most one
   // Return (the originating one), but using `Return[]` mirrors
   // Prisma's expectation for the "many" side of an optional one-to-one.
-  returnsAsReplacement Return[]        @relation("ReturnReplacementOrder")
-  returnsAsExchange    Return[]        @relation("ReturnExchangeOrder")
-  shippingOption    ShippingOption?    @relation(fields: [shippingOptionId], references: [id], onDelete: SetNull)
+  returnsAsReplacement  Return[]                    @relation("ReturnReplacementOrder")
+  returnsAsExchange     Return[]                    @relation("ReturnExchangeOrder")
+  shippingOption        ShippingOption?             @relation(fields: [shippingOptionId], references: [id], onDelete: SetNull)
 
   // Phase B (P0) — discount allocation ledger relations.
   orderDiscounts          OrderDiscount[]
   orderItemDiscounts      OrderItemDiscount[]
   discountRedemptions     DiscountRedemption[]
   discountLiabilityLedger DiscountLiabilityLedger[]
+  // Phase 69 (audit Gap #20) — queryable per-rule risk reasons.
+  riskReasons             OrderRiskReason[]
+  // Phase 71 (audit Gap #8) — temporal history of every risk
+  // score event (placement, manual rescore, rule-set bump).
+  // Differs from OrderRiskReason which is current-state
+  // denormalisation; this table preserves prior decisions so a
+  // compliance question like "what was this order's band when
+  // admin X approved it?" has an answer.
+  riskScoreHistory        OrderRiskScoreHistory[]
+  // Phase 73 (claim-flow audit Gap #14) — temporal history of
+  // every claim transition (claim, release, expiry, approve,
+  // reject, force-release).
+  claimHistory            OrderClaimHistory[]
+  // Phase 79 (2026-05-22) — history audit Gap #8. FK back-reference
+  // for OrderReassignmentLog.masterOrderId.
+  reassignmentLogs        OrderReassignmentLog[]
+  // Phase 84 (2026-05-23) — timeline audit Gap #9. FK back-reference
+  // for OrderStatusHistory.masterOrderId; ON DELETE Cascade
+  // matches the other history tables.
+  statusHistory           OrderStatusHistory[]
 
   @@index([customerId])
   @@index([orderNumber])
@@ -201,6 +545,16 @@ model MasterOrder {
   // Without the composite, the cron reads every PENDING_PAYMENT row
   // even when most have plenty of time left.
   @@index([orderStatus, paymentExpiresAt])
+  // Phase 68 (2026-05-22) — verification SLA breach detector cron:
+  // `WHERE order_status = 'PLACED' AND verification_deadline_at < NOW()`.
+  // The queue-stats query also reads it for the banner counter.
+  @@index([orderStatus, verificationDeadlineAt])
+  // Phase 71 (2026-05-22) — bulk-approve-green sweep + verifier
+  // tray triage queries: `WHERE order_status = 'PLACED' AND
+  // verification_risk_band = ? ORDER BY created_at`. Without this
+  // the sweep scans every PLACED row even though most are
+  // YELLOW/RED.
+  @@index([orderStatus, verificationRiskBand, createdAt])
   // Verification queue indexes exist in DB (migrations 20260504120000 +
   // 20260504130000) but are not redeclared here because their original
   // names exceed Postgres's 63-byte identifier limit, which the Prisma
@@ -210,45 +564,110 @@ model MasterOrder {
 }
 
 model SubOrder {
-  id                     String                 @id @default(uuid())
-  masterOrderId          String                 @map("master_order_id")
-  sellerId               String?                @map("seller_id")
-  fulfillmentNodeType    String                 @default("SELLER") @map("fulfillment_node_type")
-  franchiseId            String?                @map("franchise_id")
-  subTotal               Decimal                @map("sub_total") @db.Decimal(10, 2)
+  id                        String                      @id @default(uuid())
+  masterOrderId             String                      @map("master_order_id")
+  sellerId                  String?                     @map("seller_id")
+  fulfillmentNodeType       String                      @default("SELLER") @map("fulfillment_node_type")
+  franchiseId               String?                     @map("franchise_id")
+  subTotal                  Decimal                     @map("sub_total") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007).
   // Phase 2 (PR 2.5) — DB-level invariant: sub_total_in_paise >= 0.
   // See migration 20260512160000.
-  subTotalInPaise        BigInt                 @default(0) @map("sub_total_in_paise")
-  paymentStatus          OrderPaymentStatus     @default(PENDING) @map("payment_status")
-  fulfillmentStatus      OrderFulfillmentStatus @default(UNFULFILLED) @map("fulfillment_status")
-  acceptStatus           OrderAcceptStatus      @default(OPEN) @map("accept_status")
-  acceptDeadlineAt       DateTime?              @map("accept_deadline_at")
-  rejectionReason        String?                @map("rejection_reason")
-  rejectionNote          String?                @map("rejection_note")
-  expectedDispatchDate   DateTime?              @map("expected_dispatch_date")
-  deliveredAt            DateTime?              @map("delivered_at")
-  returnWindowEndsAt     DateTime?              @map("return_window_ends_at")
-  trackingNumber         String?                @map("tracking_number")
-  courierName            String?                @map("courier_name")
-  shippingLabelUrl       String?                @map("shipping_label_url")
+  subTotalInPaise           BigInt                      @default(0) @map("sub_total_in_paise")
+  paymentStatus             OrderPaymentStatus          @default(PENDING) @map("payment_status")
+  fulfillmentStatus         OrderFulfillmentStatus      @default(UNFULFILLED) @map("fulfillment_status")
+  // Phase 108 (2026-05-25) — denormalised latest seller-reversal status for
+  // dashboards/filtering. fulfillmentStatus stays DELIVERED (the customer
+  // kept the goods); the reversal lifecycle lives in seller_reversals.
+  sellerReversalStatus      SellerReversalStatus?       @map("seller_reversal_status")
+  acceptStatus              OrderAcceptStatus           @default(OPEN) @map("accept_status")
+  acceptDeadlineAt          DateTime?                   @map("accept_deadline_at")
+  rejectionReason           String?                     @map("rejection_reason")
+  rejectionNote             String?                     @map("rejection_note")
+  // Phase 80 (2026-05-22) — acceptance audit Gaps #7/#19.
+  //   • acceptedAt / acceptedBy → who clicked Accept and when.
+  //     Pre-Phase-80 only the FSM status was stored; "when was this
+  //     accepted" had to be inferred from updatedAt, which churns on
+  //     every PACKED / SHIPPED transition too.
+  //   • rejectedAt / rejectedBy → mirror columns for reject.
+  //   • rejectionType → discriminator (MANUAL / AUTO_SLA / ADMIN_FORCE)
+  //     so SLA-breach analytics can split user vs system rejects.
+  //   • autoRejectedAt → set ONLY by the SLA cron's auto-reject path,
+  //     mirrors rejectedAt for those rows. Lets ops query "all
+  //     auto-rejects in the last 24h" without a status JOIN.
+  acceptedAt                DateTime?                   @map("accepted_at")
+  acceptedBy                String?                     @map("accepted_by")
+  rejectedAt                DateTime?                   @map("rejected_at")
+  rejectedBy                String?                     @map("rejected_by")
+  rejectionType             SubOrderRejectionType?      @map("rejection_type")
+  autoRejectedAt            DateTime?                   @map("auto_rejected_at")
+  expectedDispatchDate      DateTime?                   @map("expected_dispatch_date")
+  // Phase 82 (2026-05-23) — packing & shipping audit Gap #1. Pack/ship
+  // timestamps + actor ids. Without these, SLA dashboards (avg
+  // time-to-pack, time-to-ship by seller) are unsourceable and the
+  // audit chain has no record of "Bob from Seller A clicked Ship at
+  // 14:23". `packedBy` / `shippedBy` are bare strings because the
+  // actor can be a seller or franchise — no single FK works.
+  packedAt                  DateTime?                   @map("packed_at")
+  packedBy                  String?                     @map("packed_by")
+  shippedAt                 DateTime?                   @map("shipped_at")
+  shippedBy                 String?                     @map("shipped_by")
+  deliveredAt               DateTime?                   @map("delivered_at")
+  // Phase 83 (2026-05-23) — delivery confirmation audit Gaps #3/#11.
+  //   • deliveredBy: actor (admin id) or carrier source slug
+  //     (e.g. "shiprocket-webhook"). Polymorphic string, same
+  //     pattern as packedBy/shippedBy.
+  //   • deliverySource: enum that discriminates webhook vs manual.
+  //     Powers analytics "% deliveries via courier webhook" and
+  //     dispute investigations "who marked this delivered?".
+  //   • deliveryProofUrl: optional carrier-supplied POD image /
+  //     signature image / admin-uploaded proof.
+  //   • deliveryOtpVerified: true when a delivery OTP was
+  //     successfully validated at handover.
+  //   • deliverySignatureUrl: separate from proofUrl so a signed
+  //     POD and a photo POD can both be stored.
+  deliveredBy               String?                     @map("delivered_by")
+  deliverySource            DeliveryConfirmationSource? @map("delivery_source")
+  deliveryProofUrl          String?                     @map("delivery_proof_url")
+  deliveryOtpVerified       Boolean?                    @map("delivery_otp_verified")
+  deliverySignatureUrl      String?                     @map("delivery_signature_url")
+  // Phase 83 — Gap #2. Commission processor reads this column to
+  // know when to lock commission. Set at delivery time to
+  // `returnWindowEndsAt`. The 15s polling cron filters
+  // `commissionLockScheduledAt <= now()` so commission is locked
+  // immediately when the return window expires — no more "up to
+  // 15s after exact moment" race; the cron only acts on rows that
+  // have already had their scheduled time pass.
+  commissionLockScheduledAt DateTime?                   @map("commission_lock_scheduled_at")
+  returnWindowEndsAt        DateTime?                   @map("return_window_ends_at")
+  trackingNumber            String?                     @map("tracking_number")
+  courierName               String?                     @map("courier_name")
+  // Phase 82 (Gap #10) — customer-clickable tracking URL. Derived
+  // from courier + AWB at SHIPPED time. Distinct from
+  // `shippingLabelUrl` (which the shipping facade uses for the label
+  // PDF / iThink-specific tracking URL) so the customer order page
+  // has a stable place to look.
+  trackingUrl               String?                     @map("tracking_url")
+  shippingLabelUrl          String?                     @map("shipping_label_url")
+  // Phase 85 (2026-05-23) — AWB attachment audit Gap #11. Pre-Phase-85
+  // the schema had no way to answer "when did this AWB get
+  // attached?" / "who attached it?" / "was it seller or admin
+  // override?". The trio below records that on the row at write time
+  // so dispute investigations don't need to cross-reference
+  // audit_logs + tracking timestamps.
+  awbAttachedAt             DateTime?                   @map("awb_attached_at")
+  awbAttachedBy             String?                     @map("awb_attached_by")
+  awbAttachmentSource       AwbAttachmentSource?        @map("awb_attachment_source")
 
   // ─── Delivery method (NULL until the sub-order is accepted) ──
   // The seller / franchise picks this at fulfilment time from the
   // methods their admin has enabled. NULL means the choice hasn't
   // been made yet (sub-order routed but not yet accepted).
-  deliveryMethod    DeliveryMethod?     @map("delivery_method")
-  // iThink-only fields. trackingNumber + courierName above are
-  // generic legacy fields; these are iThink-specific.
-  ithinkAwb         String?             @map("ithink_awb")
-  ithinkLogistic    String?             @map("ithink_logistic")
-  ithinkTrackingUrl String?             @map("ithink_tracking_url")
-  ithinkOrderRefnum String?             @map("ithink_order_refnum")
-  ithinkBookedAt    DateTime?           @map("ithink_booked_at")
+  deliveryMethod     DeliveryMethod?     @map("delivery_method")
   // Self-delivery state machine — only used when deliveryMethod = SELF_DELIVERY.
-  selfDeliveryStatus  SelfDeliveryStatus? @map("self_delivery_status")
-  selfDeliveredAt     DateTime?           @map("self_delivered_at")
-  selfDeliveryNotes   String?             @map("self_delivery_notes")
+  selfDeliveryStatus SelfDeliveryStatus? @map("self_delivery_status")
+  selfDeliveredAt    DateTime?           @map("self_delivered_at")
+  selfDeliveryNotes  String?             @map("self_delivery_notes")
 
   // Phase 4 (PR 4.4) — last-processed tracking event timestamp for
   // ordering guard. Set by the Shiprocket / iThink webhook handlers
@@ -256,7 +675,39 @@ model SubOrder {
   // incoming event with an OLDER timestamp is dropped as
   // out-of-order — the FSM never regresses (e.g. DELIVERED → IN_TRANSIT
   // flapping when Shiprocket's webhook delivery reorders payloads).
-  lastTrackingEventAt DateTime?           @map("last_tracking_event_at")
+  lastTrackingEventAt DateTime? @map("last_tracking_event_at")
+
+  // Phase 87 (2026-05-23) — NDR / RTO audit Gaps #4/#5/#6.
+  //
+  // NDR lifecycle persistence. Each UNDELIVERED scan increments
+  // ndrAttemptCount and stamps ndrLastAttemptAt. ndrStatus tracks
+  // the dispute state surface to the customer:
+  //   • PENDING_REATTEMPT — carrier will retry automatically
+  //   • CUSTOMER_RESPONDED — customer used the NDR-action endpoint
+  //   • EXHAUSTED         — attempt threshold hit, RTO auto-initiated
+  // Without these columns multi-failed-delivery sub-orders looked
+  // identical to a single-failed sub-order; the customer page +
+  // admin tooling had no signal of repeated NDRs.
+  ndrAttemptCount   Int       @default(0) @map("ndr_attempt_count")
+  ndrLastAttemptAt  DateTime? @map("ndr_last_attempt_at")
+  ndrLastReason     String?   @map("ndr_last_reason") @db.Text
+  ndrLastReasonCode String?   @map("ndr_last_reason_code")
+  ndrStatus         String?   @map("ndr_status")
+
+  // RTO lifecycle persistence. Pre-Phase-87 the mapper collapsed
+  // RTO_INITIATED + RTO_IN_TRANSIT to `undefined`, so a sub-order
+  // sat at fulfillmentStatus=SHIPPED for the entire 7-14d return
+  // journey then snapped to CANCELLED. These timestamps let the
+  // customer + admin UIs render the RTO phase explicitly.
+  rtoInitiatedAt DateTime? @map("rto_initiated_at")
+  rtoInTransitAt DateTime? @map("rto_in_transit_at")
+  rtoDeliveredAt DateTime? @map("rto_delivered_at")
+  rtoReason      String?   @map("rto_reason") @db.Text
+
+  // Per-row latest carrier scan + reason code (forensic shortcut so
+  // the dashboard doesn't have to join shipment_tracking_events).
+  lastCourierStatus       String? @map("last_courier_status")
+  lastCourierReasonCode   String? @map("last_courier_reason_code")
   // Snapshot of pickup address id at the time of booking — keeps
   // audit trail if the seller/franchise later re-registers a different
   // warehouse with iThink. The forward AWB ships from this address.
@@ -268,10 +719,44 @@ model SubOrder {
   // be a different physical location.
   returnAddressIdSnapshot String? @map("return_address_id_snapshot")
 
-  commissionProcessed    Boolean                @default(false) @map("commission_processed")
-  commissionRateSnapshot Decimal?               @map("commission_rate_snapshot") @db.Decimal(5, 2)
-  createdAt              DateTime               @default(now()) @map("created_at")
-  updatedAt              DateTime               @updatedAt @map("updated_at")
+  commissionProcessed    Boolean            @default(false) @map("commission_processed")
+  // Phase 75 (2026-05-22) — Phase 73 reject-flow audit Gap #10.
+  // Pre-Phase-75 the reject path set `commissionProcessed: true`
+  // even though no settlement actually ran — the column was being
+  // overloaded to mean "skip me in the settlement sweep" instead
+  // of its literal meaning "settlement has been done for this row".
+  // Settlement code keeps reading commissionProcessed as-is (no
+  // breaking change). The new column captures the actual decision
+  // so analytics + finance reconciliation can distinguish
+  // "computed and paid" (PROCESSED) from "intentionally skipped
+  // because the order was rejected/cancelled" (NOT_APPLICABLE).
+  // Default PENDING for new rows so the existing flow's default
+  // semantics carry forward.
+  commissionDecision     CommissionDecision @default(PENDING) @map("commission_decision")
+  commissionRateSnapshot Decimal?           @map("commission_rate_snapshot") @db.Decimal(5, 2)
+
+  // Phase 78 (2026-05-22) — reassignment audit Gap #16.
+  // Counter incremented inside the reassign transaction; used by the
+  // UI to badge "2nd reassignment" and by analytics to flag sub-orders
+  // that have bounced between fulfillment nodes.
+  reassignmentCount Int       @default(0) @map("reassignment_count")
+  lastReassignedAt  DateTime? @map("last_reassigned_at")
+
+  // Phase 81 (2026-05-22) — sub-order cancel audit Gaps #2/#3.
+  //   • cancelledAt / cancelledBy → human-readable + queryable
+  //     answer to "who cancelled this and when". Pre-Phase-81 the
+  //     event payload was the only artifact.
+  //   • cancelReason → mandatory reason text from the cancel modal
+  //     (DTO enforces min 10 chars at the controller layer).
+  //   • cancellationSource → ADMIN / CUSTOMER / SYSTEM
+  //     discriminator (Gap #2).
+  cancelledAt        DateTime?           @map("cancelled_at")
+  cancelledBy        String?             @map("cancelled_by")
+  cancelReason       String?             @map("cancel_reason") @db.Text
+  cancellationSource CancellationSource? @map("cancellation_source")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   masterOrder       MasterOrder        @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
   seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
@@ -279,6 +764,10 @@ model SubOrder {
   items             OrderItem[]
   commissionRecords CommissionRecord[]
   returns           Return[]
+  // Phase 136 — disputes linked to this sub-order. Lets the commission
+  // confirmation filter exclude sub-orders with an open dispute (mirrors the
+  // `returns` relation), in one transactional query.
+  disputes          Dispute[]
 
   // Phase B (P0) — per-sub-order item allocations (drives seller-
   // level settlement deduction for seller-funded discounts).
@@ -288,18 +777,87 @@ model SubOrder {
   // is unique (partial unique index); cancelled rows accumulate.
   eWayBills EWayBill[]
 
+  // Phase 79 (2026-05-22) — history audit Gap #8 + Gap #13. The
+  // primary back-reference points at logs where THIS sub-order was
+  // reassigned (named relation so the disambiguation is explicit).
+  // The newSubOrderLogs side points at logs that named this sub-order
+  // as the new sub-order created by an auto-reassign cascade.
+  reassignmentLogs OrderReassignmentLog[]  @relation("OrderReassignmentSubOrder")
+  // Phase 84 (2026-05-23) — timeline audit Gap #9. Back-reference for
+  // OrderStatusHistory.subOrderId. SetNull would lose the chronology
+  // if a sub-order is hard-deleted; Cascade keeps history aligned
+  // with the parent row's lifecycle.
+  statusHistory    OrderStatusHistory[]
+  newSubOrderLogs  OrderReassignmentLog[]  @relation("OrderReassignmentNewSubOrder")
+  // Phase 85 (2026-05-23) — AWB attachment audit Gap #13.
+  // Back-reference for SubOrderAwbHistory rows. Pre-Phase-85 an
+  // overwrite silently lost the prior AWB; the child table now
+  // preserves every assignment with detachedAt + reason.
+  awbHistory       SubOrderAwbHistory[]
+  // Phase 86 (2026-05-23) — tracking webhook audit Gap #1/#17.
+  // Back-reference for per-scan carrier history. Each accepted
+  // webhook/poll-cron snapshot writes one ShipmentTrackingEvent row
+  // so the customer page can render the full scan timeline.
+  trackingEvents   ShipmentTrackingEvent[]
+  // Phase 87 (2026-05-23) — NDR/RTO audit Gap #11. Per-attempt
+  // history. Each NdrAttempt row corresponds to one carrier failed-
+  // delivery scan; RtoEvent rows trace the RTO phase milestones.
+  ndrAttempts      NdrAttempt[]
+  rtoEvents        RtoEvent[]
+  // Phase 88 (2026-05-23) — typed shipment evidence (replaces the
+  // polymorphic FileAttachment lookup). Dual-written at upload, then
+  // queried directly for the 4-photo gate + POD customer surface +
+  // admin browsing.
+  shipmentEvidence ShipmentEvidence[]
+
+  // Phase 81 (2026-05-22) — cancel audit Gap #3. FK to Admin via
+  // SetNull. Mirror of Phase 78's pattern on OrderReassignmentLog —
+  // admin churn doesn't break historical reporting.
+  canceller Admin? @relation("SubOrderCanceller", fields: [cancelledBy], references: [id], onDelete: SetNull)
+
   @@index([masterOrderId])
   @@index([sellerId])
   @@index([franchiseId])
   @@index([fulfillmentNodeType])
   @@index([deliveryMethod])
-  @@index([ithinkAwb])
   @@index([selfDeliveryStatus])
   // Phase 2 (PR 2.1) — order-acceptance timeout sweeper:
   // `WHERE accept_status = 'OPEN' AND accept_deadline_at < NOW()`.
   // Runs every 5 min and would otherwise scan every OPEN sub-order
   // — those grow unbounded as the marketplace scales.
   @@index([acceptStatus, acceptDeadlineAt])
+  // Phase 80 (2026-05-22) — acceptance audit Gap #18. The unified SLA
+  // cron filters on (acceptStatus, fulfillmentNodeType,
+  // acceptDeadlineAt). Without this composite, the cron either scans
+  // every OPEN sub-order (when nodeType isn't keyed) or scans the
+  // wrong tier of the (acceptStatus, acceptDeadlineAt) index — neither
+  // is cheap once the OPEN tier grows.
+  @@index([acceptStatus, fulfillmentNodeType, acceptDeadlineAt])
+  // Phase 80 — Gap #19 analytics. "All auto-rejected sub-orders in
+  // the last 24h" + "auto-reject % by date" both serve from this
+  // index without scanning every REJECTED row.
+  @@index([rejectionType, autoRejectedAt])
+  // Phase 81 (2026-05-22) — cancel audit. "All cancelled sub-orders
+  // by admin X in the last 7d" + "% of orders cancelled by source"
+  // analytics queries hit this composite without scanning every
+  // CANCELLED row.
+  @@index([cancellationSource, cancelledAt])
+  @@index([cancelledBy, cancelledAt])
+  // Phase 82 (2026-05-23) — packing & shipping audit Gap #1. SLA
+  // dashboards (avg time-to-pack / time-to-ship by seller) query by
+  // sellerId + packedAt range; franchise mirror by franchiseId.
+  @@index([sellerId, packedAt])
+  @@index([sellerId, shippedAt])
+  @@index([franchiseId, packedAt])
+  @@index([franchiseId, shippedAt])
+  // Phase 83 (2026-05-23) — delivery confirmation audit Gap #2/#3.
+  //   • (commissionLockScheduledAt) — the polling cron's hot path:
+  //     `WHERE commission_lock_scheduled_at <= now() AND
+  //     commission_processed = false`.
+  //   • (delivery_source, delivered_at) — "deliveries by source
+  //     last 7d" analytics dashboard.
+  @@index([commissionLockScheduledAt])
+  @@index([deliverySource, deliveredAt])
   // Phase 2 (PR 2.1) — seller dashboard "my orders by status":
   // `WHERE seller_id = ? AND accept_status = ? ORDER BY created_at DESC`.
   // The leading `(sellerId, acceptStatus)` keys narrow the scan,
@@ -312,15 +870,15 @@ model SubOrder {
 }
 
 model OrderItem {
-  id           String   @id @default(uuid())
-  subOrderId   String   @map("sub_order_id")
-  productId    String   @map("product_id")
-  variantId    String?  @map("variant_id")
-  productTitle String   @map("product_title")
-  variantTitle String?  @map("variant_title")
-  sku          String?
-  masterSku    String?  @map("master_sku")
-  imageUrl     String?  @map("image_url")
+  id                String   @id @default(uuid())
+  subOrderId        String   @map("sub_order_id")
+  productId         String   @map("product_id")
+  variantId         String?  @map("variant_id")
+  productTitle      String   @map("product_title")
+  variantTitle      String?  @map("variant_title")
+  sku               String?
+  masterSku         String?  @map("master_sku")
+  imageUrl          String?  @map("image_url")
   unitPrice         Decimal  @map("unit_price") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007).
   // Phase 2 (PR 2.5) — DB-level invariants on this line item:
@@ -330,13 +888,45 @@ model OrderItem {
   // See migration 20260512160000.
   unitPriceInPaise  BigInt   @default(0) @map("unit_price_in_paise")
   quantity          Int
+  // Phase 108 (2026-05-25) — cumulative units reversed via seller
+  // B2B/off-platform reversals (see seller-reversal.prisma). Guards
+  // against over-reversal across multiple approved requests.
+  reversedQuantity  Int      @default(0) @map("reversed_quantity")
   totalPrice        Decimal  @map("total_price") @db.Decimal(10, 2)
   totalPriceInPaise BigInt   @default(0) @map("total_price_in_paise")
-  createdAt    DateTime @default(now()) @map("created_at")
+  createdAt         DateTime @default(now()) @map("created_at")
 
-  subOrder         SubOrder          @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  // Phase 44 (2026-05-21) — pricing-tier snapshot. unitPrice on this
+  // row is already the tier-adjusted (effective) price the customer
+  // paid; the new columns record what tier was applied so refunds,
+  // disputes, and commission re-computation can prove the discount.
+  appliedPricingTierId   String?  @map("applied_pricing_tier_id")
+  appliedDiscountPercent Decimal? @map("applied_discount_percent") @db.Decimal(5, 2)
+  appliedFixedUnitPrice  Decimal? @map("applied_fixed_unit_price") @db.Decimal(10, 2)
+  appliedListUnitPrice   Decimal? @map("applied_list_unit_price") @db.Decimal(10, 2)
+
+  // Phase 67 (2026-05-22) — direct linkage from OrderItem to the
+  // seller StockReservation row that consumed inventory for it
+  // (audit Gap #10). Pre-Phase-67 a partial refund of an order
+  // had to look up the reservation by (productId, variantId,
+  // mappingId) — which is ambiguous when a customer holds two
+  // pre-existing reservations on the same SKU. Populated by the
+  // checkout service after catalogFacade.confirmReservation
+  // returns. String id (no FK) so a future StockReservation
+  // hard-delete doesn't cascade through order history.
+  stockReservationId String? @map("stock_reservation_id")
+  // Phase 67 (2026-05-22) — Cloudinary public id snapshot
+  // (audit Gap #23). Stored alongside imageUrl so a UI render
+  // can rebuild the URL when the original URL 404s after a
+  // Cloudinary regeneration. Populated when ProductImage carries
+  // a publicId; null otherwise (forward-compat schema today).
+  imagePublicId      String? @map("image_public_id")
+
+  subOrder         SubOrder            @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
   commissionRecord CommissionRecord?
   returnItems      ReturnItem[]
+  // Phase 44 — SetNull so deleting a tier never destroys order data.
+  appliedTier      ProductPricingTier? @relation(fields: [appliedPricingTierId], references: [id], onDelete: SetNull)
 
   // Phase B (P0) — per-item discount allocations + post-discount
   // GST snapshot. taxSnapshot is one-to-one (a row exists for any
@@ -344,25 +934,590 @@ model OrderItem {
   // legacy orders, which fall back to gross refund logic).
   orderItemDiscounts OrderItemDiscount[]
   taxSnapshot        OrderItemTaxSnapshot?
+  // Phase 70 (audit Gap #15) — in-tx tax-config snapshot. Read by
+  // the post-tx TaxSnapshotService so live product/variant config
+  // changes between order commit and snapshot don't drift the
+  // numbers.
+  taxConfigSnapshot  OrderItemTaxConfigSnapshot?
+
+  // Phase 92 (2026-05-23) — Return Eligibility audit Gap #11/#13.
+  // Item-kind discriminator so digital / service / subscription /
+  // gift-card items can be blocked from return eligibility without
+  // adding a per-product flag. Defaults to PHYSICAL so legacy rows
+  // behave as today.
+  itemKind                         OrderItemKind @default(PHYSICAL) @map("item_kind")
+  // Phase 92 — Gap #20 returnability snapshot. Captures the product
+  // policy at order time so a later retroactive flip of
+  // Product.isReturnable doesn't strand the customer.
+  isReturnableSnapshot             Boolean       @default(true) @map("is_returnable_snapshot")
+  returnWindowDaysSnapshot         Int?          @map("return_window_days_snapshot")
+  allowedReturnReasonsJsonSnapshot Json?         @map("allowed_return_reasons_json_snapshot")
+  allowPartialReturnSnapshot       Boolean       @default(true) @map("allow_partial_return_snapshot")
+  nonReturnableReasonSnapshot      String?       @map("non_returnable_reason_snapshot")
 
   @@index([subOrderId])
+  @@index([itemKind])
   @@map("order_items")
 }
 
+// Phase 92 (2026-05-23) — Return Eligibility audit Gap #11.
+//
+// Item-kind discriminator. PHYSICAL is today's only inventory; the
+// other values are schema-ready for future product mix.
+enum OrderItemKind {
+  PHYSICAL
+  DIGITAL
+  SERVICE
+  SUBSCRIPTION
+  GIFT_CARD
+}
+
+// Phase 70 (2026-05-22) — Phase 67 audit Gap #15. Per-line tax-
+// config snapshot captured INSIDE the order transaction so the
+// post-tx OrderItemTaxSnapshot computation never re-reads live
+// product/variant tax config. Pre-Phase-70 the tax snapshot
+// service ran 50-500ms after the order tx committed and used
+// `tx.product.findMany` to pull HSN / GST rate / supply
+// taxability live — an admin editing `gstRateBps` mid-flow
+// caused the snapshot to bake the NEW rate against the OLD
+// price the customer paid. The audit recommended "snap product
+// tax config INTO order tx so post-tx writers read from snapshot,
+// never live product."
+//
+// One row per OrderItem; tax service reads here first and falls
+// back to live config only for legacy orders (snapshot absent).
+model OrderItemTaxConfigSnapshot {
+  id                 String  @id @default(uuid())
+  orderItemId        String  @unique @map("order_item_id")
+  // Resolved per-line values — variant overrides have already been
+  // collapsed against the product defaults at write time. The tax
+  // engine consumes these directly without re-reading either
+  // source row.
+  hsnCode            String? @map("hsn_code")
+  gstRateBps         Int     @default(0) @map("gst_rate_bps")
+  supplyTaxability   String  @default("TAXABLE") @map("supply_taxability")
+  priceIncludesTax   Boolean @default(true) @map("price_includes_tax")
+  cessRateBps        Int     @default(0) @map("cess_rate_bps")
+  uqcCode            String? @map("uqc_code")
+  // Product origin (for the supplier-state lookup in the tax
+  // engine's place-of-supply resolution).
+  productSource      String? @map("product_source")
+  // Whether the snapshot came from a variant override or the
+  // product default — diagnostic only; the tax engine treats
+  // both identically.
+  sourcedFromVariant Boolean @default(false) @map("sourced_from_variant")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  orderItem OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@map("order_item_tax_config_snapshots")
+}
+
+// Phase 72 (2026-05-22) — Phase 71 risk audit Gap #12. Tunable
+// per-rule weights / thresholds without a code change + deploy.
+// Rule LOGIC stays in risk-scoring.service.ts (some rules require
+// Prisma queries that aren't expressible in JSON); rule WEIGHTS
+// and a flag bag of THRESHOLDS come from this table.
+//
+// Cached in-memory at the RiskScoringService level; bump-cache
+// is invoked by the admin tune endpoint on every write. A missing
+// row falls back to the hardcoded default so a fresh deploy works
+// without seed data (the seed migration also writes initial rows
+// for visibility).
+//
+// reasonCode is the foreign key into OrderRiskReasonCode enum
+// (same identifiers the service emits). One row per code.
+model OrderRiskRuleConfig {
+  id          String              @id @default(uuid())
+  reasonCode  OrderRiskReasonCode @unique @map("reason_code")
+  // Signed score contribution when the rule matches. Negative
+  // = trust signal; positive = risk signal. Must match the
+  // service's expectation for the code (e.g., negative for
+  // REPEAT_CUSTOMER, positive for everything else).
+  scoreDelta  Int                 @map("score_delta")
+  // Per-rule thresholds + flag bag. Schema-less JSON since each
+  // rule needs different shape:
+  //   { "valueRupees": 10000 } for HIGH_VALUE
+  //   { "minPrior": 3, "lookbackDays": 90, "rateThreshold": 0.3 }
+  //     for CANCELLATION_HISTORY
+  //   { "domains": ["mailinator.com", ...] } for SUSPICIOUS_EMAIL
+  //   { "windowMinutes": 60, "threshold": 3 } for VELOCITY
+  //   { "pincodes": ["123456", ...] } for PINCODE_RTO
+  config      Json                @default("{}")
+  // When false the service treats the rule as if it doesn't
+  // exist (skips the match entirely). Lets ops disable a
+  // misbehaving rule without redeploy.
+  enabled     Boolean             @default(true)
+  // Phase 72 — audit Gap #17. When true, the reason text emitted
+  // by this rule elides exact monetary amounts (renders bucketed
+  // form like "Very high value order (≥₹25K)" instead of
+  // "(₹78,500)"). Default false preserves current behaviour for
+  // any tier that still benefits from the precise amount.
+  maskAmounts Boolean             @default(false) @map("mask_amounts")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by")
+
+  @@map("order_risk_rule_configs")
+}
+
+// Phase 74 (2026-05-22) — Phase 73 approve/reject audit Gap #3 + #18.
+// Append-only decision audit trail. Every approve / reject writes a
+// row inside the same tx as the order status flip + side effects.
+// Differs from the generic audit_logs row (which is event-shaped) —
+// this is verification-specific, queryable per-order, and joins to
+// Admin for "decisions by admin X in date range Y".
+enum OrderVerificationDecisionType {
+  APPROVED
+  REJECTED
+}
+
+model OrderVerificationDecision {
+  id            String                        @id @default(uuid())
+  masterOrderId String                        @map("master_order_id")
+  decision      OrderVerificationDecisionType
+  decidedBy     String                        @map("decided_by")
+  decidedAt     DateTime                      @default(now()) @map("decided_at")
+  // For REJECTED: required reason text. For APPROVED: optional
+  // remarks. Length enforced at the DTO layer (10..500 for reason,
+  // 0..500 for remarks).
+  reason        String?                       @db.Text
+  remarks       String?                       @db.Text
+  // Free-form bag: routing result, refund instruction id, risk
+  // band snapshot, etc. Lets future surfaces enrich the row
+  // without schema churn.
+  metadataJson  Json?                         @map("metadata_json")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+
+  @@index([masterOrderId, decidedAt(sort: Desc)])
+  @@index([decidedBy, decidedAt])
+  @@index([decision, decidedAt])
+  @@map("order_verification_decisions")
+}
+
+// Phase 73 (2026-05-22) — claim-flow audit Gap #14.
+//
+// Append-only history of every claim transition. Pre-Phase-73
+// the MasterOrder.claimed_by_admin_id / claimed_at / claim_expires_at
+// columns were overwritten on every claim event — release / expiry /
+// approve / reject / force-release all wiped the data with no
+// trail. Compliance + fraud investigation could not reconstruct
+// "Bob held order X for 12 min, released it, then re-claimed 5
+// min later".
+//
+// One row per (claim, release) pair. The verifier identity stays
+// on `claimedByAdminId` even after the admin row is deleted (the
+// FK is SetNull on Admin so we keep the historical id for
+// reporting). releasedByAdminId is null for cron-driven TTL
+// expirations (no human actor).
+enum OrderClaimReleaseReason {
+  // Verifier explicitly released their hold.
+  EXPLICIT_RELEASE
+  // Claim TTL expired and the auto-release cron swept it.
+  TTL_EXPIRY
+  // Verifier approved and the claim was cleared as part of approve.
+  APPROVED
+  // Verifier rejected; claim cleared as part of reject.
+  REJECTED
+  // SUPER_ADMIN force-released someone else's claim.
+  FORCE_RELEASE
+  // Order verified via the admin-orders bypass path while a claim
+  // existed (cross-path race that the Phase 68 claim guard now
+  // rejects — kept for forensic completeness).
+  ORDER_VIA_BYPASS
+}
+
+model OrderClaimHistory {
+  id                String                  @id @default(uuid())
+  masterOrderId     String                  @map("master_order_id")
+  // The admin who held the claim. SetNull on admin delete so a
+  // staff churn doesn't break history rendering.
+  claimedByAdminId  String?                 @map("claimed_by_admin_id")
+  claimedAt         DateTime                @map("claimed_at")
+  releasedAt        DateTime                @default(now()) @map("released_at")
+  // Cached so reports don't have to subtract every row in JS.
+  durationSeconds   Int                     @map("duration_seconds")
+  releaseReason     OrderClaimReleaseReason @map("release_reason")
+  // For FORCE_RELEASE: the super-admin who triggered. Null for
+  // self-release, approve, reject, TTL expiry.
+  releasedByAdminId String?                 @map("released_by_admin_id")
+  // Optional free-text reason / remarks. force-release requires
+  // a reason; other paths leave it null.
+  reasonNote        String?                 @map("reason_note")
+  createdAt         DateTime                @default(now()) @map("created_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+
+  @@index([masterOrderId, releasedAt(sort: Desc)])
+  @@index([claimedByAdminId, releasedAt])
+  @@index([releaseReason, releasedAt])
+  @@map("order_claim_history")
+}
+
+// Phase 71 (2026-05-22) — Phase 70 risk-scoring audit Gap #8.
+// Temporal history of every risk-score event (placement, manual
+// rescore, rule-set bump). Pre-Phase-71 re-scoring just overwrote
+// the MasterOrder columns with no trail; compliance / fraud-ops
+// review couldn't answer "what was this order's band when admin
+// X approved it?" The OrderRiskReason child table (Phase 69)
+// covers current-state denormalisation per rule — this table is
+// the time-series complement.
+model OrderRiskScoreHistory {
+  id            String               @id @default(uuid())
+  masterOrderId String               @map("master_order_id")
+  score         Int
+  band          OrderRiskBand
+  reasons       Json
+  source        OrderRiskScoreSource
+  scoredAt      DateTime             @default(now()) @map("scored_at")
+  scoredBy      String?              @map("scored_by") // admin id; null for auto
+  scorerVersion Int                  @map("scorer_version") // SCORER_VERSION at write time
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+
+  @@index([masterOrderId, scoredAt(sort: Desc)])
+  @@index([band, scoredAt(sort: Desc)])
+  @@map("order_risk_score_history")
+}
+
+// Phase 69 (2026-05-22) — Phase 68 audit Gap #20. Pre-Phase-69 the
+// risk reasons were stored only as a JSON array on MasterOrder, so
+// admin search for "orders that hit a specific rule" required
+// linear JSON scans. Phase 69 mirrors each reason into a row so
+// the admin UI / analytics can filter on reasonCode directly. The
+// JSON snapshot on MasterOrder is kept (denormalised) for fast
+// read-side rendering on the order detail page.
+enum OrderRiskReasonCode {
+  FIRST_TIME_CUSTOMER
+  REPEAT_CUSTOMER
+  COD_PAYMENT
+  ONLINE_CAPTURED
+  ONLINE_NOT_CAPTURED
+  VERY_HIGH_VALUE
+  HIGH_VALUE
+  BULK_ORDER
+  // Phase 71 (2026-05-22) — Phase 70 risk-scoring audit Gap #11.
+  // Richer fraud-signal rules: high-RTO pincodes, customer
+  // cancellation history, disposable-email patterns, order velocity.
+  PINCODE_RTO
+  CANCELLATION_HISTORY
+  SUSPICIOUS_EMAIL
+  VELOCITY
+  OTHER
+}
+
+model OrderRiskReason {
+  id            String              @id @default(uuid())
+  masterOrderId String              @map("master_order_id")
+  reasonCode    OrderRiskReasonCode @map("reason_code")
+  // Human-readable form (e.g. "Bulk order (12 items)") so the UI
+  // doesn't have to re-derive it from the code + context.
+  reasonText    String              @map("reason_text")
+  // Signed score contribution. Negative = trust signal; positive =
+  // risk signal. Sum across rows for an order = MasterOrder.verificationRiskScore.
+  scoreDelta    Int                 @map("score_delta")
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+
+  @@index([masterOrderId])
+  @@index([reasonCode])
+  // Backs the analytics query "how many orders hit BULK_ORDER in
+  // the last 7 days" without scanning all rows.
+  @@index([reasonCode, createdAt])
+  @@map("order_risk_reasons")
+}
+
+// Phase 79 (2026-05-22) — reassignment-history audit Gap #6.
+// Discriminates the four conceptually distinct reassignment causes
+// that pre-Phase-79 all looked identical in the UI ("seller A → seller
+// B" regardless of whether it was operator intent or system fallback).
+enum OrderReassignmentEventType {
+  // Admin clicked Reassign in the UI (or hit the canonical endpoint).
+  ADMIN_MANUAL_OVERRIDE
+  // T5 cascade after a seller rejected the sub-order. Runs unattended.
+  AUTO_AFTER_SELLER_REJECT
+  // Same shape but after a franchise rejected (franchise-orders module).
+  AUTO_AFTER_FRANCHISE_REJECT
+  // Reserved for the future exception-queue auto-remediation worker
+  // that will sweep stuck orders out of EXCEPTION_QUEUE.
+  AUTO_AFTER_EXCEPTION_REMEDIATE
+}
+
+// Phase 78 (2026-05-22) — reassignment audit Gaps #1/#4/#5/#8/#16/#22.
+// Phase 79 (2026-05-22) — history audit Gaps #6/#8/#13/#20:
+//   • eventType column (Gap #6)
+//   • FK relations to MasterOrder + SubOrder + Admin (Gap #8) — Phase 78
+//     already added the Admin FK; this phase adds the SubOrder + Master
+//     references for cascade-correct delete behaviour.
+//   • newSubOrder back-reference (Gap #13) so the auto-reassign cascade's
+//     "new sub-order" can be JOINed for "lineage view" queries.
+//   • (masterOrderId, createdAt, id) composite index (Gap #20) so the
+//     per-order paginated read uses one index, with deterministic
+//     tiebreak on identical-millisecond rows.
 model OrderReassignmentLog {
-  id            String   @id @default(uuid())
-  subOrderId    String   @map("sub_order_id")
-  masterOrderId String   @map("master_order_id")
-  fromSellerId  String   @map("from_seller_id")
-  toSellerId    String?  @map("to_seller_id")
-  reason        String
+  id            String @id @default(uuid())
+  subOrderId    String @map("sub_order_id")
+  masterOrderId String @map("master_order_id")
+
+  // ── Node discriminators (Phase 78, Gap #8/#22) ─────────────────
+  // 'SELLER' | 'FRANCHISE' | 'NONE'. NONE applies to legacy rows or
+  // the never-assigned auto-reassign-after-rejection path.
+  fromNodeType String  @default("SELLER") @map("from_node_type")
+  toNodeType   String  @default("SELLER") @map("to_node_type")
+  // Polymorphic ids — point at Seller OR FranchisePartner depending
+  // on the matching nodeType column. Bare strings (no FK) because a
+  // single relation cannot point at two parent tables.
+  fromNodeId   String? @map("from_node_id")
+  toNodeId     String? @map("to_node_id")
+
+  // Legacy columns kept for back-compat with existing rows.
+  // New writes mirror these into fromNodeId/toNodeId so historic
+  // dashboards continue to work. Will be dropped in a follow-up
+  // phase once all readers are migrated.
+  fromSellerId String  @map("from_seller_id")
+  toSellerId   String? @map("to_seller_id")
+
+  // Reason is application-required (min 10 chars) at the DTO layer;
+  // here it's NOT NULL because the canned-fallback string the
+  // auto-reassign path uses still satisfies the column constraint.
+  reason String
+
+  // ── Outcome (Phase 78, Gap #14) ────────────────────────────────
   successful    Boolean
-  newSubOrderId String?  @map("new_sub_order_id")
-  createdAt     DateTime @default(now()) @map("created_at")
+  // When successful=false (auto-reassign-after-rejection couldn't
+  // place the order on anyone), capture why. Null on the happy path.
+  failureReason String? @map("failure_reason")
+  newSubOrderId String? @map("new_sub_order_id")
+
+  // ── Admin actor (Phase 78, Gap #5) ─────────────────────────────
+  // Null for auto-reassign (system actor) — the seller-rejection path
+  // and the franchise-rejection path both run unattended.
+  reassignedBy String? @map("reassigned_by")
+
+  // ── Sequence number (Phase 78, Gap #16) ────────────────────────
+  // 1 for the first reassignment of a sub-order, 2 for the second,
+  // etc. Computed at write-time from the existing log count for
+  // (subOrderId).
+  reassignmentSequence Int @default(1) @map("reassignment_sequence")
+
+  // ── Event type (Phase 79, Gap #6) ──────────────────────────────
+  // Discriminates the cause of the reassignment. Pre-Phase-79 admin
+  // overrides looked identical to system auto-cascades in the UI.
+  // Backfill: every existing row is tagged ADMIN_MANUAL_OVERRIDE
+  // since pre-Phase-78 only the admin manual writer threaded into
+  // the log table.
+  eventType OrderReassignmentEventType @default(ADMIN_MANUAL_OVERRIDE) @map("event_type")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  reassigner  Admin?      @relation(fields: [reassignedBy], references: [id], onDelete: SetNull)
+  // Phase 79 — Gap #8. FK relations so orphan-row scenarios are
+  // impossible. Cascade on MasterOrder/SubOrder delete is acceptable
+  // because we hard-delete neither in production; the application
+  // layer soft-deletes via status. Even so, defining the relation
+  // surfaces the dependency in the schema graph.
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  subOrder    SubOrder    @relation("OrderReassignmentSubOrder", fields: [subOrderId], references: [id], onDelete: Cascade)
+  // Phase 79 — Gap #13. SetNull keeps the historical lineage trail
+  // queryable even if the new sub-order is later deleted.
+  newSubOrder SubOrder?   @relation("OrderReassignmentNewSubOrder", fields: [newSubOrderId], references: [id], onDelete: SetNull)
 
   @@index([masterOrderId])
   @@index([subOrderId])
+  // Backs "all reassigns by admin X" queries on the audit dashboard.
+  @@index([reassignedBy, createdAt])
+  // Backs "all reassigns FROM seller / franchise X" queries.
+  @@index([fromNodeId, fromNodeType])
+  // Backs "all reassigns TO seller / franchise X" queries.
+  @@index([toNodeId, toNodeType])
+  // Phase 79 — Gap #6/#20. Covers the per-order paginated read
+  // (`WHERE masterOrderId = ? ORDER BY createdAt DESC, id ASC`) and
+  // the eventType filter (`WHERE masterOrderId = ? AND eventType =
+  // ?`).
+  @@index([masterOrderId, createdAt(sort: Desc), id])
+  @@index([eventType, createdAt])
   @@map("order_reassignment_logs")
+}
+
+// Phase 84 (2026-05-23) — order timeline audit Gap #1/#7.
+//
+// Pre-Phase-84 there was no order_status_history table — buyer
+// timeline was synthesized at read-time from denormalized
+// timestamps, and admin timeline was hardcoded React JSX. Phase 84
+// introduces a single append-only event log that every status
+// transition writes inside its own transaction; both customer and
+// admin timeline views read from this table with a visibility
+// filter.
+//
+// Enum is the closed taxonomy of every event that can land on the
+// timeline. Add a new value here when a new state transition is
+// introduced; the application layer enforces the same exhaustive
+// switch via TypeScript's `never`-check on the discriminated union.
+enum OrderTimelineEventType {
+  // Master-order lifecycle
+  ORDER_PLACED
+  ORDER_PAYMENT_CAPTURED
+  ORDER_VERIFICATION_CLAIMED
+  ORDER_VERIFICATION_RELEASED
+  ORDER_VERIFICATION_AUTO_EXPIRED
+  ORDER_VERIFIED
+  ORDER_REJECTED
+  ORDER_ROUTED_TO_SELLER
+  ORDER_EXCEPTION_QUEUE
+  ORDER_PARTIALLY_SHIPPED
+  ORDER_PARTIALLY_DELIVERED
+  ORDER_PARTIALLY_CANCELLED
+  ORDER_DELIVERED
+  ORDER_CANCELLED
+
+  // Sub-order lifecycle
+  SUBORDER_ASSIGNED
+  SUBORDER_ACCEPTED
+  SUBORDER_REJECTED_MANUAL
+  SUBORDER_REJECTED_AUTO_SLA
+  SUBORDER_REASSIGNED
+  SUBORDER_PACKED
+  SUBORDER_SHIPPED
+  SUBORDER_OUT_FOR_DELIVERY
+  SUBORDER_DELIVERED_WEBHOOK
+  SUBORDER_DELIVERED_MANUAL
+  SUBORDER_NDR_ATTEMPT
+  SUBORDER_CANCELLED_BY_ADMIN
+
+  // Payment / Refund
+  PAYMENT_INTENT_CREATED
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  REFUND_INITIATED
+  REFUND_COMPLETED
+  REFUND_FAILED
+
+  // Commission / Settlement
+  COMMISSION_LOCKED
+  COMMISSION_PAID
+  COMMISSION_REVERSED
+}
+
+// Who fired the event. Polymorphic — the row also carries an
+// optional actorId so a forensic JOIN can reach the parent table.
+enum TimelineActorType {
+  SYSTEM
+  ADMIN
+  SELLER
+  FRANCHISE
+  CUSTOMER
+  CARRIER
+}
+
+// Per-row visibility gate. The server-side reader applies this
+// filter so a customer GET cannot return an ADMIN_ONLY row.
+enum TimelineVisibility {
+  ADMIN_ONLY
+  CUSTOMER_VISIBLE
+  SELLER_VISIBLE
+  FRANCHISE_VISIBLE
+}
+
+model OrderStatusHistory {
+  id            String  @id @default(uuid())
+  masterOrderId String  @map("master_order_id")
+  // Optional — events scoped to a sub-order (e.g. SUBORDER_PACKED)
+  // populate this; master-order-level events leave it null.
+  subOrderId    String? @map("sub_order_id")
+
+  eventType OrderTimelineEventType @map("event_type")
+  // From/To status strings. The schema doesn't constrain them to a
+  // single enum because events span four state machines
+  // (OrderStatus / OrderFulfillmentStatus / OrderAcceptStatus /
+  // OrderPaymentStatus). Application-layer mappers ensure they
+  // match one of those.
+  oldStatus String?                @map("old_status")
+  newStatus String?                @map("new_status")
+
+  actorType TimelineActorType @map("actor_type")
+  actorId   String?           @map("actor_id")
+  // Denormalized at write time so the timeline list-view doesn't
+  // need a JOIN across four actor tables. Stays valid even if the
+  // referenced row is later deleted.
+  actorName String?           @map("actor_name")
+
+  visibility TimelineVisibility @default(ADMIN_ONLY)
+
+  // Free-form admin note (e.g. "customer requested cancellation").
+  note     String? @db.Text
+  // Structured reason (rejection enum value, refund reason code, etc).
+  reason   String? @db.Text
+  // Per-eventType structured payload. Customer endpoint applies a
+  // per-eventType whitelist before returning this field; admin
+  // endpoint returns it untouched.
+  metadata Json?
+
+  // Phase 84 — idempotency key. Used by retry-safe writers (outbox
+  // replay, webhook re-delivery) so the same logical event doesn't
+  // create two timeline rows.
+  idempotencyKey String? @map("idempotency_key")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+  subOrder    SubOrder?   @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  // Idempotency lookup; nullable so multiple rows without a key are
+  // legal. (Postgres treats NULL as distinct in unique indexes.)
+  @@unique([idempotencyKey])
+  // Composite index for the per-order timeline read with deterministic
+  // ordering (createdAt + id tiebreak for same-millisecond rows).
+  @@index([masterOrderId, createdAt, id])
+  @@index([subOrderId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([actorId, createdAt])
+  // Customer-side filtered read: `WHERE masterOrderId = ? AND
+  // visibility IN (CUSTOMER_VISIBLE) ORDER BY createdAt`.
+  @@index([masterOrderId, visibility, createdAt])
+  @@map("order_status_history")
+}
+
+// Phase 85 (2026-05-23) — manual AWB attachment audit Gap #13.
+// One row per AWB assignment to a sub-order. Pre-Phase-85 an admin
+// re-attaching an AWB silently overwrote the previous value; there
+// was no way to answer "what was the prior tracking number?". The
+// child table records every assignment (including overwrites) with
+// the reason, the actor, and the detachedAt timestamp for replaced
+// rows.
+//
+// On a replace:
+//   • The currently-active row (detachedAt = NULL) gets `detachedAt
+//     = NOW()` written first.
+//   • The new row is inserted with `detachedAt = NULL`.
+// At any instant only one row per subOrderId has detachedAt = NULL —
+// the partial unique index enforces it.
+model SubOrderAwbHistory {
+  id               String              @id @default(uuid())
+  subOrderId       String              @map("sub_order_id")
+  awbNumber        String              @map("awb_number")
+  courierName      String              @map("courier_name")
+  trackingUrl      String?             @map("tracking_url")
+  attachmentSource AwbAttachmentSource @map("attachment_source")
+  // Bare string (polymorphic — admin id, seller id, franchise id, or
+  // system slug). No FK because there's no single parent table that
+  // covers all actor kinds.
+  attachedBy       String?             @map("attached_by")
+  // Required when overwriting a prior AWB so the admin captures
+  // *why* the replacement was needed. Free-form text; DTO enforces
+  // min length when the replace flag is set.
+  reason           String?             @db.Text
+  attachedAt       DateTime            @default(now()) @map("attached_at")
+  // Null = currently-active row. Set when a newer AWB replaces it.
+  detachedAt       DateTime?           @map("detached_at")
+
+  subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  @@index([subOrderId, attachedAt(sort: Desc)])
+  @@index([awbNumber])
+  @@map("sub_order_awb_history")
 }
 
 model OrderSequence {
@@ -372,20 +1527,65 @@ model OrderSequence {
   @@map("order_sequence")
 }
 
-// Low-stock notifications — one row per (sellerProductMappingId, threshold-cross)
+// Phase 54 (2026-05-21) — explicit status enum so the lifecycle is
+// modelable (ACTIVE → RESOLVED on stock recovery, ACTIVE → DISMISSED
+// on admin action with optional snoozeUntil window). Pre-Phase-54 the
+// table relied on resolvedAt being null/non-null which couldn't
+// represent "dismissed" separately.
+enum LowStockAlertStatus {
+  ACTIVE
+  RESOLVED
+  DISMISSED
+}
+
+// Low-stock notifications — one row per (resource, threshold-cross)
 // so we don't spam admins. Cleared when stock recovers.
+//
+// Phase 54 (2026-05-21) — extended for franchise polymorphism +
+// variantId + availableStock snapshot + dismiss lifecycle. The
+// resourceType discriminator lets seller-mapping and franchise-stock
+// rows coexist in the same table so ops gets one unified alerts view.
 model LowStockAlert {
-  id                       String   @id @default(uuid())
-  sellerProductMappingId   String   @map("seller_product_mapping_id")
-  sellerId                 String   @map("seller_id")
-  productId                String   @map("product_id")
-  currentStock             Int      @map("current_stock")
-  threshold                Int
-  resolvedAt               DateTime? @map("resolved_at")
-  createdAt                DateTime @default(now()) @map("created_at")
+  id                     String  @id @default(uuid())
+  // Phase 54 — discriminator. Pre-Phase-54 the schema was implicitly
+  // SELLER_MAPPING only; franchise stock had no coverage (audit Gap #6).
+  resourceType           String  @default("SELLER_MAPPING") @map("resource_type") // 'SELLER_MAPPING' | 'FRANCHISE_STOCK'
+  // Nullable now — one of these is set per row, picked by resourceType.
+  sellerProductMappingId String? @map("seller_product_mapping_id")
+  franchiseStockId       String? @map("franchise_stock_id")
+  sellerId               String? @map("seller_id")
+  franchiseId            String? @map("franchise_id")
+  productId              String  @map("product_id")
+  // Phase 54 — variantId denormalized so the admin alert card can
+  // show "Product X — Variant Red/Large" without drilling into the
+  // mapping (audit Gap #7).
+  variantId              String? @map("variant_id")
+  // Phase 54 — currentStock kept for backward compat; availableStock
+  // (= stockQty - reservedQty) is the value the alert is actually
+  // based on (audit Gap #1). Both are refreshed on every sweep tick
+  // that finds the alert still ACTIVE (audit Gap #10).
+  currentStock           Int     @map("current_stock")
+  availableStock         Int     @default(0) @map("available_stock")
+  reservedStock          Int     @default(0) @map("reserved_stock")
+  threshold              Int
+
+  // Phase 54 — lifecycle
+  status       LowStockAlertStatus @default(ACTIVE)
+  resolvedAt   DateTime?           @map("resolved_at")
+  dismissedAt  DateTime?           @map("dismissed_at")
+  dismissedBy  String?             @map("dismissed_by")
+  dismissUntil DateTime?           @map("dismiss_until")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@unique([sellerProductMappingId])
+  @@unique([franchiseStockId])
   @@index([resolvedAt])
+  @@index([status, createdAt])
+  @@index([sellerId, status])
+  @@index([franchiseId, status])
+  @@index([productId, variantId])
   @@map("low_stock_alerts")
 }
 
@@ -398,9 +1598,9 @@ model LowStockAlert {
 // (refund flow falls back to gross logic in that case).
 // ============================================
 model OrderItemTaxSnapshot {
-  id                                  String   @id @default(uuid())
-  masterOrderId                       String   @map("master_order_id")
-  subOrderId                          String   @map("sub_order_id")
+  id            String  @id @default(uuid())
+  masterOrderId String  @map("master_order_id")
+  subOrderId    String  @map("sub_order_id")
   // Phase 7 GST — nullable for non-PRODUCT lines (SHIPPING, GIFT_WRAP,
   // etc.). PRODUCT lines still get a non-null orderItemId enforced by
   // the existing UNIQUE constraint (multiple NULLs allowed under
@@ -408,76 +1608,76 @@ model OrderItemTaxSnapshot {
   // lineType) WHERE lineType != 'PRODUCT' enforces one-per-sub-order
   // for non-PRODUCT lines (in migration SQL, not Prisma — Prisma
   // doesn't express partial unique indexes).
-  orderItemId                         String?  @unique @map("order_item_id")
+  orderItemId   String? @unique @map("order_item_id")
 
   // Phase 5 GST (2026-05-13) — line classification.
   // PRODUCT lines reference an orderItemId (unique constraint above).
   // Non-PRODUCT lines (SHIPPING / GIFT_WRAP / etc.) arrive in Phase 7
   // with a relaxed uniqueness rule.
-  lineType                            TaxLineType  @default(PRODUCT) @map("line_type")
-  supplierType                        SupplierType? @map("supplier_type")
-  sellerId                            String?  @map("seller_id")
-  productId                           String?  @map("product_id")
-  variantId                           String?  @map("variant_id")
-  description                         String?
-  uqcCode                             String?  @map("uqc_code")
+  lineType     TaxLineType   @default(PRODUCT) @map("line_type")
+  supplierType SupplierType? @map("supplier_type")
+  sellerId     String?       @map("seller_id")
+  productId    String?       @map("product_id")
+  variantId    String?       @map("variant_id")
+  description  String?
+  uqcCode      String?       @map("uqc_code")
   // Decimal quantity supports weight-based / pair-based goods (KGS,
   // PRS, MTR). PRODUCT lines retain the Int order_items.quantity in
   // OrderItem; this is a snapshot for the tax document.
-  quantity                            Decimal? @db.Decimal(12, 3)
+  quantity     Decimal?      @db.Decimal(12, 3)
 
   // Pre-discount line gross (unitPrice × qty in paise).
-  grossLineAmountInPaise              BigInt   @default(0) @map("gross_line_amount_in_paise")
+  grossLineAmountInPaise BigInt @default(0) @map("gross_line_amount_in_paise")
   // Sum of all OrderItemDiscount rows for this item.
-  discountAmountInPaise               BigInt   @default(0) @map("discount_amount_in_paise")
+  discountAmountInPaise  BigInt @default(0) @map("discount_amount_in_paise")
   // The GST taxable base = gross - discount. GST is calculated on
   // this. Sum across items must equal the order's taxable base.
-  taxableAmountInPaise                BigInt   @default(0) @map("taxable_amount_in_paise")
+  taxableAmountInPaise   BigInt @default(0) @map("taxable_amount_in_paise")
 
   // Rate in basis points (e.g., 1800 = 18%). Sourced from the
   // product/category at order time and snapshotted so later rate
   // changes don't rewrite history.
-  gstRateBps                          Int      @default(0) @map("gst_rate_bps")
+  gstRateBps        Int              @default(0) @map("gst_rate_bps")
   // Phase 5 — supply taxability + pricing-mode for accurate reporting.
-  supplyTaxability                    SupplyTaxability @default(TAXABLE) @map("supply_taxability")
-  priceIncludesTax                    Boolean  @default(true) @map("price_includes_tax")
+  supplyTaxability  SupplyTaxability @default(TAXABLE) @map("supply_taxability")
+  priceIncludesTax  Boolean          @default(true) @map("price_includes_tax")
   // Phase 5 — compensation cess (sports goods generally don't carry
   // cess today; schema-ready for future HSN that may).
-  cessRateBps                         Int      @default(0) @map("cess_rate_bps")
-  cessAmountInPaise                   BigInt   @default(0) @map("cess_amount_in_paise")
+  cessRateBps       Int              @default(0) @map("cess_rate_bps")
+  cessAmountInPaise BigInt           @default(0) @map("cess_amount_in_paise")
 
   // CGST + SGST for intra-state supply (each half the total).
-  cgstAmountInPaise                   BigInt   @default(0) @map("cgst_amount_in_paise")
-  sgstAmountInPaise                   BigInt   @default(0) @map("sgst_amount_in_paise")
+  cgstAmountInPaise                   BigInt @default(0) @map("cgst_amount_in_paise")
+  sgstAmountInPaise                   BigInt @default(0) @map("sgst_amount_in_paise")
   // IGST for inter-state supply (full rate; cgst/sgst are 0).
-  igstAmountInPaise                   BigInt   @default(0) @map("igst_amount_in_paise")
-  totalTaxAmountInPaise               BigInt   @default(0) @map("total_tax_amount_in_paise")
+  igstAmountInPaise                   BigInt @default(0) @map("igst_amount_in_paise")
+  totalTaxAmountInPaise               BigInt @default(0) @map("total_tax_amount_in_paise")
   // Final line total = taxable + total tax (+ cess). Sum across items =
   // total customer charge for line items (excl. shipping).
-  lineTotalAfterDiscountAndTaxInPaise BigInt   @default(0) @map("line_total_after_discount_and_tax_in_paise")
+  lineTotalAfterDiscountAndTaxInPaise BigInt @default(0) @map("line_total_after_discount_and_tax_in_paise")
 
-  hsnCode                             String?  @map("hsn_code")
+  hsnCode                 String?       @map("hsn_code")
   // Phase 5 — supplier/buyer GSTIN snapshots (Section 31 requires
   // these on every tax invoice).
-  sellerGstin                         String?  @map("seller_gstin")
-  buyerGstin                          String?  @map("buyer_gstin")
+  sellerGstin             String?       @map("seller_gstin")
+  buyerGstin              String?       @map("buyer_gstin")
   // GST 2-digit state codes (Phase 1 canonical format).
-  sellerStateCode                     String?  @map("seller_state_code")
+  sellerStateCode         String?       @map("seller_state_code")
   // Phase 2 wrote this as the resolved place-of-supply state code.
-  placeOfSupply                       String?  @map("place_of_supply")
-  taxSplitType                        TaxSplitType? @map("tax_split_type")
+  placeOfSupply           String?       @map("place_of_supply")
+  taxSplitType            TaxSplitType? @map("tax_split_type")
   // Phase 5 — reverse-charge flag. Always false for B2C goods today;
   // schema-ready for future special-categories or B2B cases.
-  reverseChargeApplicable             Boolean  @default(false) @map("reverse_charge_applicable")
+  reverseChargeApplicable Boolean       @default(false) @map("reverse_charge_applicable")
 
-  currencyCode                        String   @default("INR") @map("currency_code")
+  currencyCode  String        @default("INR") @map("currency_code")
   // Phase 5 — COMPLETE if all GST fields resolvable; INCOMPLETE in
   // test mode when product is TAXABLE but missing HSN/rate; EXEMPT
   // for NIL/EXEMPT/NON_GST supplies.
-  taxDataStatus                       TaxDataStatus @default(COMPLETE) @map("tax_data_status")
+  taxDataStatus TaxDataStatus @default(COMPLETE) @map("tax_data_status")
 
-  createdAt                           DateTime @default(now()) @map("created_at")
-  updatedAt                           DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   // Phase 7 — relation optional now that orderItemId is nullable.
   orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
@@ -506,31 +1706,31 @@ model OrderItemTaxSnapshot {
 //   sum of order_item_tax_snapshots WHERE subOrderId=X .taxableAmountInPaise
 // Same for cgst / sgst / igst / total tax / cess.
 model SubOrderTaxSummary {
-  id            String   @id @default(uuid())
-  masterOrderId String   @map("master_order_id")
-  subOrderId    String   @unique @map("sub_order_id")
-  sellerId      String?  @map("seller_id")
+  id            String        @id @default(uuid())
+  masterOrderId String        @map("master_order_id")
+  subOrderId    String        @unique @map("sub_order_id")
+  sellerId      String?       @map("seller_id")
   supplierType  SupplierType? @map("supplier_type")
 
   // Snapshot of supplier + buyer GST identity at order time.
-  sellerGstin              String? @map("seller_gstin")
-  sellerStateCode          String? @map("seller_state_code")
-  buyerGstin               String? @map("buyer_gstin")
-  placeOfSupplyStateCode   String? @map("place_of_supply_state_code")
-  taxSplitType             TaxSplitType? @map("tax_split_type")
+  sellerGstin            String?       @map("seller_gstin")
+  sellerStateCode        String?       @map("seller_state_code")
+  buyerGstin             String?       @map("buyer_gstin")
+  placeOfSupplyStateCode String?       @map("place_of_supply_state_code")
+  taxSplitType           TaxSplitType? @map("tax_split_type")
 
-  taxableAmountInPaise   BigInt  @default(0) @map("taxable_amount_in_paise")
-  cgstAmountInPaise      BigInt  @default(0) @map("cgst_amount_in_paise")
-  sgstAmountInPaise      BigInt  @default(0) @map("sgst_amount_in_paise")
-  igstAmountInPaise      BigInt  @default(0) @map("igst_amount_in_paise")
-  totalTaxAmountInPaise  BigInt  @default(0) @map("total_tax_amount_in_paise")
-  cessAmountInPaise      BigInt  @default(0) @map("cess_amount_in_paise")
-  roundOffAmountInPaise  BigInt  @default(0) @map("round_off_amount_in_paise")
-  invoiceTotalInPaise    BigInt  @default(0) @map("invoice_total_in_paise")
+  taxableAmountInPaise  BigInt @default(0) @map("taxable_amount_in_paise")
+  cgstAmountInPaise     BigInt @default(0) @map("cgst_amount_in_paise")
+  sgstAmountInPaise     BigInt @default(0) @map("sgst_amount_in_paise")
+  igstAmountInPaise     BigInt @default(0) @map("igst_amount_in_paise")
+  totalTaxAmountInPaise BigInt @default(0) @map("total_tax_amount_in_paise")
+  cessAmountInPaise     BigInt @default(0) @map("cess_amount_in_paise")
+  roundOffAmountInPaise BigInt @default(0) @map("round_off_amount_in_paise")
+  invoiceTotalInPaise   BigInt @default(0) @map("invoice_total_in_paise")
 
-  currencyCode    String   @default("INR") @map("currency_code")
-  taxDataStatus   TaxDataStatus @default(COMPLETE) @map("tax_data_status")
-  lineCount       Int      @default(0) @map("line_count")
+  currencyCode  String        @default("INR") @map("currency_code")
+  taxDataStatus TaxDataStatus @default(COMPLETE) @map("tax_data_status")
+  lineCount     Int           @default(0) @map("line_count")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -546,22 +1746,22 @@ model SubOrderTaxSummary {
 // Drives the customer-facing "tax summary" panel on order detail and
 // the reconciliation reports.
 model OrderTaxSummary {
-  id            String   @id @default(uuid())
-  masterOrderId String   @unique @map("master_order_id")
+  id            String @id @default(uuid())
+  masterOrderId String @unique @map("master_order_id")
 
-  taxableAmountInPaise   BigInt @default(0) @map("taxable_amount_in_paise")
-  cgstAmountInPaise      BigInt @default(0) @map("cgst_amount_in_paise")
-  sgstAmountInPaise      BigInt @default(0) @map("sgst_amount_in_paise")
-  igstAmountInPaise      BigInt @default(0) @map("igst_amount_in_paise")
-  totalTaxAmountInPaise  BigInt @default(0) @map("total_tax_amount_in_paise")
-  cessAmountInPaise      BigInt @default(0) @map("cess_amount_in_paise")
-  roundOffAmountInPaise  BigInt @default(0) @map("round_off_amount_in_paise")
-  invoiceTotalInPaise    BigInt @default(0) @map("invoice_total_in_paise")
+  taxableAmountInPaise  BigInt @default(0) @map("taxable_amount_in_paise")
+  cgstAmountInPaise     BigInt @default(0) @map("cgst_amount_in_paise")
+  sgstAmountInPaise     BigInt @default(0) @map("sgst_amount_in_paise")
+  igstAmountInPaise     BigInt @default(0) @map("igst_amount_in_paise")
+  totalTaxAmountInPaise BigInt @default(0) @map("total_tax_amount_in_paise")
+  cessAmountInPaise     BigInt @default(0) @map("cess_amount_in_paise")
+  roundOffAmountInPaise BigInt @default(0) @map("round_off_amount_in_paise")
+  invoiceTotalInPaise   BigInt @default(0) @map("invoice_total_in_paise")
 
-  currencyCode   String   @default("INR") @map("currency_code")
-  taxDataStatus  TaxDataStatus @default(COMPLETE) @map("tax_data_status")
-  subOrderCount  Int      @default(0) @map("sub_order_count")
-  lineCount      Int      @default(0) @map("line_count")
+  currencyCode  String        @default("INR") @map("currency_code")
+  taxDataStatus TaxDataStatus @default(COMPLETE) @map("tax_data_status")
+  subOrderCount Int           @default(0) @map("sub_order_count")
+  lineCount     Int           @default(0) @map("line_count")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

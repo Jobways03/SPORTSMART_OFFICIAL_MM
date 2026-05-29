@@ -12,13 +12,16 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { FranchiseAuthGuard } from '../../../../core/guards';
+import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
 import { FranchiseInventoryService } from '../../application/services/franchise-inventory.service';
 import { FranchiseAdjustStockDto } from '../dtos/franchise-adjust-stock.dto';
 
 @ApiTags('Franchise Inventory')
 @Controller('franchise/inventory')
-@UseGuards(FranchiseAuthGuard)
+// Phase 159o (audit #7) — stock mutation requires an ACTIVE (⟹ VERIFIED, since
+// Phase 159i) franchise, matching the catalog/procurement surfaces. A
+// suspended or not-yet-verified franchise can read its stock but not move it.
+@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
 export class FranchiseInventoryController {
   constructor(
     private readonly inventoryService: FranchiseInventoryService,

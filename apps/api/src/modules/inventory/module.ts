@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { InventoryPublicFacade } from './application/facades/inventory-public.facade';
 import { InventoryManagementService } from './application/services/inventory-management.service';
 import { LowStockAlertService } from './application/services/low-stock-alert.service';
+import { LowStockAlertEventHandler } from './application/event-handlers/low-stock-alert.handler';
+import { SellerLowStockAlertsController } from './presentation/controllers/seller-low-stock-alerts.controller';
 import { StockMovementLedgerService } from './application/services/stock-movement-ledger.service';
 import { SellerInventoryController } from './presentation/controllers/seller-inventory.controller';
 import { AdminInventoryController } from './presentation/controllers/admin-inventory.controller';
@@ -24,11 +26,16 @@ import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
     SellerInventoryController,
     AdminInventoryController,
     AdminLowStockAlertsController,
+    SellerLowStockAlertsController,
   ],
   providers: [
     InventoryPublicFacade,
     InventoryManagementService,
     LowStockAlertService,
+    // Phase 54 (2026-05-21) — event-driven low-stock detection so a
+    // fast-moving SKU triggers an alert without waiting for the next
+    // cron tick.
+    LowStockAlertEventHandler,
     // Phase 4.5 (2026-05-16) — StockMovement audit ledger. Rides on
     // the existing AuditLog tamper-evident chain (no migration). Will
     // be promoted to a dedicated StockMovement table once query

@@ -37,6 +37,9 @@ export default function SellerDisputeDetailPage() {
   const [error, setError] = useState('');
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+  // Idempotency key for the reply POST (endpoint is @Idempotent). Stable for the
+  // current draft so a timeout-then-reclick dedupes; regenerated after success.
+  const [replyKey, setReplyKey] = useState<string>(() => crypto.randomUUID());
   // Tracks the last manually-submitted reply id so the silent refresh below
   // doesn't reset the textarea while the user is still typing.
   const lastSentRef = useRef<string | null>(null);
@@ -85,10 +88,11 @@ export default function SellerDisputeDetailPage() {
     if (!body || sending || !id) return;
     setSending(true);
     try {
-      const res = await sellerDisputesService.reply(id, body);
+      const res = await sellerDisputesService.reply(id, body, replyKey);
       if (res.data) {
         lastSentRef.current = res.data.id;
         setReply('');
+        setReplyKey(crypto.randomUUID()); // fresh key for the next message
         await load(true);
       }
     } catch (err) {

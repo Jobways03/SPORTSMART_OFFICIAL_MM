@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { WalletService } from '../services/wallet.service';
+import { WalletRefundSagaService } from '../services/wallet-refund-saga.service';
 
 /**
  * Cross-module entry point for wallet operations. Other modules (refunds,
@@ -12,7 +13,35 @@ export class WalletPublicFacade {
   constructor(
     private readonly wallet: WalletService,
     private readonly audit: AuditPublicFacade,
+    // Phase 70 (2026-05-22) — Phase 66 audit Gap #8.
+    private readonly refundSaga: WalletRefundSagaService,
   ) {}
+
+  /**
+   * Phase 70 (2026-05-22) — Phase 66 audit Gap #8. The
+   * compensating-refund path used by checkout when an order
+   * placement crashes after the wallet was debited. Pre-Phase-70
+   * the checkout service called `creditCheckoutCancellation`
+   * inside a try/catch that swallowed errors — a failed refund
+   * left the customer debited with no trail. This entrypoint
+   * always writes a WalletRefundSaga row first (idempotent on
+   * orderId + customerId + amount), runs the credit, and a cron
+   * retries up to 5 times before marking ABANDONED + emitting
+   * `wallet.refund_saga.abandoned` so finance can reconcile.
+   */
+  enqueueCheckoutCancellationRefund(args: {
+    customerId: string;
+    orderId: string;
+    amountInPaise: number;
+    reason: string;
+  }) {
+    return this.refundSaga.enqueueAndAttempt({
+      customerId: args.customerId,
+      orderId: args.orderId,
+      amountInPaise: BigInt(args.amountInPaise),
+      reason: args.reason,
+    });
+  }
 
   getBalance(userId: string) {
     return this.wallet.getBalance(userId);

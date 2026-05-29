@@ -1,5 +1,12 @@
 import { apiClient, API_BASE, ApiResponse } from '@/lib/api-client';
 
+/** Extract the filename from a `Content-Disposition: attachment; filename="..."` header. */
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export type ReturnStatus =
   | 'REQUESTED'
   | 'APPROVED'
@@ -301,32 +308,51 @@ export const adminReturnsService = {
 
   // ── CSV export ─────────────────────────────────────────────────
   /**
-   * Trigger a CSV download. Returns the streaming Response unread so the
-   * caller can pipe it to a blob; this avoids loading 50k rows into JS memory.
+   * Trigger a CSV download. Uses fetch (not the JSON apiClient) so we can read
+   * the Blob body together with the X-Export-* / Content-Disposition headers.
+   * The browser still buffers the whole file into the Blob; for large result
+   * sets the server caps at 50k rows and reports `truncated` so the UI can
+   * warn the operator.
    */
   async exportCsv(params: {
     status?: string;
     dateFrom?: string;
     dateTo?: string;
     search?: string;
-  } = {}): Promise<Blob> {
+    sellerId?: string;
+    franchiseId?: string;
+    qcDecision?: string;
+    refundMethod?: string;
+    nodeType?: string;
+  } = {}): Promise<{
+    blob: Blob;
+    total: number | null;
+    truncated: boolean;
+    filename: string;
+  }> {
     const qs = new URLSearchParams();
-    if (params.status) qs.set('status', params.status);
-    if (params.dateFrom) qs.set('dateFrom', params.dateFrom);
-    if (params.dateTo) qs.set('dateTo', params.dateTo);
-    if (params.search) qs.set('search', params.search);
-    const token = (typeof window !== 'undefined' && sessionStorage.getItem('adminAccessToken')) || '';
+    for (const [key, value] of Object.entries(params)) {
+      if (value) qs.set(key, value);
+    }
+    const token =
+      (typeof window !== 'undefined' && sessionStorage.getItem('adminAccessToken')) || '';
     const res = await fetch(
       `${API_BASE}/api/v1/admin/returns/export${qs.toString() ? `?${qs}` : ''}`,
-      {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      },
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
     );
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(text || `Export failed (${res.status})`);
     }
-    return res.blob();
+    const totalHeader = res.headers.get('X-Export-Total');
+    return {
+      blob: await res.blob(),
+      total: totalHeader != null ? Number(totalHeader) : null,
+      truncated: res.headers.get('X-Export-Truncated') === 'true',
+      filename:
+        parseContentDispositionFilename(res.headers.get('Content-Disposition')) ||
+        'returns-export.csv',
+    };
   },
 
   // ── Customer return history ────────────────────────────────────

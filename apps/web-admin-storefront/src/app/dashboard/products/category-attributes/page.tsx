@@ -31,6 +31,9 @@ interface MetafieldDef {
   categoryId: string | null; pinned: boolean; sortOrder: number; isRequired: boolean;
   isActive: boolean; source?: string; inherited?: boolean;
   category?: { id: string; name: string } | null;
+  // Phase 40 (2026-05-21) — filterable flag surfaced from the new
+  // MetafieldDefinition column. Admin toggles via the table cell.
+  isFilterable?: boolean;
 }
 
 export default function CategoryAttributesPage() {
@@ -178,6 +181,24 @@ const [categories, setCategories] = useState<Category[]>([]);
     } catch {}
   };
 
+  /**
+   * Phase 40 (2026-05-21) — toggle the filterable flag on a definition.
+   * Optimistically updates the row then refetches. Failures revert.
+   */
+  const handleToggleFilterable = async (def: MetafieldDef) => {
+    const next = !def.isFilterable;
+    setDefinitions((prev) => prev.map((d) => (d.id === def.id ? { ...d, isFilterable: next } : d)));
+    try {
+      await adminMetafieldsService.markDefinitionFilterable(def.id, { isFilterable: next });
+      setSuccessMsg(next ? `"${def.name}" is now a storefront filter` : `"${def.name}" removed from filters`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (err: any) {
+      // Revert
+      setDefinitions((prev) => prev.map((d) => (d.id === def.id ? { ...d, isFilterable: def.isFilterable } : d)));
+      notify(err.message || 'Failed to update filterable flag');
+    }
+  };
+
   const isSelect = form.type === 'SINGLE_SELECT' || form.type === 'MULTI_SELECT';
   const selectedCategory = categories.find((c) => c.id === selectedCategoryId);
 
@@ -258,6 +279,8 @@ const [categories, setCategories] = useState<Category[]>([]);
                       <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#6b7280' }}>Key</th>
                       <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#6b7280' }}>Type</th>
                       <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#6b7280' }}>Required</th>
+                      {/* Phase 40 (2026-05-21) — Filterable column. */}
+                      <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#6b7280' }}>Filterable</th>
                       <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#6b7280' }}>Source</th>
                       <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#6b7280' }}>Actions</th>
                     </tr>
@@ -274,6 +297,29 @@ const [categories, setCategories] = useState<Category[]>([]);
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                           {def.isRequired ? <span style={{ color: '#dc2626', fontWeight: 600 }}>Yes</span> : <span style={{ color: '#9ca3af' }}>No</span>}
+                        </td>
+                        {/* Phase 40 — Filterable cell. Toggleable for "own"
+                            definitions only; inherited rows show the flag
+                            in read-only form (toggle on the owning category). */}
+                        <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                          {def.inherited ? (
+                            <span style={{ color: def.isFilterable ? '#16a34a' : '#9ca3af', fontWeight: 600 }}>
+                              {def.isFilterable ? 'Yes' : 'No'}
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleToggleFilterable(def)}
+                              style={{
+                                padding: '3px 10px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                                fontSize: 11, fontWeight: 600,
+                                background: def.isFilterable ? '#dcfce7' : '#f3f4f6',
+                                color: def.isFilterable ? '#16a34a' : '#9ca3af',
+                              }}
+                              title={def.isFilterable ? 'Click to hide from storefront sidebar' : 'Click to expose on storefront sidebar'}
+                            >
+                              {def.isFilterable ? 'ON' : 'OFF'}
+                            </button>
+                          )}
                         </td>
                         <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                           <span style={{

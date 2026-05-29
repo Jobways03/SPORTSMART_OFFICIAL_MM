@@ -16,10 +16,14 @@ import { UnauthorizedAppException } from '../../../../core/exceptions';
  *   3. resendOtp(email)             → invalidates the active OTP and emails a fresh one
  *   4. resetPassword(resetToken, …) → swaps the password hash atomically
  *
- * Affiliates use a single-JWT (no sessions table), so we don't revoke sessions
- * on reset — the existing tokens age out naturally on their 24 h TTL. The brute-
- * force lock counters (failedLoginAttempts / lockUntil) ARE cleared so the
- * affiliate isn't locked out after a successful reset.
+ * Phase 26 (2026-05-20) — sessions are revoked on reset. The original
+ * comment claimed "single JWT no sessions" but the AffiliateSession
+ * table was introduced (Phase 6, see affiliate.prisma:149) and is now
+ * populated by login. A stolen affiliate token must die immediately
+ * on password reset; pre-Phase-26 it survived up to the refresh TTL.
+ * The brute-force lock counters (failedLoginAttempts / lockUntil) are
+ * also cleared so the affiliate isn't locked out after a successful
+ * reset.
  */
 @Injectable()
 export class AffiliatePasswordResetService {
@@ -103,18 +107,32 @@ export class AffiliatePasswordResetService {
     });
     if (!record) throw new UnauthorizedAppException('Invalid or expired OTP');
 
-    if (record.attempts >= record.maxAttempts) {
+    // Phase 26 (2026-05-20) — atomic CAS attempt increment. The
+    // updateMany WHERE clause expresses "still active AND below cap"
+    // so two parallel verify requests cannot both pass the
+    // eligibility check. Mirrors the other 4 actors' verify flows.
+    const casRes = await this.prisma.affiliatePasswordResetOtp.updateMany({
+      where: {
+        id: record.id,
+        attempts: { lt: record.maxAttempts },
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (casRes.count !== 1) {
       await this.prisma.affiliatePasswordResetOtp.update({
         where: { id: record.id },
         data: { expiresAt: new Date() },
       });
       throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
     }
-
-    await this.prisma.affiliatePasswordResetOtp.update({
+    const after = await this.prisma.affiliatePasswordResetOtp.findUnique({
       where: { id: record.id },
-      data: { attempts: { increment: 1 } },
+      select: { attempts: true },
     });
+    const newAttempts = after?.attempts ?? record.attempts + 1;
 
     // Constant-time compare (don't leak match-length info via early return).
     const submitted = Buffer.from(createHash('sha256').update(otp).digest('hex'), 'utf8');
@@ -122,7 +140,7 @@ export class AffiliatePasswordResetService {
     const isMatch = submitted.length === expected.length && timingSafeEqual(submitted, expected);
 
     if (!isMatch) {
-      const remaining = record.maxAttempts - (record.attempts + 1);
+      const remaining = record.maxAttempts - newAttempts;
       if (remaining <= 0) {
         await this.prisma.affiliatePasswordResetOtp.update({
           where: { id: record.id },
@@ -184,6 +202,15 @@ export class AffiliatePasswordResetService {
         },
         data: { expiresAt: new Date() },
       }),
+      // Phase 26 (2026-05-20) — revoke all active affiliate sessions
+      // on reset. Mirrors customer / seller / franchise / admin resets.
+      // Without this, a stolen affiliate token survives the password
+      // change until its natural expiry — defeating the point of the
+      // recovery action.
+      this.prisma.affiliateSession.updateMany({
+        where: { affiliateId: record.affiliateId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
     ]);
 
     this.logger.log(`Affiliate password reset completed for: ${record.affiliateId}`);
@@ -216,7 +243,35 @@ export class AffiliatePasswordResetService {
     return !!recent;
   }
 
+  /**
+   * Phase 22 (2026-05-20) — send-then-store. Pre-Phase-22 created the
+   * OTP row first then attempted the SMTP send; if the send failed
+   * the affiliate would never see the code but the 60-second cooldown
+   * would block any retry. We now send first; on success we persist;
+   * on failure the row never exists so the affiliate can retry
+   * immediately. The plaintext OTP lives only in the in-memory
+   * `otp` variable for the duration of this call.
+   */
   private async persistAndEmail(affiliateId: string, email: string, otp: string): Promise<void> {
+    let sent = false;
+    try {
+      sent = await this.emailOtp.sendOtp(email, otp);
+    } catch (err) {
+      this.logger.error(
+        `Email OTP transport threw for affiliate ${affiliateId}: ${(err as Error)?.message ?? err}`,
+      );
+      sent = false;
+    }
+    if (!sent) {
+      // No row is created — the affiliate can immediately retry. We
+      // log loud, but the public API stays uniform (no enumeration:
+      // the surface is still "if the email exists, an OTP has been
+      // sent").
+      this.logger.warn(
+        `Email OTP send failed for affiliate ${affiliateId}; no OTP row persisted.`,
+      );
+      return;
+    }
     const otpHash = createHash('sha256').update(otp).digest('hex');
     await this.prisma.affiliatePasswordResetOtp.create({
       data: {
@@ -228,7 +283,6 @@ export class AffiliatePasswordResetService {
         ),
       },
     });
-    await this.emailOtp.sendOtp(email, otp);
   }
 
   private simulateDelay(): Promise<void> {

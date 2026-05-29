@@ -1,4 +1,5 @@
 import { IsOptional, IsString, IsNumber, IsEnum, Min } from 'class-validator';
+import { VariantStatus } from '@prisma/client';
 
 export class UpdateVariantDto {
   @IsOptional()
@@ -67,9 +68,12 @@ export class UpdateVariantDto {
   @IsString()
   dimensionUnit?: string;
 
+  // Phase 41 (2026-05-21) — @IsEnum(VariantStatus) replaces @IsString.
+  // Pre-Phase-41 a bogus status flowed through to Prisma and surfaced
+  // as a 500. Now: 400 with the allowlist in the error body.
   @IsOptional()
-  @IsString()
-  status?: string;
+  @IsEnum(VariantStatus)
+  status?: VariantStatus;
 
   @IsOptional()
   @IsString()

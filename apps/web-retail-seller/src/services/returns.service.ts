@@ -79,21 +79,9 @@ export const sellerReturnsService = {
     });
   },
 
-  submitQc(
-    returnId: string,
-    decisions: Array<{
-      returnItemId: string;
-      qcOutcome: string;
-      qcQuantityApproved: number;
-      qcNotes?: string;
-    }>,
-    overallNotes?: string,
-  ) {
-    return apiClient(`/seller/returns/${returnId}/qc-decision`, {
-      method: 'PATCH',
-      body: JSON.stringify({ decisions, overallNotes }),
-    });
-  },
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #3 / QC audit
+  // Gap #1 closure. See web-d2c-seller for rationale. QC is admin-
+  // only; this method 404'd. Removed.
 
   uploadEvidence(returnId: string, file: File, description?: string) {
     const formData = new FormData();

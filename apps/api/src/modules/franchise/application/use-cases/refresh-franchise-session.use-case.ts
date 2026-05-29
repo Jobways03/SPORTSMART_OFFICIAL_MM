@@ -94,6 +94,18 @@ export class RefreshFranchiseSessionUseCase {
         'Account has been suspended or deactivated. Please contact support.',
       );
     }
+    // Phase 20 (2026-05-20) — mirror the login isEmailVerified gate.
+    // If an admin or downstream process flipped the franchise back to
+    // unverified mid-session, the refresh must reject (and revoke every
+    // session) so the franchise re-enters the verify flow before they
+    // can keep using their access token.
+    if (!franchise.isEmailVerified) {
+      await this.franchiseRepo.revokeAllSessions(session.franchisePartnerId);
+      throw new ForbiddenAppException(
+        'Your email is no longer verified. Please verify your email again to continue.',
+        'EMAIL_NOT_VERIFIED',
+      );
+    }
 
     // Rotate the refresh token — narrows the exposure window for a stolen
     // token to a single use. The DB hashes the new token; we return raw.

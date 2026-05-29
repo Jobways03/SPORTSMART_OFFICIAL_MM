@@ -1,4 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   ProcurementRepository,
   PROCUREMENT_REPOSITORY,
@@ -42,6 +43,37 @@ export class ProcurementService {
     this.logger.setContext('ProcurementService');
   }
 
+  /**
+   * Phase 159p (audit #12) — append one row to the procurement transition
+   * history. Pass `tx` to keep the history atomic with the transition that
+   * produced it (approve / dispatch / receive run in a transaction).
+   */
+  private async recordProcurementEvent(
+    args: {
+      procurementRequestId: string;
+      action: string;
+      fromStatus?: string | null;
+      toStatus: string;
+      actorId?: string | null;
+      actorType: 'ADMIN' | 'FRANCHISE' | 'SYSTEM';
+      reason?: string | null;
+    },
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.prisma;
+    await client.procurementRequestEvent.create({
+      data: {
+        procurementRequestId: args.procurementRequestId,
+        action: args.action,
+        fromStatus: args.fromStatus ?? null,
+        toStatus: args.toStatus,
+        actorId: args.actorId ?? null,
+        actorType: args.actorType,
+        reason: args.reason ?? null,
+      },
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // Franchise-facing methods
   // ═══════════════════════════════════════════════════════════════
@@ -75,6 +107,11 @@ export class ProcurementService {
       );
     }
 
+    // Phase 159l (audit #12) — the fee rate is SNAPSHOT onto the request here
+    // at creation time and persisted on the request header (see below). This
+    // is deliberate: a later change to the franchise's fee rate must NOT
+    // retroactively re-price an in-flight request. Approval/settlement read
+    // `request.procurementFeeRate`, never the live franchise rate.
     const procurementFeeRate = Number(franchise.procurementFeeRate ?? 5);
 
     // Validate all items have catalog mappings and resolve product info
@@ -88,7 +125,9 @@ export class ProcurementService {
     }> = [];
 
     for (const item of items) {
-      const mapping = await this.catalogRepo.findByFranchiseAndProduct(
+      // Phase 159n (audit #2) — require an APPROVED + active mapping so a
+      // franchise can't raise procurement for a SKU the admin hasn't vetted.
+      const mapping = await this.catalogRepo.findApprovedActiveByFranchiseAndProduct(
         franchiseId,
         item.productId,
         item.variantId ?? null,
@@ -96,7 +135,7 @@ export class ProcurementService {
 
       if (!mapping) {
         throw new BadRequestAppException(
-          `Product ${item.productId}${item.variantId ? ` / variant ${item.variantId}` : ''} is not in your catalog mappings`,
+          `Product ${item.productId}${item.variantId ? ` / variant ${item.variantId}` : ''} is not an approved, active mapping in your catalog`,
         );
       }
 
@@ -187,13 +226,30 @@ export class ProcurementService {
       requestedAt.getTime() + slaHours * 60 * 60 * 1000,
     );
 
-    const updated = await this.procurementRepo.update(requestId, {
-      status: 'SUBMITTED',
-      requestedAt,
-      slaApproveBy,
-      // Clear any stale breach flag from a previous SUBMITTED→DRAFT
-      // round-trip so the cron starts fresh.
-      slaBreachedAt: null,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await this.procurementRepo.update(
+        requestId,
+        {
+          status: 'SUBMITTED',
+          requestedAt,
+          slaApproveBy,
+          // Clear any stale breach flag so the SLA cron starts fresh.
+          slaBreachedAt: null,
+        },
+        tx,
+      );
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: requestId,
+          action: 'SUBMITTED',
+          fromStatus: 'DRAFT',
+          toStatus: 'SUBMITTED',
+          actorId: franchiseId,
+          actorType: 'FRANCHISE',
+        },
+        tx,
+      );
+      return u;
     });
 
     await this.eventBus.publish({
@@ -250,11 +306,31 @@ export class ProcurementService {
       );
     }
 
-    const updated = await this.procurementRepo.update(requestId, {
-      status: 'CANCELLED',
-      notes: reason
-        ? `Cancelled by franchise: ${reason}`
-        : 'Cancelled by franchise',
+    const fromStatus = request.status;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await this.procurementRepo.update(
+        requestId,
+        {
+          status: 'CANCELLED',
+          notes: reason
+            ? `Cancelled by franchise: ${reason}`
+            : 'Cancelled by franchise',
+        },
+        tx,
+      );
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: requestId,
+          action: 'CANCELLED',
+          fromStatus,
+          toStatus: 'CANCELLED',
+          actorId: franchiseId,
+          actorType: 'FRANCHISE',
+          reason: reason ?? null,
+        },
+        tx,
+      );
+      return u;
     });
 
     this.logger.log(
@@ -292,6 +368,7 @@ export class ProcurementService {
       receivedQty: number;
       damagedQty?: number;
     }>,
+    actorId?: string,
   ) {
     const request = await this.procurementRepo.findByIdWithItems(requestId);
     if (!request) {
@@ -302,9 +379,11 @@ export class ProcurementService {
         'You do not have access to this procurement request',
       );
     }
-    // Allow second-pass top-ups from PARTIALLY_RECEIVED so a franchise can
-    // mark the remaining units as received when the rest of the shipment
-    // arrives later.
+    // Phase 55 (2026-05-21) — allow second-pass top-ups from
+    // PARTIALLY_RECEIVED but now process only the DELTA between the
+    // already-recorded receivedQty/damagedQty and the new submission
+    // so a retried POST / network blip / accidental double-click
+    // does NOT add stock twice (audit Gap #1).
     if (
       request.status !== 'DISPATCHED' &&
       request.status !== 'PARTIALLY_RECEIVED'
@@ -314,89 +393,205 @@ export class ProcurementService {
       );
     }
 
-    // Process each item — only DISPATCHED (approved+dispatched) items can be received
-    for (const receiptItem of items) {
-      const existingItem = await this.procurementRepo.findItemById(
-        receiptItem.itemId,
+    const effectiveActorId = actorId ?? franchiseId;
+    type StockSnapshot = {
+      productId: string;
+      variantId: string | null;
+      ledgerEntryIds: string[];
+      goodDelta: number;
+      damagedDelta: number;
+      onHandQty: number;
+      availableQty: number;
+      damagedQty: number;
+    };
+    const affected: StockSnapshot[] = [];
+
+    // Phase 55 — single outer transaction wraps per-item processing
+    // + final status + finance totals so a mid-loop crash rolls back
+    // the whole batch (audit Gaps #4 + #5).
+    const updated = await this.prisma.$transaction(async (tx) => {
+      for (const receiptItem of items) {
+        const existingItem = await this.procurementRepo.findItemById(
+          receiptItem.itemId,
+          tx,
+        );
+        if (!existingItem) {
+          throw new NotFoundAppException(
+            `Procurement item ${receiptItem.itemId} not found`,
+          );
+        }
+        if (existingItem.procurementRequestId !== requestId) {
+          throw new BadRequestAppException(
+            `Item ${receiptItem.itemId} does not belong to this procurement request`,
+          );
+        }
+
+        // Skip items that were rejected — they were never dispatched.
+        if (existingItem.status === 'REJECTED') {
+          this.logger.warn(
+            `Skipping receipt for rejected item ${receiptItem.itemId} in request ${request.requestNumber}`,
+          );
+          continue;
+        }
+
+        // Phase 55 — over-receipt guard (audit Gap #11). Supplier
+        // mis-counts that ship extra units shouldn't silently inflate
+        // franchise stock; force the franchise + admin to reconcile.
+        if (receiptItem.receivedQty > existingItem.dispatchedQty) {
+          throw new BadRequestAppException(
+            `Item ${receiptItem.itemId}: receivedQty (${receiptItem.receivedQty}) exceeds dispatchedQty (${existingItem.dispatchedQty}). Resolve over-receipt with admin before recording.`,
+          );
+        }
+
+        const newReceivedQty = receiptItem.receivedQty;
+        const newDamagedQty = receiptItem.damagedQty ?? 0;
+        const oldReceivedQty = existingItem.receivedQty ?? 0;
+        const oldDamagedQty = existingItem.damagedQty ?? 0;
+
+        // Phase 55 — delta math is the heart of the idempotency fix.
+        // goodQty = receivedQty - damagedQty; we only add the
+        // INCREASE in goodQty since the last submission.
+        const newGoodQty = newReceivedQty - newDamagedQty;
+        const oldGoodQty = oldReceivedQty - oldDamagedQty;
+        const goodDelta = newGoodQty - oldGoodQty;
+        const damagedDelta = newDamagedQty - oldDamagedQty;
+
+        // A negative delta would imply the franchise is decrementing
+        // an already-committed receipt — refuse it. Admins reverse
+        // bad receipts via the adjustment flow, not via this endpoint.
+        if (newReceivedQty < oldReceivedQty) {
+          throw new BadRequestAppException(
+            `Item ${receiptItem.itemId}: receivedQty (${newReceivedQty}) is less than previously-confirmed receivedQty (${oldReceivedQty}). Use the inventory adjustment flow to reverse.`,
+          );
+        }
+        if (newDamagedQty < oldDamagedQty) {
+          throw new BadRequestAppException(
+            `Item ${receiptItem.itemId}: damagedQty (${newDamagedQty}) is less than previously-confirmed damagedQty (${oldDamagedQty}).`,
+          );
+        }
+
+        // Compute item status from the NEW absolute values.
+        let itemStatus = 'RECEIVED';
+        if (newReceivedQty === 0) {
+          itemStatus = 'SHORT';
+        } else if (newDamagedQty > 0 && newDamagedQty >= newReceivedQty) {
+          itemStatus = 'DAMAGED';
+        } else if (newReceivedQty < existingItem.dispatchedQty) {
+          itemStatus = 'SHORT';
+        }
+
+        await this.procurementRepo.updateItem(
+          receiptItem.itemId,
+          {
+            receivedQty: newReceivedQty,
+            damagedQty: newDamagedQty,
+            status: itemStatus,
+          },
+          tx,
+        );
+
+        const ledgerEntryIds: string[] = [];
+        let lastStock: any = null;
+
+        // Phase 55 — add the goodDelta (not the absolute goodQty) so
+        // a retried POST adds zero. Only fires when there's a real
+        // increment.
+        if (goodDelta > 0) {
+          const result = await this.inventoryService.addProcurementStock(
+            franchiseId,
+            existingItem.productId,
+            existingItem.variantId ?? null,
+            existingItem.globalSku,
+            goodDelta,
+            requestId,
+            effectiveActorId,
+            undefined,
+            'FRANCHISE_USER',
+            tx,
+          );
+          ledgerEntryIds.push(result.ledgerEntry.id);
+          lastStock = result.stock;
+        }
+
+        // Phase 55 — damaged units go into FranchiseStock.damagedQty
+        // with a DAMAGE ledger row (audit Gap #3). Pre-Phase-55 these
+        // units silently vanished from the trail.
+        if (damagedDelta > 0) {
+          const result = await this.inventoryService.addDamagedFromProcurement(
+            franchiseId,
+            existingItem.productId,
+            existingItem.variantId ?? null,
+            existingItem.globalSku,
+            damagedDelta,
+            requestId,
+            effectiveActorId,
+            tx,
+          );
+          ledgerEntryIds.push(result.ledgerEntry.id);
+          lastStock = result.stock;
+        }
+
+        if (ledgerEntryIds.length > 0 && lastStock) {
+          affected.push({
+            productId: existingItem.productId,
+            variantId: existingItem.variantId ?? null,
+            ledgerEntryIds,
+            goodDelta,
+            damagedDelta,
+            onHandQty: lastStock.onHandQty,
+            availableQty: lastStock.availableQty,
+            damagedQty: lastStock.damagedQty,
+          });
+        }
+      }
+
+      // Calculate totals inside the same transaction.
+      const totals = await this.procurementRepo.calculateTotals(requestId, tx);
+
+      // Decide final request status by inspecting every non-REJECTED
+      // item. The re-fetch lives inside the tx so it sees our writes.
+      const refreshed = await this.procurementRepo.findByIdWithItems(
+        requestId,
+        tx,
       );
-      if (!existingItem) {
-        throw new NotFoundAppException(
-          `Procurement item ${receiptItem.itemId} not found`,
-        );
-      }
-      if (existingItem.procurementRequestId !== requestId) {
-        throw new BadRequestAppException(
-          `Item ${receiptItem.itemId} does not belong to this procurement request`,
-        );
-      }
+      const actionableItems = (refreshed?.items ?? []).filter(
+        (i: any) => i.status !== 'REJECTED',
+      );
+      const anyShort = actionableItems.some(
+        (i: any) => i.status === 'SHORT' || i.status === 'PENDING',
+      );
+      const finalStatus = anyShort ? 'PARTIALLY_RECEIVED' : 'RECEIVED';
 
-      // Skip items that were rejected — they were never dispatched
-      if (existingItem.status === 'REJECTED') {
-        this.logger.warn(
-          `Skipping receipt for rejected item ${receiptItem.itemId} in request ${request.requestNumber}`,
-        );
-        continue;
-      }
-
-      const damagedQty = receiptItem.damagedQty ?? 0;
-
-      // Determine item status based on received vs dispatched
-      let itemStatus = 'RECEIVED';
-      if (receiptItem.receivedQty === 0) {
-        itemStatus = 'SHORT';
-      } else if (damagedQty > 0 && damagedQty >= receiptItem.receivedQty) {
-        itemStatus = 'DAMAGED';
-      } else if (receiptItem.receivedQty < existingItem.dispatchedQty) {
-        itemStatus = 'SHORT';
-      }
-
-      // Update the item
-      await this.procurementRepo.updateItem(receiptItem.itemId, {
-        receivedQty: receiptItem.receivedQty,
-        damagedQty,
-        status: itemStatus,
-      });
-
-      // Add received stock to inventory (only good units)
-      const goodQty = receiptItem.receivedQty - damagedQty;
-      if (goodQty > 0) {
-        await this.inventoryService.addProcurementStock(
-          franchiseId,
-          existingItem.productId,
-          existingItem.variantId ?? null,
-          existingItem.globalSku,
-          goodQty,
-          requestId,
-        );
-      }
-    }
-
-    // Calculate totals
-    const totals = await this.procurementRepo.calculateTotals(requestId);
-
-    // Decide final request status by inspecting every non-REJECTED item.
-    //   • all terminal (RECEIVED/DAMAGED) → RECEIVED
-    //   • any still PENDING/SHORT        → PARTIALLY_RECEIVED (awaiting top-up)
-    const refreshed = await this.procurementRepo.findByIdWithItems(requestId);
-    const actionableItems = (refreshed?.items ?? []).filter(
-      (i: any) => i.status !== 'REJECTED',
-    );
-    const anyShort = actionableItems.some(
-      (i: any) => i.status === 'SHORT' || i.status === 'PENDING',
-    );
-    const finalStatus = anyShort ? 'PARTIALLY_RECEIVED' : 'RECEIVED';
-
-    // Update request status and totals. Only stamp receivedAt when the
-    // request is fully received — a partial top-up leaves it unset so the
-    // final receipt date reflects completion.
-    const updated = await this.procurementRepo.update(requestId, {
-      status: finalStatus,
-      ...(finalStatus === 'RECEIVED' ? { receivedAt: new Date() } : {}),
-      totalApprovedAmount: totals.totalApprovedAmount,
-      procurementFeeAmount: totals.procurementFeeAmount,
-      finalPayableAmount: totals.finalPayableAmount,
+      const u = await this.procurementRepo.update(
+        requestId,
+        {
+          status: finalStatus,
+          ...(finalStatus === 'RECEIVED' ? { receivedAt: new Date() } : {}),
+          totalApprovedAmount: totals.totalApprovedAmount,
+          procurementFeeAmount: totals.procurementFeeAmount,
+          finalPayableAmount: totals.finalPayableAmount,
+        },
+        tx,
+      );
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: requestId,
+          action: finalStatus,
+          fromStatus: request.status,
+          toStatus: finalStatus,
+          actorId: effectiveActorId,
+          actorType: 'FRANCHISE',
+        },
+        tx,
+      );
+      return u;
     });
 
+    // Phase 55 — rich event payload (audit Gaps #12 + #15). Includes
+    // per-item ledgerEntryIds + post-write stock snapshots so
+    // subscribers (admin UI, low-stock recompute, finance) can act
+    // without re-querying.
+    const finalStatus = updated.status;
     await this.eventBus.publish({
       eventName:
         finalStatus === 'RECEIVED'
@@ -409,12 +604,38 @@ export class ProcurementService {
         requestId,
         franchiseId,
         requestNumber: request.requestNumber,
-        finalPayableAmount: totals.finalPayableAmount,
+        finalPayableAmount: updated.finalPayableAmount,
+        actorId: effectiveActorId,
+        items: affected,
       },
     });
 
+    // Phase 55 — emit a per-stock change event so a low-stock alert
+    // subscriber can recompute immediately (audit Gap #8). Failure
+    // is non-fatal; cron sweep is the backstop.
+    for (const a of affected) {
+      this.eventBus
+        .publish({
+          eventName: 'inventory.franchise_stock.changed',
+          aggregate: 'FranchiseStock',
+          aggregateId: `${franchiseId}:${a.productId}:${a.variantId ?? 'null'}`,
+          occurredAt: new Date(),
+          payload: {
+            franchiseId,
+            productId: a.productId,
+            variantId: a.variantId,
+            onHandQty: a.onHandQty,
+            availableQty: a.availableQty,
+            damagedQty: a.damagedQty,
+            goodDelta: a.goodDelta,
+            damagedDelta: a.damagedDelta,
+          },
+        })
+        .catch(() => {});
+    }
+
     this.logger.log(
-      `Procurement request ${request.requestNumber} ${finalStatus === 'RECEIVED' ? 'fully received' : 'partially received'} by franchise`,
+      `Procurement request ${request.requestNumber} ${finalStatus === 'RECEIVED' ? 'fully received' : 'partially received'} by franchise (actor=${effectiveActorId})`,
     );
 
     return updated;
@@ -466,83 +687,124 @@ export class ProcurementService {
       );
     }
 
-    const feeRate = Number(request.procurementFeeRate);
+    const feeRate = new Prisma.Decimal(request.procurementFeeRate);
 
-    // Process each item individually
-    const processedItems: Array<{ itemId: string; status: string }> = [];
+    // Phase 159p (audit #9) — the per-item loop, status decision, totals
+    // recompute, and request update now run in ONE transaction (tx threaded to
+    // every repo call) so a mid-loop failure rolls the whole approval back
+    // instead of leaving some items APPROVED, some PENDING, and a stale status.
+    const { updated, requestStatus, totals } = await this.prisma.$transaction(
+      async (tx) => {
+        const processedItems: Array<{ itemId: string; status: string }> = [];
 
-    for (const approveItem of items) {
-      const existingItem = await this.procurementRepo.findItemById(
-        approveItem.itemId,
-      );
-      if (!existingItem) {
-        throw new NotFoundAppException(
-          `Procurement item ${approveItem.itemId} not found`,
+        for (const approveItem of items) {
+          const existingItem = await this.procurementRepo.findItemById(
+            approveItem.itemId,
+            tx,
+          );
+          if (!existingItem) {
+            throw new NotFoundAppException(
+              `Procurement item ${approveItem.itemId} not found`,
+            );
+          }
+          if (existingItem.procurementRequestId !== requestId) {
+            throw new BadRequestAppException(
+              `Item ${approveItem.itemId} does not belong to this procurement request`,
+            );
+          }
+
+          // Phase 159p (audit #3) — never approve more than was requested. A
+          // fat-fingered (or privilege-escalated) admin could otherwise approve
+          // 9 999 units against a 10-unit request, scaling inventory + payable.
+          if (approveItem.approvedQty > existingItem.requestedQty) {
+            throw new BadRequestAppException(
+              `Item ${approveItem.itemId}: approvedQty (${approveItem.approvedQty}) exceeds requestedQty (${existingItem.requestedQty}).`,
+            );
+          }
+
+          const itemStatus =
+            approveItem.approvedQty > 0 ? 'APPROVED' : 'REJECTED';
+
+          if (approveItem.approvedQty > 0) {
+            // Phase 159p (audit #13) — Decimal money math (was JS float that
+            // drifted by paisa on edge values before hitting the Decimal column).
+            const landed = new Prisma.Decimal(approveItem.landedUnitCost);
+            const procurementFeePerUnit = landed.times(feeRate).dividedBy(100);
+            const finalUnitCostToFranchise = landed.plus(procurementFeePerUnit);
+
+            await this.procurementRepo.updateItem(
+              approveItem.itemId,
+              {
+                approvedQty: approveItem.approvedQty,
+                landedUnitCost: landed,
+                procurementFeePerUnit,
+                finalUnitCostToFranchise,
+                sourceSellerId: approveItem.sourceSellerId ?? null,
+                status: itemStatus,
+              },
+              tx,
+            );
+          } else {
+            // Rejected item — zero out costs
+            await this.procurementRepo.updateItem(
+              approveItem.itemId,
+              {
+                approvedQty: 0,
+                landedUnitCost: 0,
+                procurementFeePerUnit: 0,
+                finalUnitCostToFranchise: 0,
+                sourceSellerId: approveItem.sourceSellerId ?? null,
+                status: itemStatus,
+              },
+              tx,
+            );
+          }
+
+          processedItems.push({ itemId: approveItem.itemId, status: itemStatus });
+        }
+
+        const approvedItems = processedItems.filter((i) => i.status === 'APPROVED');
+        const rejectedItems = processedItems.filter((i) => i.status === 'REJECTED');
+
+        let requestStatus: string;
+        if (approvedItems.length === 0) {
+          requestStatus = 'REJECTED';
+        } else if (rejectedItems.length > 0) {
+          requestStatus = 'PARTIALLY_APPROVED';
+        } else {
+          requestStatus = 'APPROVED';
+        }
+
+        const totals = await this.procurementRepo.calculateTotals(requestId, tx);
+
+        const updated = await this.procurementRepo.update(
+          requestId,
+          {
+            status: requestStatus,
+            approvedAt: new Date(),
+            approvedBy: adminId,
+            totalApprovedAmount: totals.totalApprovedAmount,
+            procurementFeeAmount: totals.procurementFeeAmount,
+            finalPayableAmount: totals.finalPayableAmount,
+          },
+          tx,
         );
-      }
-      if (existingItem.procurementRequestId !== requestId) {
-        throw new BadRequestAppException(
-          `Item ${approveItem.itemId} does not belong to this procurement request`,
+
+        await this.recordProcurementEvent(
+          {
+            procurementRequestId: requestId,
+            action: requestStatus,
+            fromStatus: 'SUBMITTED',
+            toStatus: requestStatus,
+            actorId: adminId,
+            actorType: 'ADMIN',
+          },
+          tx,
         );
-      }
 
-      const itemStatus =
-        approveItem.approvedQty > 0 ? 'APPROVED' : 'REJECTED';
-
-      if (approveItem.approvedQty > 0) {
-        const procurementFeePerUnit =
-          approveItem.landedUnitCost * (feeRate / 100);
-        const finalUnitCostToFranchise =
-          approveItem.landedUnitCost + procurementFeePerUnit;
-
-        await this.procurementRepo.updateItem(approveItem.itemId, {
-          approvedQty: approveItem.approvedQty,
-          landedUnitCost: approveItem.landedUnitCost,
-          procurementFeePerUnit,
-          finalUnitCostToFranchise,
-          sourceSellerId: approveItem.sourceSellerId ?? null,
-          status: itemStatus,
-        });
-      } else {
-        // Rejected item — zero out costs
-        await this.procurementRepo.updateItem(approveItem.itemId, {
-          approvedQty: 0,
-          landedUnitCost: 0,
-          procurementFeePerUnit: 0,
-          finalUnitCostToFranchise: 0,
-          sourceSellerId: approveItem.sourceSellerId ?? null,
-          status: itemStatus,
-        });
-      }
-
-      processedItems.push({ itemId: approveItem.itemId, status: itemStatus });
-    }
-
-    // Determine request-level status based on per-item decisions
-    const approvedItems = processedItems.filter(i => i.status === 'APPROVED');
-    const rejectedItems = processedItems.filter(i => i.status === 'REJECTED');
-
-    let requestStatus: string;
-    if (approvedItems.length === 0) {
-      requestStatus = 'REJECTED';
-    } else if (rejectedItems.length > 0) {
-      requestStatus = 'PARTIALLY_APPROVED';
-    } else {
-      requestStatus = 'APPROVED';
-    }
-
-    // Calculate request-level totals
-    const totals = await this.procurementRepo.calculateTotals(requestId);
-
-    // Update request status
-    const updated = await this.procurementRepo.update(requestId, {
-      status: requestStatus,
-      approvedAt: new Date(),
-      approvedBy: adminId,
-      totalApprovedAmount: totals.totalApprovedAmount,
-      procurementFeeAmount: totals.procurementFeeAmount,
-      finalPayableAmount: totals.finalPayableAmount,
-    });
+        return { updated, requestStatus, totals };
+      },
+    );
 
     // Persist the admin-entered landed cost for next-time auto-fill.
     //
@@ -590,12 +852,35 @@ export class ProcurementService {
         if (existingOverride) {
           await this.prisma.franchiseProcurementPrice.update({
             where: { id: existingOverride.id },
-            data: { landedUnitCost: approveItem.landedUnitCost },
+            data: {
+              landedUnitCost: approveItem.landedUnitCost,
+              updatedBy: adminId,
+              version: { increment: 1 },
+            },
+          });
+          // Append-only history of the override cost set via approval (#4).
+          await this.prisma.franchiseProcurementPriceHistory.create({
+            data: {
+              franchiseId: request.franchiseId,
+              productId: original.productId,
+              variantId: original.variantId ?? null,
+              action: 'APPROVAL_WRITEBACK',
+              oldLandedUnitCost: existingOverride.landedUnitCost,
+              newLandedUnitCost: approveItem.landedUnitCost,
+              changedByAdminId: adminId,
+            },
           });
         } else if (original.variantId) {
           // Target procurementPrice (NOT costPrice). costPrice is a
           // display-only field per product policy and is deliberately
           // decoupled from procurement logic.
+          //
+          // NOTE (audit #2/#10): this writes the PLATFORM-WIDE default, which
+          // the franchise-procurement-price-override spec pins as intended
+          // "Option A" shared-baseline behaviour (per-franchise secrets use an
+          // explicit override row instead). The audit reads it as a
+          // cross-franchise leak. That is a deliberate, tested design decision,
+          // so it is surfaced for a product call rather than silently flipped.
           await this.prisma.productVariant.update({
             where: { id: original.variantId },
             data: { procurementPrice: approveItem.landedUnitCost },
@@ -624,7 +909,7 @@ export class ProcurementService {
         requestNumber: request.requestNumber,
         adminId,
         requestStatus,
-        totalApprovedAmount: totals.totalApprovedAmount,
+        totalApprovedAmount: Number(totals.totalApprovedAmount),
       },
     });
 
@@ -654,9 +939,28 @@ export class ProcurementService {
       );
     }
 
-    const updated = await this.procurementRepo.update(requestId, {
-      status: 'REJECTED',
-      rejectionReason: reason ?? null,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await this.procurementRepo.update(
+        requestId,
+        {
+          status: 'REJECTED',
+          rejectionReason: reason ?? null,
+        },
+        tx,
+      );
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: requestId,
+          action: 'REJECTED',
+          fromStatus: 'SUBMITTED',
+          toStatus: 'REJECTED',
+          actorId: adminId,
+          actorType: 'ADMIN',
+          reason: reason ?? null,
+        },
+        tx,
+      );
+      return u;
     });
 
     await this.eventBus.publish({
@@ -693,6 +997,7 @@ export class ProcurementService {
       carrierName?: string | null;
       expectedDeliveryAt?: Date | null;
     },
+    dispatchItems?: Array<{ itemId: string; dispatchedQty: number }>,
   ) {
     const request = await this.procurementRepo.findByIdWithItems(requestId);
     if (!request) {
@@ -708,30 +1013,69 @@ export class ProcurementService {
       );
     }
 
-    // Only dispatch APPROVED items — skip REJECTED ones
-    for (const item of request.items) {
-      if (item.status === 'REJECTED') {
-        // Leave rejected items unchanged
-        continue;
-      }
-      if (
+    // Phase 159p (audit #10) — per-item dispatched quantities. An item listed
+    // in `dispatchItems` ships that quantity (capped at approvedQty); items not
+    // listed ship their full approvedQty (back-compatible all-or-nothing).
+    const dispatchMap = new Map<string, number>(
+      (dispatchItems ?? []).map((d) => [d.itemId, d.dispatchedQty]),
+    );
+    const dispatchableItems = request.items.filter(
+      (item: any) =>
         item.status === 'APPROVED' ||
         item.status === 'SOURCED' ||
-        item.status === 'PENDING'
-      ) {
-        await this.procurementRepo.updateItem(item.id, {
-          status: 'DISPATCHED',
-          dispatchedQty: item.approvedQty,
-        });
+        item.status === 'PENDING',
+    );
+    // Validate the requested quantities up front so we never half-dispatch.
+    for (const [itemId, qty] of dispatchMap.entries()) {
+      const item = dispatchableItems.find((i: any) => i.id === itemId);
+      if (!item) {
+        throw new BadRequestAppException(
+          `Dispatch item ${itemId} is not an approved, dispatchable item on this request`,
+        );
+      }
+      if (qty > item.approvedQty) {
+        throw new BadRequestAppException(
+          `Item ${itemId}: dispatchedQty (${qty}) exceeds approvedQty (${item.approvedQty})`,
+        );
       }
     }
 
-    const updated = await this.procurementRepo.update(requestId, {
-      status: 'DISPATCHED',
-      dispatchedAt: new Date(),
-      trackingNumber: shipment?.trackingNumber ?? null,
-      carrierName: shipment?.carrierName ?? null,
-      expectedDeliveryAt: shipment?.expectedDeliveryAt ?? null,
+    // Phase 159p (audit #9 sibling) — item updates + status flip in one tx.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      for (const item of dispatchableItems) {
+        await this.procurementRepo.updateItem(
+          item.id,
+          {
+            status: 'DISPATCHED',
+            dispatchedQty: dispatchMap.get(item.id) ?? item.approvedQty,
+          },
+          tx,
+        );
+      }
+
+      const u = await this.procurementRepo.update(
+        requestId,
+        {
+          status: 'DISPATCHED',
+          dispatchedAt: new Date(),
+          trackingNumber: shipment?.trackingNumber ?? null,
+          carrierName: shipment?.carrierName ?? null,
+          expectedDeliveryAt: shipment?.expectedDeliveryAt ?? null,
+        },
+        tx,
+      );
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: requestId,
+          action: 'DISPATCHED',
+          fromStatus: request.status,
+          toStatus: 'DISPATCHED',
+          actorId: adminId,
+          actorType: 'ADMIN',
+        },
+        tx,
+      );
+      return u;
     });
 
     await this.eventBus.publish({
@@ -771,9 +1115,27 @@ export class ProcurementService {
       );
     }
 
-    const updated = await this.procurementRepo.update(requestId, {
-      status: 'SETTLED',
-      settledAt: new Date(),
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await this.procurementRepo.update(
+        requestId,
+        {
+          status: 'SETTLED',
+          settledAt: new Date(),
+        },
+        tx,
+      );
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: requestId,
+          action: 'SETTLED',
+          fromStatus: 'RECEIVED',
+          toStatus: 'SETTLED',
+          actorId: adminId,
+          actorType: 'ADMIN',
+        },
+        tx,
+      );
+      return u;
     });
 
     await this.eventBus.publish({
@@ -790,9 +1152,24 @@ export class ProcurementService {
       },
     });
 
-    // Record procurement fee in finance ledger
+    // Record finance ledger rows. Phase 159p (audit #8) — post the PRINCIPAL
+    // cost as a franchise→HQ payable in addition to the platform fee, so the
+    // franchise's total HQ liability is answerable from the ledger.
     const totalLandedCost = Number(request.totalApprovedAmount ?? 0);
     const feeRate = Number(request.procurementFeeRate ?? 0);
+    if (totalLandedCost > 0) {
+      try {
+        await this.commissionService.recordProcurementCost({
+          franchiseId: request.franchiseId,
+          procurementRequestId: requestId,
+          principalAmount: totalLandedCost,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to record procurement principal cost for request ${request.requestNumber}: ${(err as Error).message}`,
+        );
+      }
+    }
     if (totalLandedCost > 0 && feeRate > 0) {
       try {
         await this.commissionService.recordProcurementFee({

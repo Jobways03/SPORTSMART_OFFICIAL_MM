@@ -3,36 +3,27 @@
 // Pincode database + Seller service areas
 // ============================================
 
-model PincodeDatabase {
-  id        String   @id @default(uuid())
-  pincode   String   @unique
-  city      String?
-  state     String?
-  country   String   @default("IN")
-  latitude  Decimal? @db.Decimal(10, 7)
-  longitude Decimal? @db.Decimal(10, 7)
-  zone      String? // NORTH, SOUTH, EAST, WEST, CENTRAL
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@index([city])
-  @@index([state])
-  @@index([zone])
-  @@map("pincode_database")
-}
+// Phase 77 (2026-05-22) — dropped PincodeDatabase model (audit
+// Flow #49 Gap #25). The allocator + serviceability code uses
+// PostOffice as the canonical pincode → coords lookup (cached
+// via PostOfficeCacheService with 24h TTL). PincodeDatabase had
+// no references in code; removing the model prevents a future
+// contributor from believing it's the source of truth.
+//
+// Migration drops the table. No data loss — PostOffice carries
+// the same lat/lon + state info.
 
 model SellerServiceArea {
-  id        String   @id @default(uuid())
-  sellerId  String   @map("seller_id")
-  pincode   String
-  isActive  Boolean  @default(true) @map("is_active")
+  id          String   @id @default(uuid())
+  sellerId    String   @map("seller_id")
+  pincode     String
+  isActive    Boolean  @default(true) @map("is_active")
   // Sprint 4 Story 3.1 — per-pincode COD eligibility. Independent of
   // isActive (a seller may deliver to a pincode but not accept COD
   // there). Default false so a newly-added pincode is delivery-only
   // until the seller opts in.
-  codEligible Boolean @default(false) @map("cod_eligible")
-  createdAt DateTime @default(now()) @map("created_at")
+  codEligible Boolean  @default(false) @map("cod_eligible")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
@@ -45,14 +36,45 @@ model SellerServiceArea {
 // ============================================
 // Stock Reservation — holds inventory during checkout
 // ============================================
+//
+// Phase 52 (2026-05-21) — status promoted to a Prisma enum so typos
+// (status='RESERVD') can't silently land. Attribution columns
+// (customerId/sessionId/cartId) added so a pre-order-creation
+// reservation can still be traced back to the customer. Telemetry
+// stamps (expiredAt/releasedAt/confirmedAt) added so the lifecycle
+// query for any single reservation is a single-row read instead of
+// a join across event-bus logs.
+
+enum StockReservationStatus {
+  RESERVED
+  CONFIRMED
+  RELEASED
+  EXPIRED
+}
 
 model StockReservation {
-  id        String   @id @default(uuid())
-  mappingId String   @map("mapping_id")
+  id        String                 @id @default(uuid())
+  mappingId String                 @map("mapping_id")
   quantity  Int
-  status    String   @default("RESERVED") // RESERVED, CONFIRMED, RELEASED, EXPIRED
+  status    StockReservationStatus @default(RESERVED)
+
+  // Phase 52 — attribution. customerId is set when the checkout that
+  // created this reservation belongs to an authenticated customer;
+  // sessionId is set for guest checkouts. cartId is set when the
+  // reservation is cart-driven (future Gap #1 cart-add policy).
+  customerId String? @map("customer_id")
+  sessionId  String? @map("session_id")
+  cartId     String? @map("cart_id")
+
   orderId   String?  @map("order_id")
   expiresAt DateTime @map("expires_at")
+
+  // Phase 52 — terminal-transition stamps. NULL until the
+  // corresponding flip happens.
+  expiredAt   DateTime? @map("expired_at")
+  releasedAt  DateTime? @map("released_at")
+  confirmedAt DateTime? @map("confirmed_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -61,6 +83,8 @@ model StockReservation {
   @@index([mappingId])
   @@index([status])
   @@index([expiresAt])
+  @@index([customerId])
+  @@index([orderId])
   @@map("stock_reservations")
 }
 
@@ -77,6 +101,10 @@ model AllocationLog {
   allocatedSellerId    String?  @map("allocated_seller_id")
   allocatedFranchiseId String?  @map("allocated_franchise_id")
   allocatedMappingId   String?  @map("allocated_mapping_id")
+  // Phase 159m — which FranchisePincodeMapping (territory) authorised this
+  // allocation, snapshot at decision time so it survives later map edits.
+  // Null = pincode had no mapping (distance-based discovery / seller node).
+  allocatedPincodeMappingId String? @map("allocated_pincode_mapping_id")
   allocationReason     String?  @map("allocation_reason")
   distanceKm           Decimal? @map("distance_km") @db.Decimal(10, 2)
   score                Decimal? @db.Decimal(10, 4)
@@ -84,9 +112,45 @@ model AllocationLog {
   orderId              String?  @map("order_id")
   createdAt            DateTime @default(now()) @map("created_at")
 
+  candidates AllocationCandidate[]
+
   @@index([productId])
   @@index([allocatedSellerId])
   @@index([allocatedFranchiseId])
   @@index([orderId])
   @@map("allocation_logs")
+}
+
+// Phase 77 (2026-05-22) — Phase 76 allocator audit Gap #7. Pre-Phase-77
+// AllocationLog persisted only the PRIMARY decision; the secondary
+// and tertiary candidates that lost the rank were dropped. A
+// later forensic question — "why was seller X chosen over Y?" —
+// couldn't be reconstructed because stockQty / reservedQty have
+// drifted by inspection time. This child table snapshots the
+// full ranked candidate list at allocation time.
+model AllocationCandidate {
+  id              String   @id @default(uuid())
+  allocationLogId String   @map("allocation_log_id")
+  // 1 = primary, 2 = secondary, 3 = tertiary, 4+ = fallback.
+  rank            Int
+  nodeType        String   @map("node_type") // SELLER | FRANCHISE
+  sellerId        String?  @map("seller_id")
+  franchiseId     String?  @map("franchise_id")
+  mappingId       String   @map("mapping_id")
+  distanceKm      Decimal? @map("distance_km") @db.Decimal(10, 2)
+  availableStock  Int      @map("available_stock")
+  dispatchSla     Int      @map("dispatch_sla")
+  score           Decimal  @db.Decimal(10, 4)
+  // Future: pre-scoring exclude reasons (DISTANCE_EXCEEDED,
+  // OUT_OF_STOCK, etc.). Today: false for every row written —
+  // only ranked candidates are persisted.
+  excluded        Boolean  @default(false)
+  excludeReason   String?  @map("exclude_reason")
+
+  allocationLog AllocationLog @relation(fields: [allocationLogId], references: [id], onDelete: Cascade)
+
+  @@index([allocationLogId])
+  @@index([sellerId])
+  @@index([franchiseId])
+  @@map("allocation_candidates")
 }

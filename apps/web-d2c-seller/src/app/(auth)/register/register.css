@@ -192,3 +192,91 @@
   color: var(--color-primary);
   font-weight: 500;
 }
+
+/* Phase 18 (2026-05-20) — Consent + OTP styles for register/verify */
+.consent-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.consent-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-text);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.consent-row input[type='checkbox'] {
+  margin-top: 3px;
+  min-height: auto;
+  width: auto;
+  padding: 0;
+  cursor: pointer;
+}
+
+.consent-row a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.otp-inputs {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+.otp-inputs input {
+  width: 44px;
+  height: 52px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 600;
+  padding: 0;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.otp-inputs input:focus {
+  border-color: var(--color-primary);
+  outline: none;
+}
+
+.resend-row {
+  text-align: center;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+}
+
+.resend-btn {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+}
+
+.resend-btn:disabled {
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}
+
+.alert-warning {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin-bottom: 12px;
+}

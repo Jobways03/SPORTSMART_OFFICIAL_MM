@@ -3,7 +3,10 @@ import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE_CUSTOMER,
+} from '../../../../core/auth/jwt-constants';
 import {
   UnauthorizedAppException,
   ForbiddenAppException,
@@ -88,6 +91,36 @@ export class RefreshSessionUseCase {
       throw new UnauthorizedAppException('Refresh token expired');
     }
 
+    // Phase 17 (2026-05-20) — absolute session lifetime cap.
+    //
+    // Refresh rotation extends `expiresAt = now + JWT_REFRESH_TTL` on
+    // every successful refresh, which makes a daily-active session
+    // effectively immortal. This guard enforces a hard ceiling
+    // measured from Session.createdAt: past the cap (default 60 days)
+    // the rotation is refused and the user must re-authenticate. The
+    // window stays generous so it's not a usability footgun, but it
+    // means a stolen refresh-token-rotation chain cannot live forever
+    // in the wild without a re-login event the legitimate owner
+    // would notice.
+    const sessionCreatedAt = (session as { createdAt?: Date }).createdAt;
+    if (sessionCreatedAt) {
+      const lifetimeCapDays = this.envService.getNumber(
+        'SESSION_ABSOLUTE_LIFETIME_DAYS',
+        60,
+      );
+      const cutoffMs =
+        sessionCreatedAt.getTime() + lifetimeCapDays * 24 * 60 * 60 * 1000;
+      if (Date.now() > cutoffMs) {
+        // Revoke so subsequent attempts short-circuit on the
+        // revoked-at branch rather than re-hitting the absolute-cap
+        // computation per call.
+        await this.sessionRepo.revoke(session.id);
+        throw new UnauthorizedAppException(
+          'Session has reached its maximum lifetime. Please sign in again.',
+        );
+      }
+    }
+
     // Look up the user with current roles (roles may have changed since login)
     const user = (await this.userRepo.findById(session.userId)) as any;
     if (!user) {
@@ -119,9 +152,14 @@ export class RefreshSessionUseCase {
       newExpiresAt,
     );
 
-    // Issue a new access token
-    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '7d');
+    // Phase 17 (2026-05-20) — access TTL default tightened from 7d to
+    // 15m (parity with login). A stolen access token is now valid for
+    // at most 15 minutes; refresh rotation refills it for live
+    // sessions. Same iss + aud claims as login so the customer guard
+    // accepts tokens from both paths.
+    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '15m');
     const accessTtlSeconds = this.parseTimeToSeconds(accessTtl);
+    const appUrl = this.envService.getOptional('APP_URL');
 
     const accessToken = jwt.sign(
       {
@@ -131,7 +169,12 @@ export class RefreshSessionUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_CUSTOMER_SECRET'),
-      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
+      {
+        expiresIn: accessTtlSeconds,
+        algorithm: JWT_ALGORITHM,
+        audience: JWT_AUDIENCE_CUSTOMER,
+        ...(appUrl ? { issuer: appUrl } : {}),
+      },
     );
 
     this.logger.log(`Session refreshed for user: ${user.id}`);
