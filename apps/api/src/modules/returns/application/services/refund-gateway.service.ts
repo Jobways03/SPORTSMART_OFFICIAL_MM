@@ -212,22 +212,49 @@ export class RefundGatewayService {
         })
         .catch(() => undefined);
 
+      // Phase 96 (2026-05-23) — Phase 98 audit Gap #1/#22 closure.
+      // Pre-Phase-96 the gateway treated any non-`processed` status as
+      // success (including the rare-but-real `failed`), silently
+      // reporting failed refunds as completed. We now branch:
+      //
+      //   processed → fully settled, completed: true (caller flips
+      //               Return → REFUNDED).
+      //   pending   → accepted by Razorpay, not yet settled. Caller
+      //               keeps Return in REFUND_PROCESSING and waits for
+      //               the webhook / status poller to confirm.
+      //   failed    → Razorpay rejected the refund call. Caller should
+      //               NOT flip Return forward; surface as
+      //               requiresManualProcessing for admin retry.
       if (refundResult.status === 'processed') {
         this.logger.log(
           `Refund processed via Razorpay: ${refundResult.providerRefundId} for return=${input.returnNumber}, amount=₹${input.amount}`,
         );
         return {
           success: true,
+          completed: true,
+          gatewayRefundId: refundResult.providerRefundId,
+        };
+      }
+      if (refundResult.status === 'failed') {
+        this.logger.warn(
+          `Razorpay reported refund FAILED at gateway: ${refundResult.providerRefundId} for return=${input.returnNumber}`,
+        );
+        return {
+          success: false,
+          requiresManualProcessing: true,
+          failureReason: `Razorpay reported refund failed at gateway (refund id ${refundResult.providerRefundId})`,
           gatewayRefundId: refundResult.providerRefundId,
         };
       }
 
-      // Refund initiated but not yet processed
+      // status === 'pending' — accepted, not yet processed. Caller
+      // keeps Return in REFUND_PROCESSING and waits for confirmation.
       this.logger.log(
-        `Refund initiated via Razorpay (pending): ${refundResult.providerRefundId}`,
+        `Refund accepted via Razorpay (pending): ${refundResult.providerRefundId}`,
       );
       return {
         success: true,
+        completed: false,
         gatewayRefundId: refundResult.providerRefundId,
       };
     } catch (error) {

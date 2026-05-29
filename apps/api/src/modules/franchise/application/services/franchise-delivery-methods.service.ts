@@ -28,20 +28,12 @@ export class FranchiseDeliveryMethodsService {
       where: { id: franchiseId },
       select: {
         id: true,
-        ithinkEnabled: true,
-        ithinkPickupAddressId: true,
-        ithinkWarehouseStatus: true,
         selfDeliveryEnabled: true,
         selfDeliveryPincodes: true,
       },
     });
     if (!franchise) throw new NotFoundException('Franchise not found');
     return {
-      ithinkEnabled:
-        franchise.ithinkEnabled && franchise.ithinkWarehouseStatus === 'APPROVED',
-      ithinkPending:
-        franchise.ithinkEnabled && franchise.ithinkWarehouseStatus === 'PENDING',
-      ithinkWarehouseStatus: franchise.ithinkWarehouseStatus,
       selfDeliveryEnabled: franchise.selfDeliveryEnabled,
       selfDeliveryPincodes: franchise.selfDeliveryPincodes,
     };
@@ -58,27 +50,19 @@ export class FranchiseDeliveryMethodsService {
         id: true,
         franchiseId: true,
         deliveryMethod: true,
-        ithinkAwb: true,
       },
     });
     if (!subOrder) throw new NotFoundException('SubOrder not found');
     if (subOrder.franchiseId !== input.franchiseId) {
       throw new ForbiddenException('This sub-order is not yours');
     }
-    if (subOrder.ithinkAwb || subOrder.deliveryMethod) {
+    if (subOrder.deliveryMethod) {
       throw new BadRequestException(
         'Delivery method is already set for this sub-order',
       );
     }
 
     const entitlements = await this.getMyEntitlements(input.franchiseId);
-    if (input.method === 'ITHINK_LOGISTICS' && !entitlements.ithinkEnabled) {
-      throw new ForbiddenException(
-        entitlements.ithinkPending
-          ? 'iThink warehouse approval is still pending'
-          : 'iThink is not enabled for your franchise',
-      );
-    }
     if (input.method === 'SELF_DELIVERY' && !entitlements.selfDeliveryEnabled) {
       throw new ForbiddenException('Self-delivery is not enabled for your franchise');
     }

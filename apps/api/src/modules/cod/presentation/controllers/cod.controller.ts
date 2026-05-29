@@ -12,6 +12,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import type { CodRuleKind } from '@prisma/client';
 import { AdminAuthGuard, AnyAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { CodRuleEngine } from '../../application/services/cod-rule-engine.service';
 
@@ -26,6 +27,7 @@ interface CreateRuleDto {
 @ApiTags('COD — Admin')
 @Controller('admin/cod/rules')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('cod.write')
 export class AdminCodRulesController {
   constructor(private readonly engine: CodRuleEngine) {}
 

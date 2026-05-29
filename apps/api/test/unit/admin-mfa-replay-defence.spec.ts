@@ -72,6 +72,24 @@ class FakeAdminRepo {
     if (row) Object.assign(row, data);
   }
 
+  // Phase 1 / H3 — atomic CAS advance. Mirrors the prod repo: only
+  // succeeds when current step is null or strictly less than `step`.
+  // The verify-challenge use-case calls this on every TOTP path so
+  // the test fake must implement it for the spec to exercise the
+  // happy path.
+  async advanceMfaLastUsedStepCas(
+    adminId: string,
+    step: number,
+  ): Promise<boolean> {
+    const row = this.rows.get(adminId);
+    if (!row) return false;
+    if (row.mfaLastUsedStep != null && row.mfaLastUsedStep >= step) {
+      return false;
+    }
+    row.mfaLastUsedStep = step;
+    return true;
+  }
+
   async createAdminSession(data: any) {
     const sess = { id: `sess-${this.sessions.length + 1}`, ...data };
     this.sessions.push(sess);
@@ -92,20 +110,37 @@ function makeBackupCodesStub() {
 }
 
 function makeVerifyUseCase(repo: FakeAdminRepo) {
+  // Phase 23 (2026-05-20) — verify use-case gained audit + eventBus.
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+  const eventBus = { publish: jest.fn().mockResolvedValue(undefined) } as any;
+  // Phase 26 (2026-05-20) — verify use-case gained AccessLogService
+  // (LOGIN_SUCCESS row on MFA-pass) + RedisService (JTI one-time-use).
+  // The replay-defence specs don't observe either; stub both.
+  const accessLog = { record: jest.fn().mockResolvedValue(undefined) } as any;
+  const redis = { acquireLock: jest.fn().mockResolvedValue(true) } as any;
   return new AdminMfaVerifyChallengeUseCase(
     repo as any,
     makeEnv(),
     makeCipher(),
     makeBackupCodesStub(),
+    audit,
+    eventBus,
+    accessLog,
+    redis,
   );
 }
 
 function makeEnrollService(repo: FakeAdminRepo) {
+  // Phase 25 (2026-05-20) — service gained audit + events.
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+  const events = { emit: jest.fn() } as any;
   return new AdminMfaService(
     repo as any,
     makeCipher(),
     makeEnv(),
     makeBackupCodesStub(),
+    audit,
+    events,
   );
 }
 

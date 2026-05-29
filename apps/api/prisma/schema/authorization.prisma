@@ -56,11 +56,11 @@ model ResourcePolicy {
 
   /// Higher priority wins on conflict. Defaults to 100 so admins can
   /// insert override rules at 200+ without renumbering.
-  priority Int @default(100)
+  priority Int     @default(100)
   enabled  Boolean @default(true)
 
   createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt      @map("updated_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
   createdByAdminId String?  @map("created_by_admin_id")
 
   @@index([resourceType, action, enabled])
@@ -111,7 +111,7 @@ model AuthorizationAudit {
   decision         AuthorizationDecisionEffect
   /// True when the guard would have blocked but allowed-through
   /// because the corresponding strict flag was off (soak mode).
-  wouldHaveBlocked Boolean @default(false) @map("would_have_blocked")
+  wouldHaveBlocked Boolean                     @default(false) @map("would_have_blocked")
 
   // ── Permissions layer ────────────────────────────────────────
   requiredPermissions String[] @default([]) @map("required_permissions")

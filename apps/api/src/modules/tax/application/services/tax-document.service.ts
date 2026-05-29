@@ -25,9 +25,12 @@
 //   - docs/tax/INVOICE_CANCELLATION_POLICY.md (status semantics)
 //   - docs/tax/HSN_RATE_POLICY.md (HSN/UQC on lines)
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EWayBillService } from './eway-bill.service';
+import { TaxModeService } from './tax-mode.service';
+// Phase 90 (2026-05-23) — auto-classify hook (Gap #1).
+import { EInvoiceService } from './einvoice.service';
 import {
   DocumentSequenceService,
 } from './document-sequence.service';
@@ -78,7 +81,90 @@ export class TaxDocumentService {
     private readonly prisma: PrismaService,
     private readonly docSequence: DocumentSequenceService,
     private readonly ewayBill: EWayBillService,
+    // Phase 45 (2026-05-21) — TaxModeService.report() now gates
+    // invoice generation. Before Phase 45 the three modes
+    // (OFF/AUDIT/STRICT) only controlled the PDF DRAFT watermark;
+    // the underlying invoice always succeeded. Now STRICT throws on
+    // missing-HSN / missing-rate / unverified-config and the
+    // generation aborts before document_number is allocated.
+    private readonly taxMode: TaxModeService,
+    // Phase 90 (2026-05-23) — Gap #1 auto-classify hook. @Optional
+    // because the legacy spec harnesses instantiate TaxDocumentService
+    // directly without DI; e-invoice path is no-op when undefined.
+    @Optional()
+    private readonly einvoice?: EInvoiceService,
   ) {}
+
+  /**
+   * Phase 45 (2026-05-21) — invoice-generation pre-flight gate.
+   *
+   * For every product referenced by the snapshot rows, fetch the
+   * current tax columns and emit a violation via TaxModeService.report()
+   * for each missing/invalid field. Behaviour per mode:
+   *   - OFF:    .report() is a no-op (silent).
+   *   - AUDIT:  logs the violation, generation proceeds.
+   *   - STRICT: throws TaxStrictModeViolationError, generation aborts.
+   *
+   * Closes audit gaps #2 (TaxModeService.report never invoked) and
+   * #15 (invoice generation doesn't read tax mode for content gating).
+   *
+   * Uses a single product fetch keyed on the de-duplicated set of
+   * productIds in the snapshot — no per-line N+1.
+   */
+  private async assertInvoiceLinesAreTaxReady(snapshots: ReadonlyArray<{ productId: string | null; isTaxable?: boolean }>): Promise<void> {
+    const productIds = Array.from(
+      new Set(snapshots.map((s) => s.productId).filter((id): id is string => !!id)),
+    );
+    if (productIds.length === 0) return;
+
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: {
+        id: true,
+        hsnCode: true,
+        gstRateBps: true,
+        supplyTaxability: true,
+        taxConfigVerified: true,
+      },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+
+    for (const snap of snapshots) {
+      if (!snap.productId) continue;
+      const p = byId.get(snap.productId);
+      if (!p) continue;
+
+      // TAXABLE products must have a valid HSN.
+      const taxability = p.supplyTaxability ?? 'TAXABLE';
+      if (taxability === 'TAXABLE') {
+        if (!p.hsnCode || !/^\d{4,8}$/.test(p.hsnCode)) {
+          await this.taxMode.report({
+            code: 'product.missing_hsn',
+            message: `Product ${p.id} has no valid HSN — strict mode requires HSN on every taxable invoice line`,
+            context: { productId: p.id, hsnCode: p.hsnCode },
+          });
+        }
+        if (p.gstRateBps === null || p.gstRateBps === undefined || p.gstRateBps <= 0) {
+          await this.taxMode.report({
+            code: 'product.missing_rate',
+            message: `Product ${p.id} has no GST rate — strict mode requires a non-zero rate on every taxable invoice line`,
+            context: { productId: p.id, gstRateBps: p.gstRateBps },
+          });
+        }
+      }
+
+      // All products (taxable + exempt) must have an admin attestation
+      // on file. Closes audit Gap #1 + #15 — the verified flag now
+      // gates invoice content, not just the readiness dashboard.
+      if (!p.taxConfigVerified) {
+        await this.taxMode.report({
+          code: 'product.unverified_config',
+          message: `Product ${p.id} tax config has not been attested by an admin — strict mode requires admin sign-off before invoicing`,
+          context: { productId: p.id },
+        });
+      }
+    }
+  }
 
   /**
    * Generate (or return existing) tax document for one SubOrder.
@@ -130,6 +216,12 @@ export class TaxDocumentService {
     if (snapshots.length === 0) {
       throw new Error(`No tax-line snapshots for sub-order ${subOrderId}`);
     }
+
+    // Phase 45 (2026-05-21) — TaxModeService gate. Runs before we
+    // allocate a document number so a STRICT failure doesn't burn a
+    // sequence slot or leave a half-written row. AUDIT mode logs and
+    // proceeds; OFF is silent.
+    await this.assertInvoiceLinesAreTaxReady(snapshots);
 
     // 3. Load sub-order + master + seller + customer context.
     const subOrder = await this.prisma.subOrder.findUnique({
@@ -217,9 +309,26 @@ export class TaxDocumentService {
     }
 
     // Recipient identity (customer).
-    const customerProfile = await this.prisma.customerTaxProfile.findFirst({
-      where: { customerId: subOrder.masterOrder.customerId, isDefault: true },
-    });
+    // Phase 37 — checkout may have picked a non-default profile. The
+    // selectedTaxProfileId snapshot wins when present; otherwise we
+    // fall back to whatever profile is currently isDefault.
+    const selectedProfileId = (subOrder.masterOrder as any).selectedTaxProfileId as
+      | string
+      | null
+      | undefined;
+    let customerProfile = selectedProfileId
+      ? await this.prisma.customerTaxProfile.findFirst({
+          where: {
+            id: selectedProfileId,
+            customerId: subOrder.masterOrder.customerId,
+          },
+        })
+      : null;
+    if (!customerProfile) {
+      customerProfile = await this.prisma.customerTaxProfile.findFirst({
+        where: { customerId: subOrder.masterOrder.customerId, isDefault: true },
+      });
+    }
     const customer = await this.prisma.user.findUnique({
       where: { id: subOrder.masterOrder.customerId },
       select: { id: true, firstName: true, lastName: true, email: true },
@@ -309,6 +418,10 @@ export class TaxDocumentService {
           customerId: subOrder.masterOrder.customerId,
           supplierType: summary.supplierType ?? ('MARKETPLACE_SELLER' as SupplierType),
           invoiceType,
+          // Phase 159w (audit B2) — stamp the GST mode this invoice was issued
+          // under, so a later re-export / refund recompute can validate against
+          // the mode in effect at issue time rather than the live mode.
+          gstModeSnapshot: await this.taxMode.getMode(),
 
           supplierGstin,
           sellerRegistrationType,
@@ -368,6 +481,10 @@ export class TaxDocumentService {
             discountAmountInPaise: s.discountAmountInPaise,
             taxableAmountInPaise: s.taxableAmountInPaise,
             gstRateBps: s.gstRateBps,
+            // Phase 159y (GSTR-3B audit #2) — carry the line's supply
+            // classification onto the invoice line for the GSTR-3B §3.1(b/c/e)
+            // split. POS lines (other create site) stay null = TAXABLE default.
+            supplyTaxability: s.supplyTaxability,
             cgstAmountInPaise: s.cgstAmountInPaise,
             sgstAmountInPaise: s.sgstAmountInPaise,
             igstAmountInPaise: s.igstAmountInPaise,
@@ -399,8 +516,290 @@ export class TaxDocumentService {
       );
     }
 
+    // Phase 90 (2026-05-23) — Gap #1. Auto e-invoice classification.
+    // Pre-Phase-90 every TaxDocument was inserted with
+    // einvoiceStatus=NOT_APPLICABLE; the retry cron filter
+    // (PENDING/FAILED) never picked them up, so B2B documents
+    // required a manual admin click to ever flip to PENDING. Fire
+    // the hook here in best-effort mode so the typed-path cron + UI
+    // picks up applicable rows automatically.
+    if (this.einvoice) {
+      try {
+        await this.einvoice.classifyForDocument(doc.id);
+      } catch (err) {
+        this.logger.warn(
+          `E-invoice classification failed for ${doc.documentNumber}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     return {
       document: { id: doc.id, documentNumber: doc.documentNumber, documentType: doc.documentType },
+      isNew: true,
+      reason: typeDecision.reason,
+    };
+  }
+
+  /**
+   * Follow-up #133 — generate (or return existing) tax invoice for a
+   * franchise POS sale. Mirrors generateForSubOrder but reads from
+   * FranchisePosSale + FranchisePosSaleItem (Decimal money fields)
+   * instead of SubOrderTaxSummary + OrderItemTaxSnapshot (BigInt
+   * paise). Walk-in B2C is the default; customerGstin capture at the
+   * register is a future enhancement.
+   *
+   * Idempotent: a non-cancelled document already linked to this saleId
+   * short-circuits and returns the existing row.
+   */
+  async generateForPosSale(
+    saleId: string,
+    options: GenerateForSubOrderOptions = {},
+  ): Promise<GenerateResult> {
+    // 1. Idempotency check on posSaleId.
+    if (!options.forceNew) {
+      const existing = await this.prisma.taxDocument.findFirst({
+        where: {
+          posSaleId: saleId,
+          status: {
+            notIn: ['VOIDED_DRAFT', 'SUPERSEDED', 'FULLY_REVERSED'],
+          },
+        },
+        select: { id: true, documentNumber: true, documentType: true },
+        orderBy: { generatedAt: 'desc' },
+      });
+      if (existing) {
+        return {
+          document: existing,
+          isNew: false,
+          reason: 'A non-cancelled document already exists for this POS sale.',
+        };
+      }
+    }
+
+    // 2. Load sale + items.
+    const sale = await this.prisma.franchisePosSale.findUnique({
+      where: { id: saleId },
+      include: { items: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!sale) throw new Error(`FranchisePosSale ${saleId} not found`);
+    if (sale.items.length === 0) {
+      throw new Error(`POS sale ${saleId} has no items — refusing to issue invoice`);
+    }
+    if (sale.status !== 'COMPLETED') {
+      throw new Error(
+        `Cannot issue invoice for POS sale ${saleId}: status=${sale.status}`,
+      );
+    }
+
+    // 3. Load franchise (supplier identity).
+    const franchise = await this.prisma.franchisePartner.findUnique({
+      where: { id: sale.franchiseId },
+      select: {
+        id: true,
+        gstNumber: true,
+        state: true,
+        franchiseCode: true,
+        ownerName: true,
+        businessName: true,
+      },
+    });
+    if (!franchise) {
+      throw new Error(`Franchise ${sale.franchiseId} not found for POS sale ${saleId}`);
+    }
+
+    const supplierGstin = franchise.gstNumber;
+    const sellerLegalName =
+      franchise.businessName ?? franchise.ownerName ?? franchise.franchiseCode;
+    const sellerStateCode = franchise.state ?? sale.placeOfSupplyState ?? null;
+
+    // 4. Compute totals in BigInt paise. POS persists Decimal(10,2) in
+    //    INR; multiply by 100 + round to integer paise.
+    const toPaise = (d: Prisma.Decimal | number | null | undefined): bigint => {
+      if (d === null || d === undefined) return 0n;
+      const num = typeof d === 'number' ? d : Number(d);
+      return BigInt(Math.round(num * 100));
+    };
+
+    let taxableAmountInPaise = 0n;
+    let cgstAmountInPaise = 0n;
+    let sgstAmountInPaise = 0n;
+    let igstAmountInPaise = 0n;
+    for (const item of sale.items) {
+      taxableAmountInPaise += toPaise(item.taxableAmount);
+      cgstAmountInPaise += toPaise(item.cgstAmount);
+      sgstAmountInPaise += toPaise(item.sgstAmount);
+      igstAmountInPaise += toPaise(item.igstAmount);
+    }
+    const totalTaxAmountInPaise =
+      cgstAmountInPaise + sgstAmountInPaise + igstAmountInPaise;
+
+    // 5. Pick document type — franchise is REGULAR registration, all
+    //    POS items are TAXABLE (POS doesn't sell exempt goods today),
+    //    so this resolves to TAX_INVOICE. Codify via the picker so any
+    //    future exempt-line handling lands here automatically.
+    const hasTaxableLines = sale.items.some((i) => Number(i.taxableAmount) > 0);
+    const typeDecision: DocumentTypePickerResult = pickDocumentType({
+      sellerRegistrationType: 'REGULAR' as GstRegistrationType,
+      hasTaxableLines,
+      hasExemptLines: false,
+    });
+    const documentType = typeDecision.documentType;
+
+    // 6. Allocate document number under the franchise's GSTIN sequence.
+    const fy = DocumentSequenceService.financialYearOf(new Date());
+    const numberAlloc = await this.docSequence.nextNumber({
+      supplierGstin,
+      financialYear: fy,
+      documentType,
+    });
+
+    // 7. Round-off + amount-in-words.
+    const rawTotalInPaise = taxableAmountInPaise + totalTaxAmountInPaise;
+    const roundOff = computeInvoiceRoundOff(rawTotalInPaise);
+    const amountInWords = paiseToInvoiceWords(
+      roundOff.roundedAmountInPaise < 0n
+        ? -roundOff.roundedAmountInPaise
+        : roundOff.roundedAmountInPaise,
+    );
+
+    // 8. Persist document + lines in one tx.
+    const doc = await this.prisma.$transaction(async (tx) => {
+      if (options.forceNew) {
+        await tx.taxDocument.updateMany({
+          where: {
+            posSaleId: saleId,
+            status: {
+              in: [
+                'GENERATED',
+                'PDF_PENDING',
+                'PDF_GENERATED',
+                'PDF_FAILED',
+                'PARTIALLY_REVERSED',
+              ],
+            },
+          },
+          data: { status: 'SUPERSEDED' },
+        });
+      }
+
+      const created = await tx.taxDocument.create({
+        data: {
+          documentNumber: numberAlloc.documentNumber,
+          documentType,
+          financialYear: fy,
+          // POS rows leave master/sub null and use posSaleId.
+          posSaleId: sale.id,
+          customerId: null,
+          supplierType: 'FRANCHISE' as SupplierType,
+          // Walk-in B2C is the default; B2B GSTIN capture at register
+          // is a future enhancement (sale.customerGstin column).
+          invoiceType: 'B2C' as InvoiceType,
+          // Phase 159w (audit B2) — GST mode at issue time (see above).
+          gstModeSnapshot: await this.taxMode.getMode(),
+
+          supplierGstin,
+          sellerRegistrationType: 'REGULAR' as GstRegistrationType,
+          sellerLegalName,
+          sellerAddressJson: Prisma.JsonNull,
+          sellerStateCode,
+
+          buyerGstin: null,
+          buyerLegalName: sale.customerName ?? 'Walk-in customer',
+          billingAddressJson: Prisma.JsonNull,
+          shippingAddressJson: Prisma.JsonNull,
+          placeOfSupplyStateCode: sale.placeOfSupplyState ?? sellerStateCode,
+
+          reverseChargeApplicable: false,
+          reverseChargeReason: null,
+
+          taxableAmountInPaise,
+          cgstAmountInPaise,
+          sgstAmountInPaise,
+          igstAmountInPaise,
+          totalTaxAmountInPaise,
+          cessAmountInPaise: 0n,
+          roundOffAmountInPaise: roundOff.roundOffInPaise,
+          documentTotalInPaise: roundOff.roundedAmountInPaise,
+          amountInWords,
+          currencyCode: 'INR',
+          paymentMode: sale.paymentMethod,
+
+          status: 'PDF_PENDING',
+          einvoiceStatus: 'NOT_APPLICABLE',
+          generatedAt: new Date(),
+        },
+      });
+
+      for (let i = 0; i < sale.items.length; i++) {
+        const item = sale.items[i]!;
+        const lineTaxablePaise = toPaise(item.taxableAmount);
+        const lineCgstPaise = toPaise(item.cgstAmount);
+        const lineSgstPaise = toPaise(item.sgstAmount);
+        const lineIgstPaise = toPaise(item.igstAmount);
+        const lineTaxPaise = lineCgstPaise + lineSgstPaise + lineIgstPaise;
+        const lineGrossPaise = toPaise(item.lineTotal);
+        const lineDiscountPaise = toPaise(item.lineDiscount);
+        const unitPricePaise = toPaise(item.unitPrice);
+
+        await tx.taxDocumentLine.create({
+          data: {
+            documentId: created.id,
+            sourceSnapshotId: null,
+            lineNumber: i + 1,
+            lineType: 'PRODUCT',
+            productId: item.productId,
+            variantId: item.variantId,
+            productName: item.variantTitle
+              ? `${item.productTitle} — ${item.variantTitle}`
+              : item.productTitle,
+            sku: item.franchiseSku ?? item.globalSku,
+            hsnOrSacCode: item.hsnCode,
+            uqcCode: null,
+            quantity: new Prisma.Decimal(item.quantity),
+            unitPriceInPaise: unitPricePaise,
+            grossAmountInPaise: lineGrossPaise,
+            discountAmountInPaise: lineDiscountPaise,
+            taxableAmountInPaise: lineTaxablePaise,
+            gstRateBps: item.gstRateBps,
+            cgstAmountInPaise: lineCgstPaise,
+            sgstAmountInPaise: lineSgstPaise,
+            igstAmountInPaise: lineIgstPaise,
+            totalTaxAmountInPaise: lineTaxPaise,
+            cessAmountInPaise: 0n,
+            lineTotalInPaise: lineTaxablePaise + lineTaxPaise,
+            currencyCode: 'INR',
+          },
+        });
+      }
+
+      return created;
+    });
+
+    this.logger.log(
+      `Generated POS ${documentType} ${doc.documentNumber} (FY ${fy}) for sale ${sale.saleNumber}: ${typeDecision.reason}`,
+    );
+
+    // Phase 90 (2026-05-23) — Gap #1. POS-sale invoices follow the
+    // same auto-classify flow as sub-order invoices. POS sales are
+    // mostly B2C (walk-in) and will fall to NOT_APPLICABLE via the
+    // buyerGstin gate — but the hook stays so a B2B POS sale (legacy
+    // bulk purchase) auto-classifies the same way.
+    if (this.einvoice) {
+      try {
+        await this.einvoice.classifyForDocument(doc.id);
+      } catch (err) {
+        this.logger.warn(
+          `E-invoice classification failed for POS ${doc.documentNumber}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    return {
+      document: {
+        id: doc.id,
+        documentNumber: doc.documentNumber,
+        documentType: doc.documentType,
+      },
       isNew: true,
       reason: typeDecision.reason,
     };

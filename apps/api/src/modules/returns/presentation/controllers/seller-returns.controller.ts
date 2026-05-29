@@ -13,10 +13,14 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { SellerAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { ReturnService } from '../../application/services/return.service';
 import { MarkReceivedDto } from '../dtos/mark-received.dto';
+import { SellerRespondDto } from '../dtos/seller-respond.dto';
+import { SellerRescindResponseDto } from '../dtos/seller-rescind-response.dto';
 
 const QC_EVIDENCE_UPLOAD_OPTIONS = {
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
@@ -61,7 +65,13 @@ export class SellerReturnsController {
   }
 
   // PATCH /seller/returns/:returnId/mark-received — mark package received
+  //
+  // Phase 96 (2026-05-23) — Mark Received audit Gap #9 closure.
+  // @Idempotent guards against network retries duplicating the
+  // status-history row + customer email. Service-side same-state
+  // early-return is the belt; this is the suspenders.
   @Patch(':returnId/mark-received')
+  @Idempotent()
   async markReceived(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -77,6 +87,7 @@ export class SellerReturnsController {
       'SELLER',
       req.sellerId,
       dto.notes,
+      dto.parcelCondition,
     );
     return { success: true, message: 'Return marked as received', data };
   }
@@ -114,25 +125,24 @@ export class SellerReturnsController {
   // with the customer's claim) or CONTEST (disagree, optionally with
   // evidence URLs). Service enforces ownership, deadline, and the
   // PENDING-only state machine.
+  //
+  // Phase 94 (2026-05-23) — Seller/Franchise Return Response audit:
+  //   • @Throttle limit — Gap #18: caps respond storms at 5/min/IP.
+  //   • @Idempotent     — Gap #14: double-clicks return the cached
+  //                       response instead of throwing "already
+  //                       responded" on the retry.
+  //   • SellerRespondDto — Gap #11/#12: notes capped at 2000 chars,
+  //                       evidence URL array capped at 10 with 2048
+  //                       chars each. Service-side host allowlist
+  //                       runs after this.
   @Patch(':returnId/respond')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Idempotent()
   async respond(
     @Req() req: any,
     @Param('returnId') returnId: string,
-    @Body()
-    body: {
-      decision: 'ACCEPTED' | 'CONTESTED';
-      notes?: string;
-      evidenceFileUrls?: string[];
-    },
+    @Body() body: SellerRespondDto,
   ) {
-    if (
-      !body?.decision ||
-      (body.decision !== 'ACCEPTED' && body.decision !== 'CONTESTED')
-    ) {
-      throw new BadRequestAppException(
-        'decision must be ACCEPTED or CONTESTED',
-      );
-    }
     if (body.decision === 'CONTESTED' && !body.notes?.trim()) {
       throw new BadRequestAppException(
         'notes are required when contesting a claim — explain why',
@@ -144,8 +154,37 @@ export class SellerReturnsController {
       decision: body.decision,
       notes: body.notes,
       evidenceFileUrls: body.evidenceFileUrls,
+      contestReasonCategory: body.contestReasonCategory,
+      itemDecisions: body.itemDecisions,
     });
     return { success: true, message: 'Response recorded', data };
+  }
+
+  // Phase 95 (2026-05-23) — Phase 94 deferred #25 closure.
+  // PATCH /seller/returns/:returnId/respond/rescind — seller flips
+  // their prior ACCEPTED↔CONTESTED while still within the original
+  // window + 1h grace.
+  @Patch(':returnId/respond/rescind')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Idempotent()
+  async rescindResponse(
+    @Req() req: any,
+    @Param('returnId') returnId: string,
+    @Body() body: SellerRescindResponseDto,
+  ) {
+    if (body.newDecision === 'CONTESTED' && !body.notes?.trim()) {
+      throw new BadRequestAppException(
+        'notes are required when rescinding to CONTESTED — explain why',
+      );
+    }
+    const data = await this.returnService.rescindSellerResponse({
+      returnId,
+      sellerId: req.sellerId,
+      newDecision: body.newDecision,
+      notes: body.notes,
+      contestReasonCategory: body.contestReasonCategory,
+    });
+    return { success: true, message: 'Response rescinded', data };
   }
 
   // QC DECISION — intentionally admin-only.

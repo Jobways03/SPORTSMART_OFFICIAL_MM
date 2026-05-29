@@ -7,21 +7,21 @@
 // final decision.
 
 enum DisputeKind {
-  RETURN_REJECTED       // buyer disputes a QC rejection
-  WRONG_ITEM_RECEIVED   // buyer says they got the wrong item
-  DAMAGED_IN_TRANSIT    // damage between dispatch and delivery
-  MISSING_FROM_PARCEL   // partial item missing on delivery
+  RETURN_REJECTED // buyer disputes a QC rejection
+  WRONG_ITEM_RECEIVED // buyer says they got the wrong item
+  DAMAGED_IN_TRANSIT // damage between dispatch and delivery
+  MISSING_FROM_PARCEL // partial item missing on delivery
   OTHER
 }
 
 enum DisputeStatus {
-  OPEN              // filed, awaiting first admin touch
-  UNDER_REVIEW      // admin acknowledged + investigating
-  AWAITING_INFO     // need info from buyer/seller
-  RESOLVED_BUYER    // outcome favours the buyer (refund / replacement)
-  RESOLVED_SELLER   // outcome favours the seller (no refund)
-  RESOLVED_SPLIT    // partial — e.g. partial refund
-  CLOSED            // procedural close (buyer abandoned, dup, etc.)
+  OPEN // filed, awaiting first admin touch
+  UNDER_REVIEW // admin acknowledged + investigating
+  AWAITING_INFO // need info from buyer/seller
+  RESOLVED_BUYER // outcome favours the buyer (refund / replacement)
+  RESOLVED_SELLER // outcome favours the seller (no refund)
+  RESOLVED_SPLIT // partial — e.g. partial refund
+  CLOSED // procedural close (buyer abandoned, dup, etc.)
 }
 
 enum DisputeActorType {
@@ -98,25 +98,29 @@ model Dispute {
 
   // Polymorphic filer (matches TicketActorType convention; admin-filed
   // disputes happen when an admin escalates on behalf of a buyer).
-  filedByType   DisputeActorType @map("filed_by_type")
-  filedById     String           @map("filed_by_id")
-  filedByName   String           @map("filed_by_name")
+  filedByType DisputeActorType @map("filed_by_type")
+  filedById   String           @map("filed_by_id")
+  filedByName String           @map("filed_by_name")
 
   // Initial complaint summary (the first message body, snapshotted).
   summary String @db.Text
 
-  // Triage assignment.
-  assignedAdminId String? @map("assigned_admin_id")
+  // Triage assignment. assignedAt / assignedByAdminId capture WHEN and BY WHOM
+  // the current assignment was made (both null when unassigned); the full
+  // change chain lives in audit_logs (action=dispute.assigned).
+  assignedAdminId   String?   @map("assigned_admin_id")
+  assignedAt        DateTime? @map("assigned_at")
+  assignedByAdminId String?   @map("assigned_by_admin_id")
 
   // Decision audit (populated when status transitions to a RESOLVED_*).
-  decisionByAdminId      String?   @map("decision_by_admin_id")
-  decisionAt             DateTime? @map("decision_at")
-  decisionRationale      String?   @map("decision_rationale") @db.Text
+  decisionByAdminId     String?   @map("decision_by_admin_id")
+  decisionAt            DateTime? @map("decision_at")
+  decisionRationale     String?   @map("decision_rationale") @db.Text
   // Refund amount in paise (matches money convention elsewhere). Set
   // for RESOLVED_BUYER (full refund) or RESOLVED_SPLIT (partial). Null
   // for RESOLVED_SELLER. The refund flow reads this to mint the actual
   // wallet credit / gateway refund.
-  decisionAmountInPaise  Int?      @map("decision_amount_in_paise")
+  decisionAmountInPaise Int?      @map("decision_amount_in_paise")
 
   // Phase 12 (post-Phase-11) — liability + remedy split. The decision
   // (RESOLVED_BUYER / SPLIT / SELLER) only says *who won*; these two
@@ -126,20 +130,31 @@ model Dispute {
   //     PlatformExpense)
   //   - the linked-return status update (DISPUTE_OVERTURNED etc.)
   // See docs/decisions/016-dispute-liability-ledger.md for the matrix.
-  liabilityParty  LiabilityParty?  @map("liability_party")
-  customerRemedy  CustomerRemedy?  @map("customer_remedy")
+  liabilityParty LiabilityParty? @map("liability_party")
+  customerRemedy CustomerRemedy? @map("customer_remedy")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   messages DisputeMessage[]
   evidence DisputeEvidence[]
+  // Phase 136 — relation for the existing subOrderId FK scalar. Enables the
+  // commission processor to exclude sub-orders with an active dispute from
+  // commission confirmation (transactionally, in the eligibility WHERE).
+  subOrder SubOrder? @relation(fields: [subOrderId], references: [id], onDelete: SetNull)
 
   @@index([status, severity(sort: Desc), createdAt(sort: Desc)])
   @@index([filedByType, filedById])
   @@index([masterOrderId])
+  @@index([subOrderId])
   @@index([returnId])
   @@index([sourceTicketId])
+  // Drives the admin "disputes assigned to reviewer X" queue filter.
+  @@index([assignedAdminId, status])
+  // Decision analytics — "decisions by admin X", "refunds by liability party".
+  @@index([decisionByAdminId, decisionAt])
+  @@index([liabilityParty, decisionAt])
+  @@index([customerRemedy, decisionAt])
   @@map("disputes")
 }
 
@@ -166,6 +181,8 @@ model DisputeMessage {
   dispute Dispute @relation(fields: [disputeId], references: [id], onDelete: Cascade)
 
   @@index([disputeId, createdAt])
+  // Admin-only thread filters (e.g. listing internal notes on a dispute).
+  @@index([disputeId, isInternalNote, createdAt])
   @@map("dispute_messages")
 }
 
@@ -175,8 +192,8 @@ model DisputeEvidence {
 
   // Polymorphic linkage — same pattern as ticket attachments. Files
   // live in the existing FileMetadata table.
-  fileId   String @map("file_id")
-  caption  String?
+  fileId  String  @map("file_id")
+  caption String?
 
   uploadedByType DisputeActorType @map("uploaded_by_type")
   uploadedById   String           @map("uploaded_by_id")

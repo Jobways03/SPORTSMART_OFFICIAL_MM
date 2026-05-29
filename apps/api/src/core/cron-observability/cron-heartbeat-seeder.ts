@@ -125,11 +125,6 @@ const TARGETS: SeedTarget[] = [
     description: 'Release expired franchise stock reservations.',
   },
   {
-    jobName: 'ithink-tracking-poller',
-    expectedIntervalSeconds: 10 * 60,
-    description: 'Poll iThink Get Airwaybill firehose for status updates.',
-  },
-  {
     jobName: 'release-expired-redemptions',
     expectedIntervalSeconds: 60,
     description: 'Release expired RESERVED discount redemptions.',

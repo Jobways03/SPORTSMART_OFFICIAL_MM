@@ -1,15 +1,26 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Ip, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
+import { Request, Response } from 'express';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
+import {
+  clearAuthCookies,
+  readRefreshCookie,
+  setAuthCookies,
+} from '../../../../core/auth/auth-cookie.helper';
 import { FranchiseRegisterDto } from '../dtos/franchise-register.dto';
 import { FranchiseLoginDto } from '../dtos/franchise-login.dto';
+import { FranchiseVerifyEmailDto } from '../dtos/franchise-verify-email.dto';
+import { FranchiseResendVerificationOtpDto } from '../dtos/franchise-resend-verification-otp.dto';
 import { FranchiseForgotPasswordDto } from '../dtos/franchise-forgot-password.dto';
 import { FranchiseVerifyOtpDto } from '../dtos/franchise-verify-otp.dto';
 import { FranchiseResendOtpDto } from '../dtos/franchise-resend-otp.dto';
 import { FranchiseResetPasswordDto } from '../dtos/franchise-reset-password.dto';
 import { FranchiseChangePasswordDto } from '../dtos/franchise-change-password.dto';
 import { RegisterFranchiseUseCase } from '../../application/use-cases/register-franchise.use-case';
+import { PublicVerifyFranchiseEmailUseCase } from '../../application/use-cases/public-verify-franchise-email.use-case';
+import { ResendFranchiseVerificationOtpUseCase } from '../../application/use-cases/resend-franchise-verification-otp.use-case';
 import { LoginFranchiseUseCase } from '../../application/use-cases/login-franchise.use-case';
 import { RefreshFranchiseSessionUseCase } from '../../application/use-cases/refresh-franchise-session.use-case';
 import { ForgotPasswordFranchiseUseCase } from '../../application/use-cases/forgot-password-franchise.use-case';
@@ -27,6 +38,8 @@ import { AccessLogService } from '../../../access-log/application/services/acces
 export class FranchiseAuthController {
   constructor(
     private readonly registerFranchiseUseCase: RegisterFranchiseUseCase,
+    private readonly publicVerifyFranchiseEmailUseCase: PublicVerifyFranchiseEmailUseCase,
+    private readonly resendFranchiseVerificationOtpUseCase: ResendFranchiseVerificationOtpUseCase,
     private readonly loginFranchiseUseCase: LoginFranchiseUseCase,
     private readonly refreshFranchiseSessionUseCase: RefreshFranchiseSessionUseCase,
     private readonly forgotPasswordFranchiseUseCase: ForgotPasswordFranchiseUseCase,
@@ -36,23 +49,91 @@ export class FranchiseAuthController {
     private readonly changePasswordFranchiseUseCase: ChangePasswordFranchiseUseCase,
     private readonly logoutFranchiseUseCase: LogoutFranchiseUseCase,
     private readonly accessLog: AccessLogService,
+    private readonly env: EnvService,
+    private readonly captcha: CaptchaVerifierService,
   ) {}
 
+  private cookieSettings() {
+    return {
+      domain: this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
+      secure:
+        this.env.isProduction() ||
+        this.env.getString('NODE_ENV') === 'staging',
+    };
+  }
+
   @Post('register')
-  @HttpCode(HttpStatus.CREATED)
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async register(@Body() dto: FranchiseRegisterDto) {
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @HttpCode(HttpStatus.ACCEPTED)
+  async register(
+    @Body() dto: FranchiseRegisterDto,
+    @Ip() ip: string,
+  ) {
+    // CAPTCHA verified BEFORE bcrypt cost runs.
+    await this.captcha.verify(dto.captchaToken, ip);
+
     const data = await this.registerFranchiseUseCase.execute({
       ownerName: dto.ownerName,
       businessName: dto.businessName,
       email: dto.email,
       phoneNumber: dto.phoneNumber,
       password: dto.password,
+      confirmPassword: dto.confirmPassword,
+      acceptTerms: dto.acceptTerms,
+      acceptPrivacy: dto.acceptPrivacy,
+      acceptMarketing: dto.acceptMarketing,
     });
 
     return {
       success: true,
-      message: 'Franchise registered successfully',
+      message: data.message,
+      data,
+    };
+  }
+
+  /**
+   * Phase 20 (2026-05-20) — public verify-email endpoint. Accepts
+   * `{email, otp}` BEFORE login so a brand-new franchise can verify
+   * without first authenticating.
+   */
+  @Post('verify-email')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async verifyEmail(
+    @Body() dto: FranchiseVerifyEmailDto,
+    @Ip() ip: string,
+  ) {
+    await this.captcha.verify(dto.captchaToken, ip);
+    const data = await this.publicVerifyFranchiseEmailUseCase.execute({
+      email: dto.email,
+      otp: dto.otp,
+    });
+    return {
+      success: true,
+      message: 'Email verified. Please sign in to continue.',
+      data,
+    };
+  }
+
+  /**
+   * Phase 20 (2026-05-20) — public resend-verification-otp endpoint.
+   * Enumeration-safe (uniform response). 1/min/IP + server-side
+   * cooldown (60s) defeat the IP-rotating spam pattern.
+   */
+  @Post('resend-verification-otp')
+  @Throttle({ default: { limit: 1, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async resendVerificationOtp(
+    @Body() dto: FranchiseResendVerificationOtpDto,
+    @Ip() ip: string,
+  ) {
+    await this.captcha.verify(dto.captchaToken, ip);
+    const data = await this.resendFranchiseVerificationOtpUseCase.execute({
+      email: dto.email,
+    });
+    return {
+      success: true,
+      message: data.message,
       data,
     };
   }
@@ -60,7 +141,11 @@ export class FranchiseAuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async login(@Body() dto: FranchiseLoginDto, @Req() req: Request) {
+  async login(
+    @Body() dto: FranchiseLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
     try {
@@ -70,6 +155,18 @@ export class FranchiseAuthController {
         userAgent,
         ipAddress,
       });
+
+      // Follow-up #H40 — mirror tokens to httpOnly cookies.
+      const accessToken = (data as { accessToken?: string })?.accessToken;
+      const refreshToken = (data as { refreshToken?: string })?.refreshToken;
+      if (accessToken && refreshToken) {
+        setAuthCookies(res, {
+          persona: 'franchise',
+          accessToken,
+          refreshToken,
+          ...this.cookieSettings(),
+        });
+      }
 
       const franchiseId = (data as any)?.franchise?.id ?? (data as any)?.franchiseId;
       if (franchiseId) {
@@ -113,15 +210,31 @@ export class FranchiseAuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(
-    @Body() body: { refreshToken: string },
+    @Body() body: { refreshToken?: string },
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
 
+    // Follow-up #H40 — accept refresh token from body OR cookie.
+    const refreshToken =
+      body?.refreshToken ?? readRefreshCookie(req, 'franchise');
+
     const data = await this.refreshFranchiseSessionUseCase.execute({
-      refreshToken: body?.refreshToken,
+      refreshToken: refreshToken ?? '',
     });
+
+    const newAccess = (data as { accessToken?: string })?.accessToken;
+    const newRefresh = (data as { refreshToken?: string })?.refreshToken;
+    if (newAccess && newRefresh) {
+      setAuthCookies(res, {
+        persona: 'franchise',
+        accessToken: newAccess,
+        refreshToken: newRefresh,
+        ...this.cookieSettings(),
+      });
+    }
 
     this.accessLog
       .record({
@@ -143,7 +256,14 @@ export class FranchiseAuthController {
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async forgotPassword(@Body() dto: FranchiseForgotPasswordDto) {
+  async forgotPassword(
+    @Body() dto: FranchiseForgotPasswordDto,
+    @Req() req: Request,
+  ) {
+    // Phase 26 (2026-05-20) — captcha parity with the four other
+    // forgot-password endpoints. Combined with the per-IP throttle
+    // (5/60s), this defeats scripted email enumeration.
+    await this.captcha.verify(dto.captchaToken, req.ip);
     await this.forgotPasswordFranchiseUseCase.execute({ email: dto.email });
 
     return {
@@ -232,11 +352,17 @@ export class FranchiseAuthController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @UseGuards(FranchiseAuthGuard)
-  async logout(@Req() req: Request) {
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const franchiseId = (req as any).franchiseId;
     if (!franchiseId) {
       throw new UnauthorizedAppException('Franchise session not found');
     }
+    // Follow-up #H40 — clear cookies on logout so the browser doesn't
+    // keep replaying a now-invalid refresh cookie until TTL.
+    clearAuthCookies(res, 'franchise', this.cookieSettings().domain);
     await this.logoutFranchiseUseCase.execute(franchiseId);
     return {
       success: true,

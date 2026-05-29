@@ -23,6 +23,20 @@ interface CategoryDef {
   children?: CategoryDef[];
 }
 
+/**
+ * Phase 34 (2026-05-21) — verified category count.
+ *
+ * 31 L0 roots × 321 L1 children = 352 categories total.
+ *
+ * The Phase 33 audit noted an off-by-one (the audit checklist
+ * expected 351). Counted from the source-of-truth array:
+ *   awk '/^const CATEGORY_TREE/,/^const BRANDS/' seed-catalog.ts \
+ *     | grep -c 'name:'
+ *   → 352
+ * Tree depth is strictly 2 (L0 + L1). No L2 entries today. The
+ * storefront tree assembly supports unlimited depth post-Phase-33
+ * so future L2+ additions surface immediately without code changes.
+ */
 const CATEGORY_TREE: CategoryDef[] = [
   {
     name: 'Activewear & Clothing',
@@ -502,22 +516,70 @@ const CATEGORY_TREE: CategoryDef[] = [
   },
 ];
 
-const BRANDS = [
-  { name: 'Nike' },
-  { name: 'Adidas' },
-  { name: 'Puma' },
-  { name: 'Reebok' },
-  { name: 'Under Armour' },
-  { name: 'New Balance' },
-  { name: 'Asics' },
-  { name: 'Yonex' },
-  { name: 'SS (Sareen Sports)' },
-  { name: 'SG (Stanford of Georgetown)' },
-  { name: 'MRF' },
-  { name: 'Kookaburra' },
-  { name: 'Decathlon (Domyos)' },
-  { name: 'Nivia' },
-  { name: 'Cosco' },
+/**
+ * Phase 36 (2026-05-21) — brand seed entries now carry optional
+ * `logoUrl` + `description`.
+ *
+ * Logo URL policy:
+ *
+ * The seed populates each brand with a placeholder URL generated from
+ * the brand name. The placeholder URLs are stable + publicly cacheable
+ * but they're stand-ins — pre-launch the team should replace each
+ * brand's logo via the admin /dashboard/products/brands UI (which
+ * uploads to the Cloudinary cloud configured for the deployment).
+ *
+ * Override via env:
+ *   SEED_BRAND_LOGO_BASE — base URL pattern. The literal `{slug}` in
+ *   the value gets replaced with the brand's slug. Default uses a
+ *   neutral placeholder so dev seeds produce visually distinct cards
+ *   without baking a third-party CDN reference into the source tree.
+ *
+ * Example for a deployment that has pre-uploaded logos on Cloudinary:
+ *   SEED_BRAND_LOGO_BASE=https://res.cloudinary.com/sportsmart/image/upload/v1/brand-logos/{slug}.png
+ *
+ * `logoPublicId` is intentionally not seeded — it's only meaningful for
+ * Cloudinary-uploaded assets, and the seed's URL pattern can target any
+ * CDN. Replacing the logo via the admin UI stamps a real publicId.
+ */
+const SEED_BRAND_LOGO_PATTERN =
+  process.env.SEED_BRAND_LOGO_BASE ??
+  'https://placehold.co/400x400/0f172a/ffffff?text={initials}';
+
+function brandLogoForSeed(brandName: string): string {
+  const slug = toSlug(brandName);
+  const initials = brandName
+    .replace(/\(.+?\)/g, '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('') || 'B';
+  return SEED_BRAND_LOGO_PATTERN
+    .replace('{slug}', encodeURIComponent(slug))
+    .replace('{initials}', encodeURIComponent(initials));
+}
+
+interface BrandSeed {
+  name: string;
+  description?: string;
+}
+
+const BRANDS: BrandSeed[] = [
+  { name: 'Nike', description: 'American multinational footwear and apparel brand.' },
+  { name: 'Adidas', description: 'German sportswear and athletic equipment manufacturer.' },
+  { name: 'Puma', description: 'German multinational athletic and casual footwear and apparel.' },
+  { name: 'Reebok', description: 'Athletic footwear and apparel brand focused on training and fitness.' },
+  { name: 'Under Armour', description: 'American sports equipment company specialising in performance apparel.' },
+  { name: 'New Balance', description: 'American sports footwear and apparel brand.' },
+  { name: 'Asics', description: 'Japanese multinational running and athletic equipment brand.' },
+  { name: 'Yonex', description: 'Japanese sports equipment manufacturer — racquet sports specialist.' },
+  { name: 'SS (Sareen Sports)', description: 'Indian cricket equipment manufacturer.' },
+  { name: 'SG (Stanford of Georgetown)', description: 'Indian cricket equipment manufacturer.' },
+  { name: 'MRF', description: 'Indian cricket bat manufacturer (subsidiary of MRF Limited).' },
+  { name: 'Kookaburra', description: 'Australian cricket equipment brand — bats, balls, protective gear.' },
+  { name: 'Decathlon (Domyos)', description: 'Decathlon\'s in-house fitness and yoga apparel brand.' },
+  { name: 'Nivia', description: 'Indian sports goods manufacturer — footballs, basketballs, equipment.' },
+  { name: 'Cosco', description: 'Indian sports equipment brand — broad catalog across sports.' },
 ];
 
 const OPTION_DEFINITIONS: { name: string; displayName: string; type: string; values: string[] }[] = [
@@ -593,9 +655,18 @@ async function seedBrands(): Promise<void> {
 
   for (const brand of BRANDS) {
     const slug = toSlug(brand.name);
+    // Phase 36 (2026-05-21) — populate logoUrl + description on create.
+    // `update: {}` keeps the seed idempotent: re-running won't overwrite
+    // logos the admin uploaded post-seed (which carry the real
+    // Cloudinary publicId — see the brand controller's atomic upload).
     await prisma.brand.upsert({
       where: { slug },
-      create: { name: brand.name, slug },
+      create: {
+        name: brand.name,
+        slug,
+        logoUrl: brandLogoForSeed(brand.name),
+        description: brand.description ?? null,
+      },
       update: {},
     });
     console.log(`  Brand: ${brand.name} (${slug})`);

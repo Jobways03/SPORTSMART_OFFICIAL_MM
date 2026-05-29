@@ -4,7 +4,8 @@ import { AdminRole } from '@prisma/client';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
-import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
+import { JWT_VERIFY_OPTIONS_ADMIN } from '../auth/jwt-constants';
+import { readAccessCookie } from '../auth/auth-cookie.helper';
 import { UnauthorizedAppException } from '../exceptions';
 
 export interface AdminTokenPayload {
@@ -37,20 +38,27 @@ export class AdminAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
-    const authHeader = request.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // Follow-up #H40 — accept token from Bearer OR httpOnly cookie.
+    // Bearer wins when both present so a client mid-migration still
+    // works without ambiguity.
+    const authHeader = request.headers.authorization;
+    const bearer =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7)
+        : undefined;
+    const token = bearer ?? readAccessCookie(request, 'admin');
+
+    if (!token) {
       throw new UnauthorizedAppException('Admin authentication required');
     }
-
-    const token = authHeader.slice(7);
 
     let payload: AdminTokenPayload;
     try {
       payload = jwt.verify(
         token,
         this.envService.getString('JWT_ADMIN_SECRET'),
-        JWT_VERIFY_OPTIONS,
+        JWT_VERIFY_OPTIONS_ADMIN,
       ) as AdminTokenPayload;
     } catch {
       throw new UnauthorizedAppException('Invalid or expired admin token');

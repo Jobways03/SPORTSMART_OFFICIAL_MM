@@ -16,10 +16,10 @@
 //     which is exactly what cron_runs gives us.
 
 enum CronRunStatus {
-  RUNNING    // started, not yet finished
-  SUCCEEDED  // exited normally
-  FAILED     // threw / returned an error
-  TIMEOUT    // wall-clock exceeded a soft cap (set by instrumentation)
+  RUNNING // started, not yet finished
+  SUCCEEDED // exited normally
+  FAILED // threw / returned an error
+  TIMEOUT // wall-clock exceeded a soft cap (set by instrumentation)
 }
 
 model CronRun {
@@ -29,8 +29,8 @@ model CronRun {
   /// "sla.breach-detector", "retention.enforcer", "audit.chain-anchor".
   jobName String @map("job_name")
 
-  startedAt  DateTime  @default(now()) @map("started_at")
-  finishedAt DateTime? @map("finished_at")
+  startedAt  DateTime      @default(now()) @map("started_at")
+  finishedAt DateTime?     @map("finished_at")
   status     CronRunStatus @default(RUNNING)
 
   /// Wall-clock duration when finished. Null while still RUNNING.
@@ -38,14 +38,14 @@ model CronRun {
 
   /// Error message when status=FAILED. Truncated by the instrumentation
   /// at 4 KB so a runaway stack trace can't blow up the row size.
-  error      String?
+  error String?
 
   /// Free-form per-job metrics. Cron handlers set this via the
   /// instrumentation helper:
   ///    `await instr.run('foo', async () => { return { processed: 7 }; })`
   /// The return value lands here so dashboards can chart "rows processed
   /// per cron" without parsing logs.
-  result     Json?
+  result Json?
 
   @@index([jobName, startedAt])
   @@index([status, startedAt])
@@ -67,7 +67,7 @@ model CronHeartbeatTarget {
   description String?
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("cron_heartbeat_targets")
 }

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
@@ -13,6 +13,7 @@ import { FranchiseCommissionService } from './franchise-commission.service';
 import { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { OrdersService } from '../../../orders/application/services/orders.service';
 
 // Return window memoised at construct time from RETURN_WINDOW_DAYS env.
 // Prod default 14 days; matches OrdersService. See orders.service.ts.
@@ -35,6 +36,14 @@ export class FranchiseOrdersService {
     // item's totalPrice as the new subTotal.
     private readonly moneyDualWrite: MoneyDualWriteHelper,
     private readonly env: EnvService,
+    // Phase 82 (2026-05-23) — pack/ship audit. Franchise fulfillment
+    // updates delegate to the unified `OrdersService.updateFulfillment-
+    // StatusInternal` so the audit columns, evidence gate, master
+    // rollup, and audit log all fire symmetrically with the seller
+    // path. Injected via forwardRef to avoid the boot-order cycle
+    // (orders → franchise → orders).
+    @Inject(forwardRef(() => OrdersService))
+    private readonly ordersService: OrdersService,
   ) {
     this.logger.setContext('FranchiseOrdersService');
     const days = this.env.getNumber('RETURN_WINDOW_DAYS', 14);
@@ -169,6 +178,18 @@ export class FranchiseOrdersService {
         `Order is already ${subOrder.acceptStatus}`,
       );
     }
+    // Phase 80 (2026-05-22) — acceptance audit Gap #4. Late-accept
+    // block. Mirror of the seller-side check so a franchise can't
+    // accept past acceptDeadlineAt while the SLA cron is between
+    // ticks.
+    if (
+      subOrder.acceptDeadlineAt &&
+      new Date() > subOrder.acceptDeadlineAt
+    ) {
+      throw new BadRequestAppException(
+        'Acceptance window has expired — the order has been auto-rejected.',
+      );
+    }
 
     // Check franchise contract expiry before accepting
     const franchise = await this.prisma.franchisePartner.findUnique({
@@ -181,14 +202,44 @@ export class FranchiseOrdersService {
       );
     }
 
-    const updateData: any = { acceptStatus: 'ACCEPTED' };
-    updateData.expectedDispatchDate = options?.expectedDispatchDate
-      ? new Date(options.expectedDispatchDate)
-      : new Date(Date.now() + DISPATCH_DEADLINE_HOURS * 60 * 60 * 1000);
-
-    const updated = await this.prisma.subOrder.update({
-      where: { id: subOrderId },
-      data: updateData,
+    // Phase 80 — Gap #17 / R2. FOR UPDATE + re-check inside tx so
+    // cron auto-reject and franchise manual accept serialise on a
+    // single row lock.
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const lockedRows = await tx.$queryRaw<
+        Array<{ id: string; accept_status: string; accept_deadline_at: Date | null }>
+      >`
+        SELECT id, accept_status, accept_deadline_at
+        FROM sub_orders
+        WHERE id = ${subOrderId}
+        FOR UPDATE
+      `;
+      const locked = lockedRows[0];
+      if (!locked) throw new NotFoundAppException('Order not found');
+      if (locked.accept_status !== 'OPEN') {
+        throw new BadRequestAppException(
+          `Order is already ${locked.accept_status}`,
+        );
+      }
+      if (locked.accept_deadline_at && new Date() > locked.accept_deadline_at) {
+        throw new BadRequestAppException(
+          'Acceptance window has expired — the order has been auto-rejected.',
+        );
+      }
+      const updateData: any = {
+        acceptStatus: 'ACCEPTED',
+        // Phase 80 — Gap #7. Acceptance timestamp + actor (franchise id).
+        acceptedAt: now,
+        acceptedBy: franchiseId,
+      };
+      updateData.expectedDispatchDate = options?.expectedDispatchDate
+        ? new Date(options.expectedDispatchDate)
+        : new Date(Date.now() + DISPATCH_DEADLINE_HOURS * 60 * 60 * 1000);
+      return tx.subOrder.update({
+        where: { id: subOrderId },
+        data: updateData,
+      });
     });
 
     // Update master order status to SELLER_ACCEPTED
@@ -217,10 +268,15 @@ export class FranchiseOrdersService {
 
   // ── Reject order — unreserve stock, attempt reassignment ──────────────
 
+  // Phase 80 (2026-05-22) — acceptance audit Gaps #5/#7/#17/#19/#21.
+  //   • `auto` option discriminates the cron-driven path (Gap #19).
+  //   • SELECT FOR UPDATE inside a tx serialises the cron auto-reject
+  //     vs franchise manual reject (Gap #17).
+  //   • Audit columns rejectedAt / rejectedBy / rejectionType / autoRejectedAt.
   async rejectOrder(
     subOrderId: string,
     franchiseId: string,
-    options?: { reason?: string; note?: string },
+    options?: { reason?: string; note?: string; auto?: boolean },
   ) {
     const subOrder = await this.prisma.subOrder.findFirst({
       where: {
@@ -249,15 +305,41 @@ export class FranchiseOrdersService {
       );
     }
 
-    // Mark current sub-order as rejected + cancelled
-    await this.prisma.subOrder.update({
-      where: { id: subOrderId },
-      data: {
-        acceptStatus: 'REJECTED',
-        fulfillmentStatus: 'CANCELLED',
-        rejectionReason: options?.reason || null,
-        rejectionNote: options?.note || null,
-      },
+    const isAuto = !!options?.auto;
+    const now = new Date();
+    // Phase 80 — Gap #17. FOR UPDATE on the sub-order row + re-check
+    // inside the tx so we serialise with manual-accept and any other
+    // concurrent cron tick.
+    await this.prisma.$transaction(async (tx) => {
+      const lockedRows = await tx.$queryRaw<
+        Array<{ id: string; accept_status: string }>
+      >`
+        SELECT id, accept_status
+        FROM sub_orders
+        WHERE id = ${subOrderId}
+        FOR UPDATE
+      `;
+      const locked = lockedRows[0];
+      if (!locked) throw new NotFoundAppException('Order not found');
+      if (locked.accept_status !== 'OPEN') {
+        throw new BadRequestAppException(
+          `Order is already ${locked.accept_status}`,
+        );
+      }
+      await tx.subOrder.update({
+        where: { id: subOrderId },
+        data: {
+          acceptStatus: 'REJECTED',
+          fulfillmentStatus: 'CANCELLED',
+          rejectionReason: options?.reason || null,
+          rejectionNote: options?.note || null,
+          // Phase 80 audit columns.
+          rejectedAt: now,
+          rejectedBy: franchiseId,
+          rejectionType: isAuto ? 'AUTO_SLA' : 'MANUAL',
+          autoRejectedAt: isAuto ? now : null,
+        } as any,
+      });
     });
 
     // Unreserve franchise stock for each item via inventory ledger
@@ -296,20 +378,33 @@ export class FranchiseOrdersService {
         `Order ${subOrder.masterOrder.id} moved to exception queue — max reassignment attempts (${MAX_REASSIGNMENT_ATTEMPTS}) exceeded`,
       );
 
-      // Log the rejection
-      this.prisma.orderReassignmentLog
-        .create({
-          data: {
-            subOrderId,
-            masterOrderId: subOrder.masterOrder.id,
-            fromSellerId: franchiseId,
-            toSellerId: null,
-            reason: options?.reason || 'Franchise rejected the order',
-            successful: false,
-            newSubOrderId: null,
-          },
-        })
-        .catch(() => {});
+      // Phase 79 (2026-05-22) — history audit Gaps #2/#6/#12.
+      //   • Discriminator columns populated so the history UI knows
+      //     this was a franchise (not stuffed-in-seller-slot) row.
+      //   • eventType: AUTO_AFTER_FRANCHISE_REJECT — distinct from
+      //     the seller-reject cascade so an ops analyst can break
+      //     down "% of reassigns by cause" cleanly.
+      //   • failureReason captures the policy-level cause (max
+      //     attempts exceeded) instead of the seller's rejection
+      //     reason which is what `reason` carries.
+      await this.prisma.orderReassignmentLog.create({
+        data: {
+          subOrderId,
+          masterOrderId: subOrder.masterOrder.id,
+          fromNodeType: 'FRANCHISE',
+          fromNodeId: franchiseId,
+          toNodeType: 'SELLER',
+          toNodeId: null,
+          fromSellerId: franchiseId,
+          toSellerId: null,
+          reason: options?.reason || 'Franchise rejected the order',
+          successful: false,
+          failureReason: `Max reassignment attempts (${MAX_REASSIGNMENT_ATTEMPTS}) exceeded — moved to exception queue`,
+          newSubOrderId: null,
+          reassignedBy: null,
+          eventType: 'AUTO_AFTER_FRANCHISE_REJECT',
+        },
+      });
 
       this.eventBus
         .publish({
@@ -404,12 +499,16 @@ export class FranchiseOrdersService {
             // SELLER and silently mis-routed franchise primaries; that's
             // fixed here.
             if (primary.nodeType === 'SELLER') {
+              // Phase 52 polish (2026-05-21) — pass customerId so the
+              // reallocation reservation is attributed to the
+              // customer for forensic queries.
               const reservation =
                 await this.catalogFacade.reserveStock({
                   mappingId: primary.mappingId,
                   quantity: item.quantity,
                   orderId: subOrder.masterOrder.id,
                   expiresInMinutes: 60,
+                  customerId: subOrder.masterOrder.customerId,
                 });
               await this.catalogFacade.confirmReservation(
                 reservation.id,
@@ -542,20 +641,34 @@ export class FranchiseOrdersService {
         .catch(() => {});
     }
 
-    // Log the reassignment attempt
-    this.prisma.orderReassignmentLog
-      .create({
-        data: {
-          subOrderId,
-          masterOrderId: subOrder.masterOrder.id,
-          fromSellerId: franchiseId, // Using fromSellerId to store the originating node ID
-          toSellerId: newSellerId,
-          reason: options?.reason || 'Franchise rejected the order',
-          successful: reassignmentSuccessful,
-          newSubOrderId,
-        },
-      })
-      .catch(() => {});
+    // Phase 79 (2026-05-22) — history audit Gaps #2/#4/#6/#12.
+    // Same shape as the max-attempts branch above. successful=true
+    // is possible here when a SELLER picked up the rejected
+    // franchise's items; toNodeType is therefore 'SELLER'. The
+    // failureReason is populated only when the cascade didn't find
+    // a candidate.
+    await this.prisma.orderReassignmentLog.create({
+      data: {
+        subOrderId,
+        masterOrderId: subOrder.masterOrder.id,
+        fromNodeType: 'FRANCHISE',
+        fromNodeId: franchiseId,
+        toNodeType: 'SELLER',
+        toNodeId: newSellerId,
+        fromSellerId: franchiseId,
+        toSellerId: newSellerId,
+        reason: options?.reason || 'Franchise rejected the order',
+        successful: reassignmentSuccessful,
+        failureReason: reassignmentSuccessful
+          ? null
+          : customerPincode
+            ? 'Auto-reassignment found no eligible alternate seller at this pincode'
+            : 'Auto-reassignment could not run — shipping pincode missing from address snapshot',
+        newSubOrderId,
+        reassignedBy: null,
+        eventType: 'AUTO_AFTER_FRANCHISE_REJECT',
+      },
+    });
 
     // Publish rejection event
     this.eventBus
@@ -586,110 +699,102 @@ export class FranchiseOrdersService {
   }
 
   // ── Update fulfillment status (UNFULFILLED -> PACKED -> SHIPPED) ──────
-
+  //
+  // Phase 82 (2026-05-23) — packing & shipping audit Gaps #2/#3/#4/#6.
+  // Pre-Phase-82 the franchise side diverged from the seller path in
+  // five ways: (a) no mandatory AWB/courier check, (b) no 4-photo
+  // evidence gate, (c) no FSM assertTransition defense, (d) no tax
+  // invoice trigger, (e) no audit log. All of those are closed by
+  // delegating to the unified OrdersService.updateFulfillmentStatusInternal
+  // path which fires the same guards regardless of actor.
+  //
+  // The franchise-side `confirmShipment` inventory-ledger step still
+  // runs here (post-status-update) because it's franchise-specific
+  // bookkeeping that doesn't belong on the seller path.
   async updateFulfillmentStatus(
     subOrderId: string,
     franchiseId: string,
     status: string,
     tracking?: { trackingNumber?: string; courierName?: string },
   ) {
-    const subOrder = await this.prisma.subOrder.findFirst({
-      where: {
-        id: subOrderId,
-        franchiseId,
-        fulfillmentNodeType: 'FRANCHISE',
+    // Phase 82 — delegate to the unified writer. Ownership check is
+    // wrapped in a closure that the writer invokes once.
+    const updated = await this.ordersService.updateFulfillmentStatusInternal({
+      subOrderId,
+      actorId: franchiseId,
+      actorKind: 'FRANCHISE',
+      status,
+      extra: {
+        trackingNumber: tracking?.trackingNumber,
+        courierName: tracking?.courierName,
       },
-      include: { items: true },
-    });
-    if (!subOrder) {
-      throw new NotFoundAppException('Order not found');
-    }
-    if (subOrder.acceptStatus !== 'ACCEPTED') {
-      throw new BadRequestAppException(
-        'Order must be accepted before updating fulfillment status',
-      );
-    }
-
-    // Franchise can only move: UNFULFILLED -> PACKED -> SHIPPED
-    // DELIVERED must be confirmed by admin or webhook
-    const validTransitions: Record<string, string[]> = {
-      UNFULFILLED: ['PACKED'],
-      PACKED: ['SHIPPED'],
-    };
-
-    const allowed =
-      validTransitions[subOrder.fulfillmentStatus] || [];
-    if (!allowed.includes(status)) {
-      if (status === 'DELIVERED') {
-        throw new BadRequestAppException(
-          'Delivery must be confirmed by admin. Franchise can only update status up to SHIPPED.',
-        );
-      }
-      throw new BadRequestAppException(
-        `Cannot transition from ${subOrder.fulfillmentStatus} to ${status}. Allowed: ${allowed.join(', ') || 'none (franchise flow complete)'}`,
-      );
-    }
-
-    // On SHIPPED: confirm shipment via inventory ledger for each item
-    if (status === 'SHIPPED') {
-      for (const item of subOrder.items) {
-        try {
-          await this.inventoryService.confirmShipment(
+      ownershipCheck: () =>
+        this.prisma.subOrder.findFirst({
+          where: {
+            id: subOrderId,
             franchiseId,
-            item.productId,
-            item.variantId,
-            item.quantity,
-            subOrder.masterOrderId,
-          );
-        } catch (err) {
-          this.logger.warn(
-            `Failed to confirm shipment for item ${item.id}: ${(err as Error).message}`,
-          );
+            fulfillmentNodeType: 'FRANCHISE',
+          },
+        }),
+    });
+
+    // Phase 82 — Gap #14 mirror. The unified writer rejects FULFILLED
+    // for both actors via the hardcoded allowedTransitions map. The
+    // pre-Phase-82 franchise code accepted it; the new path 400s.
+
+    // Franchise-specific post-update: confirm shipment in inventory
+    // ledger on SHIPPED. The unified writer handled the FSM gate +
+    // audit columns + master rollup + audit log already, so this is
+    // pure franchise bookkeeping.
+    if (status === 'SHIPPED') {
+      const subOrder = await this.prisma.subOrder.findUnique({
+        where: { id: subOrderId },
+        include: { items: true },
+      });
+      if (subOrder?.items) {
+        for (const item of subOrder.items) {
+          try {
+            await this.inventoryService.confirmShipment(
+              franchiseId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+              subOrder.masterOrderId,
+            );
+          } catch (err) {
+            this.logger.warn(
+              `Failed to confirm shipment for item ${item.id}: ${(err as Error).message}`,
+            );
+          }
         }
       }
     }
-
-    const updatePayload: any = { fulfillmentStatus: status as any };
-    if (status === 'SHIPPED' && tracking) {
-      if (tracking.trackingNumber) updatePayload.trackingNumber = tracking.trackingNumber;
-      if (tracking.courierName) updatePayload.courierName = tracking.courierName;
-    }
-
-    const updated = await this.prisma.subOrder.update({
-      where: { id: subOrderId },
-      data: updatePayload,
-    });
-
-    // Update master order status to DISPATCHED if SHIPPED
-    if (status === 'SHIPPED') {
-      await this.prisma.masterOrder.update({
-        where: { id: subOrder.masterOrderId },
-        data: { orderStatus: 'DISPATCHED' },
-      });
-    }
-
-    // Publish fulfillment status change event
-    this.eventBus
-      .publish({
-        eventName: 'franchise.order.status_changed',
-        aggregate: 'SubOrder',
-        aggregateId: subOrderId,
-        occurredAt: new Date(),
-        payload: {
-          subOrderId,
-          franchiseId,
-          previousStatus: subOrder.fulfillmentStatus,
-          newStatus: status,
-        },
-      })
-      .catch(() => {});
 
     return updated;
   }
 
   // ── Mark delivered (admin action or auto via shipping webhook) ─────────
-
-  async markDelivered(subOrderId: string) {
+  //
+  // Phase 83 (2026-05-23) — delivery confirmation audit Gap #10.
+  // Pre-Phase-83 this was a parallel implementation that diverged from
+  // OrdersService.deliverSubOrder in five ways:
+  //   • No FSM-enforced assertTransition
+  //   • Blind master → DELIVERED (no PARTIALLY_DELIVERED rollup)
+  //   • Separate event name (franchise.order.delivered) so existing
+  //     subscribers on orders.sub_order.delivered missed it
+  //   • No audit_log row
+  //   • No deliveredBy / deliverySource columns
+  //
+  // Phase 83 routes through the unified OrdersService.deliverSubOrder
+  // path with source=MANUAL_FRANCHISE so every delivery — regardless
+  // of actor — goes through the same FSM gate, audit-log writer,
+  // and outbox event.
+  async markDelivered(
+    subOrderId: string,
+    opts?: { deliveredBy?: string; deliveryProofUrl?: string },
+  ) {
+    // Phase 83 — ownership check stays here so a franchise-admin call
+    // can't deliver a non-FRANCHISE sub-order via this entry point.
     const subOrder = await this.prisma.subOrder.findFirst({
       where: {
         id: subOrderId,
@@ -699,41 +804,11 @@ export class FranchiseOrdersService {
     if (!subOrder) {
       throw new NotFoundAppException('Order not found');
     }
-
-    const now = new Date();
-
-    const updated = await this.prisma.subOrder.update({
-      where: { id: subOrderId },
-      data: {
-        fulfillmentStatus: 'DELIVERED',
-        deliveredAt: now,
-        returnWindowEndsAt: new Date(now.getTime() + this.returnWindowMs),
-      },
+    return this.ordersService.deliverSubOrder(subOrderId, {
+      source: 'MANUAL_FRANCHISE',
+      deliveredBy: opts?.deliveredBy,
+      deliveryProofUrl: opts?.deliveryProofUrl,
     });
-
-    // Update master order status to DELIVERED
-    await this.prisma.masterOrder.update({
-      where: { id: subOrder.masterOrderId },
-      data: { orderStatus: 'DELIVERED' },
-    });
-
-    // Publish delivery event
-    this.eventBus
-      .publish({
-        eventName: 'franchise.order.delivered',
-        aggregate: 'SubOrder',
-        aggregateId: subOrderId,
-        occurredAt: now,
-        payload: {
-          subOrderId,
-          franchiseId: subOrder.franchiseId,
-          masterOrderId: subOrder.masterOrderId,
-          deliveredAt: now.toISOString(),
-        },
-      })
-      .catch(() => {});
-
-    return updated;
   }
 
   // ── Initiate return for franchise-fulfilled order ─────────────

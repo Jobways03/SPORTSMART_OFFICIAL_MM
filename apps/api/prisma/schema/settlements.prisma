@@ -7,30 +7,72 @@ enum SettlementCycleStatus {
   PREVIEWED
   APPROVED
   PAID
+  // Phase 141 — a DRAFT/PREVIEWED cycle created in error can be cancelled
+  // (releases its claimed commission records back to the pool).
+  CANCELLED
 }
 
 enum SellerSettlementStatus {
   PENDING
   APPROVED
   PAID
+  // Phase 141 — set when its parent cycle is cancelled (records released).
+  CANCELLED
+  // Phase 145 — a payout that the bank rejected / reversed; a resting state the
+  // settlement can be retried from (FAILED → PAID) with an audit chain.
+  FAILED
+}
+
+// Phase 147 — adjustment taxonomy so finance can aggregate by category
+// (e.g. "₹X of SLA fines this month") instead of parsing free-text reasons.
+enum SettlementAdjustmentType {
+  COURIER_PENALTY
+  SLA_FINE
+  GOODWILL
+  MANUAL_CORRECTION
+  // Phase 150 (2026-05-26) — Post-settlement reversal netting. Written by
+  // createCycle when it consumes a PENDING SellerDebit (a return / RTO /
+  // dispute claw-back recorded against an already-settled commission) and
+  // nets it off the seller's next payout. The amount is negative; the
+  // source debit is named in `notes`. Distinct type so finance can report
+  // claw-back deductions separately from operator-entered penalties.
+  CLAWBACK
+  OTHER
+}
+
+// Phase 147 — adjustments are append-only; a mistaken one is VOIDED (which
+// reverses its effect on the totals), never hard-deleted.
+enum SettlementAdjustmentStatus {
+  ACTIVE
+  VOIDED
 }
 
 model SettlementCycle {
-  id          String                @id @default(uuid())
-  periodStart DateTime              @map("period_start")
-  periodEnd   DateTime              @map("period_end")
-  status      SettlementCycleStatus @default(DRAFT) @map("status")
-  totalAmount Decimal               @default(0) @map("total_amount") @db.Decimal(12, 2)
-  totalMargin Decimal               @default(0) @map("total_margin") @db.Decimal(12, 2)
+  id                 String                @id @default(uuid())
+  periodStart        DateTime              @map("period_start")
+  periodEnd          DateTime              @map("period_end")
+  status             SettlementCycleStatus @default(DRAFT) @map("status")
+  totalAmount        Decimal               @default(0) @map("total_amount") @db.Decimal(12, 2)
+  totalMargin        Decimal               @default(0) @map("total_margin") @db.Decimal(12, 2)
   // Phase 1.4 paise siblings (ADR-007). BigInt — settlement cycles
   // aggregate every paid order in a period.
-  totalAmountInPaise BigInt @default(0) @map("total_amount_in_paise")
-  totalMarginInPaise BigInt @default(0) @map("total_margin_in_paise")
-  createdAt   DateTime              @default(now()) @map("created_at")
-  updatedAt   DateTime              @updatedAt @map("updated_at")
+  totalAmountInPaise BigInt                @default(0) @map("total_amount_in_paise")
+  totalMarginInPaise BigInt                @default(0) @map("total_margin_in_paise")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+  // Phase 141 — which admin created this cycle (the most consequential write in
+  // the flow). FK to Admin; SET NULL since admins are soft-deleted.
+  createdByAdminId   String?               @map("created_by_admin_id")
+  // Phase 144 — approval audit. Approving a cycle commits sellers' payouts; the
+  // who/when/why must be answerable from the schema, not just cycle.updatedAt.
+  approvedByAdminId  String?               @map("approved_by_admin_id")
+  approvedAt         DateTime?             @map("approved_at")
+  approvalNotes      String?               @map("approval_notes")
 
   sellerSettlements    SellerSettlement[]
   franchiseSettlements FranchiseSettlement[]
+  createdByAdmin       Admin?                @relation("SettlementCycleCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  approvedByAdmin      Admin?                @relation("SettlementCycleApprovedBy", fields: [approvedByAdminId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([periodStart, periodEnd])
@@ -38,19 +80,25 @@ model SettlementCycle {
 }
 
 model SellerSettlement {
-  id                    String                 @id @default(uuid())
-  cycleId               String                 @map("cycle_id")
-  sellerId              String                 @map("seller_id")
-  sellerName            String                 @map("seller_name")
-  totalOrders           Int                    @default(0) @map("total_orders")
-  totalItems            Int                    @default(0) @map("total_items")
-  totalPlatformAmount   Decimal                @default(0) @map("total_platform_amount") @db.Decimal(12, 2)
-  totalSettlementAmount Decimal                @default(0) @map("total_settlement_amount") @db.Decimal(12, 2)
-  totalPlatformMargin   Decimal                @default(0) @map("total_platform_margin") @db.Decimal(12, 2)
+  id                           String  @id @default(uuid())
+  cycleId                      String  @map("cycle_id")
+  sellerId                     String  @map("seller_id")
+  sellerName                   String  @map("seller_name")
+  totalOrders                  Int     @default(0) @map("total_orders")
+  totalItems                   Int     @default(0) @map("total_items")
+  totalPlatformAmount          Decimal @default(0) @map("total_platform_amount") @db.Decimal(12, 2)
+  totalSettlementAmount        Decimal @default(0) @map("total_settlement_amount") @db.Decimal(12, 2)
+  totalPlatformMargin          Decimal @default(0) @map("total_platform_margin") @db.Decimal(12, 2)
+  // Phase 147 — IMMUTABLE snapshot of the approved gross, set once at cycle
+  // creation and never mutated. totalSettlementAmount remains the *current net
+  // payable* (gross + active adjustments), so existing readers (payout, CSV)
+  // are unchanged; this column preserves "what was approved" for reconciliation.
+  approvedSettlementAmount     Decimal @default(0) @map("approved_settlement_amount") @db.Decimal(12, 2)
   // Phase 1.4 paise siblings (ADR-007).
-  totalPlatformAmountInPaise   BigInt @default(0) @map("total_platform_amount_in_paise")
-  totalSettlementAmountInPaise BigInt @default(0) @map("total_settlement_amount_in_paise")
-  totalPlatformMarginInPaise   BigInt @default(0) @map("total_platform_margin_in_paise")
+  totalPlatformAmountInPaise   BigInt  @default(0) @map("total_platform_amount_in_paise")
+  totalSettlementAmountInPaise BigInt  @default(0) @map("total_settlement_amount_in_paise")
+  approvedSettlementAmountInPaise BigInt @default(0) @map("approved_settlement_amount_in_paise")
+  totalPlatformMarginInPaise   BigInt  @default(0) @map("total_platform_margin_in_paise")
 
   // Phase 17 GST — TCS (Section 52) deduction snapshot. The TCS
   // amount lives in the linked `gst_tcs_settlement_ledger` row; we
@@ -58,28 +106,83 @@ model SellerSettlement {
   // seller payout statement can render without a join, and so the
   // displayed "net payout" equals (totalSettlement − tcsDeducted)
   // exactly.
-  tcsLedgerId           String?  @map("tcs_ledger_id")
-  tcsDeductedInPaise    BigInt   @default(0)   @map("tcs_deducted_in_paise")
-  tcsRateBpsSnapshot    Int      @default(100) @map("tcs_rate_bps_snapshot")
-  tcsFilingPeriod       String?  @map("tcs_filing_period")
+  tcsLedgerId        String? @map("tcs_ledger_id")
+  tcsDeductedInPaise BigInt  @default(0) @map("tcs_deducted_in_paise")
+  tcsRateBpsSnapshot Int     @default(100) @map("tcs_rate_bps_snapshot")
+  tcsFilingPeriod    String? @map("tcs_filing_period")
 
-  status                SellerSettlementStatus @default(PENDING) @map("status")
-  paidAt                DateTime?              @map("paid_at")
-  utrReference          String?                @map("utr_reference")
-  createdAt             DateTime               @default(now()) @map("created_at")
-  updatedAt             DateTime               @updatedAt @map("updated_at")
+  // Phase 27 — Section 194-O Income-Tax TDS deduction snapshot.
+  // Parallel to TCS but on GROSS sale value (including GST) and
+  // quarterly cadence. Net payout shown to the seller becomes:
+  //   totalSettlement − tcsDeducted − tdsDeducted − totalCommissionGst
+  // The ledger row at `tdsLedgerId` carries the full state-machine
+  // history; the denorm columns here keep the payout statement a
+  // single-table read.
+  tdsLedgerId        String? @map("tds_ledger_id")
+  tdsDeductedInPaise BigInt  @default(0) @map("tds_deducted_in_paise")
+  tdsRateBpsSnapshot Int     @default(100) @map("tds_rate_bps_snapshot")
+  tdsFilingPeriod    String? @map("tds_filing_period")
 
-  cycle             SettlementCycle    @relation(fields: [cycleId], references: [id], onDelete: Cascade)
-  seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  // Phase 28 — 18% GST on marketplace commission (output supply by
+  // platform to the seller per Section 9 CGST Act + SAC 9985). Place
+  // of supply is the seller's state (IGST Act Section 12(2)(a)),
+  // so the intra/inter split depends on (marketplace state, seller
+  // state). The marketplace owes this GST to the government; the
+  // seller can claim it as ITC. Subtracted from the seller's net
+  // payout because the marketplace withholds it.
+  commissionGstRateBps              Int     @default(1800) @map("commission_gst_rate_bps")
+  commissionGstSplitType            String? @map("commission_gst_split_type")
+  cgstOnCommissionInPaise           BigInt  @default(0) @map("cgst_on_commission_in_paise")
+  sgstOnCommissionInPaise           BigInt  @default(0) @map("sgst_on_commission_in_paise")
+  igstOnCommissionInPaise           BigInt  @default(0) @map("igst_on_commission_in_paise")
+  totalCommissionGstInPaise         BigInt  @default(0) @map("total_commission_gst_in_paise")
+  // 2-digit state codes captured at compute time so a later
+  // PlatformGstProfile or Seller.gstStateCode change doesn't rewrite
+  // the historical split.
+  commissionGstMarketplaceStateCode String? @map("commission_gst_marketplace_state_code")
+  commissionGstSellerStateCode      String? @map("commission_gst_seller_state_code")
+
+  status       SellerSettlementStatus @default(PENDING) @map("status")
+  paidAt       DateTime?              @map("paid_at")
+  utrReference String?                @map("utr_reference")
+  // Phase 145 — payout provenance + failure handling. paidByAdminId denormalises
+  // the actor onto the row (list/CSV "paid by X" without an audit_logs join);
+  // paymentMethod/proof for reconciliation; failure reason for a FAILED row.
+  paidByAdminId        String? @map("paid_by_admin_id")
+  paymentMethod        String? @map("payment_method")
+  paymentProofUrl      String? @map("payment_proof_url")
+  paymentFailureReason String? @map("payment_failure_reason")
+  // Phase 151 — the payout batch this settlement is locked into. Set inside
+  // createBatch's transaction (filter payoutBatchId:null) so a second
+  // createBatch can't pull the same APPROVED settlement into a second batch
+  // (duplicate-payout guard); cleared when the batch is CANCELLED.
+  payoutBatchId String?              @map("payout_batch_id")
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @updatedAt @map("updated_at")
+
+  cycle             SettlementCycle         @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  seller            Seller                  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   commissionRecords CommissionRecord[]
   tcsLedger         GstTcsSettlementLedger? @relation(fields: [tcsLedgerId], references: [id], onDelete: Restrict)
+  tdsLedger         Section194OTdsLedger?   @relation(fields: [tdsLedgerId], references: [id], onDelete: Restrict)
+  paidByAdmin       Admin?                  @relation("SellerSettlementPaidBy", fields: [paidByAdminId], references: [id], onDelete: SetNull)
   // Phase 12 (2026-05-16) — back-relation for the SettlementAdjustment FK.
   adjustments       SettlementAdjustment[]
+  // Phase 151 — the payout batch lock (duplicate-batch guard).
+  payoutBatch       PayoutBatch?            @relation(fields: [payoutBatchId], references: [id], onDelete: SetNull)
 
   @@unique([cycleId, sellerId])
   @@index([cycleId])
   @@index([sellerId])
   @@index([status])
+  @@index([payoutBatchId])
+  // Phase 141 — the per-cycle status rollup (approve/pay sweeps) hits this combo.
+  @@index([cycleId, status])
+  // Phase 145 — UTR is a globally-unique bank reference; a duplicate signals a
+  // copy-paste error masking a real payment failure. Partial unique (NULLs —
+  // unpaid settlements — are exempt). Postgres treats NULLs as distinct anyway,
+  // but the named partial index documents intent + powers reconciliation lookups.
+  @@unique([utrReference], map: "seller_settlement_utr_unique")
   @@map("seller_settlements")
 }
 
@@ -98,27 +201,42 @@ model SellerSettlement {
 //     a single row; the second insert raises a unique-violation that
 //     the admin service catches and translates to a 409.
 model SettlementAdjustment {
-  id           String   @id @default(uuid())
-  settlementId String   @map("settlement_id")
-  amount        Decimal @db.Decimal(12, 2)
+  id               String   @id @default(uuid())
+  settlementId     String   @map("settlement_id")
+  amount           Decimal  @db.Decimal(12, 2)
   // Phase 1.4 paise sibling (ADR-007).
-  amountInPaise BigInt  @default(0) @map("amount_in_paise")
-  reason        String
-  notes        String?
-  createdByAdminId String? @map("created_by_admin_id")
+  amountInPaise    BigInt   @default(0) @map("amount_in_paise")
+  // Phase 147 — category taxonomy (default OTHER for legacy rows) + lifecycle.
+  adjustmentType   SettlementAdjustmentType   @default(OTHER) @map("adjustment_type")
+  status           SettlementAdjustmentStatus @default(ACTIVE) @map("status")
+  reason           String
+  notes            String?
+  // Phase 147 — link to the courier invoice / SLA-breach doc backing the adjustment.
+  referenceDocumentUrl String? @map("reference_document_url")
+  createdByAdminId String?  @map("created_by_admin_id")
+  // Phase 147 — void provenance (set when status flips to VOIDED).
+  voidedByAdminId  String?   @map("voided_by_admin_id")
+  voidedAt         DateTime? @map("voided_at")
+  voidReason       String?   @map("void_reason")
   // Phase 12 (2026-05-16) — caller-supplied idempotency key. Optional
   // for backward compatibility with rows seeded before the column
   // existed; new code at the admin-adjustment endpoint MUST set it
   // (typically `${settlementId}:${adminId}:${request-uuid}`).
-  idempotencyKey String? @map("idempotency_key")
-  createdAt    DateTime @default(now()) @map("created_at")
+  idempotencyKey   String?  @map("idempotency_key")
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  settlement SellerSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  settlement     SellerSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  createdByAdmin Admin?           @relation("SettlementAdjustmentCreatedBy", fields: [createdByAdminId], references: [id], onDelete: SetNull)
+  voidedByAdmin  Admin?           @relation("SettlementAdjustmentVoidedBy", fields: [voidedByAdminId], references: [id], onDelete: SetNull)
 
   // Partial unique: only rows that supplied an idempotency key are
   // covered. The partial form is created in the migration alongside
   // the regular schema (Prisma can't express WHERE clauses in
   // @@unique today — see migration.sql for the CREATE UNIQUE INDEX).
   @@index([settlementId])
+  // Phase 147 — ordered list per settlement + report aggregation by type/status.
+  @@index([settlementId, createdAt])
+  @@index([adjustmentType])
+  @@index([status])
   @@map("settlement_adjustments")
 }

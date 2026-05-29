@@ -88,7 +88,7 @@ Step-by-step procedure for taking the GST module from `OFF` → `AUDIT` (staging
 **Files modified:**
 - `docs/tax/CA.md` — Phase 27 entry; header updated; §9 file map fully refreshed.
 
-**Next:** No next phase — Phase 27 is the terminal phase of the planned 0–27 implementation arc. The next milestone is **CA review + sign-off**, then the rollout runbook drives the flip-to-STRICT cutover. Post-cutover work (real NIC adapters for IRP + EWB, real S3 PDF storage, frontend UI polish in `web-admin-storefront` / `web-admin` / `web-storefront`) lands as targeted PRs against the stable foundation this 28-phase arc built.
+**Next:** No next phase — Phase 27 is the terminal phase of the planned 0–27 implementation arc. The next milestone is **CA review + sign-off**, then the rollout runbook drives the flip-to-STRICT cutover. Post-cutover work (real NIC adapters for IRP + EWB, real S3 PDF storage, frontend UI polish in `web-admin-storefront` / `web-d2c-seller-admin` / `web-storefront`) lands as targeted PRs against the stable foundation this 28-phase arc built.
 
 ---
 
@@ -173,7 +173,7 @@ Step-by-step procedure for taking the GST module from `OFF` → `AUDIT` (staging
 
 *Controllers:* `apps/api/src/modules/tax/presentation/controllers/`
 
-Three controllers expose the tax surface to the existing Next.js frontends (`web-storefront`, `web-admin` seller portal, `web-admin-storefront` super admin):
+Three controllers expose the tax surface to the existing Next.js frontends (`web-storefront`, `web-d2c-seller-admin` seller portal, `web-admin-storefront` super admin):
 
 **`CustomerTaxDocumentsController`** — `/api/v1/customer/tax-documents` (UserAuthGuard)
 - `GET /` — Paginated list of the customer's documents. Excludes VOIDED_DRAFT / SUPERSEDED. BigInt serialised to string at the HTTP boundary. Page clamped to [1, ∞], limit clamped to [1, 50].
@@ -2457,9 +2457,9 @@ Seller dispatches
 Every backend feature has frontend wiring. See §11 for the file map.
 
 - **Super Admin (`web-admin-storefront`):** product tax fields, HSN/UQC pages, GSTIN verification, multi-GSTIN seller, platform GST profile, invoice/credit-note/e-way bill lists, settlements with GST/TCS, tax reports.
-- **Seller Admin (`web-admin`):** seller-side tax visibility, document list per seller, time-bar AdminTasks.
+- **Seller Admin (`web-d2c-seller-admin`):** seller-side tax visibility, document list per seller, time-bar AdminTasks.
 - **Customer storefront (`web-storefront`):** "Inclusive of GST" gating on PDP, optional B2B GSTIN on checkout, address-change tax refresh, invoice/credit-note download on order/return detail, legacy receipt for old orders.
-- **Seller portal (`web-seller`):** GSTIN profile, invoice download per sub-order, e-way bill required-before-ship gate, settlement GST/TCS summary.
+- **Seller portal (`web-d2c-seller`):** GSTIN profile, invoice download per sub-order, e-way bill required-before-ship gate, settlement GST/TCS summary.
 - **Franchise / Affiliate portals:** invoice download for own-brand/franchise-fulfilled orders where relevant.
 
 ---
@@ -2937,7 +2937,7 @@ Engineering does NOT have an opinion on these. Please answer in `GST_ASSUMPTIONS
 |---|---|
 | Admin tax dashboard | `apps/web-admin-storefront/src/app/dashboard/tax/*` (consumes `/api/v1/admin/tax/*`) |
 | Customer invoice download | `apps/web-storefront/src/app/orders/[orderNumber]/*` (consumes `/api/v1/customer/tax-documents/*`) |
-| Seller invoice download | `apps/web-admin/src/app/dashboard/orders/[id]/*` (consumes `/api/v1/seller/tax-documents/*`) |
+| Seller invoice download | `apps/web-d2c-seller-admin/src/app/dashboard/orders/[id]/*` (consumes `/api/v1/seller/tax-documents/*`) |
 
 ---
 

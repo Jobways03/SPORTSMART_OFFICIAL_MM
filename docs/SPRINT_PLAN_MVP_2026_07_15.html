@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SportSmart MVP — Sprint Plan</title>
+<style>
+@page {
+  size: A4;
+  margin: 20mm 18mm 18mm 18mm;
+  @bottom-right { content: counter(page) " / " counter(pages); font-family: -apple-system, sans-serif; font-size: 8.5pt; color: #94a3b8; }
+  @bottom-left  { content: "SportSmart MVP · Sprint Plan"; font-family: -apple-system, sans-serif; font-size: 8.5pt; color: #94a3b8; }
+}
+@page :first { @bottom-right { content: ""; } @bottom-left { content: ""; } }
+
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #0f172a; margin: 0; }
+
+h1 { font-size: 22pt; margin: 0 0 6pt; color: #0f172a; letter-spacing: -0.3pt; font-weight: 700; }
+h2 { font-size: 15pt; margin: 18pt 0 8pt; color: #0f172a; border-bottom: 2pt solid #1e3a8a; padding-bottom: 4pt; page-break-after: avoid; }
+h3 { font-size: 12pt; margin: 14pt 0 6pt; color: #1e3a8a; page-break-after: avoid; }
+p { margin: 4pt 0 8pt; }
+
+table { width: 100%; border-collapse: collapse; margin: 4pt 0 12pt; font-size: 10pt; page-break-inside: avoid; }
+th { background: #f1f5f9; text-align: left; padding: 6pt 8pt; font-weight: 600; border-bottom: 1.5pt solid #1e3a8a; color: #1e293b; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.3pt; }
+td { padding: 6pt 8pt; border-bottom: 0.5pt solid #e2e8f0; vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.center, th.center { text-align: center; }
+
+.cover { height: 250mm; display: flex; flex-direction: column; justify-content: space-between; page-break-after: always; }
+.cover-tag { display: inline-block; background: #1e3a8a; color: #fff; font-size: 8pt; font-weight: 700; letter-spacing: 2pt; padding: 3pt 10pt; margin-bottom: 20pt; }
+.cover-title { font-size: 36pt; line-height: 1.1; font-weight: 800; color: #0f172a; margin: 0; }
+.cover-subtitle { font-size: 16pt; color: #1e3a8a; margin: 12pt 0 0; font-weight: 500; }
+.cover-date { font-size: 24pt; color: #0f172a; margin: 30pt 0 0; font-weight: 700; }
+.cover-foot { font-size: 10pt; color: #64748b; }
+
+.summary {
+  background: #f8fafc; border-left: 4pt solid #1e3a8a; padding: 14pt 18pt; margin: 14pt 0 18pt; border-radius: 0 4pt 4pt 0;
+}
+.summary h3 { margin-top: 0; }
+
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10pt; margin: 12pt 0 18pt; }
+.kpi { padding: 12pt; border: 1px solid #e2e8f0; border-radius: 4pt; text-align: center; }
+.kpi-num { font-size: 24pt; font-weight: 700; color: #1e3a8a; line-height: 1; }
+.kpi-lbl { font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5pt; color: #64748b; margin-top: 4pt; font-weight: 600; }
+
+.rag { display: inline-block; padding: 2pt 8pt; border-radius: 3pt; font-size: 9pt; font-weight: 700; }
+.r-g { background: #dcfce7; color: #166534; }
+.r-a { background: #fef3c7; color: #92400e; }
+.r-r { background: #fee2e2; color: #991b1b; }
+
+.sprint {
+  border: 1px solid #e2e8f0; border-radius: 6pt; padding: 14pt 16pt; margin: 12pt 0; background: #fff; page-break-inside: avoid;
+}
+.sprint-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8pt; padding-bottom: 6pt; border-bottom: 1pt solid #f1f5f9; }
+.sprint-num { font-size: 9pt; font-weight: 700; color: #1e3a8a; text-transform: uppercase; letter-spacing: 1.5pt; }
+.sprint-name { font-size: 16pt; font-weight: 700; color: #0f172a; margin: 2pt 0; }
+.sprint-dates { font-size: 10pt; color: #64748b; font-variant-numeric: tabular-nums; }
+.sprint-goal { font-size: 10.5pt; color: #1e3a8a; font-style: italic; margin: 0 0 10pt; }
+
+.gantt { font-size: 9pt; margin: 8pt 0 16pt; }
+.gantt-row { display: grid; grid-template-columns: 90pt 1fr; gap: 8pt; padding: 3pt 0; }
+.gantt-lbl { color: #475569; font-weight: 500; font-size: 9.5pt; }
+.gantt-trk { background: #f1f5f9; height: 16pt; border-radius: 8pt; position: relative; }
+.gantt-bar { position: absolute; top: 1pt; bottom: 1pt; background: #1e3a8a; border-radius: 7pt; color: #fff; padding: 0 8pt; font-size: 8.5pt; line-height: 14pt; }
+.gantt-bar.launch { background: #dc2626; }
+.gantt-bar.buffer { background: #d97706; }
+
+.callout { background: #eff6ff; border-left: 3pt solid #1e3a8a; padding: 8pt 12pt; margin: 10pt 0; font-size: 10pt; color: #1e3a8a; border-radius: 0 3pt 3pt 0; }
+.callout.warn { background: #fffbeb; border-color: #d97706; color: #78350f; }
+.callout.danger { background: #fef2f2; border-color: #dc2626; color: #7f1d1d; }
+
+ul, ol { margin: 4pt 0 8pt; padding-left: 18pt; }
+li { margin-bottom: 3pt; }
+.tight li { margin-bottom: 1pt; }
+
+.small { font-size: 9pt; color: #64748b; }
+.muted { color: #64748b; }
+code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #f1f5f9; padding: 1pt 4pt; border-radius: 2pt; }
+
+.page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ COVER ═══════════════ -->
+<div class="cover">
+  <div>
+    <span class="cover-tag">CONFIDENTIAL · INTERNAL</span>
+    <h1 class="cover-title">SportSmart</h1>
+    <h1 class="cover-title" style="color:#1e3a8a">MVP Sprint Plan</h1>
+    <p class="cover-subtitle">Eight weeks from where we are to live commercial operations.</p>
+    <p class="cover-date">15 July 2026</p>
+  </div>
+  <div class="cover-foot">
+    <strong>Owner:</strong> Engineering Lead · <strong>Issued:</strong> 18 May 2026 · <strong>Version:</strong> 1.0
+  </div>
+</div>
+
+<!-- ═══════════════ ONE-PAGE SUMMARY ═══════════════ -->
+
+<h1 style="font-size:18pt;margin-bottom:2pt">The plan in 60 seconds</h1>
+<p class="muted" style="margin-top:0">Read this page. Skip the rest if you trust the team.</p>
+
+<div class="summary">
+  <p style="margin:0"><strong>We're 57% of the way to MVP.</strong> The platform works end-to-end in staging today — customers can browse, sellers can list, franchises can sell at POS, admins can run the back office, GST invoices generate correctly. What's left is closing 3 ship-blockers, hardening for real load, and operationalising what we've built (alerts, dashboards, runbooks, training). Four 2-week sprints get us there with a 2-day buffer before launch on <strong>Wednesday 15 July</strong>.</p>
+</div>
+
+<div class="kpi-row">
+  <div class="kpi"><div class="kpi-num">15</div><div class="kpi-lbl">JUL · Launch</div></div>
+  <div class="kpi"><div class="kpi-num">4</div><div class="kpi-lbl">Sprints</div></div>
+  <div class="kpi"><div class="kpi-num">4.0</div><div class="kpi-lbl">FTE</div></div>
+  <div class="kpi"><div class="kpi-num"><span class="rag r-g">GREEN</span></div><div class="kpi-lbl">Confidence</div></div>
+</div>
+
+<h3>What I need from you</h3>
+<ol>
+  <li><strong>Endorse the 15 July date.</strong> If anything in the timeline below looks shaky, say so this week, not in week six.</li>
+  <li><strong>Confirm team composition</strong>: 1 Eng Lead + 1 Backend + 1 Frontend + 0.5 QA + 0.25 DevOps. Same team for all four sprints.</li>
+  <li><strong>Accept the post-MVP defer list</strong> (page 4). These items don't make MVP; they're in the next quarter's plan.</li>
+  <li><strong>Co-sign Go/No-Go on 12 July.</strong> Default decision is No-Go unless every CRITICAL exit-criterion is met.</li>
+</ol>
+
+<h3>The three things I'm watching</h3>
+<table>
+  <thead><tr><th style="width:55%">Risk</th><th class="center" style="width:12%">RAG</th><th>What I'm doing about it</th></tr></thead>
+  <tbody>
+    <tr><td>Concurrent-order race could cause oversell on Day 1</td><td class="center"><span class="rag r-a">AMBER</span></td><td>Sprint 2 fixes the race. Sprint 4 load test proves it under realistic concurrency.</td></tr>
+    <tr><td>Stuck refunds pile up because the recovery cron doesn't exist yet</td><td class="center"><span class="rag r-a">AMBER</span></td><td>Sprint 1 ships the cron. Finance monitors the queue daily from day one.</td></tr>
+    <tr><td>Payment gateway outage on launch day</td><td class="center"><span class="rag r-g">GREEN</span></td><td>COD stays available. Status page wired. Customer comms drafted.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Bottom line:</strong> We launch on 15 July with high confidence if Sprints 1 and 2 deliver on plan. If Sprint 1 slips, we re-plan in the 1 June review. If Sprint 2 slips, we'll have an honest conversation about a 2-week date push before we get to Sprint 4. No surprises in the last week.
+</div>
+
+<!-- ═══════════════ PAGE 2: WHERE WE ARE ═══════════════ -->
+<div class="page-break"></div>
+
+<h2>1. Where we are today</h2>
+
+<p>The platform has matured through 28 phases of engineering. Today, against MVP scope, the picture looks like this:</p>
+
+<table>
+  <thead><tr><th>Capability</th><th class="center" style="width:15%">Status</th><th>What's left</th></tr></thead>
+  <tbody>
+    <tr><td>Customer browse, cart, checkout, payment</td><td class="center"><span class="rag r-a">75%</span></td><td>Cart race condition; one frontend hang on API errors</td></tr>
+    <tr><td>Seller onboarding, GSTIN/PAN, product listing</td><td class="center"><span class="rag r-g">95%</span></td><td>Server-side logout; admin can't edit seller GSTIN yet (defer)</td></tr>
+    <tr><td>Franchise POS, procurement, settlements</td><td class="center"><span class="rag r-a">80%</span></td><td>POS cross-state tax split; procurement per-line tax (defer)</td></tr>
+    <tr><td>Order placement, allocation, fulfilment</td><td class="center"><span class="rag r-a">80%</span></td><td>Inventory write path needs end-to-end verification</td></tr>
+    <tr><td>Payments, refunds (online + COD), wallet</td><td class="center"><span class="rag r-a">70%</span></td><td>COD UPI auto-refund; stuck-saga recovery cron; settlement drift</td></tr>
+    <tr><td>GST: invoices, e-invoice, e-way bill, GSTR reports</td><td class="center"><span class="rag r-g">95%</span></td><td>External CA sign-off on POS bills</td></tr>
+    <tr><td>Admin tools: approvals, finance, tax dashboard</td><td class="center"><span class="rag r-g">90%</span></td><td>Some silent-error frontend bugs</td></tr>
+    <tr><td>Identity: 5 actor logins, MFA, refresh tokens</td><td class="center"><span class="rag r-g">90%</span></td><td>Refresh-token reuse detection; MFA brute-force lockout; logout endpoints</td></tr>
+    <tr><td>Integrations: Razorpay, iThink, Shiprocket, WhatsApp</td><td class="center"><span class="rag r-a">75%</span></td><td>Shipping idempotency; iThink credential redaction; webhook signatures</td></tr>
+    <tr><td>Observability: alerts, dashboards, runbooks</td><td class="center"><span class="rag r-r">40%</span></td><td>Cron heartbeat, financial drift alerts, top 3 incident runbooks</td></tr>
+  </tbody>
+</table>
+
+<h3>The 3 ship-blockers</h3>
+<ol>
+  <li><strong>Inventory write path</strong> — works in code review but never verified end-to-end with a real order. Sprint 1.</li>
+  <li><strong>COD UPI refunds get stuck in MANUAL_REQUIRED</strong> — finance touches every UPI refund manually. Unsustainable past week one. Sprint 1.</li>
+  <li><strong>Refund saga has no recovery cron</strong> — if a saga crashes mid-flight, the refund is silently lost. Sprint 1.</li>
+</ol>
+
+<h3>What we're NOT shipping in MVP-1 (and that's OK)</h3>
+<table>
+  <thead><tr><th>Deferred to</th><th>What</th><th>Why it's OK to defer</th></tr></thead>
+  <tbody>
+    <tr><td>MVP-2 (Aug)</td><td>Move tokens from sessionStorage to httpOnly cookies</td><td>Coordinated FE+BE rewrite. Acceptable risk for closed beta.</td></tr>
+    <tr><td>MVP-2 (Aug)</td><td>Affiliate logout endpoint</td><td>Stateless 24h JWT is enough for low-volume affiliate use.</td></tr>
+    <tr><td>MVP-2 (Aug)</td><td>Per-line procurement tax breakdown</td><td>Admin issues tax invoice on dispatch — franchise sees it in Tax Invoices page.</td></tr>
+    <tr><td>MVP-3 (Sep)</td><td>Per-product SEO metadata, next/image migration</td><td>We launch via direct channels, not Google search.</td></tr>
+    <tr><td>MVP-3 (Sep)</td><td>Responsive breakpoints on 3 admin apps</td><td>Staff use desktop.</td></tr>
+    <tr><td>MVP-3 (Sep)</td><td>Per-category commission override UI</td><td>20% fallback is fine for the first seller cohort with negotiated rates.</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════ PAGE 3: SPRINT OVERVIEW ═══════════════ -->
+<div class="page-break"></div>
+
+<h2>2. The sprint plan</h2>
+
+<h3>Timeline</h3>
+<div class="gantt">
+  <div class="gantt-row"><div class="gantt-lbl">Sprint 1</div><div class="gantt-trk"><div class="gantt-bar" style="left:0%;width:24%">19 May – 1 Jun · Stabilise</div></div></div>
+  <div class="gantt-row"><div class="gantt-lbl">Sprint 2</div><div class="gantt-trk"><div class="gantt-bar" style="left:24%;width:24%">2 – 15 Jun · Harden money &amp; auth</div></div></div>
+  <div class="gantt-row"><div class="gantt-lbl">Sprint 3</div><div class="gantt-trk"><div class="gantt-bar" style="left:48%;width:24%">16 – 29 Jun · Observability + tests</div></div></div>
+  <div class="gantt-row"><div class="gantt-lbl">Sprint 4</div><div class="gantt-trk"><div class="gantt-bar" style="left:72%;width:24%">30 Jun – 13 Jul · Bug bash + load test</div></div></div>
+  <div class="gantt-row"><div class="gantt-lbl">Buffer</div><div class="gantt-trk"><div class="gantt-bar buffer" style="left:96%;width:3%">14 Jul</div></div></div>
+  <div class="gantt-row"><div class="gantt-lbl">Launch</div><div class="gantt-trk"><div class="gantt-bar launch" style="left:99%;width:1%">●</div></div></div>
+</div>
+
+<h3>Sprint goals at a glance</h3>
+<table>
+  <thead><tr><th style="width:14%">Sprint</th><th style="width:30%">Goal</th><th>Top deliverables</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1. Stabilise</strong><br><span class="small">19 May – 1 Jun</span></td><td>Close every ship-blocker so we spend the rest of runway hardening, not fire-fighting.</td><td>Inventory write verified · Dispute email XSS gone · COD UPI auto-refund · Stuck-saga sweep cron · Refresh-token reuse detection · iThink credential scrubbing</td></tr>
+    <tr><td><strong>2. Harden</strong><br><span class="small">2 – 15 Jun</span></td><td>Survive real load. Eliminate every race and integration-retry risk we know about.</td><td>Cart race fix · Menu reorder race fix · Shipping idempotency · iThink webhook signing · POS cross-state tax · MFA brute-force lockout · Customer/seller/franchise logout · Settlement aggregation precision</td></tr>
+    <tr><td><strong>3. See</strong><br><span class="small">16 – 29 Jun</span></td><td>Make the system observable. On-call team can diagnose any incident in minutes.</td><td>Top 10 silent-failure UI fixes · Cron heartbeat dashboard · Financial drift alerts · Structured request logging · 5 golden-path E2E tests · Top 3 runbooks</td></tr>
+    <tr><td><strong>4. Launch prep</strong><br><span class="small">30 Jun – 13 Jul</span></td><td>Prove it. Bug bash. Load test. Security review. Sign Go/No-Go.</td><td>Whole-team bug bash · Load test at 10× expected day-1 traffic · Security review · Production data cleanup · CS team training · Go/No-Go meeting</td></tr>
+  </tbody>
+</table>
+
+<h3>Key dates</h3>
+<table>
+  <thead><tr><th style="width:18%">Date</th><th>What</th></tr></thead>
+  <tbody>
+    <tr><td>1 Jun (Fri)</td><td>Sprint 1 demo to PO + Finance + Ops</td></tr>
+    <tr><td>15 Jun (Mon)</td><td>Sprint 2 demo + external CA tax review</td></tr>
+    <tr><td>29 Jun (Mon)</td><td>Sprint 3 demo + on-call team walkthrough of runbooks</td></tr>
+    <tr><td>3 Jul (Fri)</td><td>Bug bash closes; P0/P1 triaged</td></tr>
+    <tr><td>6 Jul (Mon)</td><td>Load test results to Steering</td></tr>
+    <tr><td>10 Jul (Fri)</td><td>External CA signs off on tax filing readiness</td></tr>
+    <tr><td><strong>12 Jul (Sat)</strong></td><td><strong>Go / No-Go review.</strong> Co-signed by Founder + Eng Lead.</td></tr>
+    <tr><td>14 Jul (Mon)</td><td>Production deploy. Smoke tests. Dry-run.</td></tr>
+    <tr><td><strong>15 Jul (Wed)</strong></td><td><strong>LAUNCH.</strong></td></tr>
+    <tr><td>1 Aug (Fri)</td><td>First GSTR-1 filing for July sales</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════ PAGE 4: SPRINT 1 ═══════════════ -->
+<div class="page-break"></div>
+
+<h2>3. Sprint detail</h2>
+
+<div class="sprint">
+  <div class="sprint-head">
+    <div>
+      <div class="sprint-num">Sprint 1</div>
+      <div class="sprint-name">Stabilise</div>
+    </div>
+    <div class="sprint-dates">19 May – 1 June 2026</div>
+  </div>
+  <p class="sprint-goal">Goal: Close every ship-blocker. Inventory verified, refunds reliable, identity hardened.</p>
+
+  <table>
+    <thead><tr><th style="width:38%">What we're delivering</th><th>Done when…</th><th class="center" style="width:8%">Pts</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Inventory write path verified end-to-end</strong></td><td>A real order through the storefront decrements stock + creates reservation + reverses on cancel. E2E test in CI.</td><td class="center">3</td></tr>
+      <tr><td><strong>Dispute email XSS eliminated</strong></td><td>Admin reply text is escaped before email rendering. Same for support replies. Regression test in place.</td><td class="center">2</td></tr>
+      <tr><td><strong>COD UPI refunds auto-process</strong></td><td>UPI refunds on COD orders flow through NEFT/IMPS automatically — no finance touch.</td><td class="center">3</td></tr>
+      <tr><td><strong>Stuck-saga sweep cron</strong></td><td>Cron finds sagas stuck &gt;30 min, resumes from last step, alerts on failure. Runbook published.</td><td class="center">5</td></tr>
+      <tr><td><strong>iThink credentials no longer leak to logs</strong></td><td>Auth field redacted across all integration clients. Test asserts it.</td><td class="center">2</td></tr>
+      <tr><td><strong>Refresh-token reuse detection</strong></td><td>Schema migration on 3 actor session tables. Stolen-token replay revokes all sessions + alerts.</td><td class="center">5</td></tr>
+      <tr><td><strong>Admin orders page error state</strong></td><td>API failure shows error card + Retry button instead of stuck "Loading…".</td><td class="center">3</td></tr>
+      <tr><td><strong>Code hygiene</strong></td><td>Delete 13 orphaned stub use-case files; add <code>min="0"</code> to POS price input.</td><td class="center">2</td></tr>
+    </tbody>
+    <tfoot><tr><td colspan="2" style="text-align:right;font-weight:600">Sprint total</td><td class="center" style="font-weight:600">25</td></tr></tfoot>
+  </table>
+
+  <p class="small"><strong>Capacity:</strong> 28 pts planned vs ~38 pts team capacity. 10 pts buffer for slippage on the saga cron (5 pts) and the schema migration (5 pts) — both notoriously slip-prone.</p>
+  <p class="small"><strong>Sprint risk:</strong> Schema migration on 3 actor session tables touches production-shaped data. Shadow DB validation must happen before Backend starts.</p>
+</div>
+
+<div class="sprint">
+  <div class="sprint-head">
+    <div>
+      <div class="sprint-num">Sprint 2</div>
+      <div class="sprint-name">Harden money &amp; identity</div>
+    </div>
+    <div class="sprint-dates">2 – 15 June 2026</div>
+  </div>
+  <p class="sprint-goal">Goal: Survive real load. Kill every race and integration-retry risk we know about.</p>
+
+  <table>
+    <thead><tr><th style="width:38%">What we're delivering</th><th>Done when…</th><th class="center" style="width:8%">Pts</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Cart race fix</strong></td><td>50 concurrent add-item requests produce exactly 1 CartItem row. DB-level constraint added.</td><td class="center">3</td></tr>
+      <tr><td><strong>Menu reorder race fix</strong></td><td>Two admins reordering concurrently never produce a corrupted menu. Schema constraint backs it up.</td><td class="center">3</td></tr>
+      <tr><td><strong>Shipping create-order is idempotent</strong></td><td>Retry with same sub-order ID returns same AWB on both iThink and Shiprocket.</td><td class="center">3</td></tr>
+      <tr><td><strong>iThink webhook signature verified</strong></td><td>Forged tracking-update webhook returns 401 without mutating state.</td><td class="center">2</td></tr>
+      <tr><td><strong>POS cross-state tax split corrected</strong></td><td>Tax engine uses place-of-supply from sale (customer GSTIN or franchise state) to pick CGST+SGST vs IGST. CA reviews and signs off.</td><td class="center">2</td></tr>
+      <tr><td><strong>MFA brute-force lockout</strong></td><td>5 wrong TOTP attempts invalidates the challenge token. Brute-force test fails after 5.</td><td class="center">2</td></tr>
+      <tr><td><strong>Admin password reset uses central bcrypt policy</strong></td><td>Inline bcrypt removed; uses <code>hashPassword()</code> from policy module.</td><td class="center">1</td></tr>
+      <tr><td><strong>Server-side logout for customer / seller / franchise</strong></td><td>3 new endpoints revoke session + clear refresh-token. Frontends wire them up.</td><td class="center">3</td></tr>
+      <tr><td><strong>Settlement aggregation drift eliminated</strong></td><td>50-seller cycle: zero paise drift between sum-of-rows and cycle total.</td><td class="center">3</td></tr>
+      <tr><td><strong>Wallet idempotency race link</strong></td><td>On retry-race, customer-facing tx ref matches what's in their email.</td><td class="center">2</td></tr>
+      <tr><td><strong>Discount idempotency keyed to order, not session</strong></td><td>Cancel-and-retry checkout doesn't trip "coupon already used".</td><td class="center">3</td></tr>
+    </tbody>
+    <tfoot><tr><td colspan="2" style="text-align:right;font-weight:600">Sprint total</td><td class="center" style="font-weight:600">27</td></tr></tfoot>
+  </table>
+
+  <p class="small"><strong>Capacity:</strong> 32 pts planned, 27 committed. Race-condition fixes always run long during integration testing.</p>
+  <p class="small"><strong>Sprint risk:</strong> CA review (POS tax) may surface late-in-sprint changes. Mitigation: CA shown the engine spec in week 1, not week 2.</p>
+</div>
+
+<!-- ═══════════════ PAGE 5: SPRINTS 3 + 4 ═══════════════ -->
+<div class="page-break"></div>
+
+<div class="sprint">
+  <div class="sprint-head">
+    <div>
+      <div class="sprint-num">Sprint 3</div>
+      <div class="sprint-name">See — observability &amp; tests</div>
+    </div>
+    <div class="sprint-dates">16 – 29 June 2026</div>
+  </div>
+  <p class="sprint-goal">Goal: A stranger should be able to diagnose any incident at 3am with only the dashboard and the runbook.</p>
+
+  <table>
+    <thead><tr><th style="width:38%">What we're delivering</th><th>Done when…</th><th class="center" style="width:8%">Pts</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Top 10 silent-failure UI fixes</strong></td><td>52 silent <code>.catch(() =&gt; {})</code> sites → top 10 by impact replaced with proper error UI + retry.</td><td class="center">5</td></tr>
+      <tr><td><strong>Cron heartbeat dashboard</strong></td><td>Single screen shows every cron's last success + duration. Page-out fires if a cron goes silent.</td><td class="center">5</td></tr>
+      <tr><td><strong>Financial drift alerts</strong></td><td>Wallet drift &gt;₹100, refund queue stuck &gt;24h, settlement cycle drift — all fire to Slack in staging synthetic tests.</td><td class="center">5</td></tr>
+      <tr><td><strong>Structured request logging + correlation IDs</strong></td><td>Given an order number, on-call can pull every related backend call in seconds.</td><td class="center">3</td></tr>
+      <tr><td><strong>Webhook delivery dashboard</strong></td><td>Last 100 webhooks per integration with success/fail/retry counts + signature outcome.</td><td class="center">3</td></tr>
+      <tr><td><strong>5 golden-path E2E tests</strong></td><td>Playwright in CI. Tests cover customer, seller, admin, franchise, affiliate happy paths. Failing PR can't merge.</td><td class="center">5</td></tr>
+      <tr><td><strong>Top 3 operations runbooks</strong></td><td>payment-webhook-outage, settlement-cycle-failure, stuck-refund-queue. Walked through with on-call team.</td><td class="center">3</td></tr>
+      <tr><td><strong>Cart N+1 query fix</strong></td><td>10-item cart hits 1 batched query, not 10. Latency &lt;200ms.</td><td class="center">2</td></tr>
+    </tbody>
+    <tfoot><tr><td colspan="2" style="text-align:right;font-weight:600">Sprint total</td><td class="center" style="font-weight:600">31</td></tr></tfoot>
+  </table>
+  <p class="small"><strong>Sprint risk:</strong> Observability work always reveals hidden integrations. If S3.8 runs long, we ship 2 runbooks instead of 3.</p>
+</div>
+
+<div class="sprint">
+  <div class="sprint-head">
+    <div>
+      <div class="sprint-num">Sprint 4</div>
+      <div class="sprint-name">Launch prep</div>
+    </div>
+    <div class="sprint-dates">30 June – 13 July 2026</div>
+  </div>
+  <p class="sprint-goal">Goal: Prove it. Bug bash, load test, security review, signed Go/No-Go.</p>
+
+  <table>
+    <thead><tr><th style="width:38%">What we're delivering</th><th>Done when…</th><th class="center" style="width:8%">Pts</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Bug bash week (30 Jun – 3 Jul)</strong></td><td>Whole team walks every flow as a real user across 5 actor types. P0 fixed before week-end.</td><td class="center">8</td></tr>
+      <tr><td><strong>Load test</strong></td><td>k6 simulates 50 req/s checkout, 200 req/s browse, 100 req/s order detail, 30 req/s payment webhook. p95 &lt;800ms. Zero 5xx. Zero oversell.</td><td class="center">8</td></tr>
+      <tr><td><strong>Security review</strong></td><td>Independent review of auth, payment webhooks, tax-doc download scope, OWASP Top 10 spot-check. P0/P1 findings closed.</td><td class="center">5</td></tr>
+      <tr><td><strong>Data cleanup &amp; backfill decision</strong></td><td>Legacy UNREGISTERED sellers: contact + 30-day grace OR soft-suspend. Stale carts TTLed. Test data scrubbed.</td><td class="center">3</td></tr>
+      <tr><td><strong>Pre-deployment checklist executed</strong></td><td>Env vars audited, backups verified, rollback tested in staging. Signed off in PR.</td><td class="center">3</td></tr>
+      <tr><td><strong>Go / No-Go meeting (12 Jul)</strong></td><td>Every owner declares green/yellow/red. Co-signed by Founder + Eng Lead.</td><td class="center">2</td></tr>
+      <tr><td><strong>Customer support training + FAQ</strong></td><td>2-hour session covers all 5 actor flows. Top 20 questions documented.</td><td class="center">3</td></tr>
+    </tbody>
+    <tfoot><tr><td colspan="2" style="text-align:right;font-weight:600">Sprint total</td><td class="center" style="font-weight:600">32</td></tr></tfoot>
+  </table>
+  <p class="small"><strong>Sprint risk:</strong> Bug bash will surface 15-30 new bugs. 12 pts buffer absorbs the P0/P1 fixes. P2/P3 ship to MVP-2.</p>
+</div>
+
+<!-- ═══════════════ PAGE 6: LAUNCH ═══════════════ -->
+<div class="page-break"></div>
+
+<h2>4. Launch day — Wednesday 15 July</h2>
+
+<table>
+  <thead><tr><th class="center" style="width:18%">Time (IST)</th><th>What's happening</th></tr></thead>
+  <tbody>
+    <tr><td class="center">07:00</td><td>On-call awake. Dashboards open. Last spot-check.</td></tr>
+    <tr><td class="center">08:00</td><td>Eng Lead pre-flight: env vars, backups, crons, overnight payments reconciled.</td></tr>
+    <tr><td class="center">09:00</td><td>Status page live. CS team in Slack alerts channel.</td></tr>
+    <tr><td class="center">09:45</td><td>Stand-up. Every team member: green / amber / red.</td></tr>
+    <tr><td class="center"><strong>10:00</strong></td><td><strong>Flip the switch. Launch.</strong></td></tr>
+    <tr><td class="center">10:00 – 11:00</td><td>Live monitoring: API errors, payment webhooks, crons, stock-decrement-vs-order-rate sanity.</td></tr>
+    <tr><td class="center">11:00</td><td>First-hour checkpoint. Eng Lead + Founder call: green / amber / red.</td></tr>
+    <tr><td class="center">12:00</td><td>CS pulse-check. Marketing post on social.</td></tr>
+    <tr><td class="center">15:00</td><td>Mid-day review: orders, GMV, conversion, errors.</td></tr>
+    <tr><td class="center">17:00</td><td>End-of-day KPI review.</td></tr>
+    <tr><td class="center">18:00</td><td>Continue / pause-for-fixes decision.</td></tr>
+    <tr><td class="center">22:00</td><td>End-of-day report to Steering.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout danger">
+  <strong>I pause ordering if any of these hit:</strong>
+  <ul class="tight" style="margin:6pt 0 0">
+    <li>API 5xx rate &gt; 1% for 5 minutes</li>
+    <li>Payment webhook success &lt; 95% over 15 minutes</li>
+    <li>Refund processor errors &gt; 10 in 15 minutes</li>
+    <li>Stock decrement lag &gt; 30 seconds behind order placement</li>
+    <li>Any CRITICAL production defect with customer impact</li>
+    <li>Razorpay outage &gt; 10 minutes → failover to COD-only mode</li>
+  </ul>
+  Authority to pause sits with me. Founder informed within 5 minutes.
+</div>
+
+<h3>Day 2 onwards — Hyper-care</h3>
+<table>
+  <thead><tr><th style="width:22%">Period</th><th>Coverage</th><th>What we do</th></tr></thead>
+  <tbody>
+    <tr><td>Day 2 – 7</td><td>2 engineers on rotation. Daily 09:00 standup.</td><td>Triage tickets, fix P0/P1 same day, daily metric report to Steering.</td></tr>
+    <tr><td>Day 8 – 14</td><td>1 engineer on call. Standup 3× per week.</td><td>Ship P1 fixes. Start MVP-2 backlog grooming. First retrospective.</td></tr>
+    <tr><td>Day 15+</td><td>Normal cadence resumes.</td><td>MVP-2 sprint cycle begins.</td></tr>
+  </tbody>
+</table>
+
+<p>Hyper-care exits when: 7 consecutive days with API 5xx &lt; 0.5%, zero P0 incidents, support ticket / order ratio &lt; 8%, and the first GSTR-1 filing (1 Aug) goes clean.</p>
+
+<!-- ═══════════════ PAGE 7: RISKS + READINESS ═══════════════ -->
+<div class="page-break"></div>
+
+<h2>5. Risks, dependencies, readiness</h2>
+
+<h3>The risks that could move the launch date</h3>
+
+<table>
+  <thead><tr><th>Risk</th><th class="center" style="width:12%">RAG</th><th>Mitigation</th></tr></thead>
+  <tbody>
+    <tr><td>Concurrent-order race causes oversell on launch</td><td class="center"><span class="rag r-r">RED</span></td><td>Sprint 2 fix + Sprint 4 load test verifies under concurrency. If load test fails, descope to a soft-launch with rate-limited orders.</td></tr>
+    <tr><td>Stuck-saga cron not delivered in Sprint 1</td><td class="center"><span class="rag r-a">AMBER</span></td><td>5 pts allocated with 10-pt sprint buffer. Mid-sprint check on 27 May; escalate if slipping.</td></tr>
+    <tr><td>External CA finds GST issue requiring rework</td><td class="center"><span class="rag r-a">AMBER</span></td><td>CA shown engine spec in Sprint 1, preliminary review Sprint 3, final review 10 Jul.</td></tr>
+    <tr><td>Initial seller cohort under 25 → catalogue feels empty</td><td class="center"><span class="rag r-a">AMBER</span></td><td>PO drives onboarding from Sprint 3. 5-seller minimum acceptable for soft launch.</td></tr>
+    <tr><td>Load test reveals deeper perf issues</td><td class="center"><span class="rag r-a">AMBER</span></td><td>Pre-load smoke tests in Sprint 3. Cart N+1 fix in Sprint 3 buys headroom.</td></tr>
+    <tr><td>Razorpay outage on launch day</td><td class="center"><span class="rag r-g">GREEN</span></td><td>COD fallback. Status page. Account manager contact ready.</td></tr>
+    <tr><td>Team member illness in launch week</td><td class="center"><span class="rag r-g">GREEN</span></td><td>Pairing during Sprint 4 spreads knowledge. On-call rotation has backup.</td></tr>
+  </tbody>
+</table>
+
+<h3>What we need from outside the team</h3>
+<table>
+  <thead><tr><th>Dependency</th><th>Owner</th><th class="center" style="width:15%">Needed by</th></tr></thead>
+  <tbody>
+    <tr><td>Razorpay production credentials</td><td>Founder + Razorpay AM</td><td class="center">10 Jul</td></tr>
+    <tr><td>iThink production credentials</td><td>Founder + iThink AM</td><td class="center">10 Jul</td></tr>
+    <tr><td>Shiprocket production credentials</td><td>Founder + Shiprocket AM</td><td class="center">10 Jul</td></tr>
+    <tr><td>External CA — 2 review slots (Sprint 2 + 10 Jul)</td><td>Finance</td><td class="center">10 Jul</td></tr>
+    <tr><td>SSL certificate for production domain</td><td>DevOps</td><td class="center">10 Jul</td></tr>
+    <tr><td>SMTP sender domain verified</td><td>DevOps</td><td class="center">End Sprint 3</td></tr>
+    <tr><td>Initial seller cohort (target 25)</td><td>Product Owner</td><td class="center">End Sprint 4</td></tr>
+    <tr><td>Initial franchise cohort (target 5)</td><td>Product Owner</td><td class="center">End Sprint 4</td></tr>
+  </tbody>
+</table>
+
+<h3>Open decisions (need answer)</h3>
+<ul>
+  <li><strong>POS cross-state policy:</strong> allow walk-in customers from neighbouring states, or restrict to intra-state? — PO + Eng Lead by end Sprint 1.</li>
+  <li><strong>Legacy UNREGISTERED sellers:</strong> backfill GSTIN or soft-suspend? — PO + Finance by end Sprint 2.</li>
+  <li><strong>Commission rate structure</strong> for initial seller cohort. — PO by end Sprint 3.</li>
+  <li><strong>Hosting region + DR strategy.</strong> — DevOps + Founder by end Sprint 3.</li>
+</ul>
+
+<h3>Launch readiness — tick on 12 July</h3>
+<table>
+  <thead><tr><th style="width:30%">Engineering</th><th style="width:35%">Operations</th><th>Business</th></tr></thead>
+  <tbody>
+    <tr><td>
+      ☐ All MUST stories closed<br>
+      ☐ E2E tests green in CI<br>
+      ☐ Load test passes<br>
+      ☐ Security review clean<br>
+      ☐ Inventory write verified<br>
+      ☐ Refund flows tested
+    </td><td>
+      ☐ Env vars audited<br>
+      ☐ Backups verified (restore tested)<br>
+      ☐ Cron heartbeat live<br>
+      ☐ Drift alerts firing<br>
+      ☐ Status page live<br>
+      ☐ On-call schedule published<br>
+      ☐ Runbooks reviewed<br>
+      ☐ Rollback tested
+    </td><td>
+      ☐ CS team trained<br>
+      ☐ Seller cohort onboarded<br>
+      ☐ Franchise cohort approved<br>
+      ☐ Payment provider live<br>
+      ☐ Shipping providers live<br>
+      ☐ Legal review complete<br>
+      ☐ Privacy notice published<br>
+      ☐ Founder sign-off recorded
+    </td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════ PAGE 8: HOW WE'LL WORK ═══════════════ -->
+<div class="page-break"></div>
+
+<h2>6. How we'll work</h2>
+
+<h3>Team</h3>
+<table>
+  <thead><tr><th>Role</th><th>Who</th><th>What they own</th></tr></thead>
+  <tbody>
+    <tr><td>Engineering Lead / Sprint Manager</td><td>—</td><td>Delivery, ceremonies, escalation, technical trade-offs, ~50% coding</td></tr>
+    <tr><td>Senior Backend Engineer</td><td>—</td><td>API, schema, integrations, payments, performance</td></tr>
+    <tr><td>Senior Frontend Engineer</td><td>—</td><td>8 web frontends, shared UI, customer-facing UX</td></tr>
+    <tr><td>QA Engineer (0.5)</td><td>—</td><td>Test automation, regression suite, sprint review</td></tr>
+    <tr><td>DevOps (0.25)</td><td>—</td><td>Infra, CI/CD, monitoring, deployment</td></tr>
+    <tr><td>Product Owner</td><td>Founder</td><td>Prioritisation, story acceptance, stakeholder comms</td></tr>
+  </tbody>
+</table>
+
+<h3>Cadence</h3>
+<table>
+  <thead><tr><th style="width:25%">Ceremony</th><th style="width:30%">When</th><th>What we do</th></tr></thead>
+  <tbody>
+    <tr><td>Daily stand-up</td><td>Every weekday 09:45 IST · 15 min</td><td>Yesterday / today / blockers. Done in 15 minutes or it's broken.</td></tr>
+    <tr><td>Sprint planning</td><td>Monday week 1, 10:00 · 2 hrs</td><td>Pick stories. Confirm acceptance. Commit.</td></tr>
+    <tr><td>Mid-sprint health check</td><td>Wednesday week 2, 16:00 · 30 min</td><td>Eng Lead + PO. Are we on track? Adjust scope if not.</td></tr>
+    <tr><td>Sprint review (demo)</td><td>Friday week 2, 14:00 · 1 hr</td><td>Demo the increment. PO accepts/rejects each story.</td></tr>
+    <tr><td>Retrospective</td><td>Friday week 2, 15:30 · 45 min</td><td>3 actions for next sprint. Carry them forward.</td></tr>
+    <tr><td>Steering review</td><td>Every alternate Friday, 11:00 · 30 min</td><td>Programme RAG + decisions. Founder + Eng Lead.</td></tr>
+  </tbody>
+</table>
+
+<h3>How a story moves through the sprint</h3>
+<p>It's not ready to start unless: the user story is written, acceptance criteria are testable, it's sized (1/2/3/5/8 points), dependencies are clear, and the PO has confirmed business value.</p>
+<p>It's not done until: all acceptance criteria are met, code-reviewed by someone else, tests added, merged to <code>main</code>, deployed to staging, QA signed off, PO accepted, and no new CRITICAL/HIGH defects opened.</p>
+
+<h3>How I'll report to Steering each week</h3>
+<table>
+  <thead><tr><th>Section</th><th>Content</th></tr></thead>
+  <tbody>
+    <tr><td>Programme RAG</td><td>Green / Amber / Red — one line.</td></tr>
+    <tr><td>Sprint progress</td><td>Stories committed / delivered / carrying over.</td></tr>
+    <tr><td>Wins</td><td>3 bullets — what shipped that matters.</td></tr>
+    <tr><td>Top risks</td><td>3 risks + what I'm doing about each.</td></tr>
+    <tr><td>Decisions needed</td><td>Concrete asks with deadline.</td></tr>
+    <tr><td>Next week focus</td><td>3 bullets.</td></tr>
+  </tbody>
+</table>
+
+<h3>How I classify defects</h3>
+<table>
+  <thead><tr><th style="width:18%">Severity</th><th>Definition</th><th class="center" style="width:25%">Must fix within</th></tr></thead>
+  <tbody>
+    <tr><td><span class="rag r-r">CRITICAL</span></td><td>Money loss, oversell, security breach, compliance failure, customer can't transact.</td><td class="center">24 hours</td></tr>
+    <tr><td><span class="rag r-a">HIGH</span></td><td>Core flow degraded but workaround exists.</td><td class="center">Same sprint</td></tr>
+    <tr><td><span class="rag" style="background:#dbeafe;color:#1e40af">MEDIUM</span></td><td>UX issue, no business impact.</td><td class="center">Defer to next sprint OK</td></tr>
+    <tr><td><span class="rag r-g">LOW</span></td><td>Polish, cleanup, performance.</td><td class="center">MVP-2 backlog</td></tr>
+  </tbody>
+</table>
+
+<p class="small muted" style="margin-top:30pt;border-top:1pt solid #e2e8f0;padding-top:8pt;text-align:center">
+SportSmart MVP Sprint Plan · v1.0 · 18 May 2026 · Engineering Lead · Confidential
+</p>
+
+</body>
+</html>

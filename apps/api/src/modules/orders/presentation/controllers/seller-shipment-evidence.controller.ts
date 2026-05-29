@@ -1,5 +1,7 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -9,8 +11,10 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiTags, ApiBody, ApiConsumes } from '@nestjs/swagger';
+import { IsOptional, IsString, Length } from 'class-validator';
 import { SellerAuthGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import {
   BadRequestAppException,
   ForbiddenAppException,
@@ -18,8 +22,27 @@ import {
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { FileService } from '../../../files/application/services/file.service';
+import { ShipmentEvidenceService } from '../../../shipping/application/services/shipment-evidence.service';
 
 const UPLOAD_LIMIT_BYTES = 8 * 1024 * 1024;
+
+// Phase 88 (2026-05-23) — Gap #23 DX. Documented soft-delete body.
+export class DeleteEvidenceDto {
+  @IsString()
+  @Length(10, 500)
+  reason!: string;
+}
+
+// Phase 88 — Gap #23. Multipart upload contract is now Swagger-typed.
+export class UploadEvidenceFormDto {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  image!: any;
+
+  @IsOptional()
+  @IsString()
+  @Length(0, 256)
+  caption?: string;
+}
 
 /**
  * Phase 11 (post-Phase-10 feature) — Pre-ship "proof of dispatch" photos.
@@ -50,6 +73,10 @@ export class SellerShipmentEvidenceController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fileService: FileService,
+    // Phase 88 — typed-evidence orchestrator. Dual-write: keep
+    // FileAttachment for the legacy reader fallback, write
+    // ShipmentEvidence for the typed-path consumers.
+    private readonly shipmentEvidence: ShipmentEvidenceService,
   ) {}
 
   @Get()
@@ -58,26 +85,42 @@ export class SellerShipmentEvidenceController {
     @Param('subOrderId') subOrderId: string,
   ) {
     await this.assertOwnership(subOrderId, req.sellerId);
-    const attachments = await this.fileService.listByResource(
-      'sub_order',
-      subOrderId,
-    );
-    // PRIVATE files (SHIPMENT_EVIDENCE) have providerUrl=null in the DB.
-    // Derive a viewable Cloudinary URL per item so the seller portal
-    // can render `<img>` thumbnails and open in a new tab without an
-    // auth round-trip. Privacy contract is preserved: the caller has
-    // already passed SellerAuthGuard + ownership check above.
-    const data = attachments.map((att) => ({
-      ...att,
-      viewUrl: this.fileService.viewUrlFor(att.file),
+
+    // Phase 88 — read from the typed table. PACKING + DISPATCH +
+    // EXCEPTION + ADMIN_OVERRIDE kinds are seller-visible; POD is
+    // surfaced separately via the customer flow.
+    const rows = await this.shipmentEvidence.listForSubOrder(subOrderId, {
+      kinds: [
+        'PACKING',
+        'DISPATCH',
+        'EXCEPTION',
+        'ADMIN_OVERRIDE',
+        'ARCHIVED_REASSIGNMENT',
+      ],
+    });
+    const data = rows.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      capturedAt: r.capturedAt,
+      uploadedBy: r.uploadedBy,
+      uploadedByRole: r.uploadedByRole,
+      frozenAt: r.frozenAt,
+      file: r.file,
+      viewUrl: this.fileService.viewUrlFor(r.file),
     }));
     return { success: true, message: 'Shipment evidence retrieved', data };
   }
 
+  // Phase 88 — Gap #7 idempotency. Honors the X-Idempotency-Key
+  // header (and a fallback derived from the file SHA256 inside the
+  // service) so a network retry creates one row, not two.
   @Post()
+  @Idempotent()
   @UseInterceptors(
     FileInterceptor('image', { limits: { fileSize: UPLOAD_LIMIT_BYTES } }),
   )
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: UploadEvidenceFormDto })
   async upload(
     @Req() req: any,
     @Param('subOrderId') subOrderId: string,
@@ -96,6 +139,8 @@ export class SellerShipmentEvidenceController {
       uploadedBy: req.sellerId,
     });
 
+    // Dual write — legacy FileAttachment for back-compat + new typed
+    // ShipmentEvidence row for the gate count + audit trail.
     await this.fileService.attach({
       fileId: meta.id,
       resource: 'sub_order',
@@ -104,7 +149,54 @@ export class SellerShipmentEvidenceController {
       attachedBy: req.sellerId,
     });
 
-    return { success: true, message: 'Shipment evidence uploaded', data: meta };
+    const { id: evidenceId } = await this.shipmentEvidence.create({
+      subOrderId,
+      kind: 'PACKING',
+      fileId: meta.id,
+      uploadedBy: req.sellerId,
+      uploadedByRole: 'SELLER',
+      contentSha256: meta.contentSha256 ?? null,
+    });
+
+    await this.shipmentEvidence.auditLog({
+      shipmentEvidenceId: evidenceId,
+      action: 'CREATED',
+      actorId: req.sellerId,
+      actorRole: 'SELLER',
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers?.['user-agent'] ?? null,
+      afterJson: { fileId: meta.id, kind: 'PACKING' },
+    });
+
+    return {
+      success: true,
+      message: 'Shipment evidence uploaded',
+      data: { ...meta, evidenceId },
+    };
+  }
+
+  /**
+   * Phase 88 — Gap #13 soft-delete with freeze enforcement. Seller
+   * cannot delete frozen rows (sub-order already SHIPPED); admin
+   * override + reason required for post-SHIPPED edits.
+   */
+  @Delete(':evidenceId')
+  async delete(
+    @Req() req: any,
+    @Param('subOrderId') subOrderId: string,
+    @Param('evidenceId') evidenceId: string,
+    @Body() body: DeleteEvidenceDto,
+  ) {
+    await this.assertOwnership(subOrderId, req.sellerId);
+    await this.shipmentEvidence.softDelete({
+      evidenceId,
+      actorId: req.sellerId,
+      actorRole: 'SELLER',
+      reason: body.reason,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers?.['user-agent'] ?? null,
+    });
+    return { success: true, message: 'Evidence deleted' };
   }
 
   /**

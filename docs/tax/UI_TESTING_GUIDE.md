@@ -2,14 +2,17 @@
 
 **Audience:** Engineering + QA. Pure browser-based testing — no curl, no SQL inserts in the happy path.
 
-**Pre-reqs (all 9 ports running):**
+**Pre-reqs (relevant ports running):**
 
 | App | URL | Role |
 |---|---|---|
-| `web-storefront` | http://localhost:4005 | Customer |
-| `web-admin` | http://localhost:4001 | Seller admin |
-| `web-admin-storefront` | http://localhost:4000 | Super admin |
 | `api` | http://localhost:8000 | Backend |
+| `web-admin-storefront` | http://localhost:4000 | Super admin |
+| `web-d2c-seller-admin` | http://localhost:4001 | D2C seller admin |
+| `web-d2c-seller` | http://localhost:4003 | D2C seller portal |
+| `web-storefront` | http://localhost:4005 | Customer |
+| `web-retail-seller-admin` | http://localhost:4008 | Retail seller admin |
+| `web-retail-seller` | http://localhost:4009 | Retail seller portal |
 
 **Default dev credentials** (from seed scripts):
 
@@ -17,7 +20,8 @@
 |---|---|---|---|
 | Super Admin | http://localhost:4000/login | `admin@sportsmart.com` | `Admin@123` |
 | Customer | http://localhost:4005/login | `smoke-customer@sportsmart.test` | `SmokeCustomer@123` |
-| Seller | http://localhost:4003/login | (seed your own) | — |
+| D2C Seller | http://localhost:4003/login | (seed your own) | — |
+| Retail Seller | http://localhost:4009/login | (seed your own) | — |
 
 ---
 
@@ -27,7 +31,7 @@
 - Customer order placement (`web-storefront`)
 - Customer order detail page (`web-storefront/orders/[orderNumber]`)
 - Customer return submission
-- Seller order list + detail (`web-admin/dashboard/orders`)
+- Seller order list + detail (`web-d2c-seller-admin/dashboard/orders`)
 - Admin order management (`web-admin-storefront/dashboard/orders`)
 - Admin returns review (`web-admin-storefront/dashboard/returns`)
 - **Admin Tax dashboard** (NEW — `web-admin-storefront/dashboard/tax`) — mode badge + audit readiness + GSTR-8 / GSTR-1 / GSTR-3B exports + TCS markFiled / markPaid

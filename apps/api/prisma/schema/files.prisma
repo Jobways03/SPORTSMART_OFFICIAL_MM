@@ -9,9 +9,9 @@
 // preserves audit trail.
 
 enum FileStatus {
-  PENDING  // upload-intent issued, awaiting client to confirm
-  READY    // confirmed; safe to attach + serve
-  DELETED  // soft-deleted (deletedAt set); no longer attachable
+  PENDING // upload-intent issued, awaiting client to confirm
+  READY // confirmed; safe to attach + serve
+  DELETED // soft-deleted (deletedAt set); no longer attachable
 }
 
 enum FilePurpose {
@@ -47,18 +47,18 @@ model FileMetadata {
   purpose        FilePurpose        @default(OTHER)
   status         FileStatus         @default(PENDING)
 
-  storageKey     String             @unique @map("storage_key")
+  storageKey     String  @unique @map("storage_key")
   // Storage provider name ("s3" / "cloudinary" / "local").
-  provider       String             @default("s3")
+  provider       String  @default("s3")
   // Provider-specific identifier (S3 key, Cloudinary publicId).
-  providerFileId String?            @map("provider_file_id")
+  providerFileId String? @map("provider_file_id")
   // Optional public URL when classification=PUBLIC.
-  providerUrl    String?            @map("provider_url")
+  providerUrl    String? @map("provider_url")
 
-  uploadedBy     String             @map("uploaded_by")
+  uploadedBy String    @map("uploaded_by")
   // Pre-signed upload URL expiry — PENDING rows past this can be GC'd.
-  expiresAt      DateTime?          @map("expires_at")
-  deletedAt      DateTime?          @map("deleted_at")
+  expiresAt  DateTime? @map("expires_at")
+  deletedAt  DateTime? @map("deleted_at")
 
   // Phase 7 (PR 7.1) — content integrity hash. Computed on confirm /
   // direct-upload from the byte stream the client uploaded; verified
@@ -66,18 +66,19 @@ model FileMetadata {
   // storage no longer match what we wrote — either tampering or a
   // dropped / corrupted re-upload by another path. Either way, refuse
   // to issue a URL until the case is reviewed.
-  contentSha256  String?            @map("content_sha256")
-  hashAlgorithm  String?            @default("sha256") @map("hash_algorithm")
-  hashedAt       DateTime?          @map("hashed_at")
+  contentSha256  String?   @map("content_sha256")
+  hashAlgorithm  String?   @default("sha256") @map("hash_algorithm")
+  hashedAt       DateTime? @map("hashed_at")
   /// Last time we re-hashed and verified against the stored hash.
   /// Updated by the periodic integrity-verifier cron + on-demand
   /// re-verifies. Null = never re-checked since upload.
-  lastVerifiedAt DateTime?          @map("last_verified_at")
+  lastVerifiedAt DateTime? @map("last_verified_at")
 
-  createdAt      DateTime           @default(now()) @map("created_at")
-  updatedAt      DateTime           @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  attachments FileAttachment[]
+  attachments       FileAttachment[]
+  shipmentEvidences ShipmentEvidence[]
 
   @@index([uploadedBy])
   @@index([classification])
@@ -94,7 +95,7 @@ model FileMetadata {
 model FileAttachment {
   id         String   @id @default(uuid())
   fileId     String   @map("file_id")
-  resource   String   // 'ticket_message' / 'dispute_evidence' / 'seller_kyc' / etc.
+  resource   String // 'ticket_message' / 'dispute_evidence' / 'seller_kyc' / etc.
   resourceId String   @map("resource_id")
   caption    String?
   // Who attached this. Null for system-generated (invoice rendering).
@@ -105,5 +106,183 @@ model FileAttachment {
 
   @@index([resource, resourceId])
   @@index([fileId])
+  // Phase 88 (2026-05-23) — Gap #17. Polymorphic-table scans of
+  // (resource, resourceId, file.purpose) used to filter every row
+  // because the existing index didn't include resourceId+createdAt
+  // ordering. This composite supports the dispatch-evidence count
+  // query at scale.
+  @@index([resource, resourceId, createdAt])
   @@map("file_attachments")
+}
+
+// ============================================
+// Phase 88 (2026-05-23) — Shipment Evidence Flow audit closure.
+//
+// Pre-Phase-88 shipment evidence lived in the polymorphic
+// FileAttachment table keyed on (resource='sub_order', file.purpose=
+// 'SHIPMENT_EVIDENCE'). The audit flagged the polymorphic pattern as
+// preventing typed FKs, indexed lookups, referential integrity, and
+// any kind of POD-vs-packing-vs-RTO differentiation.
+//
+// This typed entity sits ALONGSIDE the FileAttachment row (dual-write
+// at upload time) so existing readers keep working during the
+// migration. New readers (POD customer surface, 4-photo gate, admin
+// browsing) consume this table directly. The dual-write is removed
+// after a migration cron backfills + verifies coverage.
+//
+// `kind` discriminates the lifecycle phase the evidence belongs to:
+//   PACKING        — pre-ship "proof of dispatch" (seller uploads
+//                    before SHIPPED transition; gates the 4-photo
+//                    threshold from Phase 82).
+//   DISPATCH       — handed to courier (less common — currently no
+//                    UI path, schema-ready for future).
+//   POD            — proof of delivery, captured from carrier webhook
+//                    payload when applySnapshot writes DELIVERED.
+//   RTO_PROOF      — courier-side proof when RTO_DELIVERED.
+//   EXCEPTION      — exception scan evidence (carrier picture of
+//                    damage / wrong-address slip).
+//   CUSTOMER_REJECT— customer-supplied photo when refusing delivery.
+//   ADMIN_OVERRIDE — admin-uploaded override (override evidence + audit
+//                    columns capture the actor + reason).
+//   ARCHIVED_REASSIGNMENT — sub-order reassigned to a new seller; old
+//                    evidence retained for audit but excluded from the
+//                    new seller's gate count.
+// ============================================
+enum ShipmentEvidenceKind {
+  PACKING
+  DISPATCH
+  POD
+  RTO_PROOF
+  EXCEPTION
+  CUSTOMER_REJECT
+  ADMIN_OVERRIDE
+  ARCHIVED_REASSIGNMENT
+
+  @@map("shipment_evidence_kind_enum")
+}
+
+enum ShipmentEvidenceActor {
+  SELLER
+  FRANCHISE
+  ADMIN
+  CUSTOMER
+  CARRIER_WEBHOOK
+  SYSTEM
+
+  @@map("shipment_evidence_actor_enum")
+}
+
+model ShipmentEvidence {
+  id                 String                @id @default(uuid())
+  subOrderId         String                @map("sub_order_id")
+  kind               ShipmentEvidenceKind
+  fileId             String                @map("file_id")
+  // Phase 88 — Gap #4. Metadata captured at upload time (or copied
+  // from the carrier webhook payload for POD). EXIF is JSON so the
+  // upload pipeline can persist whatever the image contained without
+  // schema churn. Geo + signature + OTP supplement the file itself.
+  capturedAt         DateTime              @default(now()) @map("captured_at")
+  uploadedBy         String                @map("uploaded_by")
+  uploadedByRole     ShipmentEvidenceActor @map("uploaded_by_role")
+  geoLat             Decimal?              @map("geo_lat") @db.Decimal(10, 7)
+  geoLng             Decimal?              @map("geo_lng") @db.Decimal(10, 7)
+  exifJson           Json?                 @map("exif_json")
+  // Perceptual hash for fuzzy dedupe + content-sha256 for exact dedupe.
+  // The contentSha256 column on FileMetadata is the canonical hash; we
+  // mirror it here so duplicate-detection queries don't have to join.
+  perceptualHash     String?               @map("perceptual_hash")
+  contentSha256      String?               @map("content_sha256")
+  // POD-specific fields. Null when kind != POD.
+  courierWaybill     String?               @map("courier_waybill")
+  signatureBlob      String?               @map("signature_blob") @db.Text
+  signedByName       String?               @map("signed_by_name")
+  // Hashed; never store the raw 6-digit OTP. Matches Phase 1
+  // user-OTP storage convention.
+  customerOtpHash    String?               @map("customer_otp_hash")
+  // Phase 88 — Gap #10. Two-phase write guard. True until the
+  // Cloudinary upload reports success + the row is reconciled. A
+  // nightly cron sweeps stale `pendingUpload=true` rows older than
+  // 1h (paired with the Cloudinary orphan-asset GC).
+  pendingUpload      Boolean               @default(true) @map("pending_upload")
+  // Phase 88 — Gap #13. Frozen at the PACKED → SHIPPED transition.
+  // Once set, soft-delete + re-upload of packing evidence is rejected
+  // at the service layer. Audit row is still written for read-only
+  // operations (admin viewing).
+  frozenAt           DateTime?             @map("frozen_at")
+  // Phase 88 — Gap #9 / DPDP retention. Defaulted to 180d post-
+  // delivery by the policy resolver. The retention cron purges rows
+  // (+ Cloudinary asset) once `retentionExpiresAt < now`. Holds-on-
+  // dispute set this to NULL while a ticket / return is active.
+  retentionExpiresAt DateTime?             @map("retention_expires_at")
+  deletedAt          DateTime?             @map("deleted_at")
+  deletedBy          String?               @map("deleted_by")
+  deletedReason      String?               @map("deleted_reason") @db.Text
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+
+  subOrder SubOrder                @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+  file     FileMetadata            @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  audits   ShipmentEvidenceAudit[]
+
+  // Phase 88 — Gap #17. Composite indexes for the gate-count query
+  // (subOrderId + kind + deletedAt) and the customer POD lookup
+  // (subOrderId + kind = POD ordered by capturedAt).
+  @@index([subOrderId, kind, deletedAt])
+  @@index([subOrderId, capturedAt])
+  @@index([contentSha256])
+  @@index([pendingUpload, createdAt])
+  @@index([retentionExpiresAt])
+  @@map("shipment_evidence")
+}
+
+// Phase 88 (2026-05-23) — Gap #5 / #13. Append-only chain of custody.
+// Every CREATE, SOFT_DELETE, RESTORE, FREEZE, PURGE writes one row so
+// dispute reviews can reconstruct the timeline. Distinct from the
+// global audit_logs chain because evidence has very-high-volume
+// per-row activity that would dwarf other categories in the main log.
+model ShipmentEvidenceAudit {
+  id                 String                @id @default(uuid())
+  shipmentEvidenceId String                @map("shipment_evidence_id")
+  action             String
+  actorId            String                @map("actor_id")
+  actorRole          ShipmentEvidenceActor @map("actor_role")
+  reason             String?               @db.Text
+  beforeJson         Json?                 @map("before_json")
+  afterJson          Json?                 @map("after_json")
+  ipAddress          String?               @map("ip_address")
+  userAgent          String?               @map("user_agent")
+  createdAt          DateTime              @default(now()) @map("created_at")
+
+  evidence ShipmentEvidence @relation(fields: [shipmentEvidenceId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentEvidenceId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt])
+  @@map("shipment_evidence_audits")
+}
+
+// Phase 88 (2026-05-23) — Gap #12 closure beyond the env var. The
+// existing `SHIPMENT_EVIDENCE_REQUIRED_PHOTOS` env (Phase 82 Gap #20)
+// only does a single global override. Real-world policy varies by
+// category, payment method, and value tier — COD ≥ ₹10k needs more
+// proof than an apparel small-pack. This table lets ops author
+// per-scope policies; the resolver picks the best match.
+model ShipmentEvidencePolicy {
+  id                String   @id @default(uuid())
+  // 'default' | 'category:<id>' | 'paymentMethod:COD' | 'value:gte:1000000'
+  scope             String   @unique
+  // The structured matcher mirrors the scope key but in queryable
+  // form. The resolver evaluates these in declared `priority` order.
+  scopeMatch        Json     @map("scope_match")
+  priority          Int      @default(100)
+  packingPhotosMin  Int      @default(4) @map("packing_photos_min")
+  podRequired       Boolean  @default(false) @map("pod_required")
+  signatureRequired Boolean  @default(false) @map("signature_required")
+  otpRequired       Boolean  @default(false) @map("otp_required")
+  retentionDays     Int      @default(180) @map("retention_days")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([active, priority])
+  @@map("shipment_evidence_policies")
 }

@@ -141,11 +141,11 @@ describe('RefundSagaService', () => {
       const finalUpdate =
         prisma.refundSaga.update.mock.calls[
           prisma.refundSaga.update.mock.calls.length - 1
-        ][0];
+        ]![0];
       expect(finalUpdate.data.status).toBe('COMPLETED');
     });
 
-    it('persists FAILED + compensations on forward failure', async () => {
+    it('persists COMPENSATED + compensations on forward failure', async () => {
       const { service, prisma } = buildService({ enabled: true });
       const a = step({ name: 'A' });
       const b = step({ name: 'B', fail: true });
@@ -159,12 +159,16 @@ describe('RefundSagaService', () => {
         steps: [a, b],
       });
       expect(r.status).toBe('FAILED');
-      // Final update is the FAILED + compensations write.
+      // Phase 96 — a forward failure WITH a clean rollback persists the saga
+      // row as COMPENSATED (distinct from a pure FAILED that had nothing to
+      // roll back). The run RESULT (r.status above) is still FAILED — the
+      // persisted terminal state and the returned status are intentionally
+      // different things.
       const finalUpdate =
         prisma.refundSaga.update.mock.calls[
           prisma.refundSaga.update.mock.calls.length - 1
-        ][0];
-      expect(finalUpdate.data.status).toBe('FAILED');
+        ]![0];
+      expect(finalUpdate.data.status).toBe('COMPENSATED');
       expect(finalUpdate.data.compensations).toBeDefined();
       expect(a.compensateCalls).toBe(1);
     });

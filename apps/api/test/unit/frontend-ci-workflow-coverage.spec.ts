@@ -53,7 +53,7 @@ function workflowMatrixApps() {
   //
   //   matrix:
   //     app:
-  //       - web-admin
+  //       - web-d2c-seller-admin
   //       - web-affiliate
   //
   // The list ends at the next non-list-item line (a line that

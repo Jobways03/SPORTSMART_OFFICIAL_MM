@@ -16,6 +16,7 @@
 // Tunable via env vars; sensible defaults so the service is safe
 // to enable without dialling in.
 
+import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -69,8 +70,16 @@ export class DiscountFraudService {
       );
     }
     if (ctx.ipAddress) {
+      // Phase 62 (2026-05-22) — rate-limit by IP hash, not plaintext
+      // IP (audit Gap #21). The hash is queried against the indexed
+      // ip_hash column; ipAddress stays in the input ctx for the
+      // single write-time hash + drop call below.
       filters.push(
-        this.countInvalidSince('ipAddress', ctx.ipAddress, windowStart),
+        this.countInvalidSince(
+          'ipHash',
+          this.hashIp(ctx.ipAddress),
+          windowStart,
+        ),
       );
     }
     if (filters.length === 0) return;
@@ -112,7 +121,13 @@ export class DiscountFraudService {
       return await this.prisma.couponAttempt.create({
         data: {
           customerId: ctx.customerId ?? null,
-          ipAddress: ctx.ipAddress ?? null,
+          // Phase 62 (2026-05-22) — ipAddress is intentionally NOT
+          // persisted (audit Gap #21). The salted SHA-256 hash lets
+          // the rate-limiter still detect collisions across attempts
+          // without storing PII. A future cleanup-cron pass nulls
+          // any pre-Phase-62 plaintext rows.
+          ipAddress: null,
+          ipHash: ctx.ipAddress ? this.hashIp(ctx.ipAddress) : null,
           deviceId: ctx.deviceId ?? null,
           // Normalize for indexing — uppercase + trim. Mirrors the
           // discount-code lookup's normalization so the abuse panel
@@ -126,6 +141,22 @@ export class DiscountFraudService {
       this.logger.warn(`Failed to record coupon attempt: ${(err as Error).message}`);
       return null;
     }
+  }
+
+  /**
+   * Phase 62 (2026-05-22) — salted SHA-256 of an IP address (audit
+   * Gap #21). The salt is env-configured and rotated quarterly; old
+   * digests remain queryable for the 30-day cleanup window. We use
+   * SHA-256 + salt (not just truncation or hashing) because the
+   * IPv4 address space is small enough that an attacker with the
+   * DB dump could brute-force the un-salted hash trivially.
+   */
+  private hashIp(ip: string): string {
+    const salt = this.env.getString(
+      'COUPON_ATTEMPT_IP_HASH_SALT',
+      'sportsmart-coupon-attempt-salt-2026-05-rotate-quarterly',
+    );
+    return createHash('sha256').update(`${salt}:${ip}`).digest('hex');
   }
 
   /**
@@ -242,7 +273,7 @@ export class DiscountFraudService {
   // ────────────────────────────────────────────────────────────
 
   private async countInvalidSince(
-    column: 'customerId' | 'ipAddress',
+    column: 'customerId' | 'ipAddress' | 'ipHash',
     value: string,
     since: Date,
   ): Promise<{ count: number; oldest?: Date }> {

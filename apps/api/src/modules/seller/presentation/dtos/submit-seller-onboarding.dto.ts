@@ -9,18 +9,23 @@ import {
   Matches,
   MaxLength,
   MinLength,
-  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
-// GST registration type values mirror prisma enum `GstRegistrationType`.
-// REGULAR + COMPOSITION + CASUAL all require a valid GSTIN; UNREGISTERED
-// does not — small sellers below the threshold can onboard without one.
+/**
+ * GST registration type values mirror prisma enum `GstRegistrationType`.
+ *
+ * Phase 19 (2026-05-20) — `UNREGISTERED` is removed from the public
+ * input contract. The Phase 26 GST policy already mandates GSTIN for
+ * every seller; the previous DTO accepted UNREGISTERED only to fail
+ * later inside the use case with a confusing 400 ("UNREGISTERED is no
+ * longer accepted"). The DTO now rejects the value up-front with a
+ * clear validation error.
+ */
 export enum GstRegistrationTypeDto {
   REGULAR = 'REGULAR',
   COMPOSITION = 'COMPOSITION',
   CASUAL = 'CASUAL',
-  UNREGISTERED = 'UNREGISTERED',
 }
 
 /**
@@ -40,27 +45,29 @@ export class SubmitSellerOnboardingDto {
   legalBusinessName!: string;
 
   @IsEnum(GstRegistrationTypeDto, {
-    message: 'GST registration type must be REGULAR, COMPOSITION, CASUAL, or UNREGISTERED',
+    message: 'GST registration type must be REGULAR, COMPOSITION, or CASUAL',
   })
   gstRegistrationType!: GstRegistrationTypeDto;
 
-  // GSTIN required for everything except UNREGISTERED. ValidateIf gates
-  // the rule so UNREGISTERED sellers can still submit without one.
-  @ValidateIf((o) => o.gstRegistrationType !== GstRegistrationTypeDto.UNREGISTERED)
-  @IsNotEmpty({ message: 'GSTIN is required for registered sellers' })
+  /**
+   * Phase 19 (2026-05-20) — unconditionally required. Removed the
+   * ValidateIf gating on UNREGISTERED; the use case's defensive
+   * "GSTIN is required" check is now belt-and-braces against
+   * malformed clients, not load-bearing.
+   */
+  @IsNotEmpty({ message: 'GSTIN is required' })
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
   @Length(15, 15, { message: 'GSTIN must be exactly 15 characters' })
   @Matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/, {
     message: 'GSTIN format is invalid (expected: 2-digit state + 10-char PAN + entity + Z + checksum)',
   })
-  gstin?: string;
+  gstin!: string;
 
-  @ValidateIf((o) => o.gstRegistrationType !== GstRegistrationTypeDto.UNREGISTERED)
-  @IsNotEmpty({ message: 'GST state code is required for registered sellers' })
+  @IsNotEmpty({ message: 'GST state code is required' })
   @IsString()
   @Matches(/^[0-9]{2}$/, { message: 'GST state code must be 2 digits' })
-  gstStateCode?: string;
+  gstStateCode!: string;
 
   // PAN is mandatory regardless of GST registration — required for TDS,
   // payouts, and Form 26AS reconciliation.
@@ -141,7 +148,9 @@ export class SubmitSellerOnboardingDto {
   detailedStoreDescription?: string;
 
   // Confirmation flag the seller must tick — explicit consent that the
-  // submitted info is accurate. Treated as an audit-trail signal.
+  // submitted info is accurate. Phase 19 (2026-05-20) — the use case
+  // now stamps `kycConfirmedAccurateAt` and writes an AuditLog row
+  // capturing this consent for the legal record.
   @IsBoolean({ message: 'You must confirm the submitted information is accurate' })
   confirmedAccurate!: boolean;
 }

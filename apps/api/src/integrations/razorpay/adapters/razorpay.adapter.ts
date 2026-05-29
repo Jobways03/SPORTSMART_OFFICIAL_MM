@@ -228,11 +228,26 @@ export class RazorpayAdapter {
       `Refund initiated: ${result.id} for payment ${paymentId} amount ${amountInPaise.toString()} paise`,
     );
 
+    // Phase 96 (2026-05-23) — Phase 98 audit Gap #1 closure. Razorpay
+    // returns one of {pending, processed, failed}. Pre-Phase-96 we
+    // coerced any non-`processed` (which includes the normal `pending`
+    // initial state for the first second) to `failed`, and the gateway
+    // service treated `failed` as success — a critical accounting bug.
+    // Propagate the real status; callers + webhook handler branch
+    // correctly.
+    const rawStatus = String(result.status ?? '').toLowerCase();
+    const mappedStatus: 'processed' | 'pending' | 'failed' =
+      rawStatus === 'processed'
+        ? 'processed'
+        : rawStatus === 'failed'
+          ? 'failed'
+          : 'pending';
+
     return {
       providerRefundId: result.id,
       paymentId: result.payment_id,
       amountInPaise,
-      status: result.status === 'processed' ? 'processed' : 'failed',
+      status: mappedStatus,
       processedAt: new Date(),
     };
   }

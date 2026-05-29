@@ -1,0 +1,238 @@
+{
+  "ball-racks-storage": [
+    {
+      "key": "rack_type",
+      "name": "Rack Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "vertical_rack", "label": "Vertical Ball Rack" },
+        { "value": "wall_mount", "label": "Wall-Mounted Rack" },
+        { "value": "floor_cart", "label": "Floor Cart / Trolley" },
+        { "value": "lockable_cage", "label": "Lockable Ball Cage" },
+        { "value": "ball_bag_net", "label": "Ball Carry Bag / Net" }
+      ]
+    },
+    {
+      "key": "ball_capacity",
+      "name": "Ball Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "1_5", "label": "1-5 Balls" },
+        { "value": "6_12", "label": "6-12 Balls" },
+        { "value": "12_24", "label": "12-24 Balls" },
+        { "value": "24_plus", "label": "24+ Balls" }
+      ]
+    }
+  ],
+  "shoe-racks-organizers": [
+    {
+      "key": "rack_type",
+      "name": "Rack Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "shoe_rack", "label": "Shoe Rack / Shelf" },
+        { "value": "shoe_cabinet", "label": "Shoe Cabinet / Locker" },
+        { "value": "wall_mount", "label": "Wall-Mounted Shoe Holder" },
+        { "value": "drop_front_box", "label": "Drop-Front Shoe Box" },
+        { "value": "shoe_bag", "label": "Shoe Bag / Travel" }
+      ]
+    },
+    {
+      "key": "shoe_capacity",
+      "name": "Shoe Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "1_pair", "label": "1 Pair" },
+        { "value": "4_6", "label": "4-6 Pairs" },
+        { "value": "8_12", "label": "8-12 Pairs" },
+        { "value": "12_plus", "label": "12+ Pairs" }
+      ]
+    }
+  ],
+  "dumbbell-weight-racks": [
+    {
+      "key": "rack_type",
+      "name": "Rack Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "dumbbell_rack", "label": "Dumbbell Rack" },
+        { "value": "weight_plate_tree", "label": "Weight Plate Tree" },
+        { "value": "kettlebell_rack", "label": "Kettlebell Rack" },
+        { "value": "barbell_holder", "label": "Barbell Holder / Stand" },
+        { "value": "multi_storage", "label": "Multi-Storage Rack" }
+      ]
+    },
+    {
+      "key": "capacity_tier",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "compact", "label": "Compact (3-5 pairs)" },
+        { "value": "medium", "label": "Medium (6-10 pairs)" },
+        { "value": "commercial", "label": "Commercial (10+ pairs)" }
+      ]
+    }
+  ],
+  "equipment-bags-holdalls": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "duffle", "label": "Duffle / Holdall" },
+        { "value": "backpack", "label": "Sports Backpack" },
+        { "value": "wheeled", "label": "Wheeled Equipment Bag" },
+        { "value": "drawstring", "label": "Drawstring / Gym Sack" },
+        { "value": "tote", "label": "Sports Tote" },
+        { "value": "team_bag", "label": "Team Equipment Bag (XL)" }
+      ]
+    },
+    {
+      "key": "bag_size",
+      "name": "Bag Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Up to 30L)" },
+        { "value": "medium", "label": "Medium (30-50L)" },
+        { "value": "large", "label": "Large (50-80L)" },
+        { "value": "xl", "label": "XL (80L+)" }
+      ]
+    }
+  ],
+  "lockers-cabinets": [
+    {
+      "key": "locker_type",
+      "name": "Locker Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "single_door", "label": "Single Door Locker" },
+        { "value": "double_tier", "label": "Double Tier (2-Door)" },
+        { "value": "triple_tier", "label": "Triple Tier (3-Door)" },
+        { "value": "open_cubby", "label": "Open Cubby / Shelf Unit" },
+        { "value": "bench_locker", "label": "Locker Bench Combo" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "steel", "label": "Steel" },
+        { "value": "plastic", "label": "Plastic / HDPE" },
+        { "value": "wood", "label": "Wood / Laminate" }
+      ]
+    }
+  ],
+  "bat-racket-holders": [
+    {
+      "key": "holder_type",
+      "name": "Holder Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "wall_mount", "label": "Wall-Mount Rack" },
+        { "value": "floor_stand", "label": "Floor Stand" },
+        { "value": "bag_sleeve", "label": "Bat / Racket Bag Sleeve" },
+        { "value": "display_case", "label": "Display Case" }
+      ]
+    },
+    {
+      "key": "sport",
+      "name": "Sport",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "cricket", "label": "Cricket Bats" },
+        { "value": "baseball", "label": "Baseball Bats" },
+        { "value": "tennis", "label": "Tennis Rackets" },
+        { "value": "badminton", "label": "Badminton Rackets" },
+        { "value": "hockey", "label": "Hockey Sticks" },
+        { "value": "multi", "label": "Multi-Sport / Universal" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "1_2", "label": "1-2" },
+        { "value": "3_5", "label": "3-5" },
+        { "value": "6_plus", "label": "6+" }
+      ]
+    }
+  ],
+  "gym-storage-organizers": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "resistance_band_rack", "label": "Resistance Band Rack / Hook" },
+        { "value": "yoga_mat_rack", "label": "Yoga Mat Rack / Holder" },
+        { "value": "foam_roller_rack", "label": "Foam Roller Storage" },
+        { "value": "jump_rope_hook", "label": "Jump Rope Hook" },
+        { "value": "gym_wall_organizer", "label": "Gym Wall Organizer" },
+        { "value": "towel_rack", "label": "Towel Rack" }
+      ]
+    },
+    {
+      "key": "mount_type",
+      "name": "Mount Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "wall_mount", "label": "Wall-Mounted" },
+        { "value": "floor_standing", "label": "Floor Standing" },
+        { "value": "door_mount", "label": "Door / Over-Door" }
+      ]
+    }
+  ],
+  "bike-storage": [
+    {
+      "key": "storage_type",
+      "name": "Storage Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "wall_hook", "label": "Wall Hook / Hanger" },
+        { "value": "ceiling_hoist", "label": "Ceiling Hoist / Pulley" },
+        { "value": "floor_stand", "label": "Floor Stand / Rack" },
+        { "value": "vertical_rack", "label": "Vertical Bike Rack" },
+        { "value": "shed_shelter", "label": "Bike Shed / Shelter" },
+        { "value": "gravity_stand", "label": "Gravity Stand (2+ Bikes)" }
+      ]
+    },
+    {
+      "key": "bike_capacity",
+      "name": "Bike Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "1", "label": "1 Bike" },
+        { "value": "2", "label": "2 Bikes" },
+        { "value": "3_4", "label": "3-4 Bikes" },
+        { "value": "5_plus", "label": "5+ Bikes" }
+      ]
+    }
+  ]
+}

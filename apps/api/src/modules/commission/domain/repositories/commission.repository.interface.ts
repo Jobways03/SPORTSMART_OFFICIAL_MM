@@ -3,6 +3,8 @@
  *  a technology-agnostic contract.
  * ──────────────────────────────────────────────────────────────────── */
 
+import type { Prisma } from '@prisma/client';
+
 // ── DTOs / return types ────────────────────────────────────────────
 
 export interface SubOrderItem {
@@ -39,21 +41,33 @@ export interface CreateCommissionRecordData {
   variantTitle: string | null;
   orderNumber: string;
   sellerName: string;
-  platformPrice: number;
-  settlementPrice: number;
+  // Phase 135 — money fields are exact decimal-STRINGS (Prisma.Decimal
+  // `.toFixed(2)`), not JS Numbers. Prisma's Decimal columns accept strings
+  // losslessly, and the money-dual-write helper's toPaise() parses strings
+  // exactly (it THROWS on a fractional Number). `number` is kept in the union
+  // only for whole-rupee/legacy callers. See commission-processor.service.ts.
+  platformPrice: number | string;
+  settlementPrice: number | string;
   quantity: number;
-  totalPlatformAmount: number;
-  totalSettlementAmount: number;
-  platformMargin: number;
+  totalPlatformAmount: number | string;
+  totalSettlementAmount: number | string;
+  platformMargin: number | string;
   status: string;
-  unitPrice: number;
-  totalPrice: number;
+  unitPrice: number | string;
+  totalPrice: number | string;
   commissionType: string;
   commissionRate: string;
-  unitCommission: number;
-  totalCommission: number;
-  adminEarning: number;
-  productEarning: number;
+  unitCommission: number | string;
+  totalCommission: number | string;
+  adminEarning: number | string;
+  productEarning: number | string;
+  // Phase 135 — processing provenance + numeric rate (analytics).
+  processedAt?: Date;
+  processedBy?: string;
+  commissionRateBps?: number;
+  // Phase 136 — stable settlement date (sub-order returnWindowEndsAt, or now
+  // for the early/immediate path). Settlement filters by this, not createdAt.
+  settlableAt?: Date;
 }
 
 export interface CommissionRecordFilter {
@@ -63,6 +77,12 @@ export interface CommissionRecordFilter {
   dateFrom?: string;
   dateTo?: string;
   search?: string;
+  // Phase 140 — export-only drill-down filters.
+  subOrderId?: string;
+  productId?: string;
+  settlementStatus?: string;
+  adjustedOnly?: boolean;
+  reversedOnly?: boolean;
 }
 
 export interface CommissionSettingsData {
@@ -87,15 +107,32 @@ export interface CommissionSummary {
 
 export interface CommissionRepository {
   /* ── Processing ── */
-  findDeliveredSubOrders(): Promise<DeliveredSubOrder[]>;
+  // Phase 135 — `limit` caps the per-tick batch so a large backlog (e.g. after
+  // a processor outage) can't load the entire matching set + nested includes
+  // into one query and OOM the worker.
+  findDeliveredSubOrders(limit?: number): Promise<DeliveredSubOrder[]>;
   getSellerProductMapping(
     sellerId: string,
     productId: string,
     variantId: string | null,
   ): Promise<SellerProductMapping | null>;
+  // Phase 135 — one-query prefetch of mappings for a whole tick (kills the
+  // per-item N+1). Keyed by `sellerId:productId:variantId` (null variant → '').
+  getSellerProductMappingsBatch(
+    keys: { sellerId: string; productId: string; variantId: string | null }[],
+  ): Promise<Map<string, SellerProductMapping>>;
   processSubOrderCommission(
     subOrderId: string,
     records: CreateCommissionRecordData[],
+    // Phase 135 — invoked inside the persist txn iff the atomic-claim wins
+    // (used to publish commission.locked through the transactional outbox).
+    onClaimed?: (tx: Prisma.TransactionClient) => Promise<void>,
+  ): Promise<boolean>; // true if this call won the claim + wrote records
+  // Phase 135 — DLQ: record a sub-order whose commission computation threw.
+  recordCommissionFailure(
+    subOrderId: string,
+    trigger: string,
+    error: string,
   ): Promise<void>;
 
   /* ── Commission records (admin) ── */

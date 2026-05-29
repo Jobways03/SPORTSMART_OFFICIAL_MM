@@ -1,0 +1,330 @@
+{
+  "fitness-trackers": [
+    {
+      "key": "display_type",
+      "name": "Display Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["OLED", "AMOLED", "LCD", "No Display"]
+    },
+    {
+      "key": "water_resistance",
+      "name": "Water Resistance",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["IP67", "IP68", "5ATM", "10ATM"]
+    },
+    {
+      "key": "battery_life_days",
+      "name": "Battery Life (Days)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Up to 3", "3-7", "7-14", "14-30", "30+"]
+    },
+    {
+      "key": "connectivity",
+      "name": "Connectivity",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": ["Bluetooth", "Wi-Fi", "GPS", "NFC", "ANT+"]
+    },
+    {
+      "key": "strap_material",
+      "name": "Strap Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Silicone", "Nylon", "Leather", "Metal", "Fabric"]
+    }
+  ],
+  "sports-watches": [
+    {
+      "key": "watch_type",
+      "name": "Watch Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["GPS Running Watch", "Multisport Watch", "Dive Watch", "Outdoor Adventure Watch", "Triathlon Watch"]
+    },
+    {
+      "key": "gps_type",
+      "name": "GPS Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["GPS", "GPS + GLONASS", "Multi-Band GNSS", "No GPS"]
+    },
+    {
+      "key": "display_type",
+      "name": "Display Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["AMOLED", "MIP", "LCD", "E-Ink"]
+    },
+    {
+      "key": "battery_life_gps_hours",
+      "name": "Battery Life GPS Mode (Hours)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Up to 10", "10-25", "25-50", "50-100", "100+"]
+    },
+    {
+      "key": "water_resistance",
+      "name": "Water Resistance",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["5ATM", "10ATM", "20ATM"]
+    },
+    {
+      "key": "heart_rate_sensor",
+      "name": "Heart Rate Sensor",
+      "type": "BOOLEAN",
+      "sortOrder": 6
+    }
+  ],
+  "heart-rate-monitors": [
+    {
+      "key": "monitor_type",
+      "name": "Monitor Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Chest Strap", "Arm Band", "Wrist-Based", "Finger Clip"]
+    },
+    {
+      "key": "connectivity",
+      "name": "Connectivity",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Bluetooth", "ANT+", "Both"]
+    },
+    {
+      "key": "water_resistant",
+      "name": "Water Resistant",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Rechargeable", "Replaceable CR2032", "Replaceable CR2025"]
+    }
+  ],
+  "cycling-computers": [
+    {
+      "key": "display_size",
+      "name": "Display Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Small (< 2 inch)", "Medium (2-3 inch)", "Large (3+ inch)"]
+    },
+    {
+      "key": "gps_enabled",
+      "name": "GPS Enabled",
+      "type": "BOOLEAN",
+      "sortOrder": 2
+    },
+    {
+      "key": "navigation",
+      "name": "Turn-by-Turn Navigation",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "connectivity",
+      "name": "Connectivity",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": ["Bluetooth", "ANT+", "Wi-Fi"]
+    },
+    {
+      "key": "display_type",
+      "name": "Display Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Color", "Black & White"]
+    }
+  ],
+  "action-cameras": [
+    {
+      "key": "video_resolution",
+      "name": "Max Video Resolution",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["1080p", "2.7K", "4K", "5K", "5.3K"]
+    },
+    {
+      "key": "frame_rate",
+      "name": "Max Frame Rate",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["30fps", "60fps", "120fps", "240fps"]
+    },
+    {
+      "key": "waterproof_depth",
+      "name": "Waterproof Depth",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Not Waterproof", "5m", "10m", "33m", "60m"]
+    },
+    {
+      "key": "stabilization",
+      "name": "Stabilization",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["None", "Standard EIS", "Advanced EIS", "HyperSmooth / RockSteady"]
+    },
+    {
+      "key": "mounting_type",
+      "name": "Mounting Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Helmet", "Chest", "Handlebar", "Universal", "Magnetic"]
+    },
+    {
+      "key": "touchscreen",
+      "name": "Touchscreen",
+      "type": "BOOLEAN",
+      "sortOrder": 6
+    }
+  ],
+  "sports-headphones": [
+    {
+      "key": "headphone_type",
+      "name": "Headphone Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["True Wireless", "Neckband", "Over-Ear", "Bone Conduction", "Ear Hook"]
+    },
+    {
+      "key": "water_resistance",
+      "name": "Water Resistance Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["IPX4", "IPX5", "IPX7", "IP67", "IP68"]
+    },
+    {
+      "key": "battery_life_hours",
+      "name": "Battery Life (Hours)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Up to 5", "5-8", "8-12", "12-20", "20+"]
+    },
+    {
+      "key": "noise_cancellation",
+      "name": "Noise Cancellation",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["None", "Passive", "Active (ANC)", "Transparency Mode"]
+    },
+    {
+      "key": "connectivity",
+      "name": "Connectivity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Bluetooth 5.0", "Bluetooth 5.2", "Bluetooth 5.3"]
+    }
+  ],
+  "gps-handheld-devices": [
+    {
+      "key": "device_type",
+      "name": "Device Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Handheld GPS", "Golf GPS", "Hunting GPS", "Marine GPS"]
+    },
+    {
+      "key": "display_size",
+      "name": "Display Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Small (< 3 inch)", "Medium (3-4 inch)", "Large (4+ inch)"]
+    },
+    {
+      "key": "preloaded_maps",
+      "name": "Preloaded Maps",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Rechargeable Li-Ion", "AA Batteries", "Dual (Rechargeable + AA)"]
+    }
+  ],
+  "speed-distance-sensors": [
+    {
+      "key": "sensor_type",
+      "name": "Sensor Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Speed Sensor", "Cadence Sensor", "Speed + Cadence Combo", "Foot Pod", "Power Meter"]
+    },
+    {
+      "key": "connectivity",
+      "name": "Connectivity",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["Bluetooth", "ANT+", "Both"]
+    },
+    {
+      "key": "battery_type",
+      "name": "Battery Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Rechargeable", "CR2032", "AAA"]
+    },
+    {
+      "key": "sport_compatibility",
+      "name": "Sport Compatibility",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": ["Running", "Cycling", "Swimming", "Gym"]
+    }
+  ],
+  "sports-cameras-mounts": [
+    {
+      "key": "mount_type",
+      "name": "Mount Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Helmet Mount", "Chest Mount", "Handlebar Mount", "Suction Cup", "Tripod Mount", "Wrist Mount", "Backpack Clip"]
+    },
+    {
+      "key": "compatible_brand",
+      "name": "Compatible Brand",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": ["GoPro", "DJI", "Insta360", "Universal"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Plastic", "Aluminium", "Stainless Steel", "Silicone"]
+    }
+  ],
+  "smart-jump-ropes-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Smart Jump Rope", "Smart Hula Hoop", "Smart Boxing Tracker", "Smart Basketball"]
+    },
+    {
+      "key": "app_connectivity",
+      "name": "App Connectivity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Bluetooth", "Wi-Fi", "No App"]
+    },
+    {
+      "key": "rechargeable",
+      "name": "Rechargeable",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    }
+  ]
+}

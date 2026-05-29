@@ -116,8 +116,11 @@ describe('PaymentsPublicFacade.markOrderPaid — Phase 0 amount-check', () => {
       expect.objectContaining({
         kind: 'AMOUNT_MISMATCH',
         masterOrderId: baseOrder.id,
-        expectedInPaise: 100_000,
-        actualInPaise: 100,
+        // Phase 143 — both amounts are BigInt paise now (ADR-007 migration); the
+        // amount-check guard is unchanged and still rejects the ₹1-for-₹1000
+        // attack — this assertion proves the rejection event fires.
+        expectedInPaise: BigInt(100_000),
+        actualInPaise: BigInt(100),
         severity: 95,
       }),
     );

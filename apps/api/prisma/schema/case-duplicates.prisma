@@ -30,7 +30,7 @@ model CaseDuplicate {
   duplicateOfSourceId   String              @map("duplicate_of_source_id")
 
   // Which rule fired. Stable enum string so dashboards don't break on rename.
-  reason                String
+  reason String
 
   // Actor who tried — useful for spotting abuse patterns.
   actorType String @map("actor_type")

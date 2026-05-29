@@ -3,6 +3,21 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { apiClient } from '@/lib/api-client';
 import { RichTextEditor } from '@sportsmart/ui';
 
@@ -33,6 +48,10 @@ interface BrowseProduct {
   id: string;
   title: string;
   imageUrl: string | null;
+  /** Phase 38 (2026-05-21) — surfaced so the modal can render a
+   *  status pill + warn before admin attaches a non-ACTIVE product. */
+  status: string;
+  moderationStatus?: string;
 }
 
 /* ── component ── */
@@ -49,6 +68,11 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
   // Image
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Phase 37 (2026-05-21) — pending File before collection exists;
+  // shipped with the multipart create. Accessibility/WCAG alt-text
+  // input lands beside the upload control.
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [imageAltText, setImageAltText] = useState('');
 
   // SEO
   const [seoOpen, setSeoOpen] = useState(false);
@@ -74,11 +98,12 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
           setDescription(res.data.description || '');
           setProducts(res.data.products);
           setImageUrl(res.data.imageUrl || null);
+          setImageAltText((res.data as { imageAltText?: string }).imageAltText || '');
           setPageTitle(res.data.name);
           setUrlHandle(res.data.slug);
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [collectionId]);
 
@@ -86,24 +111,57 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
     if (!name.trim()) return;
     setSaving(true);
     try {
+      // Phase 37 (2026-05-21) — PATCH semantics (the backend now uses
+      // @Patch, audit gap #13). Also surfaces imageAltText on the
+      // wire so the dedicated alt-text input lands in the DB.
+      const fields: Record<string, string> = { name };
+      if (urlHandle) fields.slug = urlHandle;
+      if (description) fields.description = description;
+      if (imageAltText.trim()) fields.imageAltText = imageAltText.trim();
       if (isEdit) {
         await apiClient(`/admin/collections/${collectionId}`, {
-          method: 'PUT',
-          body: JSON.stringify({ name, description, slug: urlHandle || undefined }),
+          method: 'PATCH',
+          body: JSON.stringify(fields),
         });
       } else {
-        const res = await apiClient<{ id: string }>('/admin/collections', {
-          method: 'POST',
-          body: JSON.stringify({ name, description, slug: urlHandle || undefined }),
-        });
-        if (res.data?.id) {
-          if (products.length > 0) {
-            await apiClient(`/admin/collections/${res.data.id}/products`, {
-              method: 'POST',
-              body: JSON.stringify({ productIds: products.map((p) => p.product.id) }),
-            });
+        // Phase 37 — multipart-aware create.
+        // Phase 38 (2026-05-21) — also ships initialProductIds in
+        // the same request, so a network blip between create + attach
+        // can no longer leave an empty collection. Backend reuses the
+        // eligibility-filtered addProducts; non-ACTIVE selections
+        // come back in the response as `initialAttach.skipped`.
+        const initialIds = products.map((p) => p.product.id);
+        let createRes: { data?: { id: string; initialAttach?: { attached: string[]; skipped: Array<{ productId: string; reason: string }> } } };
+        if (pendingImageFile || initialIds.length > 0) {
+          const formData = new FormData();
+          for (const [k, v] of Object.entries(fields)) formData.append(k, v);
+          if (pendingImageFile) formData.append('image', pendingImageFile);
+          for (const id of initialIds) formData.append('initialProductIds[]', id);
+          createRes = await apiClient<{ id: string; initialAttach?: { attached: string[]; skipped: Array<{ productId: string; reason: string }> } }>('/admin/collections', {
+            method: 'POST',
+            body: formData,
+          });
+        } else {
+          createRes = await apiClient<{ id: string }>('/admin/collections', {
+            method: 'POST',
+            body: JSON.stringify(fields),
+          });
+        }
+        if (createRes.data?.id) {
+          // If the backend skipped any initially-selected products
+          // (typically because they're not ACTIVE/APPROVED), surface
+          // a non-blocking heads-up so admin knows which IDs didn't
+          // attach.
+          const skipped = createRes.data.initialAttach?.skipped ?? [];
+          if (skipped.length > 0) {
+            const summary = skipped
+              .slice(0, 3)
+              .map((s) => `${s.productId.slice(0, 8)}… (${s.reason})`)
+              .join(', ');
+            const extra = skipped.length > 3 ? `, +${skipped.length - 3} more` : '';
+            alert(`${skipped.length} product(s) were skipped during attach: ${summary}${extra}`);
           }
-          router.push(`/dashboard/products/collections/${res.data.id}`);
+          router.push(`/dashboard/products/collections/${createRes.data.id}`);
           return;
         }
       }
@@ -113,18 +171,28 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
 
   const fetchBrowseProducts = useCallback(() => {
     setBrowseLoading(true);
-    const params = new URLSearchParams({ limit: '50', status: 'ACTIVE' });
+    // Phase 38 (2026-05-21) — drop the hard `status=ACTIVE` filter so
+    // admin can SEE all candidates and visually distinguish DRAFTs
+    // from ACTIVEs (the row gets a status pill below). The backend
+    // also enforces the filter on attach + reports skipped IDs with
+    // reasons, so the worst case is the admin tries to attach a
+    // DRAFT and gets a clear "skipped (not_active)" message.
+    const params = new URLSearchParams({ limit: '50' });
     if (browseSearch.trim()) params.set('search', browseSearch.trim());
     apiClient<{ products: any[] }>(`/admin/products?${params}`)
       .then((res) => {
         const existing = new Set(products.map((p) => p.product.id));
-        const mapped = (res.data?.products || []).map((p: any) => ({
-          id: p.id, title: p.title, imageUrl: p.images?.[0]?.url || null,
+        const mapped: BrowseProduct[] = (res.data?.products || []).map((p: any) => ({
+          id: p.id,
+          title: p.title,
+          imageUrl: p.primaryImageUrl || p.images?.[0]?.url || null,
+          status: p.status,
+          moderationStatus: p.moderationStatus,
         }));
         setBrowseProducts(mapped);
-        setBrowseSelected(new Set(mapped.filter((m: BrowseProduct) => existing.has(m.id)).map((m: BrowseProduct) => m.id)));
+        setBrowseSelected(new Set(mapped.filter((m) => existing.has(m.id)).map((m) => m.id)));
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setBrowseLoading(false));
   }, [browseSearch, products]);
 
@@ -147,6 +215,45 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
     setShowBrowse(false);
   };
 
+  // Phase 38 (2026-05-21) — drag-reorder sensors + handler. On edit
+  // we send the new order to the backend; on create we just shuffle
+  // local state and let the multipart create persist the order (the
+  // backend assigns sortOrder by attach insertion order today, so
+  // the persisted order matches what the admin sees).
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
+
+  const handleProductDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = products.findIndex((p) => p.product.id === active.id);
+    const newIndex = products.findIndex((p) => p.product.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const reordered = arrayMove(products, oldIndex, newIndex);
+    setProducts(reordered);
+
+    if (!isEdit || !collectionId) return;
+
+    try {
+      await apiClient(`/admin/collections/${collectionId}/products/reorder`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          items: reordered.map((p, i) => ({ productId: p.product.id, sortOrder: i })),
+        }),
+      });
+    } catch {
+      // Revert on failure — re-fetch authoritative state.
+      try {
+        const res = await apiClient<CollectionDetail>(`/admin/collections/${collectionId}`);
+        if (res.data) setProducts(res.data.products);
+      } catch {
+        /* no-op */
+      }
+    }
+  };
+
   const handleRemoveProduct = async (productId: string) => {
     if (isEdit) await apiClient(`/admin/collections/${collectionId}/products/${productId}`, { method: 'DELETE' });
     setProducts((prev) => prev.filter((p) => p.product.id !== productId));
@@ -154,7 +261,31 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !collectionId) return;
+    if (!file) return;
+
+    // Phase 37 (2026-05-21) — client-side guards mirror backend Multer.
+    const MAX_BYTES = 5 * 1024 * 1024;
+    const ALLOWED = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!ALLOWED.includes(file.type)) {
+      alert('Image must be a JPEG, PNG, or WebP.');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > MAX_BYTES) {
+      alert(`Image must be 5MB or smaller (got ${(file.size / 1024 / 1024).toFixed(1)}MB).`);
+      e.target.value = '';
+      return;
+    }
+
+    // Phase 37 — create-flow queues the file locally for the multipart
+    // POST; edit-flow uploads immediately.
+    if (!isEdit) {
+      setPendingImageFile(file);
+      setImageUrl(URL.createObjectURL(file));
+      e.target.value = '';
+      return;
+    }
+
     setUploading(true);
     try {
       const formData = new FormData();
@@ -170,7 +301,11 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
   };
 
   const handleImageRemove = async () => {
-    if (!collectionId) { setImageUrl(null); return; }
+    if (!collectionId) {
+      setPendingImageFile(null);
+      setImageUrl(null);
+      return;
+    }
     await apiClient(`/admin/collections/${collectionId}/image`, { method: 'DELETE' });
     setImageUrl(null);
   };
@@ -188,6 +323,25 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
           {isEdit ? name || 'Edit collection' : 'Add collection'}
         </h1>
+        {/* Phase 37 (2026-05-21) — audit log link visible on edit. */}
+        {isEdit && collectionId && (
+          <Link
+            href={`/dashboard/products/collections/${collectionId}/audit-log`}
+            style={{
+              marginLeft: 'auto',
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              color: '#374151',
+              background: '#fff',
+              textDecoration: 'none',
+            }}
+          >
+            View audit log
+          </Link>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
@@ -259,26 +413,30 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
                 <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 4 }}>Search or browse to add products.</div>
               </div>
             ) : (
+              // Phase 38 (2026-05-21) — drag-reorder via @dnd-kit.
+              // Backend endpoint PATCH /admin/collections/:id/products/reorder
+              // exists from Phase 37 and persists the order via the
+              // ProductCollectionMap.sortOrder column added the same phase.
               <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-                {products.map((p, i) => (
-                  <div
-                    key={p.product.id}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      padding: '10px 14px', background: i % 2 === 0 ? '#fff' : '#fafbfc',
-                      borderTop: i > 0 ? '1px solid #f3f4f6' : 'none',
-                    }}
+                <DndContext
+                  sensors={dndSensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleProductDragEnd}
+                >
+                  <SortableContext
+                    items={products.map((p) => p.product.id)}
+                    strategy={verticalListSortingStrategy}
                   >
-                    <span style={{ color: '#c4c4c4', fontSize: 11, cursor: 'grab', userSelect: 'none' }}>&#8942;&#8942;</span>
-                    <span style={{ fontSize: 13, color: '#9ca3af', width: 22, textAlign: 'right', flexShrink: 0 }}>{i + 1}.</span>
-                    <Thumb url={p.product.images[0]?.url} />
-                    <div style={{ flex: 1, fontSize: 14, fontWeight: 500, color: '#111', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.product.title}
-                    </div>
-                    <StatusPill status={p.product.status} />
-                    <button onClick={() => handleRemoveProduct(p.product.id)} style={removeBtn} title="Remove">&times;</button>
-                  </div>
-                ))}
+                    {products.map((p, i) => (
+                      <SortableProductRow
+                        key={p.product.id}
+                        product={p}
+                        index={i}
+                        onRemove={() => handleRemoveProduct(p.product.id)}
+                      />
+                    ))}
+                  </SortableContext>
+                </DndContext>
               </div>
             )}
           </section>
@@ -380,10 +538,12 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
                 </button>
               </div>
             ) : (
+              // Phase 37 (2026-05-21) — image input active on create
+              // too; pending file is sent with the multipart POST.
               <label style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                 padding: '28px 16px', border: '2px dashed #d1d5db', borderRadius: 10,
-                cursor: isEdit ? 'pointer' : 'default', background: '#fafbfc',
+                cursor: 'pointer', background: '#fafbfc',
                 transition: 'border-color 0.2s',
               }}>
                 {uploading ? (
@@ -395,26 +555,35 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
                       <circle cx="8.5" cy="8.5" r="1.5" />
                       <path d="m21 15-5-5L5 21" />
                     </svg>
-                    {isEdit ? (
-                      <>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Add image</span>
-                        <span style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>or drop an image to upload</span>
-                      </>
-                    ) : (
-                      <span style={{ fontSize: 12, color: '#9ca3af' }}>Save the collection first, then add an image</span>
-                    )}
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Add image</span>
+                    <span style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                      {isEdit ? 'or drop an image to upload' : 'will upload when you click Save'}
+                    </span>
                   </>
                 )}
-                {isEdit && (
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleImageUpload}
-                    style={{ display: 'none' }}
-                  />
-                )}
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleImageUpload}
+                  style={{ display: 'none' }}
+                />
               </label>
             )}
+            {/* Phase 37 (2026-05-21) — accessibility / WCAG alt text.
+                Storefront emits this as <img alt={...}>; falls back
+                to collection name if empty. */}
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Image alt text</label>
+              <input
+                type="text"
+                value={imageAltText}
+                maxLength={160}
+                placeholder="Describe the image for screen readers"
+                onChange={(e) => setImageAltText(e.target.value.slice(0, 160))}
+                style={{ ...input, fontSize: 12 }}
+              />
+              <span style={charCount}>{imageAltText.length}/160 — falls back to collection name if blank</span>
+            </div>
           </section>
 
           {/* Theme template */}
@@ -478,6 +647,14 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
               ) : (
                 browseProducts.map((bp, i) => {
                   const checked = browseSelected.has(bp.id);
+                  // Phase 38 (2026-05-21) — visual status pill +
+                  // ineligibility hint. The attach backend will silently
+                  // skip non-ACTIVE / non-APPROVED rows with a reason
+                  // in the response; pre-emptive UX lets admin see
+                  // which rows are eligible BEFORE selecting them.
+                  const isEligible =
+                    bp.status === 'ACTIVE' &&
+                    (!bp.moderationStatus || bp.moderationStatus === 'APPROVED');
                   return (
                     <label
                       key={bp.id}
@@ -494,14 +671,28 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
                         onChange={() => {
                           setBrowseSelected((prev) => {
                             const next = new Set(prev);
-                            next.has(bp.id) ? next.delete(bp.id) : next.add(bp.id);
+                            if (next.has(bp.id)) next.delete(bp.id);
+                            else next.add(bp.id);
                             return next;
                           });
                         }}
                         style={{ width: 17, height: 17, accentColor: '#111', flexShrink: 0 }}
                       />
                       <Thumb url={bp.imageUrl} size={44} />
-                      <span style={{ fontSize: 14, color: '#111', fontWeight: checked ? 600 : 400 }}>{bp.title}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 14, color: '#111', fontWeight: checked ? 600 : 400,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {bp.title}
+                        </div>
+                        {!isEligible && checked && (
+                          <div style={{ fontSize: 11, color: '#b45309', marginTop: 2 }}>
+                            Will be skipped on attach: product is not ACTIVE+APPROVED
+                          </div>
+                        )}
+                      </div>
+                      <BrowseStatusPill status={bp.status} moderationStatus={bp.moderationStatus} />
                     </label>
                   );
                 })
@@ -524,6 +715,106 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
 }
 
 /* ────────── Sub-components ────────── */
+
+/**
+ * Phase 38 (2026-05-21) — draggable row for one product inside a
+ * collection. The drag handle is the leading `⋮⋮` cell only;
+ * clicking the rest of the row stays as a normal interaction so the
+ * remove button + status pill behave as expected.
+ */
+function SortableProductRow({
+  product,
+  index,
+  onRemove,
+}: {
+  product: CollectionProduct;
+  index: number;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: product.product.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '10px 14px',
+    background: isDragging ? '#f1f5f9' : index % 2 === 0 ? '#fff' : '#fafbfc',
+    opacity: isDragging ? 0.7 : 1,
+    borderTop: index > 0 ? '1px solid #f3f4f6' : 'none',
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={{ color: '#c4c4c4', fontSize: 11, cursor: 'grab', userSelect: 'none' }}
+        title="Drag to reorder"
+        aria-label="Drag to reorder"
+      >
+        &#8942;&#8942;
+      </span>
+      <span style={{ fontSize: 13, color: '#9ca3af', width: 22, textAlign: 'right', flexShrink: 0 }}>{index + 1}.</span>
+      <Thumb url={product.product.images[0]?.url} />
+      <div style={{ flex: 1, fontSize: 14, fontWeight: 500, color: '#111', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {product.product.title}
+      </div>
+      <StatusPill status={product.product.status} />
+      <button onClick={onRemove} style={removeBtn} title="Remove">&times;</button>
+    </div>
+  );
+}
+
+/**
+ * Phase 38 (2026-05-21) — richer status pill for the Browse modal.
+ * Distinguishes ACTIVE, DRAFT, REJECTED, SUBMITTED, etc. via colour
+ * + label and surfaces moderationStatus when status looks fine but
+ * moderation isn't APPROVED (e.g. "ACTIVE • PENDING").
+ */
+function BrowseStatusPill({
+  status,
+  moderationStatus,
+}: {
+  status: string;
+  moderationStatus?: string;
+}) {
+  const STATUS_TONE: Record<string, { bg: string; fg: string }> = {
+    ACTIVE: { bg: '#dcfce7', fg: '#15803d' },
+    DRAFT: { bg: '#f3f4f6', fg: '#4b5563' },
+    SUBMITTED: { bg: '#dbeafe', fg: '#1e40af' },
+    APPROVED: { bg: '#dcfce7', fg: '#15803d' },
+    REJECTED: { bg: '#fee2e2', fg: '#991b1b' },
+    CHANGES_REQUESTED: { bg: '#fef3c7', fg: '#92400e' },
+    SUSPENDED: { bg: '#fef3c7', fg: '#92400e' },
+    ARCHIVED: { bg: '#f3f4f6', fg: '#6b7280' },
+  };
+  const tone = STATUS_TONE[status] ?? { bg: '#f3f4f6', fg: '#6b7280' };
+  const ineligibleModeration =
+    moderationStatus && moderationStatus !== 'APPROVED';
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <span style={{
+        fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+        background: tone.bg, color: tone.fg, whiteSpace: 'nowrap',
+        textTransform: 'uppercase', letterSpacing: 0.4,
+      }}>
+        {status}
+      </span>
+      {ineligibleModeration && (
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+          background: '#fef3c7', color: '#92400e', whiteSpace: 'nowrap',
+        }}>
+          {moderationStatus}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Thumb({ url, size = 40 }: { url?: string | null; size?: number }) {
   return (
     <div style={{

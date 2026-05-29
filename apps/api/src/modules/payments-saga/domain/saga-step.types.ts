@@ -68,4 +68,30 @@ export interface SagaStep<TContext> {
     context: TContext,
     forwardResult: unknown,
   ): Promise<void>;
+  /**
+   * Follow-up #C10 — per-step retry policy. The executor retries a
+   * thrown step up to `maxAttempts - 1` times with exponential
+   * backoff before declaring the step (and saga) FAILED. Most stuck
+   * sagas trace to transient PSP/network blips that resolve in
+   * seconds; retrying inline beats a full forward+compensate cycle
+   * followed by ops escalation.
+   *
+   * Defaults: `maxAttempts = 1` (no retry — preserves prior behavior)
+   *           `backoffMs   = 500` (first retry waits ~500ms, doubles)
+   *
+   * Set `maxAttempts = 1` (or omit) for steps where retrying could
+   * cause side-effect duplication (the PSP step is idempotent via
+   * X-Sportsmart-Idempotency-Key, but a custom audit-row insert may
+   * not be).
+   */
+  maxAttempts?: number;
+  backoffMs?: number;
+  /**
+   * Optional classifier: returns true if the error is transient and
+   * worth retrying. Default: retry every error up to maxAttempts.
+   * Use this to short-circuit retries on permanent failures (4xx
+   * validation, signature-mismatch, etc.) — saves time and stops the
+   * customer waiting for a result that's guaranteed to fail.
+   */
+  isTransientError?(err: unknown): boolean;
 }

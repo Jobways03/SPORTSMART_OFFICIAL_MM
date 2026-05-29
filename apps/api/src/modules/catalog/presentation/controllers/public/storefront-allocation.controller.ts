@@ -1,50 +1,54 @@
 import {
-  Controller,
-  Post,
   Body,
+  Controller,
   HttpCode,
   HttpStatus,
+  Post,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { UserAuthGuard } from '../../../../../core/guards';
 import {
-  SellerAllocationService,
+  AllocateAndReserveDto,
+  AllocateRequestDto,
+  ConfirmRequestDto,
+  ReallocateRequestDto,
+  ReleaseRequestDto,
+  ReserveRequestDto,
+} from '../../dtos/storefront-allocation.dto';
+import {
   AllocationResult,
+  SellerAllocationService,
 } from '../../../application/services/seller-allocation.service';
-import { BadRequestAppException } from '../../../../../core/exceptions';
 
-// ── DTOs (inline — lightweight) ──────────────────────────────────────────
-
-interface AllocateItemDto {
-  productId: string;
-  variantId?: string;
-  quantity: number;
-}
-
-interface AllocateRequestDto {
-  items: AllocateItemDto[];
-  customerPincode: string;
-}
-
-interface ReserveRequestDto {
-  mappingId: string;
-  quantity: number;
-  orderId?: string;
-  expiresInMinutes?: number;
-}
-
-interface ReallocateRequestDto {
-  orderId: string;
-  failedMappingId: string;
-  productId: string;
-  variantId?: string;
-  customerPincode: string;
-  quantity: number;
-}
-
-// ── Controller ───────────────────────────────────────────────────────────
-
+/**
+ * Phase 64 (2026-05-22) — allocation controller hardening.
+ *
+ * Pre-Phase-64 EVERY endpoint here was public, no auth, no rate
+ * limit (audit Gap #1). The /allocate/reserve in particular let an
+ * anonymous attacker reserve a competitor's stock for 15 minutes
+ * by guessing a mappingId — and the /allocate response carried
+ * mappingIds back so they didn't even need to guess.
+ *
+ * The Phase 64 surface:
+ *   - @UseGuards(UserAuthGuard) on the entire controller —
+ *     anonymous callers get a 401 instead of a free reservation
+ *     primitive.
+ *   - @Throttle on every mutation; the read endpoint has a more
+ *     permissive cap so authenticated customers shopping their
+ *     cart aren't blocked.
+ *   - DTOs validate UUIDs + pincode pattern + array size at the
+ *     pipe layer (audit Gap #21).
+ *
+ * Note: anonymous users still have the PDP path via
+ * /storefront/serviceability/check (rate-limited + sanitised in
+ * Phase 64). They no longer have a way to call the reservation
+ * primitives directly.
+ */
 @ApiTags('Storefront')
 @Controller('storefront/allocate')
+@UseGuards(UserAuthGuard)
 export class StorefrontAllocationController {
   constructor(
     private readonly allocationService: SellerAllocationService,
@@ -53,18 +57,12 @@ export class StorefrontAllocationController {
   /**
    * POST /storefront/allocate
    * Pre-allocation: returns ranked sellers for each item at a customer pincode.
-   * Called during checkout, before payment.
+   * Authenticated customers only.
    */
   @Post()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async allocate(@Body() body: AllocateRequestDto) {
-    if (!body.items || !Array.isArray(body.items) || body.items.length === 0) {
-      throw new BadRequestAppException('items array is required and cannot be empty');
-    }
-    if (!body.customerPincode) {
-      throw new BadRequestAppException('customerPincode is required');
-    }
-
     const results: {
       productId: string;
       variantId: string | null;
@@ -72,30 +70,52 @@ export class StorefrontAllocationController {
       allocation: AllocationResult;
     }[] = [];
 
-    for (const item of body.items) {
-      if (!item.productId) {
-        throw new BadRequestAppException('Each item must have a productId');
-      }
-      if (!item.quantity || item.quantity < 1) {
-        throw new BadRequestAppException('Each item must have quantity >= 1');
-      }
+    // Phase 64 (audit Gap #6) — parallelize the per-item allocator
+    // calls so a 50-item POST doesn't block the cluster for ~5
+    // seconds. Order preserved via Promise.all index alignment.
+    const allocations = await Promise.all(
+      body.items.map((item) =>
+        this.allocationService.allocate({
+          productId: item.productId,
+          variantId: item.variantId,
+          customerPincode: body.customerPincode,
+          quantity: item.quantity,
+        }),
+      ),
+    );
 
-      const allocation = await this.allocationService.allocate({
-        productId: item.productId,
-        variantId: item.variantId,
-        customerPincode: body.customerPincode,
-        quantity: item.quantity,
-      });
-
+    body.items.forEach((item, idx) => {
       results.push({
         productId: item.productId,
         variantId: item.variantId ?? null,
         quantity: item.quantity,
-        allocation,
+        allocation: allocations[idx]!,
       });
-    }
+    });
 
     const allServiceable = results.every((r) => r.allocation.serviceable);
+
+    // Phase 77 (2026-05-22) — audit Gap #20 + Flow #49 carry. The
+    // customer-facing surface receives ONLY the fields they need to
+    // render the cart serviceability state. mappingId / sellerId /
+    // sellerName / availableStock / score / dispatchSla are internal
+    // ranking metadata — a scraper with a logged-in account could
+    // otherwise build a competitive-intelligence map (which seller
+    // is nearest to each pincode, what stock depth each carries).
+    //
+    // estimatedDeliveryDays + the seller's *display name* stay
+    // because they're already visible on order detail; everything
+    // else is stripped.
+    const sanitisePrimary = (p: any) =>
+      p
+        ? {
+            nodeType: p.nodeType,
+            // Display name is OK (it's already on order detail);
+            // sellerId / mappingId / score are not.
+            sellerName: p.sellerName,
+            estimatedDeliveryDays: p.estimatedDeliveryDays,
+          }
+        : null;
 
     return {
       success: true,
@@ -110,9 +130,13 @@ export class StorefrontAllocationController {
           variantId: r.variantId,
           quantity: r.quantity,
           serviceable: r.allocation.serviceable,
-          primary: r.allocation.primary,
-          secondary: r.allocation.secondary,
-          tertiary: r.allocation.tertiary,
+          // Customer needs the unserviceable reason to act on it.
+          unserviceableReason: !r.allocation.serviceable
+            ? r.allocation.reason ?? null
+            : null,
+          primary: sanitisePrimary(r.allocation.primary),
+          // secondary / tertiary used to leak the same internal
+          // fields; the cart UI doesn't need them. Removed entirely.
           eligibleCount: r.allocation.allEligible.length,
         })),
       },
@@ -124,15 +148,9 @@ export class StorefrontAllocationController {
    * Reserve stock for a specific seller-product mapping.
    */
   @Post('reserve')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
   async reserveStock(@Body() body: ReserveRequestDto) {
-    if (!body.mappingId) {
-      throw new BadRequestAppException('mappingId is required');
-    }
-    if (!body.quantity || body.quantity < 1) {
-      throw new BadRequestAppException('quantity must be >= 1');
-    }
-
     const reservation = await this.allocationService.reserveStock({
       mappingId: body.mappingId,
       quantity: body.quantity,
@@ -151,28 +169,12 @@ export class StorefrontAllocationController {
    * POST /storefront/allocate/and-reserve
    * One-shot: rank candidates AND reserve stock against the best one, with
    * automatic primary→secondary→tertiary fallback if a higher-ranked
-   * candidate loses a concurrent reservation race. Prefer this over the
-   * two-step allocate → reserve flow for write-heavy paths (checkout).
+   * candidate loses a concurrent reservation race.
    */
   @Post('and-reserve')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  async allocateAndReserve(
-    @Body()
-    body: {
-      productId: string;
-      variantId?: string;
-      customerPincode: string;
-      quantity: number;
-      orderId?: string;
-      expiresInMinutes?: number;
-    },
-  ) {
-    if (!body.productId) throw new BadRequestAppException('productId is required');
-    if (!body.customerPincode) throw new BadRequestAppException('customerPincode is required');
-    if (!body.quantity || body.quantity < 1) {
-      throw new BadRequestAppException('quantity must be >= 1');
-    }
-
+  async allocateAndReserve(@Body() body: AllocateAndReserveDto) {
     const result = await this.allocationService.allocateAndReserve({
       productId: body.productId,
       variantId: body.variantId,
@@ -202,19 +204,10 @@ export class StorefrontAllocationController {
    * Confirm a reservation (after payment success).
    */
   @Post('confirm')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  async confirmReservation(
-    @Body() body: { reservationId: string; orderId?: string },
-  ) {
-    if (!body.reservationId) {
-      throw new BadRequestAppException('reservationId is required');
-    }
-
-    await this.allocationService.confirmReservation(
-      body.reservationId,
-      body.orderId,
-    );
-
+  async confirmReservation(@Body() body: ConfirmRequestDto) {
+    await this.allocationService.confirmReservation(body.reservationId, body.orderId);
     return {
       success: true,
       message: 'Reservation confirmed — stock deducted',
@@ -226,14 +219,10 @@ export class StorefrontAllocationController {
    * Release a reservation (e.g. cart abandonment, payment failure).
    */
   @Post('release')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  async releaseReservation(@Body() body: { reservationId: string }) {
-    if (!body.reservationId) {
-      throw new BadRequestAppException('reservationId is required');
-    }
-
+  async releaseReservation(@Body() body: ReleaseRequestDto) {
     await this.allocationService.releaseReservation(body.reservationId);
-
     return {
       success: true,
       message: 'Reservation released — stock freed',
@@ -242,17 +231,12 @@ export class StorefrontAllocationController {
 
   /**
    * POST /storefront/allocate/reallocate
-   * Re-allocate after a seller fails (T6 fallback).
+   * Re-allocate after a seller fails.
    */
   @Post('reallocate')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async reallocate(@Body() body: ReallocateRequestDto) {
-    if (!body.orderId) throw new BadRequestAppException('orderId is required');
-    if (!body.failedMappingId) throw new BadRequestAppException('failedMappingId is required');
-    if (!body.productId) throw new BadRequestAppException('productId is required');
-    if (!body.customerPincode) throw new BadRequestAppException('customerPincode is required');
-    if (!body.quantity || body.quantity < 1) throw new BadRequestAppException('quantity must be >= 1');
-
     const allocation = await this.allocationService.reallocate({
       orderId: body.orderId,
       failedMappingId: body.failedMappingId,

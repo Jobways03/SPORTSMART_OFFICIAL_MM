@@ -1,0 +1,412 @@
+{
+  "protein-powder": [
+    {
+      "key": "protein_type",
+      "name": "Protein Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "whey_concentrate", "label": "Whey Concentrate" },
+        { "value": "whey_isolate", "label": "Whey Isolate" },
+        { "value": "whey_blend", "label": "Whey Blend" },
+        { "value": "casein", "label": "Casein" },
+        { "value": "plant_based", "label": "Plant-Based / Vegan" },
+        { "value": "mass_gainer", "label": "Mass Gainer" },
+        { "value": "egg_white", "label": "Egg White" }
+      ]
+    },
+    {
+      "key": "weight",
+      "name": "Weight",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "500g", "label": "500g" },
+        { "value": "1kg", "label": "1 kg" },
+        { "value": "2kg", "label": "2 kg" },
+        { "value": "2_5kg", "label": "2.5 kg" },
+        { "value": "5kg", "label": "5 kg" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "chocolate", "label": "Chocolate" },
+        { "value": "vanilla", "label": "Vanilla" },
+        { "value": "strawberry", "label": "Strawberry" },
+        { "value": "banana", "label": "Banana" },
+        { "value": "cookies_cream", "label": "Cookies & Cream" },
+        { "value": "salted_caramel", "label": "Salted Caramel" },
+        { "value": "unflavoured", "label": "Unflavoured" }
+      ]
+    },
+    {
+      "key": "dietary",
+      "name": "Dietary",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "gluten_free", "label": "Gluten Free" },
+        { "value": "lactose_free", "label": "Lactose Free" },
+        { "value": "vegan", "label": "Vegan" },
+        { "value": "soy_free", "label": "Soy Free" },
+        { "value": "sugar_free", "label": "Sugar Free" }
+      ]
+    }
+  ],
+  "protein-bars-snacks": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "protein_bar", "label": "Protein Bar" },
+        { "value": "protein_cookie", "label": "Protein Cookie" },
+        { "value": "protein_brownie", "label": "Protein Brownie" },
+        { "value": "protein_ball", "label": "Protein Ball / Bite" },
+        { "value": "beef_jerky", "label": "Beef Jerky / Biltong" },
+        { "value": "nut_bar", "label": "Nut / Seed Bar" }
+      ]
+    },
+    {
+      "key": "pack_quantity",
+      "name": "Pack Quantity",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "single", "label": "Single" },
+        { "value": "6_pack", "label": "6 Pack" },
+        { "value": "12_pack", "label": "12 Pack" },
+        { "value": "24_pack", "label": "24 Pack" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "chocolate", "label": "Chocolate" },
+        { "value": "peanut_butter", "label": "Peanut Butter" },
+        { "value": "cookie_dough", "label": "Cookie Dough" },
+        { "value": "caramel", "label": "Caramel" },
+        { "value": "berry", "label": "Berry" },
+        { "value": "other", "label": "Other" }
+      ]
+    },
+    {
+      "key": "dietary",
+      "name": "Dietary",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "gluten_free", "label": "Gluten Free" },
+        { "value": "vegan", "label": "Vegan" },
+        { "value": "sugar_free", "label": "Sugar Free" },
+        { "value": "high_protein", "label": "High Protein (20g+)" }
+      ]
+    }
+  ],
+  "pre-workout": [
+    {
+      "key": "form",
+      "name": "Form",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "powder", "label": "Powder" },
+        { "value": "capsule", "label": "Capsules" },
+        { "value": "ready_to_drink", "label": "Ready-to-Drink" },
+        { "value": "gummy", "label": "Gummy" }
+      ]
+    },
+    {
+      "key": "weight",
+      "name": "Weight / Servings",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "150_200g", "label": "150-200g (20 servings)" },
+        { "value": "250_300g", "label": "250-300g (30 servings)" },
+        { "value": "400_500g", "label": "400-500g (50 servings)" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "fruit_punch", "label": "Fruit Punch" },
+        { "value": "blue_raspberry", "label": "Blue Raspberry" },
+        { "value": "watermelon", "label": "Watermelon" },
+        { "value": "citrus", "label": "Citrus / Lemon" },
+        { "value": "grape", "label": "Grape" },
+        { "value": "unflavoured", "label": "Unflavoured" }
+      ]
+    },
+    {
+      "key": "stimulant_free",
+      "name": "Stimulant Free",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    }
+  ],
+  "creatine": [
+    {
+      "key": "creatine_type",
+      "name": "Creatine Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "monohydrate", "label": "Monohydrate" },
+        { "value": "micronized", "label": "Micronized Monohydrate" },
+        { "value": "hcl", "label": "Creatine HCL" },
+        { "value": "blend", "label": "Creatine Blend" }
+      ]
+    },
+    {
+      "key": "form",
+      "name": "Form",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "powder", "label": "Powder" },
+        { "value": "capsule", "label": "Capsules" },
+        { "value": "gummy", "label": "Gummy" }
+      ]
+    },
+    {
+      "key": "weight",
+      "name": "Weight",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "250g", "label": "250g" },
+        { "value": "500g", "label": "500g" },
+        { "value": "1kg", "label": "1 kg" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "unflavoured", "label": "Unflavoured" },
+        { "value": "fruit_punch", "label": "Fruit Punch" },
+        { "value": "blue_raspberry", "label": "Blue Raspberry" },
+        { "value": "other", "label": "Other" }
+      ]
+    }
+  ],
+  "bcaa-amino-acids": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "bcaa", "label": "BCAA" },
+        { "value": "eaa", "label": "EAA (Essential Amino Acids)" },
+        { "value": "glutamine", "label": "Glutamine" },
+        { "value": "amino_blend", "label": "Amino Acid Blend" }
+      ]
+    },
+    {
+      "key": "form",
+      "name": "Form",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "powder", "label": "Powder" },
+        { "value": "capsule", "label": "Capsules" },
+        { "value": "ready_to_drink", "label": "Ready-to-Drink" }
+      ]
+    },
+    {
+      "key": "weight",
+      "name": "Weight",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "250g", "label": "250g" },
+        { "value": "500g", "label": "500g" },
+        { "value": "1kg", "label": "1 kg" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "tropical", "label": "Tropical" },
+        { "value": "berry", "label": "Berry" },
+        { "value": "watermelon", "label": "Watermelon" },
+        { "value": "grape", "label": "Grape" },
+        { "value": "unflavoured", "label": "Unflavoured" }
+      ]
+    }
+  ],
+  "energy-gels-drinks": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "energy_gel", "label": "Energy Gel" },
+        { "value": "energy_chew", "label": "Energy Chew / Block" },
+        { "value": "energy_drink_powder", "label": "Energy Drink Powder" },
+        { "value": "energy_drink_rtd", "label": "Energy Drink (Ready-to-Drink)" },
+        { "value": "electrolyte_tablet", "label": "Electrolyte Tablet" },
+        { "value": "electrolyte_powder", "label": "Electrolyte Powder" }
+      ]
+    },
+    {
+      "key": "pack_quantity",
+      "name": "Pack Quantity",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "single", "label": "Single" },
+        { "value": "6_pack", "label": "6 Pack" },
+        { "value": "12_pack", "label": "12 Pack" },
+        { "value": "20_pack", "label": "20 Pack" },
+        { "value": "24_pack", "label": "24 Pack" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "citrus", "label": "Citrus / Lemon Lime" },
+        { "value": "berry", "label": "Berry" },
+        { "value": "tropical", "label": "Tropical" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "cola", "label": "Cola / Caffeine" },
+        { "value": "unflavoured", "label": "Unflavoured" }
+      ]
+    },
+    {
+      "key": "caffeine",
+      "name": "Contains Caffeine",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    }
+  ],
+  "vitamins-supplements": [
+    {
+      "key": "supplement_type",
+      "name": "Supplement Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "multivitamin", "label": "Multivitamin" },
+        { "value": "omega_3", "label": "Omega 3 / Fish Oil" },
+        { "value": "vitamin_d", "label": "Vitamin D" },
+        { "value": "vitamin_c", "label": "Vitamin C" },
+        { "value": "magnesium", "label": "Magnesium" },
+        { "value": "zinc", "label": "Zinc" },
+        { "value": "iron", "label": "Iron" },
+        { "value": "collagen", "label": "Collagen" },
+        { "value": "joint_support", "label": "Joint Support / Glucosamine" },
+        { "value": "greens", "label": "Super Greens" }
+      ]
+    },
+    {
+      "key": "form",
+      "name": "Form",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "tablet", "label": "Tablet" },
+        { "value": "capsule", "label": "Capsule / Softgel" },
+        { "value": "powder", "label": "Powder" },
+        { "value": "gummy", "label": "Gummy" },
+        { "value": "liquid", "label": "Liquid" }
+      ]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "30", "label": "30 Servings" },
+        { "value": "60", "label": "60 Servings" },
+        { "value": "90", "label": "90 Servings" },
+        { "value": "120", "label": "120 Servings" },
+        { "value": "180", "label": "180 Servings" }
+      ]
+    }
+  ],
+  "meal-replacements": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "shake_powder", "label": "Meal Shake Powder" },
+        { "value": "shake_rtd", "label": "Meal Shake (Ready-to-Drink)" },
+        { "value": "meal_bar", "label": "Meal Replacement Bar" },
+        { "value": "oats_blend", "label": "Protein Oats / Blend" }
+      ]
+    },
+    {
+      "key": "weight",
+      "name": "Weight",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "500g", "label": "500g" },
+        { "value": "1kg", "label": "1 kg" },
+        { "value": "2kg", "label": "2 kg" },
+        { "value": "2_5kg", "label": "2.5 kg" }
+      ]
+    },
+    {
+      "key": "flavour",
+      "name": "Flavour",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "chocolate", "label": "Chocolate" },
+        { "value": "vanilla", "label": "Vanilla" },
+        { "value": "strawberry", "label": "Strawberry" },
+        { "value": "banana", "label": "Banana" },
+        { "value": "other", "label": "Other" }
+      ]
+    },
+    {
+      "key": "dietary",
+      "name": "Dietary",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "gluten_free", "label": "Gluten Free" },
+        { "value": "vegan", "label": "Vegan" },
+        { "value": "dairy_free", "label": "Dairy Free" }
+      ]
+    }
+  ]
+}

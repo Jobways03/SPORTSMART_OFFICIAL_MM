@@ -43,10 +43,61 @@ model SellerProductMapping {
   longitude     Decimal? @db.Decimal(10, 7)
   dispatchSla   Int      @default(2) @map("dispatch_sla") // days to dispatch
 
-  // Status & priority
+  // Status & priority.
+  //
+  // Phase 56 (2026-05-22) — isActive default flipped from true →
+  // false so direct DB inserts (admin seeds, raw SQL) follow the
+  // intended "PENDING_APPROVAL until reviewed" lifecycle instead of
+  // landing live by accident. The controller already hardcodes
+  // false; this aligns the schema's default.
   approvalStatus      MappingApprovalStatus @default(PENDING_APPROVAL) @map("approval_status")
-  isActive            Boolean               @default(true) @map("is_active")
+  isActive            Boolean               @default(false) @map("is_active")
   operationalPriority Int                   @default(0) @map("operational_priority") // higher = preferred
+
+  // Phase 56 (2026-05-22) — audit columns. Pre-Phase-56 approve /
+  // stop calls were untraceable post-fact; updatedAt was overwritten
+  // on every subsequent PATCH. Now each lifecycle transition stamps
+  // who did it and when. rejectionReason is the user-visible
+  // explanation the seller sees on a REJECTED mapping.
+  approvedBy      String?   @map("approved_by")
+  approvedAt      DateTime? @map("approved_at")
+  rejectedBy      String?   @map("rejected_by")
+  rejectedAt      DateTime? @map("rejected_at")
+  rejectionReason String?   @map("rejection_reason")
+  stoppedBy       String?   @map("stopped_by")
+  stoppedAt       DateTime? @map("stopped_at")
+
+  // Phase 59 (2026-05-22) — bulk-suspend audit columns (audit
+  // Gap #3). Distinguished from stoppedBy/At (Phase 56 single
+  // mapping) so a forensic query can answer "which admin
+  // bulk-suspended this seller and why" without joining the
+  // tamper-evident audit chain. Same shape for the reverse
+  // transition (reactivatedBy/At/Reason) so the audit trail
+  // narrates a complete suspend→reactivate cycle.
+  suspendedBy        String?   @map("suspended_by")
+  suspendedAt        DateTime? @map("suspended_at")
+  suspensionReason   String?   @map("suspension_reason")
+  reactivatedBy      String?   @map("reactivated_by")
+  reactivatedAt      DateTime? @map("reactivated_at")
+  reactivationReason String?   @map("reactivation_reason")
+
+  // Phase 60 (2026-05-22) — auto-repair migration tracking (audit
+  // Gap #12). When a stale product-level (variantId=null) mapping
+  // is fanned out into per-variant mappings, each new row carries
+  // a pointer back to its source so a forensic query can answer
+  // "which mappings inherited from which migration?" without
+  // joining the audit chain. The stale row itself is soft-deleted
+  // (deletedAt set, isActive=false) rather than hard-deleted —
+  // preserves ledger + reservations + LowStockAlert FK refs
+  // (audit Gap #2).
+  migratedFromMappingId String?   @map("migrated_from_mapping_id")
+  migratedAt            DateTime? @map("migrated_at")
+
+  // Phase 51 (2026-05-21) — soft-delete. Pre-Phase-51 the delete
+  // endpoint hard-removed the row, cascading to StockMovement and
+  // losing the forensic trail. The soft-delete stamp lets seller +
+  // admin reads filter it out while ledger history survives.
+  deletedAt DateTime? @map("deleted_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -69,6 +120,23 @@ model SellerProductMapping {
   @@index([pickupPincode])
   @@index([isActive])
   @@index([approvalStatus])
+  @@index([deletedAt])
+  // Phase 59 (2026-05-22) — hot suspend/activate query. The bulk
+  // endpoint scans by (sellerId, approvalStatus='APPROVED',
+  // isActive=true); without this composite, Postgres falls back
+  // to the single-column sellerId index plus filter, which
+  // re-scans every row of the largest seller's catalog on each
+  // call.
+  @@index([sellerId, approvalStatus, isActive])
+  // Phase 60 (2026-05-22) — composite for the stale-mapping
+  // detection pre-check (productId, variantId IS NULL,
+  // deletedAt IS NULL). The hot-path GET endpoint now does a
+  // count on this composite to skip the heavy fan-out logic when
+  // there's nothing stale.
+  @@index([productId, variantId, deletedAt])
+  // Phase 60 — forensic lookup "show me every mapping migrated
+  // from stale X".
+  @@index([migratedFromMappingId])
   @@map("seller_product_mappings")
 }
 
@@ -87,6 +155,11 @@ model SellerProductMapping {
 // the audit-log row AND the StockMovement row; once the team has
 // confidence in the new path, the audit-log path can drop.
 
+// Phase 53 (2026-05-21) — DAMAGE/LOSS/AUDIT_CORRECTION added so the
+// franchise adjustment path can write through the same typed ledger
+// once its repo migrates. Pre-Phase-53 these kinds existed only as
+// free-string movementType values on a parallel franchise ledger,
+// making cross-actor stock reporting awkward.
 enum StockMovementKind {
   RESERVED
   RELEASED
@@ -96,13 +169,26 @@ enum StockMovementKind {
   WRITE_OFF
   MANUAL_ADJUST
   INITIAL
+  DAMAGE
+  LOSS
+  AUDIT_CORRECTION
 }
 
 model StockMovement {
   id String @id @default(uuid())
 
+  // Phase 53 (2026-05-21) — polymorphic resource pointer. Pre-Phase-53
+  // the table was seller-mapping-only via the mandatory mappingId FK.
+  // The resourceType discriminator + nullable mappingId let franchise
+  // and own-brand stock events land in the same typed ledger so
+  // cross-actor reporting is a single-table scan.
+  resourceType String @default("SELLER_MAPPING") @map("resource_type") // 'SELLER_MAPPING' | 'FRANCHISE_STOCK' | 'OWN_BRAND_STOCK'
+  resourceId   String @default("") @map("resource_id")
+
   /// FK onto the SellerProductMapping this movement applies to.
-  mappingId String @map("mapping_id")
+  /// Phase 53 — nullable so non-seller resources can write through
+  /// the same table. Still populated for SELLER_MAPPING resourceType.
+  mappingId String? @map("mapping_id")
 
   kind          StockMovementKind
   /// Always positive — direction is encoded in `kind`.
@@ -130,7 +216,7 @@ model StockMovement {
 
   createdAt DateTime @default(now()) @map("created_at")
 
-  mapping SellerProductMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+  mapping SellerProductMapping? @relation(fields: [mappingId], references: [id], onDelete: Cascade)
 
   // Hot-path indexes:
   //   * (mappingId, createdAt) — drill-down "show this mapping's
@@ -138,8 +224,11 @@ model StockMovement {
   //   * (referenceType, referenceId) — given an order id, find
   //     every stock movement caused by it.
   //   * (createdAt) — period-bounded scans (daily reports).
+  //   * (resourceType, resourceId, createdAt) — Phase 53, the
+  //     cross-actor drill-down path.
   @@index([mappingId, createdAt(sort: Desc)])
   @@index([referenceType, referenceId])
   @@index([createdAt])
+  @@index([resourceType, resourceId, createdAt(sort: Desc)])
   @@map("stock_movements")
 }

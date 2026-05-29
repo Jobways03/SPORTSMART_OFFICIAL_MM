@@ -36,15 +36,15 @@ SportSmart is a **managed marketplace**:
 | Persona | App | Capabilities |
 |---|---|---|
 | Customer | `web-storefront` (:4005) | Browse, search, cart, checkout (COD + online), track orders, raise returns/disputes, wallet |
-| Seller | `web-seller` (:4003) | Onboard (KYC/GST/bank), list products, manage inventory, accept/fulfil orders, ship via iThink or self-delivery, view earnings, respond to returns |
+| Seller | `web-d2c-seller` (:4003) | Onboard (KYC/GST/bank), list products, manage inventory, accept/fulfil orders, ship via iThink or self-delivery, view earnings, respond to returns |
 | Franchise | `web-franchise` (:4004) | Geographic-territory reseller — POS, procurement, inventory, fulfil online orders |
 | Affiliate | `web-affiliate` (:4007) | Referral-based commission program — share coupon codes, track earnings lifecycle, KYC, payouts |
 | Super Admin | `web-admin-storefront` (:4000) | Marketplace operator — moderate catalog, verify orders, run settlements, RBAC, finance approvals |
-| Seller Admin | `web-admin` (:4001) | Internal seller-relations / operations staff — seller management, products, returns, accounts |
+| Seller Admin | `web-d2c-seller-admin` (:4001) | Internal seller-relations / operations staff — seller management, products, returns, accounts |
 | Franchise Admin | `web-franchise-admin` (:4002) | Franchise lifecycle, KYC, pricing overrides, delivery method config |
 | Affiliate Admin | `web-affiliate-admin` (:4006) | Affiliate application review, coupon issuance, payout approvals |
 
-> **Folder ↔ role mapping is non-obvious.** `web-admin-storefront` is the **Super Admin**; `web-admin` is the **Seller Admin**. The names suggest the opposite — always verify by port + `dev` script.
+> **Folder ↔ role mapping:** `web-admin-storefront` (:4000) is the **Super Admin**; `web-d2c-seller-admin` (:4001) is the **Seller Admin**. The names now match the role; cross-reference by port if in doubt.
 
 Business model differentiators:
 
@@ -62,9 +62,9 @@ SPORTSMART_OFFICIAL_MM/
 ├── apps/
 │   ├── api/                          NestJS 11 backend           ~156k LoC
 │   ├── web-admin-storefront/         Super Admin     :4000        ~46k LoC
-│   ├── web-admin/                    Seller Admin    :4001        ~27k LoC
+│   ├── web-d2c-seller-admin/                    Seller Admin    :4001        ~27k LoC
 │   ├── web-franchise-admin/          Franchise Admin :4002         ~9k LoC
-│   ├── web-seller/                   Seller Portal   :4003        ~16k LoC
+│   ├── web-d2c-seller/                   Seller Portal   :4003        ~16k LoC
 │   ├── web-franchise/                Franchise       :4004        ~19k LoC
 │   ├── web-storefront/               Customer        :4005        ~17k LoC
 │   ├── web-affiliate-admin/          Affiliate Admin :4006         ~6k LoC
@@ -145,9 +145,9 @@ SPORTSMART_OFFICIAL_MM/
 |---|---|---|
 | `8000` | `apps/api` | Backend API (NestJS) |
 | `4000` | `apps/web-admin-storefront` | **Super Admin** |
-| `4001` | `apps/web-admin` | **Seller Admin** |
+| `4001` | `apps/web-d2c-seller-admin` | **Seller Admin** |
 | `4002` | `apps/web-franchise-admin` | Franchise Admin |
-| `4003` | `apps/web-seller` | Seller Portal |
+| `4003` | `apps/web-d2c-seller` | Seller Portal |
 | `4004` | `apps/web-franchise` | Franchise Portal |
 | `4005` | `apps/web-storefront` | Customer Storefront |
 | `4006` | `apps/web-affiliate-admin` | Affiliate Admin |
@@ -618,11 +618,11 @@ All eight frontends store tokens in **`sessionStorage`** with actor-specific key
 | App | `accessTokenKey` | `refreshTokenKey` | `userKey` |
 |---|---|---|---|
 | `web-storefront` | `accessToken` | `refreshToken` | `user` |
-| `web-seller` | `accessToken` | `refreshToken` | `seller` |
+| `web-d2c-seller` | `accessToken` | `refreshToken` | `seller` |
 | `web-franchise` | `accessToken` | `refreshToken` | `franchise` |
 | `web-affiliate` | `affiliateToken` | — (no refresh) | `affiliateProfile` |
 | `web-admin-storefront` | `adminAccessToken` | `adminRefreshToken` | `admin` |
-| `web-admin` | `adminAccessToken` | `adminRefreshToken` | `admin` |
+| `web-d2c-seller-admin` | `adminAccessToken` | `adminRefreshToken` | `admin` |
 | `web-franchise-admin` | `adminAccessToken` | `adminRefreshToken` | `admin` |
 | `web-affiliate-admin` | `adminToken` | — (no refresh) | `adminProfile` |
 
@@ -755,7 +755,7 @@ The sidebar (`src/app/dashboard/layout.tsx`) declares `requires?: string[]` (any
 
 **Per-page guards on other pages are NOT yet applied uniformly.** URL-typed access to `/dashboard/orders` still works for any logged-in admin until each page is wrapped — ADR-020 §5 tracks this.
 
-The seller admin (`web-admin`), all other portals, and all customer-facing pages have **no RBAC layer** beyond authentication (the backend enforces).
+The seller admin (`web-d2c-seller-admin`), all other portals, and all customer-facing pages have **no RBAC layer** beyond authentication (the backend enforces).
 
 ---
 
@@ -803,7 +803,7 @@ Razorpay webhook → POST /payments/webhooks/razorpay
    ├─ Idempotency claim in Redis (24h TTL)
    ├─ verify amount + currency + order match
    ├─ if mismatch: insert PaymentMismatchAlert(kind=AMOUNT_MISMATCH) row, 200 OK
-   ├─ if ok: payments.captured event
+   ├─ if ok: payments.payment.captured event
    │
    ▼
 orders confirms paymentStatus → PAID
@@ -928,7 +928,7 @@ async createOrder(params: { amountInPaise: bigint; receipt: string; idempotencyK
 2. **Replay-window**: reject if payload `created_at` is outside `±5 min`.
 3. **Idempotency claim**: `redis.acquireLock('webhook:razorpay:' + eventId, 24h)`. If the lock exists, the event already fired; return 200 OK.
 4. Verify amount + currency + order match. On mismatch → insert `PaymentMismatchAlert(kind=AMOUNT_MISMATCH, severity=HIGH, status=OPEN)` and respond 200 OK with `code=GATEWAY_AMOUNT_MISMATCH` (PERMANENT error — Razorpay must not retry).
-5. On success → publish `payments.captured` event.
+5. On success → publish `payments.payment.captured` event.
 
 **Permanent vs transient error classification** is explicit:
 
@@ -1555,7 +1555,7 @@ Each cron name above maps to a `CronInstrumentationService.wrap(jobName, fn)` so
 
 ### Naming convention
 
-`<module>.<aggregate>.<action>` — e.g. `orders.master.created`, `payments.captured`, `returns.qc.completed`.
+`<module>.<aggregate>.<action>` — e.g. `orders.master.created`, `payments.payment.captured`, `returns.return.qc_completed`.
 
 ### Event catalog
 
@@ -1572,16 +1572,16 @@ Canonical list in `docs/architecture/event-catalog.md`. Selected high-traffic ev
 | `orders.master.created` | payments, settlements, notifications, audit, affiliate, franchise |
 | `orders.sub_order.created` | shipping, notifications, audit |
 | `orders.sub_order.delivered` | returns (eligibility window), settlements, notifications, audit |
-| `payments.captured` | orders, settlements, notifications, audit |
-| `payments.refund.completed` | returns, settlements, notifications, audit |
-| `payments.mismatch.detected` | admin-control-tower, audit |
+| `payments.payment.captured` | orders, settlements, notifications, audit |
+| `returns.refund.completed` | payments, settlements, notifications, audit |
+| `payments.mismatch.detected` | admin-control-tower, audit *(⏳ planned — not yet emitted)* |
 | `shipping.shipment.created` | orders, notifications, audit |
 | `shipping.ndr.raised` | orders, notifications, audit, admin-control-tower |
 | `shipping.rto.initiated` | orders, returns, settlements, notifications, audit |
-| `returns.requested` | notifications, audit |
-| `returns.qc.completed` | audit |
-| `returns.refund.approved` | payments, settlements, notifications, audit |
-| `returns.dispute.opened` | notifications, audit, admin-control-tower |
+| `returns.return.requested` | notifications, audit |
+| `returns.return.qc_completed` | audit |
+| `returns.refund.initiated` | payments, audit |
+| `disputes.filed` | notifications, audit, admin-control-tower |
 | `settlements.run.approved` | notifications, audit, admin-control-tower |
 | `affiliate.commission.locked` | settlements, notifications, audit |
 | `franchise.earning.locked` | settlements, notifications, audit |
@@ -1638,7 +1638,7 @@ Six of the eight (the admin/back-office apps) use **custom CSS with CSS variable
 - Drag-and-drop on menu builder (`@dnd-kit/*`) — unique to this app.
 - Stubs: `/dashboard/replacements` (commented out in sidebar), Nova routes (hidden).
 
-### 20.2 `web-admin` — Seller Admin (:4001, ~27k LoC)
+### 20.2 `web-d2c-seller-admin` — Seller Admin (:4001, ~27k LoC)
 
 - 88 files. Simpler — no RBAC, no settings hub, no discounts/marketing/analytics.
 - Pages: sellers, products, orders, returns, commission (+ settings), franchises (with 11 modal-driven actions), verification (+ team), accounts (+ settlements / payables / reports), procurement, inventory, storefront.
@@ -1651,7 +1651,7 @@ Six of the eight (the admin/back-office apps) use **custom CSS with CSS variable
 - Master franchise list with 7 action modals (status, verification, commission, message, change-password, impersonate, delete).
 - Per-franchise pricing editor, delivery methods (iThink partner code, self-delivery options), settlements ledger, cross-franchise orders aggregation.
 
-### 20.4 `web-seller` — Seller Portal (:4003, ~16k LoC)
+### 20.4 `web-d2c-seller` — Seller Portal (:4003, ~16k LoC)
 
 - 82 files. Custom CSS only (no Tailwind).
 - Sidebar disables most features until seller is `ACTIVE` + email-verified.

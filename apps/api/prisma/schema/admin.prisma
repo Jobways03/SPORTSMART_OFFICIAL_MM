@@ -56,10 +56,17 @@ model Admin {
   // mfaBackupCodesHashes: bcrypt-hashed one-time backup codes for
   //   account recovery (TOTP device lost). Stored as a JSON array of
   //   strings; null until enrollment completes.
-  mfaSecretCiphertext        String?  @map("mfa_secret_ciphertext")
-  mfaPendingSecretCiphertext String?  @map("mfa_pending_secret_ciphertext")
+  mfaSecretCiphertext        String?   @map("mfa_secret_ciphertext")
+  mfaPendingSecretCiphertext String?   @map("mfa_pending_secret_ciphertext")
+  // Phase 25 (2026-05-20) — pending-secret expiry. beginEnrollment
+  // stamps this 30 min in the future; the daily sweep cron clears
+  // pending secrets past their expiry so abandoned enrolment attempts
+  // don't leave a recoverable secret in the row indefinitely. Null
+  // means "no pending enrolment" or "set before Phase 25 — legacy
+  // row, sweep cron will clear opportunistically."
+  mfaPendingExpiresAt        DateTime? @map("mfa_pending_expires_at")
   mfaEnabledAt               DateTime? @map("mfa_enabled_at")
-  mfaBackupCodesHashes       Json?    @map("mfa_backup_codes_hashes")
+  mfaBackupCodesHashes       Json?     @map("mfa_backup_codes_hashes")
   // PR 10.7 — anti-replay tracking. TOTP step number of the most
   // recently accepted code; the verifier rejects codes for
   // step <= mfaLastUsedStep. Step counter is unix_seconds / 30,
@@ -67,17 +74,63 @@ model Admin {
   // years of TOTP from epoch, plenty. Nullable so admins who
   // haven't completed any MFA verification pass through without
   // a baseline (first verify writes the column).
-  mfaLastUsedStep            Int?     @map("mfa_last_used_step")
+  mfaLastUsedStep            Int?      @map("mfa_last_used_step")
 
-  sessions          AdminSession[]
-  actionAuditLogs   AdminActionAuditLog[]
-  impersonationLogs AdminImpersonationLog[]
-  adminMessages     AdminSellerMessage[]
-  passwordResetOtps AdminPasswordResetOtp[]
+  // Phase 26 (2026-05-20) — per-admin MFA brute-force counter.
+  // Separate from password's failedLoginAttempts / lockUntil because
+  // they live on different conceptual factors and we want the
+  // password counter to reset on successful login (cleared upfront
+  // in AdminLoginUseCase) while the MFA counter resets only on
+  // successful MFA verify. The per-IP @Throttle on /mfa-verify is
+  // still in place but breaks under NAT (one office IP) and against
+  // a rotating-proxy attacker; this per-account counter closes that
+  // gap. Lock window matches password lockout (15 min) so the two
+  // factors are symmetric.
+  failedMfaAttempts Int       @default(0) @map("failed_mfa_attempts")
+  mfaLockUntil      DateTime? @map("mfa_lock_until")
+
+  sessions               AdminSession[]
+  actionAuditLogs        AdminActionAuditLog[]
+  impersonationLogs      AdminImpersonationLog[]
+  adminMessages          AdminSellerMessage[]
+  passwordResetOtps      AdminPasswordResetOtp[]
+  // Phase 68 (2026-05-22) — audit Gaps #9 + #10. Back-references for
+  // the two MasterOrder FK relations. SetNull on the orders side
+  // means deleting an Admin clears verifiedBy / claimedByAdminId
+  // but leaves the orders intact.
+  verifiedOrders         MasterOrder[]           @relation("VerifierOrders")
+  claimedOrders          MasterOrder[]           @relation("ClaimedOrders")
+  // Phase 74 (2026-05-22) — Phase 73 audit Gap #8. Back-reference
+  // for the rejecter FK on MasterOrder.
+  rejectedOrders         MasterOrder[]           @relation("RejecterOrders")
+  // Phase 78 (2026-05-22) — reassignment audit Gap #5. Back-reference
+  // for OrderReassignmentLog.reassignedBy. Null-on-delete keeps the
+  // historical log intact even if the admin row is later removed.
+  reassignedSubOrderLogs OrderReassignmentLog[]
+  // Phase 81 (2026-05-22) — sub-order cancel audit Gap #3. FK
+  // back-reference for SubOrder.cancelledBy. SetNull on the SubOrder
+  // side keeps the cancellation record intact if the admin is later
+  // deleted (admin row removal must not destroy historical evidence).
+  cancelledSubOrders     SubOrder[]              @relation("SubOrderCanceller")
+  // Phase 138 — commission records this admin manually adjusted.
+  adjustedCommissions    CommissionRecord[]      @relation("CommissionAdjustedBy")
+  // Phase 141 — settlement cycles this admin created.
+  createdSettlementCycles SettlementCycle[]      @relation("SettlementCycleCreatedBy")
+  // Phase 144 — settlement cycles this admin approved.
+  approvedSettlementCycles SettlementCycle[]     @relation("SettlementCycleApprovedBy")
+  // Phase 145 — seller settlements this admin marked paid.
+  paidSellerSettlements   SellerSettlement[]     @relation("SellerSettlementPaidBy")
+  // Phase 146 — franchise settlements this admin marked paid (batch path).
+  paidFranchiseSettlements FranchiseSettlement[] @relation("FranchiseSettlementPaidBy")
+  // Phase 147 — settlement adjustments this admin created / voided.
+  createdSettlementAdjustments SettlementAdjustment[] @relation("SettlementAdjustmentCreatedBy")
+  voidedSettlementAdjustments  SettlementAdjustment[] @relation("SettlementAdjustmentVoidedBy")
 
   @@index([email])
   @@index([role])
   @@index([status])
+  // Phase 25 — powers the pending-secret sweep cron's WHERE.
+  @@index([mfaPendingExpiresAt])
   @@map("admins")
 }
 
@@ -103,24 +156,55 @@ model AdminPasswordResetOtp {
 }
 
 model AdminSession {
-  id           String    @id @default(uuid())
-  adminId      String    @map("admin_id")
-  refreshToken String    @map("refresh_token")
-  userAgent    String?   @map("user_agent")
-  ipAddress    String?   @map("ip_address")
-  expiresAt    DateTime  @map("expires_at")
-  revokedAt    DateTime? @map("revoked_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  id                       String    @id @default(uuid())
+  adminId                  String    @map("admin_id")
+  /// Phase 23 (2026-05-20) — Column renamed `refresh_token` →
+  /// `refresh_token_hash`. The stored value has always been the
+  /// SHA-256 hex of the raw token (via hashRefreshToken); only the
+  /// column name lied. pg_dump readers + incident-response engineers
+  /// now see the truth. Prisma field name stays `refreshToken` for
+  /// backward-compat with existing call sites.
+  refreshToken             String    @map("refresh_token_hash")
+  // Phase 1 / C6 — refresh-token reuse detection. SHA-256 of the
+  // LAST rotation's refresh token (now "burned"). A refresh request
+  // that hashes to this value, after missing on the current
+  // `refreshToken` slot, signals theft: revoke every session for
+  // this admin.
+  previousRefreshTokenHash String?   @map("previous_refresh_token_hash")
+  userAgent                String?   @map("user_agent") @db.VarChar(512)
+  ipAddress                String?   @map("ip_address") @db.VarChar(45)
+  expiresAt                DateTime  @map("expires_at")
+  revokedAt                DateTime? @map("revoked_at")
+  /// Phase 27 (2026-05-21) — forensic columns. The admin-sessions
+  /// revoke surface captures who + why in the unified audit log, but
+  /// having them on the row itself makes incident-response queries
+  /// self-contained.
+  revokedBy                String?   @map("revoked_by")
+  revocationReason         String?   @map("revocation_reason") @db.Text
+  /// Phase 27 (2026-05-21) — operator visibility into "which admin
+  /// session is actually being used right now" vs which one has gone
+  /// stale. Bumped on every refresh-rotation; nullable so a brand-new
+  /// session that hasn't yet refreshed once shows as null.
+  lastUsedAt               DateTime? @map("last_used_at")
+  /// Phase 27 (2026-05-21) — UA-derived label populated at login
+  /// ("Chrome on macOS", "iOS Safari"). Free-form; do not parse.
+  deviceLabel              String?   @map("device_label") @db.VarChar(64)
+  createdAt                DateTime  @default(now()) @map("created_at")
   // PR 10.10 — last time this session passed a fresh MFA step-up
   // challenge. The @RequiresStepUp() guard rejects requests where
   // stepUpVerifiedAt is null OR older than the per-route window
   // (default 5min). Reset to null on revoke / logout.
-  stepUpVerifiedAt DateTime? @map("step_up_verified_at")
+  stepUpVerifiedAt         DateTime? @map("step_up_verified_at")
 
   admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   @@index([adminId])
   @@index([refreshToken])
+  @@index([previousRefreshTokenHash])
+  /// Phase 23 (2026-05-20) — composite indexes for AdminAuthGuard's
+  /// per-request lookup and the inactive-session sweeper.
+  @@index([adminId, revokedAt])
+  @@index([adminId, expiresAt])
   @@map("admin_sessions")
 }
 
@@ -146,23 +230,57 @@ model AdminActionAuditLog {
   @@map("admin_action_audit_logs")
 }
 
+// Phase 28 (2026-05-21) — `seller_id` relaxed to nullable + new
+// generic `target_actor_type` / `target_actor_id` columns. The old
+// shape couldn't represent franchise impersonations (the franchise
+// flow existed but had no audit log target). Pre-existing seller
+// rows are backfilled by the migration so `targetActorType='SELLER'`
+// and `targetActorId=sellerId`; the legacy `sellerId` column stays
+// to avoid a destructive migration but is now optional and reads
+// from `targetActorId` are preferred. `tokenJti` is the Redis key
+// for true revocation (new in this phase).
+enum ImpersonationTargetType {
+  SELLER
+  FRANCHISE
+}
+
 model AdminImpersonationLog {
-  id        String    @id @default(uuid())
-  adminId   String    @map("admin_id")
-  sellerId  String    @map("seller_id")
-  tokenId   String?   @map("token_id")
-  startedAt DateTime  @default(now()) @map("started_at")
-  endedAt   DateTime? @map("ended_at")
-  isActive  Boolean   @default(true) @map("is_active")
-  ipAddress String?   @map("ip_address")
-  userAgent String?   @map("user_agent")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id              String                  @id @default(uuid())
+  adminId         String                  @map("admin_id")
+  targetActorType ImpersonationTargetType @map("target_actor_type")
+  targetActorId   String                  @map("target_actor_id")
+  // Phase 28 — legacy seller-only column. Backfilled from
+  // targetActorId for old rows; new rows mirror it when
+  // targetActorType=SELLER for back-compat with any readers that
+  // still hit it. Nullable because franchise rows leave it null.
+  sellerId        String?                 @map("seller_id")
+  tokenId         String?                 @map("token_id")
+  // Phase 28 — JWT JTI for true revocation. Indexed unique so the
+  // end-impersonation flow can find + null the corresponding Redis
+  // key in O(1).
+  tokenJti        String?                 @unique @map("token_jti")
+  reason          String?                 @db.Text
+  startedAt       DateTime                @default(now()) @map("started_at")
+  endedAt         DateTime?               @map("ended_at")
+  revokedAt       DateTime?               @map("revoked_at")
+  revokedReason   String?                 @map("revoked_reason") @db.Text
+  // Phase 28 — `isActive` is now computed by the query layer
+  // (endedAt IS NULL AND revokedAt IS NULL AND startedAt > now - TTL),
+  // but the column stays for back-compat with existing readers.
+  // The end-impersonation flow now writes it consistently.
+  isActive        Boolean                 @default(true) @map("is_active")
+  ipAddress       String?                 @map("ip_address")
+  userAgent       String?                 @map("user_agent")
+  createdAt       DateTime                @default(now()) @map("created_at")
 
   admin Admin @relation(fields: [adminId], references: [id], onDelete: Cascade)
 
   @@index([adminId])
   @@index([sellerId])
   @@index([isActive])
+  @@index([targetActorType, targetActorId])
+  @@index([startedAt])
+  @@index([endedAt])
   @@map("admin_impersonation_logs")
 }
 
@@ -207,10 +325,10 @@ model AdminCustomRole {
 }
 
 model AdminCustomRolePermission {
-  id            String @id @default(uuid())
-  roleId        String @map("role_id")
+  id            String   @id @default(uuid())
+  roleId        String   @map("role_id")
   // Permission key from the code-side PERMISSIONS registry.
-  permissionKey String @map("permission_key")
+  permissionKey String   @map("permission_key")
   createdAt     DateTime @default(now()) @map("created_at")
 
   role AdminCustomRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
@@ -221,9 +339,9 @@ model AdminCustomRolePermission {
 }
 
 model AdminRoleAssignment {
-  id        String @id @default(uuid())
-  adminId   String @map("admin_id")
-  roleId    String @map("role_id")
+  id        String   @id @default(uuid())
+  adminId   String   @map("admin_id")
+  roleId    String   @map("role_id")
   createdAt DateTime @default(now()) @map("created_at")
 
   role AdminCustomRole @relation(fields: [roleId], references: [id], onDelete: Cascade)

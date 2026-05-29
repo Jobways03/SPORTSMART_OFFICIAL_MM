@@ -106,7 +106,31 @@ function buildService(overrides: Partial<{
     publish: jest.fn().mockResolvedValue(undefined),
   };
   const franchiseFacade = {} as any;
-  const prisma = {} as any;
+  // Phase 80 (2026-05-22) — sellerRejectOrder now wraps the FSM
+  // transition in a $transaction with a SELECT ... FOR UPDATE. The
+  // fake tx echoes the same acceptStatus the outer
+  // findSubOrderForSellerWithDetails mock returned, so the
+  // inside-tx FSM gate behaves identically to the pre-Phase-80
+  // outside-tx gate.
+  const fakeRow = 'findSubOrderForSellerWithDetails' in overrides
+    ? overrides.findSubOrderForSellerWithDetails
+    : OPEN_SUB_ORDER;
+  const txSubOrderUpdate = jest.fn().mockResolvedValue({});
+  const prisma = {
+    txSubOrderUpdate,
+    $transaction: jest.fn().mockImplementation(async (cb: any) =>
+      cb({
+        $queryRaw: jest.fn().mockResolvedValue([
+          {
+            id: 'so-1',
+            accept_status: fakeRow?.acceptStatus ?? 'OPEN',
+            accept_deadline_at: fakeRow?.acceptDeadlineAt ?? null,
+          },
+        ]),
+        subOrder: { update: txSubOrderUpdate },
+      }),
+    ),
+  } as any;
   const stockRestore = {} as any;
   const env = {
     getNumber: jest.fn((_k: string, def: number) => def),
@@ -123,7 +147,7 @@ function buildService(overrides: Partial<{
     env,
     taxFacade,
   );
-  return { service, orderRepo, catalogFacade, eventBus };
+  return { service, orderRepo, catalogFacade, eventBus, prisma };
 }
 
 describe('OrdersService.sellerRejectOrder (Phase 15)', () => {
@@ -146,18 +170,25 @@ describe('OrdersService.sellerRejectOrder (Phase 15)', () => {
   });
 
   it('flips the sub-order to REJECTED/CANCELLED with the supplied reason + note', async () => {
-    const { service, orderRepo } = buildService();
+    // Phase 80 — the REJECTED transition now lives inside the
+    // `prisma.$transaction` (FOR UPDATE row lock + audit columns).
+    // Assert on the tx-side `subOrder.update` mock instead of the
+    // legacy orderRepo.updateSubOrder path.
+    const { service, prisma } = buildService();
     await service.sellerRejectOrder('so-1', 'seller-A', {
       reason: 'out-of-stock',
       note: 'last unit damaged',
     });
-    expect(orderRepo.updateSubOrder).toHaveBeenCalledWith(
-      'so-1',
+    expect((prisma as any).txSubOrderUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        acceptStatus: 'REJECTED',
-        fulfillmentStatus: 'CANCELLED',
-        rejectionReason: 'out-of-stock',
-        rejectionNote: 'last unit damaged',
+        where: { id: 'so-1' },
+        data: expect.objectContaining({
+          acceptStatus: 'REJECTED',
+          fulfillmentStatus: 'CANCELLED',
+          rejectionReason: 'out-of-stock',
+          rejectionNote: 'last unit damaged',
+          rejectionType: 'MANUAL',
+        }),
       }),
     );
   });

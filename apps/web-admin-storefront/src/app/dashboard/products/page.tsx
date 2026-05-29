@@ -11,6 +11,28 @@ import {
 import { ApiError, apiClient } from '@/lib/api-client';
 import { useModal } from '@sportsmart/ui';
 
+/**
+ * Phase 32 (2026-05-21) — bulk response now has three buckets:
+ *   - ok          : action landed this run
+ *   - alreadyDone : item was already in the target state (retry-safe)
+ *   - failed      : per-item failure with reason
+ *
+ * Pre-Phase-32 the UI lumped alreadyDone into failed which read as
+ * scary "X failed" on a retry. Render the three counts distinctly.
+ */
+function formatBulkSummary(
+  verb: string,
+  data: { ok?: string[]; alreadyDone?: string[]; failed?: Array<{ id: string; reason: string }> },
+): string {
+  const ok = data.ok?.length ?? 0;
+  const already = data.alreadyDone?.length ?? 0;
+  const failed = data.failed?.length ?? 0;
+  const parts = [`${verb} ${ok}`];
+  if (already > 0) parts.push(`${already} already done`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  return parts.join(' — ');
+}
+
 // ── Inventory panel types ───────────────────────────────────────
 // These mirror the response shape of the admin seller-mappings and
 // franchise-mappings endpoints. Defined locally because they're
@@ -261,18 +283,26 @@ export default function ProductsPage() {
 
   const runBulkApprove = async () => {
     if (selected.size === 0) return;
-    if (!(await confirmDialog(`Approve ${selected.size} selected product(s)?`)))
-      return;
+    // Phase 32 (2026-05-21) — explicit batch-size warning. The backend
+    // caps batches at 200 (BULK_MAX_BATCH), but anything north of 50
+    // is a clue the admin may have miss-clicked "select all" and
+    // deserves a louder confirmation before the moderator emails the
+    // batch goes out to every seller.
+    const promptMessage =
+      selected.size > 50
+        ? `Approve ${selected.size} selected product(s)? This will notify all of these sellers and make their listings live. Confirm?`
+        : `Approve ${selected.size} selected product(s)?`;
+    if (!(await confirmDialog(promptMessage))) return;
     setBulkSaving('approve');
     setBulkMessage('');
     try {
       const res = await adminProductsService.bulkApprove([...selected]);
       const d = res.data;
-      setBulkMessage(
-        d
-          ? `Approved ${d.ok.length}${d.failed.length ? ` — ${d.failed.length} failed` : ''}`
-          : 'Done',
-      );
+      // Phase 32 — bulk response now carries `alreadyDone` separately
+      // from `failed`. Surface it in the toast so a partial-retry
+      // doesn't read as "X failed" when those items were actually
+      // already in the target state from an earlier successful run.
+      setBulkMessage(d ? formatBulkSummary('Approved', d) : 'Done');
       clearSelection();
       await fetchProducts({ page: pagination.page });
     } catch (err) {
@@ -303,11 +333,8 @@ export default function ProductsPage() {
           ? await adminProductsService.bulkReject([...selected], text)
           : await adminProductsService.bulkRequestChanges([...selected], text);
       const d = res.data;
-      setBulkMessage(
-        d
-          ? `${bulkModal === 'reject' ? 'Rejected' : 'Changes requested on'} ${d.ok.length}${d.failed.length ? ` — ${d.failed.length} failed` : ''}`
-          : 'Done',
-      );
+      const verb = bulkModal === 'reject' ? 'Rejected' : 'Changes requested on';
+      setBulkMessage(d ? formatBulkSummary(verb, d) : 'Done');
       setBulkModal(null);
       setBulkNote('');
       clearSelection();
@@ -584,6 +611,7 @@ export default function ProductsPage() {
                 expanded={expandedRows.has(p.id)}
                 onToggleExpand={() => toggleExpanded(p.id)}
                 inventoryData={inventoryCache[p.id]}
+                showCheckboxColumn={selectableIds.length > 0}
               />
             ))}
           </div>
@@ -728,6 +756,7 @@ function ProductCard({
   expanded,
   onToggleExpand,
   inventoryData,
+  showCheckboxColumn,
 }: {
   product: ProductListItem;
   selected: boolean;
@@ -736,24 +765,11 @@ function ProductCard({
   expanded: boolean;
   onToggleExpand: () => void;
   inventoryData: InventoryPanelData | undefined;
+  showCheckboxColumn: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const pill = statusPill(p.status);
   const isSelectable = p.status === 'SUBMITTED';
-
-  // Status tone stripe on the left edge — single colour signal
-  // identifying the product's lifecycle stage at a glance, same
-  // pattern the seller/franchise cards already use.
-  const stripe =
-    pill.tone === 'success'
-      ? '#16a34a'
-      : pill.tone === 'warning'
-        ? '#d97706'
-        : pill.tone === 'danger'
-          ? '#dc2626'
-          : pill.tone === 'info'
-            ? '#2563eb'
-            : '#cbd5e1';
 
   return (
     <div
@@ -763,11 +779,10 @@ function ProductCard({
       style={{
         background: '#fff',
         border: '1px solid #e2e8f0',
-        borderRadius: 12,
-        borderLeft: `3px solid ${stripe}`,
+        borderRadius: 8,
         overflow: 'hidden',
-        transition: 'border-color 0.15s, box-shadow 0.15s',
-        boxShadow: hover ? '0 2px 8px rgba(15, 23, 42, 0.06)' : 'none',
+        transition: 'border-color 0.12s, background-color 0.12s',
+        borderColor: hover || expanded ? '#cbd5e1' : '#e2e8f0',
       }}
     >
       {/* Header row — clickable area, links to /edit. The chevron
@@ -782,29 +797,31 @@ function ProductCard({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 14,
-          padding: '14px 18px',
+          gap: 16,
+          padding: '14px 16px',
           cursor: 'pointer',
-          background: expanded ? '#f8fafc' : '#fff',
         }}
       >
-        {/* Selection checkbox — only enabled for SUBMITTED items.
-            For others, render an empty box of the same width to keep
-            cards aligned across the list. */}
-        <div
-          style={{ width: 18, flexShrink: 0 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {isSelectable && (
-            <input
-              type="checkbox"
-              checked={selected}
-              onChange={onToggle}
-              aria-label={`Select ${p.title}`}
-              style={styles.checkbox}
-            />
-          )}
-        </div>
+        {/* Selection checkbox slot — only reserved when at least one
+            product on this page is selectable. When nothing is
+            selectable, we omit the column entirely so the thumbnail
+            sits flush against the row's left padding. */}
+        {showCheckboxColumn && (
+          <div
+            style={{ width: 18, flexShrink: 0 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {isSelectable && (
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={onToggle}
+                aria-label={`Select ${p.title}`}
+                style={styles.checkbox}
+              />
+            )}
+          </div>
+        )}
 
         {/* Product image */}
         {p.primaryImageUrl ? (
@@ -831,42 +848,48 @@ function ProductCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={styles.productTitle}>
             <span title={p.title}>{p.title}</span>
-            {p.potentialDuplicateOf && (
+            {/* Phase 32 (2026-05-21) — re-submission marker. A product
+                that's PENDING + SUBMITTED but has prior APPROVED
+                history is a re-review (seller edited a live product).
+                Moderators want to prioritise these because the seller
+                is already vetted and the change-set is usually small. */}
+            {p.isReSubmission && p.moderationStatus === 'PENDING' && (
               <span
-                style={styles.duplicateBadge}
-                title="Possible duplicate"
-                aria-label="Possible duplicate"
+                title="This seller previously had this product approved. Edits triggered a re-review."
+                style={{
+                  marginLeft: 8,
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: 0.4,
+                  textTransform: 'uppercase',
+                  borderRadius: 4,
+                  background: '#dbeafe',
+                  color: '#1e3a8a',
+                }}
               >
-                <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-                  <path fill="currentColor" d="M8 1l7 13H1L8 1zm0 5v3.5m0 2V11" />
-                  <circle cx="8" cy="11.5" r="0.8" fill="currentColor" />
-                </svg>
+                Re-submission
               </span>
             )}
           </div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: 12.5,
               color: '#64748b',
-              marginTop: 3,
+              marginTop: 4,
               display: 'flex',
               flexWrap: 'wrap',
               gap: 6,
               alignItems: 'center',
+              lineHeight: 1.4,
             }}
           >
             {p.category && <span>{p.category.name}</span>}
             {p.category && <span style={{ color: '#cbd5e1' }}>·</span>}
-            <span
-              style={{
-                ...styles.typePill,
-                ...(p.hasVariants ? styles.typePillVariant : styles.typePillNormal),
-              }}
-            >
-              {p.hasVariants ? 'Variant' : 'Normal'}
-            </span>
+            <span>{p.hasVariants ? 'Variant' : 'Single'}</span>
             <span style={{ color: '#cbd5e1' }}>·</span>
-            <span style={{ fontWeight: 600, color: '#475569', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ color: '#334155', fontVariantNumeric: 'tabular-nums' }}>
               {p.hasVariants ? 'Multiple prices' : (formatPrice(p.basePrice) || '—')}
             </span>
           </div>
@@ -901,12 +924,12 @@ function ProductCard({
             width: 28,
             height: 28,
             padding: 0,
-            background: expanded ? '#e0e7ff' : 'transparent',
+            background: 'transparent',
             border: 'none',
             borderRadius: 6,
             cursor: 'pointer',
-            color: expanded ? '#3730a3' : '#64748b',
-            transition: 'background 0.15s, color 0.15s, transform 0.15s',
+            color: '#94a3b8',
+            transition: 'color 0.12s, transform 0.15s',
             transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
             flexShrink: 0,
           }}
@@ -928,7 +951,7 @@ function ProductCard({
           The top border ties it visually to the header above so
           the relationship is unambiguous. */}
       {expanded && (
-        <div style={{ borderTop: '1px solid #e2e8f0' }}>
+        <div style={{ borderTop: '1px solid #e2e8f0', background: '#fafbfc' }}>
           <InventoryPanel product={p} data={inventoryData} />
         </div>
       )}
@@ -990,8 +1013,26 @@ function StockCell({ product: p }: { product: ProductListItem }) {
         </span>
       )}
       {lowStockCount > 0 && available > 0 && (
-        <span style={{ fontSize: 10, color: '#b45309', fontWeight: 600 }}>
-          ⚠ {lowStockCount} low
+        <span
+          style={{
+            fontSize: 10.5,
+            color: '#b45309',
+            fontWeight: 600,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M6 0.5L11.5 11h-11L6 0.5zM6 4.5v3M6 8.5v1"
+              stroke="currentColor"
+              strokeWidth="0.8"
+              strokeLinecap="round"
+            />
+          </svg>
+          {lowStockCount} low
         </span>
       )}
     </div>
@@ -999,12 +1040,10 @@ function StockCell({ product: p }: { product: ProductListItem }) {
 }
 
 /* ── Inventory panel (expanded row) ─────────────────────────── */
-/* Shown when the user clicks the chevron next to a product. The
-   panel has three pieces, in order of importance:
-     1. KPI strip — the four numbers an admin actually wants to see.
-     2. Source tabs — Sellers / Franchises (only shown if both have
-        data; one alone gets shown without tabs).
-     3. Grouped accordion of partners with their per-variant rows.
+/* Shown when the user clicks the chevron next to a product. A
+   quiet stats line at the top (available, total, reserved, partner
+   counts), then sellers and franchises stacked as compact partner
+   cards that expand to per-variant rows.
    Pre-aggregated summary lives on the product list response, so
    this panel only fetches the per-mapping detail on first expand. */
 
@@ -1015,22 +1054,9 @@ function InventoryPanel({
   product: ProductListItem;
   data: InventoryPanelData | undefined;
 }) {
-  const [tab, setTab] = useState<'sellers' | 'franchises'>('sellers');
   const summary = product.inventorySummary;
   const sellers = data?.sellers ?? [];
   const franchises = data?.franchises ?? [];
-
-  // Default-tab heuristic: if sellers carry the stock, start there;
-  // if the only data is on franchises, start on franchises. Saves
-  // the admin one click on the most common cases.
-  useEffect(() => {
-    if (!data || data.loading) return;
-    if (sellers.length === 0 && franchises.length > 0) setTab('franchises');
-  }, [data?.loading, sellers.length, franchises.length]);
-
-  const showBothTabs = sellers.length > 0 && franchises.length > 0;
-  const onlySellers = sellers.length > 0 && franchises.length === 0;
-  const onlyFranchises = franchises.length > 0 && sellers.length === 0;
 
   const totalStock = summary?.totalStock ?? product.totalStock ?? 0;
   const totalAvailable = summary?.totalAvailable ?? 0;
@@ -1039,218 +1065,116 @@ function InventoryPanel({
   const sellerCount = summary?.sellerCount ?? 0;
   const franchiseCount = summary?.franchiseCount ?? 0;
 
-  // Available is the headline number — the one number an admin
-  // actually wants to see when scanning. Total + reserved are
-  // supporting context. Source counts are already shown by the tabs.
-  const availableTone: 'success' | 'warning' | 'danger' =
-    totalAvailable === 0 ? 'danger' : totalAvailable <= 5 ? 'warning' : 'success';
+  const statsLine: { label: string; value: string; tone?: 'warning' | 'danger' }[] = [
+    { label: 'available', value: String(totalAvailable),
+      tone: totalAvailable === 0 ? 'danger' : totalAvailable <= 5 ? 'warning' : undefined },
+    { label: 'total', value: String(totalStock) },
+  ];
+  if (totalReserved > 0) statsLine.push({ label: 'reserved', value: String(totalReserved) });
+  if (sellerCount > 0) statsLine.push({ label: sellerCount === 1 ? 'seller' : 'sellers', value: String(sellerCount) });
+  if (franchiseCount > 0) statsLine.push({ label: franchiseCount === 1 ? 'franchise' : 'franchises', value: String(franchiseCount) });
+  if (lowStockCount > 0) statsLine.push({ label: 'low stock', value: String(lowStockCount), tone: 'warning' });
 
   return (
-    // Padding matches the product card's header padding (14px 18px)
-    // so the inventory panel reads as the natural body of the card,
-    // not a separately-padded section.
-    <div style={{ padding: '18px 18px 22px' }}>
-      {/* Hero summary card — replaces the four-tile strip. One big
-          available number leads, total and reserved are quieter
-          stats stacked to the right. The chip row underneath
-          carries the partner-mix and low-stock callout in one
-          horizontally-scannable line.                                */}
+    <div style={{ padding: '10px 16px 14px' }}>
+      {/* Quiet stats line — replaces the four-tile/hero treatment.
+          The available number was already shown on the row above;
+          here we just provide totals and partner counts inline. */}
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: 28,
-          padding: '18px 22px',
-          background: '#fff',
-          border: '1px solid #e2e8f0',
-          borderRadius: 10,
-          marginBottom: 20,
           flexWrap: 'wrap',
+          gap: '4px 18px',
+          fontSize: 12.5,
+          color: '#64748b',
+          marginBottom: 12,
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span
-            style={{
-              fontSize: 32,
-              fontWeight: 700,
-              fontVariantNumeric: 'tabular-nums',
-              lineHeight: 1,
-              letterSpacing: '-0.5px',
-              color:
-                availableTone === 'danger'
-                  ? '#b91c1c'
-                  : availableTone === 'warning'
-                    ? '#b45309'
-                    : '#16a34a',
-            }}
-          >
-            {totalAvailable}
+        {statsLine.map((s, i) => (
+          <span key={i} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color:
+                  s.tone === 'danger' ? '#b91c1c'
+                  : s.tone === 'warning' ? '#b45309'
+                  : '#0f172a',
+              }}
+            >
+              {s.value}
+            </span>
+            <span>{s.label}</span>
           </span>
-          <span style={{ fontSize: 16, fontWeight: 500, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
-            / {totalStock}
-          </span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginLeft: 4 }}>
-            available
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            flexWrap: 'wrap',
-            flex: 1,
-            justifyContent: 'flex-end',
-          }}
-        >
-          {totalReserved > 0 && (
-            <SummaryChip tone="info" label={`${totalReserved} reserved`} />
-          )}
-          {sellerCount > 0 && (
-            <SummaryChip tone="neutral" label={`${sellerCount} seller${sellerCount === 1 ? '' : 's'}`} />
-          )}
-          {franchiseCount > 0 && (
-            <SummaryChip tone="neutral" label={`${franchiseCount} franchise${franchiseCount === 1 ? '' : 's'}`} />
-          )}
-          {lowStockCount > 0 && (
-            <SummaryChip tone="warning" label={`${lowStockCount} low stock`} />
-          )}
-          {sellerCount === 0 && franchiseCount === 0 && (
-            <SummaryChip tone="neutral" label="No partners" />
-          )}
-        </div>
+        ))}
       </div>
 
-      {/* Loading / empty / error states — bare states beat fancy
-          ones here; this panel is content-dense already. */}
       {data?.loading ? (
-        <div style={{ padding: 32, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+        <div style={{ padding: '20px 0', textAlign: 'center', color: '#94a3b8', fontSize: 12.5 }}>
           Loading inventory breakdown…
         </div>
       ) : data?.error ? (
-        <div style={{ padding: 16, fontSize: 13, color: '#b91c1c' }}>{data.error}</div>
+        <div style={{ padding: '12px 0', fontSize: 12.5, color: '#b91c1c' }}>{data.error}</div>
       ) : sellers.length === 0 && franchises.length === 0 ? (
-        <div style={{ padding: 32, textAlign: 'center', fontSize: 13, color: '#64748b' }}>
+        <div style={{ padding: '20px 0', textAlign: 'center', fontSize: 12.5, color: '#94a3b8' }}>
           No sellers or franchises mapped to this product yet.
         </div>
       ) : (
-        <>
-          {showBothTabs && (
-            <div
-              role="tablist"
-              style={{
-                display: 'flex',
-                gap: 4,
-                marginBottom: 16,
-                borderBottom: '1px solid #e2e8f0',
-              }}
-            >
-              <PanelTab active={tab === 'sellers'} count={sellers.length} label="Sellers" onClick={() => setTab('sellers')} />
-              <PanelTab active={tab === 'franchises'} count={franchises.length} label="Franchises" onClick={() => setTab('franchises')} />
-            </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {sellers.length > 0 && (
+            <PartnerSection title="Sellers" count={sellers.length}>
+              <SellerGroupedList sellers={sellers} />
+            </PartnerSection>
           )}
-
-          {(onlySellers || (showBothTabs && tab === 'sellers')) && (
-            <SellerGroupedList sellers={sellers} />
+          {franchises.length > 0 && (
+            <PartnerSection title="Franchises" count={franchises.length}>
+              <FranchiseGroupedList franchises={franchises} />
+            </PartnerSection>
           )}
-          {(onlyFranchises || (showBothTabs && tab === 'franchises')) && (
-            <FranchiseGroupedList franchises={franchises} />
-          )}
-        </>
+        </div>
       )}
     </div>
   );
 }
 
-/* SummaryChip — semantic, single dot + label. The dot carries the
-   tone so the chip can stay near-monochrome and not compete with
-   the headline available number. */
-function SummaryChip({
-  tone,
-  label,
-}: {
-  tone: 'neutral' | 'info' | 'warning';
-  label: string;
-}) {
-  const palette: Record<typeof tone, { dot: string; bg: string; fg: string }> = {
-    neutral: { dot: '#94a3b8', bg: '#f8fafc', fg: '#475569' },
-    info: { dot: '#2563eb', bg: '#eff6ff', fg: '#1d4ed8' },
-    warning: { dot: '#d97706', bg: '#fffbeb', fg: '#b45309' },
-  };
-  const p = palette[tone];
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '5px 10px',
-        background: p.bg,
-        color: p.fg,
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 600,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: p.dot }} />
-      {label}
-    </span>
-  );
-}
-
-function PanelTab({
-  active,
-  label,
+/* Compact section header that groups seller/franchise rows. The
+   small uppercase label sits at indent level 1; the partner cards
+   nest one step further right to give the panel a clear visual
+   hierarchy (staircase). */
+function PartnerSection({
+  title,
   count,
-  onClick,
+  children,
 }: {
-  active: boolean;
-  label: string;
+  title: string;
   count: number;
-  onClick: () => void;
+  children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      style={{
-        background: 'transparent',
-        border: 'none',
-        padding: '8px 14px',
-        fontFamily: 'inherit',
-        fontSize: 13,
-        fontWeight: 600,
-        color: active ? '#1d4ed8' : '#64748b',
-        borderBottom: active ? '2px solid #1d4ed8' : '2px solid transparent',
-        marginBottom: -1,
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-      }}
-    >
-      {label}
-      <span
+    <div>
+      <div
         style={{
-          display: 'inline-flex',
+          display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center',
-          minWidth: 20,
-          height: 20,
-          padding: '0 6px',
+          gap: 8,
           fontSize: 11,
-          fontWeight: 700,
-          borderRadius: 999,
-          background: active ? '#dbeafe' : '#f1f5f9',
-          color: active ? '#1d4ed8' : '#64748b',
+          fontWeight: 600,
+          color: '#64748b',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          marginBottom: 6,
+          paddingLeft: 16,
         }}
       >
-        {count}
-      </span>
-    </button>
+        <span>{title}</span>
+        <span style={{ color: '#cbd5e1' }}>·</span>
+        <span style={{ color: '#94a3b8', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
+          {count}
+        </span>
+      </div>
+      <div style={{ paddingLeft: 32 }}>{children}</div>
+    </div>
   );
 }
 
@@ -1314,7 +1238,7 @@ function SellerGroupedList({ sellers }: { sellers: AdminSellerMapping[] }) {
   }, [sellers]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {grouped.map(([id, group]) => (
         <PartnerCard
           key={id}
@@ -1364,12 +1288,11 @@ function FranchiseGroupedList({ franchises }: { franchises: AdminFranchiseMappin
   }, [franchises]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {grouped.map(([id, group]) => (
         <PartnerCard
           key={id}
           name={group.name}
-          tone="franchise"
           subtitle={
             group.pincode
               ? `Pincode ${group.pincode} · ${group.status}`
@@ -1420,39 +1343,26 @@ function PartnerCard({
   subtitle,
   totals,
   rows,
-  tone = 'seller',
 }: {
   name: string;
   subtitle?: string;
   totals: { stock: number; available: number; variants: number };
   rows: PartnerRow[];
-  tone?: 'seller' | 'franchise';
 }) {
   const [open, setOpen] = useState(false);
-  const initial = (name || '?').charAt(0).toUpperCase();
 
-  // Tone — a single coloured left edge identifies seller vs franchise
-  // at a glance. The avatar carries the same hue at lower saturation
-  // so the eye gets one signal twice, not two competing ones.
-  const palette =
-    tone === 'franchise'
-      ? { stripe: '#7c3aed', avatarBg: '#ede9fe', avatarFg: '#6d28d9' }
-      : { stripe: '#2563eb', avatarBg: '#dbeafe', avatarFg: '#1d4ed8' };
-
-  // Available headline takes the green-amber-red tone that the row
-  // health dots already speak. Keeps the inventory panel monochromatic
-  // except where the eye should land.
-  const availableTone =
-    totals.available === 0 ? '#b91c1c' : totals.available <= 5 ? '#b45309' : '#16a34a';
+  const metaParts: string[] = [];
+  if (subtitle) metaParts.push(subtitle);
+  metaParts.push(`${totals.variants} variant${totals.variants === 1 ? '' : 's'}`);
+  metaParts.push(`${totals.stock} in stock`);
 
   return (
     <div
       style={{
         background: '#fff',
         border: '1px solid #e2e8f0',
-        borderRadius: 10,
+        borderRadius: 6,
         overflow: 'hidden',
-        borderLeft: `3px solid ${palette.stripe}`,
       }}
     >
       <div
@@ -1469,55 +1379,35 @@ function PartnerCard({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 14,
-          padding: '14px 18px',
+          gap: 12,
+          padding: '10px 14px',
           cursor: 'pointer',
           userSelect: 'none',
-          background: open ? '#f8fafc' : '#fff',
+          outline: 'none',
         }}
       >
-        <div
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: '#0f172a', lineHeight: 1.3 }}>
+            {name}
+          </div>
+          <div style={{ fontSize: 11.5, color: '#64748b', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+            {metaParts.join(' · ')}
+          </div>
+        </div>
+        <span
           style={{
-            width: 36,
-            height: 36,
-            borderRadius: '50%',
-            background: palette.avatarBg,
-            color: palette.avatarFg,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 14,
-            fontWeight: 700,
+            fontSize: 12,
+            color: '#64748b',
+            fontVariantNumeric: 'tabular-nums',
             flexShrink: 0,
           }}
         >
-          {initial}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', lineHeight: 1.2 }}>{name}</div>
-          {subtitle && (
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-              {subtitle} · {totals.variants} variant{totals.variants === 1 ? '' : 's'} · {totals.stock} in stock
-            </div>
-          )}
-          {!subtitle && (
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-              {totals.variants} variant{totals.variants === 1 ? '' : 's'} · {totals.stock} in stock
-            </div>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, fontVariantNumeric: 'tabular-nums' }}>
-          <span style={{ fontSize: 22, fontWeight: 700, color: availableTone, lineHeight: 1 }}>
-            {totals.available}
-          </span>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            avail
-          </span>
-        </div>
+          <span style={{ fontWeight: 600, color: '#0f172a' }}>{totals.available}</span> available
+        </span>
         <svg
           viewBox="0 0 16 16"
-          width="14"
-          height="14"
+          width="12"
+          height="12"
           aria-hidden="true"
           style={{
             color: '#94a3b8',
@@ -1537,7 +1427,7 @@ function PartnerCard({
         </svg>
       </div>
       {open && (
-        <div style={{ borderTop: '1px solid #e2e8f0' }}>
+        <div style={{ borderTop: '1px solid #f1f5f9', background: '#fff' }}>
           {rows.map((r, idx) => {
             const health = rowHealth(r.available, r.lowThreshold, r.approval, r.isActive);
             const availableColor =
@@ -1548,18 +1438,18 @@ function PartnerCard({
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 14,
-                  padding: '12px 18px 12px 14px',
+                  gap: 12,
+                  padding: '10px 14px 10px 32px',
                   borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9',
                 }}
               >
                 <HealthDot status={health} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', lineHeight: 1.3 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: '#0f172a', lineHeight: 1.3 }}>
                     {r.label}
                   </div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                    <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#475569' }}>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                    <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#64748b' }}>
                       {r.sku}
                     </span>
                     <span style={{ color: '#cbd5e1' }}>·</span>
@@ -1567,13 +1457,13 @@ function PartnerCard({
                     {r.reserved > 0 && (
                       <>
                         <span style={{ color: '#cbd5e1' }}>·</span>
-                        <span style={{ color: '#854d0e', fontWeight: 600 }}>{r.reserved} reserved</span>
+                        <span style={{ color: '#b45309' }}>{r.reserved} reserved</span>
                       </>
                     )}
                     {r.approval && r.approval !== 'APPROVED' && (
                       <>
                         <span style={{ color: '#cbd5e1' }}>·</span>
-                        <span style={{ color: '#475569', fontWeight: 600 }}>{r.approval.replace(/_/g, ' ')}</span>
+                        <span style={{ color: '#64748b' }}>{r.approval.replace(/_/g, ' ').toLowerCase()}</span>
                       </>
                     )}
                     {r.extra && (
@@ -1589,19 +1479,23 @@ function PartnerCard({
                       </>
                     )}
                     <span style={{ color: '#cbd5e1' }}>·</span>
-                    <span style={{ color: '#94a3b8' }}>
+                    <span>
                       {new Date(r.updated).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                     </span>
                   </div>
                 </div>
-                <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: availableColor, lineHeight: 1 }}>
-                    {r.available}
-                  </div>
-                  <div style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: 2 }}>
-                    available
-                  </div>
-                </div>
+                <span
+                  style={{
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    color: availableColor,
+                    fontVariantNumeric: 'tabular-nums',
+                    flexShrink: 0,
+                  }}
+                  title={`${r.available} available`}
+                >
+                  {r.available}
+                </span>
               </div>
             );
           })}
@@ -1947,37 +1841,35 @@ const styles: Record<string, React.CSSProperties> = {
   tabs: {
     display: 'inline-flex',
     gap: 4,
-    padding: 4,
-    background: '#f1f5f9',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderStyle: 'solid',
-    borderColor: '#e2e8f0',
+    borderBottom: '1px solid #e2e8f0',
+    alignSelf: 'stretch',
+    marginRight: 4,
   },
   tab: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
-    height: 30,
+    height: 38,
     padding: '0 12px',
     fontSize: 13,
     fontWeight: 500,
-    color: '#475569',
+    color: '#64748b',
     background: 'transparent',
     border: 'none',
-    borderRadius: 7,
+    borderBottom: '2px solid transparent',
+    marginBottom: -1,
     cursor: 'pointer',
-    transition: 'background-color 0.12s, color 0.12s, box-shadow 0.12s',
+    transition: 'color 0.12s, border-color 0.12s',
     fontFamily: 'inherit',
   },
   tabHover: {
-    background: 'rgba(255, 255, 255, 0.6)',
     color: '#0f172a',
   },
   tabActive: {
-    background: '#ffffff',
     color: '#0f172a',
-    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)',
+    // Full shorthand — pairs with the base tab's `borderBottom` so
+    // React doesn't warn about mixing shorthand and longhand.
+    borderBottom: '2px solid #0f172a',
     fontWeight: 600,
   },
 
@@ -2219,36 +2111,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#64748b',
     marginTop: 2,
   },
-  duplicateBadge: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 16,
-    height: 16,
-    color: '#b45309',
-    flexShrink: 0,
-  },
-
-  /* Type pill */
-  typePill: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    padding: '2px 8px',
-    fontSize: 11,
-    fontWeight: 600,
-    borderRadius: 4,
-    letterSpacing: '0.02em',
-    whiteSpace: 'nowrap',
-  },
-  typePillNormal: {
-    background: '#f1f5f9',
-    color: '#475569',
-  },
-  typePillVariant: {
-    background: 'rgba(14, 116, 144, 0.08)',
-    color: '#0e7490',
-  },
-
   /* Status pill */
   pill: {
     display: 'inline-flex',

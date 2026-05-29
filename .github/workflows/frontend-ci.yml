@@ -81,13 +81,15 @@ jobs:
       fail-fast: false
       matrix:
         app:
-          - web-admin
           - web-admin-storefront
           - web-affiliate
           - web-affiliate-admin
+          - web-d2c-seller
+          - web-d2c-seller-admin
           - web-franchise
           - web-franchise-admin
-          - web-seller
+          - web-retail-seller
+          - web-retail-seller-admin
           - web-storefront
     env:
       NODE_VERSION: "22"
@@ -107,7 +109,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install dependencies
-        # `pnpm install --filter "@sportsmart/web-admin..."` (and friends)
+        # `pnpm install --filter "@sportsmart/web-d2c-seller-admin..."` (and friends)
         # pulls only the matrix app and its workspace-package deps.
         # Saves ~30s per matrix cell vs. installing the full graph.
         run: pnpm install --frozen-lockfile --filter "@sportsmart/${{ matrix.app }}..."

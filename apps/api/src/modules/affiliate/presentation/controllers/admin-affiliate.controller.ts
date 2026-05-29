@@ -6,19 +6,30 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Post,
   Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  RolesGuard,
+} from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { AffiliateRegistrationService } from '../../application/services/affiliate-registration.service';
 import { AffiliateKycService } from '../../application/services/affiliate-kyc.service';
 import {
+  CreateAdditionalCouponDto,
+  ReactivateAffiliateDto,
   RejectAffiliateDto,
   SuspendAffiliateDto,
+  UpdateCommissionRateDto,
 } from '../dtos/register-affiliate.dto';
 import { RejectAffiliateKycDto } from '../dtos/affiliate-kyc.dto';
 
@@ -30,7 +41,10 @@ import { RejectAffiliateKycDto } from '../dtos/affiliate-kyc.dto';
  */
 @ApiTags('Admin Affiliates')
 @Controller('admin/affiliates')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+// Phase 159 — RolesGuard added to the chain so a route-level @Roles is
+// enforced (the commission-rate endpoint is SUPER_ADMIN-only). RolesGuard
+// no-ops on routes without @Roles, so the other endpoints are unaffected.
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
 export class AdminAffiliateController {
   constructor(
     private readonly registrationService: AffiliateRegistrationService,
@@ -74,12 +88,26 @@ export class AdminAffiliateController {
   @Patch(':affiliateId/approve')
   @HttpCode(HttpStatus.OK)
   @Permissions('affiliates.approve')
+  // Phase 157 — @Idempotent so a double-click / retry returns the first result
+  // instead of a "already active" 400; @Throttle as a coarse abuse cap.
+  // (@Roles('SUPER_ADMIN') intentionally NOT added — approval is a lower-stakes,
+  // permission-gated action, not a money transfer; see report.)
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async approve(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
   ) {
     const adminId = (req as any).adminId;
-    const data = await this.registrationService.approve(affiliateId, adminId);
+    const userAgent = req.headers['user-agent'];
+    const data = await this.registrationService.approve(
+      affiliateId,
+      adminId,
+      {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
+    );
     return {
       success: true,
       message: 'Affiliate approved. A primary coupon code has been generated.',
@@ -96,10 +124,15 @@ export class AdminAffiliateController {
     @Body() dto: RejectAffiliateDto,
   ) {
     const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
     const data = await this.registrationService.reject(
       affiliateId,
       dto.reason,
       adminId,
+      {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
     );
     return {
       success: true,
@@ -110,17 +143,26 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/suspend')
   @HttpCode(HttpStatus.OK)
+  // Phase 159h — @Idempotent so a double-click can't double-process; @Throttle
+  // as a coarse abuse cap on a money-affecting state change.
   @Permissions('affiliates.suspend')
+  @Idempotent()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async suspend(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
     @Body() dto: SuspendAffiliateDto,
   ) {
     const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
     const data = await this.registrationService.suspend(
       affiliateId,
       dto.reason,
       adminId,
+      {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
     );
     return {
       success: true,
@@ -132,14 +174,21 @@ export class AdminAffiliateController {
   @Patch(':affiliateId/deactivate')
   @HttpCode(HttpStatus.OK)
   @Permissions('affiliates.suspend')
+  @Idempotent()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async deactivate(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
   ) {
     const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
     const data = await this.registrationService.deactivate(
       affiliateId,
       adminId,
+      {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
     );
     return {
       success: true,
@@ -151,14 +200,23 @@ export class AdminAffiliateController {
   @Patch(':affiliateId/reactivate')
   @HttpCode(HttpStatus.OK)
   @Permissions('affiliates.suspend')
+  @Idempotent()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async reactivate(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
+    @Body() dto: ReactivateAffiliateDto,
   ) {
     const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
     const data = await this.registrationService.reactivate(
       affiliateId,
       adminId,
+      dto.reason,
+      {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
     );
     return {
       success: true,
@@ -168,7 +226,10 @@ export class AdminAffiliateController {
   }
 
   // ── KYC ─────────────────────────────────────────────────────
-
+  // KYC review endpoints temporarily disabled (commented out per
+  // product request). Service + DTOs preserved — restore the block
+  // below to re-enable.
+  /*
   @Get(':affiliateId/kyc')
   @Permissions('affiliates.read')
   async getKyc(@Param('affiliateId') affiliateId: string) {
@@ -216,29 +277,87 @@ export class AdminAffiliateController {
       data,
     };
   }
+  */
 
   // ── Per-affiliate commission rate ──────────────────────────
 
   @Patch(':affiliateId/commission')
   @HttpCode(HttpStatus.OK)
+  // Phase 159 — commission rate sets the % an affiliate earns on ALL future
+  // orders; a malicious 100% override is direct money loss. Gate it like the
+  // strongest affiliate money action (payout mark-paid): SUPER_ADMIN only,
+  // on top of the granular permission. @Idempotent makes a double-submit a
+  // safe replay; @Throttle is a coarse abuse cap. (If finance delegation is
+  // wanted later, add 'FINANCE_ADMIN' to @Roles.)
+  @Roles('SUPER_ADMIN')
   @Permissions('affiliates.commission')
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async updateCommissionRate(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
-    @Body() body: { percentage: number | null },
+    @Body() dto: UpdateCommissionRateDto,
   ) {
     const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
     const data = await this.registrationService.updateCommissionRate({
       affiliateId,
-      percentage: body.percentage,
+      percentage: dto.percentage,
       adminId,
+      reason: dto.reason,
+      audit: {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
     });
     return {
       success: true,
       message:
-        body.percentage == null
+        dto.percentage == null
           ? 'Commission override cleared. Affiliate will use the platform default.'
-          : `Commission rate set to ${body.percentage}%.`,
+          : `Commission rate set to ${dto.percentage}%.`,
+      data,
+    };
+  }
+
+  // ── Additional coupon codes (campaign codes) ──────────────
+
+  @Post(':affiliateId/coupons')
+  @HttpCode(HttpStatus.CREATED)
+  // Phase 159b — dedicated create permission (distinct from approve/configure).
+  // @Idempotent so a double-submit replays the first create; @Throttle caps
+  // scripted/erroneous bulk creation (the per-affiliate cap is the hard limit).
+  @Permissions('affiliates.coupons.create')
+  @Idempotent()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async createCoupon(
+    @Req() req: Request,
+    @Param('affiliateId') affiliateId: string,
+    @Body() dto: CreateAdditionalCouponDto,
+  ) {
+    const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
+    const data = await this.registrationService.createAdditionalCoupon({
+      affiliateId,
+      code: dto.code,
+      customerDiscountType: dto.customerDiscountType ?? null,
+      customerDiscountValue: dto.customerDiscountValue ?? null,
+      maxDiscountAmount: dto.maxDiscountAmount ?? null,
+      minOrderValue: dto.minOrderValue ?? null,
+      maxUses: dto.maxUses ?? null,
+      perUserLimit: dto.perUserLimit,
+      startsAt: dto.startsAt ? new Date(dto.startsAt) : null,
+      expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+      isPrimary: dto.isPrimary,
+      adminId,
+      audit: {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
+    });
+    return {
+      success: true,
+      message: 'Coupon created.',
       data,
     };
   }
@@ -247,7 +366,13 @@ export class AdminAffiliateController {
 
   @Patch(':affiliateId/coupons/:couponId')
   @HttpCode(HttpStatus.OK)
-  @Permissions('affiliates.commission')
+  // Phase 158 — dedicated permission (audit #11). Coupon config moves
+  // customer-facing money, so it warrants a narrower grant than the broad
+  // 'affiliates.commission'. @Idempotent makes a double-submit a safe no-op;
+  // @Throttle is a coarse abuse cap on a money-affecting mutation.
+  @Permissions('affiliates.coupons.configure')
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async updateCouponConfig(
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
@@ -255,8 +380,10 @@ export class AdminAffiliateController {
     @Body()
     body: {
       isActive?: boolean;
-      customerDiscountType?: 'PERCENT' | 'FIXED' | null;
+      customerDiscountType?: 'PERCENT' | 'FIXED' | 'FREE_SHIPPING' | null;
       customerDiscountValue?: number | null;
+      maxDiscountAmount?: number | null;
+      startsAt?: string | null;
       expiresAt?: string | null;
       maxUses?: number | null;
       perUserLimit?: number;
@@ -264,12 +391,20 @@ export class AdminAffiliateController {
     },
   ) {
     const adminId = (req as any).adminId;
+    const userAgent = req.headers['user-agent'];
     const data = await this.registrationService.updateCouponConfig({
       affiliateId,
       couponId,
       isActive: body.isActive,
       customerDiscountType: body.customerDiscountType,
       customerDiscountValue: body.customerDiscountValue,
+      maxDiscountAmount: body.maxDiscountAmount,
+      startsAt:
+        body.startsAt === undefined
+          ? undefined
+          : body.startsAt === null
+          ? null
+          : new Date(body.startsAt),
       expiresAt:
         body.expiresAt === undefined
           ? undefined
@@ -280,6 +415,10 @@ export class AdminAffiliateController {
       perUserLimit: body.perUserLimit,
       minOrderValue: body.minOrderValue,
       adminId,
+      audit: {
+        ipAddress: req.ip,
+        userAgent: typeof userAgent === 'string' ? userAgent : undefined,
+      },
     });
     return {
       success: true,

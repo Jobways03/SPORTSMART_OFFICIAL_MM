@@ -58,20 +58,22 @@ pnpm db:reset                    # WARNING: drops sportsmart_dev and re-seeds.
 
 ## Running services
 
-`pnpm dev` runs `turbo run dev` which fans out to every workspace package. All 9
+`pnpm dev` runs `turbo run dev` which fans out to every workspace package. All
 services come up in parallel:
 
-| Service                | Port | Purpose                                  |
-|------------------------|-----:|------------------------------------------|
-| `@sportsmart/api`      | 8000 | NestJS backend (Prisma + Redis + BullMQ) |
-| `web-admin-storefront` | 4000 | Storefront ops admin (orders/customers/disputes/payments) |
-| `web-admin`            | 4001 | Platform admin (sellers/products/franchises/commissions) |
-| `web-franchise-admin`  | 4002 | Franchise network oversight              |
-| `web-seller`           | 4003 | Seller dashboard                         |
-| `web-franchise`        | 4004 | Franchise location dashboard (POS, staff, inventory) |
-| `web-storefront`       | 4005 | Customer-facing storefront               |
-| `web-affiliate-admin`  | 4006 | Affiliate program admin                  |
-| `web-affiliate`        | 4007 | Affiliate member portal                  |
+| Service                    | Port | Purpose                                  |
+|----------------------------|-----:|------------------------------------------|
+| `@sportsmart/api`          | 8000 | NestJS backend (Prisma + Redis + BullMQ) |
+| `web-admin-storefront`     | 4000 | Storefront ops admin (orders/customers/disputes/payments) |
+| `web-d2c-seller-admin`     | 4001 | **D2C** seller-side admin (D2C sellers, products, returns) |
+| `web-franchise-admin`      | 4002 | Franchise network oversight              |
+| `web-d2c-seller`           | 4003 | **D2C** seller dashboard                 |
+| `web-franchise`            | 4004 | Franchise location dashboard (POS, staff, inventory) |
+| `web-storefront`           | 4005 | Customer-facing storefront               |
+| `web-affiliate-admin`      | 4006 | Affiliate program admin                  |
+| `web-affiliate`            | 4007 | Affiliate member portal                  |
+| `web-retail-seller-admin`  | 4008 | **RETAIL** seller-side admin (Retail sellers, products, returns) |
+| `web-retail-seller`        | 4009 | **RETAIL** seller dashboard              |
 
 The React Native mobile app (`apps/mobile-storefront`) is run separately
 because Metro owns port 8081 alone and Xcode / Android Studio aren't on

@@ -5,6 +5,7 @@ import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.ada
 import { AffiliatePublicFacade } from './application/facades/affiliate-public.facade';
 import { AffiliateRegistrationService } from './application/services/affiliate-registration.service';
 import { AffiliateAuthService } from './application/services/affiliate-auth.service';
+import { AffiliateRefreshSessionService } from './application/services/affiliate-refresh-session.service';
 import { AffiliatePasswordResetService } from './application/services/affiliate-password-reset.service';
 import { AffiliateSettingsService } from './application/services/affiliate-settings.service';
 import { AffiliateCommissionService } from './application/services/affiliate-commission.service';
@@ -13,6 +14,7 @@ import { AffiliateKycService } from './application/services/affiliate-kyc.servic
 import { AffiliatePayoutService } from './application/services/affiliate-payout.service';
 import { AffiliateReturnWindowService } from './application/services/affiliate-return-window.service';
 import { AffiliateOrderEventHandler } from './application/event-handlers/affiliate-order.handler';
+import { AffiliateUserLinkHandler } from './application/event-handlers/affiliate-user-link.handler';
 import { AffiliateRegistrationController } from './presentation/controllers/affiliate-registration.controller';
 import { AdminAffiliateController } from './presentation/controllers/admin-affiliate.controller';
 import { AdminAffiliatePayoutController } from './presentation/controllers/admin-affiliate-payout.controller';
@@ -39,6 +41,7 @@ import { AffiliateSelfController } from './presentation/controllers/affiliate-se
     AffiliatePublicFacade,
     AffiliateRegistrationService,
     AffiliateAuthService,
+    AffiliateRefreshSessionService,
     AffiliatePasswordResetService,
     AffiliateSettingsService,
     AffiliateCommissionService,
@@ -53,6 +56,10 @@ import { AffiliateSelfController } from './presentation/controllers/affiliate-se
     // including them in providers is enough for Nest to register
     // the listeners with the event emitter.
     AffiliateOrderEventHandler,
+    // Phase 22 (2026-05-20) — Affiliate ↔ User auto-link. Listens to
+    // identity.user.email_verified and stamps Affiliate.userId when
+    // an application and a (now verified) user share the same email.
+    AffiliateUserLinkHandler,
   ],
   exports: [
     AffiliatePublicFacade,

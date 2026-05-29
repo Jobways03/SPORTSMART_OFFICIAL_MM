@@ -168,7 +168,7 @@ export default function MenuEditorPage() {
   }
 
   return (
-    <div style={{ padding: '32px 40px', maxWidth: 1100 }}>
+    <div style={{ padding: '32px 40px', maxWidth: 1100, margin: '0 auto' }}>
       <Link href="/dashboard/menus" style={{ color: '#6b7280', fontSize: 13, textDecoration: 'none' }}>
         ← Back to menus
       </Link>

@@ -1,6 +1,27 @@
-import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 
+/**
+ * Phase 20 (2026-05-20) — Franchise register payload.
+ *
+ * Added (consent + bot-protection):
+ *   • confirmPassword — server-side mirror of the form match.
+ *   • acceptTerms + acceptPrivacy — DPDP §6 required consent.
+ *   • acceptMarketing — optional opt-in.
+ *   • captchaToken — verified before bcrypt.
+ *
+ * Tightened:
+ *   • Phone strict India mobile ^[6-9]\d{9}$ replacing loose ^\d{10,15}$.
+ */
 export class FranchiseRegisterDto {
   @IsNotEmpty({ message: 'Owner name is required' })
   @IsString()
@@ -26,8 +47,16 @@ export class FranchiseRegisterDto {
 
   @IsNotEmpty({ message: 'Phone number is required' })
   @IsString()
-  @Transform(({ value }) => typeof value === 'string' ? value.trim().replace(/\D/g, '') : value)
-  @Matches(/^\d{10,15}$/, { message: 'Phone number must be 10-15 digits' })
+  @Transform(({ value }) => {
+    if (typeof value !== 'string') return value;
+    const digits = value.trim().replace(/\D/g, '');
+    return digits.startsWith('91') && digits.length === 12
+      ? digits.slice(2)
+      : digits;
+  })
+  @Matches(/^[6-9]\d{9}$/, {
+    message: 'Phone number must be a 10-digit Indian mobile number starting with 6, 7, 8, or 9',
+  })
   phoneNumber!: string;
 
   @IsNotEmpty({ message: 'Password is required' })
@@ -39,4 +68,24 @@ export class FranchiseRegisterDto {
   @Matches(/(?=.*\d)/, { message: 'Password must include a number' })
   @Matches(/(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])/, { message: 'Password must include a special character' })
   password!: string;
+
+  @IsNotEmpty({ message: 'Please confirm your password' })
+  @IsString()
+  @MaxLength(128)
+  confirmPassword!: string;
+
+  @IsBoolean({ message: 'You must agree to the Terms of Service' })
+  acceptTerms!: boolean;
+
+  @IsBoolean({ message: 'You must agree to the Privacy Policy' })
+  acceptPrivacy!: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  acceptMarketing?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  captchaToken?: string;
 }

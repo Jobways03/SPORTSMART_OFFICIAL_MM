@@ -228,9 +228,71 @@ export interface AdminControlTowerRepository {
   ): Promise<void>;
 
   /* ── Operations (mapping suspension) ── */
-  findSellerBasic(sellerId: string): Promise<{ id: string; sellerName: string; isDeleted: boolean } | null>;
-  suspendSellerMappings(sellerId: string): Promise<number>;
-  activateSellerMappings(sellerId: string): Promise<number>;
+  /**
+   * Phase 59 (2026-05-22) — added `status` so the service can warn
+   * when the seller-account itself is already suspended (audit
+   * Gap #7), and the audit payload can record the seller's
+   * account-level status alongside per-mapping state.
+   */
+  findSellerBasic(
+    sellerId: string,
+  ): Promise<{
+    id: string;
+    sellerName: string;
+    isDeleted: boolean;
+    status: string;
+  } | null>;
+  /**
+   * Phase 59 (2026-05-22) — status-conditional bulk suspend (audit
+   * Gaps #1 + #2 + #3). Only flips mappings that are currently
+   * APPROVED + isActive=true; PENDING_APPROVAL, REJECTED, STOPPED,
+   * and already-SUSPENDED rows are untouched. Stamps suspendedBy,
+   * suspendedAt, suspensionReason. Returns the affected mapping
+   * ids so the caller can release active reservations and emit
+   * per-mapping side effects.
+   */
+  suspendSellerMappings(
+    sellerId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<{ count: number; affectedMappingIds: string[] }>;
+  /**
+   * Phase 59 (2026-05-22) — status-conditional bulk reactivate
+   * (audit Gap #1). Only flips mappings that are currently
+   * SUSPENDED + isActive=false (i.e. the ones bulk-suspended via
+   * the symmetric path); STOPPED / REJECTED / PENDING_APPROVAL
+   * rows are untouched so an admin cannot silently overwrite a
+   * prior rejection or per-mapping stop with a single click.
+   */
+  activateSellerMappings(
+    sellerId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<{ count: number; affectedMappingIds: string[] }>;
+  /**
+   * Phase 59 (2026-05-22) — releases every active (RESERVED) stock
+   * reservation pointing at any of the given mappings (audit Gap
+   * #6). Each row is flipped status RESERVED → RELEASED inside
+   * its own per-row transaction (matching the expiry-sweep CAS
+   * pattern); the corresponding mapping's reservedQty is
+   * decremented atomically. Returns per-reservation snapshots so
+   * the caller can write ledger entries and emit cart-update
+   * events.
+   */
+  releaseReservationsForMappings(
+    mappingIds: string[],
+  ): Promise<Array<{
+    reservationId: string;
+    mappingId: string;
+    quantity: number;
+    orderId: string | null;
+    customerId: string | null;
+    sessionId: string | null;
+    cartId: string | null;
+    stockQty: number;
+    beforeReservedQty: number;
+    afterReservedQty: number;
+  }>>;
 
   /* ── Data validation ── */
   countProductsWithoutCode(): Promise<number>;

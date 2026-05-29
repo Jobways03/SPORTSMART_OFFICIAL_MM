@@ -141,33 +141,61 @@ jobs:
           cache-from: type=gha,scope=web-admin-storefront
           cache-to: type=gha,scope=web-admin-storefront,mode=max
 
-      - name: Build + push web-admin
-        if: contains(inputs.services, 'web-admin') || inputs.services == 'all'
+      - name: Build + push web-d2c-seller-admin
+        if: contains(inputs.services, 'web-d2c-seller-admin') || inputs.services == 'all'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: infra/docker/Dockerfile.web
           push: true
-          build-args: APP=web-admin
+          build-args: APP=web-d2c-seller-admin
           tags: |
-            ghcr.io/${{ github.repository }}/web-admin:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-admin:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-admin
-          cache-to: type=gha,scope=web-admin,mode=max
+            ghcr.io/${{ github.repository }}/web-d2c-seller-admin:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ github.repository }}/web-d2c-seller-admin:${{ inputs.target }}-latest
+          cache-from: type=gha,scope=web-d2c-seller-admin
+          cache-to: type=gha,scope=web-d2c-seller-admin,mode=max
 
-      - name: Build + push web-seller
-        if: contains(inputs.services, 'web-seller') || inputs.services == 'all'
+      - name: Build + push web-d2c-seller
+        if: contains(inputs.services, 'web-d2c-seller') || inputs.services == 'all'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: infra/docker/Dockerfile.web
           push: true
-          build-args: APP=web-seller
+          build-args: APP=web-d2c-seller
           tags: |
-            ghcr.io/${{ github.repository }}/web-seller:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-seller:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-seller
-          cache-to: type=gha,scope=web-seller,mode=max
+            ghcr.io/${{ github.repository }}/web-d2c-seller:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ github.repository }}/web-d2c-seller:${{ inputs.target }}-latest
+          cache-from: type=gha,scope=web-d2c-seller
+          cache-to: type=gha,scope=web-d2c-seller,mode=max
+
+      - name: Build + push web-retail-seller-admin
+        if: contains(inputs.services, 'web-retail-seller-admin') || inputs.services == 'all'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.web
+          push: true
+          build-args: APP=web-retail-seller-admin
+          tags: |
+            ghcr.io/${{ github.repository }}/web-retail-seller-admin:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ github.repository }}/web-retail-seller-admin:${{ inputs.target }}-latest
+          cache-from: type=gha,scope=web-retail-seller-admin
+          cache-to: type=gha,scope=web-retail-seller-admin,mode=max
+
+      - name: Build + push web-retail-seller
+        if: contains(inputs.services, 'web-retail-seller') || inputs.services == 'all'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.web
+          push: true
+          build-args: APP=web-retail-seller
+          tags: |
+            ghcr.io/${{ github.repository }}/web-retail-seller:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ github.repository }}/web-retail-seller:${{ inputs.target }}-latest
+          cache-from: type=gha,scope=web-retail-seller
+          cache-to: type=gha,scope=web-retail-seller,mode=max
 
       - name: Build + push web-franchise
         if: contains(inputs.services, 'web-franchise') || inputs.services == 'all'

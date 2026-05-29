@@ -62,9 +62,29 @@ describe('PrismaCommissionRepository.processSubOrderCommission — idempotency',
 
     await repo.processSubOrderCommission('so1', sampleRecords);
 
+    // Phase 135 — the atomic-claim WHERE now also re-validates the
+    // no-live-return predicate inside the transaction (closes the
+    // return-created-mid-tick race); the data carries commissionDecision
+    // (Phase 75). createMany data is passed through the dual-write helper.
     expect(subOrderUpdateMany).toHaveBeenCalledWith({
-      where: { id: 'so1', commissionProcessed: false },
-      data: { commissionProcessed: true },
+      where: {
+        id: 'so1',
+        commissionProcessed: false,
+        NOT: {
+          returns: {
+            some: { status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] } },
+          },
+        },
+        // Phase 136 — active-dispute re-check inside the claim txn.
+        disputes: {
+          none: {
+            status: {
+              notIn: ['RESOLVED_BUYER', 'RESOLVED_SELLER', 'RESOLVED_SPLIT', 'CLOSED'],
+            },
+          },
+        },
+      },
+      data: { commissionProcessed: true, commissionDecision: 'PROCESSED' },
     });
     expect(commissionCreateMany).toHaveBeenCalledWith({
       data: sampleRecords,

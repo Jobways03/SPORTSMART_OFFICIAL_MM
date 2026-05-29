@@ -6,12 +6,26 @@ import {
   HttpStatus,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
-import { AdminLoginDto } from '../dtos/admin-login.dto';
+import { Request, Response } from 'express';
+import {
+  AdminForgotPasswordDto,
+  AdminLoginDto,
+  AdminResendResetOtpDto,
+  AdminResetPasswordDto,
+  AdminVerifyResetOtpDto,
+} from '../dtos/admin-login.dto';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
+import {
+  clearAuthCookies,
+  readRefreshCookie,
+  setAuthCookies,
+} from '../../../../core/auth/auth-cookie.helper';
 import { AdminLoginUseCase } from '../../application/use-cases/admin-login.use-case';
 import { AdminLogoutUseCase } from '../../application/use-cases/admin-logout.use-case';
 import { AdminGetMeUseCase } from '../../application/use-cases/admin-get-me.use-case';
@@ -36,14 +50,33 @@ export class AdminAuthController {
     private readonly resendResetOtpUseCase: ResendAdminResetOtpUseCase,
     private readonly resetPasswordUseCase: ResetAdminPasswordUseCase,
     private readonly accessLog: AccessLogService,
+    private readonly env: EnvService,
+    private readonly captcha: CaptchaVerifierService,
   ) {}
+
+  private cookieSettings() {
+    return {
+      domain: this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
+      secure:
+        this.env.isProduction() ||
+        this.env.getString('NODE_ENV') === 'staging',
+    };
+  }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async login(@Body() dto: AdminLoginDto, @Req() req: Request) {
+  async login(
+    @Body() dto: AdminLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
+    // Phase 23 (2026-05-20) — CAPTCHA verified BEFORE bcrypt. Admin is
+    // the highest-value attack surface; a credential-spray bot
+    // previously had only the 5/60s per-IP throttle to overcome.
+    await this.captcha.verify(dto.captchaToken, ipAddress);
     try {
       const data = await this.loginUseCase.execute({
         email: dto.email,
@@ -52,12 +85,36 @@ export class AdminAuthController {
         ipAddress,
       });
 
+      // Follow-up #H40 — mirror tokens to httpOnly cookies; body still
+      // carries them for the pre-migration admin frontends.
+      const accessToken = (data as { accessToken?: string })?.accessToken;
+      const refreshToken = (data as { refreshToken?: string })?.refreshToken;
+      if (accessToken && refreshToken) {
+        setAuthCookies(res, {
+          persona: 'admin',
+          accessToken,
+          refreshToken,
+          ...this.cookieSettings(),
+        });
+      }
+
       const adminId =
         (data as any)?.admin?.adminId ??
         (data as any)?.admin?.id ??
         (data as any)?.adminId;
       const adminRole = (data as any)?.admin?.role ?? null;
-      if (adminId) {
+      // Phase 26 (2026-05-20) — discriminate. The login response is
+      // either a real session (mfaRequired absent / false) or a
+      // challenge-only halt (mfaRequired: true). Pre-Phase-26 BOTH
+      // wrote LOGIN_SUCCESS to the access_log table, which made
+      // login-success metrics over-count and confused incident
+      // response ("admin X logged in" rows that weren't really
+      // logins). The challenge-only case is already recorded in the
+      // unified AuditLog as ADMIN_LOGIN_MFA_CHALLENGE_ISSUED (see
+      // AdminLoginUseCase.auditLogin); we don't need to redundantly
+      // double-write to access_log under a misleading kind.
+      const isChallengeOnly = (data as any)?.mfaRequired === true;
+      if (adminId && !isChallengeOnly) {
         this.accessLog
           .record({
             actorType: 'ADMIN',
@@ -98,15 +155,31 @@ export class AdminAuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async refresh(
-    @Body() body: { refreshToken: string },
+    @Body() body: { refreshToken?: string },
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const ipAddress = req.ip;
     const userAgent = req.headers['user-agent'];
 
+    // Follow-up #H40 — accept refresh token from body OR cookie.
+    const refreshToken =
+      body?.refreshToken ?? readRefreshCookie(req, 'admin');
+
     const data = await this.refreshSessionUseCase.execute({
-      refreshToken: body?.refreshToken,
+      refreshToken: refreshToken ?? '',
     });
+
+    const newAccess = (data as { accessToken?: string })?.accessToken;
+    const newRefresh = (data as { refreshToken?: string })?.refreshToken;
+    if (newAccess && newRefresh) {
+      setAuthCookies(res, {
+        persona: 'admin',
+        accessToken: newAccess,
+        refreshToken: newRefresh,
+        ...this.cookieSettings(),
+      });
+    }
 
     this.accessLog
       .record({
@@ -128,11 +201,26 @@ export class AdminAuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(AdminAuthGuard, PermissionsGuard)
-  async logout(@Req() req: Request) {
+  // Phase 24 (2026-05-20) — dropped PermissionsGuard from logout.
+  // Self-service logout doesn't need a permission gate; AdminAuthGuard
+  // already proves the requester owns the session being revoked. The
+  // previous wiring (AdminAuthGuard + PermissionsGuard with no
+  // @Permissions decorator) effectively bypassed the guard anyway —
+  // it just produced an authz audit row tagged with empty
+  // requiredPermissions, which is noise.
+  @UseGuards(AdminAuthGuard)
+  async logout(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const adminId = (req as any).adminId;
     const adminRole = (req as any).adminRole ?? null;
     await this.logoutUseCase.execute(adminId);
+
+    // Follow-up #H40 — clear auth cookies on the way out. The session
+    // is already revoked in the use case; this prevents a stale
+    // browser-side cookie from being replayed pointlessly until TTL.
+    clearAuthCookies(res, 'admin', this.cookieSettings().domain);
 
     this.accessLog
       .record({
@@ -152,7 +240,10 @@ export class AdminAuthController {
   }
 
   @Get('me')
-  @UseGuards(AdminAuthGuard, PermissionsGuard)
+  // Phase 24 (2026-05-20) — same rationale as logout: a self-profile
+  // probe doesn't need a permission gate; the auth guard already
+  // proves the requester owns the row.
+  @UseGuards(AdminAuthGuard)
   async getMe(@Req() req: Request) {
     const adminId = (req as any).adminId;
     const data = await this.getMeUseCase.execute(adminId);
@@ -174,8 +265,18 @@ export class AdminAuthController {
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async forgotPassword(@Body() body: { email: string }) {
-    await this.forgotPasswordUseCase.execute({ email: body.email });
+  async forgotPassword(
+    @Body() dto: AdminForgotPasswordDto,
+    @Req() req: Request,
+  ) {
+    // Phase 23 (2026-05-20) — captcha gate before OTP send so scripted
+    // attackers can't burn the cooldown to enumerate admin emails.
+    await this.captcha.verify(dto.captchaToken, req.ip);
+    await this.forgotPasswordUseCase.execute({
+      email: dto.email,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
     return {
       success: true,
       message: 'If an admin account exists for that email, a reset OTP has been sent',
@@ -185,10 +286,15 @@ export class AdminAuthController {
   @Post('verify-reset-otp')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async verifyResetOtp(@Body() body: { email: string; otp: string }) {
+  async verifyResetOtp(
+    @Body() dto: AdminVerifyResetOtpDto,
+    @Req() req: Request,
+  ) {
     const data = await this.verifyResetOtpUseCase.execute({
-      email: body.email,
-      otp: body.otp,
+      email: dto.email,
+      otp: dto.otp,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
     });
     return {
       success: true,
@@ -200,8 +306,8 @@ export class AdminAuthController {
   @Post('resend-reset-otp')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async resendResetOtp(@Body() body: { email: string }) {
-    await this.resendResetOtpUseCase.execute({ email: body.email });
+  async resendResetOtp(@Body() dto: AdminResendResetOtpDto) {
+    await this.resendResetOtpUseCase.execute({ email: dto.email });
     return {
       success: true,
       message: 'If an admin account exists for that email, a new OTP has been sent',
@@ -212,11 +318,14 @@ export class AdminAuthController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async resetPassword(
-    @Body() body: { resetToken: string; newPassword: string },
+    @Body() dto: AdminResetPasswordDto,
+    @Req() req: Request,
   ) {
     await this.resetPasswordUseCase.execute({
-      resetToken: body.resetToken,
-      newPassword: body.newPassword,
+      resetToken: dto.resetToken,
+      newPassword: dto.newPassword,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
     });
     return {
       success: true,

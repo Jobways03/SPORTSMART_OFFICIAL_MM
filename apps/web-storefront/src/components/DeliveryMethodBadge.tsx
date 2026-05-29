@@ -2,21 +2,14 @@
 
 import React from 'react';
 
-export type DeliveryMethod = 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null | undefined;
+export type DeliveryMethod = 'SELF_DELIVERY' | null | undefined;
 
 export interface DeliveryMethodBadgeProps {
   method: DeliveryMethod;
   awb?: string | null;
   courier?: string | null;
-  trackingUrl?: string | null;
   size?: 'sm' | 'md';
   showAwb?: boolean;
-  /**
-   * When true and trackingUrl is present for an iThink shipment,
-   * the badge renders as a clickable pill that opens iThink tracking
-   * in a new tab. Used on customer-facing screens.
-   */
-  asTrackingLink?: boolean;
 }
 
 /**
@@ -28,10 +21,8 @@ export function DeliveryMethodBadge({
   method,
   awb,
   courier,
-  trackingUrl,
   size = 'sm',
   showAwb = false,
-  asTrackingLink = false,
 }: DeliveryMethodBadgeProps) {
   const config = configFor(method);
   const padding = size === 'md' ? '4px 10px' : '2px 8px';
@@ -73,21 +64,6 @@ export function DeliveryMethodBadge({
     textDecoration: 'none',
   };
 
-  if (asTrackingLink && method === 'ITHINK_LOGISTICS' && trackingUrl) {
-    return (
-      <a
-        href={trackingUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ ...baseStyle, cursor: 'pointer' }}
-        title={`${config.label} · Track on iThink${awb ? ` · AWB ${awb}` : ''}`}
-      >
-        {content}
-        <span style={{ marginLeft: 2 }}>↗</span>
-      </a>
-    );
-  }
-
   return (
     <span
       style={baseStyle}
@@ -104,14 +80,6 @@ export function DeliveryMethodBadge({
 
 function configFor(method: DeliveryMethod) {
   switch (method) {
-    case 'ITHINK_LOGISTICS':
-      return {
-        label: 'Courier',
-        icon: '\u{1F69A}',
-        bg: '#eff6ff',
-        fg: '#1e3a8a',
-        border: '#bfdbfe',
-      };
     case 'SELF_DELIVERY':
       return {
         label: 'Local delivery',

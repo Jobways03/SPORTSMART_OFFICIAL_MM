@@ -213,7 +213,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
           }
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [discountId]);
 
@@ -234,7 +234,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
           );
         }
       })
-      .catch(() => {});
+      .catch((err) => console.warn(err));
   }, []);
 
   // Browse products/collections
@@ -251,7 +251,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             price: pr.variants?.[0]?.price ?? pr.basePrice ?? 0,
           })));
         })
-        .catch(() => {})
+        .catch((err) => console.warn(err))
         .finally(() => setBrowseLoading(false));
     } else if (browseMode === 'collections') {
       apiClient<any>(`/admin/collections?limit=100${browseSearch ? `&search=${browseSearch}` : ''}`)
@@ -260,7 +260,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             id: c.id, name: c.name, productCount: c.productCount, imageUrl: c.imageUrl || null,
           })));
         })
-        .catch(() => {})
+        .catch((err) => console.warn(err))
         .finally(() => setBrowseLoading(false));
     } else if (browseMode === 'customers') {
       const p = new URLSearchParams({ limit: '50' });
@@ -271,7 +271,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             id: c.id, firstName: c.firstName, lastName: c.lastName, email: c.email,
           })));
         })
-        .catch(() => {})
+        .catch((err) => console.warn(err))
         .finally(() => setBrowseLoading(false));
     }
   }, [browseMode, browseSearch]);

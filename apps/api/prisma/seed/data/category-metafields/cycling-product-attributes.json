@@ -1,0 +1,649 @@
+{
+  "bicycles": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "bike_type",
+      "name": "Bike Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "road", "label": "Road Bike" },
+        { "value": "mountain", "label": "Mountain Bike (MTB)" },
+        { "value": "hybrid", "label": "Hybrid / Commuter" },
+        { "value": "gravel", "label": "Gravel Bike" },
+        { "value": "bmx", "label": "BMX" },
+        { "value": "electric", "label": "Electric (E-Bike)" },
+        { "value": "folding", "label": "Folding Bike" },
+        { "value": "kids", "label": "Kids Bike" }
+      ]
+    },
+    {
+      "key": "frame_size",
+      "name": "Frame Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS (13-14\")" },
+        { "value": "s", "label": "S (15-16\")" },
+        { "value": "m", "label": "M (17-18\")" },
+        { "value": "l", "label": "L (19-20\")" },
+        { "value": "xl", "label": "XL (21-22\")" },
+        { "value": "12_inch", "label": "12\" (Kids)" },
+        { "value": "16_inch", "label": "16\" (Kids)" },
+        { "value": "20_inch", "label": "20\" (Kids)" },
+        { "value": "24_inch", "label": "24\" (Kids)" }
+      ]
+    },
+    {
+      "key": "wheel_size",
+      "name": "Wheel Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "12", "label": "12\"" },
+        { "value": "16", "label": "16\"" },
+        { "value": "20", "label": "20\"" },
+        { "value": "24", "label": "24\"" },
+        { "value": "26", "label": "26\"" },
+        { "value": "27_5", "label": "27.5\" (650b)" },
+        { "value": "29", "label": "29\"" },
+        { "value": "700c", "label": "700c" }
+      ]
+    },
+    {
+      "key": "frame_material",
+      "name": "Frame Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "aluminum", "label": "Aluminum" },
+        { "value": "carbon", "label": "Carbon Fibre" },
+        { "value": "steel", "label": "Steel" },
+        { "value": "titanium", "label": "Titanium" }
+      ]
+    },
+    {
+      "key": "gears",
+      "name": "Gears",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "single", "label": "Single Speed / Fixed" },
+        { "value": "7_speed", "label": "7 Speed" },
+        { "value": "18_21", "label": "18-21 Speed" },
+        { "value": "24_27", "label": "24-27 Speed" },
+        { "value": "30_plus", "label": "30+ Speed" }
+      ]
+    },
+    {
+      "key": "suspension",
+      "name": "Suspension",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "none", "label": "Rigid (No Suspension)" },
+        { "value": "hardtail", "label": "Hardtail (Front Only)" },
+        { "value": "full", "label": "Full Suspension" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 8,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-helmets": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "helmet_type",
+      "name": "Helmet Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "road", "label": "Road" },
+        { "value": "mtb", "label": "Mountain Bike" },
+        { "value": "commuter", "label": "Commuter / Urban" },
+        { "value": "bmx", "label": "BMX / Skate" },
+        { "value": "time_trial", "label": "Time Trial / Aero" },
+        { "value": "full_face", "label": "Full Face (Downhill)" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS (48-52cm)" },
+        { "value": "s", "label": "S (51-55cm)" },
+        { "value": "m", "label": "M (55-59cm)" },
+        { "value": "l", "label": "L (59-63cm)" },
+        { "value": "xl", "label": "XL (61-65cm)" }
+      ]
+    },
+    {
+      "key": "mips",
+      "name": "MIPS Technology",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "yellow", "label": "Yellow (Hi-Vis)" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "jersey", "label": "Jersey (Short Sleeve)" },
+        { "value": "jersey_ls", "label": "Jersey (Long Sleeve)" },
+        { "value": "bib_shorts", "label": "Bib Shorts" },
+        { "value": "shorts", "label": "Cycling Shorts" },
+        { "value": "bib_tights", "label": "Bib Tights" },
+        { "value": "jacket", "label": "Jacket / Windbreaker" },
+        { "value": "gilet", "label": "Gilet / Vest" },
+        { "value": "base_layer", "label": "Base Layer" },
+        { "value": "socks", "label": "Cycling Socks" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "padded",
+      "name": "Padded Chamois",
+      "type": "BOOLEAN",
+      "sortOrder": 4,
+      "description": "Applicable for shorts/tights"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "yellow", "label": "Yellow (Hi-Vis)" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-gloves": [
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "fingerless", "label": "Fingerless / Half Finger" },
+        { "value": "full_finger", "label": "Full Finger" },
+        { "value": "winter", "label": "Winter / Thermal" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-lights": [
+    {
+      "key": "light_type",
+      "name": "Light Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "front", "label": "Front Light" },
+        { "value": "rear", "label": "Rear Light" },
+        { "value": "set", "label": "Front + Rear Set" },
+        { "value": "helmet_light", "label": "Helmet Mount Light" }
+      ]
+    },
+    {
+      "key": "lumens",
+      "name": "Brightness (Lumens)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "under_200", "label": "Under 200 lm (Be Seen)" },
+        { "value": "200_600", "label": "200-600 lm (Urban)" },
+        { "value": "600_1200", "label": "600-1200 lm (Road)" },
+        { "value": "1200_plus", "label": "1200+ lm (Off-Road)" }
+      ]
+    },
+    {
+      "key": "rechargeable",
+      "name": "Rechargeable (USB)",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" }
+      ]
+    }
+  ],
+  "cycling-locks": [
+    {
+      "key": "lock_type",
+      "name": "Lock Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "u_lock", "label": "U-Lock / D-Lock" },
+        { "value": "chain", "label": "Chain Lock" },
+        { "value": "cable", "label": "Cable Lock" },
+        { "value": "folding", "label": "Folding Lock" },
+        { "value": "combination", "label": "Combination Lock" }
+      ]
+    },
+    {
+      "key": "security_rating",
+      "name": "Security Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "basic", "label": "Basic (Deterrent)" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "high", "label": "High" },
+        { "value": "sold_secure_gold", "label": "Sold Secure Gold" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "orange", "label": "Orange" }
+      ]
+    }
+  ],
+  "cycling-tyres-tubes": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "tyre", "label": "Tyre" },
+        { "value": "inner_tube", "label": "Inner Tube" },
+        { "value": "tubeless_kit", "label": "Tubeless Conversion Kit" }
+      ]
+    },
+    {
+      "key": "wheel_size",
+      "name": "Wheel Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "20", "label": "20\"" },
+        { "value": "24", "label": "24\"" },
+        { "value": "26", "label": "26\"" },
+        { "value": "27_5", "label": "27.5\" (650b)" },
+        { "value": "29", "label": "29\"" },
+        { "value": "700c", "label": "700c" }
+      ]
+    },
+    {
+      "key": "tyre_type",
+      "name": "Tyre Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "road", "label": "Road / Slick" },
+        { "value": "gravel", "label": "Gravel / All-Road" },
+        { "value": "mtb", "label": "MTB / Knobby" },
+        { "value": "commuter", "label": "Commuter / Hybrid" },
+        { "value": "fat", "label": "Fat Tyre" }
+      ]
+    },
+    {
+      "key": "puncture_protection",
+      "name": "Puncture Protection",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    }
+  ],
+  "cycling-pedals": [
+    {
+      "key": "pedal_type",
+      "name": "Pedal Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "flat", "label": "Flat / Platform" },
+        { "value": "clipless_spd", "label": "Clipless – SPD (2-Bolt)" },
+        { "value": "clipless_road", "label": "Clipless – Road (3-Bolt)" },
+        { "value": "hybrid", "label": "Hybrid (Flat + Clip)" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "alloy", "label": "Alloy" },
+        { "value": "carbon", "label": "Carbon" },
+        { "value": "nylon_composite", "label": "Nylon / Composite" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "silver", "label": "Silver" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" }
+      ]
+    }
+  ],
+  "cycling-saddles": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "riding_style",
+      "name": "Riding Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "road", "label": "Road / Race" },
+        { "value": "mtb", "label": "Mountain Bike" },
+        { "value": "comfort", "label": "Comfort / Commuter" },
+        { "value": "triathlon", "label": "Triathlon / TT" }
+      ]
+    },
+    {
+      "key": "rail_material",
+      "name": "Rail Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "steel", "label": "Steel" },
+        { "value": "alloy", "label": "Alloy" },
+        { "value": "titanium", "label": "Titanium" },
+        { "value": "carbon", "label": "Carbon" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "brown", "label": "Brown" },
+        { "value": "red", "label": "Red" }
+      ]
+    }
+  ],
+  "cycling-pumps-tools": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "floor_pump", "label": "Floor Pump" },
+        { "value": "mini_pump", "label": "Mini / Hand Pump" },
+        { "value": "co2_inflator", "label": "CO2 Inflator" },
+        { "value": "multi_tool", "label": "Multi-Tool" },
+        { "value": "chain_tool", "label": "Chain Tool / Breaker" },
+        { "value": "tyre_levers", "label": "Tyre Levers" },
+        { "value": "repair_kit", "label": "Puncture Repair Kit" },
+        { "value": "bike_stand", "label": "Bike Work Stand" }
+      ]
+    },
+    {
+      "key": "valve_compatibility",
+      "name": "Valve Compatibility",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "description": "Applicable for pumps only",
+      "choices": [
+        { "value": "presta", "label": "Presta" },
+        { "value": "schrader", "label": "Schrader" },
+        { "value": "dual", "label": "Dual / Universal" }
+      ]
+    }
+  ],
+  "cycling-bags-storage": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "saddle_bag", "label": "Saddle Bag" },
+        { "value": "frame_bag", "label": "Frame Bag" },
+        { "value": "handlebar_bag", "label": "Handlebar Bag" },
+        { "value": "pannier", "label": "Pannier" },
+        { "value": "backpack", "label": "Cycling Backpack" },
+        { "value": "top_tube", "label": "Top Tube Bag" },
+        { "value": "bike_transport", "label": "Bike Transport Bag / Box" }
+      ]
+    },
+    {
+      "key": "waterproof",
+      "name": "Waterproof",
+      "type": "BOOLEAN",
+      "sortOrder": 2
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "bottle_cage", "label": "Bottle Cage" },
+        { "value": "water_bottle", "label": "Water Bottle" },
+        { "value": "bell", "label": "Bell" },
+        { "value": "mirror", "label": "Mirror" },
+        { "value": "mudguard", "label": "Mudguard / Fender" },
+        { "value": "kickstand", "label": "Kickstand" },
+        { "value": "phone_mount", "label": "Phone / GPS Mount" },
+        { "value": "bike_rack", "label": "Bike Rack (Car)" },
+        { "value": "trainer", "label": "Indoor Trainer / Turbo" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "silver", "label": "Silver" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-eyewear": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "lens_type",
+      "name": "Lens Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "clear", "label": "Clear" },
+        { "value": "tinted", "label": "Tinted / Dark" },
+        { "value": "photochromic", "label": "Photochromic (Transition)" },
+        { "value": "polarized", "label": "Polarized" },
+        { "value": "interchangeable", "label": "Interchangeable Lenses" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Frame Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

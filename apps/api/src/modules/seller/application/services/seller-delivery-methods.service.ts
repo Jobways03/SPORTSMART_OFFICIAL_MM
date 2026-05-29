@@ -10,17 +10,16 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 /**
  * Seller-facing delivery-method operations. Used from the
- * `web-seller` dashboard:
+ * `web-d2c-seller` / `web-retail-seller` dashboards:
  *
  *   * `getMyEntitlements` — what methods can I use?
- *   * `chooseMethodForSubOrder` — pick iThink or self-delivery at
- *     accept time, validating against entitlement.
+ *   * `chooseMethodForSubOrder` — pick the delivery method at accept
+ *     time, validating against entitlement.
  *   * `transitionSelfDeliveryStatus` — manual progress for
- *     self-delivery shipments (no courier scans to drive this).
+ *     self-delivery shipments.
  *
- * Booking the iThink shipment (Add Order call) happens in the orders
- * module's accept-sub-order use case, not here. This service only
- * owns the choice + the self-delivery state machine.
+ * Self-delivery is the only delivery method today (iThink removed);
+ * this service owns the choice + the self-delivery state machine.
  */
 @Injectable()
 export class SellerDeliveryMethodsService {
@@ -31,20 +30,12 @@ export class SellerDeliveryMethodsService {
       where: { id: sellerId },
       select: {
         id: true,
-        ithinkEnabled: true,
-        ithinkPickupAddressId: true,
-        ithinkWarehouseStatus: true,
         selfDeliveryEnabled: true,
         selfDeliveryPincodes: true,
       },
     });
     if (!seller) throw new NotFoundException('Seller not found');
     return {
-      ithinkEnabled:
-        seller.ithinkEnabled && seller.ithinkWarehouseStatus === 'APPROVED',
-      ithinkPending:
-        seller.ithinkEnabled && seller.ithinkWarehouseStatus === 'PENDING',
-      ithinkWarehouseStatus: seller.ithinkWarehouseStatus,
       selfDeliveryEnabled: seller.selfDeliveryEnabled,
       selfDeliveryPincodes: seller.selfDeliveryPincodes,
     };
@@ -74,27 +65,19 @@ export class SellerDeliveryMethodsService {
         deliveryMethod: true,
         fulfillmentStatus: true,
         acceptStatus: true,
-        ithinkAwb: true,
       },
     });
     if (!subOrder) throw new NotFoundException('SubOrder not found');
     if (subOrder.sellerId !== input.sellerId) {
       throw new ForbiddenException('This sub-order is not yours');
     }
-    if (subOrder.ithinkAwb || subOrder.deliveryMethod) {
+    if (subOrder.deliveryMethod) {
       throw new BadRequestException(
         'Delivery method is already set for this sub-order',
       );
     }
 
     const entitlements = await this.getMyEntitlements(input.sellerId);
-    if (input.method === 'ITHINK_LOGISTICS' && !entitlements.ithinkEnabled) {
-      throw new ForbiddenException(
-        entitlements.ithinkPending
-          ? 'iThink warehouse approval is still pending'
-          : 'iThink is not enabled for your account',
-      );
-    }
     if (input.method === 'SELF_DELIVERY' && !entitlements.selfDeliveryEnabled) {
       throw new ForbiddenException('Self-delivery is not enabled for your account');
     }

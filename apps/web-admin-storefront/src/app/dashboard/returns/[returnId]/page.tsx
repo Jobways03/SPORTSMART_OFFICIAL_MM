@@ -12,6 +12,7 @@ import {
   LiabilityParty,
   CustomerRemedy,
 } from '@/services/admin-returns.service';
+import CaseTimeline from '@/components/CaseTimeline';
 
 type QcRow = { returnItemId: string; qcOutcome: QcOutcome; qcQuantityApproved: number; qcNotes: string };
 
@@ -560,7 +561,7 @@ export default function AdminReturnDetailPage() {
   const totalReturnQty = data.items.reduce((s, it) => s + (it.quantity ?? 0), 0);
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1200, background: '#f8fafc', minHeight: 'calc(100vh - 56px)' }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto', background: '#f8fafc', minHeight: 'calc(100vh - 56px)' }}>
       <div style={{ marginBottom: 16 }}>
         <Link href="/dashboard/returns" style={{ color: '#6b7280', fontSize: 13, textDecoration: 'none' }}>
           ← Back to Returns
@@ -980,7 +981,7 @@ export default function AdminReturnDetailPage() {
           as-shipped baseline; compare them against the Customer Evidence
           card (the customer's claim photos) to spot fake "damaged in
           transit" claims at the REQUESTED stage, before paying for a
-          courier pickup. The seller's web-seller portal collects them
+          courier pickup. The seller's portal (web-d2c-seller / web-retail-seller) collects them
           on the order detail page. */}
       {shipmentEvidence.length > 0 && (
         <div style={{ ...cardStyleV2, marginBottom: 20, borderLeft: '4px solid #8b5cf6' }}>
@@ -2392,6 +2393,10 @@ export default function AdminReturnDetailPage() {
               </div>
             </div>
           )}
+
+          <div style={{ marginBottom: 16 }}>
+            <CaseTimeline caseKind="return" caseId={data.id} refreshKey={data.updatedAt} />
+          </div>
 
           {data.statusHistory && data.statusHistory.length > 0 && (
             <div style={cardStyleV2}>

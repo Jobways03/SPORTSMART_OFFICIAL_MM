@@ -25,6 +25,11 @@ export const envSchema = z.object({
   JWT_CUSTOMER_SECRET: z.string().min(32),
   JWT_SELLER_SECRET: z.string().min(32),
   JWT_FRANCHISE_SECRET: z.string().min(32),
+  // Phase 159u (staff-auth) — optional dedicated secret for franchise-STAFF
+  // tokens. Falls back to JWT_FRANCHISE_SECRET when unset (staff tokens stay
+  // isolated by the FRANCHISE_STAFF roles claim + separate session table), so
+  // existing deployments need no new env var to boot.
+  JWT_FRANCHISE_STAFF_SECRET: z.string().min(32).optional(),
   JWT_ADMIN_SECRET: z.string().min(32),
   JWT_AFFILIATE_SECRET: z.string().min(32),
   // App-layer key for encrypting affiliate PAN / Aadhaar / bank
@@ -39,6 +44,10 @@ export const envSchema = z.object({
   // ops can.
   AFFILIATE_ENCRYPTION_KEYS: z.string().optional(),
   AFFILIATE_ENCRYPTION_ACTIVE_VERSION: z.string().optional(),
+  // Phase 154 — gate affiliate payouts on KYC verification (PMLA / RBI).
+  // Default ON (enforced) when unset; product can set 'false' to pause the
+  // gate explicitly. Read via getBoolean('AFFILIATE_KYC_GATE_ENABLED', true).
+  AFFILIATE_KYC_GATE_ENABLED: z.string().optional(),
   // Phase 10 — App-layer key for encrypting admin TOTP secrets at
   // rest. Same 32-byte / AES-256 shape as the affiliate key. Now
   // listed in requiredInProd (PR 10.8) so prod refuses to boot
@@ -46,14 +55,47 @@ export const envSchema = z.object({
   // every MFA-enrolled admin login. Optional in dev/staging so
   // local development without MFA can skip generating a key.
   ADMIN_MFA_ENCRYPTION_KEY: z.string().min(32).optional(),
-  JWT_REFRESH_SECRET: z.string().min(32),
+  // Phase 19 (2026-05-20) — AES-256-GCM key for encrypting seller
+  // payout bank-account numbers at rest. Distinct from the affiliate
+  // key so a leak on one side does not impact the other. Optional in
+  // dev (the bank-details PATCH route returns BANK_DETAILS_UNAVAILABLE
+  // when unset, with a loud log line); required in production.
+  // Generate with `openssl rand -hex 32` (or base64 32).
+  SELLER_BANK_ENCRYPTION_KEY: z.string().min(32).optional(),
+  // Phase 20 (2026-05-20) — same shape, dedicated franchise key so a
+  // leak on one side does not cross-contaminate the other.
+  FRANCHISE_BANK_ENCRYPTION_KEY: z.string().min(32).optional(),
+  // Phase 21 (2026-05-20) — Removed. Refresh tokens are random UUIDs
+  // hashed at rest, not JWTs, so this secret was never consumed. The
+  // env var is kept as optional for back-compat with deploys that
+  // still set it (so bootstrap doesn't fail); new deployments don't
+  // need to set it. Drop entirely after the next major release.
+  JWT_REFRESH_SECRET: z.string().min(32).optional(),
   // Phase 3 (PR 3.3) — tightened from the pre-PR default of '7d'.
   // A stolen access token is now valid for at most 1 hour against
   // a still-active session; renewals go through the (hashed,
   // rotation-on-use) refresh flow from PR 3.2. Operators can still
   // override per-env, subject to the cross-field validation below.
+  // Phase 17 (2026-05-20) — code-side fallback in the use-cases
+  // tightened to '15m'; this env-side default ('1h') is the "schema
+  // safety net" if an operator unsets the env entirely.
   JWT_ACCESS_TTL: z.string().default('1h'),
   JWT_REFRESH_TTL: z.string().default('30d'),
+  // Phase 17 (2026-05-20) — absolute session lifetime cap.
+  //
+  // The refresh-rotation flow extends `expiresAt = now + JWT_REFRESH_TTL`
+  // on every refresh, which makes a daily-active session effectively
+  // immortal. This cap is the absolute ceiling on Session.createdAt
+  // — once a session is older than this, the refresh use-case
+  // refuses the rotation and the user must re-authenticate. Defaults
+  // to 60 days; tighten in high-paranoia deployments.
+  SESSION_ABSOLUTE_LIFETIME_DAYS: z.coerce.number().int().positive().default(60),
+
+  // Cookie domain pinning for auth cookies (admin, seller, franchise,
+  // affiliate, identity login + refresh). Blank in dev — cookies default
+  // to the request host. In prod set to `.sportsmart.com` (with the leading
+  // dot) so the cookie is shared across api., admin., seller.* subdomains.
+  AUTH_COOKIE_DOMAIN: z.string().optional(),
 
   // S3 - optional in dev
   S3_BUCKET: z.string().optional(),
@@ -85,31 +127,10 @@ export const envSchema = z.object({
   // Shiprocket dashboard config; the bearer-token path will be
   // removed in a follow-up release.
   SHIPROCKET_WEBHOOK_HMAC_SECRET: z.string().optional(),
-
-  // iThink Logistics
-  ITHINK_USE_SANDBOX: z
-    .string()
-    .default('true')
-    .transform((v) => v === 'true' || v === '1'),
-  ITHINK_BASE_URL: z.string().default('https://pre-alpha.ithinklogistics.com'),
-  ITHINK_TRACK_URL: z.string().default('https://pre-alpha.ithinklogistics.com'),
-  ITHINK_ACCESS_TOKEN: z.string().optional(),
-  ITHINK_SECRET_KEY: z.string().optional(),
-  ITHINK_DEFAULT_LOGISTICS: z
-    .enum(['delhivery', 'bluedart', 'xpressbees', 'ecom', 'ekart', 'fedex'])
-    .default('delhivery'),
-  ITHINK_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
-  ITHINK_HTTP_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
-  ITHINK_TRACKING_POLL_INTERVAL_MINUTES: z.coerce
-    .number()
-    .int()
-    .min(5)
-    .max(29)
-    .default(25),
-  ITHINK_TRACKING_POLL_ENABLED: z
-    .string()
-    .default('false')
-    .transform((v) => v === 'true' || v === '1'),
+  // Phase 86 (2026-05-23) — Gap #15. Comma-separated IPv4/IPv6 +
+  // CIDR allowlist for Shiprocket webhook source IPs. Unset = pass-
+  // through (HMAC + idempotency remain primary defense).
+  SHIPROCKET_WEBHOOK_IP_ALLOWLIST: z.string().optional(),
 
   // OpenSearch - optional
   OPENSEARCH_NODE: z.string().optional(),
@@ -167,21 +188,56 @@ export const envSchema = z.object({
   SETTLEMENT_CYCLE_PERIOD_DAYS: z.coerce.number().default(7),
   SETTLEMENT_AUTO_CYCLE_INTERVAL_MINUTES: z.coerce.number().default(60),
 
+  // Phase 159r (POS void/return audit #9) — a franchise may self-void a POS
+  // sale only within this many hours of the sale. 0 disables the window.
+  POS_VOID_WINDOW_HOURS: z.coerce.number().default(24),
+
+  // Phase 159s (POS report audit #4) — timezone offset (minutes east of UTC)
+  // used to compute a franchise's "business day" boundaries for daily POS
+  // reports. Default 330 = IST (UTC+5:30). India has no DST so a fixed offset
+  // is correct and avoids server-local-TZ wrong-day bleed.
+  FRANCHISE_REPORT_TZ_OFFSET_MINUTES: z.coerce.number().int().default(330),
+
   // Order acceptance SLA. If a sub-order stays OPEN longer than this,
   // a background job auto-rejects it and triggers re-routing. 0 disables.
   ORDER_ACCEPTANCE_SLA_MINUTES: z.coerce.number().default(60),
   ORDER_ACCEPTANCE_SLA_CHECK_SECONDS: z.coerce.number().default(60),
+  // Phase 80 (2026-05-22) — acceptance audit Gap #10/#11. Per-batch
+  // page size for the unified SLA cron's drain-loop. Defaults to 100
+  // so a single tick processes up to 1000 expired sub-orders across
+  // 10 batches before yielding the lock. Operator can tune down in
+  // dev to verify the drain-loop logic.
+  ORDER_ACCEPTANCE_SLA_BATCH_SIZE: z.coerce.number().default(100),
+  // Phase 82 (2026-05-23) — pack/ship audit Gap #20. Pre-ship
+  // "proof of dispatch" photo threshold. Default 4. Per-tier tuning
+  // (e.g. trusted sellers get 2) is a future ABAC concern; for now
+  // the platform-wide threshold lives here so ops can adjust
+  // without a redeploy.
+  SHIPMENT_EVIDENCE_REQUIRED_PHOTOS: z.coerce.number().default(4),
 
   // Routing engine scoring weights. Must sum to 1.0 — the engine
   // normalises if they don't, but round-number thirds are cleaner.
   ROUTING_DISTANCE_WEIGHT: z.coerce.number().default(0.7),
   ROUTING_STOCK_WEIGHT: z.coerce.number().default(0.2),
   ROUTING_SLA_WEIGHT: z.coerce.number().default(0.1),
+  // Phase 159m — weight of an admin pincode→franchise territory priority.
+  ROUTING_PINCODE_PRIORITY_WEIGHT: z.coerce.number().default(0.5),
 
   // Refund poller + auto-retry. Polls Razorpay for pending refund status
   // and retries failed gateway calls on a schedule. 0 disables.
   REFUND_POLL_INTERVAL_SECONDS: z.coerce.number().default(120),
   REFUND_RETRY_BACKOFF_MINUTES: z.coerce.number().default(15),
+  // Phase 101 (2026-05-23) — Refund Retry audit Gap #6 closure.
+  // Cap was hardcoded in two places (service const + cron query)
+  // pre-Phase-101. Single env var keeps the two in sync.
+  REFUND_MAX_RETRY_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  // Phase 100 (2026-05-23) — Phase 98 audit Gap #3 polling fallback.
+  REFUND_STATUS_POLLER_ENABLED: z.string().default('true'),
+  REFUND_STATUS_POLLER_MIN_AGE_MIN: z.coerce.number().default(15),
+  // Phase 96 (2026-05-23) — Mark Received QC task SLA.
+  RETURN_QC_PENDING_SLA_HOURS: z.coerce.number().default(48),
+  // Phase 95 (2026-05-23) — Phase 93 evidence allowlist (comma list).
+  RETURN_EVIDENCE_ALLOWED_HOSTS: z.string().optional(),
 
   // Stale-return auto-close. Returns stuck in non-terminal states
   // beyond this many days are escalated or auto-closed.
@@ -197,6 +253,19 @@ export const envSchema = z.object({
   // to rate-limit per client IP). 0 = don't trust X-Forwarded-For (dev).
   // 1 = trust one hop (typical: ALB / nginx in front). Higher if chained.
   TRUST_PROXY_HOPS: z.coerce.number().default(0),
+
+  // ── Phase 16 (2026-05-20) — Captcha / bot protection ────────────────
+  // Provider for the captcha verifier service used on customer
+  // register / verify-otp / resend-otp endpoints. Local development
+  // uses 'disabled' so devs can sign up without standing up a captcha
+  // provider; production MUST be 'turnstile' or 'hcaptcha'.
+  CAPTCHA_PROVIDER: z
+    .enum(['disabled', 'turnstile', 'hcaptcha'])
+    .default('disabled'),
+  // Secret key from the captcha provider (paired with the public site
+  // key embedded in the frontend). Required when CAPTCHA_PROVIDER is
+  // 'turnstile' or 'hcaptcha'.
+  CAPTCHA_SECRET: z.string().optional(),
 
   // ── Phase 1.1 — Idempotency (ADR-003) ──────────────────────────────
   // Endpoints decorated with @Idempotent() require X-Idempotency-Key
@@ -226,9 +295,11 @@ export const envSchema = z.object({
   // When ON, return/dispute/ticket creation paths run a duplicate-active
   // check and reject with a 409 problem-type if a matching active case
   // already exists. Each rejection is logged to `case_duplicates`.
-  // OFF (default) preserves today's behaviour — duplicates land silently
-  // and are caught only by status-history audits later.
-  CASE_DUPLICATE_PREVENTION_ENABLED: z.string().default('false'),
+  // Defaults ON (correct-by-default): a customer/seller cannot open a
+  // second active dispute for the same return or order+kind. Operators
+  // that need the old silent-duplicate behaviour can opt out by setting
+  // CASE_DUPLICATE_PREVENTION_ENABLED=false explicitly.
+  CASE_DUPLICATE_PREVENTION_ENABLED: z.string().default('true'),
 
   // ── Phase 1.4 — Money paise dual-write (ADR-007) ─────────────────────
   // When ON, MoneyDualWriteHelper.applyPaise(...) augments write
@@ -294,6 +365,31 @@ export const envSchema = z.object({
   // When 'true', GOODWILL_CREDIT remedies always queue regardless of
   // amount — finance signs off on every non-recoverable platform hit.
   REFUND_GOODWILL_REQUIRES_APPROVAL: z.string().default('true'),
+  // Phase 125 — dual-approval (two-person rule). Refunds whose amount is
+  // at/above this threshold (in paise) require TWO distinct finance
+  // approvers: the first approval is recorded and the instruction stays
+  // PENDING_APPROVAL until a second, different admin approves. Default
+  // ₹1,00,000. Set very high to effectively disable dual approval.
+  REFUND_DUAL_APPROVAL_THRESHOLD_PAISE: z.coerce.number().default(10_000_000),
+
+  // Phase 126 — dispute-decision settlement recovery sweep. decide()
+  // mints the customer's RefundInstruction AFTER its atomic status+outbox
+  // txn; a crash in that window strands the refund. This sweep re-mints
+  // missing instructions for decided disputes (idempotent). LOOKBACK
+  // bounds the scan window in minutes (default 24h).
+  DISPUTE_REFUND_RECOVERY_SWEEP_ENABLED: z.string().default('true'),
+  DISPUTE_REFUND_RECOVERY_LOOKBACK_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(1440),
+
+  // Phase 134 — dispute decisions awarding at/above this amount (paise) require
+  // the `disputes.decide.high_value` permission (runtime, soak-aware check on
+  // POST /admin/disputes/:id/decide). Default ₹50,000.
+  DISPUTE_HIGH_VALUE_DECISION_THRESHOLD_PAISE: z.coerce
+    .number()
+    .default(5_000_000),
 
   // Phase 13 (P1.8) — return seller-response sweeper. Cron flips
   // PENDING → EXPIRED past sellerResponseDueAt. Default 'true' since
@@ -343,6 +439,11 @@ export const envSchema = z.object({
   // /admin/inventory/alerts/sweep endpoint in isolation; left on by
   // default because the steady-state correctness path needs it.
   LOW_STOCK_SWEEP_CRON_ENABLED: z.string().default('true'),
+  // Phase 54 (2026-05-21) — sweep batch size. Pre-Phase-54 the
+  // service hardcoded `take: 50_000` which silently truncated at
+  // marketplace scale (audit Gap #5). Cursor-paginated now; the
+  // env knob lets ops tune for memory + DB load without a deploy.
+  LOW_STOCK_SWEEP_BATCH_SIZE: z.coerce.number().default(1000),
 
   // Sprint 6 Story 5.1 — delegate /search/products to OpenSearch when
   // ON. Default OFF so the proven Prisma path keeps running until ops
@@ -389,6 +490,17 @@ export const envSchema = z.object({
   // alert-only — does NOT auto-delete. Default ON; flip false only for
   // local dev when the registry is in flux.
   RBAC_ORPHAN_SWEEP_ENABLED: z.string().default('true'),
+  // Phase 25 (2026-05-20) — MFA pending-secret sweep cron (every 15 min).
+  // Clears mfa_pending_secret_ciphertext rows past their stamped
+  // mfa_pending_expires_at so abandoned enrolments don't leave a
+  // recoverable secret indefinitely. Read-only on rows past their
+  // declared TTL — safe-by-construction.
+  MFA_PENDING_SWEEP_ENABLED: z.string().default('true'),
+  // Phase 27 (2026-05-21) — daily sweep of session rows where
+  // revokedAt is older than 90 days. Active sessions are never
+  // touched. The unified AuditLog retains the revoke event in full;
+  // the session row past 90 days is just disk + index bloat.
+  SESSION_REVOKED_SWEEP_ENABLED: z.string().default('true'),
   // Phase 4 (PR 4.3) — ABAC resource-policy evaluator runs after
   // PermissionsGuard. Off by default; flips on with PR 4.5.
   ABAC_ENABLED: z.string().default('false'),
@@ -399,9 +511,12 @@ export const envSchema = z.object({
   AUTHZ_AUDIT_ENABLED: z.string().default('true'),
 
   // Phase 5 (PR 5.4) — minimum number of evidence images required at
-  // QC submission. 0 = off (legacy behaviour). Set to 2 once the QC
-  // tooling reliably uploads multi-angle shots for every inspection.
-  RETURN_QC_MIN_EVIDENCE: z.coerce.number().int().min(0).default(0),
+  // QC submission. 0 = off (legacy behaviour); 2 = at least two photos
+  // per inspection. Phase 0 (Gap audit) bumped the default to 2 so a
+  // QC decision can never be submitted with zero photos — that was a
+  // dispute-liability black hole. Set via env to override per
+  // environment (e.g. 0 in dev seeds, 2 in staging/prod).
+  RETURN_QC_MIN_EVIDENCE: z.coerce.number().int().min(0).default(2),
   // Phase 5 (PR 5.4) — restocking-fee rate in basis points (1bps = 0.01%).
   // Applied only to "buyer-fault" reasons (CHANGED_MIND, SIZE_FIT_ISSUE).
   // 0 = off (no fee deducted from refund). 1000 = 10%.
@@ -428,6 +543,18 @@ export const envSchema = z.object({
   // investigation, etc.). Interval also tunable.
   COMMISSION_PROCESSOR_ENABLED: z.string().default('true'),
   COMMISSION_PROCESSOR_INTERVAL_MS: z.coerce.number().default(15_000),
+  // Phase 159d — affiliate return-window confirm cron. Emergency-pause flag +
+  // tunable interval, parity with the seller commission processor above.
+  AFFILIATE_RETURN_WINDOW_CRON_ENABLED: z.string().default('true'),
+  AFFILIATE_RETURN_WINDOW_CRON_INTERVAL_MS: z.coerce.number().default(60_000),
+  // Phase 135 — max sub-orders processed per tick. Caps the scan + the
+  // per-tick work so a large backlog drains across ticks instead of loading
+  // everything (+ nested includes) into one query.
+  COMMISSION_PROCESSOR_BATCH_SIZE: z.coerce.number().int().min(1).default(200),
+  // Phase 135 — bounded concurrency for the per-tick sub-order loop. Each
+  // sub-order is an independent atomic-claimed transaction; the cap bounds
+  // DB-connection pressure.
+  COMMISSION_PROCESSOR_CONCURRENCY: z.coerce.number().int().min(1).default(5),
 
   // Phase 3.8 (2026-05-16) — Double-entry invariant validator.
   // Daily cron at 04:00 IST sums the day's wallet + payout + refund
@@ -442,6 +569,104 @@ export const envSchema = z.object({
   // checkouts permanently block stock from being resold.
   RESERVATION_EXPIRY_SWEEP_ENABLED: z.string().default('true'),
   RESERVATION_EXPIRY_BATCH_SIZE: z.coerce.number().default(500),
+
+  // Phase 61 (2026-05-22) — cart abandonment sweep (audit Gap #12).
+  // Daily 03:00 UTC, leader-elected. Deletes Cart rows whose
+  // updatedAt is older than CART_ABANDONMENT_CUTOFF_DAYS. The
+  // cart_items FK is ON DELETE CASCADE so child rows go with the
+  // parent.
+  CART_ABANDONMENT_SWEEP_ENABLED: z.string().default('true'),
+  CART_ABANDONMENT_CUTOFF_DAYS: z.coerce.number().default(90),
+
+  // Phase 62 (2026-05-22) — coupon application hardening.
+  //   AFFILIATE_COMMISSION_CAP_PER_ORDER (in paise) is the upper
+  //     bound on a single AffiliateCommission row (audit Gap #14).
+  //     Default 100,000 paise = ₹1000 per order so a colluding
+  //     fraud pair can't bank arbitrary commissions on a fake
+  //     order. 0 disables the cap.
+  //   COUPON_ATTEMPT_IP_HASH_SALT — salt applied to IP addresses
+  //     before SHA-256 digesting (audit Gap #21). Rotated quarterly
+  //     by ops; old digests stay queryable for the 30-day cleanup
+  //     window. Must be at least 16 chars.
+  AFFILIATE_COMMISSION_CAP_PER_ORDER: z.coerce.number().default(100_000),
+  COUPON_ATTEMPT_IP_HASH_SALT: z.string().min(16).default(
+    'sportsmart-coupon-attempt-salt-2026-05-rotate-quarterly',
+  ),
+
+  // Phase 64 (2026-05-22) — serviceability hardening.
+  //   ROUTING_MAX_DISTANCE_KM is the upper bound on the customer-
+  //   to-seller Haversine distance for an eligibility match (audit
+  //   Gap #8). Pre-Phase-64 a Chennai customer could be routed to
+  //   a 2500km Punjab seller with one unit of stock; the allocator
+  //   now filters out candidates beyond this cap. Default 1500 km
+  //   covers the longest realistic single-leg domestic shipment
+  //   without enabling cross-country mis-routes. 0 disables the
+  //   cap for back-compat.
+  ROUTING_MAX_DISTANCE_KM: z.coerce.number().default(1500),
+
+  // Phase 66 (2026-05-22) — payment intent hardening.
+  //   PAYMENT_EXPIRY_SWEEP_ENABLED (audit Gap #18) gates the cron
+  //     that flips PENDING_PAYMENT orders past their
+  //     paymentExpiresAt to CANCELLED + paymentStatus=EXPIRED.
+  //   ALLOW_ONLINE_PAYMENTS (audit Gap #12) lets ops disable
+  //     online payments cleanly without removing the Razorpay
+  //     config. /checkout/summary returns the flag so the UI can
+  //     hide the ONLINE option without guessing.
+  PAYMENT_EXPIRY_SWEEP_ENABLED: z.string().default('true'),
+  ALLOW_ONLINE_PAYMENTS: z.string().default('true'),
+
+  // Phase 69 (2026-05-22) — Phase 67 audit Gaps #1 + #5. The
+  // OrderFinalizationRecoveryCron retries tax-snapshot creation
+  // for orders whose post-tx work never finished (finalizedAt IS
+  // NULL). All three tunables are env-driven so ops can pause
+  // recovery temporarily or shorten the alert threshold in
+  // incident response.
+  ORDER_FINALIZATION_RECOVERY_ENABLED: z.string().default('true'),
+  ORDER_FINALIZATION_GRACE_MINUTES: z.coerce.number().int().min(1).default(10),
+  ORDER_FINALIZATION_ALERT_MINUTES: z.coerce.number().int().min(1).default(60),
+  ORDER_FINALIZATION_BATCH_LIMIT: z.coerce.number().int().min(1).max(5000).default(500),
+
+  // Phase 70 (2026-05-22) — Phase 66 audit Gap #8. Wallet refund
+  // saga retry cron tunables.
+  WALLET_REFUND_SAGA_ENABLED: z.string().default('true'),
+  WALLET_REFUND_SAGA_BATCH_LIMIT: z.coerce.number().int().min(1).max(1000).default(100),
+  WALLET_REFUND_SAGA_COOLDOWN_MINUTES: z.coerce.number().int().min(1).default(5),
+
+  // Phase 70 (2026-05-22) — Phase 66 audit Gap #19 (wallet flow).
+  // Env-tunable single-topup cap (paise). Default ₹1,00,000 mirrors
+  // the legacy hard-coded value.
+  WALLET_MAX_TOPUP_PAISE: z.coerce.number().int().min(100).default(10_000_000),
+
+  // Phase 68 (2026-05-22) — verification queue claim TTL (audit Gap
+  // #16). The number of minutes a claim is held before the next
+  // claim-next call can re-claim the order. Default 15 matches the
+  // legacy hardcoded value; teams in different shift patterns can
+  // tune without redeploying code.
+  VERIFICATION_CLAIM_TTL_MINUTES: z.coerce.number().int().min(1).default(15),
+
+  // Phase 73 (2026-05-22) — claim-flow audit Gap #4 + #7.
+  //   VERIFICATION_MAX_CLAIMS_PER_VERIFIER  default 10 — cap on
+  //     live claims per admin (prevents mass-claim queue DoS).
+  //   VERIFICATION_CLAIM_EXPIRY_ENABLED      default true — gates
+  //     the auto-release cron; ops can pause during incident
+  //     response.
+  //   VERIFICATION_CLAIM_EXPIRY_BATCH_LIMIT  default 500 — per-
+  //     tick row cap so a stuck-state backlog can't blow up one
+  //     cron run.
+  VERIFICATION_MAX_CLAIMS_PER_VERIFIER: z.coerce.number().int().min(1).default(10),
+
+  // Phase 76 (2026-05-22) — bulk-approve-green ceiling. Default 25
+  // mirrors legacy behaviour; service-side absolute ceiling of 50
+  // caps any env typo.
+  VERIFICATION_BULK_APPROVE_MAX: z.coerce.number().int().min(1).max(50).default(25),
+  VERIFICATION_CLAIM_EXPIRY_ENABLED: z.string().default('true'),
+  VERIFICATION_CLAIM_EXPIRY_BATCH_LIMIT: z.coerce.number().int().min(1).max(5000).default(500),
+
+  // Phase 68 (audit Gap #13) — verification SLA window. New orders
+  // get verification_deadline_at = NOW() + this many minutes at
+  // place-order time. Default 60 (= 1h) matches the pre-Phase-68
+  // queue-stats proxy threshold.
+  VERIFICATION_SLA_MINUTES: z.coerce.number().int().min(1).default(60),
 
   // Phase 10 (2026-05-16) — stuck-job detector cron. Sweeps known
   // transient cohorts (tax_documents in PDF_PENDING, einvoice PENDING,
@@ -513,12 +738,6 @@ export const envSchema = z.object({
   // inbox means alerts survive admin departures without code changes.
   ADMIN_ESCALATION_EMAIL: z.string().optional(),
 
-  // Phase 5.2 (2026-05-16) — iThink webhook signature secret. Pre-shared
-  // HMAC secret used to verify the X-Ithink-Signature header on any
-  // inbound webhook from iThink. Empty means signature verification is
-  // SKIPPED (dev mode only). Required in production.
-  ITHINK_WEBHOOK_SECRET: z.string().optional(),
-
   // Phase 5.5 (2026-05-16) — Support SLA business-hours mode.
   // When 'true', SLA timers pause outside 09:00-19:00 IST on weekdays
   // and pause entirely on Saturday + Sunday. Default 'false' preserves
@@ -526,6 +745,19 @@ export const envSchema = z.object({
   SUPPORT_SLA_BUSINESS_HOURS_ENABLED: z.string().default('false'),
   SUPPORT_SLA_BUSINESS_HOUR_START: z.coerce.number().min(0).max(23).default(9),
   SUPPORT_SLA_BUSINESS_HOUR_END: z.coerce.number().min(1).max(24).default(19),
+  // Phase 120 — SLA-breach sweep. Set false to pause auto-escalation of
+  // tickets that blew their slaTargetAt.
+  SUPPORT_SLA_SWEEP_ENABLED: z.string().default('true'),
+  // Phase 122 — a non-admin reply reopens a RESOLVED ticket; past this many
+  // days since resolution, force a new ticket instead. 0 disables the window.
+  SUPPORT_REOPEN_WINDOW_DAYS: z.coerce.number().int().min(0).default(30),
+  // Phase 124 — forward-mirror reliability sweep (ticket reply → dispute).
+  SUPPORT_MIRROR_SWEEP_ENABLED: z.string().default('true'),
+  SUPPORT_MIRROR_SWEEP_LOOKBACK_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(10)
+    .default(120),
 
   // Phase 5.5 (2026-05-16) — Auto-assignment for new support tickets.
   // Round-robin across on-shift agents (admins with permission
@@ -547,6 +779,12 @@ export const envSchema = z.object({
   // FAIL-and-escalated. Default 5 min — Razorpay's hard refund
   // timeout is 30s, leaving 9.5× headroom for the longest legit run.
   REFUND_SAGA_STUCK_MINUTES: z.coerce.number().int().min(1).default(5),
+  // Phase 116 — stuck PENDING_APPROVAL sweep. Set false to pause the
+  // escalation cron during an ops incident.
+  REFUND_PENDING_APPROVAL_SWEEP_ENABLED: z.string().default('true'),
+  // RefundInstruction rows left in PENDING_APPROVAL longer than this many
+  // hours raise an AdminTask so finance is paged. Default 48h.
+  REFUND_PENDING_APPROVAL_STUCK_HOURS: z.coerce.number().int().min(1).default(48),
 
   // Phase 1 (PR 1.8) — Franchise reservation cleanup cron. ON by
   // default so a crash-mid-checkout doesn't strand franchise stock
@@ -600,6 +838,17 @@ export const envSchema = z.object({
   // 'stub' in dev/test so engineers can exercise the ship-block + retry
   // UI without NIC credentials.
   EWAY_BILL_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+  // Phase 89 (2026-05-23) — NIC e-Waybill API credentials. All
+  // optional at the env layer (dev uses stub), but the NIC adapter's
+  // constructor throws if any are missing when EWAY_BILL_PROVIDER=nic
+  // — so a misconfigured prod deploy crashes at boot rather than
+  // silently falling back to the stub.
+  NIC_API_BASE_URL: z.string().optional(),
+  NIC_GSP_USERNAME: z.string().optional(),
+  NIC_GSP_PASSWORD: z.string().optional(),
+  NIC_GSP_CLIENT_ID: z.string().optional(),
+  NIC_GSP_CLIENT_SECRET: z.string().optional(),
+  NIC_TAXPAYER_GSTIN: z.string().optional(),
 
   // Phase 19 GST — tax-document PDF storage provider. 'stub' writes
   // rendered HTML to `apps/api/storage/tax-pdfs/...` so dev can open
@@ -638,6 +887,22 @@ export const envSchema = z.object({
   // 'nic' wires the real CBIC IRP API (crashes loudly until wired
   // — see TaxModule factory).
   EINVOICE_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+  // Phase 90 (2026-05-23) — NIC IRP credentials. All optional at
+  // env layer (dev uses stub). The NIC adapter's constructor throws
+  // if any are missing when EINVOICE_PROVIDER=nic, so a misconfigured
+  // prod deploy crashes at boot rather than silently falling back.
+  NIC_IRP_BASE_URL: z.string().optional(),
+  NIC_IRP_GSP_USERNAME: z.string().optional(),
+  NIC_IRP_GSP_PASSWORD: z.string().optional(),
+  NIC_IRP_GSP_CLIENT_ID: z.string().optional(),
+  NIC_IRP_GSP_CLIENT_SECRET: z.string().optional(),
+  NIC_IRP_TAXPAYER_GSTIN: z.string().optional(),
+  // Phase 35 GST — GSTN portal verification provider. `stub` derives
+  // the result from the local Mod-36 checksum so dev / staging can
+  // exercise the verification UI without GSTN credentials. `sandbox`
+  // is reserved for the real GSTN sandbox API (crashes loudly at
+  // boot until wired — see TaxModule factory).
+  GSTN_PROVIDER: z.enum(['stub', 'sandbox']).default('stub'),
   // Phase 22 GST — IRN retry cron flags.
   TAX_EINVOICE_RETRY_CRON_ENABLED: z.string().default('true'),
   TAX_EINVOICE_RETRY_CAP: z.coerce.number().int().min(1).default(5),
@@ -960,6 +1225,13 @@ export const envSchema = z.object({
     // as a 500 on the first MFA-required login attempt in prod.
     'ADMIN_MFA_ENCRYPTION_KEY',
   ];
+  // NOTE: `SELLER_BANK_ENCRYPTION_KEY` (Phase 19, 2026-05-20) is
+  // documented in .env.example as required for prod, but is NOT
+  // listed above. `SellerBankDetailsService` refuses writes at
+  // request time with `BANK_DETAILS_UNAVAILABLE` when the key is
+  // unset — that is a sufficient runtime gate without forcing a
+  // boot-time failure that would cascade through the prod-env test
+  // matrix.
   for (const key of requiredInProd) {
     const value = env[key];
     if (value === undefined || value === null || String(value).trim() === '') {
@@ -1060,6 +1332,16 @@ export const envSchema = z.object({
       key: 'MONEY_DUAL_WRITE_ENABLED',
       reason:
         'PR 7.1 — ADR-007 paise migration step 2 (dual-write base camp). MoneyDualWriteHelper.applyPaise computes the paise sibling for every Decimal money column on write and persists both in the same transaction. Off in prod, new writes drift away from the paise siblings going forward, and the step-3 backfill has to be re-run repeatedly to catch up — by the time step 4 (read-switch) lands, the only defensible posture is "every prod write has been dual-writing for the full retention window of any rows the read-switch will touch." Per-call-site wiring is a separate rollout; this gate only forces the apparatus on.',
+    },
+    {
+      key: 'PERMISSIONS_GUARD_STRICT',
+      reason:
+        'Phase 0 (Gap audit) — PermissionsGuard.STRICT forces the guard to throw (fail-closed) when a controller route is decorated with @Permissions(...) but the resolver cannot evaluate the admin\'s effective permission set (DB unreachable, role row missing, cache cold). Off / non-strict, the guard degrades-open: a transient permission-resolver failure lets the request through, masking config drift and turning a permission misconfiguration into a silent missing-check. Schema default is already \'true\'; this gate makes the production boot refuse if it gets flipped off.',
+    },
+    {
+      key: 'RBAC_ORPHAN_SWEEP_ENABLED',
+      reason:
+        'Phase 24 (RBAC audit) — RbacOrphanSweepCron is the only daily detector that catches drift between code-side ALL_PERMISSION_KEYS and DB-side admin_custom_role_permissions.permissionKey. When a permission key is renamed in code, the cron emits rbac.orphan_permission_detected so ops can rename the DB rows or restore the code key. Off in prod, custom roles silently grant permissions that no controller checks — the role looks correct but PermissionsGuard never matches the orphan key. The sweep is read-only with no money-moving side effects, so the boot-gate has no operational cost.',
     },
   ];
   for (const { key, reason } of requiredOnInProd) {

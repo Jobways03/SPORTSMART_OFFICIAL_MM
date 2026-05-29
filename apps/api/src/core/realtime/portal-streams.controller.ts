@@ -15,6 +15,7 @@ import {
   PermissionsGuard,
   SellerAuthGuard,
 } from '../guards';
+import { Permissions } from '../decorators/permissions.decorator';
 import { PortalPushService } from './portal-push.service';
 
 /**
@@ -47,6 +48,7 @@ export class PortalStreamsController {
 
   @Get('admin-queue')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
+  @Permissions('audit.read')
   async adminQueue(@Req() req: Request, @Res() res: Response): Promise<void> {
     this.openSse(res);
     const teardown = this.push.register({

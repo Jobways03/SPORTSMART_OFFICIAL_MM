@@ -12,7 +12,8 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { FranchiseAuthGuard } from '../../../../core/guards';
+import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { ProcurementService } from '../../application/services/procurement.service';
 import { ProcurementCreateDto } from '../dtos/procurement-create.dto';
 import { ProcurementReceiptDto } from '../dtos/procurement-receipt.dto';
@@ -75,7 +76,10 @@ function scrubPlatformBreakdown<T extends Record<string, any>>(request: T): T {
 
 @ApiTags('Franchise Procurement')
 @Controller('franchise/procurement')
-@UseGuards(FranchiseAuthGuard)
+// Phase 159p (audit #6) — procurement is a business action, so it requires an
+// ACTIVE (⟹ VERIFIED) franchise, matching the catalog/inventory surfaces. A
+// PENDING/INACTIVE franchise can no longer create, submit, or receive requests.
+@UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
 export class FranchiseProcurementController {
   constructor(private readonly procurementService: ProcurementService) {}
 
@@ -189,18 +193,33 @@ export class FranchiseProcurementController {
     };
   }
 
+  /**
+   * Phase 55 (2026-05-21) — receipt with idempotency + actor.
+   * @Idempotent supports an `X-Idempotency-Key` header that cached
+   * the response (24h Redis dedup); combined with the service's
+   * delta-based idempotency it gives two-layer protection against
+   * duplicate-stock-add on retried POSTs (audit Gaps #1 + #13).
+   *
+   * actorId is the franchiseUserId when multi-user franchises land;
+   * today it falls back to franchiseId so the ledger row at least
+   * attributes to the org rather than 'SYSTEM' (audit Gap #2).
+   */
   @Post(':id/receive')
   @HttpCode(HttpStatus.OK)
+  @Idempotent()
   async confirmReceipt(
     @Req() req: Request,
     @Param('id') id: string,
     @Body() dto: ProcurementReceiptDto,
   ) {
     const franchiseId = (req as any).franchiseId;
+    const franchiseUserId =
+      (req as any).franchiseUserId ?? (req as any).franchiseId;
     const data = await this.procurementService.confirmReceipt(
       franchiseId,
       id,
       dto.items,
+      franchiseUserId,
     );
 
     return {

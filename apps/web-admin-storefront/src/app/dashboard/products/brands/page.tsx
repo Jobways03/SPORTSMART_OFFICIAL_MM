@@ -31,7 +31,7 @@ export default function BrandsPage() {
           setTotalPages(res.data.pagination?.totalPages || 1);
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, []);
 

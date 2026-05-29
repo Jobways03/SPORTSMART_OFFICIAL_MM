@@ -10,7 +10,12 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  RequiresStepUp,
+  StepUpGuard,
+} from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PaymentsPublicFacade } from '../../application/facades/payments-public.facade';
@@ -29,7 +34,10 @@ class MarkOrderPaidDto {
 
 @ApiTags('Admin Payments')
 @Controller('admin/payments')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+// Phase 26 (2026-05-20) — StepUpGuard added so methods that opt in via
+// @RequiresStepUp are gated. Read endpoints are not annotated; only the
+// money-moving mark-paid is.
+@UseGuards(AdminAuthGuard, PermissionsGuard, StepUpGuard)
 export class AdminPaymentsController {
   constructor(private readonly paymentsFacade: PaymentsPublicFacade) {}
 
@@ -41,6 +49,10 @@ export class AdminPaymentsController {
   @Patch('orders/:masterOrderId/mark-paid')
   @Idempotent()
   @Permissions('paymentOps.transition')
+  // Phase 26 (2026-05-20) — Money-state transition with no automatic
+  // rollback path. Tight 1-min window so a stolen-cookie attacker
+  // cannot pile up mark-paid calls on a long-running elevated session.
+  @RequiresStepUp({ maxAgeMs: 60_000 })
   async markPaid(
     @Req() req: Request,
     @Param('masterOrderId') masterOrderId: string,

@@ -11,10 +11,11 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
+import { ProductPricingTierService } from '../../../application/services/product-pricing-tier.service';
 import {
-  PricingTierWriteInput,
-  ProductPricingTierService,
-} from '../../../application/services/product-pricing-tier.service';
+  CreatePricingTierDto,
+  UpdatePricingTierDto,
+} from '../../dtos/pricing-tier.dto';
 
 @ApiTags('Admin - Product Pricing Tiers')
 @Controller({ path: 'admin/products', version: '1' })
@@ -36,9 +37,9 @@ export class AdminProductPricingTiersController {
   @Permissions('catalog.write')
   async create(
     @Param('productId') productId: string,
-    @Body() body: PricingTierWriteInput,
+    @Body() dto: CreatePricingTierDto,
   ) {
-    const data = await this.service.create(productId, body);
+    const data = await this.service.create(productId, dto);
     return { success: true, message: 'Pricing tier created', data };
   }
 
@@ -47,9 +48,9 @@ export class AdminProductPricingTiersController {
   async update(
     @Param('productId') _productId: string,
     @Param('tierId') tierId: string,
-    @Body() body: Partial<PricingTierWriteInput>,
+    @Body() dto: UpdatePricingTierDto,
   ) {
-    const data = await this.service.update(tierId, body);
+    const data = await this.service.update(tierId, dto);
     return { success: true, message: 'Pricing tier updated', data };
   }
 

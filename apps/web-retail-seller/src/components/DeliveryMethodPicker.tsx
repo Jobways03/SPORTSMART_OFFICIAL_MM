@@ -1,0 +1,196 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+
+import {
+  sellerDeliveryMethodsService,
+  type DeliveryMethod,
+  type SellerDeliveryEntitlements,
+} from '@/services/delivery-methods.service';
+
+/**
+ * Inline picker rendered on a SubOrder accept screen. Asks the seller
+ * which delivery method to use, gated by their admin-controlled
+ * entitlements. Disables (with explanation) the method if the admin
+ * hasn't enabled it, and hides itself entirely if it isn't available.
+ *
+ * On confirm, calls the backend to lock in the choice. The caller
+ * gets the updated SubOrder via the onChosen callback so it can
+ * refresh the order display.
+ */
+export interface DeliveryMethodPickerProps {
+  subOrderId: string;
+  onChosen?: (method: DeliveryMethod) => void;
+  /** Optionally override the entitlements load (e.g., for tests). */
+  initialEntitlements?: SellerDeliveryEntitlements | null;
+  compact?: boolean;
+}
+
+export function DeliveryMethodPicker({
+  subOrderId,
+  onChosen,
+  initialEntitlements,
+  compact,
+}: DeliveryMethodPickerProps) {
+  const [entitlements, setEntitlements] = useState<SellerDeliveryEntitlements | null>(
+    initialEntitlements ?? null,
+  );
+  const [loading, setLoading] = useState(!initialEntitlements);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialEntitlements) return;
+    sellerDeliveryMethodsService
+      .getEntitlements()
+      .then((res) => {
+        if (res.data) setEntitlements(res.data);
+        else setError(res.message ?? 'Unable to load delivery methods');
+      })
+      .catch((e) => setError(String(e?.message ?? e)))
+      .finally(() => setLoading(false));
+  }, [initialEntitlements]);
+
+  const handleChoose = async (method: DeliveryMethod) => {
+    if (!method) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await sellerDeliveryMethodsService.chooseMethod(subOrderId, method);
+      if (res.data) {
+        onChosen?.(res.data.deliveryMethod);
+      } else {
+        setError(res.message ?? 'Could not save delivery method');
+      }
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return <div style={{ color: '#6b7280', fontSize: 13 }}>Loading delivery options…</div>;
+  }
+
+  if (!entitlements || !entitlements.selfDeliveryEnabled) {
+    return (
+      <div
+        style={{
+          background: '#fef3c7',
+          border: '1px solid #fde68a',
+          padding: 12,
+          borderRadius: 8,
+          fontSize: 13,
+          color: '#92400e',
+        }}
+      >
+        Your admin has not enabled any delivery method yet. Contact support to get
+        Self Delivery turned on for your account.
+      </div>
+    );
+  }
+
+  const containerStyle: React.CSSProperties = compact
+    ? { display: 'flex', gap: 10 }
+    : { display: 'grid', gridTemplateColumns: '1fr', gap: 12 };
+
+  return (
+    <div>
+      <div style={containerStyle}>
+        <Option
+          label="Self Delivery"
+          description="You deliver to the customer yourself. Update the status manually as you progress."
+          icon="\u{1F3EC}"
+          enabled={entitlements.selfDeliveryEnabled}
+          disabledReason="Self delivery is not enabled for your account"
+          loading={submitting}
+          onClick={() => handleChoose('SELF_DELIVERY')}
+        />
+      </div>
+
+      {error && (
+        <div
+          style={{
+            marginTop: 10,
+            color: '#b91c1c',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            padding: '6px 10px',
+            borderRadius: 6,
+            fontSize: 12,
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Option({
+  label,
+  description,
+  icon,
+  enabled,
+  pending,
+  disabledReason,
+  loading,
+  onClick,
+}: {
+  label: string;
+  description: string;
+  icon: string;
+  enabled: boolean;
+  pending?: boolean;
+  disabledReason: string;
+  loading: boolean;
+  onClick: () => void;
+}) {
+  const disabled = !enabled || loading;
+  return (
+    <button
+      type="button"
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={!enabled ? disabledReason : undefined}
+      style={{
+        textAlign: 'left',
+        background: enabled ? '#fff' : '#f9fafb',
+        border: `2px solid ${enabled ? '#bfdbfe' : '#e5e7eb'}`,
+        borderRadius: 10,
+        padding: '14px 16px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
+        transition: 'border 0.15s, box-shadow 0.15s',
+        boxShadow: enabled ? '0 1px 2px rgba(0,0,0,0.04)' : 'none',
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.style.borderColor = '#2563eb';
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled) e.currentTarget.style.borderColor = '#bfdbfe';
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ fontSize: 18 }} aria-hidden="true">{icon}</span>
+        <strong style={{ fontSize: 14 }}>{label}</strong>
+        {pending && (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              padding: '1px 8px',
+              borderRadius: 999,
+              background: '#fef3c7',
+              color: '#92400e',
+            }}
+          >
+            PENDING APPROVAL
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.4 }}>{description}</div>
+    </button>
+  );
+}

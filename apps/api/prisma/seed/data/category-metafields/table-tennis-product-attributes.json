@@ -1,0 +1,574 @@
+{
+  "table-tennis-bats": [
+    {
+      "key": "bat_type",
+      "name": "Bat Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "pre_assembled", "label": "Pre-Assembled (Ready to Play)" },
+        { "value": "custom_blade_only", "label": "Custom Blade Only" }
+      ]
+    },
+    {
+      "key": "playing_style",
+      "name": "Playing Style",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "offensive", "label": "Offensive (Attack)" },
+        { "value": "all_round", "label": "All-Round" },
+        { "value": "defensive", "label": "Defensive (Chop / Block)" }
+      ]
+    },
+    {
+      "key": "grip_type",
+      "name": "Grip Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "flared", "label": "Flared (FL)" },
+        { "value": "straight", "label": "Straight (ST)" },
+        { "value": "anatomic", "label": "Anatomic (AN)" },
+        { "value": "penhold", "label": "Penhold (CS / JP)" }
+      ]
+    },
+    {
+      "key": "speed_rating",
+      "name": "Speed Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "description": "Manufacturer speed rating on a typical 1–10 scale",
+      "choices": [
+        { "value": "slow", "label": "Slow (1–4)" },
+        { "value": "medium", "label": "Medium (5–7)" },
+        { "value": "fast", "label": "Fast (8–9)" },
+        { "value": "very_fast", "label": "Very Fast (10+)" }
+      ]
+    },
+    {
+      "key": "ittf_approved",
+      "name": "ITTF Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 5,
+      "description": "Approved for official ITTF-sanctioned competitions"
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Tournament" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "black_red", "label": "Black / Red (Standard)" },
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "table-tennis-blades": [
+    {
+      "key": "blade_composition",
+      "name": "Blade Composition",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "all_wood", "label": "All-Wood" },
+        { "value": "carbon", "label": "Carbon Fibre" },
+        { "value": "arylate_carbon", "label": "Arylate Carbon (ALC)" },
+        { "value": "zlc", "label": "ZLC (Zylon Carbon)" },
+        { "value": "glass_fiber", "label": "Glass Fibre" }
+      ]
+    },
+    {
+      "key": "ply_count",
+      "name": "Ply Count",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "3_ply", "label": "3-Ply" },
+        { "value": "5_ply", "label": "5-Ply" },
+        { "value": "7_ply", "label": "7-Ply" },
+        { "value": "9_ply", "label": "9+ Ply" }
+      ]
+    },
+    {
+      "key": "playing_style",
+      "name": "Playing Style",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "offensive", "label": "Offensive (OFF / OFF+)" },
+        { "value": "all_round", "label": "All-Round (ALL / ALL+)" },
+        { "value": "defensive", "label": "Defensive (DEF)" }
+      ]
+    },
+    {
+      "key": "grip_type",
+      "name": "Grip Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "flared", "label": "Flared (FL)" },
+        { "value": "straight", "label": "Straight (ST)" },
+        { "value": "anatomic", "label": "Anatomic (AN)" },
+        { "value": "penhold_cs", "label": "Penhold – Chinese (CS)" },
+        { "value": "penhold_jp", "label": "Penhold – Japanese (JP)" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Tournament" }
+      ]
+    }
+  ],
+
+  "table-tennis-rubbers": [
+    {
+      "key": "rubber_type",
+      "name": "Rubber Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "inverted", "label": "Inverted (Smooth – Most Common)" },
+        { "value": "short_pips", "label": "Short Pips" },
+        { "value": "long_pips", "label": "Long Pips" },
+        { "value": "anti_spin", "label": "Anti-Spin" }
+      ]
+    },
+    {
+      "key": "sponge_thickness",
+      "name": "Sponge Thickness",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "1_0", "label": "1.0mm (Control)" },
+        { "value": "1_5", "label": "1.5mm" },
+        { "value": "1_8", "label": "1.8mm" },
+        { "value": "2_0", "label": "2.0mm (All-Round)" },
+        { "value": "2_1", "label": "2.1mm" },
+        { "value": "max", "label": "Max / 2.2mm (Speed)" },
+        { "value": "ox", "label": "OX (No Sponge)" }
+      ]
+    },
+    {
+      "key": "playing_style",
+      "name": "Playing Style",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "offensive", "label": "Offensive (Speed / Spin)" },
+        { "value": "all_round", "label": "All-Round" },
+        { "value": "defensive", "label": "Defensive (Control / Chop)" }
+      ]
+    },
+    {
+      "key": "ittf_approved",
+      "name": "ITTF Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 4,
+      "description": "Approved for official ITTF-sanctioned competitions"
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Tournament" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 6,
+      "choices": [
+        { "value": "red", "label": "Red" },
+        { "value": "black", "label": "Black" }
+      ]
+    }
+  ],
+
+  "table-tennis-balls": [
+    {
+      "key": "star_rating",
+      "name": "Star Rating",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "3_star", "label": "3-Star (Match / Competition)" },
+        { "value": "2_star", "label": "2-Star (Training)" },
+        { "value": "1_star", "label": "1-Star (Practice)" },
+        { "value": "no_star", "label": "No Star (Recreational)" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "abs_plastic", "label": "ABS Plastic (Poly – Current Standard)" },
+        { "value": "celluloid", "label": "Celluloid (Legacy)" }
+      ]
+    },
+    {
+      "key": "pack_size",
+      "name": "Pack Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "3_pack", "label": "3-Pack" },
+        { "value": "6_pack", "label": "6-Pack" },
+        { "value": "12_pack", "label": "12-Pack" },
+        { "value": "24_pack", "label": "24-Pack" },
+        { "value": "72_pack", "label": "72-Pack" },
+        { "value": "144_pack", "label": "144-Pack (Gross)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "orange", "label": "Orange" }
+      ]
+    }
+  ],
+
+  "table-tennis-tables": [
+    {
+      "key": "table_type",
+      "name": "Table Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "indoor", "label": "Indoor" },
+        { "value": "outdoor", "label": "Outdoor (Weatherproof)" },
+        { "value": "mini", "label": "Mini / Compact" },
+        { "value": "conversion_top", "label": "Conversion Top" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "full_size", "label": "Full Size (9ft × 5ft – Regulation)" },
+        { "value": "three_quarter", "label": "3/4 Size" },
+        { "value": "mid_size", "label": "Mid-Size" },
+        { "value": "mini", "label": "Mini / Tabletop" }
+      ]
+    },
+    {
+      "key": "top_thickness",
+      "name": "Top Thickness",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "description": "Thicker tops give a more consistent bounce",
+      "choices": [
+        { "value": "12mm", "label": "12mm (Recreational)" },
+        { "value": "16mm", "label": "16mm" },
+        { "value": "19mm", "label": "19mm (Club)" },
+        { "value": "22mm", "label": "22mm" },
+        { "value": "25mm", "label": "25mm (Competition)" }
+      ]
+    },
+    {
+      "key": "foldable",
+      "name": "Foldable",
+      "type": "BOOLEAN",
+      "sortOrder": 4,
+      "description": "Folds for compact storage and playback mode"
+    },
+    {
+      "key": "wheels",
+      "name": "Wheels",
+      "type": "BOOLEAN",
+      "sortOrder": 5,
+      "description": "Caster wheels for easy movement when folded"
+    },
+    {
+      "key": "color",
+      "name": "Table Color",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 6,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" }
+      ]
+    }
+  ],
+
+  "table-tennis-nets": [
+    {
+      "key": "net_type",
+      "name": "Net Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "clip_on", "label": "Clip-On (Standard)" },
+        { "value": "screw_clamp", "label": "Screw Clamp (Competition)" },
+        { "value": "retractable", "label": "Retractable / Portable" },
+        { "value": "permanent", "label": "Permanent Mount" }
+      ]
+    },
+    {
+      "key": "ittf_approved",
+      "name": "ITTF Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 2,
+      "description": "Approved for official ITTF-sanctioned competitions"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+
+  "table-tennis-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "polo_shirt", "label": "Polo Shirt" },
+        { "value": "t_shirt", "label": "T-Shirt" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "skirt", "label": "Skirt / Skort" },
+        { "value": "track_jacket", "label": "Track Jacket" },
+        { "value": "track_pants", "label": "Track Pants" },
+        { "value": "socks", "label": "Socks" },
+        { "value": "headband", "label": "Headband" },
+        { "value": "wristband", "label": "Wristband" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "white", "label": "White" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "table-tennis-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Tournament" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "table-tennis-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "single_bat_case", "label": "Single Bat Case" },
+        { "value": "double_bat_case", "label": "Double Bat Case" },
+        { "value": "bat_wallet", "label": "Bat Wallet / Pouch" },
+        { "value": "backpack", "label": "Backpack" },
+        { "value": "shoulder_bag", "label": "Shoulder Bag" },
+        { "value": "ball_bag", "label": "Ball Bag / Holder" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "table-tennis-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "rubber_cleaner", "label": "Rubber Cleaner / Spray" },
+        { "value": "rubber_protector", "label": "Rubber Protector Film" },
+        { "value": "edge_tape", "label": "Edge Tape" },
+        { "value": "glue", "label": "Rubber Glue / VOC-Free Glue" },
+        { "value": "bat_repair_kit", "label": "Bat Repair Kit" },
+        { "value": "robot", "label": "Table Tennis Robot" },
+        { "value": "ball_picker", "label": "Ball Picker / Collector" },
+        { "value": "scoreboard", "label": "Scoreboard" },
+        { "value": "floor_surrounds", "label": "Floor Surrounds / Barriers" },
+        { "value": "table_cover", "label": "Table Cover" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ]
+}

@@ -149,12 +149,11 @@ describe('Seed-list ↔ instrumented-cron registry parity (PR 5.5)', () => {
     'admin-task-sla-breach',
     'stuck-saga-sweep',
     'franchise-reservation-cleanup',
-    'ithink-tracking-poller',
     'release-expired-redemptions',
     'seller-response-sweeper',
   ];
 
-  it('the seed list contains exactly the canonical 16 names', () => {
+  it('the seed list contains exactly the canonical 15 names', () => {
     const seeded = new Set(SEEDED_CRON_JOB_NAMES);
     const canonical = new Set(CANONICAL_JOB_NAMES);
     expect(seeded).toEqual(canonical);

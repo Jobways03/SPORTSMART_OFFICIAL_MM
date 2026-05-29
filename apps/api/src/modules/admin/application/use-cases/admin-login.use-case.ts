@@ -4,7 +4,10 @@ import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE_ADMIN,
+} from '../../../../core/auth/jwt-constants';
 import { hashPassword, shouldRehash } from '../../../../core/auth/bcrypt-policy';
 import { UnauthorizedAppException, ForbiddenAppException } from '../../../../core/exceptions';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
@@ -219,12 +222,49 @@ export class AdminLoginUseCase {
     const mfaState = await this.adminRepo.findAdminById(admin.id, {
       mfaEnabledAt: true,
     });
+
+    // Phase 23 (2026-05-20) — Force MFA for SUPER_ADMIN.
+    //
+    // Pre-Phase-23 a SUPER_ADMIN who hadn't enrolled MFA could log in
+    // with just a password — defeating the point of MFA infrastructure
+    // for the most privileged role. Now: SUPER_ADMIN without MFA
+    // enrolled is hard-blocked at login with a clear ENFORCED_MFA
+    // code. The frontend surfaces a "you must enroll MFA before
+    // logging in" screen and walks the admin through the existing
+    // enrollment flow (which is itself gated behind an authenticated
+    // session, so we keep one well-defined path: an out-of-band
+    // recovery / break-glass route for the bootstrap super-admin's
+    // first login lives in the runbook).
+    if (admin.role === 'SUPER_ADMIN' && !mfaState?.mfaEnabledAt) {
+      this.auditLogin(
+        admin.id,
+        admin.role,
+        'ADMIN_LOGIN_BLOCKED',
+        { reason: 'enforced_mfa_enrollment_required' },
+        ipAddress,
+        userAgent,
+      );
+      throw new ForbiddenAppException(
+        'Your SUPER_ADMIN account must have MFA enrolled before you can sign in. Contact your security operator for the enrollment runbook.',
+        'ENFORCED_MFA_ENROLLMENT',
+      );
+    }
+
     if (mfaState?.mfaEnabledAt) {
+      // Phase 26 (2026-05-20) — JTI for one-time use. Pre-Phase-26 the
+      // challenge token was stateless: a captured challenge + a fresh
+      // TOTP code captured during the 5-min window could be replayed,
+      // though the same-step anti-replay caught most cases. JTI makes
+      // the challenge single-use: the verify path consumes the JTI via
+      // Redis SET NX EX so a second presentation of the same token is
+      // 401'd even before the TOTP step is evaluated.
+      const jti = randomUUID();
       const challengeToken = jwt.sign(
         {
           sub: admin.id,
           email: admin.email,
           aud: ADMIN_MFA_CHALLENGE_AUD,
+          jti,
         },
         this.envService.getString('JWT_ADMIN_SECRET'),
         {
@@ -268,7 +308,13 @@ export class AdminLoginUseCase {
     });
 
     // Generate access token
-    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '7d');
+    //
+    // Phase 23 (2026-05-20) — fallback tightened from '7d' → '15m'.
+    // The env schema's `.default('1h')` makes the literal fallback
+    // unreachable in normal boot, but defense-in-depth: if anyone
+    // ever removes the schema default a 15-minute token is the
+    // failure mode we want, not a 7-day one.
+    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '15m');
     const accessTtlSeconds = Math.floor(this.parseTimeToMs(accessTtl) / 1000);
 
     const accessToken = jwt.sign(
@@ -279,7 +325,14 @@ export class AdminLoginUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_ADMIN_SECRET'),
-      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
+      {
+        expiresIn: accessTtlSeconds,
+        algorithm: JWT_ALGORITHM,
+        // Phase 26 (2026-05-20) — pin audience so the AdminAuthGuard
+        // can reject the challenge token (aud=admin-mfa-challenge)
+        // explicitly rather than relying on missing claims.
+        audience: JWT_AUDIENCE_ADMIN,
+      },
     );
 
     this.logger.log(`Admin logged in: ${admin.id} (${admin.role})`);

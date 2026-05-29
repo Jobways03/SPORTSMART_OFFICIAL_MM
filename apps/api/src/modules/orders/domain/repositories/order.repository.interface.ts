@@ -1,5 +1,49 @@
 import { Prisma } from '@prisma/client';
 
+// Phase 79 (2026-05-22) — history audit Gap #7. Typed contract for the
+// reassignment-history reader so the UI <-> repo boundary has a
+// compile-time shape check. The eventType union mirrors the Prisma
+// enum (kept inline to avoid pulling Prisma types into the controller).
+export type ReassignmentEventType =
+  | 'ADMIN_MANUAL_OVERRIDE'
+  | 'AUTO_AFTER_SELLER_REJECT'
+  | 'AUTO_AFTER_FRANCHISE_REJECT'
+  | 'AUTO_AFTER_EXCEPTION_REMEDIATE';
+
+export type ReassignmentNodeType = 'SELLER' | 'FRANCHISE';
+
+export interface ReassignmentLogEntity {
+  id: string;
+  subOrderId: string;
+  masterOrderId: string;
+  fromNodeType: ReassignmentNodeType;
+  fromNodeId: string | null;
+  toNodeType: ReassignmentNodeType;
+  toNodeId: string | null;
+  fromSellerId: string;
+  toSellerId: string | null;
+  reason: string;
+  failureReason: string | null;
+  successful: boolean;
+  newSubOrderId: string | null;
+  reassignedBy: string | null;
+  reassignmentSequence: number;
+  eventType: ReassignmentEventType;
+  createdAt: Date;
+}
+
+export interface ReassignmentLogQueryOptions {
+  /** Cursor — return rows older than this createdAt. */
+  before?: Date;
+  /** ISO datetime range filter (applied to createdAt). */
+  from?: Date;
+  to?: Date;
+  /** Filter by event type. */
+  eventType?: ReassignmentEventType;
+  /** Page size. Repo clamps to a sane maximum. */
+  limit?: number;
+}
+
 export interface OrderRepository {
   // ── Master Order queries ───────────────────────────────────────────────
 
@@ -72,7 +116,22 @@ export interface OrderRepository {
 
   // ── Reassignment logs ──────────────────────────────────────────────────
 
-  findReassignmentLogs(masterOrderId: string): Promise<any[]>;
+  /**
+   * Phase 79 (2026-05-22) — history audit Gap #7/#10/#15/#20.
+   * Typed return + cursor pagination + optional time-range filter.
+   * Pagination uses (createdAt, id) — a millisecond-equal row gets a
+   * deterministic tiebreak via id ASC so a paginating client never
+   * skips or repeats a row across pages.
+   */
+  findReassignmentLogs(
+    masterOrderId: string,
+    opts?: ReassignmentLogQueryOptions,
+  ): Promise<ReassignmentLogEntity[]>;
+
+  countReassignmentLogs(
+    masterOrderId: string,
+    opts?: Pick<ReassignmentLogQueryOptions, 'from' | 'to' | 'eventType'>,
+  ): Promise<number>;
 
   createReassignmentLog(data: any): Promise<any>;
 
@@ -125,13 +184,13 @@ export interface OrderRepository {
 
   createAllocationLog(data: any): Promise<void>;
 
-  // ── Expired sub-orders (for timeout service) ───────────────────────────
-
-  findExpiredSubOrders(now: Date): Promise<{ id: string; sellerId: string | null }[]>;
-
   // ── Transaction support ────────────────────────────────────────────────
 
-  executeTransaction(fn: (tx: any) => Promise<void>): Promise<void>;
+  // Phase 81 (2026-05-22) — generic return type so callers can
+  // surface the cb's value (e.g. an updated row) without an extra
+  // outer-scope ref. Backwards-compatible: existing void callers
+  // resolve as `undefined`.
+  executeTransaction<T = void>(fn: (tx: any) => Promise<T>): Promise<T>;
 }
 
 export const ORDER_REPOSITORY = Symbol('OrderRepository');

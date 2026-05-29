@@ -115,6 +115,31 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     });
   }
 
+  /**
+   * Phase 159n (audit #1/#2/#7) — APPROVED + active variant of the lookup
+   * above. POS, procurement-request creation, and manual stock adjustment must
+   * use THIS so a franchise can't transact (sell / procure / hold stock)
+   * against a mapping the admin hasn't vetted. The unfiltered
+   * findByFranchiseAndProduct stays for read/display paths.
+   */
+  async findApprovedActiveByFranchiseAndProduct(
+    franchiseId: string,
+    productId: string,
+    variantId: string | null,
+  ): Promise<any | null> {
+    return this.prisma.franchiseCatalogMapping.findFirst({
+      where: {
+        franchiseId,
+        productId,
+        variantId: variantId ?? null,
+        approvalStatus: 'APPROVED',
+        isActive: true,
+        product: { isDeleted: false },
+        ...(variantId ? { variant: { isDeleted: false } } : {}),
+      },
+    });
+  }
+
   async create(data: {
     franchiseId: string;
     productId: string;
@@ -176,6 +201,39 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
 
   async delete(id: string): Promise<void> {
     await this.prisma.franchiseCatalogMapping.delete({ where: { id } });
+  }
+
+  /**
+   * Phase 159n (audit #8) — soft-remove. Replaces the hard delete so the row +
+   * its approval history survive (a franchise can't "wash" approval state by
+   * delete-and-recreate, and existing stock/order references aren't orphaned).
+   * Sets STOPPED + isActive=false + removedAt/By and appends a REMOVED event.
+   */
+  async softRemove(id: string, actorId?: string): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.franchiseCatalogMapping.update({
+        where: { id },
+        data: {
+          approvalStatus: 'STOPPED',
+          isActive: false,
+          removedById: actorId ?? null,
+          removedAt: new Date(),
+          version: { increment: 1 },
+        },
+        select: { id: true, franchiseId: true, productId: true, variantId: true },
+      });
+      await tx.franchiseCatalogMappingEvent.create({
+        data: {
+          mappingId: id,
+          franchiseId: updated.franchiseId,
+          productId: updated.productId,
+          variantId: updated.variantId,
+          action: 'REMOVED',
+          actorId: actorId ?? null,
+          actorRole: 'FRANCHISE',
+        },
+      });
+    });
   }
 
   async findAvailableProducts(params: {
@@ -296,58 +354,93 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     return { products, total };
   }
 
-  async approve(id: string): Promise<any> {
-    return this.prisma.franchiseCatalogMapping.update({
-      where: { id },
-      data: { approvalStatus: 'APPROVED', isActive: true },
-      include: {
-        product: {
-          include: {
-            category: true,
-            brand: true,
-            images: { where: { sortOrder: 0 }, take: 1 },
+  // Phase 159n (audit #5) — decision write-back now stamps the actor/reason
+  // columns, bumps the OCC version, and appends a history-event row in one
+  // transaction. `actorId` is the admin; `reason` is persisted for reject/stop.
+  private async applyDecision(
+    id: string,
+    decision: {
+      action: 'APPROVED' | 'REJECTED' | 'STOPPED';
+      data: Record<string, unknown>;
+      reason?: string | null;
+      actorId?: string;
+    },
+  ): Promise<any> {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.franchiseCatalogMapping.update({
+        where: { id },
+        data: { ...decision.data, version: { increment: 1 } },
+        include: {
+          product: {
+            include: {
+              category: true,
+              brand: true,
+              images: { where: { sortOrder: 0 }, take: 1 },
+            },
           },
+          variant: true,
         },
-        variant: true,
+      });
+      await tx.franchiseCatalogMappingEvent.create({
+        data: {
+          mappingId: id,
+          franchiseId: updated.franchiseId,
+          productId: updated.productId,
+          variantId: updated.variantId,
+          action: decision.action,
+          reason: decision.reason ?? null,
+          actorId: decision.actorId ?? null,
+          actorRole: 'ADMIN',
+        },
+      });
+      return updated;
+    });
+  }
+
+  async approve(id: string, actorId?: string): Promise<any> {
+    return this.applyDecision(id, {
+      action: 'APPROVED',
+      actorId,
+      data: {
+        approvalStatus: 'APPROVED',
+        isActive: true,
+        approvedById: actorId ?? null,
+        approvedAt: new Date(),
       },
     });
   }
 
-  async stop(id: string): Promise<any> {
-    return this.prisma.franchiseCatalogMapping.update({
-      where: { id },
-      data: { approvalStatus: 'STOPPED', isActive: false },
-      include: {
-        product: {
-          include: {
-            category: true,
-            brand: true,
-            images: { where: { sortOrder: 0 }, take: 1 },
-          },
-        },
-        variant: true,
+  async stop(id: string, actorId?: string, reason?: string | null): Promise<any> {
+    return this.applyDecision(id, {
+      action: 'STOPPED',
+      actorId,
+      reason,
+      data: {
+        approvalStatus: 'STOPPED',
+        isActive: false,
+        stoppedById: actorId ?? null,
+        stoppedAt: new Date(),
+        stopReason: reason ?? null,
       },
     });
   }
 
-  async reject(id: string): Promise<any> {
+  async reject(id: string, actorId?: string, reason?: string | null): Promise<any> {
     // Rejection puts the mapping into a "needs fixing" state. The
     // franchise can edit and re-submit, which flips the status back
     // to PENDING_APPROVAL via FranchiseCatalogService.updateMapping.
     // We set isActive=false so the row doesn't accidentally become
     // routing-eligible while in REJECTED limbo.
-    return this.prisma.franchiseCatalogMapping.update({
-      where: { id },
-      data: { approvalStatus: 'REJECTED', isActive: false },
-      include: {
-        product: {
-          include: {
-            category: true,
-            brand: true,
-            images: { where: { sortOrder: 0 }, take: 1 },
-          },
-        },
-        variant: true,
+    return this.applyDecision(id, {
+      action: 'REJECTED',
+      actorId,
+      reason,
+      data: {
+        approvalStatus: 'REJECTED',
+        isActive: false,
+        rejectedById: actorId ?? null,
+        rejectedAt: new Date(),
+        rejectionReason: reason ?? null,
       },
     });
   }

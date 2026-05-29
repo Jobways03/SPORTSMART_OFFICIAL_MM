@@ -153,7 +153,12 @@ describe('AdminFranchiseCatalogController.listAllMappings — response envelope'
     const prisma: any = {
       franchiseStock: { findMany: jest.fn().mockResolvedValue([]) },
     };
-    const ctrl = new AdminFranchiseCatalogController(repo, prisma);
+    const ctrl = new AdminFranchiseCatalogController(
+      repo,
+      prisma,
+      { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any,
+      { publish: jest.fn().mockResolvedValue(undefined) } as any,
+    );
 
     const res = await ctrl.listAllMappings('2', '20');
 

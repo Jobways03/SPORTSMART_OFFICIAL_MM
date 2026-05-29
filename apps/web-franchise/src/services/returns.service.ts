@@ -64,25 +64,19 @@ export const franchiseReturnsService = {
     });
   },
 
-  submitQc(
-    returnId: string,
-    decisions: Array<{
-      returnItemId: string;
-      qcOutcome: string;
-      qcQuantityApproved: number;
-      qcNotes?: string;
-    }>,
-    overallNotes?: string,
-  ) {
-    return apiClient(`/franchise/returns/${returnId}/qc-decision`, {
-      method: 'PATCH',
-      body: JSON.stringify({ decisions, overallNotes }),
-    });
-  },
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #4 / QC audit
+  // Gap #2 closure. The `/franchise/returns/:id/qc-decision` route
+  // does NOT exist on the backend; QC is admin-only (the
+  // submitQcDecision actorType guard rejects non-ADMIN). Removed.
 
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #5 closure.
+  // Pre-Phase-100 the field name was 'file' but the backend's
+  // FileInterceptor('image') expects 'image' — every franchise QC
+  // evidence upload 400'd at the boundary. Aligned with the
+  // controller's expected field name.
   uploadEvidence(returnId: string, file: File, description?: string) {
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('image', file);
     if (description) formData.append('description', description);
     return apiClient(`/franchise/returns/${returnId}/qc-evidence`, {
       method: 'POST',

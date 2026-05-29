@@ -55,6 +55,23 @@ export class RefreshFranchiseSessionUseCase {
     const session =
       await this.franchiseRepo.findSessionByRefreshToken(refreshToken);
     if (!session) {
+      // Phase 1 / C6 — refresh-token reuse detection. Primary miss;
+      // check the burned-hash slot. A hit means this token was
+      // already rotated out by the legitimate client → theft replay
+      // → revoke every session for the franchise partner.
+      const burned =
+        await this.franchiseRepo.findSessionByPreviousRefreshToken(
+          refreshToken,
+        );
+      if (burned) {
+        await this.franchiseRepo.revokeAllSessions(burned.franchisePartnerId);
+        this.logger.warn(
+          `Refresh-token reuse detected for franchise partner ${burned.franchisePartnerId} — revoked all sessions`,
+        );
+        throw new UnauthorizedAppException(
+          'Session security check failed. Please sign in again.',
+        );
+      }
       throw new UnauthorizedAppException('Invalid refresh token');
     }
     if (session.revokedAt) {
@@ -75,6 +92,18 @@ export class RefreshFranchiseSessionUseCase {
       await this.franchiseRepo.revokeAllSessions(session.franchisePartnerId);
       throw new ForbiddenAppException(
         'Account has been suspended or deactivated. Please contact support.',
+      );
+    }
+    // Phase 20 (2026-05-20) — mirror the login isEmailVerified gate.
+    // If an admin or downstream process flipped the franchise back to
+    // unverified mid-session, the refresh must reject (and revoke every
+    // session) so the franchise re-enters the verify flow before they
+    // can keep using their access token.
+    if (!franchise.isEmailVerified) {
+      await this.franchiseRepo.revokeAllSessions(session.franchisePartnerId);
+      throw new ForbiddenAppException(
+        'Your email is no longer verified. Please verify your email again to continue.',
+        'EMAIL_NOT_VERIFIED',
       );
     }
 

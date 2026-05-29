@@ -186,7 +186,7 @@ export default function SellerDetailPage() {
       .then((res) => {
         if (res.data) setCommission(res.data);
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoadingCommission(false));
   }, [id]);
 
@@ -267,7 +267,7 @@ export default function SellerDetailPage() {
             <Pill label={status.label} tone={status.tone} />
             <Pill label={verify.label} tone={verify.tone} />
             {/* Quick link to the delivery-method entitlement screen.
-                Marketplace admin toggles iThink / Self Delivery here. */}
+                Marketplace admin toggles Self Delivery here. */}
             <Link
               href={`/dashboard/sellers/${seller.sellerId}/delivery-methods`}
               style={{

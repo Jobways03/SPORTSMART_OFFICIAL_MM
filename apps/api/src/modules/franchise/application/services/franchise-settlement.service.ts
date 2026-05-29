@@ -1,4 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import {
   FranchiseFinanceRepository,
   FRANCHISE_FINANCE_REPOSITORY,
@@ -34,6 +35,30 @@ export class FranchiseSettlementService {
   async createSettlementCycle(periodStart: Date, periodEnd: Date) {
     // Wrap the entire cycle creation in a transaction for atomicity
     const result = await this.prisma.$transaction(async (tx) => {
+      // Phase 159v (audit #13) — reject a period that OVERLAPS an
+      // already-settled franchise cycle (other than this exact period, which is
+      // an idempotent re-run). The atomic CLAIM below already prevents
+      // double-counting, but an overlapping run would still create an empty
+      // second franchise settlement and bloat the audit trail.
+      const overlappingCycles = await tx.settlementCycle.findMany({
+        where: {
+          NOT: { AND: [{ periodStart }, { periodEnd }] },
+          periodStart: { lte: periodEnd },
+          periodEnd: { gte: periodStart },
+        },
+        select: { id: true },
+      });
+      if (overlappingCycles.length > 0) {
+        const settledInOverlap = await tx.franchiseSettlement.count({
+          where: { cycleId: { in: overlappingCycles.map((c) => c.id) } },
+        });
+        if (settledInOverlap > 0) {
+          throw new BadRequestAppException(
+            'A franchise settlement cycle overlapping this period already exists. Choose a non-overlapping period or reuse the existing cycle.',
+          );
+        }
+      }
+
       // 1. Find or create SettlementCycle for the period
       let cycle = await tx.settlementCycle.findFirst({
         where: {
@@ -127,67 +152,76 @@ export class FranchiseSettlementService {
         }
 
         // Aggregate by sourceType
+        // Phase 159v (audit #9) — Decimal accumulators (was float + Math.round)
+        // so 100s of small-paisa rows don't drift.
+        const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
         let totalOnlineOrders = 0;
-        let totalOnlineAmount = 0;
-        let totalOnlineCommission = 0;
         let totalProcurements = 0;
-        let totalProcurementAmount = 0;
-        let totalProcurementFees = 0;
         let totalPosSales = 0;
-        let totalPosAmount = 0;
-        let totalPosFees = 0;
-        let reversalAmount = 0;
-        let adjustmentAmount = 0;
-        let grossFranchiseEarning = 0;
-        let totalPlatformEarning = 0;
+        let totalOnlineAmount = D(0);
+        let totalOnlineCommission = D(0);
+        let totalProcurementAmount = D(0);
+        let totalProcurementFees = D(0);
+        let totalPosAmount = D(0);
+        let totalPosFees = D(0);
+        let reversalAmount = D(0);
+        let adjustmentAmount = D(0);
+        let grossFranchiseEarning = D(0);
+        let totalPlatformEarning = D(0);
 
         for (const entry of entries) {
-          const base = Number(entry.baseAmount);
-          const platform = Number(entry.platformEarning);
-          const franchiseEarn = Number(entry.franchiseEarning);
+          const base = D(entry.baseAmount);
+          const platform = D(entry.platformEarning);
+          const franchiseEarn = D(entry.franchiseEarning);
 
-          grossFranchiseEarning += franchiseEarn;
-          totalPlatformEarning += platform;
+          totalPlatformEarning = totalPlatformEarning.plus(platform);
 
           switch (entry.sourceType) {
             case 'ONLINE_ORDER':
               totalOnlineOrders += 1;
-              totalOnlineAmount += base;
-              totalOnlineCommission += platform;
+              totalOnlineAmount = totalOnlineAmount.plus(base);
+              totalOnlineCommission = totalOnlineCommission.plus(platform);
+              // Phase 159v (audit #5) — gross accumulates SALES earnings only.
+              grossFranchiseEarning = grossFranchiseEarning.plus(franchiseEarn);
               break;
             case 'PROCUREMENT_FEE':
               totalProcurements += 1;
-              totalProcurementAmount += base;
-              totalProcurementFees += platform;
+              totalProcurementAmount = totalProcurementAmount.plus(base);
+              totalProcurementFees = totalProcurementFees.plus(platform);
+              // franchiseEarning is 0 for a platform fee — not a franchise earning.
               break;
             case 'POS_SALE':
-              // Each POS_SALE entry is one completed sale; base/platform are
-              // always positive for this sourceType (void path short-circuits
-              // via updateLedgerEntryStatus REVERSED, so won't reach here).
               totalPosSales += 1;
-              totalPosAmount += base;
-              totalPosFees += platform;
+              totalPosAmount = totalPosAmount.plus(base);
+              totalPosFees = totalPosFees.plus(platform);
+              grossFranchiseEarning = grossFranchiseEarning.plus(franchiseEarn);
               break;
             case 'POS_SALE_REVERSAL':
-              // Paired reversal for a partial/full POS return. Amounts are
-              // negative; subtract them from the corresponding POS totals
-              // so the settlement reflects NET POS activity for the cycle.
-              totalPosAmount += base;       // base is negative → subtracts
-              totalPosFees += platform;     // platform is negative → subtracts
+              // Paired POS return — negative amounts net the POS totals + gross.
+              totalPosAmount = totalPosAmount.plus(base);
+              totalPosFees = totalPosFees.plus(platform);
+              grossFranchiseEarning = grossFranchiseEarning.plus(franchiseEarn);
               break;
             case 'RETURN_REVERSAL':
-              reversalAmount += Math.abs(franchiseEarn);
+              // Phase 159v (audit #5) — the online-return clawback lives ONLY in
+              // reversalAmount (a positive magnitude); it is NOT also folded
+              // into gross, so netPayable subtracts it exactly once.
+              reversalAmount = reversalAmount.plus(franchiseEarn.abs());
               break;
             case 'ADJUSTMENT':
-              adjustmentAmount += franchiseEarn;
+              // Phase 159v (audit #4) — signed: +bonus / −penalty. Lives ONLY
+              // in adjustmentAmount and is ADDED to net with its own sign.
+              adjustmentAmount = adjustmentAmount.plus(franchiseEarn);
               break;
           }
         }
 
-        const netPayableToFranchise =
-          Math.round(
-            (grossFranchiseEarning - reversalAmount - adjustmentAmount) * 100,
-          ) / 100;
+        // Phase 159v (audit #4/#5) — gross holds sales earnings only; a return
+        // clawback subtracts once; an adjustment adds with its sign.
+        const netPayableToFranchise = grossFranchiseEarning
+          .minus(reversalAmount)
+          .plus(adjustmentAmount)
+          .toDecimalPlaces(2);
 
         // Create settlement within transaction
         const settlement = await tx.franchiseSettlement.create({
@@ -196,18 +230,18 @@ export class FranchiseSettlementService {
             franchiseId,
             franchiseName,
             totalOnlineOrders,
-            totalOnlineAmount: Math.round(totalOnlineAmount * 100) / 100,
-            totalOnlineCommission: Math.round(totalOnlineCommission * 100) / 100,
+            totalOnlineAmount: totalOnlineAmount.toDecimalPlaces(2),
+            totalOnlineCommission: totalOnlineCommission.toDecimalPlaces(2),
             totalProcurements,
-            totalProcurementAmount: Math.round(totalProcurementAmount * 100) / 100,
-            totalProcurementFees: Math.round(totalProcurementFees * 100) / 100,
+            totalProcurementAmount: totalProcurementAmount.toDecimalPlaces(2),
+            totalProcurementFees: totalProcurementFees.toDecimalPlaces(2),
             totalPosSales,
-            totalPosAmount: Math.round(totalPosAmount * 100) / 100,
-            totalPosFees: Math.round(totalPosFees * 100) / 100,
-            reversalAmount: Math.round(reversalAmount * 100) / 100,
-            adjustmentAmount: Math.round(adjustmentAmount * 100) / 100,
-            grossFranchiseEarning: Math.round(grossFranchiseEarning * 100) / 100,
-            totalPlatformEarning: Math.round(totalPlatformEarning * 100) / 100,
+            totalPosAmount: totalPosAmount.toDecimalPlaces(2),
+            totalPosFees: totalPosFees.toDecimalPlaces(2),
+            reversalAmount: reversalAmount.toDecimalPlaces(2),
+            adjustmentAmount: adjustmentAmount.toDecimalPlaces(2),
+            grossFranchiseEarning: grossFranchiseEarning.toDecimalPlaces(2),
+            totalPlatformEarning: totalPlatformEarning.toDecimalPlaces(2),
             netPayableToFranchise,
             status: 'PENDING',
           },
@@ -269,8 +303,14 @@ export class FranchiseSettlementService {
       );
     }
 
+    // Phase 159v (audit — "FAILED→APPROVED leaks the old UTR forward") — when a
+    // FAILED settlement is re-approved, clear any stale payment reference and
+    // paidAt from the failed attempt so they can't be mistaken for the new
+    // payout or carried into the next pay. A PENDING→APPROVED has none anyway.
     const updated = await this.financeRepo.updateSettlement(settlementId, {
       status: 'APPROVED',
+      paymentReference: null,
+      paidAt: null,
     });
 
     await this.eventBus.publish({
@@ -308,21 +348,38 @@ export class FranchiseSettlementService {
       );
     }
 
-    const updated = await this.financeRepo.updateSettlement(settlementId, {
-      status: 'PAID',
-      paidAt: new Date(),
-      paymentReference,
+    // Phase 159v (audit #3 + #16) — flip the settlement to PAID and SETTLE its
+    // ledger rows in ONE transaction. Two prior bugs:
+    //  (#3) two separate writes — a crash between them left the settlement PAID
+    //       while its ledger stayed ACCRUED, so "paid" and "settled" diverged.
+    //  (#16) the status pre-check above is TOCTOU: two concurrent pay requests
+    //       both read APPROVED, both proceed → double money-out + duplicate
+    //       `settlement.paid` event. The conditional updateMany below is a
+    //       compare-and-swap — only the first caller flips APPROVED→PAID
+    //       (count===1); the loser sees count===0 and aborts cleanly. This is
+    //       the authoritative guard, enforced at the DB, not just configured.
+    const entryIds: string[] = (settlement.ledgerEntries ?? []).map((e: any) => e.id);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const flip = await tx.franchiseSettlement.updateMany({
+        where: { id: settlementId, status: 'APPROVED' },
+        data: { status: 'PAID', paidAt: new Date(), paymentReference },
+      });
+      if (flip.count !== 1) {
+        throw new BadRequestAppException(
+          'Settlement is no longer APPROVED (it may have just been paid by a concurrent request). No payment was recorded.',
+        );
+      }
+      if (entryIds.length > 0) {
+        await tx.franchiseFinanceLedger.updateMany({
+          where: { id: { in: entryIds } },
+          data: { status: 'SETTLED', settlementBatchId: settlementId },
+        });
+      }
+      const u = await tx.franchiseSettlement.findUnique({
+        where: { id: settlementId },
+      });
+      return u!;
     });
-
-    // Mark all linked ledger entries as SETTLED
-    if (settlement.ledgerEntries && settlement.ledgerEntries.length > 0) {
-      const entryIds = settlement.ledgerEntries.map((e: any) => e.id);
-      await this.financeRepo.bulkUpdateLedgerStatus(
-        entryIds,
-        'SETTLED',
-        settlementId,
-      );
-    }
 
     await this.eventBus.publish({
       eventName: 'franchise.settlement.paid',
@@ -393,6 +450,27 @@ export class FranchiseSettlementService {
     status?: string;
   }) {
     return this.financeRepo.findAllSettlementsPaginated(params);
+  }
+
+  // ── Export settlements (CSV / Tally) ────────────────────────
+  // Phase 159v (audit #11) — a finance-facing CSV of the franchise settlement
+  // register at the audited surface. (The accounts module also exposes a
+  // cross-partner cycle breakdown + the per-entry ledger export; this one is
+  // scoped to the franchise settlement summary rows with the same filters as
+  // the list endpoint.) Capped + truncation-flagged like the accounts exports.
+  async exportSettlements(filters: {
+    cycleId?: string;
+    franchiseId?: string;
+    status?: string;
+  }) {
+    const CAP = 5000;
+    const { settlements, total } =
+      await this.financeRepo.findAllSettlementsPaginated({
+        page: 1,
+        limit: CAP,
+        ...filters,
+      });
+    return { rows: settlements, total, truncated: total > CAP };
   }
 
   // ── Get settlement detail ───────────────────────────────────

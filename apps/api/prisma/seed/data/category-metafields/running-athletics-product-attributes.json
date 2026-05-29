@@ -1,0 +1,576 @@
+{
+  "running-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" },
+        { "value": "uk_13_5_15", "label": "UK 13.5–15" }
+      ]
+    },
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "road", "label": "Road Running" },
+        { "value": "trail", "label": "Trail Running" },
+        { "value": "track_racing", "label": "Track Racing Flat" },
+        { "value": "cross_country", "label": "Cross Country" },
+        { "value": "treadmill", "label": "Treadmill / Indoor" }
+      ]
+    },
+    {
+      "key": "cushioning",
+      "name": "Cushioning Level",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "minimal", "label": "Minimal / Barefoot" },
+        { "value": "light", "label": "Light" },
+        { "value": "moderate", "label": "Moderate" },
+        { "value": "max", "label": "Max Cushion" }
+      ]
+    },
+    {
+      "key": "support_type",
+      "name": "Support Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 5,
+      "choices": [
+        { "value": "neutral", "label": "Neutral" },
+        { "value": "stability", "label": "Stability (Overpronation)" },
+        { "value": "motion_control", "label": "Motion Control (Severe Overpronation)" }
+      ]
+    },
+    {
+      "key": "drop",
+      "name": "Heel-to-Toe Drop",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "zero", "label": "Zero Drop (0mm)" },
+        { "value": "low", "label": "Low Drop (1–6mm)" },
+        { "value": "standard", "label": "Standard Drop (7–10mm)" },
+        { "value": "high", "label": "High Drop (11mm+)" }
+      ]
+    },
+    {
+      "key": "distance",
+      "name": "Distance",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "sprint", "label": "Sprint / Short Distance" },
+        { "value": "5k_10k", "label": "5K – 10K" },
+        { "value": "half_marathon", "label": "Half Marathon" },
+        { "value": "marathon", "label": "Marathon" },
+        { "value": "ultra", "label": "Ultra Marathon" },
+        { "value": "daily_trainer", "label": "Daily Trainer (All Distances)" }
+      ]
+    },
+    {
+      "key": "carbon_plate",
+      "name": "Carbon Plate",
+      "type": "BOOLEAN",
+      "sortOrder": 8,
+      "description": "Contains a carbon fibre plate for energy return"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 9,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "athletics-spikes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "spike_type",
+      "name": "Spike Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "sprint", "label": "Sprint (100m–400m)" },
+        { "value": "middle_distance", "label": "Middle Distance (800m–1500m)" },
+        { "value": "long_distance", "label": "Long Distance (3000m+)" },
+        { "value": "cross_country", "label": "Cross Country" },
+        { "value": "hurdles", "label": "Hurdles" },
+        { "value": "high_jump", "label": "High Jump" },
+        { "value": "long_jump_triple_jump", "label": "Long Jump / Triple Jump" },
+        { "value": "pole_vault", "label": "Pole Vault" },
+        { "value": "javelin", "label": "Javelin" },
+        { "value": "multi_event", "label": "Multi-Event / All-Round" }
+      ]
+    },
+    {
+      "key": "spike_pin_length",
+      "name": "Spike Pin Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "5mm", "label": "5mm (Indoor / Hard Track)" },
+        { "value": "6mm", "label": "6mm (Standard Track)" },
+        { "value": "9mm", "label": "9mm (Soft Track)" },
+        { "value": "12mm", "label": "12mm (Cross Country / Grass)" },
+        { "value": "15mm", "label": "15mm (Muddy XC)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "running-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "t_shirt", "label": "T-Shirt / Running Top" },
+        { "value": "singlet", "label": "Singlet / Vest" },
+        { "value": "long_sleeve", "label": "Long Sleeve Top" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "tights_leggings", "label": "Tights / Leggings" },
+        { "value": "capri", "label": "Capri / 3/4 Tights" },
+        { "value": "sports_bra", "label": "Sports Bra" },
+        { "value": "running_jacket", "label": "Running Jacket (Windproof)" },
+        { "value": "waterproof_jacket", "label": "Waterproof Jacket" },
+        { "value": "gilet", "label": "Gilet / Vest (Sleeveless)" },
+        { "value": "arm_warmers", "label": "Arm Warmers" },
+        { "value": "cap", "label": "Running Cap" },
+        { "value": "beanie", "label": "Beanie / Headband" },
+        { "value": "gloves", "label": "Running Gloves" },
+        { "value": "buff", "label": "Buff / Neck Gaiter" }
+      ]
+    },
+    {
+      "key": "season",
+      "name": "Season",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "summer", "label": "Summer / Hot Weather" },
+        { "value": "winter", "label": "Winter / Cold Weather" },
+        { "value": "all_season", "label": "All Season" },
+        { "value": "rain", "label": "Wet Weather / Rain" }
+      ]
+    },
+    {
+      "key": "reflective",
+      "name": "Reflective",
+      "type": "BOOLEAN",
+      "sortOrder": 5,
+      "description": "Reflective elements for low-light visibility"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow (Hi-Vis)" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange (Hi-Vis)" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "running-socks": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "S (UK 3–5.5)" },
+        { "value": "medium", "label": "M (UK 6–8.5)" },
+        { "value": "large", "label": "L (UK 9–11.5)" },
+        { "value": "xl", "label": "XL (UK 12+)" }
+      ]
+    },
+    {
+      "key": "sock_type",
+      "name": "Sock Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "no_show", "label": "No-Show / Invisible" },
+        { "value": "ankle", "label": "Ankle" },
+        { "value": "quarter", "label": "Quarter" },
+        { "value": "crew", "label": "Crew (Mid-Calf)" },
+        { "value": "compression", "label": "Compression (Calf)" },
+        { "value": "toe_socks", "label": "Toe Socks" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "running-watches-electronics": [
+    {
+      "key": "device_type",
+      "name": "Device Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "gps_watch", "label": "GPS Running Watch" },
+        { "value": "fitness_tracker", "label": "Fitness Tracker / Band" },
+        { "value": "heart_rate_monitor", "label": "Heart Rate Monitor (Chest Strap)" },
+        { "value": "running_pod", "label": "Running Pod / Foot Pod" },
+        { "value": "headphones", "label": "Sport Headphones (Wireless)" },
+        { "value": "headlamp", "label": "Running Headlamp / Light" },
+        { "value": "safety_light", "label": "Safety / Clip-On Light" }
+      ]
+    },
+    {
+      "key": "gps",
+      "name": "GPS",
+      "type": "BOOLEAN",
+      "sortOrder": 2,
+      "description": "Built-in GPS for route and pace tracking"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hydration": [
+    {
+      "key": "hydration_type",
+      "name": "Hydration Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "handheld_bottle", "label": "Handheld Bottle" },
+        { "value": "hydration_vest", "label": "Hydration Vest / Pack" },
+        { "value": "belt_bottle", "label": "Belt / Waist Bottle" },
+        { "value": "soft_flask", "label": "Soft Flask / Collapsible" },
+        { "value": "bladder", "label": "Hydration Bladder (Reservoir)" },
+        { "value": "electrolyte_tabs", "label": "Electrolyte Tablets / Powder" },
+        { "value": "energy_gels", "label": "Energy Gels / Chews" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "250ml", "label": "250ml" },
+        { "value": "500ml", "label": "500ml" },
+        { "value": "750ml", "label": "750ml" },
+        { "value": "1l", "label": "1L" },
+        { "value": "1_5l", "label": "1.5L" },
+        { "value": "2l", "label": "2L+" },
+        { "value": "na", "label": "N/A (Nutrition)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "clear", "label": "Clear" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "running-bags-belts": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "running_backpack", "label": "Running Backpack" },
+        { "value": "race_vest", "label": "Race Vest" },
+        { "value": "waist_belt", "label": "Waist Belt / Flip Belt" },
+        { "value": "arm_band", "label": "Arm Band (Phone)" },
+        { "value": "drawstring", "label": "Drawstring / Gym Sack" },
+        { "value": "shoe_bag", "label": "Shoe Bag" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "minimal", "label": "Minimal (Phone / Keys)" },
+        { "value": "small", "label": "Small (5L)" },
+        { "value": "medium", "label": "Medium (5–12L)" },
+        { "value": "large", "label": "Large (12L+)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "running-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "insoles", "label": "Insoles / Orthotics" },
+        { "value": "laces", "label": "Elastic / Lock Laces" },
+        { "value": "race_number_belt", "label": "Race Number Belt" },
+        { "value": "sunglasses", "label": "Running Sunglasses" },
+        { "value": "anti_chafe", "label": "Anti-Chafe Balm / Body Glide" },
+        { "value": "foam_roller", "label": "Foam Roller" },
+        { "value": "massage_gun", "label": "Massage Gun" },
+        { "value": "resistance_band", "label": "Resistance Band" },
+        { "value": "compression_sleeve", "label": "Compression Calf Sleeve" },
+        { "value": "knee_support", "label": "Knee Support / IT Band Strap" },
+        { "value": "ankle_support", "label": "Ankle Support" },
+        { "value": "blister_plasters", "label": "Blister Plasters / Tape" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "athletics-field-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "shot_put", "label": "Shot Put" },
+        { "value": "discus", "label": "Discus" },
+        { "value": "javelin", "label": "Javelin" },
+        { "value": "hammer", "label": "Hammer" },
+        { "value": "hurdles", "label": "Hurdles" },
+        { "value": "starting_blocks", "label": "Starting Blocks" },
+        { "value": "relay_baton", "label": "Relay Baton" },
+        { "value": "high_jump_bar", "label": "High Jump Bar / Crossbar" },
+        { "value": "high_jump_mat", "label": "High Jump Landing Mat" },
+        { "value": "pole_vault_pole", "label": "Pole Vault Pole" },
+        { "value": "measuring_tape", "label": "Measuring Tape" },
+        { "value": "cones_markers", "label": "Cones / Lane Markers" }
+      ]
+    },
+    {
+      "key": "weight_class",
+      "name": "Weight Class",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "description": "For throws events – weight varies by age/gender category",
+      "choices": [
+        { "value": "senior_men", "label": "Senior Men" },
+        { "value": "senior_women", "label": "Senior Women" },
+        { "value": "junior_men", "label": "Junior Men" },
+        { "value": "junior_women", "label": "Junior Women" },
+        { "value": "youth", "label": "Youth" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / School" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / County" },
+        { "value": "professional", "label": "Professional / Competition" }
+      ]
+    }
+  ]
+}

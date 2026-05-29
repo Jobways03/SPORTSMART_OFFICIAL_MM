@@ -15,6 +15,9 @@ import { AffiliateSupportController } from './presentation/controllers/affiliate
 import { SupportService } from './application/services/support.service';
 import { SupportPublicFacade } from './application/facades/support-public.facade';
 import { DisputeMirrorHandler } from './application/event-handlers/dispute-mirror.handler';
+import { SlaBreachSweepCron } from './application/jobs/sla-breach-sweep.cron';
+import { TicketMirrorSweepCron } from './application/jobs/ticket-mirror-sweep.cron';
+import { DisputeMirrorBackSweepCron } from './application/jobs/dispute-mirror-back-sweep.cron';
 import { PrismaSupportRepository } from './infrastructure/repositories/prisma-support.repository';
 import { SUPPORT_REPOSITORY } from './domain/repositories/support.repository.interface';
 
@@ -38,6 +41,9 @@ import { SUPPORT_REPOSITORY } from './domain/repositories/support.repository.int
     SupportService,
     SupportPublicFacade,
     DisputeMirrorHandler,
+    SlaBreachSweepCron,
+    TicketMirrorSweepCron,
+    DisputeMirrorBackSweepCron,
     {
       provide: SUPPORT_REPOSITORY,
       useClass: PrismaSupportRepository,

@@ -33,22 +33,63 @@ export type OrderStatus =
   | 'DISPATCHED'
   | 'DELIVERED'
   | 'CANCELLED'
-  | 'EXCEPTION_QUEUE';
+  // Phase 74 (2026-05-22) — verifier-initiated rejection. Distinct
+  // from CANCELLED so refund saga + analytics can branch.
+  | 'REJECTED'
+  | 'EXCEPTION_QUEUE'
+  // Phase 81 (2026-05-22) — cancel audit Gap #6/#20. Set when some
+  // but not all sub-orders have been cancelled. From here the master
+  // can still progress (PARTIALLY_CANCELLED → DELIVERED for the
+  // remaining sub-orders) or go fully CANCELLED if the last active
+  // sub-order is later cancelled too.
+  | 'PARTIALLY_CANCELLED'
+  // Phase 82 (2026-05-23) — pack/ship audit Gap #12/#13. Master is
+  // mid-shipment: at least one sub-order is SHIPPED but at least one
+  // is still UNFULFILLED/PACKED. Resolves to DISPATCHED once every
+  // active sub-order has shipped.
+  | 'PARTIALLY_SHIPPED'
+  // Phase 83 (2026-05-23) — delivery audit. Master is mid-delivery:
+  // some sub-orders delivered, others still in transit. Resolves to
+  // DELIVERED when the last sub-order arrives.
+  | 'PARTIALLY_DELIVERED';
 
 const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   // Initial state for ONLINE orders awaiting gateway capture.
   // Canonical happy path is PENDING_PAYMENT → PLACED (via verifyPayment).
   // Auto-cancel on payment-window expiry routes to CANCELLED.
   PENDING_PAYMENT: ['PLACED', 'CANCELLED'],
-  PLACED: ['PENDING_VERIFICATION', 'VERIFIED', 'CANCELLED', 'EXCEPTION_QUEUE'],
-  PENDING_VERIFICATION: ['VERIFIED', 'CANCELLED', 'EXCEPTION_QUEUE'],
-  VERIFIED: ['ROUTED_TO_SELLER', 'CANCELLED', 'EXCEPTION_QUEUE'],
-  ROUTED_TO_SELLER: ['SELLER_ACCEPTED', 'CANCELLED', 'EXCEPTION_QUEUE'],
-  SELLER_ACCEPTED: ['DISPATCHED', 'CANCELLED', 'EXCEPTION_QUEUE'],
-  DISPATCHED: ['DELIVERED', 'EXCEPTION_QUEUE'],
+  PLACED: ['PENDING_VERIFICATION', 'VERIFIED', 'CANCELLED', 'REJECTED', 'EXCEPTION_QUEUE'],
+  PENDING_VERIFICATION: ['VERIFIED', 'CANCELLED', 'REJECTED', 'EXCEPTION_QUEUE'],
+  VERIFIED: ['ROUTED_TO_SELLER', 'CANCELLED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED'],
+  ROUTED_TO_SELLER: ['SELLER_ACCEPTED', 'CANCELLED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED'],
+  // Phase 82 — SELLER_ACCEPTED → PARTIALLY_SHIPPED when first sub-order
+  // ships and others still pending.
+  SELLER_ACCEPTED: ['DISPATCHED', 'CANCELLED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED', 'PARTIALLY_SHIPPED'],
+  // Phase 81 — DISPATCHED can also become PARTIALLY_CANCELLED if a
+  // SHIPPED sub-order gets force-cancelled (rare but legal). The
+  // remaining sub-orders continue to DELIVERED.
+  // Phase 83 — DISPATCHED → PARTIALLY_DELIVERED when first sub-order
+  // arrives but others still in transit.
+  DISPATCHED: ['DELIVERED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED', 'PARTIALLY_DELIVERED'],
+  // Phase 81 — PARTIALLY_CANCELLED can resolve either way:
+  //   • last remaining sub-order delivers → DELIVERED
+  //   • last remaining sub-order cancels → CANCELLED
+  //   • anything goes wrong → EXCEPTION_QUEUE
+  PARTIALLY_CANCELLED: ['DELIVERED', 'CANCELLED', 'DISPATCHED', 'EXCEPTION_QUEUE'],
+  // Phase 82 — PARTIALLY_SHIPPED resolves to DISPATCHED once the last
+  // remaining sub-order ships, or to PARTIALLY_CANCELLED / CANCELLED
+  // if a pending sub-order gets cancelled instead.
+  // Phase 83 — also → PARTIALLY_DELIVERED when one of the shipped
+  // sub-orders arrives while others are still in transit.
+  PARTIALLY_SHIPPED: ['DISPATCHED', 'DELIVERED', 'PARTIALLY_DELIVERED', 'PARTIALLY_CANCELLED', 'CANCELLED', 'EXCEPTION_QUEUE'],
+  // Phase 83 — PARTIALLY_DELIVERED resolves to DELIVERED when the
+  // last sub-order arrives, or to CANCELLED / PARTIALLY_CANCELLED
+  // if a pending sub-order gets cancelled instead.
+  PARTIALLY_DELIVERED: ['DELIVERED', 'PARTIALLY_CANCELLED', 'CANCELLED', 'EXCEPTION_QUEUE'],
   // Terminal states — no transitions out.
   DELIVERED: [],
   CANCELLED: [],
+  REJECTED: [],
   // EXCEPTION_QUEUE is a manual-recovery state. Admins can push it back into
   // the flow, so we allow it to leave to most non-terminal states.
   EXCEPTION_QUEUE: [
@@ -57,6 +98,10 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
     'SELLER_ACCEPTED',
     'DISPATCHED',
     'CANCELLED',
+    'REJECTED',
+    'PARTIALLY_CANCELLED',
+    'PARTIALLY_SHIPPED',
+    'PARTIALLY_DELIVERED',
   ],
 };
 
@@ -76,8 +121,15 @@ const FULFILLMENT_STATUS_TRANSITIONS: Record<
 > = {
   UNFULFILLED: ['PACKED', 'CANCELLED'],
   PACKED: ['SHIPPED', 'CANCELLED'],
-  SHIPPED: ['DELIVERED', 'FULFILLED'],
-  FULFILLED: ['DELIVERED'],
+  // Phase 81 (2026-05-22) — cancel audit Gap #8. SHIPPED + FULFILLED
+  // can transition to CANCELLED via the admin force-cancel path.
+  // The application layer guards this with the
+  // `orders.subOrder.cancel.force` permission so a default
+  // sub-order-cancel admin can't trigger it; the FSM allows the
+  // transition as a legal state-machine move so the courier-
+  // coordination flow can fire downstream.
+  SHIPPED: ['DELIVERED', 'FULFILLED', 'CANCELLED'],
+  FULFILLED: ['DELIVERED', 'CANCELLED'],
   // Terminal
   DELIVERED: [],
   CANCELLED: [],
@@ -112,6 +164,7 @@ export type ReturnStatus =
   | 'PARTIALLY_APPROVED'
   | 'REFUND_PROCESSING'
   | 'REFUNDED'
+  | 'REFUND_FAILED'
   | 'COMPLETED'
   | 'CANCELLED'
   // Phase 12 — dispute-driven overrides on the linked return.
@@ -156,9 +209,21 @@ const RETURN_STATUS_TRANSITIONS: Record<ReturnStatus, readonly ReturnStatus[]> =
     'DISPUTE_CONFIRMED',
     'GOODWILL_CREDITED',
   ],
-  // Refund processing terminal-ish
-  REFUND_PROCESSING: ['REFUNDED'],
+  // Refund processing terminal-ish.
+  // Phase 100 (2026-05-23) — Phase 98 audit Gap #17 + #18 closure.
+  // Added → REFUND_FAILED (retry cap exhausted; gateway rejection)
+  // and → CANCELLED (admin-cancelled after manual review). Both keep
+  // the customer-facing case explicit instead of leaving the row
+  // pinned in REFUND_PROCESSING forever.
+  REFUND_PROCESSING: ['REFUNDED', 'REFUND_FAILED', 'CANCELLED'],
   REFUNDED: ['COMPLETED'],
+  // REFUND_FAILED is a terminal escalation state; an AdminTask drives
+  // the human resolution which may flip to REFUNDED (manual bank
+  // transfer reference), CANCELLED (customer abandoned), or COMPLETED
+  // (Phase 105 — Phase 103 audit close terminal). The closeReturn
+  // path needs the COMPLETED edge so support can clear the failed-
+  // refund queue once the customer accepts the outcome.
+  REFUND_FAILED: ['REFUNDED', 'CANCELLED', 'COMPLETED'],
   // Phase 12 — even completed returns can later be touched by a
   // dispute that surfaces evidence after the fact (e.g. customer
   // contacts support post-refund about a partial-only resolution

@@ -11,6 +11,10 @@ interface ListSellersInput {
   search?: string;
   status?: string;
   verificationStatus?: string;
+  // Phase 38 — D2C / RETAIL discriminator; narrows the query to one
+  // seller class. Each admin frontend (web-d2c-seller-admin /
+  // web-retail-seller-admin) always pins this to its own type.
+  sellerType?: 'D2C' | 'RETAIL';
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   fromDate?: string;
@@ -41,6 +45,7 @@ export class AdminListSellersUseCase {
       search,
       status,
       verificationStatus,
+      sellerType,
       sortBy = 'createdAt',
       sortOrder = 'desc',
       fromDate,
@@ -60,6 +65,11 @@ export class AdminListSellersUseCase {
 
     if (verificationStatus) {
       where.verificationStatus = verificationStatus as any;
+    }
+
+    if (sellerType) {
+      // Phase 38 — narrows to D2C or RETAIL.
+      (where as any).sellerType = sellerType;
     }
 
     if (fromDate) {
@@ -101,6 +111,10 @@ export class AdminListSellersUseCase {
         sellerShopName: s.sellerShopName,
         email: s.email,
         phoneNumber: s.phoneNumber,
+        // Phase 38 — surface the D2C / RETAIL discriminator on the
+        // list response so the super-admin UI can render a Type column
+        // + filter without a per-row fetch.
+        sellerType: (s as any).sellerType ?? null,
         status: s.status,
         verificationStatus: s.verificationStatus,
         isEmailVerified: s.isEmailVerified,

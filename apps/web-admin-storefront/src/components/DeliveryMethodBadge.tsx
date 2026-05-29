@@ -2,16 +2,14 @@
 
 import React from 'react';
 
-export type DeliveryMethod = 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null | undefined;
+export type DeliveryMethod = 'SELF_DELIVERY' | null | undefined;
 
 /**
  * Single-source badge for "how is this order being delivered?".
  *
- * Renders distinct visual styling for each method so admins can scan
- * an order list and tell apart courier-routed (iThink) from
- * in-house-delivered (self) shipments. NULL means the seller /
- * franchise hasn't picked a method yet — show "Not chosen" in muted
- * grey rather than hiding the column.
+ * Renders the delivery method so admins can scan an order list at a
+ * glance. NULL means the seller / franchise hasn't picked a method
+ * yet — show "Not chosen" in muted grey rather than hiding the column.
  *
  * Kept inline (no shared package) so each app can ship without
  * crossing the workspace boundary for a one-line badge. The colour
@@ -80,14 +78,6 @@ export function DeliveryMethodBadge({
 
 function configFor(method: DeliveryMethod) {
   switch (method) {
-    case 'ITHINK_LOGISTICS':
-      return {
-        label: 'iThink',
-        icon: '\u{1F69A}', // delivery truck
-        bg: '#eff6ff',
-        fg: '#1e3a8a',
-        border: '#bfdbfe',
-      };
     case 'SELF_DELIVERY':
       return {
         label: 'Self Delivery',

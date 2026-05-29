@@ -3,27 +3,34 @@
 // ============================================
 
 model Category {
-  id          String   @id @default(uuid())
-  name        String
-  slug        String   @unique
-  description String?
-  imageUrl    String?  @map("image_url")
+  id                        String   @id @default(uuid())
+  name                      String
+  slug                      String   @unique
+  description               String?
+  imageUrl                  String?  @map("image_url")
   // Story Phase 5 Cat-1 — wide banner shown on the category landing
   // page. Distinct from `imageUrl` which is the square thumbnail used
   // in nav menus and category grids.
-  bannerUrl   String?  @map("banner_url")
+  bannerUrl                 String?  @map("banner_url")
   // SEO blocks — set per-category so search engines pick up the
   // canonical headline / blurb rather than the generic site default.
   // Both nullable; the storefront falls back to `name` + first 160
   // chars of `description` when these are empty.
-  metaTitle       String? @map("meta_title")
-  metaDescription String? @map("meta_description")
-  parentId    String?  @map("parent_id")
-  level       Int      @default(0)
-  sortOrder   Int      @default(0) @map("sort_order")
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  metaTitle                 String?  @map("meta_title")
+  metaDescription           String?  @map("meta_description")
+  parentId                  String?  @map("parent_id")
+  level                     Int      @default(0)
+  sortOrder                 Int      @default(0) @map("sort_order")
+  isActive                  Boolean  @default(true) @map("is_active")
+  // Phase 92 (2026-05-23) — Return Eligibility audit Gap #2.
+  // Category-level return policy. Resolver falls back to these when
+  // Product.* overrides are null. Null = use the global default
+  // (RETURN_WINDOW_DAYS env / 14d).
+  defaultReturnWindowDays   Int?     @map("default_return_window_days")
+  isReturnable              Boolean  @default(true) @map("is_returnable")
+  defaultAllowedReasonsJson Json?    @map("default_allowed_reasons_json")
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
 
   parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children Category[] @relation("CategoryHierarchy")
@@ -31,25 +38,127 @@ model Category {
   products                Product[]
   categoryOptionTemplates CategoryOptionTemplate[]
   metafieldDefinitions    MetafieldDefinition[]
+  // Phase 34 (2026-05-21) — back-relation for the audit log.
+  auditLogs               CategoryAuditLog[]
 
   @@index([parentId])
   @@index([slug])
+  // Phase 33 (2026-05-21) — query-pattern indexes.
+  //   - `level` filter on admin list page.
+  //   - `isActive` for the storefront tree (~352 active rows today;
+  //     the flat fetch in findActiveTree benefits from a partial-ish
+  //     access pattern).
+  //   - `(parentId, isActive, sortOrder)` is what the storefront tree
+  //     and the admin "children of X" panel both join + order on.
+  @@index([level])
+  @@index([isActive])
+  @@index([parentId, isActive, sortOrder])
   @@map("categories")
 }
 
-model Brand {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  slug      String   @unique
-  logoUrl   String?  @map("logo_url")
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+/// Phase 34 (2026-05-21) — Category mutation audit trail.
+///
+/// Every create / update / delete / deactivate / reorder operation
+/// against the taxonomy lands a row here. The previous + new state
+/// JSON snapshots let an investigator reconstruct what changed and
+/// when. The `action` enum is intentionally narrower than the unified
+/// AuditLog to keep this table query-friendly for the dedicated
+/// "category history" admin view.
+///
+/// Writes are best-effort: a failure here logs but does NOT roll back
+/// the primary mutation. The taxonomy is the source of truth; the
+/// audit log is the mirror.
+model CategoryAuditLog {
+  id            String              @id @default(uuid())
+  categoryId    String              @map("category_id")
+  action        CategoryAuditAction
+  adminId       String?             @map("admin_id")
+  previousState Json?               @map("previous_state")
+  newState      Json?               @map("new_state")
+  reason        String?
+  createdAt     DateTime            @default(now()) @map("created_at")
 
-  products Product[]
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId, createdAt])
+  @@index([adminId, createdAt])
+  @@map("category_audit_logs")
+}
+
+enum CategoryAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  DEACTIVATE
+  REORDER
+}
+
+model Brand {
+  id              String   @id @default(uuid())
+  name            String   @unique
+  slug            String   @unique
+  logoUrl         String?  @map("logo_url")
+  // Phase 35 (2026-05-21) — Cloudinary publicId for the logo asset.
+  // Stored alongside `logoUrl` so the controller can:
+  //   - delete the old asset when admin replaces the logo
+  //   - clean up the asset when admin hard-deletes the brand
+  //   - clean up the asset when admin removes the logo
+  // Pre-Phase-35 every logo replacement orphaned the prior asset;
+  // each brand could accumulate dozens of dead Cloudinary blobs.
+  logoPublicId    String?  @map("logo_public_id")
+  // Phase 35 — parity with Category. Description for the brand
+  // landing page; SEO metadata for search-engine snippets. All
+  // optional; storefront falls back to name + first 160 chars of
+  // description when omitted.
+  description     String?  @db.Text
+  metaTitle       String?  @map("meta_title")
+  metaDescription String?  @map("meta_description")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  products  Product[]
+  // Phase 35 (2026-05-21) — back-relation for the audit log mirror.
+  auditLogs BrandAuditLog[]
 
   @@index([slug])
+  // Phase 35 (2026-05-21) — public storefront filters by isActive
+  // and orders by name; the composite covers both predicates plus
+  // the order without a separate sort.
+  @@index([isActive])
+  @@index([isActive, name])
   @@map("brands")
+}
+
+/// Phase 35 (2026-05-21) — Brand mutation audit trail.
+/// Mirrors CategoryAuditLog. Every create / update / delete / deactivate
+/// / logo-change / bulk-assign writes a row. Best-effort: failures here
+/// log but never roll back the primary mutation. The taxonomy is the
+/// source of truth; the audit log is the mirror.
+model BrandAuditLog {
+  id            String           @id @default(uuid())
+  brandId       String           @map("brand_id")
+  action        BrandAuditAction
+  adminId       String?          @map("admin_id")
+  previousState Json?            @map("previous_state")
+  newState      Json?            @map("new_state")
+  reason        String?
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId, createdAt])
+  @@index([adminId, createdAt])
+  @@map("brand_audit_logs")
+}
+
+enum BrandAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  DEACTIVATE
+  LOGO_CHANGE
+  BULK_ASSIGN
 }
 
 model OptionDefinition {
@@ -159,36 +268,66 @@ model Product {
   dimensionUnit String?  @default("cm") @map("dimension_unit")
 
   // Policy
-  returnPolicy String? @map("return_policy")
-  warrantyInfo String? @map("warranty_info")
+  returnPolicy             String? @map("return_policy")
+  warrantyInfo             String? @map("warranty_info")
+  // Phase 92 (2026-05-23) — Return Eligibility audit Gap #1/#2/#11.
+  // Structured returnability so the eligibility resolver doesn't
+  // depend on free-text parsing. Defaults preserve today's behaviour
+  // (everything returnable with the global window) until ops
+  // populates per-product overrides.
+  isReturnable             Boolean @default(true) @map("is_returnable")
+  nonReturnableReason      String? @map("non_returnable_reason")
+  returnWindowDaysOverride Int?    @map("return_window_days_override")
+  // Per-product allowed reason categories. Null = inherit from
+  // category default. Stored as JSON list of ReturnReasonCategory
+  // enum values; the resolver normalises before exposing.
+  allowedReturnReasonsJson Json?   @map("allowed_return_reasons_json")
+  // Phase 92 — Gap #12 partial-quantity policy. False = all-or-nothing
+  // (pack-of-N SKUs, sets that can't be split).
+  allowPartialReturn       Boolean @default(true) @map("allow_partial_return")
 
   // ─── Tax fields (Phase 1 GST — 2026-05-13) ──────────────────────
   // See docs/tax/CA.md and docs/tax/HSN_RATE_POLICY.md.
   // Tax-data-status is derived at runtime (not stored) based on
   // whether (hsnCode + gstRateBps + defaultUqcCode) are set for a
   // taxable product. Admin moderation surfaces TAX_DATA_MISSING.
-  hsnCode             String?           @map("hsn_code")
-  gstRateBps          Int               @default(0) @map("gst_rate_bps")
-  supplyTaxability    SupplyTaxability  @default(TAXABLE) @map("supply_taxability")
+  hsnCode             String?          @map("hsn_code")
+  gstRateBps          Int              @default(0) @map("gst_rate_bps")
+  supplyTaxability    SupplyTaxability @default(TAXABLE) @map("supply_taxability")
   // Default B2C convention for India e-commerce: prices ARE inclusive
   // of GST. Admin can flip per-product for B2B-only or GST-exclusive
   // catalogs. See docs/tax/GST_ASSUMPTIONS.md §2 row "GST-inclusive".
-  taxInclusivePricing Boolean           @default(true) @map("tax_inclusive_pricing")
+  taxInclusivePricing Boolean          @default(true) @map("tax_inclusive_pricing")
   // Compensation cess (sports goods generally don't attract cess).
   // Schema-ready for future HSN that may; default 0.
-  cessRateBps         Int               @default(0) @map("cess_rate_bps")
+  cessRateBps         Int              @default(0) @map("cess_rate_bps")
   // UQC code per CBIC list (NOS, PCS, KGS, ...). Required at
   // order-line snapshot time; falls back to "NOS" at engine level if
   // missing in non-strict mode.
-  defaultUqcCode      String?           @map("default_uqc_code")
+  defaultUqcCode      String?          @map("default_uqc_code")
   // Free-text classification: e.g. "apparel-under-1000", "footwear",
   // "equipment". Used by admin bulk operations + reports.
-  taxCategory         String?           @map("tax_category")
-  taxConfigUpdatedBy  String?           @map("tax_config_updated_by")
-  taxConfigUpdatedAt  DateTime?         @map("tax_config_updated_at")
-
-  // Duplicate detection
-  potentialDuplicateOf String? @map("potential_duplicate_of")
+  taxCategory         String?          @map("tax_category")
+  taxConfigUpdatedBy  String?          @map("tax_config_updated_by")
+  taxConfigUpdatedAt  DateTime?        @map("tax_config_updated_at")
+  // Phase 37 — admin attestation that the product's tax config (HSN,
+  // GST rate, supply taxability, cess) has been reviewed for
+  // correctness. Seller-proposed tax fields land with this false;
+  // an admin flips it true via the verify-tax-config endpoint. Any
+  // subsequent write that changes a tax field auto-resets this to
+  // false so a seller can't bypass approval by editing post-attestation.
+  // Surfaced on the admin product list so reviewers can prioritise.
+  taxConfigVerified   Boolean          @default(false) @map("tax_config_verified")
+  taxConfigVerifiedAt DateTime?        @map("tax_config_verified_at")
+  taxConfigVerifiedBy String?          @map("tax_config_verified_by")
+  // Phase 45 (2026-05-21) — monotonic version on tax-config writes.
+  // Incremented on every write that touches a tax column, including
+  // attestation flips and resets. verify-tax-config accepts the
+  // version the admin reviewed (`expectedVersion`); the service
+  // refuses the attest when the row has drifted since the read,
+  // closing the read-then-write race that pre-Phase-45 let an admin
+  // stamp their name on data they hadn't actually seen.
+  taxConfigVersion    Int              @default(0) @map("tax_config_version")
 
   isDeleted Boolean   @default(false) @map("is_deleted")
   deletedAt DateTime? @map("deleted_at")
@@ -219,6 +358,11 @@ model Product {
   pricingTiers             ProductPricingTier[]
   // User-generated reviews (see product-reviews.prisma).
   reviews                  ProductReview[]
+  // Phase 45 (2026-05-21) — append-only audit trail of tax-config
+  // attestation transitions (ATTESTED / RESET / EDITED / BULK_EDITED).
+  // CA-compliance audits demand the historical chain, not just the
+  // last writer that sits in the Product columns.
+  taxAttestations          TaxAttestationLog[]
 
   @@index([sellerId])
   @@index([categoryId])
@@ -228,6 +372,54 @@ model Product {
   @@index([slug])
   @@index([isDeleted])
   @@map("products")
+}
+
+/// Phase 45 (2026-05-21) — tax-config attestation audit trail.
+///
+/// Pre-Phase-45 the only record of who attested a product was the
+/// taxConfigVerified{At,By} columns on Product — last-writer-wins,
+/// no historical chain. CA audits compare the attestation evidence
+/// against the data at the time of attestation; without a log there's
+/// no way to prove A attested v1, B reset, A re-attested v2. This
+/// table captures every transition so the auditor can reconstruct
+/// the timeline.
+model TaxAttestationLog {
+  id                   String               @id @default(uuid())
+  productId            String               @map("product_id")
+  action               TaxAttestationAction
+  // Snapshot of the tax fields at the time of the transition. NULLs
+  // are legal — e.g. for a RESET, the new* columns are NULL because
+  // the attestation was cleared, not the data.
+  prevHsn              String?              @map("prev_hsn")
+  prevGstRateBps       Int?                 @map("prev_gst_rate_bps")
+  prevSupplyTaxability String?              @map("prev_supply_taxability")
+  prevUqcCode          String?              @map("prev_uqc_code")
+  newHsn               String?              @map("new_hsn")
+  newGstRateBps        Int?                 @map("new_gst_rate_bps")
+  newSupplyTaxability  String?              @map("new_supply_taxability")
+  newUqcCode           String?              @map("new_uqc_code")
+  // The taxConfigVersion at the moment of the transition. Verifying
+  // admin can pin their attestation to the exact version they
+  // reviewed.
+  taxConfigVersion     Int                  @map("tax_config_version")
+  actorId              String               @map("actor_id")
+  // SELLER / ADMIN / SYSTEM — the audit can scope by role.
+  actorRole            String               @map("actor_role")
+  reviewerNote         String?              @map("reviewer_note")
+  createdAt            DateTime             @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("tax_attestation_logs")
+}
+
+enum TaxAttestationAction {
+  ATTESTED
+  RESET
+  EDITED
+  BULK_EDITED
 }
 
 // Story 3.5 — Product Pricing Tiers (display-only at v1).
@@ -257,12 +449,29 @@ model ProductPricingTier {
   // Inclusive lower bound: tier applies when cart line quantity >=
   // minQuantity. Multiple tiers per product form a ladder; the
   // highest matching tier wins at display time.
-  minQuantity Int @map("min_quantity")
+  minQuantity Int  @map("min_quantity")
+  // Phase 44 (2026-05-21) — inclusive upper bound for closed-range
+  // tiers (e.g. "Buy 10-24: 5% off"). NULL = unbounded. Migration
+  // adds a CHECK (max_quantity IS NULL OR max_quantity >= min_quantity).
+  maxQuantity Int? @map("max_quantity")
 
-  // Percent off the line's unit price. 0–100 enforced at the service
-  // layer; the column itself accepts the raw value to keep migrations
-  // straightforward.
-  discountPercent Decimal @map("discount_percent") @db.Decimal(5, 2)
+  // Phase 44 — pricing modes are mutually exclusive. Exactly one of
+  // discountPercent / fixedUnitPrice must be set; the migration adds
+  // a CHECK constraint for that invariant.
+  //
+  // discountPercent — percent off the line's list unit price (0-100,
+  // enforced at the service layer).
+  discountPercent Decimal? @map("discount_percent") @db.Decimal(5, 2)
+  // fixedUnitPrice — absolute override (e.g. "₹999 at 50+"). Keeps
+  // the same Decimal(10,2) scale as variant.price / product.basePrice.
+  fixedUnitPrice  Decimal? @map("fixed_unit_price") @db.Decimal(10, 2)
+
+  // Phase 44 — optional schedule window. NULL on either end means
+  // open-ended on that side. The active-check is
+  //   isActive=true AND (startAt IS NULL OR startAt <= NOW)
+  //                AND (endAt IS NULL OR endAt > NOW)
+  startAt DateTime? @map("start_at")
+  endAt   DateTime? @map("end_at")
 
   // Optional override copy ("Buy 5+ save 10%"). Falls back to a
   // formatted default when null. Useful when ops wants a campaign
@@ -275,11 +484,19 @@ model ProductPricingTier {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // Phase 44 (2026-05-21) — back-relations from the snapshot columns
+  // on CartItem / OrderItem so a tier can find every line that
+  // referenced it (useful for audit + commission re-computation).
+  cartItems  CartItem[]
+  orderItems OrderItem[]
 
   @@unique([productId, variantId, minQuantity], name: "product_variant_qty_unique")
   @@index([productId])
   @@index([productId, isActive])
+  // Phase 44 — covers the resolver's "active tiers in window for
+  // product+variant" query.
+  @@index([productId, isActive, variantId])
   @@map("product_pricing_tiers")
 }
 
@@ -342,10 +559,23 @@ model ProductVariant {
   taxInclusivePricingOverride Boolean? @map("tax_inclusive_pricing_override")
   uqcCodeOverride             String?  @map("uqc_code_override")
 
-  isDeleted        Boolean       @default(false) @map("is_deleted")
-  deletedAt        DateTime?     @map("deleted_at")
-  createdAt        DateTime      @default(now()) @map("created_at")
-  updatedAt        DateTime      @updatedAt @map("updated_at")
+  // Phase 41 (2026-05-21) — deterministic fingerprint of the option-
+  // value combination this variant represents. Computed as
+  //   sha256(sorted_join(optionValueIds, '|'))
+  // by VariantGeneratorService at create time. The DB-level
+  // @@unique([productId, optionFingerprint]) below makes "two variants
+  // representing the same Red/Large combination on one product"
+  // physically impossible — the unique violation surfaces as a P2002
+  // which the controller maps to 409.
+  //
+  // Nullable so the migration can backfill existing rows in a follow-up
+  // step; new rows always set it.
+  optionFingerprint String? @map("option_fingerprint")
+
+  isDeleted Boolean   @default(false) @map("is_deleted")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
   product                  Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
   optionValues             ProductVariantOptionValue[]
@@ -356,10 +586,6 @@ model ProductVariant {
   // Sprint 3 Story 2.2 — see wishlist.prisma.
   wishlistItems            WishlistItem[]
 
-  @@index([productId])
-  @@index([sku])
-  @@index([status])
-  @@index([isDeleted])
   // Phase 4 follow-up (2026-05-16) — per-product SKU uniqueness.
   // The application layer already enforces this in
   // PrismaVariantRepository (create + update); the DB-level constraint
@@ -372,6 +598,18 @@ model ProductVariant {
   // surface any existing duplicates; once those are resolved the
   // constraint can be added safely.
   @@unique([productId, sku], name: "product_variants_product_sku_unique")
+  @@index([productId])
+  @@index([sku])
+  @@index([status])
+  @@index([isDeleted])
+  // Phase 41 (2026-05-21) — covers the "active variants for this
+  // product" query used by storefront PDP + cart validation.
+  @@index([productId, status])
+  // Phase 41 — partial unique declared in raw SQL in the migration
+  // (Prisma DSL has no partial-index support):
+  //   CREATE UNIQUE INDEX product_variants_option_fingerprint_unique
+  //     ON product_variants (product_id, option_fingerprint)
+  //     WHERE option_fingerprint IS NOT NULL AND is_deleted = false;
   @@map("product_variants")
 }
 
@@ -403,6 +641,14 @@ model ProductImage {
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([productId])
+  // Phase 29 (2026-05-21) — partial unique index enforces "at most
+  // one primary image per product." Declared in raw SQL because
+  // Prisma's schema DSL does not support partial indexes:
+  //   CREATE UNIQUE INDEX product_images_one_primary_idx
+  //     ON product_images (product_id) WHERE is_primary = TRUE;
+  // See migration 20260521160000_product_image_one_primary. The
+  // upload controller catches the resulting P2002 and retries with
+  // isPrimary=false.
   @@map("product_images")
 }
 
@@ -413,6 +659,12 @@ model ProductVariantImage {
   publicId  String?  @map("public_id")
   altText   String?  @map("alt_text")
   sortOrder Int      @default(0) @map("sort_order")
+  // Phase 41 (2026-05-21) — explicit hero-image flag. Mirrors the
+  // Phase 29 pattern on ProductImage so the storefront and cart
+  // line-item thumbnail can pick the canonical image without relying
+  // on the implicit sortOrder=0 convention (easy to break across
+  // queries). Partial unique declared in raw SQL in the migration.
+  isPrimary Boolean  @default(false) @map("is_primary")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -450,19 +702,38 @@ model ProductSeo {
 }
 
 model ProductCollection {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  slug        String   @unique
-  description String?
-  imageUrl    String?  @map("image_url")
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id            String    @id @default(uuid())
+  name          String    @unique
+  slug          String    @unique
+  description   String?
+  imageUrl      String?   @map("image_url")
+  // Phase 37 (2026-05-21) — Cloudinary publicId for the hero image.
+  // Stored alongside imageUrl so admin replace + delete can clean
+  // up the prior asset. Same orphan-proofing pattern as Brand
+  // (Phase 35).
+  imagePublicId String?   @map("image_public_id")
+  // Phase 37 (2026-05-21) — accessibility / WCAG. Storefront should
+  // emit <img alt={...}> from this field; falls back to name if null.
+  imageAltText  String?   @map("image_alt_text")
+  isActive      Boolean   @default(true) @map("is_active")
+  // Phase 37 (2026-05-21) — soft delete. Pre-Phase-37 a collection
+  // hard-deleted mid-sale removed all join rows + 404'd the
+  // storefront page with no undo. Now: delete sets deletedAt; the
+  // public storefront filters `deletedAt: null`; admin can restore.
+  deletedAt     DateTime? @map("deleted_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   products  ProductCollectionMap[]
   discounts DiscountCollection[]
+  // Phase 37 (2026-05-21) — back-relation for the audit log mirror.
+  auditLogs CollectionAuditLog[]
 
   @@index([slug])
+  // Phase 37 (2026-05-21) — query-pattern indexes. Storefront list
+  // filters isActive + deletedAt; admin list filters deletedAt.
+  @@index([isActive])
+  @@index([deletedAt])
   @@map("product_collections")
 }
 
@@ -470,6 +741,13 @@ model ProductCollectionMap {
   id           String   @id @default(uuid())
   productId    String   @map("product_id")
   collectionId String   @map("collection_id")
+  // Phase 37 (2026-05-21) — explicit sort order for the collection
+  // landing page. Pre-Phase-37 products were ordered by attach time
+  // (createdAt); marketers couldn't put the bestseller first. The
+  // storefront query now orders by (sortOrder, createdAt) so
+  // existing rows fall back to attach-time within the default 0
+  // bucket. Admin reorder endpoint stamps this column.
+  sortOrder    Int      @default(0) @map("sort_order")
   createdAt    DateTime @default(now()) @map("created_at")
 
   product    Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -478,7 +756,43 @@ model ProductCollectionMap {
   @@unique([productId, collectionId])
   @@index([productId])
   @@index([collectionId])
+  // Phase 37 (2026-05-21) — composite for the storefront's
+  // "products in collection X ordered" query.
+  @@index([collectionId, sortOrder])
   @@map("product_collection_maps")
+}
+
+/// Phase 37 (2026-05-21) — Collection mutation audit trail. Mirrors
+/// CategoryAuditLog (Phase 34) + BrandAuditLog (Phase 35). Every
+/// create / update / delete / restore / image change / product
+/// attach / detach / reorder writes a row. Best-effort: failures
+/// here log but never roll back the primary mutation.
+model CollectionAuditLog {
+  id            String                @id @default(uuid())
+  collectionId  String                @map("collection_id")
+  action        CollectionAuditAction
+  adminId       String?               @map("admin_id")
+  previousState Json?                 @map("previous_state")
+  newState      Json?                 @map("new_state")
+  reason        String?
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  collection ProductCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@index([collectionId, createdAt])
+  @@index([adminId, createdAt])
+  @@map("collection_audit_logs")
+}
+
+enum CollectionAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  IMAGE_CHANGE
+  ATTACH
+  DETACH
+  REORDER
 }
 
 model ProductStatusHistory {
@@ -530,18 +844,74 @@ model MetafieldDefinition {
   isRequired Boolean @default(false) @map("is_required")
   isActive   Boolean @default(true) @map("is_active")
 
+  // Phase 40 (2026-05-21) — filterability is now a first-class flag
+  // on the definition. Pre-Phase-40 admins had to create a full
+  // StorefrontFilter config row per definition just to toggle visibility
+  // on the storefront filter sidebar (heavy + confusing). The flag
+  // here is the single source of truth; StorefrontFilter rows remain
+  // as optional per-scope overrides (custom label / type / collapsed).
+  //
+  // defaultFilterType narrows the rendering hint when the definition
+  // type alone is ambiguous (e.g. SINGLE_LINE_TEXT used as a text
+  // input vs checkbox). defaultFilterLabel overrides `name` when
+  // the storefront facet should read differently from the admin
+  // label. filterDisplayOrder controls the position when the auto-
+  // generated config is used.
+  isFilterable       Boolean @default(false) @map("is_filterable")
+  defaultFilterType  String? @map("default_filter_type")
+  defaultFilterLabel String? @map("default_filter_label")
+  filterDisplayOrder Int     @default(0) @map("filter_display_order")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  category        Category?          @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  category        Category?                     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   metafieldValues ProductMetafield[]
   filterConfigs   StorefrontFilter[]
+  // Phase 39 (2026-05-21) — back-relation for the audit log mirror.
+  auditLogs       MetafieldDefinitionAuditLog[]
 
   @@unique([namespace, key, categoryId])
   @@index([categoryId])
   @@index([ownerType])
   @@index([namespace, key])
+  // Phase 39 (2026-05-21) — covers the required-check query that
+  // submit-for-review + approve both run.
+  @@index([isRequired, categoryId])
+  @@index([isActive])
+  // Phase 40 (2026-05-21) — covers the storefront filter listing
+  // query ("which active filterable defs apply to this category?").
+  @@index([isFilterable, categoryId])
   @@map("metafield_definitions")
+}
+
+/// Phase 39 (2026-05-21) — definition mutation audit trail. Same
+/// shape as the Phase 34-37 audit-log models. Best-effort: failures
+/// log but never roll back the primary mutation.
+model MetafieldDefinitionAuditLog {
+  id                    String                         @id @default(uuid())
+  metafieldDefinitionId String                         @map("metafield_definition_id")
+  action                MetafieldDefinitionAuditAction
+  adminId               String?                        @map("admin_id")
+  previousState         Json?                          @map("previous_state")
+  newState              Json?                          @map("new_state")
+  reason                String?
+  createdAt             DateTime                       @default(now()) @map("created_at")
+
+  metafieldDefinition MetafieldDefinition @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([metafieldDefinitionId, createdAt])
+  @@index([adminId, createdAt])
+  @@map("metafield_definition_audit_logs")
+}
+
+enum MetafieldDefinitionAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  DEACTIVATE
+  REACTIVATE
+  BULK_ASSIGN
 }
 
 // ── Product Metafield Values ────────────────────────────────────────────
@@ -563,7 +933,15 @@ model ProductMetafield {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   product             Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
-  metafieldDefinition MetafieldDefinition @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
+  // Phase 39 (2026-05-21) — Restrict (was Cascade). Pre-Phase-39 a
+  // definition delete silently destroyed every product's value for
+  // that attribute (1,285 definitions × N products = unbounded data
+  // loss with one click). Restrict means admins must clear values
+  // first; the controller already checks _count.metafieldValues
+  // before allowing the delete + falls back to deactivate when
+  // values exist, so the new constraint just hardens the contract
+  // at the DB layer.
+  metafieldDefinition MetafieldDefinition @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([productId, metafieldDefinitionId])
   @@index([productId])
@@ -601,10 +979,21 @@ model StorefrontFilter {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  metafieldDefinition MetafieldDefinition? @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Cascade)
+  // Phase 40 (2026-05-21) — Cascade → Restrict. Pre-Phase-40 deleting
+  // a metafield definition silently dropped every per-scope filter
+  // config pointing at it. Combined with the Phase 39 FK-restrict on
+  // ProductMetafield this gives admins a consistent contract: clear
+  // the dependents first, then delete.
+  metafieldDefinition MetafieldDefinition? @relation(fields: [metafieldDefinitionId], references: [id], onDelete: Restrict)
 
   @@index([metafieldDefinitionId])
   @@index([scopeType, scopeId])
   @@index([isActive, sortOrder])
+  // Phase 40 (2026-05-21) — partial unique declared in raw SQL in the
+  // migration (Prisma DSL does not support partial indexes). Prevents
+  // duplicate per-scope filter configs for the same definition.
+  //   CREATE UNIQUE INDEX storefront_filters_def_scope_unique
+  //     ON storefront_filters (metafield_definition_id, scope_type, COALESCE(scope_id, ''))
+  //     WHERE metafield_definition_id IS NOT NULL;
   @@map("storefront_filters")
 }

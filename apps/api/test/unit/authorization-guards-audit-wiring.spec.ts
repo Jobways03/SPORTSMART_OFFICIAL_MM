@@ -32,6 +32,11 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
       method: opts.method ?? 'POST',
       url: opts.url ?? '/admin/test',
       adminId: opts.user?.id ?? null,
+      // Phase 24 (2026-05-20) — sessionId needed for the
+      // PermissionsGuard auto-step-up branch when a CRITICAL
+      // permission is required. Stub session id matches the prisma
+      // mock that returns a fresh stepUpVerifiedAt.
+      sessionId: 'sess-1',
     };
     return {
       switchToHttp: () => ({ getRequest: () => req }),
@@ -56,7 +61,21 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
     const unifiedAudit = {
       writeAuditLog: jest.fn().mockResolvedValue(undefined),
     } as any;
-    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit);
+    // Phase 24 (2026-05-20) — PermissionsGuard gained PrismaService
+    // as 5th constructor arg. The CRITICAL auto-step-up branch fires
+    // for permissions like `wallets.adjust` (which IS CRITICAL). To
+    // exercise the audit-wiring matrix without the step-up branch
+    // throwing, return a fresh stepUpVerifiedAt from the session
+    // stub — represents "admin recently stepped up."
+    const prisma = {
+      adminSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          stepUpVerifiedAt: new Date(),
+          revokedAt: null,
+        }),
+      },
+    } as any;
+    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit, prisma);
     return { guard, reflector, audit };
   }
 
@@ -82,7 +101,10 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
 
   // ── PermissionsGuard ─────────────────────────────────────────────
 
-  it('PermissionsGuard records ALLOW when actor has the perm', () => {
+  // Phase 24 (2026-05-20) — canActivate is async; matrix updated to
+  // await + use resolves.toBe(true) so the auto-step-up branch can
+  // run without throwing on the synchronous path.
+  it('PermissionsGuard records ALLOW when actor has the perm', async () => {
     const { guard, reflector, audit } = makePermsGuard();
     jest
       .spyOn(reflector, 'getAllAndOverride')
@@ -90,7 +112,7 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
         key === PERMISSIONS_KEY ? ['wallets.adjust'] : undefined,
       );
 
-    const ok = guard.canActivate(
+    const ok = await guard.canActivate(
       fakeCtx({
         user: { id: 'a1', roles: ['SELLER_OPERATIONS'], permissions: ['wallets.adjust'] },
       }),
@@ -107,7 +129,7 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
     );
   });
 
-  it('PermissionsGuard records would-have-blocked ALLOW in soak mode on miss', () => {
+  it('PermissionsGuard records would-have-blocked ALLOW in soak mode on miss', async () => {
     const { guard, reflector, audit } = makePermsGuard();
     jest
       .spyOn(reflector, 'getAllAndOverride')
@@ -115,7 +137,7 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
         key === PERMISSIONS_KEY ? ['wallets.adjust'] : undefined,
       );
 
-    const ok = guard.canActivate(
+    const ok = await guard.canActivate(
       fakeCtx({
         user: { id: 'a1', roles: ['CUSTOMER'], permissions: [] },
       }),

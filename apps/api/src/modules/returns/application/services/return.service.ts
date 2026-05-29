@@ -1,5 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { CommissionRecordStatus } from '@prisma/client';
+import { validateImageUpload } from '../../../../core/util/image-magic-bytes';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
@@ -12,6 +14,8 @@ import { assertTransition } from '../../../../core/fsm/status-transitions';
 import { applyOptimisticTransition } from '../../../../core/fsm/optimistic-transition';
 import { CaseDuplicateService } from '../../../../core/case-duplicate/case-duplicate.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+// Phase 93 (2026-05-23) — Gap #5/#24 evidence URL allowlist.
+import { validateEvidenceUrls } from '../../domain/evidence-url-validator';
 import { RestockingFeeCalculator } from './restocking-fee.calculator';
 import { CustomerAbuseCounterService } from './customer-abuse-counter.service';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
@@ -44,6 +48,13 @@ import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razo
 import { verifyRazorpaySignature } from './razorpay-signature';
 import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
+import {
+  CreditNoteService,
+  Section34TimeBarredError,
+  SourceInvoiceNotFoundError,
+} from '../../../tax/application/services/credit-note.service';
+import { WalletAdjustmentService } from '../../../tax/application/services/wallet-adjustment.service';
+import { isWithinSection34Window } from '../../../tax/domain/credit-note-time-bar';
 
 export interface CreateReturnInput {
   subOrderId: string;
@@ -166,6 +177,122 @@ export interface ConfirmRefundInput {
 
 const REFUND_MAX_RETRY_ATTEMPTS = 5;
 
+// Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure.
+//
+// Map a raw failure reason (which may contain gateway internals like
+// "Razorpay error: card declined CVV mismatch", bank-side strings, or
+// even raw stack traces) to a customer-friendly message. We err on the
+// side of vagueness — the customer cares that we're handling it, not
+// the technical detail. Admin UI still gets the raw reason.
+function customerSafeRefundFailureMessage(rawReason: string | null | undefined): string {
+  if (!rawReason) {
+    return 'We hit an issue processing your refund. Our team is on it.';
+  }
+  const lower = String(rawReason).toLowerCase();
+  if (lower.includes('cap') && lower.includes('exhaust')) {
+    return 'We were unable to complete your refund automatically after multiple attempts. Our payments team has been notified and will reach out shortly with next steps.';
+  }
+  if (
+    lower.includes('insufficient') ||
+    lower.includes('not enough balance')
+  ) {
+    return 'A temporary issue prevented your refund from completing. We are retrying automatically.';
+  }
+  if (
+    lower.includes('account closed') ||
+    lower.includes('invalid account') ||
+    lower.includes('account not found')
+  ) {
+    return 'Your refund couldn’t reach the original account. We’ll route it through an alternate method — please check back in 24 hours or contact support if needed.';
+  }
+  if (lower.includes('declined') || lower.includes('rejected')) {
+    return 'The bank/payment provider declined the refund. Our payments team is investigating and will contact you with next steps.';
+  }
+  if (lower.includes('manual') || lower.includes('admin')) {
+    return 'Your refund needs manual processing. Our team will complete it within 1-2 business days.';
+  }
+  // Default — vague but reassuring.
+  return 'We hit an issue processing your refund. Our payments team is on it and will retry shortly.';
+}
+
+// Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure.
+//
+// Project a return row down to a customer-safe shape: redact admin-
+// only fields (raw failure reason, internal notes, audit pointers)
+// while keeping the customer-facing equivalents.
+function projectReturnForCustomer<T extends Record<string, any>>(ret: T): T {
+  if (!ret || typeof ret !== 'object') return ret;
+  const {
+    refundFailureReason: _rawReason,
+    qcInternalNotes: _internalQc,
+    qcRationale: _rationale,
+    refundFailedBy: _failedBy,
+    refundFailedByActor: _failedByActor,
+    refundFailedAt: _failedAt,
+    closedBy: _closedBy,
+    closedByActorType: _closedByActor,
+    refundFailureHistory: _history,
+    sellerResponseNotes: _sellerNotes,
+    sellerContestReasonCategory: _contestCat,
+    riskScore: _risk,
+    riskFlags: _riskFlags,
+    riskScoredAt: _riskAt,
+    ...safeRest
+  } = ret as any;
+  return safeRest as T;
+}
+
+// Phase 106 (2026-05-23) — Phase 101 audit Gap #28 closure.
+//
+// Append one entry to the refundFailureHistory ring (bounded to 10).
+// Existing history is parsed defensively — JSONB columns can be any
+// shape if hand-edited / migrated.
+function appendFailureHistory(
+  existing: unknown,
+  entry: {
+    attemptNumber: number;
+    reason: string;
+    actorType?: string;
+    actorId?: string;
+  },
+): Array<Record<string, unknown>> {
+  const arr = Array.isArray(existing) ? [...(existing as any[])] : [];
+  arr.push({
+    attemptNumber: entry.attemptNumber,
+    reason: entry.reason,
+    occurredAt: new Date().toISOString(),
+    actorType: entry.actorType ?? null,
+    actorId: entry.actorId ?? null,
+  });
+  // Keep the most recent 10 entries.
+  return arr.slice(-10);
+}
+
+// Phase 94 (2026-05-23) — Seller/Franchise Return Response audit
+// Gap #13. Seller-supplied notes get a defence-in-depth scrub before
+// the column write: strip HTML tags + control chars, collapse
+// whitespace, hard cap at 2000 chars. The DTO already enforces 2000
+// chars at the validator boundary, but we double-check here so direct
+// service callers (admin tools, batched imports, future internal flows)
+// don't bypass the cap. Returns null for empty/whitespace input so the
+// column stays NULL rather than an empty string.
+function sanitizeRespondNotes(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const stripped = String(raw)
+    // Drop angle-bracket tags entirely (defense-in-depth even though
+    // safeHtml escapes downstream — we don't want hostile script tag
+    // payloads sitting in the DB column forever).
+    .replace(/<[^>]*>/g, '')
+    // Strip ASCII control chars (sans \n, \r, \t).
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    // Collapse runs of whitespace.
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (stripped.length === 0) return null;
+  return stripped.slice(0, 2000);
+}
+
 @Injectable()
 export class ReturnService {
   constructor(
@@ -206,6 +333,16 @@ export class ReturnService {
     // amount columns on the return / returnItem / refundTransaction
     // models. No-ops when MONEY_DUAL_WRITE_ENABLED=false (dev/CI).
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    // GST Phase 11 — Section 34 credit note issued on QC approval,
+    // linking the original tax invoice's CGST/SGST/IGST reversal to
+    // the QC-approved quantities. Idempotent on the return: multi-cycle
+    // QC (partial → fuller approval over days) yields per-line deltas.
+    private readonly creditNote: CreditNoteService,
+    // GST Phase 13 — wallet-adjustment fallback when Section 34 blocks
+    // a credit note (original invoice older than 30 Sept of FY+1). The
+    // platform absorbs the GST cost and the refund posts via the
+    // wallet ledger under dual-approval gating.
+    private readonly walletAdjustment: WalletAdjustmentService,
   ) {
     this.logger.setContext('ReturnService');
   }
@@ -237,15 +374,24 @@ export class ReturnService {
   // ── Phase-5 helpers ───────────────────────────────────────────────────
 
   private getQcMinEvidence(): number {
-    return this.env.getNumber('RETURN_QC_MIN_EVIDENCE', 0);
+    // Phase 0 (Gap audit) — env-schema default is now 2; the second
+    // argument here is the fallback if EnvService cannot resolve the
+    // key at all (which should never happen in a healthy boot). Keep
+    // it at 2 so the runtime fallback matches the schema default.
+    return this.env.getNumber('RETURN_QC_MIN_EVIDENCE', 2);
   }
 
   // ── Eligibility ────────────────────────────────────────────────────────
 
-  async getOrderEligibility(masterOrderId: string, customerId: string) {
+  async getOrderEligibility(
+    masterOrderId: string,
+    customerId: string,
+    auditContext?: { ipAddress?: string | null; userAgent?: string | null },
+  ) {
     return this.eligibilityService.checkOrderEligibility(
       masterOrderId,
       customerId,
+      auditContext,
     );
   }
 
@@ -327,7 +473,66 @@ export class ReturnService {
       );
     }
 
-    // Create return
+    // Phase 93 (2026-05-23) — Gap #5/#24 evidence URL allowlist.
+    // Format-validates each URL + checks the host against the
+    // Cloudinary allowlist (env-tunable in production). Rejects
+    // localhost/metadata/non-https URLs to close the SSRF/phishing
+    // vector.
+    if (input.evidenceFileUrls && input.evidenceFileUrls.length > 0) {
+      const allowedHostsEnv =
+        this.env?.getOptional?.('RETURN_EVIDENCE_ALLOWED_HOSTS' as any);
+      const allowedHosts = allowedHostsEnv
+        ? allowedHostsEnv
+            .split(',')
+            .map((h: string) => h.trim())
+            .filter(Boolean)
+        : undefined;
+      const bad = validateEvidenceUrls(input.evidenceFileUrls, {
+        allowedHosts: allowedHosts as any,
+      });
+      if (bad) {
+        throw new BadRequestAppException(
+          `Evidence URL #${bad.index + 1} rejected: ${bad.reason}`,
+        );
+      }
+    }
+
+    // Phase 93 — Gap #2/#8 compute seller-response state + node
+    // snapshot upfront so they land inside the create tx.
+    const sellerResponseRequirement = classifyReasonForSellerResponse(
+      input.items.map((i) => i.reasonCategory),
+    );
+    const subOrderAny = subOrder as any;
+    const nodeType: 'SELLER' | 'FRANCHISE' | null = subOrderAny.franchiseId
+      ? 'FRANCHISE'
+      : subOrderAny.sellerId
+        ? 'SELLER'
+        : null;
+    // Phase 94 (2026-05-23) — Seller/Franchise Return Response audit
+    // Gap #1. Franchise-fulfilled sub-orders skip the seller-response
+    // window entirely: there is no franchise respond endpoint (QC-only
+    // design — admin remains the neutral arbiter for franchise claims
+    // because franchises are operationally closer to the marketplace).
+    // Pre-Phase-94, classifyReasonForSellerResponse would return
+    // REQUIRED for DEFECTIVE/etc. and stamp PENDING on a franchise
+    // return — the sweeper would then flip it to EXPIRED after 48h
+    // with no signal to anyone, dropping the "fairness gate" silently.
+    // Now: any franchise sub-order forces NOT_REQUIRED so QC starts
+    // immediately without waiting on a respond that can never arrive.
+    const sellerResponseStatus: 'PENDING' | 'NOT_REQUIRED' =
+      nodeType === 'FRANCHISE'
+        ? 'NOT_REQUIRED'
+        : sellerResponseRequirement === 'REQUIRED'
+          ? 'PENDING'
+          : 'NOT_REQUIRED';
+    const sellerNotifiedAt =
+      sellerResponseStatus === 'PENDING' ? new Date() : undefined;
+    const sellerResponseDueAt = sellerNotifiedAt
+      ? computeSellerResponseDueAt(sellerNotifiedAt)
+      : undefined;
+
+    // Create return — Phase 93 routes evidence + seller-response +
+    // node snapshot through the repo so everything commits atomically.
     const created = await this.returnRepo.create({
       returnNumber,
       subOrderId: subOrder.id,
@@ -342,69 +547,61 @@ export class ReturnService {
         reasonCategory: i.reasonCategory,
         reasonDetail: i.reasonDetail,
       })),
+      evidenceFileUrls: input.evidenceFileUrls ?? [],
+      sellerResponseStatus,
+      sellerNotifiedAt,
+      sellerResponseDueAt,
+      sellerIdSnapshot: nodeType === 'SELLER' ? subOrderAny.sellerId : null,
+      franchiseIdSnapshot:
+        nodeType === 'FRANCHISE' ? subOrderAny.franchiseId : null,
+      nodeTypeSnapshot: nodeType,
+      // Phase 95 (2026-05-23) — Phase 93 deferred #26 closure.
+      // Commission freeze threads through into the repo's tx so the
+      // PENDING→ON_HOLD flip commits atomically with the Return row.
+      // Pre-Phase-95 this fired as a sequential post-create call and
+      // a crash between the two left commission unfrozen against a
+      // real return — the next settlement cycle would have paid out.
+      commissionFreezeReason: `Held pending return ${returnNumber}`,
     });
 
-    // Persist the customer-supplied issue photos as ReturnEvidence rows
-    // so QC has context and so forfeit cases are defensible.
-    if (input.evidenceFileUrls && input.evidenceFileUrls.length > 0) {
-      await this.prisma.returnEvidence.createMany({
-        data: input.evidenceFileUrls.map((url) => ({
-          returnId: created.id,
-          uploadedBy: 'CUSTOMER',
-          uploaderId: customerId,
-          fileType: 'IMAGE',
-          fileUrl: url,
-          description: 'Customer-submitted issue evidence',
-        })),
-      });
+    // Phase 93 (2026-05-23) — Gap #1/#2/#4 closure.
+    //
+    // Pre-Phase-93 evidence + seller-response state + an additional
+    // status-history row were written here as separate post-tx
+    // statements. A crash between the create-tx commit and any of
+    // these statements left a phantom return missing evidence /
+    // seller-response. The repo's create transaction now persists
+    // everything atomically; the duplicate post-tx writes were
+    // removed.
+
+    // Phase 95 — commission freeze count surfaced from the repo so
+    // we keep the audit + log surface the standalone helper provided.
+    const commissionFrozenCount: number =
+      (created as any).__commissionFrozenCount ?? 0;
+    if (commissionFrozenCount > 0) {
+      this.logger.log(
+        `Commission frozen for sub-order ${subOrder.id}: ${commissionFrozenCount} record(s) PENDING → ON_HOLD (Held pending return ${returnNumber})`,
+      );
+      this.audit
+        .writeAuditLog({
+          actorRole: 'SYSTEM',
+          action: 'commission.frozen',
+          module: 'returns',
+          resource: 'sub_order',
+          resourceId: subOrder.id,
+          newValue: {
+            count: commissionFrozenCount,
+            reason: `Held pending return ${returnNumber}`,
+          },
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `[commission.frozen] audit write failed for sub-order ${subOrder.id}: ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          );
+        });
     }
-
-    // Phase 13 (P1.8) — seller-response lifecycle. If any item alleges
-    // seller fault (DEFECTIVE / WRONG_ITEM / NOT_AS_DESCRIBED /
-    // QUALITY_ISSUE / OTHER), open a 48h response window. Otherwise
-    // mark NOT_REQUIRED so QC can proceed without waiting on the
-    // seller (CHANGED_MIND, SIZE_FIT_ISSUE, DAMAGED_IN_TRANSIT).
-    const sellerResponseRequirement = classifyReasonForSellerResponse(
-      input.items.map((i) => i.reasonCategory),
-    );
-    if (sellerResponseRequirement === 'REQUIRED') {
-      const notifiedAt = new Date();
-      const dueAt = computeSellerResponseDueAt(notifiedAt);
-      await this.prisma.return.update({
-        where: { id: created.id },
-        data: {
-          sellerResponseStatus: 'PENDING' as any,
-          sellerNotifiedAt: notifiedAt,
-          sellerResponseDueAt: dueAt,
-        },
-      });
-    } else {
-      await this.prisma.return.update({
-        where: { id: created.id },
-        data: { sellerResponseStatus: 'NOT_REQUIRED' as any },
-      });
-    }
-
-    // Log consent in the status history so there's an immutable record.
-    await this.returnRepo.recordStatusChange(
-      created.id,
-      null,
-      'REQUESTED',
-      'CUSTOMER',
-      customerId,
-      'Customer acknowledged forfeit policy at submission',
-    );
-
-    // Freeze commission the moment a return is requested. Any PENDING
-    // commission row tied to this sub-order flips to ON_HOLD so it
-    // stops being eligible for the next settlement cycle. This covers
-    // the race where commission was processed BEFORE the customer
-    // decided to return. My earlier query-level guard handles the
-    // other direction (return opened before processor tick).
-    await this.freezeCommissionForSubOrder(
-      subOrder.id,
-      `Held pending return ${returnNumber}`,
-    );
 
     // Publish requested event (best-effort)
     try {
@@ -426,7 +623,10 @@ export class ReturnService {
       // events are best-effort
     }
 
-    // Phase 13 — audit trail.
+    // Phase 13 — audit trail. Phase 93 (2026-05-23) — Gap #13:
+    // surface the failure as a WARN log so silent audit gaps are
+    // observable. Don't re-throw — audit must not block return
+    // creation, but the loss should be obvious in dashboards.
     this.audit
       .writeAuditLog({
         actorId: customerId,
@@ -442,7 +642,11 @@ export class ReturnService {
           itemCount: input.items.length,
         },
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        this.logger.warn(
+          `Audit log write failed for return ${returnNumber}: ${(err as Error)?.message ?? err}`,
+        );
+      });
 
     this.logger.log(
       `Return ${returnNumber} created by customer ${customerId}`,
@@ -495,11 +699,26 @@ export class ReturnService {
       !blockedByRisk &&
       autoApprovalDecision.autoApprove
     ) {
-      await this.returnRepo.update(created.id, {
-        status: 'APPROVED',
-        approvedAt: new Date(),
-        approvedBy: 'SYSTEM',
-      });
+      // Phase 93 (2026-05-23) — Gap #12 optimistic-lock CAS. The
+      // just-created row has version=0; using updateWithVersion catches
+      // a racing admin-reject that ran between our create and this
+      // update. On CAS mismatch (Prisma P2025) the auto-approval
+      // silently no-ops — admin's reject wins.
+      try {
+        await this.returnRepo.updateWithVersion(created.id, 0, {
+          status: 'APPROVED',
+          approvedAt: new Date(),
+          approvedBy: 'SYSTEM',
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          this.logger.log(
+            `Auto-approval skipped for ${returnNumber}: version drift (likely admin action raced)`,
+          );
+          return this.returnRepo.findByIdWithItems(created.id);
+        }
+        throw err;
+      }
       await this.returnRepo.recordStatusChange(
         created.id,
         'REQUESTED',
@@ -565,7 +784,12 @@ export class ReturnService {
     );
 
     return {
-      returns,
+      // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure. The
+      // raw refundFailureReason can leak gateway internals; customer
+      // endpoints must only return the sanitized refundFailureMessageCustomer.
+      // Other admin-only fields (internal notes, audit pointers) are
+      // also redacted here.
+      returns: returns.map((r) => projectReturnForCustomer(r)),
       pagination: {
         page: params.page,
         limit: params.limit,
@@ -585,12 +809,112 @@ export class ReturnService {
     if (ret.customerId !== customerId) {
       throw new ForbiddenAppException('You do not have access to this return');
     }
-    return ret;
+
+    // Phase 38 — side-load the refund-settlement story so the
+    // customer-facing return detail can render either:
+    //   - "Credit note SM-CN-000042 issued for ₹X" (Section 34 window
+    //     open at QC-approve time), OR
+    //   - "Refund credited to wallet (₹X)" (Section 34 time-barred,
+    //     wallet adjustment route), OR
+    //   - "Refund processing" (QC approved but neither artefact exists
+    //     yet — the post-commit notifications haven't fired).
+    //
+    // Both reads are best-effort: a failure here MUST NOT block the
+    // return detail load. CreditNoteService scopes prior CNs by
+    // `reason contains returnNumber`; we mirror that.
+    let creditNote: {
+      id: string;
+      documentNumber: string;
+      documentTotalInPaise: string;
+      status: string;
+      generatedAt: Date | null;
+    } | null = null;
+    let walletCredit: {
+      id: string;
+      kind: string;
+      status: string;
+      amountInPaise: string;
+      approvedAt: Date | null;
+      reason: string;
+    } | null = null;
+    try {
+      const cn = await this.prisma.taxDocument.findFirst({
+        where: {
+          documentType: 'CREDIT_NOTE',
+          reason: { contains: ret.returnNumber },
+          status: { notIn: ['VOIDED_DRAFT'] },
+        },
+        orderBy: { generatedAt: 'desc' },
+        select: {
+          id: true,
+          documentNumber: true,
+          documentTotalInPaise: true,
+          status: true,
+          generatedAt: true,
+        },
+      });
+      if (cn) {
+        creditNote = {
+          id: cn.id,
+          documentNumber: cn.documentNumber,
+          documentTotalInPaise: cn.documentTotalInPaise.toString(),
+          status: cn.status,
+          generatedAt: cn.generatedAt,
+        };
+      }
+    } catch (err) {
+      this.logger.warn(
+        `getReturnDetail: CN lookup failed for return ${returnId}: ${(err as Error).message}`,
+      );
+    }
+    try {
+      const adj = await this.prisma.walletAdjustment.findFirst({
+        where: { returnId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          kind: true,
+          status: true,
+          amountInPaise: true,
+          approvedAt: true,
+          reason: true,
+        },
+      });
+      if (adj) {
+        walletCredit = {
+          id: adj.id,
+          kind: adj.kind,
+          status: adj.status,
+          amountInPaise: adj.amountInPaise.toString(),
+          approvedAt: adj.approvedAt,
+          reason: adj.reason,
+        };
+      }
+    } catch (err) {
+      this.logger.warn(
+        `getReturnDetail: wallet adjustment lookup failed for return ${returnId}: ${(err as Error).message}`,
+      );
+    }
+
+    // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure.
+    // Customer endpoint — project the row down to remove admin-only
+    // fields. creditNote + walletCredit are customer-safe (they
+    // describe the customer's own refund settlement).
+    return {
+      ...projectReturnForCustomer(ret),
+      creditNote,
+      walletCredit,
+    };
   }
 
   // ── Cancel ─────────────────────────────────────────────────────────────
 
-  async cancelReturn(returnId: string, customerId: string) {
+  async cancelReturn(
+    returnId: string,
+    customerId: string,
+    // Phase 93 (2026-05-23) — Gap #23 optional cancellation reason.
+    cancellationReason?: string,
+  ) {
     const ret = await this.returnRepo.findById(returnId);
     if (!ret) {
       throw new NotFoundAppException('Return not found');
@@ -612,9 +936,15 @@ export class ReturnService {
     }
     const fromStatus = ret.status;
 
+    const cancelledAt = new Date();
     const updated = await this.returnRepo.update(returnId, {
       status: 'CANCELLED',
-      closedAt: new Date(),
+      closedAt: cancelledAt,
+      // Phase 93 — Gap #23 persist cancellation detail.
+      cancelledAt,
+      cancelledBy: customerId,
+      cancelledByRole: 'CUSTOMER',
+      cancellationReason: cancellationReason ?? null,
     });
 
     await this.returnRepo.recordStatusChange(
@@ -623,7 +953,9 @@ export class ReturnService {
       'CANCELLED',
       'CUSTOMER',
       customerId,
-      'Cancelled by customer',
+      cancellationReason
+        ? `Cancelled by customer: ${cancellationReason}`
+        : 'Cancelled by customer',
     );
 
     // Customer voluntarily cancelled — seller is entitled to their
@@ -724,8 +1056,31 @@ export class ReturnService {
       ]);
     }
 
+    // Phase 109 (2026-05-25) — pre-QC Section 34 eligibility preview so the QC
+    // modal can warn the admin BEFORE they submit (the authoritative status is
+    // only stamped at QC time / by the timebar cron). Prefer the persisted
+    // status when the return is already classified.
+    let creditNoteEligibilityPreview: string | null =
+      (ret as any).creditNoteEligibilityStatus ?? null;
+    if (!creditNoteEligibilityPreview) {
+      const sourceInvoice = await this.prisma.taxDocument.findFirst({
+        where: {
+          subOrderId: (ret as any).subOrderId,
+          documentType: { in: ['TAX_INVOICE', 'INVOICE_CUM_BILL_OF_SUPPLY'] },
+        },
+        orderBy: { generatedAt: 'desc' },
+      });
+      creditNoteEligibilityPreview =
+        !sourceInvoice || !sourceInvoice.generatedAt
+          ? 'NO_INVOICE'
+          : isWithinSection34Window(sourceInvoice.generatedAt, new Date())
+            ? 'ELIGIBLE'
+            : 'TIME_BARRED';
+    }
+
     return {
       ...ret,
+      creditNoteEligibilityPreview,
       // Phase C — discount-aware refund preview data.
       refundPreview: {
         taxSnapshots,
@@ -1079,48 +1434,118 @@ export class ReturnService {
     actorType: string,
     actorId: string,
     notes?: string,
+    parcelCondition?: string,
   ) {
     const ret = await this.returnRepo.findById(returnId);
     if (!ret) throw new NotFoundAppException('Return not found');
 
-    const updated = await applyOptimisticTransition({
-      kind: 'ReturnStatus',
-      toStatus: 'RECEIVED',
-      current: ret,
-      update: (where, statusPatch) =>
-        this.returnRepo.updateWithVersion(returnId, where.version, {
-          ...statusPatch,
-          receivedAt: new Date(),
-          receivedBy: actorId,
-        }),
-    });
-
-    await this.returnRepo.recordStatusChange(
-      returnId,
-      ret.status,
-      'RECEIVED',
-      actorType,
-      actorId,
-      notes,
-    );
-
-    try {
-      await this.eventBus.publish({
-        eventName: 'returns.return.received',
-        aggregate: 'Return',
-        aggregateId: returnId,
-        occurredAt: new Date(),
-        payload: {
-          returnId,
-          returnNumber: ret.returnNumber,
-          receivedBy: actorId,
-        },
-      });
-    } catch {
-      // events are best-effort
+    // Phase 96 (2026-05-23) — Phase 96 audit Gap #6/#7/#8 closure.
+    //
+    // Pre-Phase-96 a second call on an already-RECEIVED return would
+    // pass through applyOptimisticTransition's same-state branch and:
+    //   1. clobber the original receivedAt/receivedBy with the second
+    //      caller's values,
+    //   2. write a duplicate ReturnStatusHistory row (RECEIVED →
+    //      RECEIVED),
+    //   3. re-publish returns.return.received → possible duplicate
+    //      customer email,
+    //   4. duplicate audit log row.
+    //
+    // Early-return preserves the original receipt record + makes the
+    // endpoint truly idempotent without requiring the caller's
+    // Idempotency-Key header.
+    if (ret.status === 'RECEIVED') {
+      this.logger.log(
+        `Return ${ret.returnNumber} already RECEIVED; idempotent no-op (actor=${actorType}:${actorId})`,
+      );
+      return ret;
     }
 
-    // Phase 13 — audit trail
+    const sanitizedNotes = sanitizeRespondNotes(notes);
+    const sanitizedCondition = parcelCondition
+      ? String(parcelCondition).slice(0, 64)
+      : null;
+    const bypassedInTransit = ret.status === 'PICKUP_SCHEDULED';
+
+    // Phase 96 — Gap #10 closure. Wrap the FSM update + status history
+    // + outbox publish in a single $transaction so a crash between
+    // them can't desync. The applyOptimisticTransition update inside
+    // the tx still does the version CAS.
+    const respondedAt = new Date();
+    const txOutcome = await this.prisma.$transaction(async (tx) => {
+      // Apply version-CAS update inside the tx.
+      let updated: any;
+      try {
+        updated = await tx.return.update({
+          where: { id: returnId, version: (ret as any).version } as any,
+          data: {
+            status: 'RECEIVED' as any,
+            receivedAt: respondedAt,
+            receivedBy: actorId,
+            receivedByActorType: actorType,
+            parcelCondition: sanitizedCondition,
+            receivedBypassedInTransit: bypassedInTransit,
+            // Phase 97 (2026-05-23) — QC audit Gap #20. Surrogate
+            // qcStatus surfaced explicitly so QC queue dashboards +
+            // claim-lock flow have a stable column to filter on.
+            qcStatus: 'PENDING_QC' as any,
+            version: { increment: 1 },
+          } as any,
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          throw new BadRequestAppException(
+            'Return was modified by another process; please refresh and retry.',
+          );
+        }
+        throw err;
+      }
+      // FSM defence-in-depth: assertTransition uses the same matrix
+      // applyOptimisticTransition would have applied (PICKUP_SCHEDULED
+      // | IN_TRANSIT → RECEIVED). If a future schema change widens the
+      // allowed source states this guard catches it before we ship.
+      try {
+        assertTransition(
+          'ReturnStatus' as any,
+          ret.status,
+          'RECEIVED' as any,
+        );
+      } catch (err) {
+        throw err;
+      }
+
+      await tx.returnStatusHistory.create({
+        data: {
+          returnId,
+          fromStatus: ret.status as any,
+          toStatus: 'RECEIVED' as any,
+          changedBy: actorType,
+          changedById: actorId,
+          notes: sanitizedNotes,
+        },
+      });
+
+      await this.eventBus.publish(
+        {
+          eventName: 'returns.return.received',
+          aggregate: 'Return',
+          aggregateId: returnId,
+          occurredAt: respondedAt,
+          payload: {
+            returnId,
+            returnNumber: ret.returnNumber,
+            receivedBy: actorId,
+            receivedByActorType: actorType,
+            parcelCondition: sanitizedCondition,
+            bypassedInTransit,
+          },
+        },
+        { tx },
+      );
+
+      return updated;
+    });
+
     this.audit
       .writeAuditLog({
         actorId,
@@ -1130,15 +1555,26 @@ export class ReturnService {
         resource: 'return',
         resourceId: returnId,
         oldValue: { status: ret.status },
-        newValue: { status: 'RECEIVED', notes },
+        newValue: {
+          status: 'RECEIVED',
+          notes: sanitizedNotes,
+          parcelCondition: sanitizedCondition,
+          bypassedInTransit,
+        },
         metadata: { returnNumber: ret.returnNumber },
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        this.logger.warn(
+          `[return.received] audit write failed for ${ret.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
 
     this.logger.log(
-      `Return ${ret.returnNumber} marked RECEIVED by ${actorType} ${actorId}`,
+      `Return ${ret.returnNumber} marked RECEIVED by ${actorType} ${actorId} (parcelCondition=${sanitizedCondition ?? 'n/a'}, bypassedInTransit=${bypassedInTransit})`,
     );
-    return updated;
+    return txOutcome;
   }
 
   /**
@@ -1160,20 +1596,78 @@ export class ReturnService {
       );
     }
 
+    // Phase 97 (2026-05-23) — QC audit Gap #4 closure. Magic-byte sniff
+    // the buffer before forwarding to Cloudinary. Pre-Phase-97 the
+    // FileInterceptor accepted any binary up to 5 MB; a hostile client
+    // could send Content-Type: image/png with an .exe payload and we
+    // would happily upload + persist a fake-evidence row. The hand-
+    // rolled sniffer rejects on mismatch.
+    const sniff = validateImageUpload(fileBuffer, fileMimetype);
+    if (!sniff.ok) {
+      throw new BadRequestAppException(
+        `Evidence upload rejected: ${sniff.reason}`,
+      );
+    }
+
+    // Phase 97 — Gap #27 dedup via SHA-256 contentHash. Repeated
+    // upload of the same image (e.g. admin double-click after preview)
+    // dedups to the existing row instead of leaving two Cloudinary
+    // assets + two DB rows.
+    const contentHash = createHash('sha256').update(fileBuffer).digest('hex');
+    const existing = await this.prisma.returnEvidence.findFirst({
+      where: { returnId, contentHash } as any,
+    });
+    if (existing) {
+      this.logger.log(
+        `QC evidence dedup hit for return ${ret.returnNumber} (contentHash=${contentHash.slice(0, 8)}…)`,
+      );
+      return existing;
+    }
+
     // Upload to Cloudinary
     const uploadResult = await this.cloudinaryAdapter.upload(fileBuffer, {
       folder: `returns/${returnId}/evidence`,
     });
 
-    const evidence = await this.returnRepo.addEvidence({
-      returnId,
-      uploadedBy: actorType,
-      uploaderId: actorId,
-      fileType: fileMimetype,
-      fileUrl: uploadResult.secureUrl,
-      publicId: uploadResult.publicId,
-      description,
-    });
+    let evidence: any;
+    try {
+      // Phase 97 — Gap #10 orphan-leak fix. Cloudinary upload happens
+      // before the DB write; if the DB row insert fails, we need to
+      // clean up the Cloudinary asset. The .delete call is best-effort
+      // — a failure here is logged + caught by the daily orphan-cleanup
+      // cron (separate concern).
+      evidence = await this.returnRepo.addEvidence({
+        returnId,
+        uploadedBy: actorType,
+        uploaderId: actorId,
+        fileType: sniff.detected,
+        fileUrl: uploadResult.secureUrl,
+        publicId: uploadResult.publicId,
+        description,
+        contentHash,
+        width: (uploadResult as any).width,
+        height: (uploadResult as any).height,
+        bytes: (uploadResult as any).bytes ?? fileBuffer.length,
+      } as any);
+    } catch (err) {
+      this.logger.warn(
+        `[uploadQcEvidence] DB row insert failed for return ${ret.returnNumber}; rolling back Cloudinary asset ${uploadResult.publicId}: ${
+          (err as Error)?.message ?? 'unknown error'
+        }`,
+      );
+      try {
+        if (typeof (this.cloudinaryAdapter as any).delete === 'function') {
+          await (this.cloudinaryAdapter as any).delete(uploadResult.publicId);
+        }
+      } catch (deleteErr) {
+        this.logger.error(
+          `[uploadQcEvidence] Cloudinary rollback delete also failed for ${uploadResult.publicId} (orphan asset): ${
+            (deleteErr as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      }
+      throw err;
+    }
 
     this.logger.log(
       `QC evidence uploaded for return ${ret.returnNumber} by ${actorType} ${actorId}`,
@@ -1246,17 +1740,54 @@ export class ReturnService {
           `qcQuantityApproved cannot be negative`,
         );
       }
+      // Phase 97 (2026-05-23) — QC audit Gap #18 closure. APPROVED
+      // outcome MUST match the full returned qty; if the admin
+      // approved less, the outcome should be PARTIAL. Pre-Phase-97 a
+      // mismatched APPROVED was silently treated as partial (no error
+      // surfaced + audit reflected the wrong outcome).
+      if (
+        decision.qcOutcome === 'APPROVED' &&
+        decision.qcQuantityApproved !== item.quantity
+      ) {
+        throw new BadRequestAppException(
+          `APPROVED outcome requires qcQuantityApproved === return quantity (got ${decision.qcQuantityApproved} of ${item.quantity}). Use PARTIAL outcome to approve only some units.`,
+        );
+      }
+      // Phase 97 — Gap #17 closure. PARTIAL with qty=0 evaluated to
+      // noneApproved=true → ended up REJECTED, but with the
+      // "partial" outcome on the item row. Confusing input → reject
+      // it explicitly.
+      if (
+        decision.qcOutcome === 'PARTIAL' &&
+        decision.qcQuantityApproved <= 0
+      ) {
+        throw new BadRequestAppException(
+          `PARTIAL outcome requires qcQuantityApproved > 0. Use REJECTED to approve zero units.`,
+        );
+      }
+      // Phase 97 — Gap #19 closure. PARTIAL with qty<total still
+      // rejects some units, so the customer deserves a per-item
+      // explanation. Mirrors the REJECTED/DAMAGED rule.
+      const isPartialReject =
+        decision.qcOutcome === 'PARTIAL' &&
+        decision.qcQuantityApproved < item.quantity;
       // REJECTED / DAMAGED forfeit the customer's item + refund, so the
       // reason must be documented. Accept the reason from EITHER the
       // per-item note OR the overall notes — admins write wherever their
       // UI puts focus and we shouldn't be pedantic about which field as
       // long as *something* explains the decision to the customer.
-      if (decision.qcOutcome === 'REJECTED' || decision.qcOutcome === 'DAMAGED') {
+      if (
+        decision.qcOutcome === 'REJECTED' ||
+        decision.qcOutcome === 'DAMAGED' ||
+        isPartialReject
+      ) {
         const perItemOk = (decision.qcNotes ?? '').trim().length >= 15;
         const overallOk = (input.overallNotes ?? '').trim().length >= 15;
         if (!perItemOk && !overallOk) {
           throw new BadRequestAppException(
-            `A ${decision.qcOutcome.toLowerCase()} decision requires a reason (min 15 characters) explaining what was found during inspection. Write it in the per-item Notes field or the Overall Notes field.`,
+            `A ${decision.qcOutcome.toLowerCase()} decision (${
+              isPartialReject ? 'partial reject' : decision.qcOutcome
+            }) requires a reason (min 15 characters) explaining what was found during inspection. Write it in the per-item Notes field or the Overall Notes field.`,
           );
         }
       }
@@ -1435,6 +1966,53 @@ export class ReturnService {
       );
     }
 
+    // Phase 95 (2026-05-23) — Phase 94 deferred #21 closure. Admin
+    // attributing SELLER liability over a CONTESTED response requires
+    // an explicit override-reason note. Pre-Phase-95 the contest was
+    // a soft signal — admin could side with the customer without
+    // recording why. We now refuse the QC submission unless either
+    //   • per-item qcNotes ≥ 30 chars, OR
+    //   • input.overallNotes ≥ 30 chars
+    // and write a structured audit row labeled 'override_contest'.
+    if (
+      liabilityParty === 'SELLER' &&
+      ret.sellerResponseStatus === 'CONTESTED'
+    ) {
+      const overallNoteOk = (input.overallNotes ?? '').trim().length >= 30;
+      const anyPerItemNoteOk = input.decisions.some(
+        (d) => (d.qcNotes ?? '').trim().length >= 30,
+      );
+      if (!overallNoteOk && !anyPerItemNoteOk) {
+        throw new BadRequestAppException(
+          'The seller CONTESTED this claim. Attributing SELLER liability requires an override reason (min 30 chars) in overallNotes or any qcNotes — explain why the seller\'s contest evidence does not change the outcome.',
+        );
+      }
+      // Best-effort structured audit so compliance can see "admin
+      // overrode contest" patterns per seller.
+      this.audit
+        .writeAuditLog({
+          actorId,
+          actorRole: 'ADMIN',
+          action: 'return.qc.override_contest',
+          module: 'returns',
+          resource: 'return',
+          resourceId: returnId,
+          newValue: {
+            sellerResponseStatus: 'CONTESTED',
+            attributedLiability: 'SELLER',
+            overrideReason: (input.overallNotes ?? '').slice(0, 1000),
+          },
+          metadata: { returnNumber: ret.returnNumber },
+        })
+        .catch((err) => {
+          this.logger.warn(
+            `[return.qc.override_contest] audit write failed for ${ret.returnNumber}: ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          );
+        });
+    }
+
     // FSM enforcement — RECEIVED is the only valid source state for QC
     // outcomes. The check at the top of this method already validates
     // ret.status === 'RECEIVED' but pinning the rule centrally here means
@@ -1596,6 +2174,21 @@ export class ReturnService {
         where: { id: returnId },
         data: this.moneyDualWrite.applyPaise('return', {
           status: newStatus as any,
+          // Phase 97 (2026-05-23) — QC audit Gap #20 closure. Flip
+          // surrogate qcStatus to COMPLETED at decision commit so the
+          // QC queue (which filters PENDING_QC) doesn't surface this
+          // row anymore.
+          // Phase 100 (2026-05-23) — QC audit Gap #13 closure. When
+          // input.requiresApproval=true the qcStatus stays
+          // AWAITING_SECOND_APPROVAL instead of COMPLETED. Downstream
+          // refund auto-initiation is gated on COMPLETED so the
+          // first-admin's decision parks until a second admin opens
+          // /admin/refunds/:id/approve. The Return.status flip stays
+          // (QC_APPROVED / etc.) so QC-side downstream code keeps
+          // working; the second-approval gate sits on top.
+          qcStatus: input.requiresApproval
+            ? 'AWAITING_SECOND_APPROVAL'
+            : 'COMPLETED',
           qcCompletedAt: new Date(),
           qcDecision: qcDecision as any,
           qcNotes: input.overallNotes,
@@ -1684,6 +2277,131 @@ export class ReturnService {
       // events are best-effort
     }
 
+    // GST Phase 11/13 — issue the Section 34 credit note for the
+    // QC-approved quantities. Synchronous + post-commit so the
+    // customer-facing decision (status flip + refund initiation
+    // below) is never blocked by a CN failure; the daily
+    // TaxCreditNoteTimeBarCron remains the safety net for stuck
+    // rows. Three outcomes:
+    //
+    //   1. Section 34 window open → CreditNoteService persists the
+    //      CN + flips the source invoice to PARTIALLY_REVERSED /
+    //      FULLY_REVERSED via the FSM.
+    //   2. Section 34 window closed → Section34TimeBarredError →
+    //      WalletAdjustmentService.requestForTimeBarredReturn records
+    //      a TIME_BARRED_CREDIT_NOTE adjustment (PENDING_APPROVAL,
+    //      dual-approval if above threshold). Platform absorbs GST.
+    //   3. Other CN failure (missing source invoice, snapshot gap,
+    //      etc.) → log and rely on the timebar cron + admin
+    //      override endpoint to backfill. We do NOT throw — QC has
+    //      already advanced and the customer's refund must proceed.
+    //
+    // Skipped when QC rejected everything (no items to credit).
+    //
+    // Phase 109 (2026-05-25) — double-refund guard. When the Section 34
+    // window has closed the refund is routed via a TIME_BARRED_CREDIT_NOTE
+    // wallet adjustment (which IS the customer refund). This flag tells the
+    // refund branch below to SKIP the parallel initiateRefund — otherwise the
+    // customer is paid twice (once now via gateway/wallet, once when finance
+    // approves the adjustment).
+    let timebarWalletRouted = false;
+    if (newStatus === 'QC_APPROVED' || newStatus === 'PARTIALLY_APPROVED') {
+      try {
+        const cn = await this.creditNote.generateForReturn(returnId, {
+          actorId,
+        });
+        if (cn.isNew) {
+          this.logger.log(
+            `Credit note ${cn.creditNote.documentNumber} issued for return ${ret.returnNumber} ` +
+              `against invoice ${cn.sourceInvoice.documentNumber} ` +
+              `(source now ${cn.sourceInvoice.statusAfter})`,
+          );
+        } else {
+          this.logger.log(
+            `Credit note path idempotent: existing ${cn.creditNote.documentNumber} ` +
+              `still covers return ${ret.returnNumber}.`,
+          );
+        }
+      } catch (err) {
+        // Two "route to wallet instead of credit note" cases:
+        //   • TIME_BARRED             — Section 34 window has closed.
+        //   • REQUIRES_FINANCE_REVIEW — no source tax invoice to credit
+        //     against (legacy / unbilled order; the wallet adjustment's
+        //     LEGACY_RECEIPT fallback handles it).
+        // Both set the skip flag + stamp eligibility BEFORE attempting the
+        // adjustment, so the parallel initiateRefund is suppressed even if the
+        // adjustment write fails (the daily cron / admin override retry it) —
+        // the customer must never be paid twice. Stamping the column
+        // synchronously (vs waiting for the daily cron) also lets
+        // initiateRefund's guard + the admin UI see the status immediately.
+        const timeBarred = err instanceof Section34TimeBarredError;
+        const noSourceInvoice = err instanceof SourceInvoiceNotFoundError;
+        if (timeBarred || noSourceInvoice) {
+          timebarWalletRouted = true;
+          const eligibility = timeBarred
+            ? 'TIME_BARRED'
+            : 'REQUIRES_FINANCE_REVIEW';
+          await this.prisma.return
+            .update({
+              where: { id: returnId },
+              data: {
+                creditNoteEligibilityStatus: eligibility,
+                creditNoteEligibilityCheckedAt: new Date(),
+                creditNoteTimeBarReason: (err as Error).message,
+                refundMethod: 'WALLET',
+              },
+            })
+            .catch((updErr) => {
+              this.logger.error(
+                `Failed to stamp ${eligibility} eligibility on return ${ret.returnNumber}: ${(updErr as Error).message}`,
+              );
+            });
+          // Compliance audit — this return left the normal refund path; the
+          // refund is handled via the finance-approved wallet adjustment.
+          this.audit
+            .writeAuditLog({
+              actorId,
+              action: 'return.refund.timebar_routed',
+              module: 'returns',
+              resource: 'return',
+              resourceId: returnId,
+              metadata: {
+                returnNumber: ret.returnNumber,
+                eligibility,
+                reason: (err as Error).message,
+              },
+            })
+            .catch(() => undefined);
+          try {
+            const adj = await this.walletAdjustment.requestForTimeBarredReturn({
+              returnId,
+              requestedByAdminId: actorId,
+            });
+            this.logger.warn(
+              `Return ${ret.returnNumber} routed to wallet adjustment ${adj.id} ` +
+                `(status ${adj.status}, eligibility ${eligibility}); no credit ` +
+                `note issued.`,
+            );
+          } catch (adjErr) {
+            // Fallback failed — log loudly. TaxCreditNoteTimeBarCron
+            // re-classifies daily; admins can also use the time-bar override
+            // endpoint to retry.
+            this.logger.error(
+              `Wallet-adjustment fallback FAILED for return ${ret.returnNumber}: ` +
+                `${(adjErr as Error).message} — TaxCreditNoteTimeBarCron will ` +
+                `re-classify on next sweep.`,
+            );
+          }
+        } else {
+          this.logger.error(
+            `Credit-note generation FAILED for return ${ret.returnNumber}: ` +
+              `${(err as Error).message} — refund still proceeding; ` +
+              `TaxCreditNoteTimeBarCron will re-classify on next sweep.`,
+          );
+        }
+      }
+    }
+
     // Phase 13 — write the liability ledger row that recovers (or
     // expenses) the refund cost. Best-effort: a ledger failure should
     // NOT block the QC decision (the customer-facing decision stands
@@ -1725,6 +2443,31 @@ export class ReturnService {
           })
           .catch(() => undefined);
       }
+    }
+
+    // Phase 97 (2026-05-23) — QC audit Gap #11 closure. Resolve the
+    // RETURN_QC_PENDING AdminTask raised at mark-received so the
+    // queue accurately reflects what's still outstanding. Best-effort
+    // — failing to resolve the task is not fatal for QC; the SLA
+    // breach cron will reconcile.
+    try {
+      await (this.prisma as any).adminTask.updateMany({
+        where: {
+          uniqueKey: `return-qc-pending:${returnId}`,
+          status: { in: ['OPEN', 'CLAIMED'] },
+        },
+        data: {
+          status: 'RESOLVED',
+          resolvedAt: new Date(),
+          resolvedBy: actorId,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[return.qc_decided] AdminTask resolution failed for ${ret.returnNumber}: ${
+          (err as Error)?.message ?? 'unknown error'
+        }`,
+      );
     }
 
     // Audit trail — records who decided what, when. The action key
@@ -1772,7 +2515,13 @@ export class ReturnService {
           actorType,
         },
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        this.logger.warn(
+          `[return.qc_decided] audit write failed for ${ret.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
 
     this.logger.log(
       `QC completed for return ${ret.returnNumber}: ${qcDecision}, refund=₹${refundAmount}, liability=${liabilityParty ?? 'n/a'}, remedy=${customerRemedy ?? 'n/a'}`,
@@ -1806,9 +2555,19 @@ export class ReturnService {
     // resolves to REFUND_TO_CUSTOMER).
     const remedyTakesCashRefund =
       customerRemedy !== 'REPLACEMENT' && customerRemedy !== 'EXCHANGE';
+    // Phase 100 (2026-05-23) — QC audit Gap #13 closure. When the
+    // first admin flagged requiresApproval=true, the qcStatus stayed
+    // AWAITING_SECOND_APPROVAL and the refund must NOT auto-initiate.
+    // A second admin posts to /admin/refunds/:id/approve to release
+    // the refund (existing refund-approval flow handles it).
+    const refundGatedBySecondApproval = !!input.requiresApproval;
     if (
       remedyTakesCashRefund &&
       refundAmount > 0 &&
+      !refundGatedBySecondApproval &&
+      // Phase 109 — time-barred returns are refunded via the wallet
+      // adjustment (above), not here. Skipping prevents the double-pay.
+      !timebarWalletRouted &&
       (newStatus === 'QC_APPROVED' || newStatus === 'PARTIALLY_APPROVED')
     ) {
       try {
@@ -1826,6 +2585,35 @@ export class ReturnService {
           `Failed to auto-initiate refund for return ${ret.returnNumber}: ${(err as Error).message}`,
         );
         // Don't throw — QC succeeded; admin can manually initiate refund if needed
+      }
+    } else if (refundGatedBySecondApproval && refundAmount > 0) {
+      this.logger.log(
+        `Refund deferred for return ${ret.returnNumber} (requiresApproval=true) — awaiting second admin sign-off`,
+      );
+      // Raise an AdminTask so the second admin sees the case in the
+      // queue. Unique on (returnId) so retries dedup.
+      try {
+        await (this.prisma as any).adminTask.upsert({
+          where: { uniqueKey: `qc-second-approval:${returnId}` },
+          update: {},
+          create: {
+            kind: 'OTHER' as any,
+            uniqueKey: `qc-second-approval:${returnId}`,
+            severity: 'HIGH',
+            status: 'OPEN',
+            title: `Second-admin approval needed for QC of ${ret.returnNumber}`,
+            details: `First admin (${actorId}) flagged requiresApproval=true. Refund ₹${refundAmount} pending second sign-off.`,
+            relatedResource: 'return',
+            relatedResourceId: returnId,
+            slaBreachAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[qc-second-approval] AdminTask upsert failed for ${ret.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
       }
     }
 
@@ -1928,6 +2716,16 @@ export class ReturnService {
     if (!validStatuses.includes(ret.status)) {
       throw new BadRequestAppException(
         `Return must be QC_APPROVED or PARTIALLY_APPROVED to initiate refund (current: ${ret.status})`,
+      );
+    }
+
+    // Phase 109 (2026-05-25) — a time-barred return is refunded ONLY via its
+    // TIME_BARRED_CREDIT_NOTE wallet adjustment (finance-approved). Refuse a
+    // direct gateway / instant-wallet refund here so a manual or retried call
+    // can't pay the customer a second time on top of the adjustment.
+    if (ret.creditNoteEligibilityStatus === 'TIME_BARRED') {
+      throw new BadRequestAppException(
+        'Refund for a time-barred return is routed via the GST wallet adjustment (finance approval); direct refund initiation is blocked.',
       );
     }
 
@@ -2141,9 +2939,46 @@ export class ReturnService {
       );
     }
 
+    // Phase 96 (2026-05-23) — Phase 98 audit Gap #9 / Gap #29 closure.
+    //
+    //   Gap #9  — confirmRefund accepted any admin-typed refundReference
+    //             and stored it verbatim as the canonical gateway id.
+    //             A malicious / careless admin could mark any return
+    //             REFUNDED with any text.
+    //   Gap #29 — same reference reused across multiple returns went
+    //             undetected.
+    //
+    // Sanitize + reject blank + refuse if another return already owns
+    // this reference. The gateway-side cross-check (for ONLINE methods)
+    // belongs in a follow-up that adds a Razorpay-status poller; this
+    // gates the trivially-spoofable case here.
+    const trimmedRef = (input.refundReference ?? '').trim();
+    if (trimmedRef.length === 0) {
+      throw new BadRequestAppException(
+        'refundReference is required and cannot be blank',
+      );
+    }
+    if (trimmedRef.length > 256) {
+      throw new BadRequestAppException(
+        'refundReference is too long (max 256 chars)',
+      );
+    }
+    const existingByRef = await this.prisma.return.findFirst({
+      where: {
+        refundReference: trimmedRef,
+        id: { not: returnId },
+      },
+      select: { id: true, returnNumber: true },
+    });
+    if (existingByRef) {
+      throw new BadRequestAppException(
+        `refundReference '${trimmedRef}' already in use by return ${existingByRef.returnNumber}. Refusing to record a duplicate reference.`,
+      );
+    }
+
     const updateData: Record<string, unknown> = {
       status: 'REFUNDED',
-      refundReference: input.refundReference,
+      refundReference: trimmedRef,
       refundProcessedAt: new Date(),
       refundFailureReason: null,
     };
@@ -2157,7 +2992,7 @@ export class ReturnService {
       'REFUNDED',
       actorType,
       actorId,
-      input.notes || `Refund completed — reference: ${input.refundReference}`,
+      input.notes || `Refund completed — reference: ${trimmedRef}`,
     );
 
     try {
@@ -2170,7 +3005,7 @@ export class ReturnService {
           returnId,
           returnNumber: ret.returnNumber,
           refundAmount: Number(ret.refundAmount),
-          refundReference: input.refundReference,
+          refundReference: trimmedRef,
           processedBy: actorId,
         },
       });
@@ -2179,7 +3014,7 @@ export class ReturnService {
     }
 
     this.logger.log(
-      `Refund confirmed for return ${ret.returnNumber}: ${input.refundReference}`,
+      `Refund confirmed for return ${ret.returnNumber}: ${trimmedRef}`,
     );
     return updated;
   }
@@ -2194,6 +3029,10 @@ export class ReturnService {
     actorId: string,
     reason: string,
   ) {
+    // Phase 101 (2026-05-23) — Phase 102 audit closures: #3 self-loop
+    // history, #4 attempts not incremented, #5 no RefundTransaction
+    // row, #6 RefundInstruction not updated, #7 markedFailedBy/At
+    // columns, #10 no transaction, #12 race with confirmRefund.
     const ret = await this.returnRepo.findById(returnId);
     if (!ret) throw new NotFoundAppException('Return not found');
     if (ret.status !== 'REFUND_PROCESSING') {
@@ -2202,40 +3041,154 @@ export class ReturnService {
       );
     }
 
-    // Don't change status — keep as REFUND_PROCESSING so it can be retried.
-    // Just record the failure.
-    const updated = await this.returnRepo.update(returnId, {
-      refundFailureReason: reason,
-      refundLastAttemptAt: new Date(),
-    });
+    const sanitizedReason = sanitizeRespondNotes(reason) ?? reason;
+    const now = new Date();
+    const newAttempts = (ret.refundAttempts ?? 0) + 1;
+    const maxRetries = ret.refundMaxRetries ?? REFUND_MAX_RETRY_ATTEMPTS;
+    const capReached = newAttempts >= maxRetries;
+    const finalStatus: 'REFUND_PROCESSING' | 'REFUND_FAILED' = capReached
+      ? 'REFUND_FAILED'
+      : 'REFUND_PROCESSING';
 
-    await this.returnRepo.recordStatusChange(
-      returnId,
-      'REFUND_PROCESSING',
-      'REFUND_PROCESSING',
-      actorType,
-      actorId,
-      `Refund attempt failed: ${reason}`,
-    );
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      // Version-CAS lock so a concurrent confirmRefund can't race.
+      let updated: any;
+      try {
+        updated = await tx.return.update({
+          where: {
+            id: returnId,
+            version: (ret as any).version,
+            status: 'REFUND_PROCESSING' as any,
+          } as any,
+          data: {
+            status: finalStatus as any,
+            refundFailureReason: sanitizedReason,
+            // Phase 106 — Phase 102 audit Gap #14 closure. Sanitized
+            // customer-facing mirror.
+            refundFailureMessageCustomer: customerSafeRefundFailureMessage(
+              capReached ? `cap exhausted: ${sanitizedReason}` : sanitizedReason,
+            ),
+            // Phase 106 — Phase 101 audit Gap #28 closure. Append to
+            // bounded history ring (last 10 failures).
+            refundFailureHistory: appendFailureHistory(
+              (ret as any).refundFailureHistory,
+              {
+                attemptNumber: newAttempts,
+                reason: sanitizedReason,
+                actorType,
+                actorId,
+              },
+            ) as any,
+            refundLastAttemptAt: now,
+            refundAttempts: { increment: 1 },
+            // Phase 101 — Gap #14 null the gateway reference so the
+            // poller cron stops asking Razorpay about a dead refund id
+            // and the retry cron can pick the row up for re-attempt.
+            refundReference: null,
+            // Phase 101 — Gap #7 audit pointer.
+            refundFailedBy: actorId,
+            refundFailedByActor: actorType,
+            refundFailedAt: now,
+            version: { increment: 1 },
+          } as any,
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          throw new BadRequestAppException(
+            'Return was modified by another process; please refresh and retry.',
+          );
+        }
+        throw err;
+      }
 
-    try {
-      await this.eventBus.publish({
-        eventName: 'returns.refund.failed',
-        aggregate: 'Return',
-        aggregateId: returnId,
-        occurredAt: new Date(),
-        payload: {
+      // Phase 101 — Gap #5 closure. Per-attempt RefundTransaction row
+      // mirrors the cron-retry path so the audit table reflects ALL
+      // failure events (cron + manual).
+      try {
+        await tx.refundTransaction.create({
+          data: {
+            returnId,
+            attemptNumber: newAttempts,
+            amount: ret.refundAmount ?? 0,
+            amountInPaise: (ret as any).refundAmountInPaise ?? BigInt(0),
+            status: 'FAILED' as any,
+            failureReason: sanitizedReason,
+            actorType,
+            actorId,
+          } as any,
+        });
+      } catch (err: any) {
+        // Conflict with concurrent cron retry that already inserted
+        // the same attempt number — let it pass; the bookkeeping
+        // serializes on the row.
+        if (err?.code !== 'P2002') throw err;
+      }
+
+      // Phase 101 — Gap #3 closure. Use a meaningful from/to status
+      // when we actually flipped (cap reached). Otherwise the
+      // self-loop row is intentional ("attempt failed at <reason>" —
+      // it's a refund-attempt log, not a state transition).
+      await tx.returnStatusHistory.create({
+        data: {
           returnId,
-          returnNumber: ret.returnNumber,
-          reason,
-          attemptNumber: (ret.refundAttempts ?? 0) + 1,
+          fromStatus: 'REFUND_PROCESSING' as any,
+          toStatus: finalStatus as any,
+          changedBy: actorType,
+          changedById: actorId,
+          notes: capReached
+            ? `Refund attempt #${newAttempts} failed and cap (${maxRetries}) reached: ${sanitizedReason}`
+            : `Refund attempt #${newAttempts} failed: ${sanitizedReason}`,
         },
       });
-    } catch {
-      // events are best-effort
-    }
 
-    // Phase 13 — audit trail
+      // Phase 101 — Gap #6 closure. Mirror the failure on any linked
+      // RefundInstruction so the saga audit reflects the same outcome.
+      try {
+        await tx.refundInstruction.updateMany({
+          where: {
+            sourceType: 'RETURN' as any,
+            sourceId: returnId,
+            status: { in: ['PROCESSING', 'RETRYING', 'PENDING_APPROVAL'] as any },
+          },
+          data: {
+            status: 'FAILED' as any,
+            failureReason: sanitizedReason,
+            attempts: { increment: 1 },
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[markRefundFailed] RefundInstruction mirror failed for ${ret.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      }
+
+      // Outbox publish inside tx so the customer-notification handler
+      // is durably triggered.
+      await this.eventBus.publish(
+        {
+          eventName: 'returns.refund.failed',
+          aggregate: 'Return',
+          aggregateId: returnId,
+          occurredAt: now,
+          payload: {
+            returnId,
+            returnNumber: ret.returnNumber,
+            reason: sanitizedReason,
+            attemptNumber: newAttempts,
+            capReached,
+            finalStatus,
+          },
+        },
+        { tx },
+      );
+
+      return updated;
+    });
+
+    // Post-tx best-effort audit log + AdminTask. Failures here are
+    // logged but do not roll back the markRefundFailed bookkeeping.
     this.audit
       .writeAuditLog({
         actorId,
@@ -2244,37 +3197,38 @@ export class ReturnService {
         module: 'returns',
         resource: 'return',
         resourceId: returnId,
+        oldValue: { status: 'REFUND_PROCESSING', attempts: ret.refundAttempts },
         newValue: {
-          reason,
-          attemptNumber: (ret.refundAttempts ?? 0) + 1,
+          status: finalStatus,
+          reason: sanitizedReason,
+          attemptNumber: newAttempts,
+          capReached,
         },
         metadata: { returnNumber: ret.returnNumber },
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        this.logger.warn(
+          `[return.refund_failed] audit write failed for ${ret.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
 
-    // Phase 13 — surface failed refunds to finance/ops via the AdminTask
-    // queue so they don't depend on cron scraping for visibility. The
-    // task is idempotent on (sourceType=RETURN, sourceId) — repeated
-    // failures on the same return reuse the same task row instead of
-    // spamming the queue, and ops sees the latest attempt count via
-    // the linked return record.
     await this.liabilityLedger
       .enqueueAdminTask({
         kind: 'RETURN_REFUND_FAILED' as any,
         sourceType: 'RETURN' as any,
         sourceId: returnId,
-        reason: `Return ${ret.returnNumber} refund failed (attempt ${(ret.refundAttempts ?? 0) + 1}): ${reason}`,
+        reason: `Return ${ret.returnNumber} refund failed (attempt ${newAttempts}${capReached ? ' — cap reached' : ''}): ${sanitizedReason}`,
+        slaHours: capReached ? 4 : undefined,
       })
       .catch((err: unknown) => {
-        // Best-effort — admin task creation failure shouldn't roll
-        // back the refund-failed bookkeeping. Log and move on; the
-        // audit log + ReturnStatusHistory still record the event.
         this.logger.error(
           `Failed to enqueue AdminTask for refund-failure on return ${ret.returnNumber}: ${(err as Error).message}`,
         );
       });
 
-    return updated;
+    return outcome;
   }
 
   /**
@@ -2282,7 +3236,32 @@ export class ReturnService {
    * Enforces a maximum retry count. Attempt is recorded regardless of outcome.
    */
   async retryRefund(returnId: string, actorType: string, actorId: string) {
-    const ret = await this.returnRepo.findByIdWithItems(returnId);
+    // Phase 101 (2026-05-23) — Refund Retry audit Gap #13 closure.
+    // Pre-Phase-101 a manual admin retry and the cron tick could both
+    // call this method on the same return concurrently — both would
+    // pass the refundAttempts < cap guard, both would call Razorpay,
+    // and both would write RefundTransaction rows. The (returnId,
+    // attemptNumber) unique catches the audit dup but the gateway
+    // round-trip is wasted (Razorpay's own idempotency key dedups the
+    // payout, but we still pay the latency).
+    //
+    // We now serialize the read+write under a SELECT ... FOR UPDATE
+    // taken in a short tx. Concurrent callers wait briefly; the second
+    // one re-reads the bumped state and either does its own attempt
+    // or hits the cap. The Razorpay call itself happens OUTSIDE this
+    // tx (long-running HTTP shouldn't hold a row lock), but the
+    // attempt counter increment + audit row write that follow are
+    // ordered against each other.
+    const ret = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM returns WHERE id = $1 FOR UPDATE`,
+        returnId,
+      );
+      return tx.return.findUnique({
+        where: { id: returnId },
+        include: { masterOrder: true, items: { include: { orderItem: true } } },
+      });
+    });
     if (!ret) throw new NotFoundAppException('Return not found');
     if (ret.status !== 'REFUND_PROCESSING') {
       throw new BadRequestAppException(
@@ -2290,9 +3269,68 @@ export class ReturnService {
       );
     }
 
-    if ((ret.refundAttempts ?? 0) >= REFUND_MAX_RETRY_ATTEMPTS) {
+    // Phase 101 (2026-05-23) — Refund Retry audit Gap #6 closure.
+    // Per-return refundMaxRetries override wins over the env default.
+    const envMaxRetries = this.env.getNumber(
+      'REFUND_MAX_RETRY_ATTEMPTS' as any,
+      REFUND_MAX_RETRY_ATTEMPTS,
+    );
+    const effectiveMaxRetries =
+      (ret as any).refundMaxRetries ?? envMaxRetries;
+    if ((ret.refundAttempts ?? 0) >= effectiveMaxRetries) {
+      // Phase 100 (2026-05-23) — Phase 98 audit Gap #18 closure.
+      // Flip the Return to REFUND_FAILED terminal so dashboards have
+      // an explicit state for the human-triage queue. Best-effort
+      // AdminTask (RETURN_REFUND_FAILED kind already exists in the
+      // enum) so ops sees the case.
+      try {
+        await this.returnRepo.update(returnId, {
+          status: 'REFUND_FAILED' as any,
+          refundFailureReason: `Max retry attempts (${effectiveMaxRetries}) exhausted`,
+          // Phase 106 — Phase 102 audit Gap #14 closure.
+          refundFailureMessageCustomer: customerSafeRefundFailureMessage(
+            'cap exhausted',
+          ),
+        });
+        await this.returnRepo.recordStatusChange(
+          returnId,
+          ret.status,
+          'REFUND_FAILED',
+          actorType,
+          actorId,
+          `Retry cap (${effectiveMaxRetries}) exhausted; escalated for manual processing`,
+        );
+        await this.liabilityLedger
+          .enqueueAdminTask({
+            kind: 'RETURN_REFUND_FAILED' as any,
+            sourceType: 'RETURN' as any,
+            sourceId: returnId,
+            reason: `Refund retry cap exhausted for return ${ret.returnNumber} (${effectiveMaxRetries} attempts)`,
+            slaHours: 24,
+          })
+          .catch(() => undefined);
+        // Publish exhaustion event so customer + admin notification
+        // handlers fire.
+        await this.eventBus.publish({
+          eventName: 'returns.refund.exhausted_escalation',
+          aggregate: 'Return',
+          aggregateId: returnId,
+          occurredAt: new Date(),
+          payload: {
+            returnId,
+            returnNumber: ret.returnNumber,
+            refundAmount: Number(ret.refundAmount),
+            attempts: ret.refundAttempts,
+            lastFailureReason: ret.refundFailureReason ?? null,
+          },
+        });
+      } catch (err) {
+        this.logger.error(
+          `[retryRefund] failed to escalate ${ret.returnNumber} to REFUND_FAILED: ${(err as Error).message}`,
+        );
+      }
       throw new BadRequestAppException(
-        `Maximum retry attempts (${REFUND_MAX_RETRY_ATTEMPTS}) exceeded for this refund`,
+        `Maximum retry attempts (${effectiveMaxRetries}) exceeded for this refund. Return escalated to REFUND_FAILED for manual processing.`,
       );
     }
 
@@ -2303,7 +3341,11 @@ export class ReturnService {
       );
     }
 
-    // Try gateway again
+    // Phase 101 (2026-05-23) — Refund Retry audit Gap #25 closure.
+    // Pre-Phase-101 the retry path didn't pass refundMethod through to
+    // the gateway, so an admin who picked BANK_TRANSFER at initiate
+    // would fall back to default WALLET on retry. Now the previous
+    // method is honored.
     const gatewayResult = await this.refundGateway.processRefund({
       orderId: masterOrder.id,
       orderNumber: masterOrder.orderNumber,
@@ -2312,46 +3354,96 @@ export class ReturnService {
       customerId: ret.customerId,
       returnId: ret.id,
       returnNumber: ret.returnNumber,
+      refundMethod: ret.refundMethod ?? undefined,
     });
 
-    await this.returnRepo.recordRefundAttempt(returnId, {
-      gatewayRefundId: gatewayResult.gatewayRefundId,
-      success: gatewayResult.success,
-      failureReason: gatewayResult.failureReason,
-    });
-
-    // Audit row for this retry attempt. Same dual-write + Decimal
-    // pass-through pattern as the initial-attempt write above.
-    await this.prisma.refundTransaction.create({
-      data: this.moneyDualWrite.applyPaise('refundTransaction', {
-        returnId,
-        attemptNumber: (ret.refundAttempts ?? 0) + 1,
-        amount: ret.refundAmount,
-        gatewayRefundId: gatewayResult.gatewayRefundId ?? null,
-        status: gatewayResult.success ? 'INITIATED' : 'FAILED',
-        failureReason: gatewayResult.failureReason ?? null,
-        actorType,
-        actorId,
-      }),
-    });
-
-    await this.returnRepo.recordStatusChange(
-      returnId,
-      'REFUND_PROCESSING',
-      'REFUND_PROCESSING',
-      actorType,
-      actorId,
-      `Refund retry attempt ${(ret.refundAttempts ?? 0) + 1}: ${
-        gatewayResult.success
-          ? 'succeeded'
-          : gatewayResult.failureReason || 'failed'
-      }`,
+    // Phase 101 — Gap #12 closure. Per-attempt writes (recordRefundAttempt
+    // + refundTransaction.create + recordStatusChange) now run inside
+    // a single $transaction so a crash mid-sequence doesn't leave
+    // attempts incremented without the audit row.
+    const backoffMin = this.env.getNumber(
+      'REFUND_RETRY_BACKOFF_MINUTES' as any,
+      15,
     );
+    const nextRetryAt = new Date(Date.now() + backoffMin * 60 * 1000);
+
+    await this.prisma.$transaction(async (tx) => {
+      // Increment attempts + stamp gateway result + compute nextRetryAt.
+      const data: Record<string, unknown> = {
+        refundAttempts: { increment: 1 },
+        refundLastAttemptAt: new Date(),
+        refundNextRetryAt: nextRetryAt,
+      };
+      if (gatewayResult.success && gatewayResult.gatewayRefundId) {
+        data.refundReference = gatewayResult.gatewayRefundId;
+        data.refundFailureReason = null;
+        // Phase 106 — clear the customer-facing message on success
+        // so a previously-failed retry that finally lands doesn't
+        // keep showing "we hit an issue" copy.
+        data.refundFailureMessageCustomer = null;
+      } else if (gatewayResult.failureReason) {
+        data.refundFailureReason = gatewayResult.failureReason;
+        // Phase 106 — Phase 102 audit Gap #14 closure. Customer-safe
+        // mirror.
+        data.refundFailureMessageCustomer = customerSafeRefundFailureMessage(
+          gatewayResult.failureReason,
+        );
+        // Phase 106 — Phase 101 audit Gap #28 closure. Append to
+        // bounded history ring.
+        data.refundFailureHistory = appendFailureHistory(
+          (ret as any).refundFailureHistory,
+          {
+            attemptNumber: (ret.refundAttempts ?? 0) + 1,
+            reason: gatewayResult.failureReason,
+            actorType,
+            actorId,
+          },
+        ) as any;
+      }
+      await tx.return.update({
+        where: { id: returnId },
+        data: data as any,
+      });
+
+      // Phase 101 — Gap #21 dedup. (returnId, attemptNumber) is now
+      // unique; P2002 means the cron + manual retry raced — let it pass.
+      try {
+        await tx.refundTransaction.create({
+          data: this.moneyDualWrite.applyPaise('refundTransaction', {
+            returnId,
+            attemptNumber: (ret.refundAttempts ?? 0) + 1,
+            amount: ret.refundAmount,
+            gatewayRefundId: gatewayResult.gatewayRefundId ?? null,
+            status: gatewayResult.success ? 'INITIATED' : 'FAILED',
+            failureReason: gatewayResult.failureReason ?? null,
+            actorType,
+            actorId,
+          }) as any,
+        });
+      } catch (err: any) {
+        if (err?.code !== 'P2002') throw err;
+      }
+
+      await tx.returnStatusHistory.create({
+        data: {
+          returnId,
+          fromStatus: 'REFUND_PROCESSING' as any,
+          toStatus: 'REFUND_PROCESSING' as any,
+          changedBy: actorType,
+          changedById: actorId,
+          notes: `Refund retry attempt ${(ret.refundAttempts ?? 0) + 1}: ${
+            gatewayResult.success
+              ? 'succeeded'
+              : gatewayResult.failureReason || 'failed'
+          }`,
+        },
+      });
+    });
 
     this.logger.log(
       `Refund retry for return ${ret.returnNumber}: ${
         gatewayResult.success ? 'succeeded' : 'failed'
-      }`,
+      } (next attempt ${nextRetryAt.toISOString()})`,
     );
 
     return this.returnRepo.findByIdWithItems(returnId);
@@ -2360,44 +3452,104 @@ export class ReturnService {
   /**
    * Close a return — moves it to COMPLETED. Allowed from REFUNDED or
    * QC_REJECTED (in cases where there is nothing to refund).
+   *
+   * Phase 101 (2026-05-23) — Phase 103 audit closures.
+   *
+   *   Gap #2/#3 — closedBy + closeReason persistence.
+   *   Gap #4/#5 — early-return on already-COMPLETED so duplicate calls
+   *              do NOT overwrite the original closedAt and do NOT
+   *              write a noop status-history row.
    */
-  async closeReturn(returnId: string, actorType: string, actorId: string) {
+  async closeReturn(
+    returnId: string,
+    actorType: string,
+    actorId: string,
+    reason?: string,
+  ) {
     const ret = await this.returnRepo.findById(returnId);
     if (!ret) throw new NotFoundAppException('Return not found');
 
-    const updated = await applyOptimisticTransition({
-      kind: 'ReturnStatus',
-      toStatus: 'COMPLETED',
-      current: ret,
-      update: (where, statusPatch) =>
-        this.returnRepo.updateWithVersion(returnId, where.version, {
-          ...statusPatch,
-          closedAt: new Date(),
-        }),
-    });
-
-    await this.returnRepo.recordStatusChange(
-      returnId,
-      ret.status,
-      'COMPLETED',
-      actorType,
-      actorId,
-      'Return closed',
-    );
-
-    try {
-      await this.eventBus.publish({
-        eventName: 'returns.return.closed',
-        aggregate: 'Return',
-        aggregateId: returnId,
-        occurredAt: new Date(),
-        payload: { returnId, returnNumber: ret.returnNumber },
-      });
-    } catch {
-      // events are best-effort
+    if (ret.status === 'COMPLETED') {
+      this.logger.log(
+        `Return ${ret.returnNumber} already COMPLETED; idempotent no-op (actor=${actorType}:${actorId})`,
+      );
+      return ret;
     }
 
-    // Phase 13 — audit trail
+    const sanitizedReason = sanitizeRespondNotes(reason);
+    const closedAt = new Date();
+
+    // Phase 105 (2026-05-23) — Phase 103 audit Gap #7 / Gap #8 closure.
+    // Pre-Phase-105 the status update, history insert, event publish
+    // and audit log were 4 sequential ops with no shared boundary —
+    // a crash between the status flip and recordStatusChange would
+    // leave a closed return with no audit row. We now wrap the
+    // critical writes in a single $transaction and route the event
+    // through the outbox (publish({ tx })) so delivery survives a
+    // post-tx process crash. Assert FSM defensively so we still get
+    // the 400 if the row isn't in REFUNDED/QC_REJECTED/REFUND_FAILED.
+    assertTransition('ReturnStatus' as any, ret.status, 'COMPLETED' as any);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      let row: any;
+      try {
+        row = await tx.return.update({
+          where: { id: returnId, version: (ret as any).version } as any,
+          data: {
+            status: 'COMPLETED' as any,
+            closedAt,
+            closedBy: actorId,
+            closedByActorType: actorType,
+            closeReason: sanitizedReason,
+            version: { increment: 1 },
+          } as any,
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          throw new BadRequestAppException(
+            'Return was modified by another process; please refresh and retry.',
+          );
+        }
+        throw err;
+      }
+
+      await tx.returnStatusHistory.create({
+        data: {
+          returnId,
+          fromStatus: ret.status as any,
+          toStatus: 'COMPLETED' as any,
+          changedBy: actorType,
+          changedById: actorId,
+          notes: sanitizedReason
+            ? `Return closed: ${sanitizedReason.slice(0, 200)}`
+            : 'Return closed',
+        },
+      });
+
+      await this.eventBus.publish(
+        {
+          eventName: 'returns.return.closed',
+          aggregate: 'Return',
+          aggregateId: returnId,
+          occurredAt: closedAt,
+          payload: {
+            returnId,
+            returnNumber: ret.returnNumber,
+            closedBy: actorId,
+            closedByActorType: actorType,
+            closeReason: sanitizedReason,
+            fromStatus: ret.status,
+          },
+        },
+        { tx },
+      );
+
+      return row;
+    });
+
+    // Phase 103 audit Gap #21 — richer audit row including closedAt
+    // and reason. Post-tx best-effort with explicit warn-on-failure
+    // so audit gaps are observable.
     this.audit
       .writeAuditLog({
         actorId,
@@ -2406,14 +3558,25 @@ export class ReturnService {
         module: 'returns',
         resource: 'return',
         resourceId: returnId,
-        oldValue: { status: ret.status },
-        newValue: { status: 'COMPLETED' },
+        oldValue: { status: ret.status, closedAt: null, version: (ret as any).version },
+        newValue: {
+          status: 'COMPLETED',
+          closedAt,
+          closeReason: sanitizedReason,
+          version: ((ret as any).version ?? 0) + 1,
+        },
         metadata: { returnNumber: ret.returnNumber },
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        this.logger.warn(
+          `[return.closed] audit write failed for ${ret.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
 
     this.logger.log(
-      `Return ${ret.returnNumber} closed by ${actorType} ${actorId}`,
+      `Return ${ret.returnNumber} closed by ${actorType} ${actorId} (reason=${sanitizedReason ?? 'n/a'})`,
     );
     return updated;
   }
@@ -2461,7 +3624,11 @@ export class ReturnService {
       where: { subOrderId, status: CommissionRecordStatus.PENDING },
       data: {
         status: CommissionRecordStatus.ON_HOLD,
-        adjustmentReason: reason,
+        // Phase 137 — dedicated holdReason (no longer overloads adjustmentReason,
+        // which the manual-adjust path owns). heldByAdminId stays null → marks
+        // this a SYSTEM freeze, which the admin resume + the unfreeze tell apart
+        // from an admin hold.
+        holdReason: reason,
       },
     });
     if (result.count > 0) {
@@ -2659,85 +3826,288 @@ export class ReturnService {
     decision: 'ACCEPTED' | 'CONTESTED';
     notes?: string;
     evidenceFileUrls?: string[];
+    // Phase 95 (2026-05-23) — Phase 94 deferred. Structured contest
+    // reason for analytics. Free-text notes still allowed; this is
+    // the categorical signal.
+    contestReasonCategory?: string;
+    // Phase 95 — Phase 94 deferred #20 partial-cart support. Each
+    // entry overrides the top-level decision for the referenced
+    // ReturnItem. Rollup: any CONTESTED item → top-level CONTESTED
+    // (else top-level ACCEPTED).
+    itemDecisions?: Array<{
+      returnItemId: string;
+      decision: 'ACCEPTED' | 'CONTESTED';
+      note?: string;
+    }>;
   }) {
-    const ret = await this.returnRepo.findByIdWithItems(args.returnId);
-    if (!ret) throw new NotFoundAppException('Return not found');
-    const sellerOnSubOrder = (ret as any).subOrder?.sellerId;
-    if (!sellerOnSubOrder || sellerOnSubOrder !== args.sellerId) {
-      throw new ForbiddenAppException(
-        'You do not have access to this return',
-      );
-    }
-    if (
-      !ret.sellerResponseStatus ||
-      ret.sellerResponseStatus === 'NOT_REQUIRED'
-    ) {
-      throw new BadRequestAppException(
-        'No seller response is required for this return.',
-      );
-    }
-    if (ret.sellerResponseStatus !== 'PENDING') {
-      throw new BadRequestAppException(
-        `Seller has already responded (${ret.sellerResponseStatus}).`,
-      );
-    }
-    // Late-response courtesy window: 1 hour past due is still accepted
-    // since the seller may have started typing right at the deadline.
-    // After that, they can talk to admin via support; CONTESTED stays
-    // valid because admin can still override at QC, but ACCEPTED is
-    // pointless once the cron has flipped the row to EXPIRED (handled
-    // below — if cron beat the seller, sellerResponseStatus is EXPIRED
-    // already and the previous check throws).
-    if (
-      ret.sellerResponseDueAt &&
-      ret.sellerResponseDueAt.getTime() + 60 * 60 * 1000 < Date.now()
-    ) {
-      throw new BadRequestAppException(
-        'The seller response window has closed. Contact admin via support.',
-      );
-    }
-
-    const respondedAt = new Date();
-    const updated = await this.prisma.return.update({
-      where: { id: args.returnId },
-      data: {
-        sellerResponseStatus: args.decision as any,
-        sellerRespondedAt: respondedAt,
-        sellerResponseNotes: args.notes ?? null,
-      },
-    });
-
-    // Optional evidence upload — reuse ReturnEvidence with
-    // uploadedBy='SELLER'. ReturnEvidence already supports this value
-    // (string column with admin / seller / customer / franchise).
-    if (
-      args.evidenceFileUrls &&
-      args.evidenceFileUrls.length > 0
-    ) {
-      await this.prisma.returnEvidence.createMany({
-        data: args.evidenceFileUrls.map((url) => ({
-          returnId: args.returnId,
-          uploadedBy: 'SELLER',
-          uploaderId: args.sellerId,
-          fileType: 'IMAGE',
-          fileUrl: url,
-          description: `Seller ${args.decision.toLowerCase()} response evidence`,
-        })),
+    // Phase 94 (2026-05-23) — Seller/Franchise Return Response audit
+    // pre-tx validation. Cheap checks first so we don't burn a tx slot
+    // on obviously-bad payloads.
+    //
+    //   Gap #9  — evidence URL allowlist. Mirrors the create-return
+    //             check; env-tunable via RETURN_EVIDENCE_ALLOWED_HOSTS.
+    //   Gap #13 — notes sanitization. Strip control chars + cap length
+    //             so the column + downstream HTML email never receive
+    //             a 100MB blob or script-injection payload.
+    if (args.evidenceFileUrls && args.evidenceFileUrls.length > 0) {
+      const allowed =
+        this.env?.getOptional?.('RETURN_EVIDENCE_ALLOWED_HOSTS' as any);
+      const allowedHosts = allowed
+        ? allowed
+            .split(',')
+            .map((h: string) => h.trim())
+            .filter(Boolean)
+        : undefined;
+      const bad = validateEvidenceUrls(args.evidenceFileUrls, {
+        allowedHosts: allowedHosts as any,
       });
+      if (bad) {
+        throw new BadRequestAppException(
+          `Evidence URL #${bad.index + 1} rejected: ${bad.reason}`,
+        );
+      }
+    }
+    const sanitizedNotes = sanitizeRespondNotes(args.notes);
+
+    // Phase 94 — Gap #4/#5/#7/#8 atomicity. Pre-Phase-94 the update,
+    // evidence rows, status-history row and audit log fired as four
+    // sequential statements. A crash after step 1 left the seller
+    // marked CONTESTED with no evidence rows — QC saw the dispute
+    // without the supporting photos. Wrapping everything in a
+    // $transaction + threading the outbox publish through the same
+    // tx (via `eventBus.publish({ tx })`) makes the whole respond
+    // either fully committed or fully rolled back.
+    //
+    // Inside the tx we issue `SELECT ... FOR UPDATE` on the row first
+    // — closes the TOCTOU window between the sweeper's `updateMany
+    // WHERE sellerResponseStatus=PENDING` and this respond. Sweeper
+    // also runs `FOR UPDATE SKIP LOCKED` now (see
+    // sweepExpiredSellerResponses), so the two never race on the
+    // same row.
+    const respondedAt = new Date();
+    let txOutcome: {
+      updated: any;
+      retSnapshot: any;
+      evidenceCount: number;
+      effectiveDecision: 'ACCEPTED' | 'CONTESTED';
+    } | null = null;
+
+    try {
+      txOutcome = await this.prisma.$transaction(async (tx) => {
+        // Pessimistic row lock so the sweeper (which now uses FOR
+        // UPDATE SKIP LOCKED) can't flip PENDING→EXPIRED between our
+        // read + write. If the sweeper holds the lock we wait briefly;
+        // if it commits EXPIRED first our subsequent CAS bumps a 0-row
+        // update and we surface a clean BadRequest.
+        await tx.$queryRawUnsafe(
+          `SELECT id FROM returns WHERE id = $1 FOR UPDATE`,
+          args.returnId,
+        );
+
+        // Re-read INSIDE the tx so we see post-sweeper state.
+        const ret = await tx.return.findUnique({
+          where: { id: args.returnId },
+          include: { subOrder: true },
+        });
+        if (!ret) {
+          throw new NotFoundAppException('Return not found');
+        }
+
+        const sellerOnSubOrder = (ret as any).subOrder?.sellerId;
+        if (!sellerOnSubOrder || sellerOnSubOrder !== args.sellerId) {
+          throw new ForbiddenAppException(
+            'You do not have access to this return',
+          );
+        }
+        if (
+          !ret.sellerResponseStatus ||
+          ret.sellerResponseStatus === 'NOT_REQUIRED'
+        ) {
+          throw new BadRequestAppException(
+            'No seller response is required for this return.',
+          );
+        }
+        if (ret.sellerResponseStatus !== 'PENDING') {
+          throw new BadRequestAppException(
+            `Seller has already responded (${ret.sellerResponseStatus}).`,
+          );
+        }
+        // Late-response courtesy window: up to 1 hour past due is
+        // still accepted. Anything older redirects to admin support.
+        // Phase 94 — Gap #16. Comment fix: the symmetric treatment of
+        // ACCEPTED + CONTESTED inside the grace window is intentional
+        // (a seller mid-typing at the deadline shouldn't lose their
+        // submission). The "ACCEPTED is pointless once EXPIRED" line
+        // from Phase 13 was misleading — the EXPIRED check above
+        // already short-circuits that case.
+        if (
+          ret.sellerResponseDueAt &&
+          ret.sellerResponseDueAt.getTime() + 60 * 60 * 1000 < Date.now()
+        ) {
+          throw new BadRequestAppException(
+            'The seller response window has closed. Contact admin via support.',
+          );
+        }
+
+        // Phase 95 (2026-05-23) — Phase 94 deferred #20 partial-cart
+        // rollup. When the caller supplies itemDecisions, the
+        // top-level decision becomes the rollup of all items: any
+        // CONTESTED item → CONTESTED at the return level. If no
+        // itemDecisions present, top-level decision is used for all
+        // items (back-compat with the single-stance flow).
+        const allReturnItems = await tx.returnItem.findMany({
+          where: { returnId: args.returnId },
+          select: { id: true },
+        });
+        const validItemIds = new Set(allReturnItems.map((i: any) => i.id));
+        let effectiveDecision = args.decision;
+        const perItem = new Map<string, { decision: 'ACCEPTED' | 'CONTESTED'; note?: string }>();
+        if (args.itemDecisions && args.itemDecisions.length > 0) {
+          for (const d of args.itemDecisions) {
+            if (!validItemIds.has(d.returnItemId)) {
+              throw new BadRequestAppException(
+                `returnItemId ${d.returnItemId} does not belong to this return`,
+              );
+            }
+            perItem.set(d.returnItemId, { decision: d.decision, note: d.note });
+          }
+          const anyContested = Array.from(perItem.values()).some(
+            (v) => v.decision === 'CONTESTED',
+          );
+          effectiveDecision = anyContested ? 'CONTESTED' : 'ACCEPTED';
+        } else {
+          for (const it of allReturnItems) {
+            perItem.set(it.id, { decision: args.decision });
+          }
+        }
+
+        // Phase 94 — Gap #6 version CAS. `updateWithVersion` adds
+        // `version: ret.version` to the WHERE; if a concurrent admin
+        // reject / risk re-score bumped the version since our read,
+        // the 0-row update raises P2025 which we translate into a
+        // 409 ConflictAppException equivalent (BadRequest with a
+        // retry hint here — the seller can refresh + try again).
+        let updated: any;
+        try {
+          updated = await tx.return.update({
+            where: { id: args.returnId, version: (ret as any).version } as any,
+            data: {
+              sellerResponseStatus: effectiveDecision as any,
+              sellerRespondedAt: respondedAt,
+              sellerResponseNotes: sanitizedNotes,
+              sellerContestReasonCategory:
+                effectiveDecision === 'CONTESTED'
+                  ? args.contestReasonCategory ?? null
+                  : null,
+              version: { increment: 1 },
+            } as any,
+          });
+        } catch (err: any) {
+          if (err?.code === 'P2025') {
+            throw new BadRequestAppException(
+              'Return was modified by another process; please refresh and retry.',
+            );
+          }
+          throw err;
+        }
+
+        // Phase 95 — write per-item rows inside the same tx.
+        for (const [itemId, d] of perItem.entries()) {
+          await tx.returnItem.update({
+            where: { id: itemId },
+            data: {
+              sellerItemResponse: d.decision as any,
+              sellerItemRespondedAt: respondedAt,
+              sellerItemResponseNote: d.note
+                ? sanitizeRespondNotes(d.note)
+                : null,
+            } as any,
+          });
+        }
+
+        // Phase 94 — Gap #3/#4. Evidence rows write inside the same
+        // tx so a crash between the status flip and the evidence
+        // insert can't desync the two surfaces.
+        let evidenceCount = 0;
+        if (args.evidenceFileUrls && args.evidenceFileUrls.length > 0) {
+          await tx.returnEvidence.createMany({
+            data: args.evidenceFileUrls.map((url) => ({
+              returnId: args.returnId,
+              uploadedBy: 'SELLER',
+              uploaderId: args.sellerId,
+              fileType: 'IMAGE',
+              fileUrl: url,
+              description: `Seller ${args.decision.toLowerCase()} response evidence`,
+            })),
+          });
+          evidenceCount = args.evidenceFileUrls.length;
+        }
+
+        // Phase 94 — Gap #15. Status-history breadcrumb. We keep the
+        // self-loop row (fromStatus === toStatus) intentionally — the
+        // admin UI surfaces this table as the chronological log of
+        // everything that touched the return, and a seller respond is
+        // exactly the kind of event that deserves a line there even
+        // though the primary Return.status itself is unchanged. The
+        // QC liability decision later writes its own row with a real
+        // transition.
+        await tx.returnStatusHistory.create({
+          data: {
+            returnId: args.returnId,
+            fromStatus: ret.status as any,
+            toStatus: ret.status as any,
+            changedBy: 'SELLER',
+            changedById: args.sellerId,
+            notes: `Seller ${args.decision.toLowerCase()}${
+              sanitizedNotes ? `: ${sanitizedNotes.slice(0, 200)}` : ''
+            }`,
+          },
+        });
+
+        // Phase 94 — Gap #10. Outbox publish INSIDE the tx so the
+        // event row commits atomically with the status flip. Without
+        // this, a crash between commit and emitAsync (or a failure of
+        // the direct emit) would lose the event entirely.
+        const itemDecisionCount = perItem.size;
+        const contestedItemCount = Array.from(perItem.values()).filter(
+          (v) => v.decision === 'CONTESTED',
+        ).length;
+        await this.eventBus.publish(
+          {
+            eventName: 'returns.seller.responded',
+            aggregate: 'Return',
+            aggregateId: args.returnId,
+            occurredAt: respondedAt,
+            payload: {
+              returnId: args.returnId,
+              returnNumber: ret.returnNumber,
+              sellerId: args.sellerId,
+              decision: effectiveDecision,
+              contestReasonCategory:
+                args.contestReasonCategory ?? null,
+              itemDecisionCount,
+              contestedItemCount,
+              evidenceCount,
+              hasNotes: !!sanitizedNotes && sanitizedNotes.length > 0,
+            },
+          },
+          { tx },
+        );
+
+        return { updated, retSnapshot: ret, evidenceCount, effectiveDecision };
+      });
+    } catch (err) {
+      throw err;
     }
 
-    // Status-history breadcrumb so the admin sees the seller's choice
-    // chronologically alongside QC notes.
-    await this.returnRepo.recordStatusChange(
-      args.returnId,
-      ret.status,
-      ret.status,
-      'SELLER',
-      args.sellerId,
-      `Seller ${args.decision.toLowerCase()}: ${(args.notes ?? '').slice(0, 200)}`,
-    );
+    const { updated, retSnapshot, evidenceCount, effectiveDecision } =
+      txOutcome!;
 
-    // Audit trail
+    // Phase 94 — Gap #17. Audit trail. Pre-Phase-94 `.catch(() =>
+    // undefined)` silently swallowed audit failures, breaking
+    // forensic + compliance review. We now surface as logger.warn —
+    // the audit IS best-effort (audit failures must not block the
+    // seller's response), but the loss should be observable.
     this.audit
       .writeAuditLog({
         actorId: args.sellerId,
@@ -2748,17 +4118,307 @@ export class ReturnService {
         resourceId: args.returnId,
         oldValue: { sellerResponseStatus: 'PENDING' },
         newValue: {
-          sellerResponseStatus: args.decision,
-          notes: args.notes,
-          evidenceCount: args.evidenceFileUrls?.length ?? 0,
+          sellerResponseStatus: effectiveDecision,
+          requestedDecision: args.decision,
+          contestReasonCategory: args.contestReasonCategory ?? null,
+          notesLength: sanitizedNotes?.length ?? 0,
+          evidenceCount,
+          itemDecisionCount: args.itemDecisions?.length ?? 0,
         },
-        metadata: { returnNumber: ret.returnNumber },
+        metadata: { returnNumber: retSnapshot.returnNumber },
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        this.logger.warn(
+          `[return.seller_responded] audit write failed for ${retSnapshot.returnNumber}: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
 
     this.logger.log(
-      `Return ${ret.returnNumber}: seller ${args.sellerId} ${args.decision} (notes=${(args.notes ?? '').length}ch, evidence=${args.evidenceFileUrls?.length ?? 0})`,
+      `Return ${retSnapshot.returnNumber}: seller ${args.sellerId} ${effectiveDecision} (notes=${sanitizedNotes?.length ?? 0}ch, evidence=${evidenceCount}, items=${args.itemDecisions?.length ?? 0})`,
     );
+
+    return updated;
+  }
+
+  /**
+   * Phase 95 (2026-05-23) — Phase 94 deferred #25 closure.
+   *
+   * Seller can flip their previous ACCEPTED↔CONTESTED while still
+   * within the original window + 1h grace. Use case: a seller clicks
+   * ACCEPTED on autopilot, then opens the QC photos and realises the
+   * claim doesn't match the item — they should be able to switch to
+   * CONTESTED without contacting support. Past the grace window the
+   * decision is final; admin can still override at QC time.
+   *
+   * Same tx guarantees as respondAsSeller: row lock + version CAS +
+   * outbox publish inside the tx + post-tx audit log.
+   */
+  async rescindSellerResponse(args: {
+    returnId: string;
+    sellerId: string;
+    newDecision: 'ACCEPTED' | 'CONTESTED';
+    notes?: string;
+    contestReasonCategory?: string;
+  }) {
+    const sanitizedNotes = sanitizeRespondNotes(args.notes);
+    const respondedAt = new Date();
+
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM returns WHERE id = $1 FOR UPDATE`,
+        args.returnId,
+      );
+      const ret = await tx.return.findUnique({
+        where: { id: args.returnId },
+        include: { subOrder: true },
+      });
+      if (!ret) throw new NotFoundAppException('Return not found');
+      const sellerOnSubOrder = (ret as any).subOrder?.sellerId;
+      if (!sellerOnSubOrder || sellerOnSubOrder !== args.sellerId) {
+        throw new ForbiddenAppException(
+          'You do not have access to this return',
+        );
+      }
+      // Rescind requires a prior ACCEPTED or CONTESTED — can't rescind
+      // a never-submitted (PENDING) or expired response.
+      if (
+        ret.sellerResponseStatus !== 'ACCEPTED' &&
+        ret.sellerResponseStatus !== 'CONTESTED'
+      ) {
+        throw new BadRequestAppException(
+          `Rescind requires a prior ACCEPTED or CONTESTED response (current: ${ret.sellerResponseStatus ?? 'none'}).`,
+        );
+      }
+      if (ret.sellerResponseStatus === args.newDecision) {
+        throw new BadRequestAppException(
+          `Already ${args.newDecision}; nothing to rescind.`,
+        );
+      }
+      // Within window + 1h grace — same rule as respondAsSeller.
+      if (
+        ret.sellerResponseDueAt &&
+        ret.sellerResponseDueAt.getTime() + 60 * 60 * 1000 < Date.now()
+      ) {
+        throw new BadRequestAppException(
+          'The seller response window has closed. Contact admin via support.',
+        );
+      }
+
+      let updated: any;
+      try {
+        updated = await tx.return.update({
+          where: { id: args.returnId, version: (ret as any).version } as any,
+          data: {
+            sellerResponseStatus: args.newDecision as any,
+            sellerRespondedAt: respondedAt,
+            sellerResponseNotes: sanitizedNotes,
+            sellerContestReasonCategory:
+              args.newDecision === 'CONTESTED'
+                ? args.contestReasonCategory ?? null
+                : null,
+            version: { increment: 1 },
+          } as any,
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          throw new BadRequestAppException(
+            'Return was modified by another process; please refresh and retry.',
+          );
+        }
+        throw err;
+      }
+
+      await tx.returnStatusHistory.create({
+        data: {
+          returnId: args.returnId,
+          fromStatus: ret.status as any,
+          toStatus: ret.status as any,
+          changedBy: 'SELLER',
+          changedById: args.sellerId,
+          notes: `Seller rescinded ${ret.sellerResponseStatus?.toLowerCase()} → ${args.newDecision.toLowerCase()}${
+            sanitizedNotes ? `: ${sanitizedNotes.slice(0, 200)}` : ''
+          }`,
+        },
+      });
+
+      await this.eventBus.publish(
+        {
+          eventName: 'returns.seller.response.rescinded',
+          aggregate: 'Return',
+          aggregateId: args.returnId,
+          occurredAt: respondedAt,
+          payload: {
+            returnId: args.returnId,
+            returnNumber: ret.returnNumber,
+            sellerId: args.sellerId,
+            fromDecision: ret.sellerResponseStatus,
+            toDecision: args.newDecision,
+          },
+        },
+        { tx },
+      );
+
+      return { updated, retSnapshot: ret };
+    });
+
+    this.audit
+      .writeAuditLog({
+        actorId: args.sellerId,
+        actorRole: 'SELLER',
+        action: 'return.seller_response.rescinded',
+        module: 'returns',
+        resource: 'return',
+        resourceId: args.returnId,
+        oldValue: { sellerResponseStatus: outcome.retSnapshot.sellerResponseStatus },
+        newValue: {
+          sellerResponseStatus: args.newDecision,
+          notesLength: sanitizedNotes?.length ?? 0,
+        },
+        metadata: { returnNumber: outcome.retSnapshot.returnNumber },
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `[return.seller_response.rescinded] audit write failed: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
+
+    return outcome.updated;
+  }
+
+  /**
+   * Phase 95 (2026-05-23) — Phase 94 deferred #28 closure.
+   *
+   * Admin extends the seller-response window by N hours. Useful for
+   * sellers who need extra time (out-of-office, holiday, evidence
+   * gathering). Records who granted the extension + when so audit can
+   * distinguish "seller responded inside their original window" from
+   * "admin moved the goalpost".
+   *
+   * Caps at 168h (7 days) total extension so the customer's refund
+   * doesn't sit indefinitely waiting on the seller.
+   */
+  async extendSellerResponseWindow(args: {
+    returnId: string;
+    adminId: string;
+    additionalHours: number;
+    reason?: string;
+  }) {
+    if (!Number.isFinite(args.additionalHours) || args.additionalHours <= 0) {
+      throw new BadRequestAppException(
+        'additionalHours must be a positive number',
+      );
+    }
+    if (args.additionalHours > 168) {
+      throw new BadRequestAppException(
+        'Maximum extension is 168 hours (7 days). For longer holds, cancel the return + ask the customer to refile.',
+      );
+    }
+    const sanitizedReason = sanitizeRespondNotes(args.reason);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT id FROM returns WHERE id = $1 FOR UPDATE`,
+        args.returnId,
+      );
+      const ret = await tx.return.findUnique({ where: { id: args.returnId } });
+      if (!ret) throw new NotFoundAppException('Return not found');
+      if (ret.sellerResponseStatus !== 'PENDING') {
+        throw new BadRequestAppException(
+          `Window extension requires a PENDING response (current: ${ret.sellerResponseStatus ?? 'none'}).`,
+        );
+      }
+      // Cumulative extension cap: don't allow stacking extensions
+      // beyond 168h total.
+      const existingExt = (ret as any).sellerResponseExtensionHours ?? 0;
+      if (existingExt + args.additionalHours > 168) {
+        throw new BadRequestAppException(
+          `Cumulative extension (${existingExt + args.additionalHours}h) exceeds 168h cap.`,
+        );
+      }
+
+      const baseDue = ret.sellerResponseDueAt ?? new Date();
+      const newDue = new Date(
+        baseDue.getTime() + args.additionalHours * 60 * 60 * 1000,
+      );
+      let row: any;
+      try {
+        row = await tx.return.update({
+          where: { id: args.returnId, version: (ret as any).version } as any,
+          data: {
+            sellerResponseDueAt: newDue,
+            sellerResponseExtendedBy: args.adminId,
+            sellerResponseExtendedAt: new Date(),
+            sellerResponseExtensionHours: existingExt + args.additionalHours,
+            version: { increment: 1 },
+          } as any,
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          throw new BadRequestAppException(
+            'Return was modified by another process; please refresh and retry.',
+          );
+        }
+        throw err;
+      }
+
+      await tx.returnStatusHistory.create({
+        data: {
+          returnId: args.returnId,
+          fromStatus: ret.status as any,
+          toStatus: ret.status as any,
+          changedBy: 'ADMIN',
+          changedById: args.adminId,
+          notes: `Seller response window extended by ${args.additionalHours}h to ${newDue.toISOString()}${
+            sanitizedReason ? `: ${sanitizedReason.slice(0, 200)}` : ''
+          }`,
+        },
+      });
+
+      await this.eventBus.publish(
+        {
+          eventName: 'returns.seller.response.extended',
+          aggregate: 'Return',
+          aggregateId: args.returnId,
+          occurredAt: new Date(),
+          payload: {
+            returnId: args.returnId,
+            returnNumber: ret.returnNumber,
+            adminId: args.adminId,
+            additionalHours: args.additionalHours,
+            newDueAt: newDue.toISOString(),
+          },
+        },
+        { tx },
+      );
+
+      return row;
+    });
+
+    this.audit
+      .writeAuditLog({
+        actorId: args.adminId,
+        actorRole: 'ADMIN',
+        action: 'return.seller_response.extended',
+        module: 'returns',
+        resource: 'return',
+        resourceId: args.returnId,
+        newValue: {
+          additionalHours: args.additionalHours,
+          newDueAt: updated.sellerResponseDueAt,
+          reason: sanitizedReason,
+        },
+      })
+      .catch((err) => {
+        this.logger.warn(
+          `[return.seller_response.extended] audit write failed: ${
+            (err as Error)?.message ?? 'unknown error'
+          }`,
+        );
+      });
 
     return updated;
   }
@@ -2774,33 +4434,131 @@ export class ReturnService {
   async sweepExpiredSellerResponses(now: Date = new Date()): Promise<{
     expiredCount: number;
   }> {
-    const result = await this.prisma.return.updateMany({
-      where: {
-        sellerResponseStatus: 'PENDING' as any,
-        sellerResponseDueAt: { lt: now },
-      },
-      data: {
-        sellerResponseStatus: 'EXPIRED' as any,
-      },
-    });
-    if (result.count > 0) {
-      this.logger.log(
-        `Seller-response sweeper expired ${result.count} return(s)`,
-      );
-      // Don't write per-row audit entries here (could be many on a
-      // backlog flush) — the cron run row + per-return status history
-      // when QC eventually decides covers the trail. If a per-row audit
-      // is wanted later, do it inside the loop with batched audit writes.
+    // Phase 94 (2026-05-23) — Seller/Franchise Return Response audit
+    // Gap #15 / #16. Pre-Phase-94 the sweeper ran a single
+    // `updateMany`, then logged the count. Problems closed here:
+    //
+    //   #15 — TOCTOU vs respondAsSeller. Without row-level locking,
+    //         the sweeper could flip PENDING→EXPIRED in the millisecond
+    //         after respondAsSeller read PENDING but before its update
+    //         landed; the respond's update would then overwrite EXPIRED
+    //         with ACCEPTED. We now grab `FOR UPDATE SKIP LOCKED` per
+    //         batch so the respond + sweeper serialize cleanly.
+    //   #15b — No per-row event/audit. Customer / admin couldn't get
+    //         a signal when their window expired. We now publish
+    //         `returns.seller.response.expired` per row + write a
+    //         status_history breadcrumb so the forensic trail records
+    //         which entity (cron) closed the window.
+    //
+    // Batched in 100-row chunks so a backlog flush doesn't hold an
+    // unbounded number of row locks at once.
+    const BATCH = 100;
+    let totalExpired = 0;
+
+    // We loop until the SELECT FOR UPDATE returns 0 candidates. Each
+    // iteration runs in its own tx so a failure mid-batch only loses
+    // that one batch's work and the next cron tick retries.
+    /* eslint-disable no-constant-condition */
+    while (true) {
+      const expiredRows = await this.prisma.$transaction(async (tx) => {
+        const candidates = await tx.$queryRawUnsafe<
+          Array<{ id: string; return_number: string }>
+        >(
+          `SELECT id, return_number FROM returns
+           WHERE seller_response_status = 'PENDING'
+             AND seller_response_due_at IS NOT NULL
+             AND seller_response_due_at < $1
+           ORDER BY seller_response_due_at ASC
+           LIMIT ${BATCH}
+           FOR UPDATE SKIP LOCKED`,
+          now,
+        );
+        if (candidates.length === 0) return [];
+
+        const ids = candidates.map((r) => r.id);
+        await tx.return.updateMany({
+          where: { id: { in: ids } },
+          data: { sellerResponseStatus: 'EXPIRED' as any },
+        });
+
+        // Per-row status_history breadcrumbs so the audit trail names
+        // SYSTEM as the actor + flags the change as a window expiry.
+        // ReturnStatusHistory.fromStatus/toStatus reflects the main
+        // Return.status which is unchanged here; we use the `notes`
+        // column to carry the seller-response transition string.
+        const histRows = candidates.map((c) => ({
+          returnId: c.id,
+          fromStatus: null as any,
+          toStatus: 'REQUESTED' as any, // placeholder; only the notes carry meaning
+          changedBy: 'SYSTEM',
+          changedById: null as any,
+          notes: 'seller_response_status: PENDING → EXPIRED (window lapsed)',
+        }));
+        // Best-effort — failure here MUST NOT block the EXPIRED flip
+        // (which is the primary purpose of the sweep). Log and move on.
+        try {
+          await tx.returnStatusHistory.createMany({ data: histRows as any });
+        } catch (err) {
+          this.logger.warn(
+            `[seller-response sweeper] status history batch insert failed: ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          );
+        }
+
+        // Outbox publish INSIDE the tx so each EXPIRED row gets a
+        // durable event row. If the publish-loop crashes mid-batch
+        // the entire tx rolls back, the rows stay PENDING, and the
+        // next cron tick retries.
+        for (const c of candidates) {
+          await this.eventBus.publish(
+            {
+              eventName: 'returns.seller.response.expired',
+              aggregate: 'Return',
+              aggregateId: c.id,
+              occurredAt: now,
+              payload: {
+                returnId: c.id,
+                returnNumber: c.return_number,
+                expiredAt: now.toISOString(),
+              },
+            },
+            { tx },
+          );
+        }
+
+        return candidates;
+      });
+
+      totalExpired += expiredRows.length;
+      if (expiredRows.length < BATCH) break;
     }
-    return { expiredCount: result.count };
+
+    if (totalExpired > 0) {
+      this.logger.log(
+        `Seller-response sweeper expired ${totalExpired} return(s)`,
+      );
+    }
+    return { expiredCount: totalExpired };
   }
 
   private async unfreezeCommissionForSubOrder(subOrderId: string, reason: string) {
     const result = await this.prisma.commissionRecord.updateMany({
-      where: { subOrderId, status: CommissionRecordStatus.ON_HOLD },
+      // Phase 137 — only lift SYSTEM freezes (heldByAdminId IS NULL). An admin
+      // hold (heldByAdminId set) must NOT be auto-resumed by a return rejection;
+      // it stays held until an admin explicitly resumes it.
+      where: {
+        subOrderId,
+        status: CommissionRecordStatus.ON_HOLD,
+        heldByAdminId: null,
+      },
       data: {
         status: CommissionRecordStatus.PENDING,
-        adjustmentReason: reason,
+        holdReason: null,
+        // Phase 136 — stamp when an ON_HOLD record was restored to PENDING, so
+        // a once-frozen-then-restored row is distinguishable from one that was
+        // never frozen (both otherwise look like plain PENDING to settlement).
+        unfrozenAt: new Date(),
       },
     });
     if (result.count > 0) {

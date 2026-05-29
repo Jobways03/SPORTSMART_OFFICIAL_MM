@@ -1,12 +1,14 @@
 export {
   createApiClient,
   ApiError,
+  registerStepUpHandler,
 } from './api-client';
 export type {
   ApiResponse,
   ApiClientConfig,
   ApiClient,
   TokenStorage,
+  StepUpHandler,
 } from './api-client';
 
 // Money formatting — BigInt-safe paise↔rupee conversions used by every

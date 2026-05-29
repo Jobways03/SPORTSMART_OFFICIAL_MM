@@ -15,11 +15,13 @@ import { AdminRefundApprovalsController } from './admin-refund-approvals.control
  * catches the regression in milliseconds, no DB / HTTP setup.
  */
 
+// Phase 132 — separation of duties: viewing, approving, and rejecting are
+// now distinct permissions (was all `refunds.approve`).
 const ROUTE_PERMISSIONS: Array<{ method: string; permission: string }> = [
-  { method: 'list', permission: 'refunds.approve' },
-  { method: 'get', permission: 'refunds.approve' },
+  { method: 'list', permission: 'refunds.read' },
+  { method: 'get', permission: 'refunds.read' },
   { method: 'approve', permission: 'refunds.approve' },
-  { method: 'reject', permission: 'refunds.approve' },
+  { method: 'reject', permission: 'refunds.reject' },
 ];
 
 describe('AdminRefundApprovalsController — authorization config', () => {

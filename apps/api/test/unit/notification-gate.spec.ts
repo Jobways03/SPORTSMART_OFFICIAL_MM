@@ -4,10 +4,14 @@ import { NotificationGateService } from '../../src/modules/notifications/applica
 /**
  * Phase 8 (PR 8.2) — NotificationGateService.
  *
- * Three trust boundaries:
+ * Trust boundaries:
  *   1. Suppression list always blocks.
  *   2. Transactional flag bypasses preferences (but NOT suppression).
  *   3. User opt-out blocks non-transactional sends.
+ *   4. Phase 28 (2026-05-21) — DPDP consent gates non-transactional
+ *      marketing sends via ConsentService.isAllowed; tests below pass
+ *      a stub that defaults to "allowed=true" so this layer is
+ *      neutralised for branches that exercise the other layers.
  *
  * Pin every branch.
  */
@@ -15,6 +19,7 @@ describe('NotificationGateService', () => {
   function setup(opts: {
     suppression?: { reason: string; expiresAt?: Date | null } | null;
     preference?: { enabled: boolean } | null;
+    consentAllowed?: boolean;
   } = {}) {
     const fakePrisma: any = {
       notificationSuppression: {
@@ -28,8 +33,14 @@ describe('NotificationGateService', () => {
           opts.preference ? { ...opts.preference } : null,
         ),
       },
+      whatsappSession: {
+        findUnique: jest.fn(async () => null),
+      },
     };
-    return new NotificationGateService(fakePrisma);
+    const consentStub: any = {
+      isAllowed: jest.fn().mockResolvedValue(opts.consentAllowed ?? true),
+    };
+    return new NotificationGateService(fakePrisma, consentStub);
   }
 
   it('allows when no suppression + no preference row', async () => {

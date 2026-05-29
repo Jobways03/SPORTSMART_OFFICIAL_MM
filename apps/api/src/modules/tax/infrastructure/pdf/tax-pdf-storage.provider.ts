@@ -9,13 +9,25 @@
 // boot-time, not service-layer.
 
 export interface PdfUploadInput {
-  /** Logical key — `tax-documents/${fy}/${supplierGstin|PLATFORM}/${documentNumber}.pdf`. */
+  /**
+   * Logical key — `${fy}/${supplierGstin|PLATFORM}/${documentType}/${documentNumber}.${ext}`.
+   * The stub uses `.html` (the bytes are an HTML render); the real
+   * adapter (puppeteer / headless Chrome) will produce true PDF
+   * bytes with extension `.pdf`. The extension is chosen by the
+   * caller via `storagePath`, NOT inferred from `contentType`.
+   */
   storagePath: string;
-  /** Rendered PDF bytes. The stub may accept HTML buffers; real adapters
-   *  require true PDF bytes. */
+  /**
+   * Bytes to persist. The stub accepts HTML (text/html); real
+   * adapters require true PDF bytes (application/pdf).
+   */
   body: Buffer;
-  /** Content type — typically `application/pdf`. The stub records this
-   *  on disk in a sidecar so a dev can sanity-check. */
+  /**
+   * Content type — `text/html; charset=utf-8` for the stub, or
+   * `application/pdf` for the real adapter. Honest labelling at
+   * the storage layer so a browser opening the signed URL renders
+   * the bytes as their actual type.
+   */
   contentType: string;
 }
 

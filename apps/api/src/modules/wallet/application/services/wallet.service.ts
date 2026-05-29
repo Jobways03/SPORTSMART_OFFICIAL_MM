@@ -258,9 +258,16 @@ export class WalletService {
     if (args.amountInPaise < 100) {
       throw new BadRequestAppException('Minimum top-up is ₹1');
     }
-    if (args.amountInPaise > 10_000_000) {
-      // ₹100,000 cap to start; raise after KYC review
-      throw new BadRequestAppException('Maximum single top-up is ₹1,00,000');
+    // Phase 70 (2026-05-22) — Phase 66 audit Gap #19. Env-tunable
+    // cap. Default ₹1,00,000 (10,000,000 paise) preserves prior
+    // behaviour; ops can raise after KYC review without redeploy.
+    const maxTopupPaise = Number(
+      process.env.WALLET_MAX_TOPUP_PAISE ?? 10_000_000,
+    );
+    if (args.amountInPaise > maxTopupPaise) {
+      throw new BadRequestAppException(
+        `Maximum single top-up is ₹${(maxTopupPaise / 100).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`,
+      );
     }
 
     const wallet = await this.repo.getOrCreate(args.userId);

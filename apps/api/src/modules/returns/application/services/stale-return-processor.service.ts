@@ -184,9 +184,26 @@ export class StaleReturnProcessorService
           );
           continue;
         }
+        // Phase 105 (2026-05-23) — Phase 104 audit Gap #14 closure.
+        // Pre-Phase-105 the auto-close path wrote `{ status, closedAt }`
+        // only — the closeReason / closedBy / closedByActorType fields
+        // added in Phase 101 stayed null for cron-closed rows. We now
+        // stamp the SYSTEM actor + a structured reason so finance
+        // dashboards see the same shape regardless of the close path,
+        // AND we publish the same `returns.return.closed` event so
+        // downstream handlers (BulkJob trace, customer notification
+        // when added) fire for stale-closed rows too.
+        const now = new Date();
+        const closeReason = `Auto-closed — stale in ${ret.status} for ${this.staleDays}+ days`;
         const result = await this.prisma.return.updateMany({
           where: { id: ret.id, status: ret.status as any },
-          data: { status: 'COMPLETED', closedAt: new Date() },
+          data: {
+            status: 'COMPLETED' as any,
+            closedAt: now,
+            closedBy: 'stale-return-processor',
+            closedByActorType: 'SYSTEM',
+            closeReason,
+          } as any,
         });
         if (result.count === 0) {
           this.logger.log(
@@ -201,9 +218,35 @@ export class StaleReturnProcessorService
             toStatus: 'COMPLETED',
             changedBy: 'SYSTEM',
             changedById: 'stale-return-processor',
-            notes: `Auto-closed — stale in ${ret.status} for ${this.staleDays}+ days`,
+            notes: closeReason,
           },
         });
+        // Publish the same event the service path emits so any
+        // downstream subscribers (customer notification, metrics)
+        // see stale-closed returns too.
+        try {
+          await this.eventBus.publish({
+            eventName: 'returns.return.closed',
+            aggregate: 'Return',
+            aggregateId: ret.id,
+            occurredAt: now,
+            payload: {
+              returnId: ret.id,
+              returnNumber: ret.returnNumber,
+              closedBy: 'stale-return-processor',
+              closedByActorType: 'SYSTEM',
+              closeReason,
+              fromStatus: ret.status,
+              source: 'STALE_CRON',
+            },
+          });
+        } catch (err) {
+          this.logger.warn(
+            `[stale-auto-close] event publish failed for ${ret.returnNumber}: ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          );
+        }
         this.logger.log(
           `Auto-closed stale return ${ret.returnNumber} (was ${ret.status})`,
         );

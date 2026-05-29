@@ -49,7 +49,7 @@ export default function OverviewPage() {
           active,
           suspended,
           rejected,
-          kycPending,
+          // KYC feature disabled — no longer fetching kycPending.
           payouts,
           totalsRes,
           topRes,
@@ -59,7 +59,7 @@ export default function OverviewPage() {
           apiFetch<{ pagination: { total: number } }>('/admin/affiliates?status=ACTIVE&limit=1'),
           apiFetch<{ pagination: { total: number } }>('/admin/affiliates?status=SUSPENDED&limit=1'),
           apiFetch<{ pagination: { total: number } }>('/admin/affiliates?status=REJECTED&limit=1'),
-          apiFetch<{ pagination: { total: number } }>('/admin/affiliates?kycStatus=PENDING&limit=1'),
+          // apiFetch<{ pagination: { total: number } }>('/admin/affiliates?kycStatus=PENDING&limit=1'),
           apiFetch<{ pagination: { total: number } }>('/admin/affiliates/payouts?status=REQUESTED&limit=1'),
           apiFetch<Totals>('/admin/affiliates/commissions/totals'),
           apiFetch<{ rows: TopEarner[] }>('/admin/affiliates/reports/top-earners?limit=5'),
@@ -70,7 +70,7 @@ export default function OverviewPage() {
           ACTIVE: active.pagination.total,
           SUSPENDED: suspended.pagination.total,
           REJECTED: rejected.pagination.total,
-          KYC_PENDING: kycPending.pagination.total,
+          KYC_PENDING: 0,
           PAYOUT_REQUESTED: payouts.pagination.total,
           COMMISSION_PENDING: totalsRes.PENDING.count,
           COMMISSION_CONFIRMED: totalsRes.CONFIRMED.count,
@@ -95,12 +95,13 @@ export default function OverviewPage() {
       href: '/dashboard',
       tone: 'warning' as const,
     },
-    {
-      n: counts.KYC_PENDING,
-      label: 'KYC submissions to verify',
-      href: '/dashboard/kyc',
-      tone: 'warning' as const,
-    },
+    // KYC action item temporarily removed — feature disabled.
+    // {
+    //   n: counts.KYC_PENDING,
+    //   label: 'KYC submissions to verify',
+    //   href: '/dashboard/kyc',
+    //   tone: 'warning' as const,
+    // },
     {
       n: counts.PAYOUT_REQUESTED,
       label: 'payouts to approve',

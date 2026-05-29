@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { CatalogCacheService } from '../../../application/services/catalog-cache.service';
+import { StorefrontFilterValidatorService } from '../../../application/services/storefront-filter-validator.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { Request } from 'express';
 import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
@@ -25,6 +26,7 @@ export class StorefrontProductsController {
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly cache: CatalogCacheService,
     private readonly prisma: PrismaService,
+    private readonly filterValidator: StorefrontFilterValidatorService,
   ) {}
 
   @Get()
@@ -76,7 +78,13 @@ export class StorefrontProductsController {
       if (col) collectionId = col.id;
     }
 
-    // Parse filters from query params
+    // Parse filters from query params.
+    //
+    // Phase 40 (2026-05-21) — values are NFKC-normalized at the entry
+    // boundary so the storefront SERP buckets visual look-alikes (e.g.
+    // Cyrillic 'о' vs Latin 'o') into the same product set.
+    // Blank values are stripped here so the repo doesn't see empty
+    // filter[key]= params.
     const rawQuery = req.query as Record<string, any>;
     const filterObj: Record<string, string> = {};
     if (rawQuery.filter && typeof rawQuery.filter === 'object') {
@@ -86,6 +94,22 @@ export class StorefrontProductsController {
       const m = k.match(/^filter\[(\w+)\]$/);
       if (m && v) filterObj[m[1]!] = String(v);
     }
+    for (const key of Object.keys(filterObj)) {
+      const normalized = String(filterObj[key])
+        .split(',')
+        .map((s) => s.trim().normalize('NFKC'))
+        .filter(Boolean)
+        .join(',');
+      if (normalized === '') delete filterObj[key];
+      else filterObj[key] = normalized;
+    }
+
+    // Phase 40 (2026-05-21) — Gap #10. Validate values against the
+    // definition's choices[] before the SQL fires. Invalid values
+    // collapse the key out of the filter set.
+    const scrubbedFilterObj = await this.filterValidator.scrubFilterObj(filterObj, categoryId);
+    Object.keys(filterObj).forEach((k) => delete filterObj[k]);
+    Object.assign(filterObj, scrubbedFilterObj);
 
     const result = await this.cache.getOrSetProductList(
       { page: pageNum, limit: limitNum, search, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, availability: filterObj.availability || null, brandFilter: filterObj.brand || null, filters: JSON.stringify(filterObj) },
@@ -249,6 +273,78 @@ export class StorefrontProductsController {
       success: true,
       message: 'Search suggestions',
       data: { suggestions: results.map((r) => ({ title: r.title, slug: r.slug })) },
+    };
+  }
+
+  /**
+   * Phase 42 (2026-05-21) — server-side variant resolution.
+   *
+   * Closes the 100% checklist row 8 gap: the storefront PDP previously
+   * matched the selected option combination to a variantId via
+   * in-memory JS comparison over the variants array. That fails when
+   * the variant's optionValues array is incomplete (some join rows
+   * missing) and is non-deterministic if duplicate combinations exist.
+   *
+   * Now the backend computes the deterministic optionFingerprint
+   * (same hash as VariantGeneratorService) and looks the variant up
+   * via the partial-unique (productId, optionFingerprint) index from
+   * Phase 41. Returns the unique variantId or 404.
+   *
+   * Declared BEFORE `@Get(':slug')` so /catalog/products/:slug/...
+   * subpaths don't collide with the slug param.
+   */
+  @Get(':slug/resolve-variant')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resolve an option-value combination to a unique variantId' })
+  @ApiQuery({ name: 'optionValueIds', required: true, description: 'Comma-separated list of OptionValue UUIDs' })
+  async resolveVariant(
+    @Param('slug') slug: string,
+    @Query('optionValueIds') optionValueIdsCsv?: string,
+  ) {
+    if (!optionValueIdsCsv) {
+      throw new NotFoundAppException('optionValueIds is required');
+    }
+    const optionValueIds = optionValueIdsCsv
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (optionValueIds.length === 0) {
+      throw new NotFoundAppException('optionValueIds must contain at least one id');
+    }
+
+    const product = await this.prisma.product.findFirst({
+      where: { slug, isDeleted: false, status: 'ACTIVE', moderationStatus: 'APPROVED' },
+      select: { id: true },
+    });
+    if (!product) throw new NotFoundAppException('Product not found');
+
+    // Same fingerprint algorithm as VariantGeneratorService.
+    // Sorting + sha256 of the joined id list. Imported lazily here so
+    // the storefront controller doesn't depend on the application
+    // service layer.
+    const { createHash } = await import('crypto');
+    const fingerprint = createHash('sha256')
+      .update([...optionValueIds].sort().join('|'))
+      .digest('hex');
+
+    const variant = await this.prisma.productVariant.findFirst({
+      where: {
+        productId: product.id,
+        optionFingerprint: fingerprint,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+      },
+      select: { id: true, masterSku: true, sku: true, title: true, price: true, status: true },
+    });
+
+    if (!variant) {
+      throw new NotFoundAppException('No variant matches this combination');
+    }
+
+    return {
+      success: true,
+      message: 'Variant resolved',
+      data: variant,
     };
   }
 

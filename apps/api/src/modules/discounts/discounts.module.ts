@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AdminDiscountsController } from './presentation/controllers/admin-discounts.controller';
 import { CustomerDiscountsController } from './presentation/controllers/customer-discounts.controller';
 import { DiscountsService } from './application/services/discounts.service';
@@ -13,6 +13,8 @@ import { DiscountAffiliateUnificationService } from './application/services/disc
 import { DiscountPublicFacade } from './application/facades/discount-public.facade';
 import { ReleaseExpiredRedemptionsCron } from './application/crons/release-expired-redemptions.cron';
 import { CouponAttemptsCleanupCron } from './application/crons/coupon-attempts-cleanup.cron';
+// Phase 62 (2026-05-22) — allocation failure recovery (audit Gap #12).
+import { DiscountAllocationRecoveryHandler } from './application/event-handlers/discount-allocation-recovery.handler';
 import { PrismaDiscountRepository } from './infrastructure/repositories/prisma-discount.repository';
 import { DISCOUNT_REPOSITORY } from './domain/repositories/discount.repository.interface';
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
@@ -21,7 +23,8 @@ import { AuditModule } from '../audit/module';
 import { TaxModule } from '../tax/module';
 
 @Module({
-  imports: [AffiliateModule, AuditModule, TaxModule],
+  // TaxModule pulls Checkout → Discounts via forwardRef chain; mirror it here.
+  imports: [AffiliateModule, AuditModule, forwardRef(() => TaxModule)],
   controllers: [AdminDiscountsController, CustomerDiscountsController],
   providers: [
     AdminAuthGuard,
@@ -41,6 +44,11 @@ import { TaxModule } from '../tax/module';
     // older than the cleanup horizon (default 30 days) so the
     // windowed fraud-check query stays fast at scale.
     CouponAttemptsCleanupCron,
+    // Phase 62 — listens to discount.allocation.failed and re-runs
+    // allocateAndPersist; defensively flips redemption REDEEMED on
+    // double failure so the coupon slot isn't held by a phantom
+    // RESERVED.
+    DiscountAllocationRecoveryHandler,
     {
       provide: DISCOUNT_REPOSITORY,
       useClass: PrismaDiscountRepository,

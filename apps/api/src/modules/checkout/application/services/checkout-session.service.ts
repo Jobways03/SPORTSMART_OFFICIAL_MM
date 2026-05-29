@@ -14,8 +14,23 @@ export interface CheckoutItemAllocation {
   quantity: number;
   unitPrice: number;
   lineTotal: number;
+  // Phase 44 (2026-05-21) — pricing-tier snapshot. unitPrice is the
+  // tier-adjusted (effective) price; the fields below record the
+  // applied tier so order placement can persist the snapshot.
+  appliedPricingTierId?: string | null;
+  appliedDiscountPercent?: number | null;
+  appliedFixedUnitPrice?: number | null;
+  appliedListUnitPrice?: number | null;
   serviceable: boolean;
   unserviceableReason?: string;
+  /**
+   * Phase 64 (2026-05-22) — typed allocator reason (audit Gap
+   * #16). Pre-Phase-64 the only diagnostic was the customer-
+   * facing English `unserviceableReason`; support couldn't tell
+   * OUT_OF_STOCK from NO_SERVICE_AREA from DISTANCE_EXCEEDED.
+   * Value matches `ServiceabilityReason` from the allocator.
+   */
+  unserviceableCode?: string;
   allocatedSellerId: string | null;
   allocatedSellerName: string | null;
   allocatedNodeType: 'SELLER' | 'FRANCHISE';

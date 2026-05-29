@@ -22,9 +22,23 @@ import {
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard, RolesGuard } from '../../../../../core/guards';
+import { Permissions } from '../../../../../core/decorators/permissions.decorator';
+import { Roles } from '../../../../../core/decorators/roles.decorator';
+import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
+import { CurrentAdmin } from '../../../../../core/decorators/current-actor.decorator';
 import { ProductSlugService } from '../../../application/services/product-slug.service';
 import { ProductCodeService } from '../../../application/services/product-code.service';
+// Phase 39 (2026-05-21) — required-metafield gate on approve.
+import { MetafieldValidationService } from '../../../application/services/metafield-validation.service';
+// Phase 45 (2026-05-21) — atomic tax-config attestation w/ audit log.
+import { ProductTaxAttestationService } from '../../../application/services/product-tax-attestation.service';
+import {
+  BULK_TAX_CONFIG_MAX_PRODUCTS,
+  BulkUpdateTaxConfigDto,
+  BulkVerifyTaxConfigDto,
+  VerifyTaxConfigDto,
+} from '../../dtos/tax-config.dto';
 import { AdminCreateProductDto } from '../../dtos/admin-create-product.dto';
 import { UpdateProductDto } from '../../dtos/update-product.dto';
 import { AdminRejectProductDto } from '../../dtos/admin-reject-product.dto';
@@ -37,8 +51,47 @@ import { PrismaService } from '../../../../../bootstrap/database/prisma.service'
 
 @ApiTags('Admin Products')
 @Controller('admin/products')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+// Phase 46 (2026-05-21) — RolesGuard added at the class level so the
+// @Roles() decorator on the bulk tax-config endpoints fires its
+// belt-and-braces hard-role check (defence-in-depth alongside the
+// tax.bulk-config / tax.bulk-verify permission keys). RolesGuard
+// short-circuits to allow when no @Roles() metadata is set, so the
+// other handlers on this controller are unaffected.
+@UseGuards(AdminAuthGuard, PermissionsGuard, RolesGuard)
 export class AdminProductsController {
+  /**
+   * Phase 31 (2026-05-21) — states in which a product is still part
+   * of the moderation pipeline. /reject, /request-changes, and the
+   * bulk variants accept this set. SUBMITTED is the standard case;
+   * DRAFT / REJECTED / CHANGES_REQUESTED let an admin pre-emptively
+   * stamp a verdict on rows that haven't been submitted, or re-stamp
+   * after the seller pulled back. ACTIVE / APPROVED are deliberately
+   * NOT here — taking down a live product must go through
+   * PATCH /:id/status (SUSPENDED/ARCHIVED) so the takedown reason is
+   * captured in the status-change history and the storefront cache
+   * invalidation hooks fire for the correct transition.
+   */
+  private static readonly MODERATION_REVIEW_STATES: readonly string[] = [
+    'SUBMITTED',
+    'DRAFT',
+    'REJECTED',
+    'CHANGES_REQUESTED',
+  ];
+
+  /**
+   * Phase 31 (2026-05-21) — same set + cap for bulk endpoints. Pre-
+   * Phase-31 bulk hard-required SUBMITTED while single accepted more
+   * states; the asymmetry was confusing.
+   */
+  private static readonly BULK_MAX_BATCH = 200;
+
+  // Phase 29 (2026-05-21) — granular @Permissions per method.
+  // Pre-Phase-29 the controller carried a single class-level
+  // `catalog.write` that gated reads *and* moderation behind the same
+  // role grant. Now: `catalog.read` for GETs, `catalog.write` for the
+  // CRUD body, `catalog.approve` for moderation + tax attestation +
+  // bulk ops. The PermissionsGuard merges class- and method-level
+  // metadata, so each handler advertises its own permission below.
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
     @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
@@ -48,12 +101,15 @@ export class AdminProductsController {
     private readonly eventBus: EventBusService,
     private readonly cartFacade: CartPublicFacade,
     private readonly prisma: PrismaService,
+    private readonly metafieldValidation: MetafieldValidationService,
+    private readonly taxAttestation: ProductTaxAttestationService,
   ) {
     this.logger.setContext('AdminProductsController');
   }
 
   @Get()
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.read')
   async listProducts(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -232,6 +288,7 @@ export class AdminProductsController {
 
   @Get(':productId')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.read')
   async getProduct(@Param('productId') productId: string) {
     const product = await this.productRepo.findByIdWithFullDetails(productId);
     if (!product) throw new NotFoundAppException('Product not found');
@@ -240,8 +297,12 @@ export class AdminProductsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async createProduct(@Req() req: Request, @Body() dto: AdminCreateProductDto) {
-    const adminId = (req as any).adminId;
+  @Permissions('catalog.write')
+  // Phase 32 (2026-05-21) — admin create supports X-Idempotency-Key.
+  // Mirrors the seller create path; a double-click on the admin
+  // form returns the same product instead of creating a duplicate.
+  @Idempotent()
+  async createProduct(@CurrentAdmin() adminId: string, @Body() dto: AdminCreateProductDto) {
 
     let seller: { id: string; status: string } | null = null;
     if (dto.sellerEmail) {
@@ -250,37 +311,73 @@ export class AdminProductsController {
       if (seller.status !== 'ACTIVE') throw new AppException('Seller account is not active', 'BAD_REQUEST');
     }
 
-    let categoryId = dto.categoryId;
-    if (!categoryId && (dto as any).categoryName) {
-      const category = await this.productRepo.findOrCreateCategory((dto as any).categoryName);
-      categoryId = category.id;
-    }
-
-    let brandId = dto.brandId;
-    if (!brandId && (dto as any).brandName) {
-      const brand = await this.productRepo.findOrCreateBrand((dto as any).brandName);
-      brandId = brand.id;
-    }
+    // Phase 29 (2026-05-21) — taxonomy must be referenced by uuid.
+    // The pre-Phase-29 path accepted `categoryName` / `brandName` and
+    // called findOrCreateCategory/Brand, which (a) had no @Permissions
+    // gate on taxonomy creation, (b) silently created duplicate rows
+    // for case-variant typos ("Shoe" vs "Shoes"), (c) blew up on
+    // slug collisions with a Prisma P2002 500. Admins now create
+    // taxonomy via the dedicated /admin/categories + /admin/brands
+    // endpoints and reference the resulting uuid.
+    const categoryId = dto.categoryId;
+    const brandId = dto.brandId;
 
     const slug = await this.slugService.generateUniqueSlug(dto.title);
     const productCode = await this.productCodeService.generateProductCode();
 
-    // When admin creates a product for a seller, it goes straight to ACTIVE
-    // (admin-created = pre-approved). Otherwise DRAFT for platform products.
-    const initialStatus = seller ? 'ACTIVE' : 'DRAFT';
+    // Phase 29 (2026-05-21) — products ALWAYS start in DRAFT regardless
+    // of seller assignment. The pre-Phase-29 short-circuit
+    // (`seller ? 'ACTIVE' : 'DRAFT'`) bypassed moderation and let
+    // admins publish unreviewed products straight to ACTIVE with
+    // moderationStatus=APPROVED. Activation now requires an explicit
+    // POST /admin/products/:productId/approve call, which runs the
+    // publish-readiness check (category/brand/price/image/tax) added
+    // alongside this change.
+    const initialStatus = 'DRAFT';
+
+    // Stamp the tax-config audit fields if the admin supplied any
+    // GST-relevant data on create. Mirrors the seller path — keeps
+    // products.tax_config_updated_by/_at honest as a "who last touched
+    // the tax columns" trail. Undefined-only writes (no tax fields in
+    // the DTO) skip the stamp so it stays null until first set.
+    const taxFieldsTouched =
+      dto.hsnCode !== undefined ||
+      dto.gstRateBps !== undefined ||
+      dto.supplyTaxability !== undefined ||
+      dto.taxInclusivePricing !== undefined ||
+      dto.cessRateBps !== undefined ||
+      dto.defaultUqcCode !== undefined ||
+      dto.taxCategory !== undefined;
 
     const product = await this.productRepo.createInTransaction(
       {
         sellerId: seller?.id || null, productCode, title: dto.title, slug,
         shortDescription: dto.shortDescription, description: dto.description,
         categoryId, brandId, hasVariants: dto.hasVariants,
-        status: initialStatus, moderationStatus: 'APPROVED',
+        // Phase 29 (2026-05-21) — both status + moderationStatus start
+        // PENDING / DRAFT. The pre-Phase-29 unconditional
+        // moderationStatus=APPROVED stamp was the second half of the
+        // DRAFT-skip bug (the first half being status=ACTIVE).
+        status: initialStatus, moderationStatus: 'PENDING',
         procurementPrice: dto.procurementPrice,
         basePrice: dto.basePrice, compareAtPrice: dto.compareAtPrice, costPrice: dto.costPrice,
         baseSku: dto.baseSku, baseStock: dto.baseStock,
         weight: dto.weight, weightUnit: dto.weightUnit,
         length: dto.length, width: dto.width, height: dto.height, dimensionUnit: dto.dimensionUnit,
         returnPolicy: dto.returnPolicy, warrantyInfo: dto.warrantyInfo,
+        hsnCode: dto.hsnCode,
+        gstRateBps: dto.gstRateBps,
+        supplyTaxability: dto.supplyTaxability,
+        taxInclusivePricing: dto.taxInclusivePricing,
+        cessRateBps: dto.cessRateBps,
+        defaultUqcCode: dto.defaultUqcCode,
+        taxCategory: dto.taxCategory,
+        taxConfigUpdatedBy: taxFieldsTouched ? adminId : undefined,
+        taxConfigUpdatedAt: taxFieldsTouched ? new Date() : undefined,
+        // Phase 37 — tax config starts unverified. Admin attests via
+        // POST /admin/products/:productId/verify-tax-config after
+        // review. Defaulted in schema so no explicit write needed
+        // on create.
       },
       dto.tags,
       dto.seo,
@@ -292,7 +389,14 @@ export class AdminProductsController {
       `Product created by admin ${adminId}: ${product.id}${seller ? ` for seller ${seller.id}` : ' (platform product)'}`,
     );
 
-    // Auto-create SellerProductMapping for the assigned seller
+    // Auto-create SellerProductMapping for the assigned seller.
+    //
+    // Phase 29 (2026-05-21) — mappings start PENDING + isActive=false.
+    // The pre-Phase-29 APPROVED+isActive stamp was the third half of
+    // the DRAFT-skip bug: even after the product is forced to DRAFT,
+    // an APPROVED mapping would be picked up by the routing engine as
+    // soon as the product is later approved. PENDING + isActive=false
+    // forces an explicit per-seller approval step.
     if (seller) {
       try {
         const sellerProfile = await this.productRepo.findSellerById(seller.id);
@@ -311,8 +415,8 @@ export class AdminProductsController {
               pickupAddress: sellerProfile?.storeAddress || null,
               pickupPincode: sellerProfile?.sellerZipCode || null,
               dispatchSla: 2,
-              approvalStatus: 'APPROVED',
-              isActive: true,
+              approvalStatus: 'PENDING',
+              isActive: false,
             });
           }
         } else {
@@ -326,12 +430,12 @@ export class AdminProductsController {
             pickupAddress: sellerProfile?.storeAddress || null,
             pickupPincode: sellerProfile?.sellerZipCode || null,
             dispatchSla: 2,
-            approvalStatus: 'APPROVED',
-            isActive: true,
+            approvalStatus: 'PENDING',
+            isActive: false,
           });
         }
 
-        this.logger.log(`Auto-created seller mapping(s) for admin-created product ${product.id}`);
+        this.logger.log(`Auto-created PENDING seller mapping(s) for admin-created product ${product.id}`);
       } catch (mappingError) {
         this.logger.warn(`Failed to auto-create seller mapping for admin product ${product.id}: ${mappingError}`);
       }
@@ -341,19 +445,21 @@ export class AdminProductsController {
 
     return {
       success: true,
-      message: 'Product created successfully. Seller has been automatically mapped.',
+      message: seller
+        ? 'Product created as DRAFT. Seller mapping is PENDING and must be approved via /admin/products/:productId/approve.'
+        : 'Product created as DRAFT. Use /admin/products/:productId/approve to publish.',
       data: fullProduct,
     };
   }
 
   @Patch(':productId')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.write')
   async updateProduct(
-    @Req() req: Request,
+    @CurrentAdmin() adminId: string,
     @Param('productId') productId: string,
     @Body() dto: UpdateProductDto,
   ) {
-    const adminId = (req as any).adminId;
     const existing = await this.productRepo.findByIdBasic(productId);
     if (!existing) throw new NotFoundAppException('Product not found');
 
@@ -365,14 +471,8 @@ export class AdminProductsController {
     if (dto.categoryId !== undefined) updateData.categoryId = dto.categoryId;
     if (dto.brandId !== undefined) updateData.brandId = dto.brandId;
 
-    if ((dto as any).categoryName !== undefined) {
-      const category = await this.productRepo.findOrCreateCategory((dto as any).categoryName);
-      updateData.categoryId = category.id;
-    }
-    if ((dto as any).brandName !== undefined) {
-      const brand = await this.productRepo.findOrCreateBrand((dto as any).brandName);
-      updateData.brandId = brand.id;
-    }
+    // Phase 29 (2026-05-21) — categoryName / brandName free-form
+    // assignment removed (see /create). Admins must reference uuid.
 
     if (dto.shortDescription !== undefined) updateData.shortDescription = dto.shortDescription;
     if (dto.description !== undefined) updateData.description = dto.description;
@@ -392,9 +492,83 @@ export class AdminProductsController {
     if (dto.dimensionUnit !== undefined) updateData.dimensionUnit = dto.dimensionUnit;
     if (dto.returnPolicy !== undefined) updateData.returnPolicy = dto.returnPolicy;
     if (dto.warrantyInfo !== undefined) updateData.warrantyInfo = dto.warrantyInfo;
+    // Phase 92 follow-up (2026-05-23) — Gap #22 admin surface for the
+    // typed return-policy columns. Each is optional; only forward
+    // explicitly-supplied values.
+    if (dto.isReturnable !== undefined) updateData.isReturnable = dto.isReturnable;
+    if (dto.nonReturnableReason !== undefined) {
+      updateData.nonReturnableReason = dto.nonReturnableReason || null;
+    }
+    if (dto.returnWindowDaysOverride !== undefined) {
+      updateData.returnWindowDaysOverride = dto.returnWindowDaysOverride;
+    }
+    if (dto.allowedReturnReasons !== undefined) {
+      updateData.allowedReturnReasonsJson =
+        dto.allowedReturnReasons.length > 0
+          ? (dto.allowedReturnReasons as any)
+          : null;
+    }
+    if (dto.allowPartialReturn !== undefined) {
+      updateData.allowPartialReturn = dto.allowPartialReturn;
+    }
+
+    // Tax columns — forward each that was supplied, then stamp the
+    // audit fields once if any of them was touched. Undefined-only
+    // updates leave taxConfigUpdatedBy/_At untouched so the trail
+    // reflects "who last actually changed tax data".
+    if (dto.hsnCode !== undefined) updateData.hsnCode = dto.hsnCode;
+    if (dto.gstRateBps !== undefined) updateData.gstRateBps = dto.gstRateBps;
+    if (dto.supplyTaxability !== undefined) updateData.supplyTaxability = dto.supplyTaxability;
+    if (dto.taxInclusivePricing !== undefined) updateData.taxInclusivePricing = dto.taxInclusivePricing;
+    if (dto.cessRateBps !== undefined) updateData.cessRateBps = dto.cessRateBps;
+    if (dto.defaultUqcCode !== undefined) updateData.defaultUqcCode = dto.defaultUqcCode;
+    if (dto.taxCategory !== undefined) updateData.taxCategory = dto.taxCategory;
+    const adminTaxFieldsTouched = (
+      dto.hsnCode !== undefined ||
+      dto.gstRateBps !== undefined ||
+      dto.supplyTaxability !== undefined ||
+      dto.taxInclusivePricing !== undefined ||
+      dto.cessRateBps !== undefined ||
+      dto.defaultUqcCode !== undefined ||
+      dto.taxCategory !== undefined
+    );
+    if (adminTaxFieldsTouched) {
+      updateData.taxConfigUpdatedBy = adminId;
+      updateData.taxConfigUpdatedAt = new Date();
+      // Phase 37 — touching the tax fields resets the attestation.
+      // An admin editing tax config doesn't auto-attest — they
+      // must follow up with POST /admin/products/:productId/
+      // verify-tax-config to flip verified back to true. This
+      // keeps "admin made the edit" and "admin attested the
+      // config" as separate signals in the audit trail.
+      updateData.taxConfigVerified = false;
+      updateData.taxConfigVerifiedAt = null;
+      updateData.taxConfigVerifiedBy = null;
+      // Phase 45 (2026-05-21) — bump the monotonic version so any
+      // open admin attest screen sees the drift.
+      updateData.taxConfigVersion = { increment: 1 };
+    }
 
     const product = await this.productRepo.updateInTransaction(productId, updateData, dto.tags, dto.seo);
     this.logger.log(`Product ${productId} updated by admin ${adminId}`);
+
+    // Phase 45 (2026-05-21) — append-only audit row. Fire-and-forget
+    // so an audit-log failure doesn't roll back the primary update;
+    // the source of truth is the Product row, the log is the mirror.
+    if (adminTaxFieldsTouched) {
+      this.taxAttestation
+        .recordEdited({
+          productId,
+          actorId: adminId,
+          actorRole: 'ADMIN',
+          action: 'EDITED',
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to write tax-attestation audit row for ${productId}: ${err}`,
+          ),
+        );
+    }
 
     const fullProduct = await this.productRepo.findFullProduct(product.id);
     return { success: true, message: 'Product updated successfully', data: fullProduct };
@@ -402,8 +576,8 @@ export class AdminProductsController {
 
   @Delete(':productId')
   @HttpCode(HttpStatus.OK)
-  async deleteProduct(@Req() req: Request, @Param('productId') productId: string) {
-    const adminId = (req as any).adminId;
+  @Permissions('catalog.write')
+  async deleteProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string) {
     const existing = await this.productRepo.findByIdBasic(productId);
     if (!existing) throw new NotFoundAppException('Product not found');
 
@@ -448,8 +622,8 @@ export class AdminProductsController {
 
   @Patch(':productId/approve')
   @HttpCode(HttpStatus.OK)
-  async approveProduct(@Req() req: Request, @Param('productId') productId: string) {
-    const adminId = (req as any).adminId;
+  @Permissions('catalog.approve')
+  async approveProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
     // Already active/approved — idempotent success
@@ -460,6 +634,25 @@ export class AdminProductsController {
     const approvableStatuses = ['SUBMITTED', 'DRAFT', 'REJECTED', 'CHANGES_REQUESTED'];
     if (!approvableStatuses.includes(product.status)) {
       throw new AppException(`Cannot approve a product with status ${product.status}`, 'BAD_REQUEST');
+    }
+
+    // Phase 39 (2026-05-21) — required category metafield gate on
+    // approve. The repository's approveInTransaction enforces the
+    // Phase 29 publish-readiness check (brand, category, basePrice,
+    // image) but doesn't reach into the metafield table. Catch the
+    // missing-required-metafield case here so the admin sees a
+    // single 400 with the field list rather than approving a row
+    // that then renders as "incomplete" on the storefront.
+    const mfCheck = await this.metafieldValidation.validateRequiredOnSubmit(
+      productId,
+      product.categoryId ?? null,
+    );
+    if (mfCheck.missing.length > 0) {
+      throw new BadRequestAppException(
+        `Cannot approve — missing required metafields: ${mfCheck.missing
+          .map((m) => m.name || m.key)
+          .join(', ')}`,
+      );
     }
 
     await this.productRepo.approveInTransaction(
@@ -486,15 +679,329 @@ export class AdminProductsController {
     return { success: true, message: 'Product approved and activated successfully', data: null };
   }
 
+  // Phase 37 — admin attestation of the tax config. Separate from
+  // product approval because the HSN / GST rate / supply taxability
+  // review is a different competence (tax/finance team) from the
+  // catalog content review (product team). The flag gates STRICT-
+  // mode invoicing: TaxAuditReadinessService can be extended later
+  // to flag "active products with unverified tax config" so the
+  // STRICT-mode flip doesn't go live until every active product has
+  // a finance signoff.
+  //
+  // Any subsequent edit to a tax field on the product auto-resets
+  // this flag — see the admin/seller updateProduct paths.
+  // Phase 37 — Bulk product tax-config update.
+  //
+  // Apply HSN code + GST rate + UQC + supply taxability to many
+  // products in one call. Filter is either an explicit productIds list
+  // OR a category match (with optional "missing HSN only" sub-filter).
+  // Sets taxConfigVerified=true since an admin is explicitly attesting
+  // the values.
+  @Post('bulk/tax-config')
+  @HttpCode(HttpStatus.OK)
+  // Phase 46 (2026-05-21) — dedicated SUPER_ADMIN-only perm key.
+  // Pre-Phase-46 the endpoint used `catalog.approve` which is shared
+  // with regular catalog operations; any catalog-approver admin
+  // could rewrite tax data across thousands of products. The new key
+  // `tax.bulk-config` is intentionally absent from every non-
+  // SUPER_ADMIN role's permission set, so SUPER_ADMIN's
+  // ALL_PERMISSION_KEYS catch-all is the only path to it.
+  //
+  // @Roles('SUPER_ADMIN') is belt-and-braces — protects against a
+  // future role definition accidentally including the permission
+  // key. Either guard alone rejects non-SUPER_ADMIN admins.
+  @Permissions('tax.bulk-config')
+  @Roles('SUPER_ADMIN')
+  @Idempotent()
+  async bulkUpdateTaxConfig(
+    @CurrentAdmin() adminId: string,
+    @Body() dto: BulkUpdateTaxConfigDto,
+  ) {
+    const hasAny =
+      dto.hsnCode !== undefined ||
+      dto.gstRateBps !== undefined ||
+      dto.cessRateBps !== undefined ||
+      dto.supplyTaxability !== undefined ||
+      dto.defaultUqcCode !== undefined;
+    if (!hasAny) {
+      throw new BadRequestAppException(
+        'At least one tax field (hsnCode / gstRateBps / cessRateBps / supplyTaxability / defaultUqcCode) must be supplied',
+      );
+    }
+    if ((dto.productIds == null || dto.productIds.length === 0) && !dto.categoryId) {
+      throw new BadRequestAppException('Either productIds[] or categoryId is required');
+    }
+
+    // Phase 46 (2026-05-21) — Gaps #11 + #13 + #14.
+    //
+    //   #11 silent truncation: the pre-Phase-46 path did findMany with
+    //       take: 2000 then updateMany on whatever came back. A
+    //       category matching 5000 products silently dropped 3000.
+    //       Now the candidate query has no `take`; if the result is
+    //       larger than the per-call cap we 400 with a helpful
+    //       message + ask the admin to narrow the filter.
+    //   #13 race window: candidate findMany + product update + audit
+    //       log all run inside one $transaction with row locks on
+    //       the candidate set, so a concurrent product write can't
+    //       drift the set between the read and the writes.
+    //   #14 status filter: candidate query now filters
+    //       isDeleted=false. Bulk tax-config write on a soft-deleted
+    //       row is meaningless work + would stamp the attestation
+    //       columns on a dead product.
+    const baseWhere: Record<string, unknown> = { isDeleted: false };
+    if (dto.productIds && dto.productIds.length > 0) {
+      baseWhere.id = { in: dto.productIds };
+    } else if (dto.categoryId) {
+      baseWhere.categoryId = dto.categoryId;
+      if (dto.missingHsnOnly) {
+        baseWhere.OR = [{ hsnCode: null }, { hsnCode: '' }];
+      }
+    }
+
+    const updateData: Record<string, unknown> = {
+      taxConfigVerified: false,
+      taxConfigVerifiedAt: null,
+      taxConfigVerifiedBy: null,
+      taxConfigUpdatedAt: new Date(),
+      taxConfigUpdatedBy: adminId,
+      taxConfigVersion: { increment: 1 },
+    };
+    if (dto.hsnCode !== undefined) updateData.hsnCode = dto.hsnCode;
+    if (dto.gstRateBps !== undefined) updateData.gstRateBps = dto.gstRateBps;
+    if (dto.cessRateBps !== undefined) updateData.cessRateBps = dto.cessRateBps;
+    if (dto.supplyTaxability !== undefined) updateData.supplyTaxability = dto.supplyTaxability;
+    if (dto.defaultUqcCode !== undefined) updateData.defaultUqcCode = dto.defaultUqcCode;
+
+    const { updated } = await this.prisma.$transaction(async (tx) => {
+      const candidates = await tx.product.findMany({
+        where: baseWhere,
+        select: { id: true },
+      });
+      if (candidates.length === 0) {
+        return { updated: 0 };
+      }
+      if (candidates.length > BULK_TAX_CONFIG_MAX_PRODUCTS) {
+        throw new BadRequestAppException(
+          `Filter matches ${candidates.length} products which exceeds the per-call cap of ${BULK_TAX_CONFIG_MAX_PRODUCTS}. Narrow the filter (e.g. supply explicit productIds[], or use missingHsnOnly).`,
+        );
+      }
+      const candidateIds = candidates.map((c) => c.id);
+      // Row-level lock on every candidate so a concurrent product
+      // write (seller edit, single-product PATCH) serializes against
+      // us for the duration of the bulk write + audit log emit.
+      await tx.$queryRaw`
+        SELECT id FROM products WHERE id = ANY(${candidateIds}::text[]) FOR UPDATE
+      `;
+      await tx.product.updateMany({
+        where: { id: { in: candidateIds } },
+        data: updateData as any,
+      });
+      await this.taxAttestation.recordBulkEdited({
+        tx,
+        productIds: candidateIds,
+        actorId: adminId,
+        actorRole: 'ADMIN',
+      });
+      return { updated: candidateIds.length };
+    });
+
+    this.logger.log(
+      `Bulk tax-config update by admin ${adminId}: ` +
+        `${updated} products affected (attestation reset; verify-tax-config required per product)`,
+    );
+    return {
+      success: true,
+      message:
+        `${updated} product(s) updated. ` +
+        `taxConfigVerified has been reset — each product requires a follow-up ` +
+        `POST /admin/products/:productId/verify-tax-config attestation.`,
+      data: { updated },
+    };
+  }
+
+  /**
+   * Phase 46 (2026-05-21) — preview endpoint for the bulk-tax-config
+   * page. Returns the match count + a sample of products so the UI
+   * can render a confirmation modal ("About to update X products.
+   * Examples: ...") before the admin commits.
+   *
+   * Same filter shape as the write endpoint; never mutates.
+   */
+  @Post('bulk/tax-config/preview')
+  @HttpCode(HttpStatus.OK)
+  // Phase 46 — same gates as the write endpoint. Preview is read-
+  // only but it answers "how many products match my filter", which
+  // is also a recon signal we don't want to expose broadly.
+  @Permissions('tax.bulk-config')
+  @Roles('SUPER_ADMIN')
+  async previewBulkTaxConfig(@Body() dto: BulkUpdateTaxConfigDto) {
+    if ((dto.productIds == null || dto.productIds.length === 0) && !dto.categoryId) {
+      throw new BadRequestAppException('Either productIds[] or categoryId is required');
+    }
+
+    const baseWhere: Record<string, unknown> = { isDeleted: false };
+    if (dto.productIds && dto.productIds.length > 0) {
+      baseWhere.id = { in: dto.productIds };
+    } else if (dto.categoryId) {
+      baseWhere.categoryId = dto.categoryId;
+      if (dto.missingHsnOnly) {
+        baseWhere.OR = [{ hsnCode: null }, { hsnCode: '' }];
+      }
+    }
+
+    const [count, sample] = await Promise.all([
+      this.prisma.product.count({ where: baseWhere }),
+      this.prisma.product.findMany({
+        where: baseWhere,
+        select: {
+          id: true,
+          title: true,
+          hsnCode: true,
+          gstRateBps: true,
+          supplyTaxability: true,
+          taxConfigVerified: true,
+        },
+        take: 20,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    const exceedsCap = count > BULK_TAX_CONFIG_MAX_PRODUCTS;
+    return {
+      success: true,
+      message: exceedsCap
+        ? `Filter matches ${count} products — exceeds per-call cap of ${BULK_TAX_CONFIG_MAX_PRODUCTS}. Narrow before submitting.`
+        : `Filter matches ${count} product(s).`,
+      data: {
+        matchingCount: count,
+        capExceeded: exceedsCap,
+        cap: BULK_TAX_CONFIG_MAX_PRODUCTS,
+        sample,
+      },
+    };
+  }
+
+  /**
+   * Phase 45 (2026-05-21) — bulk attestation endpoint. Separate from
+   * bulk-tax-config so attestation requires explicit action (admin
+   * can't accidentally attest while editing data). Closes the prompt-
+   * suggested split between data-change and attestation.
+   */
+  @Post('bulk/verify-tax-config')
+  @HttpCode(HttpStatus.OK)
+  // Phase 46 (2026-05-21) — dedicated perm key + role guard.
+  @Permissions('tax.bulk-verify')
+  @Roles('SUPER_ADMIN')
+  @Idempotent()
+  async bulkVerifyTaxConfig(
+    @CurrentAdmin() adminId: string,
+    @Body() dto: BulkVerifyTaxConfigDto,
+  ) {
+    const attestedIds: string[] = [];
+    const failed: Array<{ productId: string; reason: string }> = [];
+    for (const productId of dto.productIds) {
+      try {
+        await this.taxAttestation.attest({
+          productId,
+          actorId: adminId,
+          actorRole: 'ADMIN',
+          reviewerNote: dto.reviewerNote ?? null,
+        });
+        attestedIds.push(productId);
+      } catch (err: any) {
+        failed.push({ productId, reason: err?.message ?? 'unknown error' });
+      }
+    }
+    this.logger.log(
+      `Bulk verify-tax-config by admin ${adminId}: ok=${attestedIds.length} failed=${failed.length}`,
+    );
+    return {
+      success: true,
+      message: `Attested ${attestedIds.length} of ${dto.productIds.length}`,
+      data: { attestedIds, failed },
+    };
+  }
+
+  @Patch(':productId/verify-tax-config')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.approve')
+  async verifyTaxConfig(
+    @CurrentAdmin() adminId: string,
+    @Param('productId') productId: string,
+    @Body() dto: VerifyTaxConfigDto,
+  ) {
+    // Phase 45 (2026-05-21) — delegates to ProductTaxAttestationService
+    // which row-locks, re-validates the current tax columns, bumps
+    // taxConfigVersion, and writes a TaxAttestationLog row. Pre-Phase-45
+    // the controller wrote the columns directly and returned early
+    // when already verified — leaving Gap #12 (no re-validation) +
+    // Gap #6 (no audit chain) + Gap #8 (no optimistic lock) wide open.
+    const result = await this.taxAttestation.attest({
+      productId,
+      actorId: adminId,
+      actorRole: 'ADMIN',
+      expectedVersion: dto.expectedVersion,
+      reviewerNote: dto.reviewerNote ?? null,
+    });
+    this.logger.log(
+      `Product ${productId} tax config verified by admin ${adminId} version=${result.taxConfigVersion}`,
+    );
+    return {
+      success: true,
+      message: 'Tax config verified',
+      data: {
+        taxConfigVerified: true,
+        taxConfigVerifiedAt: result.taxConfigVerifiedAt,
+        taxConfigVerifiedBy: result.taxConfigVerifiedBy,
+        taxConfigVersion: result.taxConfigVersion,
+      },
+    };
+  }
+
+  /**
+   * Phase 45 (2026-05-21) — read the per-product attestation audit
+   * log. Used by the admin UI's tax-config panel to render the
+   * history of attest / reset / edit transitions.
+   */
+  @Get(':productId/tax-attestation-log')
+  @HttpCode(HttpStatus.OK)
+  // Phase 46 (2026-05-21) — dedicated read key. Phase 45 reused
+  // catalog.read which over-granted: any catalog-reader admin could
+  // browse attestation history. The new tax.audit.read key narrows
+  // the audience to finance / CA / SUPER_ADMIN.
+  @Permissions('tax.audit.read')
+  async getTaxAttestationLog(
+    @Param('productId') productId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const entries = await this.taxAttestation.getAuditLog(productId, {
+      limit: limit ? Number(limit) : undefined,
+      offset: offset ? Number(offset) : undefined,
+    });
+    return { success: true, message: 'Tax attestation log', data: entries };
+  }
+
   @Patch(':productId/reject')
   @HttpCode(HttpStatus.OK)
-  async rejectProduct(@Req() req: Request, @Param('productId') productId: string, @Body() dto: AdminRejectProductDto) {
-    const adminId = (req as any).adminId;
+  @Permissions('catalog.approve')
+  async rejectProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string, @Body() dto: AdminRejectProductDto) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    const rejectableStatuses = ['SUBMITTED', 'DRAFT', 'ACTIVE', 'APPROVED'];
+    // Phase 31 (2026-05-21) — /reject is a moderation-time action,
+    // not a live-product takedown. Pre-Phase-31 it accepted ACTIVE +
+    // APPROVED, which let a single admin yank a live product from
+    // the storefront in one click without going through the
+    // /status SUSPENDED → ARCHIVED takedown path. Now narrowed to
+    // states a product can legitimately be in DURING moderation.
+    const rejectableStatuses = AdminProductsController.MODERATION_REVIEW_STATES;
     if (!rejectableStatuses.includes(product.status)) {
-      throw new AppException(`Cannot reject a product with status ${product.status}`, 'BAD_REQUEST');
+      throw new AppException(
+        `Cannot reject a product with status ${product.status}. ` +
+          `Use PATCH /admin/products/:id/status (target SUSPENDED or ARCHIVED) ` +
+          `to take down a live product.`,
+        'BAD_REQUEST',
+      );
     }
 
     await this.productRepo.rejectInTransaction(
@@ -521,13 +1028,18 @@ export class AdminProductsController {
 
   @Patch(':productId/request-changes')
   @HttpCode(HttpStatus.OK)
-  async requestChanges(@Req() req: Request, @Param('productId') productId: string, @Body() dto: AdminRequestChangesDto) {
-    const adminId = (req as any).adminId;
+  @Permissions('catalog.approve')
+  async requestChanges(@CurrentAdmin() adminId: string, @Param('productId') productId: string, @Body() dto: AdminRequestChangesDto) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    const changeableStatuses = ['SUBMITTED', 'DRAFT', 'ACTIVE', 'APPROVED'];
+    // Phase 31 (2026-05-21) — same scope narrowing as /reject above.
+    const changeableStatuses = AdminProductsController.MODERATION_REVIEW_STATES;
     if (!changeableStatuses.includes(product.status)) {
-      throw new AppException(`Cannot request changes on a product with status ${product.status}`, 'BAD_REQUEST');
+      throw new AppException(
+        `Cannot request changes on a product with status ${product.status}. ` +
+          `Use PATCH /admin/products/:id/status (target SUSPENDED) for live products.`,
+        'BAD_REQUEST',
+      );
     }
 
     await this.productRepo.requestChangesInTransaction(
@@ -564,8 +1076,8 @@ export class AdminProductsController {
 
   @Patch(':productId/status')
   @HttpCode(HttpStatus.OK)
-  async updateStatus(@Req() req: Request, @Param('productId') productId: string, @Body() dto: AdminUpdateProductStatusDto) {
-    const adminId = (req as any).adminId;
+  @Permissions('catalog.approve')
+  async updateStatus(@CurrentAdmin() adminId: string, @Param('productId') productId: string, @Body() dto: AdminUpdateProductStatusDto) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
 
@@ -589,60 +1101,6 @@ export class AdminProductsController {
     return { success: true, message: `Product status updated to ${dto.status}`, data: null };
   }
 
-  @Post(':productId/merge-into/:targetProductId')
-  @HttpCode(HttpStatus.OK)
-  async mergeProduct(@Req() req: Request, @Param('productId') productId: string, @Param('targetProductId') targetProductId: string) {
-    const adminId = (req as any).adminId;
-
-    const [sourceProduct, targetProduct] = await Promise.all([
-      this.productRepo.findProductForMerge(productId),
-      this.productRepo.findByIdBasic(targetProductId),
-    ]);
-
-    if (!sourceProduct) throw new NotFoundAppException('Source product not found');
-    if (!targetProduct) throw new NotFoundAppException('Target product not found');
-    if (sourceProduct.id === targetProduct.id) throw new BadRequestAppException('Cannot merge a product into itself');
-    if (!sourceProduct.sellerId) throw new BadRequestAppException('Source product has no associated seller');
-
-    const sellerProfile = await this.productRepo.findSellerById(sourceProduct.sellerId);
-    const mappingsCreated = await this.productRepo.mergeProducts(productId, targetProductId, adminId, sellerProfile, sourceProduct, targetProduct);
-
-    this.logger.log(`Product ${productId} merged into ${targetProductId} by admin ${adminId}. ${mappingsCreated.length} mapping(s) created.`);
-
-    return {
-      success: true,
-      message: `Product merged into existing product. ${mappingsCreated.length} seller mapping(s) created.`,
-      data: { sourceProductId: productId, targetProductId, mappingsCreated: mappingsCreated.length },
-    };
-  }
-
-  @Get(':productId/duplicate-info')
-  @HttpCode(HttpStatus.OK)
-  async getDuplicateInfo(@Param('productId') productId: string) {
-    const result = await this.productRepo.findDuplicateInfo(productId);
-    if (!result) throw new NotFoundAppException('Product not found');
-
-    if (!result.potentialDuplicateOf) {
-      return { success: true, message: 'No potential duplicate found', data: null };
-    }
-
-    if (!result.duplicate) {
-      return { success: true, message: 'Potential duplicate product no longer exists', data: null };
-    }
-
-    const d = result.duplicate;
-    return {
-      success: true,
-      message: 'Duplicate info retrieved',
-      data: {
-        id: d.id, productCode: d.productCode, title: d.title, status: d.status,
-        moderationStatus: d.moderationStatus, basePrice: d.basePrice, hasVariants: d.hasVariants,
-        brandName: d.brand?.name ?? null, categoryName: d.category?.name ?? null,
-        images: d.images, seller: d.seller,
-      },
-    };
-  }
-
   // ─────────────────────────────────────────────────────────────
   // Bulk moderation — approve / reject / request-changes for many
   // products in one request. Each item is processed independently:
@@ -653,36 +1111,61 @@ export class AdminProductsController {
 
   @Post('bulk/approve')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.approve')
   async bulkApprove(
-    @Req() req: Request,
+    @CurrentAdmin() adminId: string,
     @Body() dto: { productIds: string[] },
   ) {
-    const adminId = (req as any).adminId;
-    if (!Array.isArray(dto.productIds) || dto.productIds.length === 0) {
-      throw new BadRequestAppException('productIds must be a non-empty array');
-    }
+    const ids = this.validateBulkIds(dto.productIds);
 
     const ok: string[] = [];
+    const alreadyDone: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
 
-    for (const productId of dto.productIds) {
+    for (const productId of ids) {
       try {
         const product = await this.productRepo.findByIdBasic(productId);
         if (!product) {
           failed.push({ id: productId, reason: 'Product not found' });
           continue;
         }
-        if (product.status !== 'SUBMITTED') {
+        // Phase 31 (2026-05-21) — retry-safe classification. Items
+        // already in the target state are reported as `alreadyDone`
+        // instead of `failed`. Without this, a partial-failure batch
+        // (server crashed mid-loop) couldn't be retried — half the
+        // batch would surface as scary "wrong state" failures.
+        if (product.status === 'ACTIVE' || product.status === 'APPROVED') {
+          alreadyDone.push(productId);
+          continue;
+        }
+        if (!AdminProductsController.MODERATION_REVIEW_STATES.includes(product.status)) {
           failed.push({
             id: productId,
-            reason: `Expected SUBMITTED, got ${product.status}`,
+            reason: `Cannot approve from status ${product.status}`,
+          });
+          continue;
+        }
+        // Phase 39 (2026-05-21) — same required-metafield gate as
+        // single approve. We log the missing list per row instead
+        // of failing the whole batch — a partial bulk-approve is
+        // useful for admins clearing the queue.
+        const mfCheck = await this.metafieldValidation.validateRequiredOnSubmit(
+          productId,
+          product.categoryId ?? null,
+        );
+        if (mfCheck.missing.length > 0) {
+          failed.push({
+            id: productId,
+            reason: `Missing required metafields: ${mfCheck.missing
+              .map((m) => m.name || m.key)
+              .join(', ')}`,
           });
           continue;
         }
         await this.productRepo.approveInTransaction(
           productId,
           [
-            { fromStatus: 'SUBMITTED', toStatus: 'APPROVED', changedBy: adminId, reason: 'Bulk approve' },
+            { fromStatus: product.status, toStatus: 'APPROVED', changedBy: adminId, reason: 'Bulk approve' },
             { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after bulk approval' },
           ],
           { moderatorId: adminId },
@@ -706,51 +1189,52 @@ export class AdminProductsController {
     }
 
     this.logger.log(
-      `Bulk approve by admin ${adminId}: ok=${ok.length}, failed=${failed.length}`,
+      `Bulk approve by admin ${adminId}: ok=${ok.length}, alreadyDone=${alreadyDone.length}, failed=${failed.length}`,
     );
 
     return {
       success: true,
-      message: `Approved ${ok.length} of ${dto.productIds.length}`,
-      data: { ok, failed },
+      message: `Approved ${ok.length} of ${ids.length} (${alreadyDone.length} already approved, ${failed.length} failed)`,
+      data: { ok, alreadyDone, failed },
     };
   }
 
   @Post('bulk/reject')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.approve')
   async bulkReject(
-    @Req() req: Request,
+    @CurrentAdmin() adminId: string,
     @Body() dto: { productIds: string[]; reason: string },
   ) {
-    const adminId = (req as any).adminId;
-    if (!Array.isArray(dto.productIds) || dto.productIds.length === 0) {
-      throw new BadRequestAppException('productIds must be a non-empty array');
-    }
-    if (!dto.reason || !dto.reason.trim()) {
-      throw new BadRequestAppException('reason is required');
-    }
+    const ids = this.validateBulkIds(dto.productIds);
+    const reason = this.validateBulkReason(dto.reason, 'reason');
 
     const ok: string[] = [];
+    const alreadyDone: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
 
-    for (const productId of dto.productIds) {
+    for (const productId of ids) {
       try {
         const product = await this.productRepo.findByIdBasic(productId);
         if (!product) {
           failed.push({ id: productId, reason: 'Product not found' });
           continue;
         }
-        if (product.status !== 'SUBMITTED') {
+        if (product.status === 'REJECTED') {
+          alreadyDone.push(productId);
+          continue;
+        }
+        if (!AdminProductsController.MODERATION_REVIEW_STATES.includes(product.status)) {
           failed.push({
             id: productId,
-            reason: `Expected SUBMITTED, got ${product.status}`,
+            reason: `Cannot reject from status ${product.status} — use PATCH /:id/status for takedown`,
           });
           continue;
         }
         await this.productRepo.rejectInTransaction(
           productId,
-          dto.reason,
-          { fromStatus: 'SUBMITTED', toStatus: 'REJECTED', changedBy: adminId, reason: dto.reason },
+          reason,
+          { fromStatus: product.status, toStatus: 'REJECTED', changedBy: adminId, reason },
           { moderatorId: adminId },
         );
         await this.eventBus
@@ -759,7 +1243,7 @@ export class AdminProductsController {
             aggregate: 'Product',
             aggregateId: productId,
             occurredAt: new Date(),
-            payload: { productId, productTitle: product.title, sellerId: product.sellerId, reason: dto.reason, adminId },
+            payload: { productId, productTitle: product.title, sellerId: product.sellerId, reason, adminId },
           })
           .catch(() => {});
         ok.push(productId);
@@ -772,51 +1256,52 @@ export class AdminProductsController {
     }
 
     this.logger.log(
-      `Bulk reject by admin ${adminId}: ok=${ok.length}, failed=${failed.length}`,
+      `Bulk reject by admin ${adminId}: ok=${ok.length}, alreadyDone=${alreadyDone.length}, failed=${failed.length}`,
     );
 
     return {
       success: true,
-      message: `Rejected ${ok.length} of ${dto.productIds.length}`,
-      data: { ok, failed },
+      message: `Rejected ${ok.length} of ${ids.length} (${alreadyDone.length} already rejected, ${failed.length} failed)`,
+      data: { ok, alreadyDone, failed },
     };
   }
 
   @Post('bulk/request-changes')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.approve')
   async bulkRequestChanges(
-    @Req() req: Request,
+    @CurrentAdmin() adminId: string,
     @Body() dto: { productIds: string[]; note: string },
   ) {
-    const adminId = (req as any).adminId;
-    if (!Array.isArray(dto.productIds) || dto.productIds.length === 0) {
-      throw new BadRequestAppException('productIds must be a non-empty array');
-    }
-    if (!dto.note || !dto.note.trim()) {
-      throw new BadRequestAppException('note is required');
-    }
+    const ids = this.validateBulkIds(dto.productIds);
+    const note = this.validateBulkReason(dto.note, 'note');
 
     const ok: string[] = [];
+    const alreadyDone: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
 
-    for (const productId of dto.productIds) {
+    for (const productId of ids) {
       try {
         const product = await this.productRepo.findByIdBasic(productId);
         if (!product) {
           failed.push({ id: productId, reason: 'Product not found' });
           continue;
         }
-        if (product.status !== 'SUBMITTED') {
+        if (product.status === 'CHANGES_REQUESTED') {
+          alreadyDone.push(productId);
+          continue;
+        }
+        if (!AdminProductsController.MODERATION_REVIEW_STATES.includes(product.status)) {
           failed.push({
             id: productId,
-            reason: `Expected SUBMITTED, got ${product.status}`,
+            reason: `Cannot request changes from status ${product.status} — use PATCH /:id/status for live products`,
           });
           continue;
         }
         await this.productRepo.requestChangesInTransaction(
           productId,
-          dto.note,
-          { fromStatus: 'SUBMITTED', toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: dto.note },
+          note,
+          { fromStatus: product.status, toStatus: 'CHANGES_REQUESTED', changedBy: adminId, reason: note },
           { moderatorId: adminId },
         );
         await this.eventBus
@@ -825,7 +1310,7 @@ export class AdminProductsController {
             aggregate: 'Product',
             aggregateId: productId,
             occurredAt: new Date(),
-            payload: { productId, productTitle: product.title, sellerId: product.sellerId, note: dto.note, adminId },
+            payload: { productId, productTitle: product.title, sellerId: product.sellerId, note, adminId },
           })
           .catch(() => {});
         ok.push(productId);
@@ -838,13 +1323,58 @@ export class AdminProductsController {
     }
 
     this.logger.log(
-      `Bulk request-changes by admin ${adminId}: ok=${ok.length}, failed=${failed.length}`,
+      `Bulk request-changes by admin ${adminId}: ok=${ok.length}, alreadyDone=${alreadyDone.length}, failed=${failed.length}`,
     );
 
     return {
       success: true,
-      message: `Changes requested on ${ok.length} of ${dto.productIds.length}`,
-      data: { ok, failed },
+      message: `Changes requested on ${ok.length} of ${ids.length} (${alreadyDone.length} already in CHANGES_REQUESTED, ${failed.length} failed)`,
+      data: { ok, alreadyDone, failed },
     };
+  }
+
+  /**
+   * Phase 31 (2026-05-21) — shared validators for the three bulk
+   * endpoints. The pre-Phase-31 inline checks let unbounded batches
+   * through; a batch of 10k took minutes per worker and held the
+   * Postgres connection long enough to starve other requests. The
+   * BULK_MAX_BATCH cap is intentionally low (200) — operators
+   * needing larger batches should use the dedicated /bulk/tax-config
+   * paths or wait for the async-job variant.
+   *
+   * The ids are also deduped here so a duplicate id within a batch
+   * doesn't surface as a misleading "wrong state" on the second
+   * occurrence after the first one approves.
+   */
+  private validateBulkIds(input: unknown): string[] {
+    if (!Array.isArray(input) || input.length === 0) {
+      throw new BadRequestAppException('productIds must be a non-empty array');
+    }
+    if (input.length > AdminProductsController.BULK_MAX_BATCH) {
+      throw new BadRequestAppException(
+        `Bulk batch size cannot exceed ${AdminProductsController.BULK_MAX_BATCH} products per request`,
+      );
+    }
+    const unique = Array.from(
+      new Set(input.filter((id): id is string => typeof id === 'string' && id.trim() !== '')),
+    );
+    if (unique.length === 0) {
+      throw new BadRequestAppException('productIds must be a non-empty array of strings');
+    }
+    return unique;
+  }
+
+  private validateBulkReason(raw: unknown, field: 'reason' | 'note'): string {
+    if (typeof raw !== 'string' || !raw.trim()) {
+      throw new BadRequestAppException(`${field} is required`);
+    }
+    const trimmed = raw.trim();
+    if (trimmed.length < 10) {
+      throw new BadRequestAppException(`${field} must be at least 10 characters`);
+    }
+    if (trimmed.length > 2000) {
+      throw new BadRequestAppException(`${field} must not exceed 2000 characters`);
+    }
+    return trimmed;
   }
 }

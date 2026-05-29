@@ -13,8 +13,15 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
-import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  RolesGuard,
+  PermissionsGuard,
+  RequiresStepUp,
+  StepUpGuard,
+} from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AdminListSellersUseCase } from '../../application/use-cases/admin-list-sellers.use-case';
@@ -23,6 +30,7 @@ import { AdminEditSellerUseCase } from '../../application/use-cases/admin-edit-s
 import { AdminUpdateSellerStatusUseCase } from '../../application/use-cases/admin-update-seller-status.use-case';
 import { AdminUpdateSellerVerificationUseCase } from '../../application/use-cases/admin-update-seller-verification.use-case';
 import { AdminImpersonateSellerUseCase } from '../../application/use-cases/admin-impersonate-seller.use-case';
+import { AdminEndImpersonationUseCase } from '../../application/use-cases/admin-end-impersonation.use-case';
 import { AdminSendSellerMessageUseCase } from '../../application/use-cases/admin-send-seller-message.use-case';
 import { AdminChangeSellerPasswordUseCase } from '../../application/use-cases/admin-change-seller-password.use-case';
 import { AdminDeleteSellerUseCase } from '../../application/use-cases/admin-delete-seller.use-case';
@@ -35,7 +43,7 @@ import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile
 
 @ApiTags('Admin Sellers')
 @Controller('admin/sellers')
-@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard, StepUpGuard)
 export class AdminSellersController {
   constructor(
     private readonly listSellersUseCase: AdminListSellersUseCase,
@@ -44,6 +52,9 @@ export class AdminSellersController {
     private readonly updateStatusUseCase: AdminUpdateSellerStatusUseCase,
     private readonly updateVerificationUseCase: AdminUpdateSellerVerificationUseCase,
     private readonly impersonateUseCase: AdminImpersonateSellerUseCase,
+    // Phase 28 (2026-05-21) — shared use case; same dep injection
+    // works for the franchise admin controller too.
+    private readonly endImpersonationUseCase: AdminEndImpersonationUseCase,
     private readonly sendMessageUseCase: AdminSendSellerMessageUseCase,
     private readonly changePasswordUseCase: AdminChangeSellerPasswordUseCase,
     private readonly deleteSellerUseCase: AdminDeleteSellerUseCase,
@@ -58,6 +69,7 @@ export class AdminSellersController {
       search: query.search,
       status: query.status,
       verificationStatus: query.verificationStatus,
+      sellerType: query.sellerType,
       sortBy: query.sortBy,
       sortOrder: query.sortOrder,
       fromDate: query.fromDate,
@@ -161,8 +173,19 @@ export class AdminSellersController {
   @HttpCode(HttpStatus.OK)
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   @Permissions('sellers.approve')
+  // Phase 26 — impersonation grants the admin a temporary seller token
+  // with the seller's full surface, including bank/KYC pages. Treat
+  // CRITICAL: tight 1-min window so a stolen admin session cannot
+  // silently impersonate.
+  @RequiresStepUp({ maxAgeMs: 60_000 })
+  // Phase 28 (2026-05-21) — per-IP throttle. Step-up already gates
+  // each call, but a compromised admin with a fresh step-up could
+  // otherwise issue 300 tokens/min (global default). 10/min is
+  // generous for ops while bounding the blast radius.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async impersonate(
     @Param('sellerId') sellerId: string,
+    @Body() body: { reason?: string } = {},
     @Req() req: Request,
   ) {
     const adminId = (req as any).adminId;
@@ -171,6 +194,7 @@ export class AdminSellersController {
       adminId,
       adminRole,
       sellerId,
+      reason: body?.reason,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
     });
@@ -180,6 +204,39 @@ export class AdminSellersController {
       message: 'Impersonation token generated',
       data,
     };
+  }
+
+  /**
+   * Phase 28 (2026-05-21) — End an active seller impersonation early.
+   * Deletes the JTI from Redis (so the seller guard 401s the next
+   * request even though the JWT still verifies by signature),
+   * stamps endedAt on AdminImpersonationLog, writes an audit row,
+   * and emits seller.impersonation_ended.
+   *
+   * Idempotent — already-ended impersonations return 200 without
+   * re-stamping. Step-up not required (de-escalation, not escalation).
+   */
+  @Post('impersonations/:jti/end')
+  @HttpCode(HttpStatus.OK)
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Permissions('sellers.approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async endImpersonation(
+    @Param('jti') jti: string,
+    @Body() body: { reason?: string } = {},
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const adminRole = (req as any).adminRole;
+    const data = await this.endImpersonationUseCase.execute({
+      tokenJti: jti,
+      endedByActorId: adminId,
+      endedByActorRole: adminRole,
+      reason: body?.reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+    return { success: true, message: 'Impersonation ended', data };
   }
 
   @Post(':sellerId/message')

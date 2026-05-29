@@ -1,5 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   AdminRepository,
   ADMIN_REPOSITORY,
@@ -10,7 +12,60 @@ export class AdminCustomerService {
   constructor(
     @Inject(ADMIN_REPOSITORY)
     private readonly adminRepo: AdminRepository,
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditPublicFacade,
   ) {}
+
+  /**
+   * Phase 21 (2026-05-20) — Admin unlock-account helper. Clears
+   * `lockUntil` and `failedLoginAttempts` for a customer who's been
+   * locked out by the 5-strikes lockout policy. Useful when support
+   * needs to manually reset a customer who's offline mid-lockout.
+   *
+   * Audit-logged with the admin's id + IP/UA so the action is
+   * traceable.
+   */
+  async unlockAccount(input: {
+    adminId: string;
+    userId: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<{ userId: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: input.userId },
+      select: {
+        id: true,
+        email: true,
+        lockUntil: true,
+        failedLoginAttempts: true,
+      },
+    });
+    if (!user) {
+      throw new NotFoundAppException('Customer not found');
+    }
+    await this.prisma.user.update({
+      where: { id: input.userId },
+      data: { lockUntil: null, failedLoginAttempts: 0 },
+    });
+    this.audit
+      .writeAuditLog({
+        actorId: input.adminId,
+        actorRole: 'ADMIN',
+        action: 'CUSTOMER_ACCOUNT_UNLOCKED',
+        module: 'admin',
+        resource: 'User',
+        resourceId: input.userId,
+        oldValue: {
+          lockUntil: user.lockUntil,
+          failedLoginAttempts: user.failedLoginAttempts,
+        },
+        newValue: { lockUntil: null, failedLoginAttempts: 0 },
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+      })
+      .catch(() => undefined);
+    return { userId: input.userId };
+  }
 
   async listCustomers(params: {
     page: number;

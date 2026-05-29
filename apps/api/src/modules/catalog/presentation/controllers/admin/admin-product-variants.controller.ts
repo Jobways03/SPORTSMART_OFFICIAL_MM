@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -17,29 +18,36 @@ import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.se
 import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
+  ConflictAppException,
   NotFoundAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { Permissions } from '../../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
+import type { Prisma } from '@prisma/client';
+import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
+import { StockSyncService } from '../../../application/services/stock-sync.service';
+import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
 import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
-import { IsArray, ArrayNotEmpty } from 'class-validator';
 import { UpdateVariantDto } from '../../dtos/update-variant.dto';
 import { CreateVariantDto } from '../../dtos/create-variant.dto';
 import { BulkUpdateVariantsDto } from '../../dtos/bulk-update-variants.dto';
 import { GenerateManualVariantsDto } from '../../dtos/generate-manual-variants.dto';
-
-class GenerateVariantsDto {
-  @IsArray()
-  @ArrayNotEmpty()
-  optionValueIds!: string[][];
-}
+import {
+  GenerateVariantsDto,
+  VARIANT_GENERATE_MAX_COMBINATIONS,
+  assertGenerateGroupsShape,
+  computeCartesianSize,
+} from '../../dtos/generate-variants.dto';
 
 @ApiTags('Admin Products')
 @Controller('admin/products/:productId/variants')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('catalog.write')
 export class AdminProductVariantsController {
   constructor(
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
@@ -47,10 +55,75 @@ export class AdminProductVariantsController {
     @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
     private readonly logger: AppLoggerService,
     private readonly variantGenerator: VariantGeneratorService,
+    private readonly stockSyncService: StockSyncService,
     private readonly cartFacade: CartPublicFacade,
     private readonly eventBus: EventBusService,
+    private readonly cloudinary: CloudinaryAdapter,
+    private readonly prisma: PrismaService,
   ) {
     this.logger.setContext('AdminProductVariantsController');
+  }
+
+  /**
+   * Phase 42 (2026-05-21) — admin version of the atomic generate
+   * core. Same shape as the seller controller; the only diff is the
+   * mapping rows are created as APPROVED + active (admin attests on
+   * behalf of the seller). Closes audit gaps #1, #4, #10 on the
+   * admin path too.
+   */
+  private async runGenerateAtomically(args: {
+    productId: string;
+    optionDefMap: Map<string, string[]>;
+    allValueIds: string[];
+    optionValueGroups: string[][];
+  }): Promise<any[]> {
+    const { productId, optionDefMap, allValueIds, optionValueGroups } = args;
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM products WHERE id = ${productId} FOR UPDATE`;
+
+      await this.variantRepo.clearProductOptionsAndVariants(productId, tx);
+      let sortOrder = 0;
+      for (const defId of optionDefMap.keys()) {
+        await this.variantRepo.createProductOption(productId, defId, sortOrder++, tx);
+      }
+      for (const valueId of allValueIds) {
+        await this.variantRepo.createProductOptionValue(productId, valueId, tx);
+      }
+
+      await this.variantGenerator.generateVariants(productId, optionValueGroups, tx);
+      await this.variantRepo.setHasVariants(productId, true, tx);
+
+      const variants = await tx.productVariant.findMany({
+        where: { productId, isDeleted: false },
+        orderBy: { sortOrder: 'asc' },
+      });
+      await this.autoCreateVariantMappingsForAdminTx(tx, productId, variants);
+
+      return variants;
+    });
+  }
+
+  /**
+   * Phase 41 (2026-05-21) — same destructive-clear guard as the
+   * seller controller. Admins can pass ?confirm=true to override.
+   */
+  private async destructiveGenerateGuard(productId: string, confirm: boolean) {
+    const inventory = await this.variantRepo.countActiveVariantInventory(productId);
+    if ((inventory.withStock > 0 || inventory.cartItems > 0) && !confirm) {
+      throw new ConflictAppException(
+        `Refusing to overwrite existing variants — found ${inventory.withStock} with stock and ${inventory.cartItems} cart items. Pass ?confirm=true to proceed (this is destructive).`,
+      );
+    }
+    return { publicIds: await this.variantRepo.collectVariantImagePublicIds(productId) };
+  }
+
+  private async cleanupCloudinaryAssets(publicIds: string[]): Promise<void> {
+    for (const id of publicIds) {
+      this.cloudinary.delete(id).catch((err) =>
+        this.logger.warn(`Cloudinary delete failed for ${id}: ${(err as Error).message}`),
+      );
+    }
   }
 
   @Post()
@@ -75,10 +148,17 @@ export class AdminProductVariantsController {
 
   @Post('generate-manual')
   @HttpCode(HttpStatus.CREATED)
-  async generateManualVariants(@Req() req: Request, @Param('productId') productId: string, @Body() dto: GenerateManualVariantsDto) {
+  @Idempotent()
+  async generateManualVariants(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Query('confirm') confirm: string | undefined,
+    @Body() dto: GenerateManualVariantsDto,
+  ) {
     const adminId = (req as any).adminId;
-    const optionValueIdGroups: string[][] = [];
+    const { publicIds } = await this.destructiveGenerateGuard(productId, confirm === 'true');
 
+    const optionValueIdGroups: string[][] = [];
     for (const opt of dto.options) {
       const optName = opt.name.trim();
       if (!optName) continue;
@@ -97,6 +177,13 @@ export class AdminProductVariantsController {
       return { success: false, message: 'No valid options provided', data: null };
     }
 
+    const cartSize = computeCartesianSize(optionValueIdGroups);
+    if (cartSize > VARIANT_GENERATE_MAX_COMBINATIONS) {
+      throw new BadRequestAppException(
+        `Generating ${cartSize} variants exceeds the per-request limit of ${VARIANT_GENERATE_MAX_COMBINATIONS}.`,
+      );
+    }
+
     const allValueIds = optionValueIdGroups.flat();
     const optionValues = await this.variantRepo.findOptionValuesByIds(allValueIds);
     const optionDefMap = new Map<string, string[]>();
@@ -105,22 +192,13 @@ export class AdminProductVariantsController {
       optionDefMap.get(ov.optionDefinitionId)!.push(ov.id);
     }
 
-    await this.variantRepo.clearProductOptionsAndVariants(productId);
-    let sortOrder = 0;
-    for (const defId of optionDefMap.keys()) {
-      await this.variantRepo.createProductOption(productId, defId, sortOrder++);
-    }
-    for (const valueId of allValueIds) {
-      await this.variantRepo.createProductOptionValue(productId, valueId);
-    }
-
-    await this.variantGenerator.generateVariants(productId, optionValueIdGroups);
-    await this.variantRepo.setHasVariants(productId, true);
-
-    const variants = await this.variantRepo.findByProductId(productId);
-
-    // Auto-create seller mappings for generated variants
-    await this.autoCreateVariantMappingsForAdmin(productId, variants);
+    const variants = await this.runGenerateAtomically({
+      productId,
+      optionDefMap,
+      allValueIds,
+      optionValueGroups: optionValueIdGroups,
+    });
+    this.cleanupCloudinaryAssets(publicIds);
 
     this.logger.log(`Generated ${variants.length} variants (manual options) for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };
@@ -128,32 +206,62 @@ export class AdminProductVariantsController {
 
   @Post('generate')
   @HttpCode(HttpStatus.CREATED)
-  async generateVariants(@Req() req: Request, @Param('productId') productId: string, @Body() dto: GenerateVariantsDto) {
+  @Idempotent()
+  async generateVariants(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Query('confirm') confirm: string | undefined,
+    @Body() dto: GenerateVariantsDto,
+  ) {
     const adminId = (req as any).adminId;
+
+    try {
+      assertGenerateGroupsShape(dto.optionValueIds);
+    } catch (err) {
+      throw new BadRequestAppException((err as Error).message);
+    }
+
+    const cartSize = computeCartesianSize(dto.optionValueIds);
+    if (cartSize > VARIANT_GENERATE_MAX_COMBINATIONS) {
+      throw new BadRequestAppException(
+        `Generating ${cartSize} variants exceeds the per-request limit of ${VARIANT_GENERATE_MAX_COMBINATIONS}.`,
+      );
+    }
+
+    const { publicIds } = await this.destructiveGenerateGuard(productId, confirm === 'true');
+
     const allValueIds = dto.optionValueIds.flat();
     const optionValues = await this.variantRepo.findOptionValuesByIds(allValueIds);
+    if (optionValues.length !== new Set(allValueIds).size) {
+      const found = new Set(optionValues.map((v: any) => v.id));
+      const missing = allValueIds.filter((id) => !found.has(id));
+      throw new BadRequestAppException(`Unknown option value id(s): ${missing.join(', ')}`);
+    }
+
+    const valueById = new Map(optionValues.map((v: any) => [v.id, v]));
+    for (let i = 0; i < dto.optionValueIds.length; i++) {
+      const axis = dto.optionValueIds[i]!;
+      const defIds = new Set(axis.map((id) => valueById.get(id)?.optionDefinitionId));
+      if (defIds.size !== 1) {
+        throw new BadRequestAppException(
+          `optionValueIds[${i}] mixes values from different option definitions.`,
+        );
+      }
+    }
+
     const optionDefMap = new Map<string, string[]>();
     for (const ov of optionValues) {
       if (!optionDefMap.has(ov.optionDefinitionId)) optionDefMap.set(ov.optionDefinitionId, []);
       optionDefMap.get(ov.optionDefinitionId)!.push(ov.id);
     }
 
-    await this.variantRepo.clearProductOptionsAndVariants(productId);
-    let sortOrder = 0;
-    for (const defId of optionDefMap.keys()) {
-      await this.variantRepo.createProductOption(productId, defId, sortOrder++);
-    }
-    for (const valueId of allValueIds) {
-      await this.variantRepo.createProductOptionValue(productId, valueId);
-    }
-
-    await this.variantGenerator.generateVariants(productId, dto.optionValueIds);
-    await this.variantRepo.setHasVariants(productId, true);
-
-    const variants = await this.variantRepo.findByProductId(productId);
-
-    // Auto-create seller mappings for generated variants
-    await this.autoCreateVariantMappingsForAdmin(productId, variants);
+    const variants = await this.runGenerateAtomically({
+      productId,
+      optionDefMap,
+      allValueIds,
+      optionValueGroups: dto.optionValueIds,
+    });
+    this.cleanupCloudinaryAssets(publicIds);
 
     this.logger.log(`Generated ${variants.length} variants for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };
@@ -183,7 +291,13 @@ export class AdminProductVariantsController {
     if (dto.barcode !== undefined) updateData.barcode = dto.barcode;
     if (dto.title !== undefined) updateData.title = dto.title;
 
-    const updated = await this.variantRepo.update(variantId, updateData);
+    // Phase 41 (2026-05-21) — Gap #10 wiring on the admin path.
+    // updateVariantAdmin wraps the variant write in a transaction
+    // with SELECT FOR UPDATE on every mapping for this variant so
+    // concurrent checkout reservations serialize against admin
+    // status / price changes. Defense-in-depth — admin doesn't sync
+    // mapping stock today, but the lock keeps future changes safe.
+    const updated = await this.stockSyncService.updateVariantAdmin(productId, variantId, updateData);
     this.logger.log(`Variant ${variantId} updated for product ${productId} by admin ${adminId}`);
     return { success: true, message: 'Variant updated successfully', data: updated };
   }
@@ -206,59 +320,59 @@ export class AdminProductVariantsController {
   }
 
   /**
-   * Auto-create per-variant seller mappings when admin generates variants.
-   * Looks up the product's sellerId, removes stale product-level mapping,
-   * and creates per-variant mappings with APPROVED status.
+   * Phase 42 (2026-05-21) — tx-bound admin mapping creation. Mirrors
+   * the seller variant. Admin flow stamps APPROVED + active.
    */
-  private async autoCreateVariantMappingsForAdmin(
+  private async autoCreateVariantMappingsForAdminTx(
+    tx: Prisma.TransactionClient,
     productId: string,
     variants: any[],
   ): Promise<void> {
-    try {
-      const product = await this.productRepo.findByIdBasic(productId);
-      if (!product?.sellerId) return; // No seller associated — nothing to map
+    const product = await tx.product.findUnique({
+      where: { id: productId },
+      select: { sellerId: true, basePrice: true },
+    });
+    if (!product?.sellerId) return;
+    const sellerId = product.sellerId;
 
-      const sellerId = product.sellerId;
-      const sellerProfile = await this.productRepo.findSellerById(sellerId);
+    const sellerProfile = await tx.seller.findUnique({
+      where: { id: sellerId },
+      select: { storeAddress: true, sellerZipCode: true },
+    });
 
-      // Remove existing product-level mapping (null variantId)
-      await this.sellerMappingRepo.deleteBySellerProductVariantNull(sellerId, productId);
+    await tx.sellerProductMapping.deleteMany({
+      where: { sellerId, productId, variantId: null },
+    });
 
-      // Get existing variant mappings to avoid duplicates
-      const existingMappings = await this.sellerMappingRepo.findBySellerForProduct(sellerId, productId);
-      const existingVariantIds = new Set(existingMappings.map((m: any) => m.variantId));
+    const existing = await tx.sellerProductMapping.findMany({
+      where: { sellerId, productId },
+      select: { variantId: true },
+    });
+    const existingVariantIds = new Set(existing.map((m: any) => m.variantId));
 
-      let created = 0;
-      for (const variant of variants) {
-        if (existingVariantIds.has(variant.id)) continue;
+    const toCreate = variants
+      .filter((v) => !existingVariantIds.has(v.id))
+      .map((variant) => ({
+        sellerId,
+        productId,
+        variantId: variant.id,
+        stockQty: variant.stock ?? 0,
+        settlementPrice: variant.price
+          ? Number(variant.price)
+          : product.basePrice
+            ? Number(product.basePrice)
+            : undefined,
+        pickupAddress: sellerProfile?.storeAddress || null,
+        pickupPincode: sellerProfile?.sellerZipCode || null,
+        dispatchSla: 2,
+        approvalStatus: 'APPROVED' as const,
+        isActive: true,
+      }));
 
-        await this.sellerMappingRepo.create({
-          sellerId,
-          productId,
-          variantId: variant.id,
-          stockQty: variant.stock ?? 0,
-          settlementPrice: variant.price
-            ? Number(variant.price)
-            : product.basePrice
-              ? Number(product.basePrice)
-              : undefined,
-          pickupAddress: sellerProfile?.storeAddress || null,
-          pickupPincode: sellerProfile?.sellerZipCode || null,
-          dispatchSla: 2,
-          approvalStatus: 'APPROVED',
-          isActive: true,
-        });
-        created++;
-      }
-
-      if (created > 0) {
-        this.logger.log(
-          `Auto-created ${created} seller mapping(s) for variants of product ${productId} (admin flow)`,
-        );
-      }
-    } catch (err) {
-      this.logger.warn(
-        `Failed to auto-create seller mappings for product ${productId}: ${err}`,
+    if (toCreate.length > 0) {
+      await this.sellerMappingRepo.createMany(toCreate, tx);
+      this.logger.log(
+        `Auto-created ${toCreate.length} seller mapping(s) for variants of product ${productId} (admin flow)`,
       );
     }
   }
@@ -270,10 +384,6 @@ export class AdminProductVariantsController {
     const variant = await this.variantRepo.findById(variantId, productId);
     if (!variant) throw new NotFoundAppException('Variant not found');
 
-    // Block deletion if any active cart still references this variant.
-    // Otherwise the next checkout would fetch the variant with isDeleted
-    // filter, get null, and crash with a NULL reference error. Customers
-    // would need manual intervention to clear their cart.
     const activeCartCount =
       await this.cartFacade.countActiveItemsForVariant(variantId);
     if (activeCartCount > 0) {
@@ -285,11 +395,6 @@ export class AdminProductVariantsController {
     await this.variantRepo.softDelete(variantId);
     this.logger.log(`Variant ${variantId} deleted from product ${productId} by admin ${adminId}`);
 
-    // Notify downstream (franchise module auto-stops mappings that
-    // pointed at this variant). Fire-and-forget — the repo's soft-
-    // delete filter already hides dead-variant mappings, so a missed
-    // event only leaves stale STOPPED-worthy rows; not a correctness
-    // bug, just cleanup.
     try {
       await this.eventBus.publish({
         eventName: 'catalog.variant.soft_deleted',

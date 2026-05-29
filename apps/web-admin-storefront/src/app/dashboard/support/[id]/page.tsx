@@ -14,6 +14,7 @@ import {
   TicketPriority,
 } from '@/services/admin-support.service';
 import { ApiError } from '@/lib/api-client';
+import CaseTimeline from '@/components/CaseTimeline';
 
 const STATUS_OPTIONS: TicketStatus[] = [
   'OPEN',
@@ -248,7 +249,7 @@ export default function TicketDetailPage() {
   const isMine = ticket.assignedAdminId === adminId;
 
   return (
-    <div style={{ padding: '24px 32px', display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, maxWidth: 1280 }}>
+    <div style={{ padding: '24px 32px', display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, maxWidth: 1280, margin: '0 auto' }}>
       {/* Main column */}
       <div>
         <Link href="/dashboard/support" style={{ color: '#525A65', fontSize: 13, textDecoration: 'none', display: 'inline-block', marginBottom: 12 }}>
@@ -340,6 +341,14 @@ export default function TicketDetailPage() {
             </button>
           </div>
         </form>
+
+        <div style={{ marginTop: 16 }}>
+          <CaseTimeline
+            caseKind="ticket"
+            caseId={ticket.id}
+            refreshKey={ticket.updatedAt}
+          />
+        </div>
       </div>
 
       {/* Side panel */}

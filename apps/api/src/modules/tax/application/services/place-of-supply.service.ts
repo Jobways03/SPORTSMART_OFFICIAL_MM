@@ -20,6 +20,7 @@ import {
   type B2bPosSource,
 } from '../../domain/place-of-supply';
 import {
+  buildCodeToNameIndex,
   buildStateIndex,
   extractStateCodeFromAddress,
 } from '../../domain/state-code-map';
@@ -31,6 +32,9 @@ const STATE_INDEX_CACHE_TTL_MS = 60_000;
 export class PlaceOfSupplyService {
   private readonly logger = new Logger(PlaceOfSupplyService.name);
   private stateIndex: Map<string, string> | null = null;
+  // Phase 159z (GSTR-8 audit #4) — inverse index (code → name) kept in
+  // sync with stateIndex via the same TTL. Lazily filled by getStateIndex().
+  private codeToNameIndex: Map<string, string> | null = null;
   private stateIndexExpiresAt = 0;
   private platformDefaultStateCode: string | null = null;
 
@@ -178,8 +182,32 @@ export class PlaceOfSupplyService {
       select: { gstStateCode: true, stateName: true },
     });
     this.stateIndex = buildStateIndex(rows);
+    this.codeToNameIndex = buildCodeToNameIndex(rows);
     this.stateIndexExpiresAt = Date.now() + STATE_INDEX_CACHE_TTL_MS;
     return this.stateIndex;
+  }
+
+  /**
+   * Phase 159z — code→name lookup used by GSTR-8 to resolve
+   * place-of-supply state codes into human-readable names for the
+   * CBIC-format CSV column. Same 60s TTL cache as the name→code
+   * index so both directions stay in sync.
+   *
+   * Returns a Map keyed by 2-digit GST state code; values are the
+   * canonical state name (e.g. '27' → 'Maharashtra'). Unknown codes
+   * (e.g. '99' Other Territory) fall back to the code itself at the
+   * call site.
+   */
+  async getStateCodeToNameMap(): Promise<ReadonlyMap<string, string>> {
+    if (
+      this.codeToNameIndex &&
+      this.stateIndexExpiresAt > Date.now()
+    ) {
+      return this.codeToNameIndex;
+    }
+    // Re-load both directions in one round-trip.
+    await this.getStateIndex();
+    return this.codeToNameIndex ?? new Map<string, string>();
   }
 
   private async getPlatformDefaultStateCode(): Promise<string> {

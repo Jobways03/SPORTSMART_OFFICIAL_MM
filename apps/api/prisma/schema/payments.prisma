@@ -7,10 +7,10 @@
 // settled (alerts inbox for the admin payment-ops team).
 
 enum PaymentAttemptKind {
-  CREATE_ORDER     // POST to gateway to create a new order
-  CAPTURE          // capture an authorised payment
+  CREATE_ORDER // POST to gateway to create a new order
+  CAPTURE // capture an authorised payment
   VERIFY_SIGNATURE // server-side signature verify on success callback
-  REFUND           // request a refund through the gateway
+  REFUND // request a refund through the gateway
 }
 
 enum PaymentAttemptStatus {
@@ -19,11 +19,11 @@ enum PaymentAttemptStatus {
 }
 
 enum PaymentMismatchKind {
-  AMOUNT_MISMATCH      // expected ≠ actual settled amount
+  AMOUNT_MISMATCH // expected ≠ actual settled amount
   CURRENCY_MISMATCH
-  DUPLICATE_PAYMENT    // same payment id captured twice
-  ORPHAN_PAYMENT       // gateway settled an unknown order
-  SIGNATURE_INVALID    // post-callback verify mismatch
+  DUPLICATE_PAYMENT // same payment id captured twice
+  ORPHAN_PAYMENT // gateway settled an unknown order
+  SIGNATURE_INVALID // post-callback verify mismatch
 }
 
 enum PaymentMismatchStatus {
@@ -31,6 +31,88 @@ enum PaymentMismatchStatus {
   IN_REVIEW
   RESOLVED
   IGNORED
+}
+
+// Phase 70 (2026-05-22) — Phase 66 audit Gap #3 + Gap #10,
+// Phase 67 audit Gap #4. Payment entity scaffolding. Pre-Phase-70
+// payment state was scattered across MasterOrder columns
+// (razorpayOrderId, razorpayPaymentId, paymentStatus,
+// paymentExpiresAt) which conflated order state with payment
+// state. The full intent-first refactor (Payment created BEFORE
+// MasterOrder, MasterOrder references it) is a future-phase rewrite;
+// this shadow table populates alongside the existing flow so the
+// data starts accumulating now and the future-phase refactor has a
+// schema to read from without a separate data migration.
+//
+// One row per Payment lifecycle event:
+//   • COD orders get one Payment(method=COD, status=PENDING) at
+//     place-order.
+//   • ONLINE orders get one Payment(method=ONLINE, status=CREATED)
+//     at place-order when Razorpay createOrder succeeds; flips to
+//     CAPTURED on verify-payment webhook + verify-signature
+//     endpoint.
+//   • Retried online orders get a second Payment row pointing to
+//     the same masterOrderId (the existing flow overwrites the
+//     MasterOrder columns; the Payment table preserves the trail).
+enum PaymentLifecycleStatus {
+  CREATED
+  PENDING
+  CAPTURED
+  FAILED
+  REFUNDED
+  VOIDED
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentLifecycleMethod {
+  COD
+  ONLINE
+  WALLET_ONLY
+}
+
+model Payment {
+  id            String @id @default(uuid())
+  masterOrderId String @map("master_order_id")
+
+  method PaymentLifecycleMethod
+  status PaymentLifecycleStatus @default(CREATED)
+
+  amountInPaise BigInt @map("amount_in_paise")
+  currency      String @default("INR")
+
+  // Gateway identity. Razorpay-specific today. Both nullable —
+  // COD payments carry no provider IDs; online payments fill them
+  // in incrementally (orderId at create, paymentId at capture).
+  provider          String  @default("razorpay")
+  providerOrderId   String? @map("provider_order_id")
+  providerPaymentId String? @map("provider_payment_id")
+
+  // Deterministic idempotency key from the checkout flow (sha-256
+  // of customerId + session.createdAt + orderNumber for online;
+  // null for COD). Lets the future-phase refactor dedup retries
+  // at the Payment layer without depending on MasterOrder.
+  idempotencyKey String? @map("idempotency_key")
+
+  // When the payment window closes (online only). COD = null.
+  expiresAt  DateTime? @map("expires_at")
+  // When the gateway confirmed capture (or COD was collected).
+  capturedAt DateTime? @map("captured_at")
+  // When status flipped to a terminal failure / refund / void.
+  terminalAt DateTime? @map("terminal_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([masterOrderId])
+  @@index([providerOrderId])
+  @@index([providerPaymentId])
+  @@index([status, createdAt(sort: Desc)])
+  // Phase 70 — partial unique on (providerOrderId) when non-null
+  // mirrors the MasterOrder.razorpayOrderId partial unique added
+  // in Phase 66 (Gap #4). Prevents two Payment rows from sharing
+  // a gateway order id.
+  @@map("payments")
 }
 
 model PaymentAttempt {
@@ -44,14 +126,19 @@ model PaymentAttempt {
   status PaymentAttemptStatus
 
   // Gateway identity. Razorpay-specific today; widen if we add more.
-  provider           String  @default("razorpay")
-  providerOrderId    String? @map("provider_order_id")
-  providerPaymentId  String? @map("provider_payment_id")
-  providerRefundId   String? @map("provider_refund_id")
+  provider          String  @default("razorpay")
+  providerOrderId   String? @map("provider_order_id")
+  providerPaymentId String? @map("provider_payment_id")
+  providerRefundId  String? @map("provider_refund_id")
 
   // Money snapshot — paise to match the rest of the platform.
-  amountInPaise Int? @map("amount_in_paise")
-  currency      String @default("INR")
+  // Phase 66 (2026-05-22) — widened Int → BigInt (audit Gap #22).
+  // Int? capped at ~₹21M / 2.1cr; the BigInt-everywhere policy
+  // already applies to PaymentMismatchAlert (line 88-89) and
+  // MasterOrder.totalAmountInPaise. PaymentAttempt is the lone
+  // outlier; this brings it in line.
+  amountInPaise BigInt? @map("amount_in_paise")
+  currency      String  @default("INR")
 
   // For SUCCESS: the response body or relevant fields. For FAILURE: the
   // gateway error / our parse error. Free-form so we can capture rich
@@ -73,10 +160,10 @@ model PaymentAttempt {
 model PaymentMismatchAlert {
   id String @id @default(uuid())
 
-  kind   PaymentMismatchKind
-  status PaymentMismatchStatus @default(OPEN)
+  kind     PaymentMismatchKind
+  status   PaymentMismatchStatus @default(OPEN)
   // Optional severity — drives sort order in admin queue.
-  severity Int @default(50)
+  severity Int                   @default(50)
 
   // Linked context (any may be null for orphans).
   masterOrderId     String? @map("master_order_id")
@@ -88,7 +175,7 @@ model PaymentMismatchAlert {
   expectedInPaise BigInt? @map("expected_in_paise")
   actualInPaise   BigInt? @map("actual_in_paise")
 
-  description String @db.Text
+  description     String  @db.Text
   // Internal notes added during triage (admin-only).
   resolutionNotes String? @map("resolution_notes") @db.Text
 

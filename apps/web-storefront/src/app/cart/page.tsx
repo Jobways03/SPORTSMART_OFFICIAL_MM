@@ -42,6 +42,48 @@ interface CartData {
   itemCount: number;
 }
 
+// Phase 36 — wire shape of /customer/tax-preview/cart. Mirrors the
+// checkout-time CheckoutTaxPreview but inlined here so the cart page
+// doesn't depend on the checkout module.
+interface CartTaxPreview {
+  subtotalTaxableInPaise: string;
+  cgstInPaise: string;
+  sgstInPaise: string;
+  igstInPaise: string;
+  cessInPaise: string;
+  totalTaxInPaise: string;
+  rawTotalInPaise: string;
+  roundOffInPaise: string;
+  grandTotalInPaise: string;
+  hasIgst: boolean;
+  hasCgstSgst: boolean;
+  incompleteItemCount: number;
+}
+
+// Format a stringified paise value as ₹X,XX,XXX.YY using BigInt arithmetic
+// so values past Number.MAX_SAFE_INTEGER still render exactly. Cart-side
+// totals will never approach that range, but the helper stays consistent
+// with the same one used at checkout.
+function formatPaiseString(paise: string): string {
+  let value: bigint;
+  try {
+    value = BigInt(paise);
+  } catch {
+    return '₹0.00';
+  }
+  const ZERO = BigInt(0);
+  const HUNDRED = BigInt(100);
+  const negative = value < ZERO;
+  const abs = negative ? -value : value;
+  const rupees = abs / HUNDRED;
+  const remainder = abs % HUNDRED;
+  const rupeesStr = rupees
+    .toString()
+    .replace(/\B(?=(\d{2})+(\d{3})(?!\d))/g, ',');
+  const paiseStr = remainder.toString().padStart(2, '0');
+  return `${negative ? '-' : ''}₹${rupeesStr}.${paiseStr}`;
+}
+
 const formatINR = (n: number) => '₹' + Number(n).toLocaleString('en-IN');
 
 export default function CartPage() {
@@ -58,6 +100,12 @@ export default function CartPage() {
   const [couponApplying, setCouponApplying] = useState(false);
   const [couponError, setCouponError] = useState('');
   const [previewedCoupon, setPreviewedCoupon] = useState<PreviewedCoupon | null>(null);
+
+  // Phase 36 — cart-side tax preview. Uses the customer's default
+  // address (if any) to derive CGST/SGST/IGST split before they enter
+  // checkout. Best-effort: null = no default address yet, just falls
+  // back to the legacy "Included in price" string.
+  const [cartTax, setCartTax] = useState<CartTaxPreview | null>(null);
 
   // Hydrate any previously-previewed coupon (e.g. customer came back
   // from /products after applying a code on cart already). We re-fetch
@@ -192,6 +240,35 @@ export default function CartPage() {
       window.sessionStorage.removeItem(PREVIEW_COUPON_STORAGE_KEY);
     }
   };
+
+  // Phase 36 — fetch a server-computed tax preview using the customer's
+  // default address. Re-runs whenever the cart subtotal or item count
+  // changes (mirroring the coupon re-preview effect). Failures are
+  // non-fatal: we just clear the tax breakdown and the summary degrades
+  // to the legacy "GST: Included in price" string.
+  useEffect(() => {
+    if (!cart || cart.items.length === 0) {
+      setCartTax(null);
+      return;
+    }
+    let cancelled = false;
+    apiClient<CartTaxPreview>('/customer/tax-preview/cart', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setCartTax(res.data ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCartTax(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart?.totalAmount, cart?.itemCount]);
 
   // Re-validate the preview when the cart subtotal changes (qty change,
   // item add/remove). If the discount no longer applies (e.g. min-order
@@ -460,10 +537,59 @@ export default function CartPage() {
                       Free
                     </dd>
                   </div>
-                  <div className="flex justify-between">
-                    <dt className="text-ink-600">GST</dt>
-                    <dd className="text-ink-600 text-caption">Included in price</dd>
-                  </div>
+                  {/* Phase 36 — when the backend returns a tax preview
+                      (default address present), show the actual CGST/
+                      SGST/IGST split. Otherwise fall back to the legacy
+                      "Included in price" string. */}
+                  {cartTax ? (
+                    <>
+                      {cartTax.hasCgstSgst && (
+                        <>
+                          <div className="flex justify-between">
+                            <dt className="text-ink-600">CGST</dt>
+                            <dd className="text-ink-900 tabular">
+                              {formatPaiseString(cartTax.cgstInPaise)}
+                            </dd>
+                          </div>
+                          <div className="flex justify-between">
+                            <dt className="text-ink-600">SGST</dt>
+                            <dd className="text-ink-900 tabular">
+                              {formatPaiseString(cartTax.sgstInPaise)}
+                            </dd>
+                          </div>
+                        </>
+                      )}
+                      {cartTax.hasIgst && (
+                        <div className="flex justify-between">
+                          <dt className="text-ink-600">IGST</dt>
+                          <dd className="text-ink-900 tabular">
+                            {formatPaiseString(cartTax.igstInPaise)}
+                          </dd>
+                        </div>
+                      )}
+                      {cartTax.cessInPaise !== '0' && (
+                        <div className="flex justify-between">
+                          <dt className="text-ink-600">Cess</dt>
+                          <dd className="text-ink-900 tabular">
+                            {formatPaiseString(cartTax.cessInPaise)}
+                          </dd>
+                        </div>
+                      )}
+                      {cartTax.incompleteItemCount > 0 && (
+                        <div className="text-caption text-ink-500 mt-1">
+                          Some items have incomplete tax data; final
+                          invoice may differ slightly.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex justify-between">
+                      <dt className="text-ink-600">GST</dt>
+                      <dd className="text-ink-600 text-caption">
+                        Included in price
+                      </dd>
+                    </div>
+                  )}
                 </dl>
 
                 {/* Coupon preview block — purely advisory. Server

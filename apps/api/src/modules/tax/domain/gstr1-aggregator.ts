@@ -42,6 +42,9 @@ export interface DocumentForGstr1
     | 'documentTotalInPaise'
     | 'reverseChargeApplicable'
     | 'originalDocumentNumber'
+    // Phase 159x (audit B2) — e-invoice IRN fields for the B2B NIC upload.
+    | 'irn'
+    | 'ackDate'
   > {
   lines?: Pick<
     TaxDocumentLine,
@@ -70,6 +73,10 @@ export interface B2bRow {
   cessInPaise: bigint;
   invoiceValueInPaise: bigint;
   reverseChargeApplicable: boolean;
+  // Phase 159x (audit B2) — IRN + ack date for e-invoiced B2B supplies (null
+  // when the invoice wasn't e-invoiced / below the e-invoice threshold).
+  irn: string | null;
+  irnDate: Date | null;
 }
 
 export interface B2cLargeRow {
@@ -97,6 +104,9 @@ export interface B2cSmallRow {
 export interface CreditNoteRow {
   documentNumber: string;
   documentDate: Date;
+  // Phase 159x (audit — DEBIT_NOTE silently dropped) — §9B reports both credit
+  // and debit notes; this distinguishes them for the NIC upload.
+  noteType: 'CREDIT' | 'DEBIT';
   originalInvoiceNumber: string;
   buyerGstin: string | null;
   buyerType: 'B2B' | 'B2C';
@@ -134,6 +144,10 @@ export interface Gstr1Aggregate {
   creditNotes: CreditNoteRow[];
   hsn: HsnSummaryRow[];
   documentsIssued: DocumentsIssuedRow[];
+  // Phase 159x (audit B3/#8) — data-integrity notes (e.g. a taxable invoice
+  // with no line items whose rate had to be back-calculated). The service logs
+  // these so a silent misclassification surfaces instead of looking nil-rated.
+  warnings: string[];
   totals: {
     taxableInPaise: bigint;
     cgstInPaise: bigint;
@@ -142,6 +156,7 @@ export interface Gstr1Aggregate {
     cessInPaise: bigint;
     invoiceValueInPaise: bigint;
     creditNoteValueInPaise: bigint;
+    debitNoteValueInPaise: bigint;
   };
 }
 
@@ -165,6 +180,7 @@ export function aggregateGstr1(
     creditNotes: [],
     hsn: [],
     documentsIssued: [],
+    warnings: [],
     totals: {
       taxableInPaise: 0n,
       cgstInPaise: 0n,
@@ -173,6 +189,7 @@ export function aggregateGstr1(
       cessInPaise: 0n,
       invoiceValueInPaise: 0n,
       creditNoteValueInPaise: 0n,
+      debitNoteValueInPaise: 0n,
     },
   };
 
@@ -203,6 +220,8 @@ export function aggregateGstr1(
           cessInPaise: d.cessAmountInPaise,
           invoiceValueInPaise: d.documentTotalInPaise,
           reverseChargeApplicable: d.reverseChargeApplicable,
+          irn: d.irn ?? null,
+          irnDate: d.ackDate ?? null,
         });
       } else {
         const interState =
@@ -230,7 +249,7 @@ export function aggregateGstr1(
           // dominant line rate for the document; lines with
           // mixed rates split contribute to their own bucket via
           // the per-line accumulator below.
-          accumulateB2cSmallFromDocument(d, b2cSmallMap);
+          accumulateB2cSmallFromDocument(d, b2cSmallMap, out.warnings);
         }
       }
 
@@ -240,15 +259,36 @@ export function aggregateGstr1(
       out.totals.igstInPaise += d.igstAmountInPaise;
       out.totals.cessInPaise += d.cessAmountInPaise;
       out.totals.invoiceValueInPaise += d.documentTotalInPaise;
-    } else if (d.documentType === 'CREDIT_NOTE') {
+    } else if (
+      d.documentType === 'CREDIT_NOTE' ||
+      d.documentType === 'DEBIT_NOTE'
+    ) {
+      // Phase 159x (audit — DEBIT_NOTE was silently dropped) — §9B reports
+      // both credit and debit notes.
       const isB2B = !!d.buyerGstin;
+      const noteType = d.documentType === 'CREDIT_NOTE' ? 'CREDIT' : 'DEBIT';
+      // Phase 159x (audit #7/#15) — NIC requires a place of supply on every
+      // §9B note. When it's missing, recover the buyer's state from the GSTIN
+      // (first 2 digits) for B2B; a B2C note with no PoS is surfaced as a
+      // warning rather than emitting an empty cell the portal will reject.
+      let pos = d.placeOfSupplyStateCode;
+      if (!pos) {
+        if (isB2B) pos = stateCodeFromGstin(d.buyerGstin);
+        if (!pos) {
+          out.warnings.push(
+            `${noteType} note ${d.documentNumber} has no place-of-supply state code` +
+              `${isB2B ? '' : ' (B2C — cannot derive from GSTIN)'}; NIC upload will reject it.`,
+          );
+        }
+      }
       out.creditNotes.push({
         documentNumber: d.documentNumber,
         documentDate: d.generatedAt ?? new Date(0),
+        noteType,
         originalInvoiceNumber: d.originalDocumentNumber ?? '',
         buyerGstin: d.buyerGstin,
         buyerType: isB2B ? 'B2B' : 'B2C',
-        placeOfSupplyStateCode: d.placeOfSupplyStateCode,
+        placeOfSupplyStateCode: pos,
         taxableReversalInPaise: d.taxableAmountInPaise,
         cgstReversalInPaise: d.cgstAmountInPaise,
         sgstReversalInPaise: d.sgstAmountInPaise,
@@ -256,7 +296,11 @@ export function aggregateGstr1(
         cessReversalInPaise: d.cessAmountInPaise,
         noteValueInPaise: d.documentTotalInPaise,
       });
-      out.totals.creditNoteValueInPaise += d.documentTotalInPaise;
+      if (noteType === 'CREDIT') {
+        out.totals.creditNoteValueInPaise += d.documentTotalInPaise;
+      } else {
+        out.totals.debitNoteValueInPaise += d.documentTotalInPaise;
+      }
     }
     // BILL_OF_SUPPLY / LEGACY_RECEIPT only contribute to §13 (already counted).
 
@@ -311,6 +355,7 @@ export function aggregateGstr1(
 function accumulateB2cSmallFromDocument(
   d: DocumentForGstr1,
   map: Map<string, B2cSmallRow>,
+  warnings: string[],
 ): void {
   const state = d.placeOfSupplyStateCode ?? '';
   // Aggregate by (state, rate). If lines have mixed rates we split per
@@ -341,9 +386,27 @@ function accumulateB2cSmallFromDocument(
     }
     return;
   }
-  // No lines — single bucket at rate 0 (we don't know the rate; CA
-  // sees this as data drift in the report).
-  const key = `${state}|0`;
+  // Phase 159x (audit B3/#8) — no line items. Rather than dumping the doc into
+  // a rate=0 bucket (which makes a taxable supply look nil-rated and silently
+  // misclassifies revenue), recover the effective rate from the tax actually
+  // charged: rateBps = (cgst+sgst+igst) / taxable × 10000, rounded. A warning
+  // is recorded so the underlying data-integrity gap (a TAX_INVOICE with no
+  // lines) surfaces to the CA instead of hiding.
+  const taxTotal =
+    d.cgstAmountInPaise + d.sgstAmountInPaise + d.igstAmountInPaise;
+  const rateBps =
+    d.taxableAmountInPaise > 0n
+      ? Number(
+          (taxTotal * 10000n + d.taxableAmountInPaise / 2n) /
+            d.taxableAmountInPaise,
+        )
+      : 0;
+  warnings.push(
+    `Invoice ${d.documentNumber} has no line items; B2C-Small rate ` +
+      `back-calculated to ${(rateBps / 100).toFixed(2)}% from tax amounts ` +
+      `(taxable=${d.taxableAmountInPaise} paise, tax=${taxTotal} paise).`,
+  );
+  const key = `${state}|${rateBps}`;
   const existing = map.get(key);
   if (existing) {
     existing.taxableInPaise += d.taxableAmountInPaise;
@@ -354,7 +417,7 @@ function accumulateB2cSmallFromDocument(
   } else {
     map.set(key, {
       placeOfSupplyStateCode: state,
-      gstRateBps: 0,
+      gstRateBps: rateBps,
       taxableInPaise: d.taxableAmountInPaise,
       cgstInPaise: d.cgstAmountInPaise,
       sgstInPaise: d.sgstAmountInPaise,
@@ -362,6 +425,15 @@ function accumulateB2cSmallFromDocument(
       cessInPaise: d.cessAmountInPaise,
     });
   }
+}
+
+// Phase 159x (audit #7/#15) — GSTIN's first two characters are the state code
+// (e.g. "27ABCDE1234F1Z5" → "27" = Maharashtra). Used to recover a missing
+// place-of-supply on a B2B note + to cross-check reverse-charge supplies.
+function stateCodeFromGstin(gstin: string | null): string | null {
+  if (!gstin || gstin.length < 2) return null;
+  const code = gstin.slice(0, 2);
+  return /^\d{2}$/.test(code) ? code : null;
 }
 
 function decimalToNumber(d: Prisma.Decimal | number | null | undefined): number {

@@ -29,6 +29,12 @@ export interface RefreshSellerSessionResult {
 // before expiry doesn't force a re-login. Mirrors customer / admin refresh.
 const REFRESH_EXPIRY_GRACE_MS = 60_000;
 
+// Phase 21 (2026-05-20) — Sliding-refresh has no upper bound by
+// default. Without an absolute cap, a daily-active seller never
+// re-authenticates; a stolen cookie can be kept alive indefinitely.
+// Hard cap measured from Session.createdAt → force re-login.
+const SESSION_ABSOLUTE_LIFETIME_DAYS_DEFAULT = 60;
+
 @Injectable()
 export class RefreshSellerSessionUseCase {
   constructor(
@@ -51,6 +57,23 @@ export class RefreshSellerSessionUseCase {
     const session =
       await this.sellerRepo.findSessionByRefreshToken(refreshToken);
     if (!session) {
+      // Phase 1 / C6 — refresh-token reuse detection. Primary miss;
+      // check the burned-hash slot. A hit means the caller presented
+      // an already-rotated token (theft replay). Revoke every session
+      // for this seller and refuse.
+      const burned =
+        await this.sellerRepo.findSessionByPreviousRefreshToken(
+          refreshToken,
+        );
+      if (burned) {
+        await this.sellerRepo.revokeAllSessions(burned.sellerId);
+        this.logger.warn(
+          `Refresh-token reuse detected for seller ${burned.sellerId} — revoked all sessions`,
+        );
+        throw new UnauthorizedAppException(
+          'Session security check failed. Please sign in again.',
+        );
+      }
       throw new UnauthorizedAppException('Invalid refresh token');
     }
     if (session.revokedAt) {
@@ -58,6 +81,26 @@ export class RefreshSellerSessionUseCase {
     }
     if (session.expiresAt.getTime() + REFRESH_EXPIRY_GRACE_MS < Date.now()) {
       throw new UnauthorizedAppException('Refresh token expired');
+    }
+
+    // Phase 21 (2026-05-20) — absolute lifetime cap. Even with
+    // continuous rotation, a session cannot live beyond
+    // createdAt + SESSION_ABSOLUTE_LIFETIME_DAYS. Past that we revoke
+    // the session and force a fresh login.
+    const absoluteLifetimeDays = Number(
+      this.envService.getString(
+        'SESSION_ABSOLUTE_LIFETIME_DAYS',
+        String(SESSION_ABSOLUTE_LIFETIME_DAYS_DEFAULT),
+      ),
+    );
+    const absoluteCutoffMs =
+      session.createdAt.getTime() +
+      absoluteLifetimeDays * 24 * 60 * 60 * 1000;
+    if (absoluteCutoffMs < Date.now()) {
+      await this.sellerRepo.revokeAllSessions(session.sellerId);
+      throw new UnauthorizedAppException(
+        'Session expired. Please sign in again.',
+      );
     }
 
     const seller = await this.sellerRepo.findById(session.sellerId);
@@ -71,6 +114,17 @@ export class RefreshSellerSessionUseCase {
       await this.sellerRepo.revokeAllSessions(session.sellerId);
       throw new ForbiddenAppException(
         'Account is not active. Please contact support.',
+      );
+    }
+    // Phase 21 (2026-05-20) — mirror the login isEmailVerified gate.
+    // If an admin or downstream process flipped the seller back to
+    // unverified mid-session, refresh must reject (and revoke every
+    // session) so the seller re-enters the verify flow.
+    if (!(seller as any).isEmailVerified) {
+      await this.sellerRepo.revokeAllSessions(session.sellerId);
+      throw new ForbiddenAppException(
+        'Your email is no longer verified. Please verify your email again to continue.',
+        'EMAIL_NOT_VERIFIED',
       );
     }
 
@@ -88,7 +142,7 @@ export class RefreshSellerSessionUseCase {
     );
 
     const accessTtlSeconds = Math.floor(
-      this.parseTimeToMs(this.envService.getString('JWT_ACCESS_TTL', '7d')) /
+      this.parseTimeToMs(this.envService.getString('JWT_ACCESS_TTL', '15m')) /
         1000,
     );
     // JWT_SELLER_SECRET — must match LoginSellerUseCase, otherwise the

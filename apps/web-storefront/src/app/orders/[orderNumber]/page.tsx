@@ -177,15 +177,32 @@ const fulfillmentColor = (status: string, paymentStatus?: string) => {
   }
 };
 
-// Maps timeline event kinds to a small icon glyph + accent colour.
+// Maps timeline event kinds to a small icon name + accent colour.
 // Kept inline so the entire vertical-bar timeline is self-contained.
-const TIMELINE_KIND_STYLE: Record<string, { icon: string; color: string }> = {
-  ORDER_PLACED: { icon: '✎', color: '#2563eb' },
-  ORDER_VERIFIED: { icon: '✓', color: '#0d9488' },
-  TRACKING_UPDATED: { icon: '↗', color: '#7c3aed' },
-  SHIPMENT_DELIVERED: { icon: '✓', color: '#16a34a' },
-  ORDER_CANCELLED: { icon: '✗', color: '#dc2626' },
+type TimelineIcon = 'pencil' | 'check' | 'arrow-up-right' | 'x' | 'dot';
+const TIMELINE_KIND_STYLE: Record<string, { icon: TimelineIcon; color: string }> = {
+  ORDER_PLACED: { icon: 'pencil', color: '#2563eb' },
+  ORDER_VERIFIED: { icon: 'check', color: '#0d9488' },
+  TRACKING_UPDATED: { icon: 'arrow-up-right', color: '#7c3aed' },
+  SHIPMENT_DELIVERED: { icon: 'check', color: '#16a34a' },
+  ORDER_CANCELLED: { icon: 'x', color: '#dc2626' },
 };
+
+function TimelineIconSvg({ name }: { name: TimelineIcon }) {
+  const p = {
+    width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none',
+    stroke: 'currentColor', strokeWidth: 2.5,
+    strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  };
+  switch (name) {
+    case 'pencil':         return (<svg {...p}><path d="m12 20 9-9-3-3-9 9-1 4z" /></svg>);
+    case 'check':          return (<svg {...p}><path d="m5 12 5 5 9-11" /></svg>);
+    case 'arrow-up-right': return (<svg {...p}><path d="M7 17 17 7M9 7h8v8" /></svg>);
+    case 'x':              return (<svg {...p}><path d="M18 6 6 18M6 6l12 12" /></svg>);
+    case 'dot':            return (<svg {...p}><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" /></svg>);
+  }
+}
 
 function OrderTimeline({ events }: { events: OrderTimelineEvent[] }) {
   if (!events || events.length === 0) return null;
@@ -200,7 +217,7 @@ function OrderTimeline({ events }: { events: OrderTimelineEvent[] }) {
   return (
     <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>
       {events.map((ev, idx) => {
-        const style = TIMELINE_KIND_STYLE[ev.kind] ?? { icon: '●', color: '#6b7280' };
+        const style = TIMELINE_KIND_STYLE[ev.kind] ?? { icon: 'dot' as TimelineIcon, color: '#6b7280' };
         const isLast = idx === events.length - 1;
         return (
           <li key={`${ev.kind}-${ev.at}-${ev.subOrderId ?? ''}`} style={{ position: 'relative', paddingLeft: 28, paddingBottom: isLast ? 0 : 18 }}>
@@ -228,14 +245,12 @@ function OrderTimeline({ events }: { events: OrderTimelineEvent[] }) {
                 borderRadius: '50%',
                 background: style.color,
                 color: '#fff',
-                fontSize: 11,
-                fontWeight: 700,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
             >
-              {style.icon}
+              <TimelineIconSvg name={style.icon} />
             </span>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{ev.label}</div>
             <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
@@ -696,15 +711,9 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
                   Fulfilled by SPORTSMART
                 </span>
-                {/* Delivery method indicator — clickable tracking link when iThink. */}
+                {/* Delivery method indicator. */}
                 {so.deliveryMethod && (
-                  <DeliveryMethodBadge
-                    method={so.deliveryMethod}
-                    awb={so.ithinkAwb}
-                    courier={so.ithinkLogistic}
-                    trackingUrl={so.ithinkTrackingUrl}
-                    asTrackingLink
-                  />
+                  <DeliveryMethodBadge method={so.deliveryMethod} />
                 )}
                 {so.acceptStatus === 'CANCELLED' && (
                   <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: '#dc262620', color: '#dc2626' }}>Cancelled</span>

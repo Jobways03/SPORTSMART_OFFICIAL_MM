@@ -44,14 +44,23 @@ export class VerifyResetOtpSellerUseCase {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
-    // Check max attempts
-    if (otpRecord.attempts >= otpRecord.maxAttempts) {
+    // Phase 26 (2026-05-20) — atomic CAS attempt increment. The
+    // sellerRepo.incrementOtpAttemptsCas method (added Phase 18)
+    // expresses the "still active AND below cap" predicate inside
+    // the UPDATE WHERE so two parallel verify requests cannot both
+    // pass the eligibility check. Pre-Phase-26 the seller path used
+    // read-then-increment which let an attacker race the rate limit
+    // for an extra guess; the customer path already used CAS.
+    const inc = await this.sellerRepo.incrementOtpAttemptsCas(
+      otpRecord.id,
+      otpRecord.maxAttempts,
+    );
+    if (!inc.ok) {
       await this.sellerRepo.expireOtp(otpRecord.id);
-      throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
+      throw new UnauthorizedAppException(
+        'Too many failed attempts. Please request a new OTP.',
+      );
     }
-
-    // Increment attempts
-    await this.sellerRepo.incrementOtpAttempts(otpRecord.id);
 
     // Compare OTP hash in constant time — see
     // identity/verify-reset-otp.use-case.ts for rationale.
@@ -61,7 +70,7 @@ export class VerifyResetOtpSellerUseCase {
     const isMatch =
       actual.length === expected.length && timingSafeEqual(actual, expected);
     if (!isMatch) {
-      const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
+      const remainingAttempts = otpRecord.maxAttempts - inc.attempts;
       if (remainingAttempts <= 0) {
         await this.sellerRepo.expireOtp(otpRecord.id);
         throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');

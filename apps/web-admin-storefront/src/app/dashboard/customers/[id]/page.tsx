@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
 
-/* ── Types ──────────────────────────────────────────────────── */
+// ── Types ─────────────────────────────────────────────────────────
 
 interface Address {
   id: string;
@@ -19,7 +19,6 @@ interface Address {
   country: string;
   isDefault: boolean;
 }
-
 interface Customer {
   id: string;
   firstName: string;
@@ -28,11 +27,9 @@ interface Customer {
   phone: string | null;
   status: string;
   emailVerified: boolean;
-  phoneVerified: boolean;
   createdAt: string;
   addresses: Address[];
 }
-
 interface OrderItem {
   id: string;
   productTitle: string;
@@ -42,7 +39,6 @@ interface OrderItem {
   quantity: number;
   totalPrice: number;
 }
-
 interface SubOrder {
   id: string;
   fulfillmentStatus: string;
@@ -50,7 +46,6 @@ interface SubOrder {
   items: OrderItem[];
   seller: { sellerShopName: string } | null;
 }
-
 interface Order {
   id: string;
   orderNumber: string;
@@ -61,13 +56,11 @@ interface Order {
   createdAt: string;
   subOrders: SubOrder[];
 }
-
 interface Stats {
   totalOrders: number;
   totalSpent: number;
   customerSinceDays: number;
 }
-
 interface CustomerDetailResponse {
   customer: Customer;
   stats: Stats;
@@ -77,7 +70,7 @@ interface CustomerDetailResponse {
 
 type PillTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
 
-/* ── Formatting ─────────────────────────────────────────────── */
+// ── Formatters ────────────────────────────────────────────────────
 
 const inr = (n: number) =>
   `₹${Number(n).toLocaleString('en-IN', {
@@ -99,7 +92,7 @@ const fmtTime = (d: string) =>
     hour12: true,
   });
 
-const fmtDateTime = (d: string) => `${fmtDate(d)} at ${fmtTime(d)}`;
+const fmtDateTime = (d: string) => `${fmtDate(d)} · ${fmtTime(d)}`;
 
 const pluralDays = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
 
@@ -120,52 +113,34 @@ function avatarColor(seed: string): { bg: string; fg: string } {
 
 function paymentPill(status: string): { label: string; tone: PillTone } {
   switch (status) {
-    case 'PAID':
-      return { label: 'Paid', tone: 'success' };
-    case 'PENDING':
-      return { label: 'Payment pending', tone: 'warning' };
-    case 'CANCELLED':
-      return { label: 'Cancelled', tone: 'danger' };
-    case 'REFUNDED':
-      return { label: 'Refunded', tone: 'info' };
-    default:
-      return { label: status.toLowerCase(), tone: 'neutral' };
+    case 'PAID':      return { label: 'Paid',             tone: 'success' };
+    case 'PENDING':   return { label: 'Payment pending',  tone: 'warning' };
+    case 'CANCELLED': return { label: 'Cancelled',        tone: 'danger' };
+    case 'REFUNDED':  return { label: 'Refunded',         tone: 'info' };
+    default:          return { label: status.toLowerCase(), tone: 'neutral' };
   }
 }
 
-function customerStatusPill(status: string): {
-  label: string;
-  tone: PillTone;
-} {
+function customerStatusPill(status: string): { label: string; tone: PillTone } {
   switch (status) {
-    case 'ACTIVE':
-      return { label: 'Active', tone: 'success' };
-    case 'SUSPENDED':
-      return { label: 'Suspended', tone: 'danger' };
-    case 'BANNED':
-      return { label: 'Banned', tone: 'danger' };
-    case 'INACTIVE':
-      return { label: 'Inactive', tone: 'neutral' };
-    default:
-      return { label: status.toLowerCase(), tone: 'neutral' };
+    case 'ACTIVE':    return { label: 'Active',    tone: 'success' };
+    case 'SUSPENDED': return { label: 'Suspended', tone: 'danger' };
+    case 'BANNED':    return { label: 'Banned',    tone: 'danger' };
+    case 'INACTIVE':  return { label: 'Inactive',  tone: 'neutral' };
+    default:          return { label: status.toLowerCase(), tone: 'neutral' };
   }
 }
 
-function fulfillmentPill(subOrders: SubOrder[]): {
-  label: string;
-  tone: PillTone;
-} {
-  const statuses = Array.from(
-    new Set(subOrders.map((s) => s.fulfillmentStatus)),
-  );
+function fulfillmentPill(subOrders: SubOrder[]): { label: string; tone: PillTone } {
+  const statuses = Array.from(new Set(subOrders.map((s) => s.fulfillmentStatus)));
   if (statuses.includes('DELIVERED')) return { label: 'Delivered', tone: 'success' };
   if (statuses.includes('FULFILLED')) return { label: 'Fulfilled', tone: 'info' };
-  if (statuses.includes('SHIPPED')) return { label: 'Shipped', tone: 'info' };
-  if (statuses.includes('PACKED')) return { label: 'Packed', tone: 'warning' };
+  if (statuses.includes('SHIPPED'))   return { label: 'Shipped',   tone: 'info' };
+  if (statuses.includes('PACKED'))    return { label: 'Packed',    tone: 'warning' };
   return { label: 'Unfulfilled', tone: 'warning' };
 }
 
-/* ── Page ───────────────────────────────────────────────────── */
+// ── Page ──────────────────────────────────────────────────────────
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -178,13 +153,11 @@ export default function CustomerDetailPage() {
       .then((res) => {
         if (res.data) setData(res.data);
       })
-      .catch(() => {})
+      .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
   }, [id]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const timelineGroups = useMemo(() => {
     if (!data) return [];
@@ -194,10 +167,9 @@ export default function CustomerDetailPage() {
     for (const o of data.orders) {
       events.push({
         when: new Date(o.createdAt),
-        text:
-          o.paymentStatus === 'CANCELLED'
-            ? `Order #${o.orderNumber} was cancelled.`
-            : `Placed order #${o.orderNumber} via Online Store.`,
+        text: o.paymentStatus === 'CANCELLED'
+          ? `Order #${o.orderNumber} was cancelled.`
+          : `Placed order #${o.orderNumber} via Online Store.`,
       });
     }
     events.push({
@@ -217,23 +189,8 @@ export default function CustomerDetailPage() {
     return groups;
   }, [data]);
 
-  if (loading) {
-    return <LoadingState />;
-  }
-
-  if (!data) {
-    return (
-      <div style={styles.notFound}>
-        <h3 style={styles.notFoundTitle}>Customer not found</h3>
-        <p style={styles.notFoundBody}>
-          This customer may have been removed or the link is invalid.
-        </p>
-        <Link href="/dashboard/customers" style={styles.notFoundLink}>
-          ← Back to Customers
-        </Link>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState />;
+  if (!data) return <NotFound />;
 
   const { customer, stats, lastOrder, orders } = data;
   const defaultAddr =
@@ -243,64 +200,73 @@ export default function CustomerDetailPage() {
   const color = avatarColor(`${customer.firstName}${customer.lastName}${customer.id}`);
 
   return (
-    <div style={styles.page}>
-      {/* ── Breadcrumb + identity ─────────────────────────── */}
-      <div style={styles.breadcrumb}>
-        <Link href="/dashboard/customers" style={styles.breadcrumbLink}>
-          Customers
+    <div style={{
+      padding: '24px 32px', maxWidth: 1280, margin: '0 auto', color: '#0F1115',
+    }}>
+      {/* ── Breadcrumb ──────────────────────────────────── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 12,
+      }}>
+        <Link href="/dashboard/customers" style={{
+          color: '#525A65', textDecoration: 'none', fontWeight: 500,
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+        }}>
+          <span aria-hidden>←</span> Customers
         </Link>
-        <span style={styles.breadcrumbSep} aria-hidden="true">
-          /
-        </span>
-        <span style={styles.breadcrumbCurrent}>{fullName}</span>
+        <span aria-hidden style={{ color: '#CBD5E1' }}>/</span>
+        <span style={{ color: '#0F1115', fontWeight: 500 }}>{fullName}</span>
       </div>
 
-      <header style={styles.identityRow}>
+      {/* ── Identity hero ───────────────────────────────── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20,
+      }}>
         <div
-          style={{ ...styles.identityAvatar, background: color.bg, color: color.fg }}
-          aria-hidden="true"
+          aria-hidden
+          style={{
+            width: 56, height: 56, borderRadius: '50%',
+            fontSize: 18, fontWeight: 700, letterSpacing: '0.02em',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            background: color.bg, color: color.fg,
+          }}
         >
           {initials(customer.firstName, customer.lastName)}
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={styles.identityTitleRow}>
-            <h1 style={styles.h1}>{fullName}</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <h1 style={{
+              margin: 0, fontSize: 24, fontWeight: 700,
+              letterSpacing: '-0.01em', color: '#0F1115',
+            }}>
+              {fullName}
+            </h1>
             <Pill label={statusChip.label} tone={statusChip.tone} />
           </div>
-          <div style={styles.identityMeta}>
-            <span style={styles.identityMetaItem} title={customer.email}>
-              {customer.email}
-            </span>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+            fontSize: 13, color: '#525A65', marginTop: 4,
+          }}>
+            <span title={customer.email}>{customer.email}</span>
             {customer.phone && (
               <>
-                <span style={styles.metaDot} aria-hidden="true">
-                  •
-                </span>
-                <span style={styles.identityMetaItem}>{customer.phone}</span>
+                <Dot />
+                <span>{customer.phone}</span>
               </>
             )}
-            <span style={styles.metaDot} aria-hidden="true">
-              •
-            </span>
-            <span style={styles.identityMetaItem}>
-              Joined {fmtDate(customer.createdAt)}
-            </span>
+            <Dot />
+            <span>Joined {fmtDate(customer.createdAt)}</span>
           </div>
         </div>
-      </header>
+      </div>
 
-      {/* ── Stats ───────────────────────────────────────────── */}
-      <div style={styles.statsRow}>
-        <StatCard
-          label="Amount spent"
-          value={inr(stats.totalSpent)}
-          emphasis
-        />
+      {/* ── KPI strip ───────────────────────────────────── */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 12, marginBottom: 24,
+      }}>
+        <StatCard label="Amount spent" value={inr(stats.totalSpent)} emphasis />
         <StatCard label="Orders" value={String(stats.totalOrders)} />
-        <StatCard
-          label="Customer since"
-          value={pluralDays(stats.customerSinceDays)}
-        />
+        <StatCard label="Customer since" value={pluralDays(stats.customerSinceDays)} />
         <StatCard
           label="Last order"
           value={lastOrder ? fmtDate(lastOrder.createdAt) : '—'}
@@ -308,37 +274,50 @@ export default function CustomerDetailPage() {
         />
       </div>
 
-      {/* ── Two-column content ──────────────────────────────── */}
-      <div style={styles.grid}>
-        {/* ── LEFT ── */}
-        <div style={styles.main}>
-          {lastOrder ? (
-            <Section title="Last order placed">
+      {/* ── Two-column body ─────────────────────────────── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) 320px',
+        gap: 20, alignItems: 'flex-start',
+      }}>
+        {/* LEFT */}
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Section title="Last order placed">
+            {lastOrder ? (
               <LastOrderCard order={lastOrder} />
-            </Section>
-          ) : (
-            <Section title="Last order placed">
-              <div style={styles.muted}>
-                This customer hasn't placed an order yet.
-              </div>
-            </Section>
-          )}
+            ) : (
+              <Muted>This customer hasn't placed an order yet.</Muted>
+            )}
+          </Section>
 
           <Section title="Timeline">
             {timelineGroups.length === 0 ? (
-              <div style={styles.muted}>No activity recorded.</div>
+              <Muted>No activity recorded.</Muted>
             ) : (
-              <div style={styles.timeline}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                 {timelineGroups.map((g) => (
-                  <div key={g.key} style={styles.timelineGroup}>
-                    <div style={styles.timelineDate}>{g.label}</div>
-                    <div style={styles.timelineRail}>
+                  <div key={g.key}>
+                    <div style={{
+                      fontSize: 11, fontWeight: 700, color: '#7A828F',
+                      textTransform: 'uppercase', letterSpacing: '0.06em',
+                      marginBottom: 10,
+                    }}>{g.label}</div>
+                    <div style={{ position: 'relative', paddingLeft: 20 }}>
                       {g.items.map((ev, i) => (
-                        <div key={i} style={styles.timelineItem}>
-                          <span style={styles.timelineDot} aria-hidden="true" />
-                          <div style={styles.timelineBody}>
-                            <div style={styles.timelineText}>{ev.text}</div>
-                            <div style={styles.timelineTime}>
+                        <div key={i} style={{ position: 'relative', paddingBottom: 12 }}>
+                          <span aria-hidden style={{
+                            position: 'absolute', left: -17, top: 6,
+                            width: 8, height: 8, borderRadius: '50%',
+                            background: '#0F1115', boxShadow: '0 0 0 3px #fff',
+                          }} />
+                          <div style={{
+                            position: 'relative', borderLeft: '2px solid #E5E7EB',
+                            marginLeft: -14, paddingLeft: 14, paddingBottom: 2,
+                          }}>
+                            <div style={{ fontSize: 13, color: '#0F1115', lineHeight: 1.5 }}>
+                              {ev.text}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#7A828F', marginTop: 2 }}>
                               {fmtTime(ev.when.toISOString())}
                             </div>
                           </div>
@@ -352,19 +331,17 @@ export default function CustomerDetailPage() {
           </Section>
         </div>
 
-        {/* ── RIGHT sidebar ── */}
-        <aside style={styles.sidebar}>
+        {/* RIGHT */}
+        <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <SectionCard title="Contact">
             <SideRow label="Email" value={customer.email} mono />
-            {customer.phone && (
-              <SideRow label="Phone" value={customer.phone} mono />
-            )}
+            {customer.phone && <SideRow label="Phone" value={customer.phone} mono />}
           </SectionCard>
 
-          {defaultAddr ? (
-            <SectionCard title="Default address">
-              <div style={styles.address}>
-                <div style={styles.addressName}>{defaultAddr.fullName}</div>
+          <SectionCard title="Default address">
+            {defaultAddr ? (
+              <div style={{ fontSize: 13, color: '#0F1115', lineHeight: 1.55 }}>
+                <div style={{ fontWeight: 600 }}>{defaultAddr.fullName}</div>
                 <div>{defaultAddr.addressLine1}</div>
                 {defaultAddr.addressLine2 && <div>{defaultAddr.addressLine2}</div>}
                 <div>
@@ -372,60 +349,61 @@ export default function CustomerDetailPage() {
                 </div>
                 <div>{defaultAddr.country}</div>
                 {defaultAddr.phone && (
-                  <div style={styles.addressPhone}>{defaultAddr.phone}</div>
+                  <div style={{ fontSize: 12, color: '#525A65', marginTop: 4 }}>
+                    {defaultAddr.phone}
+                  </div>
                 )}
               </div>
-            </SectionCard>
-          ) : (
-            <SectionCard title="Default address">
-              <div style={styles.muted}>No address on file.</div>
-            </SectionCard>
-          )}
+            ) : (
+              <Muted>No address on file.</Muted>
+            )}
+          </SectionCard>
 
           <SectionCard title="Verification">
-            <VerificationRow
-              label="Email"
-              verified={customer.emailVerified}
-            />
-            <VerificationRow
-              label="Phone"
-              verified={customer.phoneVerified}
-            />
+            <VerificationRow label="Email" verified={customer.emailVerified} />
           </SectionCard>
 
           <SectionCard title="Notes">
-            <div style={styles.notesEmpty}>
+            <div style={{ fontSize: 12, color: '#7A828F', lineHeight: 1.5 }}>
               Leave notes for this customer — visible to your team only.
             </div>
           </SectionCard>
 
           {orders.length > 0 && (
             <SectionCard title={`Order history (${orders.length})`}>
-              <div style={styles.orderList}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {(showAllOrders ? orders : orders.slice(0, 10)).map((o) => {
                   const pay = paymentPill(o.paymentStatus);
                   return (
                     <Link
                       key={o.id}
                       href={`/dashboard/orders/${o.id}`}
-                      style={styles.orderItem}
+                      style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+                        padding: '10px 0', borderBottom: '1px solid #F3F4F6',
+                        textDecoration: 'none', color: 'inherit',
+                      }}
                     >
-                      <div style={styles.orderLeft}>
-                        <div style={styles.orderNumber}>#{o.orderNumber}</div>
-                        <div style={styles.orderDate}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600, color: '#0F1115',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>
+                          #{o.orderNumber}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#7A828F', marginTop: 2 }}>
                           {fmtDate(o.createdAt)}
                         </div>
                       </div>
-                      <div style={styles.orderRight}>
-                        <div style={styles.orderAmount}>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600, color: '#0F1115',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}>
                           {inr(Number(o.totalAmount))}
                         </div>
                         <div style={{ marginTop: 3 }}>
-                          <Pill
-                            label={pay.label}
-                            tone={pay.tone}
-                            size="xs"
-                          />
+                          <Pill label={pay.label} tone={pay.tone} size="xs" />
                         </div>
                       </div>
                     </Link>
@@ -436,30 +414,18 @@ export default function CustomerDetailPage() {
                     type="button"
                     onClick={() => setShowAllOrders((v) => !v)}
                     aria-expanded={showAllOrders}
-                    style={styles.orderListToggle}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                      alignSelf: 'center', marginTop: 10,
+                      height: 30, padding: '0 14px',
+                      fontSize: 12, fontWeight: 600, color: '#525A65',
+                      background: 'transparent',
+                      border: '1px solid #E5E7EB', borderRadius: 9999,
+                      cursor: 'pointer', fontFamily: 'inherit',
+                    }}
                   >
-                    {showAllOrders
-                      ? 'Show less'
-                      : `Show ${orders.length - 10} more`}
-                    <svg
-                      viewBox="0 0 20 20"
-                      style={{
-                        ...styles.orderListToggleChevron,
-                        transform: showAllOrders
-                          ? 'rotate(180deg)'
-                          : 'rotate(0deg)',
-                      }}
-                      aria-hidden="true"
-                    >
-                      <path
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 8l5 5 5-5"
-                      />
-                    </svg>
+                    {showAllOrders ? 'Show less' : `Show ${orders.length - 10} more`}
+                    <ChevronDown rotated={showAllOrders} />
                   </button>
                 )}
               </div>
@@ -471,21 +437,24 @@ export default function CustomerDetailPage() {
   );
 }
 
-/* ── Sub-components ─────────────────────────────────────────── */
+// ── Sub-components ────────────────────────────────────────────────
 
 function Section({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+  title, action, children,
+}: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section style={styles.section}>
-      <div style={styles.sectionHead}>
-        <h2 style={styles.sectionTitle}>{title}</h2>
+    <section style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: 20,
+    }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: 14,
+      }}>
+        <h2 style={{
+          margin: 0, fontSize: 14, fontWeight: 700, color: '#0F1115',
+          textTransform: 'uppercase', letterSpacing: '0.06em',
+        }}>{title}</h2>
         {action}
       </div>
       {children}
@@ -493,106 +462,88 @@ function Section({
   );
 }
 
-function SectionCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div style={styles.sideCard}>
-      <h3 style={styles.sideCardTitle}>{title}</h3>
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14, padding: 16,
+    }}>
+      <h3 style={{
+        margin: '0 0 10px', fontSize: 12, fontWeight: 700, color: '#0F1115',
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>{title}</h3>
       {children}
     </div>
   );
 }
 
 function StatCard({
-  label,
-  value,
-  emphasis,
-  muted,
-}: {
-  label: string;
-  value: string;
-  emphasis?: boolean;
-  muted?: boolean;
-}) {
+  label, value, emphasis, muted,
+}: { label: string; value: string; emphasis?: boolean; muted?: boolean }) {
   return (
-    <div style={styles.statCard}>
-      <div style={styles.statLabel}>{label}</div>
-      <div
-        style={{
-          ...styles.statValue,
-          ...(emphasis ? styles.statValueEmphasis : {}),
-          ...(muted ? styles.statValueMuted : {}),
-        }}
-      >
-        {value}
-      </div>
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: '16px 18px', minWidth: 0,
+    }}>
+      <div style={{
+        fontSize: 11, fontWeight: 600, color: '#7A828F',
+        textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6,
+      }}>{label}</div>
+      <div style={{
+        fontSize: emphasis ? 24 : 22, fontWeight: 700,
+        color: muted ? '#7A828F' : '#0F1115',
+        letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{value}</div>
     </div>
   );
 }
 
 function Pill({
-  label,
-  tone,
-  size = 'sm',
-}: {
-  label: string;
-  tone: PillTone;
-  size?: 'xs' | 'sm';
-}) {
-  const toneStyles = pillTones[tone];
+  label, tone, size = 'sm',
+}: { label: string; tone: PillTone; size?: 'xs' | 'sm' }) {
+  const t = PILL_TONE[tone];
+  const xs = size === 'xs';
   return (
-    <span
-      style={{
-        ...styles.pill,
-        ...(size === 'xs' ? styles.pillXs : {}),
-        ...toneStyles.wrap,
-      }}
-    >
-      <span style={{ ...styles.pillDot, background: toneStyles.dot }} />
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      height: xs ? 20 : 22, padding: '0 10px', borderRadius: 9999,
+      fontSize: xs ? 11 : 11, fontWeight: 700,
+      textTransform: 'uppercase', letterSpacing: '0.05em',
+      background: t.chip, color: t.color, whiteSpace: 'nowrap',
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
       {label}
     </span>
   );
 }
 
-function SideRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function SideRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div style={styles.sideRow}>
-      <div style={styles.sideRowLabel}>{label}</div>
-      <div style={{ ...styles.sideRowValue, ...(mono ? styles.sideRowMono : {}) }}>
+    <div style={{ marginBottom: 10 }}>
+      <div style={{
+        fontSize: 11, fontWeight: 600, color: '#7A828F',
+        textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2,
+      }}>{label}</div>
+      <div style={{
+        fontSize: 13, color: '#0F1115', wordBreak: 'break-word',
+        fontFamily: mono ? 'ui-monospace, monospace' : 'inherit',
+      }}>
         {value}
       </div>
     </div>
   );
 }
 
-function VerificationRow({
-  label,
-  verified,
-}: {
-  label: string;
-  verified: boolean;
-}) {
+function VerificationRow({ label, verified }: { label: string; verified: boolean }) {
   return (
-    <div style={styles.verifyRow}>
-      <span style={styles.verifyLabel}>{label}</span>
-      {verified ? (
-        <Pill label="Verified" tone="success" size="xs" />
-      ) : (
-        <Pill label="Not verified" tone="neutral" size="xs" />
-      )}
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      padding: '6px 0', borderBottom: '1px solid #F3F4F6',
+    }}>
+      <span style={{ fontSize: 13, color: '#0F1115' }}>{label}</span>
+      {verified
+        ? <Pill label="Verified" tone="success" size="xs" />
+        : <Pill label="Not verified" tone="neutral" size="xs" />}
     </div>
   );
 }
@@ -602,59 +553,84 @@ function LastOrderCard({ order }: { order: Order }) {
   const ful = fulfillmentPill(order.subOrders);
   const items = order.subOrders.flatMap((s) => s.items);
   return (
-    <div style={styles.orderCard}>
-      <div style={styles.orderCardHead}>
-        <div style={styles.orderCardHeadLeft}>
-          <Link href={`/dashboard/orders/${order.id}`} style={styles.orderCardNumber}>
+    <div style={{
+      border: '1px solid #E5E7EB', borderRadius: 12, padding: 16,
+    }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        gap: 8, flexWrap: 'wrap', marginBottom: 4,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <Link href={`/dashboard/orders/${order.id}`} style={{
+            fontWeight: 700, fontSize: 14, color: '#0F1115',
+            textDecoration: 'none', fontVariantNumeric: 'tabular-nums',
+          }}>
             #{order.orderNumber}
           </Link>
           <Pill label={pay.label} tone={pay.tone} size="xs" />
           <Pill label={ful.label} tone={ful.tone} size="xs" />
         </div>
-        <div style={styles.orderCardTotal}>{inr(Number(order.totalAmount))}</div>
+        <div style={{
+          fontWeight: 700, fontSize: 16, color: '#0F1115',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          {inr(Number(order.totalAmount))}
+        </div>
       </div>
-      <div style={styles.orderCardMeta}>
+      <div style={{ fontSize: 12, color: '#7A828F', marginBottom: 12 }}>
         {fmtDateTime(order.createdAt)} · Online Store
       </div>
 
-      <div style={styles.orderItems}>
+      <div style={{ borderTop: '1px solid #F3F4F6' }}>
         {items.map((item) => (
-          <div key={item.id} style={styles.orderItemRow}>
-            <div style={styles.itemThumb}>
+          <div key={item.id} style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: '10px 0', borderBottom: '1px solid #F3F4F6',
+          }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 8,
+              background: '#FAFAFA', border: '1px solid #E5E7EB', overflow: 'hidden',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0, color: '#7A828F',
+            }}>
               {item.imageUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={item.imageUrl}
-                  alt=""
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
+                <img src={item.imageUrl} alt=""
+                     style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               ) : (
-                <svg viewBox="0 0 24 24" style={styles.itemThumbIcon} aria-hidden="true">
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3 7l2-3h14l2 3M3 7v12a1 1 0 001 1h16a1 1 0 001-1V7M3 7h18M8 11a4 4 0 008 0"
-                  />
-                </svg>
+                <BoxIcon />
               )}
             </div>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={styles.itemTitle}>{item.productTitle}</div>
+              <div style={{
+                fontSize: 13, fontWeight: 500, color: '#0F1115',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{item.productTitle}</div>
               {item.variantTitle && (
-                <div style={styles.itemVariant}>{item.variantTitle}</div>
+                <div style={{ fontSize: 11, color: '#7A828F', marginTop: 2 }}>{item.variantTitle}</div>
               )}
             </div>
-            <div style={styles.itemQty}>× {item.quantity}</div>
-            <div style={styles.itemPrice}>{inr(Number(item.totalPrice))}</div>
+            <div style={{
+              fontSize: 13, color: '#525A65',
+              fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+            }}>× {item.quantity}</div>
+            <div style={{
+              fontSize: 13, fontWeight: 600, color: '#0F1115',
+              fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+              minWidth: 72, textAlign: 'right',
+            }}>{inr(Number(item.totalPrice))}</div>
           </div>
         ))}
       </div>
 
-      <div style={styles.orderCardFoot}>
-        <Link href="/dashboard/orders" style={styles.ghostBtn}>
+      <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+        <Link href="/dashboard/orders" style={{
+          height: 32, padding: '0 14px',
+          display: 'inline-flex', alignItems: 'center',
+          fontSize: 12, fontWeight: 600, color: '#0F1115',
+          background: '#fff', border: '1px solid #D2D6DC', borderRadius: 9999,
+          textDecoration: 'none',
+        }}>
           View all orders
         </Link>
       </div>
@@ -662,597 +638,98 @@ function LastOrderCard({ order }: { order: Order }) {
   );
 }
 
+function Muted({ children }: { children: React.ReactNode }) {
+  return <div style={{ fontSize: 13, color: '#7A828F' }}>{children}</div>;
+}
+
+function Dot() {
+  return <span aria-hidden style={{ color: '#CBD5E1' }}>•</span>;
+}
+
 function LoadingState() {
   return (
-    <div style={styles.loading}>
-      <div style={styles.spinner} aria-hidden="true" />
-      <div style={styles.loadingText}>Loading customer…</div>
-      <style>{spinKeyframes}</style>
+    <div style={{
+      padding: '80px 32px', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', gap: 12,
+    }}>
+      <div style={{
+        width: 24, height: 24, border: '2px solid #E5E7EB', borderTopColor: '#0F1115',
+        borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+      }} />
+      <div style={{ fontSize: 13, color: '#525A65' }}>Loading customer…</div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
 
-/* ── Pill tones ─────────────────────────────────────────────── */
-
-const pillTones: Record<
-  PillTone,
-  { wrap: React.CSSProperties; dot: string }
-> = {
-  success: {
-    wrap: {
-      background: 'rgba(22, 163, 74, 0.08)',
-      color: '#15803d',
-      borderColor: 'rgba(22, 163, 74, 0.2)',
-    },
-    dot: '#16a34a',
-  },
-  warning: {
-    wrap: {
-      background: 'rgba(245, 158, 11, 0.1)',
-      color: '#b45309',
-      borderColor: 'rgba(245, 158, 11, 0.25)',
-    },
-    dot: '#f59e0b',
-  },
-  danger: {
-    wrap: {
-      background: 'rgba(220, 38, 38, 0.08)',
-      color: '#b91c1c',
-      borderColor: 'rgba(220, 38, 38, 0.2)',
-    },
-    dot: '#dc2626',
-  },
-  info: {
-    wrap: {
-      background: 'rgba(14, 116, 144, 0.08)',
-      color: '#0e7490',
-      borderColor: 'rgba(14, 116, 144, 0.2)',
-    },
-    dot: '#0891b2',
-  },
-  neutral: {
-    wrap: {
-      background: '#f1f5f9',
-      color: '#475569',
-      borderColor: '#e2e8f0',
-    },
-    dot: '#94a3b8',
-  },
-};
-
-/* ── Styles ─────────────────────────────────────────────────── */
-
-const spinKeyframes = `
-@keyframes customer-spin {
-  to { transform: rotate(360deg); }
+function NotFound() {
+  return (
+    <div style={{
+      maxWidth: 420, margin: '60px auto 0', textAlign: 'center',
+      padding: '40px 24px',
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+    }}>
+      <div style={{
+        width: 44, height: 44, borderRadius: 9999, background: '#F3F4F6',
+        margin: '0 auto 12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#7A828F',
+      }}>
+        <UserIcon size={20} />
+      </div>
+      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F1115' }}>
+        Customer not found
+      </h3>
+      <p style={{ margin: '6px 0 20px', fontSize: 13, color: '#525A65' }}>
+        This customer may have been removed or the link is invalid.
+      </p>
+      <Link href="/dashboard/customers" style={{
+        fontSize: 13, fontWeight: 600, color: '#0F1115',
+        textDecoration: 'none',
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '8px 14px', border: '1px solid #D2D6DC', borderRadius: 9999,
+      }}>
+        <span aria-hidden>←</span> Back to Customers
+      </Link>
+    </div>
+  );
 }
-`;
 
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    maxWidth: 1120,
-    margin: '0 auto',
-    color: '#0f172a',
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
-  },
+// ── Pill tones ────────────────────────────────────────────────────
 
-  /* Breadcrumb */
-  breadcrumb: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    fontSize: 13,
-    marginBottom: 12,
-  },
-  breadcrumbLink: {
-    color: '#64748b',
-    textDecoration: 'none',
-    fontWeight: 500,
-  },
-  breadcrumbSep: {
-    color: '#cbd5e1',
-  },
-  breadcrumbCurrent: {
-    color: '#0f172a',
-    fontWeight: 500,
-  },
-
-  /* Identity header */
-  identityRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 16,
-    marginBottom: 24,
-  },
-  identityAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: '50%',
-    fontSize: 18,
-    fontWeight: 700,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    letterSpacing: '0.02em',
-  },
-  identityTitleRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    flexWrap: 'wrap',
-  },
-  h1: {
-    margin: 0,
-    fontSize: 24,
-    fontWeight: 700,
-    letterSpacing: '-0.01em',
-    color: '#0f172a',
-  },
-  identityMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    fontSize: 13,
-    color: '#64748b',
-    marginTop: 4,
-    flexWrap: 'wrap',
-  },
-  identityMetaItem: {
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-  },
-  metaDot: {
-    color: '#cbd5e1',
-  },
-
-  /* Stats */
-  statsRow: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: 12,
-    marginBottom: 24,
-  },
-  statCard: {
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 10,
-    padding: '16px 18px',
-  },
-  statLabel: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    marginBottom: 6,
-  },
-  statValue: {
-    fontSize: 22,
-    fontWeight: 700,
-    color: '#0f172a',
-    letterSpacing: '-0.01em',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  statValueEmphasis: {
-    fontSize: 24,
-  },
-  statValueMuted: {
-    color: '#94a3b8',
-    fontWeight: 600,
-  },
-
-  /* Grid */
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 320px',
-    gap: 24,
-    alignItems: 'flex-start',
-  },
-  main: {
-    minWidth: 0,
-  },
-  sidebar: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-  },
-
-  /* Section */
-  section: {
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 10,
-    padding: 20,
-    marginBottom: 16,
-  },
-  sectionHead: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  sectionTitle: {
-    margin: 0,
-    fontSize: 14,
-    fontWeight: 600,
-    color: '#0f172a',
-    letterSpacing: '-0.01em',
-  },
-  muted: {
-    fontSize: 13,
-    color: '#94a3b8',
-  },
-
-  /* Last order card */
-  orderCard: {
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
-    padding: 16,
-  },
-  orderCardHead: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-    marginBottom: 4,
-  },
-  orderCardHeadLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  orderCardNumber: {
-    fontWeight: 600,
-    fontSize: 14,
-    color: '#0f172a',
-    textDecoration: 'none',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  orderCardTotal: {
-    fontWeight: 700,
-    fontSize: 16,
-    color: '#0f172a',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  orderCardMeta: {
-    fontSize: 12,
-    color: '#64748b',
-    marginBottom: 12,
-  },
-  orderItems: {
-    borderTop: '1px solid #f1f5f9',
-  },
-  orderItemRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    padding: '10px 0',
-    borderBottom: '1px solid #f1f5f9',
-  },
-  itemThumb: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
-    background: '#f8fafc',
-    border: '1px solid #e2e8f0',
-    overflow: 'hidden',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    color: '#94a3b8',
-  },
-  itemThumbIcon: {
-    width: 18,
-    height: 18,
-  },
-  itemTitle: {
-    fontSize: 13,
-    fontWeight: 500,
-    color: '#0f172a',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  itemVariant: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  itemQty: {
-    fontSize: 13,
-    color: '#64748b',
-    fontVariantNumeric: 'tabular-nums',
-    whiteSpace: 'nowrap',
-  },
-  itemPrice: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#0f172a',
-    fontVariantNumeric: 'tabular-nums',
-    whiteSpace: 'nowrap',
-    minWidth: 72,
-    textAlign: 'right',
-  },
-  orderCardFoot: {
-    marginTop: 12,
-    display: 'flex',
-    justifyContent: 'flex-end',
-  },
-  ghostBtn: {
-    padding: '6px 12px',
-    fontSize: 13,
-    fontWeight: 500,
-    color: '#334155',
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 6,
-    textDecoration: 'none',
-    transition: 'background-color 0.12s, border-color 0.12s',
-  },
-
-  /* Timeline */
-  timeline: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 18,
-  },
-  timelineGroup: {},
-  timelineDate: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    marginBottom: 10,
-  },
-  timelineRail: {
-    position: 'relative',
-    paddingLeft: 20,
-  },
-  timelineItem: {
-    position: 'relative',
-    paddingBottom: 12,
-    paddingLeft: 0,
-  },
-  timelineDot: {
-    position: 'absolute',
-    left: -17,
-    top: 6,
-    width: 7,
-    height: 7,
-    borderRadius: '50%',
-    background: '#cbd5e1',
-    boxShadow: '0 0 0 3px #ffffff',
-  },
-  timelineBody: {
-    position: 'relative',
-    borderLeft: '2px solid #e2e8f0',
-    marginLeft: -14,
-    paddingLeft: 14,
-    paddingBottom: 2,
-  },
-  timelineText: {
-    fontSize: 13,
-    color: '#0f172a',
-    lineHeight: 1.5,
-  },
-  timelineTime: {
-    fontSize: 12,
-    color: '#94a3b8',
-    marginTop: 2,
-  },
-
-  /* Sidebar cards */
-  sideCard: {
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 10,
-    padding: 16,
-  },
-  sideCardTitle: {
-    margin: '0 0 10px',
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#0f172a',
-    letterSpacing: '-0.005em',
-  },
-  sideRow: {
-    marginBottom: 10,
-  },
-  sideRowLabel: {
-    fontSize: 11,
-    fontWeight: 500,
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    marginBottom: 2,
-  },
-  sideRowValue: {
-    fontSize: 13,
-    color: '#0f172a',
-    wordBreak: 'break-word',
-  },
-  sideRowMono: {
-    fontFamily: '"SF Mono", Menlo, Consolas, monospace',
-    fontSize: 12,
-  },
-
-  address: {
-    fontSize: 13,
-    color: '#0f172a',
-    lineHeight: 1.55,
-  },
-  addressName: {
-    fontWeight: 600,
-    marginBottom: 2,
-  },
-  addressPhone: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 4,
-  },
-
-  verifyRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '6px 0',
-    borderBottom: '1px solid #f1f5f9',
-  },
-  verifyLabel: {
-    fontSize: 13,
-    color: '#0f172a',
-  },
-
-  notesEmpty: {
-    fontSize: 12,
-    color: '#94a3b8',
-    lineHeight: 1.5,
-  },
-
-  orderList: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  orderItem: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    padding: '10px 0',
-    borderBottom: '1px solid #f1f5f9',
-    textDecoration: 'none',
-    color: 'inherit',
-  },
-  orderLeft: {
-    minWidth: 0,
-  },
-  orderNumber: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#0f172a',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  orderDate: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  orderRight: {
-    textAlign: 'right',
-    flexShrink: 0,
-  },
-  orderAmount: {
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#0f172a',
-    fontVariantNumeric: 'tabular-nums',
-  },
-  orderListMore: {
-    fontSize: 12,
-    color: '#64748b',
-    padding: '10px 0 2px',
-    textAlign: 'center',
-  },
-  orderListToggle: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    alignSelf: 'center',
-    marginTop: 10,
-    padding: '7px 12px',
-    fontSize: 12,
-    fontWeight: 500,
-    color: '#334155',
-    background: 'transparent',
-    border: '1px solid #e2e8f0',
-    borderRadius: 999,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
-  },
-  orderListToggleChevron: {
-    width: 14,
-    height: 14,
-    transition: 'transform 0.18s ease',
-  },
-
-  /* Pills */
-  pill: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '3px 10px 3px 8px',
-    fontSize: 12,
-    fontWeight: 500,
-    borderRadius: 999,
-    border: '1px solid',
-    lineHeight: 1.4,
-    whiteSpace: 'nowrap',
-  },
-  pillXs: {
-    fontSize: 11,
-    padding: '2px 8px 2px 6px',
-  },
-  pillDot: {
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
-
-  /* Loading */
-  loading: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 12,
-    padding: '80px 20px',
-  },
-  spinner: {
-    width: 24,
-    height: 24,
-    border: '2px solid #e2e8f0',
-    borderTopColor: '#0f172a',
-    borderRadius: '50%',
-    animation: 'customer-spin 0.8s linear infinite',
-  },
-  loadingText: {
-    fontSize: 13,
-    color: '#64748b',
-  },
-
-  /* Not found */
-  notFound: {
-    maxWidth: 420,
-    margin: '60px auto 0',
-    textAlign: 'center',
-    padding: '40px 24px',
-    background: '#ffffff',
-    border: '1px solid #e2e8f0',
-    borderRadius: 12,
-  },
-  notFoundTitle: {
-    margin: 0,
-    fontSize: 18,
-    fontWeight: 600,
-    color: '#0f172a',
-  },
-  notFoundBody: {
-    margin: '6px 0 20px',
-    fontSize: 13,
-    color: '#64748b',
-  },
-  notFoundLink: {
-    fontSize: 13,
-    fontWeight: 500,
-    color: '#00805f',
-    textDecoration: 'none',
-  },
+const PILL_TONE: Record<PillTone, { color: string; chip: string }> = {
+  success: { color: '#15803d', chip: '#dcfce7' },
+  warning: { color: '#b45309', chip: '#fef3c7' },
+  danger:  { color: '#b91c1c', chip: '#fee2e2' },
+  info:    { color: '#1d4ed8', chip: '#dbeafe' },
+  neutral: { color: '#525A65', chip: '#F3F4F6' },
 };
+
+// ── Icons ─────────────────────────────────────────────────────────
+
+function ChevronDown({ rotated }: { rotated: boolean }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+         style={{ transition: 'transform 0.18s', transform: rotated ? 'rotate(180deg)' : 'rotate(0deg)' }}
+         aria-hidden>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+function BoxIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m21 8-9-5-9 5v8l9 5 9-5z" /><path d="M3 8l9 5 9-5M12 13v10" />
+    </svg>
+  );
+}
+function UserIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="9" r="4" />
+      <path d="M5 21c1.4-4.5 4-6.5 7-6.5s5.6 2 7 6.5" />
+    </svg>
+  );
+}

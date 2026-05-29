@@ -39,6 +39,27 @@ export class PrismaAdminRepository implements AdminRepository {
     await this.prisma.admin.update({ where: { id: adminId }, data });
   }
 
+  async advanceMfaLastUsedStepCas(
+    adminId: string,
+    step: number,
+  ): Promise<boolean> {
+    // updateMany with the CAS predicate in the WHERE clause: the row
+    // only matches when the column is still ahead of or equal to the
+    // previous step. Prisma returns `count` so the caller can detect
+    // a lost race.
+    const res = await this.prisma.admin.updateMany({
+      where: {
+        id: adminId,
+        OR: [
+          { mfaLastUsedStep: null },
+          { mfaLastUsedStep: { lt: step } },
+        ],
+      },
+      data: { mfaLastUsedStep: step },
+    });
+    return res.count === 1;
+  }
+
   async createAdminSession(data: {
     adminId: string;
     refreshToken: string;
@@ -55,9 +76,17 @@ export class PrismaAdminRepository implements AdminRepository {
   }
 
   async revokeAdminSessions(adminId: string): Promise<void> {
+    // Phase 26 (2026-05-20) — also null stepUpVerifiedAt. The schema
+    // comment on AdminSession.stepUpVerifiedAt promises the column is
+    // "Reset to null on revoke / logout"; pre-Phase-26 the code only
+    // wrote revokedAt and relied on the StepUpGuard rejecting revoked
+    // sessions to make the stale stamp moot. That was correct
+    // operationally but a future refactor that reads stepUpVerifiedAt
+    // without checking revokedAt would silently extend a revoked
+    // session's elevation. Cheap to make the docstring honest.
     await this.prisma.adminSession.updateMany({
       where: { adminId, revokedAt: null },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: new Date(), stepUpVerifiedAt: null } as any,
     });
   }
 
@@ -66,10 +95,34 @@ export class PrismaAdminRepository implements AdminRepository {
     adminId: string;
     expiresAt: Date;
     revokedAt: Date | null;
+    createdAt: Date;
   } | null> {
     return this.prisma.adminSession.findFirst({
       where: { refreshToken: hashRefreshToken(rawToken) },
-      select: { id: true, adminId: true, expiresAt: true, revokedAt: true },
+      select: {
+        id: true,
+        adminId: true,
+        expiresAt: true,
+        revokedAt: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot. Hit on
+   * this path means the caller presented a refresh token that was
+   * already rotated out — i.e. the token was stolen at some point
+   * and the attacker is now trying to use it. Returns the adminId
+   * so the use-case can revoke every session for them.
+   */
+  async findAdminSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    adminId: string;
+  } | null> {
+    return this.prisma.adminSession.findFirst({
+      where: { previousRefreshTokenHash: hashRefreshToken(rawToken) } as any,
+      select: { id: true, adminId: true },
     });
   }
 
@@ -78,12 +131,21 @@ export class PrismaAdminRepository implements AdminRepository {
     newRawRefreshToken: string,
     newExpiresAt: Date,
   ): Promise<void> {
+    // Phase 1 / C6 — capture the burned hash into
+    // `previousRefreshTokenHash` so a future refresh request
+    // presenting the old (now rotated) token can be detected as
+    // theft via findAdminSessionByPreviousRefreshToken.
+    const current = await this.prisma.adminSession.findUnique({
+      where: { id: sessionId },
+      select: { refreshToken: true },
+    });
     await this.prisma.adminSession.update({
       where: { id: sessionId },
       data: {
+        previousRefreshTokenHash: current?.refreshToken ?? null,
         refreshToken: hashRefreshToken(newRawRefreshToken),
         expiresAt: newExpiresAt,
-      },
+      } as any,
     });
   }
 
@@ -98,6 +160,32 @@ export class PrismaAdminRepository implements AdminRepository {
       where: { id: sessionId },
       data: { stepUpVerifiedAt: new Date() } as any,
     });
+  }
+
+  // Phase 25 (2026-05-20) — race-safe MFA enrolment commit. The
+  // updateMany pattern fails atomically against the optimistic-
+  // concurrency predicate `mfaEnabledAt: null`: only the first of
+  // two parallel completes sees count === 1. The other receives
+  // count === 0 and the service surfaces a 409. The pending-secret
+  // column is also nulled here so a partial-write failure mode
+  // cannot leave the admin enrolled with a still-pending secret.
+  async commitMfaEnrollmentAtomic(args: {
+    adminId: string;
+    pendingCiphertext: string;
+    enabledAt: Date;
+    lastUsedStep: number;
+  }): Promise<boolean> {
+    const res = await this.prisma.admin.updateMany({
+      where: { id: args.adminId, mfaEnabledAt: null },
+      data: {
+        mfaSecretCiphertext: args.pendingCiphertext,
+        mfaPendingSecretCiphertext: null,
+        mfaPendingExpiresAt: null,
+        mfaEnabledAt: args.enabledAt,
+        mfaLastUsedStep: args.lastUsedStep,
+      } as any,
+    });
+    return res.count === 1;
   }
 
   // ── Seller management ──────────────────────────────────────
@@ -197,14 +285,72 @@ export class PrismaAdminRepository implements AdminRepository {
 
   // ── Impersonation log ──────────────────────────────────────
 
+  // Phase 28 (2026-05-21) — multi-actor + JTI tracking shape.
   async createImpersonationLog(data: {
     adminId: string;
-    sellerId: string;
+    targetActorType: 'SELLER' | 'FRANCHISE';
+    targetActorId: string;
     tokenId: string;
+    tokenJti: string;
+    reason?: string | null;
     ipAddress: string | null;
     userAgent: string | null;
   }): Promise<{ id: string }> {
-    return this.prisma.adminImpersonationLog.create({ data });
+    return this.prisma.adminImpersonationLog.create({
+      data: {
+        adminId: data.adminId,
+        targetActorType: data.targetActorType,
+        targetActorId: data.targetActorId,
+        // Preserve sellerId mirror for back-compat with old readers
+        // when the target is a seller. Franchise rows leave it null.
+        sellerId:
+          data.targetActorType === 'SELLER' ? data.targetActorId : null,
+        tokenId: data.tokenId,
+        tokenJti: data.tokenJti,
+        reason: data.reason ?? null,
+        ipAddress: data.ipAddress,
+        userAgent: data.userAgent,
+      } as any,
+    });
+  }
+
+  async findImpersonationLogByJti(tokenJti: string): Promise<{
+    id: string;
+    adminId: string;
+    targetActorType: 'SELLER' | 'FRANCHISE';
+    targetActorId: string;
+    endedAt: Date | null;
+    revokedAt: Date | null;
+  } | null> {
+    const row = await (this.prisma.adminImpersonationLog.findUnique as any)({
+      where: { tokenJti },
+      select: {
+        id: true,
+        adminId: true,
+        targetActorType: true,
+        targetActorId: true,
+        endedAt: true,
+        revokedAt: true,
+      },
+    });
+    return row ?? null;
+  }
+
+  async endImpersonationLog(args: {
+    id: string;
+    endedAt: Date;
+    revokedAt?: Date | null;
+    revokedReason?: string | null;
+  }): Promise<void> {
+    await this.prisma.adminImpersonationLog.update({
+      where: { id: args.id },
+      data: {
+        endedAt: args.endedAt,
+        revokedAt: args.revokedAt ?? null,
+        revokedReason: args.revokedReason ?? null,
+        isActive: false,
+      } as any,
+    });
   }
 
   // ── Seller messages ────────────────────────────────────────
@@ -306,7 +452,6 @@ export class PrismaAdminRepository implements AdminRepository {
         phone: true,
         status: true,
         emailVerified: true,
-        phoneVerified: true,
         createdAt: true,
         addresses: {
           orderBy: { isDefault: 'desc' as const },
@@ -394,6 +539,48 @@ export class PrismaAdminRepository implements AdminRepository {
       where: { id: otpId },
       data: { attempts: { increment: 1 } },
     });
+  }
+
+  /**
+   * Phase 26 (2026-05-20) — count of admin OTPs created since a given
+   * timestamp. Powers the per-admin hourly resend cap. Mirror of
+   * countOtpsSince in seller / franchise repos.
+   */
+  async countAdminOtpsSince(adminId: string, since: Date): Promise<number> {
+    return this.prisma.adminPasswordResetOtp.count({
+      where: { adminId, createdAt: { gte: since } },
+    });
+  }
+
+  /**
+   * Phase 26 (2026-05-20) — atomic CAS attempt increment for admin
+   * reset OTPs. Mirrors PrismaUserRepository / PrismaSellerRepository /
+   * PrismaFranchiseRepository. The WHERE clause expresses "still
+   * active AND below cap" inside the same UPDATE statement so two
+   * parallel verify requests cannot both pass the eligibility check.
+   * Returns the post-increment attempts count or {ok: false} when
+   * the row was ineligible (cap reached, expired, or already used).
+   */
+  async incrementAdminOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }> {
+    const res = await this.prisma.adminPasswordResetOtp.updateMany({
+      where: {
+        id: otpId,
+        attempts: { lt: maxAttempts },
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (res.count !== 1) return { ok: false };
+    const after = await this.prisma.adminPasswordResetOtp.findUnique({
+      where: { id: otpId },
+      select: { attempts: true },
+    });
+    return { ok: true, attempts: after?.attempts ?? 0 };
   }
 
   async expireAdminOtp(otpId: string): Promise<void> {

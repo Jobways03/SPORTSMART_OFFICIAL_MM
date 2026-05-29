@@ -26,12 +26,64 @@ import type { SignOptions, VerifyOptions } from 'jsonwebtoken';
 export const JWT_ALGORITHM = 'HS256' as const;
 
 /**
+ * Phase 17 (2026-05-20) — per-actor JWT audience claims.
+ *
+ * Each persona's access token carries `aud: <persona-audience>`
+ * so a token forged with the wrong actor secret (or a future
+ * shape-confusion mistake) cannot pass through the wrong guard.
+ * The guard for each persona pins `audience` in JWT_VERIFY_OPTIONS,
+ * and jsonwebtoken rejects with `JsonWebTokenError: jwt audience
+ * invalid` when the claim mismatches.
+ *
+ * Keep the strings in lock-step with the constants the guards
+ * import — a meta-test verifies guard verify-options use these.
+ */
+export const JWT_AUDIENCE_CUSTOMER = 'sportsmart-customer';
+export const JWT_AUDIENCE_SELLER = 'sportsmart-seller';
+export const JWT_AUDIENCE_FRANCHISE = 'sportsmart-franchise';
+export const JWT_AUDIENCE_ADMIN = 'sportsmart-admin';
+export const JWT_AUDIENCE_AFFILIATE = 'sportsmart-affiliate';
+
+/**
  * Pass as the third argument to `jwt.verify(token, secret, ...)`.
  * Mandatory for every verify in this codebase — the meta-test in
  * `test/unit/jwt-algorithm-pinning.spec.ts` enforces this.
  */
 export const JWT_VERIFY_OPTIONS: VerifyOptions = {
   algorithms: [JWT_ALGORITHM],
+};
+
+/**
+ * Customer-specific verify options. Pins both the algorithm AND the
+ * audience claim so a seller/admin/franchise/affiliate token cannot
+ * be replayed against the customer guard even if the JWT secrets
+ * collide (the pairwise-uniqueness env check already prevents that,
+ * but defence in depth).
+ */
+export const JWT_VERIFY_OPTIONS_CUSTOMER: VerifyOptions = {
+  algorithms: [JWT_ALGORITHM],
+  audience: JWT_AUDIENCE_CUSTOMER,
+};
+
+/**
+ * Phase 26 (2026-05-20) — Admin session-token verify options.
+ *
+ * Pre-Phase-26 the admin guard used JWT_VERIFY_OPTIONS (algorithm pin
+ * only), so a challenge token with `aud: 'admin-mfa-challenge'` would
+ * pass the verify step and was only rejected later because it lacked
+ * the `role` / `sessionId` claims. Defense-by-missing-claim is fragile:
+ * a future refactor that adds optional claims to challenge tokens
+ * would silently re-open the bypass.
+ *
+ * Now the guard pins `audience: JWT_AUDIENCE_ADMIN`. Challenge tokens
+ * carry `aud: ADMIN_MFA_CHALLENGE_AUD` and fail jwt.verify with
+ * `JsonWebTokenError: jwt audience invalid`. Session access tokens
+ * are minted with `audience: JWT_AUDIENCE_ADMIN` at the three sign
+ * sites (login non-MFA, mfa-verify, refresh).
+ */
+export const JWT_VERIFY_OPTIONS_ADMIN: VerifyOptions = {
+  algorithms: [JWT_ALGORITHM],
+  audience: JWT_AUDIENCE_ADMIN,
 };
 
 /**

@@ -22,7 +22,6 @@ import { join } from 'path';
 
 const INSTRUMENTED_CRONS = [
   // Phase 5 (PR 5.1) — leader-elected pollers built in Phase 1.
-  'src/modules/shipping/infrastructure/crons/ithink-tracking-poller.cron.ts',
   'src/modules/franchise/application/services/franchise-reservation-cleanup.service.ts',
   'src/modules/payments-saga/application/jobs/stuck-saga-sweep.cron.ts',
   // Phase 5 (PR 5.2) — high-value housekeeping + correctness crons.

@@ -230,14 +230,14 @@ model Discount {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  products             DiscountProduct[]
-  collections          DiscountCollection[]
-  codes                DiscountCode[]
-  redemptions          DiscountRedemption[]
-  orderDiscounts       OrderDiscount[]
-  orderItemDiscounts   OrderItemDiscount[]
+  products               DiscountProduct[]
+  collections            DiscountCollection[]
+  codes                  DiscountCode[]
+  redemptions            DiscountRedemption[]
+  orderDiscounts         OrderDiscount[]
+  orderItemDiscounts     OrderItemDiscount[]
   liabilityLedgerEntries DiscountLiabilityLedger[]
-  eligibilityRules     DiscountEligibilityRule[]
+  eligibilityRules       DiscountEligibilityRule[]
 
   @@index([code])
   @@index([status])
@@ -283,21 +283,21 @@ model DiscountCollection {
 // codes (influencer, win-back, post-purchase, bulk) via this table.
 // ============================================
 model DiscountCode {
-  id                    String             @id @default(uuid())
-  discountId            String             @map("discount_id")
-  code                  String             @unique
-  status                DiscountCodeStatus @default(ACTIVE)
-  maxUses               Int?               @map("max_uses")
-  usedCount             Int                @default(0) @map("used_count")
+  id                  String             @id @default(uuid())
+  discountId          String             @map("discount_id")
+  code                String             @unique
+  status              DiscountCodeStatus @default(ACTIVE)
+  maxUses             Int?               @map("max_uses")
+  usedCount           Int                @default(0) @map("used_count")
   // Per-customer assignment (one-time / personalized codes). NULL =
   // shareable code anyone can redeem.
-  assignedCustomerId    String?            @map("assigned_customer_id")
+  assignedCustomerId  String?            @map("assigned_customer_id")
   // Affiliate-issued codes can be tied to the originating affiliate
   // for attribution + commission. NULL for non-affiliate codes.
-  assignedAffiliateId   String?            @map("assigned_affiliate_id")
-  expiresAt             DateTime?          @map("expires_at")
-  createdAt             DateTime           @default(now()) @map("created_at")
-  updatedAt             DateTime           @updatedAt @map("updated_at")
+  assignedAffiliateId String?            @map("assigned_affiliate_id")
+  expiresAt           DateTime?          @map("expires_at")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
 
   discount    Discount             @relation(fields: [discountId], references: [id], onDelete: Cascade)
   redemptions DiscountRedemption[]
@@ -343,9 +343,9 @@ model DiscountRedemption {
   // Discount FK uses RESTRICT — historical redemption rows must
   // survive admin deletion of the parent Discount (security patch
   // 20260508130000).
-  discount     Discount      @relation(fields: [discountId], references: [id], onDelete: Restrict)
+  discount      Discount      @relation(fields: [discountId], references: [id], onDelete: Restrict)
   discountCode_ DiscountCode? @relation(fields: [discountCodeId], references: [id], onDelete: SetNull)
-  masterOrder  MasterOrder?  @relation(fields: [masterOrderId], references: [id], onDelete: SetNull)
+  masterOrder   MasterOrder?  @relation(fields: [masterOrderId], references: [id], onDelete: SetNull)
 
   // Idempotency-keyed dedup so the same checkout request doesn't
   // create two RESERVED rows. Combined with the partial unique
@@ -438,27 +438,27 @@ model OrderItemDiscount {
 // returns / cancellations).
 // ============================================
 model DiscountLiabilityLedger {
-  id              String                  @id @default(uuid())
-  masterOrderId   String                  @map("master_order_id")
-  subOrderId      String?                 @map("sub_order_id")
-  orderItemId     String?                 @map("order_item_id")
-  sellerId        String?                 @map("seller_id")
-  discountId      String                  @map("discount_id")
-  discountCodeId  String?                 @map("discount_code_id")
-  discountCode    String?                 @map("discount_code")
-  fundingType     DiscountFundingType     @map("funding_type")
-  liabilityParty  DiscountLiabilityParty  @map("liability_party")
-  amountInPaise   BigInt                  @default(0) @map("amount_in_paise")
-  status          DiscountLiabilityStatus @default(PENDING)
-  reason          String?
+  id             String                  @id @default(uuid())
+  masterOrderId  String                  @map("master_order_id")
+  subOrderId     String?                 @map("sub_order_id")
+  orderItemId    String?                 @map("order_item_id")
+  sellerId       String?                 @map("seller_id")
+  discountId     String                  @map("discount_id")
+  discountCodeId String?                 @map("discount_code_id")
+  discountCode   String?                 @map("discount_code")
+  fundingType    DiscountFundingType     @map("funding_type")
+  liabilityParty DiscountLiabilityParty  @map("liability_party")
+  amountInPaise  BigInt                  @default(0) @map("amount_in_paise")
+  status         DiscountLiabilityStatus @default(PENDING)
+  reason         String?
   // Idempotency dedup so a retried order-creation transaction
   // doesn't double-write the same ledger row (security patch
   // 20260508130000). Caller generates the key per (order × discount
   // × party). Partial unique index enforces dedup; null keys allowed
   // for legacy/imported rows.
-  idempotencyKey  String?                 @map("idempotency_key")
-  createdAt       DateTime                @default(now()) @map("created_at")
-  updatedAt       DateTime                @updatedAt @map("updated_at")
+  idempotencyKey String?                 @map("idempotency_key")
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
 
   masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
   discount    Discount    @relation(fields: [discountId], references: [id])
@@ -536,17 +536,24 @@ model DiscountEligibilityRule {
 }
 
 model CouponAttempt {
-  id             String              @id @default(uuid())
-  customerId     String?             @map("customer_id")
-  ipAddress      String?             @map("ip_address")
-  deviceId       String?             @map("device_id")
-  codeAttempted  String              @map("code_attempted")
-  result         CouponAttemptResult
-  reason         String?
-  createdAt      DateTime            @default(now()) @map("created_at")
+  id            String              @id @default(uuid())
+  customerId    String?             @map("customer_id")
+  // Phase 62 (2026-05-22) — `ipAddress` is now write-skipped in
+  // favour of the salted SHA-256 digest in `ipHash` (audit Gap
+  // #21). The column is kept for backward compatibility with
+  // pre-Phase-62 rows; the cleanup cron is responsible for
+  // nullifying them as it sweeps.
+  ipAddress     String?             @map("ip_address")
+  ipHash        String?             @map("ip_hash")
+  deviceId      String?             @map("device_id")
+  codeAttempted String              @map("code_attempted")
+  result        CouponAttemptResult
+  reason        String?
+  createdAt     DateTime            @default(now()) @map("created_at")
 
   @@index([customerId, createdAt])
   @@index([ipAddress, createdAt])
+  @@index([ipHash, createdAt])
   @@index([result, createdAt])
   @@index([codeAttempted])
   @@map("coupon_attempts")

@@ -10,42 +10,24 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { DisputeKind, DisputeStatus } from '@prisma/client';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
+import { requirePermissionOrSoak } from '../../../../core/authorization/require-permission';
 import { DisputeService } from '../../application/services/dispute.service';
-
-interface ReplyDto {
-  body: string;
-  isInternalNote?: boolean;
-}
-
-interface AssignDto {
-  adminId: string | null;
-}
-
-interface DecideDto {
-  outcome: 'RESOLVED_BUYER' | 'RESOLVED_SELLER' | 'RESOLVED_SPLIT';
-  rationale: string;
-  /** Required when customerRemedy is FULL_REFUND / PARTIAL_REFUND / GOODWILL_CREDIT (in paise). */
-  amountInPaise?: number;
-  /** Phase 12 — see DecisionArgs in DisputeService for the matrix. */
-  liabilityParty: 'SELLER' | 'LOGISTICS' | 'PLATFORM' | 'CUSTOMER' | 'NONE';
-  customerRemedy:
-    | 'FULL_REFUND'
-    | 'PARTIAL_REFUND'
-    | 'NO_REFUND'
-    | 'GOODWILL_CREDIT';
-  logistics?: {
-    courierName?: string;
-    awbNumber?: string;
-    evidenceFileId?: string;
-    notes?: string;
-  };
-}
+import {
+  AdminReplyMessageDto,
+  AssignDisputeDto,
+  AttachDisputeContextDto,
+  DecideDisputeDto,
+  SetDisputeStatusDto,
+  SetSeverityDto,
+} from '../dtos/admin-dispute.dtos';
 
 @ApiTags('Disputes — Admin')
 @Controller('admin/disputes')
@@ -54,6 +36,7 @@ export class AdminDisputesController {
   constructor(
     private readonly service: DisputeService,
     private readonly prisma: PrismaService,
+    private readonly env: EnvService,
   ) {}
 
   @Get()
@@ -81,6 +64,14 @@ export class AdminDisputesController {
     return { success: true, message: 'Disputes retrieved', data };
   }
 
+  // Declared BEFORE :id so the static path isn't captured by the param route.
+  @Get('assignable-admins')
+  @Permissions('disputes.assign')
+  async assignableAdmins() {
+    const data = await this.service.listAssignableAdmins();
+    return { success: true, message: 'Assignable admins retrieved', data };
+  }
+
   @Get(':id')
   @Permissions('disputes.read')
   async get(@Req() req: any, @Param('id') id: string) {
@@ -91,12 +82,29 @@ export class AdminDisputesController {
   }
 
   @Post(':id/messages')
-  @Permissions('disputes.read')
-  async reply(@Req() req: any, @Param('id') id: string, @Body() body: ReplyDto) {
+  // Phase 0 / H24 — distinct from `disputes.read` (which only lets an
+  // admin SEE the thread). Replying is a write, so a read-only support
+  // analyst should be blocked here. The new permission goes into the
+  // registry alongside `disputes.read` / `disputes.assign`.
+  @Permissions('disputes.reply')
+  @Idempotent()
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async reply(@Req() req: any, @Param('id') id: string, @Body() body: AdminReplyMessageDto) {
     const admin = await this.prisma.admin.findUnique({
       where: { id: req.adminId }, select: { name: true, email: true },
     });
     if (!admin) throw new NotFoundAppException('Admin not found');
+    // Phase 134 — posting an INTERNAL note needs a finer permission than a
+    // customer-visible reply. Body-dependent, so it's a runtime soak-aware
+    // check rather than a static @Permissions guard.
+    if (body.isInternalNote === true) {
+      requirePermissionOrSoak({
+        req,
+        permission: 'disputes.internalNote',
+        env: this.env,
+        context: 'dispute.internalNote',
+      });
+    }
     const data = await this.service.reply({
       disputeId: id,
       sender: { type: 'ADMIN', id: req.adminId, name: admin.name || admin.email },
@@ -108,8 +116,12 @@ export class AdminDisputesController {
 
   @Patch(':id/assign')
   @Permissions('disputes.assign')
-  async assign(@Param('id') id: string, @Body() body: AssignDto) {
-    const data = await this.service.assign(id, body.adminId ?? null);
+  async assign(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: AssignDisputeDto,
+  ) {
+    const data = await this.service.assign(id, body.adminId ?? null, req.adminId);
     return { success: true, message: 'Dispute assigned', data };
   }
 
@@ -118,26 +130,30 @@ export class AdminDisputesController {
   async setStatus(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { status: DisputeStatus },
+    @Body() body: SetDisputeStatusDto,
   ) {
-    if (!body?.status) throw new BadRequestAppException('status is required');
     const data = await this.service.setStatus(id, body.status, req.adminId);
     return { success: true, message: 'Status updated', data };
   }
 
   @Patch(':id/severity')
   @Permissions('disputes.assign')
-  async setSeverity(@Param('id') id: string, @Body() body: { severity: number }) {
-    const data = await this.service.setSeverity(id, Number(body.severity));
+  async setSeverity(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: SetSeverityDto,
+  ) {
+    const data = await this.service.setSeverity(id, body.severity, req.adminId);
     return { success: true, message: 'Severity updated', data };
   }
 
   @Patch(':id/attach-context')
   @Permissions('disputes.statusUpdate')
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
   async attachContext(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { orderNumber?: string; returnNumber?: string },
+    @Body() body: AttachDisputeContextDto,
   ) {
     if (!body?.orderNumber && !body?.returnNumber) {
       throw new BadRequestAppException(
@@ -156,14 +172,24 @@ export class AdminDisputesController {
   @Post(':id/decide')
   @Idempotent()
   @Permissions('disputes.decide')
-  async decide(@Req() req: any, @Param('id') id: string, @Body() body: DecideDto) {
-    if (!body?.outcome || !body?.rationale) {
-      throw new BadRequestAppException('outcome and rationale are required');
-    }
-    if (!body?.liabilityParty || !body?.customerRemedy) {
-      throw new BadRequestAppException(
-        'liabilityParty and customerRemedy are required (Phase 12 ADR-016)',
-      );
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
+  async decide(@Req() req: any, @Param('id') id: string, @Body() body: DecideDisputeDto) {
+    // Field presence/shape is enforced by DecideDisputeDto; the service
+    // enforces the ADR-016 (outcome × remedy × liability × amount) matrix.
+    // Phase 134 — decisions awarding at/above the high-value threshold need a
+    // finer permission than ordinary decisions (body-dependent → runtime
+    // soak-aware check; the route-level disputes.decide guard still applies).
+    const highValueThreshold = this.env.getNumber(
+      'DISPUTE_HIGH_VALUE_DECISION_THRESHOLD_PAISE',
+      5_000_000,
+    );
+    if ((body.amountInPaise ?? 0) >= highValueThreshold) {
+      requirePermissionOrSoak({
+        req,
+        permission: 'disputes.decide.high_value',
+        env: this.env,
+        context: 'dispute.decide.high_value',
+      });
     }
     const data = await this.service.decide({
       disputeId: id,

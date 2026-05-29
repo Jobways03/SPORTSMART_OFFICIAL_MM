@@ -28,6 +28,8 @@ function makeInvoice(
     documentTotalInPaise: 0n,
     reverseChargeApplicable: false,
     originalDocumentNumber: null,
+    irn: null,
+    ackDate: null,
     lines: [],
     ...o,
   };
@@ -204,7 +206,82 @@ describe('aggregateGstr1', () => {
     expect(r.creditNotes).toHaveLength(1);
     expect(r.creditNotes[0].originalInvoiceNumber).toBe('SM-INV-000005');
     expect(r.creditNotes[0].buyerType).toBe('B2B');
+    expect(r.creditNotes[0].noteType).toBe('CREDIT');
     expect(r.creditNotes[0].taxableReversalInPaise).toBe(50_000n);
+  });
+
+  // Phase 159x (audit B2) — B2B row carries the e-invoice IRN.
+  it('carries IRN + IRN date on a B2B invoice (§4)', () => {
+    const ackDate = new Date(Date.UTC(2026, 3, 15));
+    const inv = makeInvoice({
+      buyerGstin: '07AAGCB1234C1Z5',
+      placeOfSupplyStateCode: '07',
+      taxableAmountInPaise: 100_000n,
+      igstAmountInPaise: 18_000n,
+      documentTotalInPaise: 118_000n,
+      irn: 'a'.repeat(64),
+      ackDate,
+    });
+    const r = aggregateGstr1([inv]);
+    expect(r.b2b[0].irn).toBe('a'.repeat(64));
+    expect(r.b2b[0].irnDate).toEqual(ackDate);
+  });
+
+  // Phase 159x (audit B3/#8) — a TAX_INVOICE with no lines must NOT land at
+  // rate 0; the rate is recovered from the tax actually charged + a warning.
+  it('back-calculates the rate for a line-less B2C-Small invoice + warns', () => {
+    const inv = makeInvoice({
+      buyerGstin: null,
+      sellerStateCode: '29',
+      placeOfSupplyStateCode: '29',
+      taxableAmountInPaise: 100_000n, // ₹1000
+      cgstAmountInPaise: 9_000n, // 9%
+      sgstAmountInPaise: 9_000n, // 9%  → 18% total
+      documentTotalInPaise: 118_000n,
+      lines: [], // ← the integrity gap
+    });
+    const r = aggregateGstr1([inv]);
+    expect(r.b2cSmall).toHaveLength(1);
+    expect(r.b2cSmall[0].gstRateBps).toBe(1800); // recovered 18%, NOT 0
+    expect(r.warnings.length).toBe(1);
+    expect(r.warnings[0]).toContain('no line items');
+  });
+
+  // Phase 159x (audit — DEBIT_NOTE was silently dropped).
+  it('puts a DEBIT_NOTE into §9B with noteType DEBIT', () => {
+    const dn = makeInvoice({
+      documentNumber: 'SM-DN-000001',
+      documentType: 'DEBIT_NOTE',
+      buyerGstin: '07AAGCB1234C1Z5',
+      placeOfSupplyStateCode: '07',
+      originalDocumentNumber: 'SM-INV-000009',
+      taxableAmountInPaise: 20_000n,
+      igstAmountInPaise: 3_600n,
+      documentTotalInPaise: 23_600n,
+    });
+    const r = aggregateGstr1([dn]);
+    expect(r.creditNotes).toHaveLength(1);
+    expect(r.creditNotes[0].noteType).toBe('DEBIT');
+    expect(r.totals.debitNoteValueInPaise).toBe(23_600n);
+    expect(r.totals.creditNoteValueInPaise).toBe(0n);
+  });
+
+  // Phase 159x (audit #7/#15) — a B2B note with no place-of-supply recovers
+  // the state from the buyer GSTIN's first two digits.
+  it('recovers a B2B note place-of-supply from the buyer GSTIN', () => {
+    const cn = makeInvoice({
+      documentNumber: 'SM-CN-000002',
+      documentType: 'CREDIT_NOTE',
+      buyerGstin: '07AAGCB1234C1Z5',
+      placeOfSupplyStateCode: null,
+      originalDocumentNumber: 'SM-INV-000005',
+      taxableAmountInPaise: 10_000n,
+      igstAmountInPaise: 1_800n,
+      documentTotalInPaise: 11_800n,
+    });
+    const r = aggregateGstr1([cn]);
+    expect(r.creditNotes[0].placeOfSupplyStateCode).toBe('07');
+    expect(r.warnings.length).toBe(0);
   });
 
   it('aggregates §12 HSN summary across documents', () => {

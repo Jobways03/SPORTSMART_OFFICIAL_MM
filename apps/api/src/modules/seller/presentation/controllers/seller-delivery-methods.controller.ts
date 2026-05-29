@@ -36,7 +36,7 @@ function ok<T>(data: T, message = 'OK') {
  */
 
 class ChooseDeliveryMethodDto {
-  @IsEnum(['ITHINK_LOGISTICS', 'SELF_DELIVERY'])
+  @IsEnum(['SELF_DELIVERY'])
   method!: DeliveryMethod;
 }
 

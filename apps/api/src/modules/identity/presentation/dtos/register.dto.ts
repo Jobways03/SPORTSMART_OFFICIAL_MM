@@ -1,4 +1,13 @@
-import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class RegisterDto {
@@ -40,4 +49,75 @@ export class RegisterDto {
   @Matches(/(?=.*\d)/, { message: 'Password must include a number' })
   @Matches(/(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?])/, { message: 'Password must include a special character' })
   password!: string;
+
+  /**
+   * Phase 21 (2026-05-20) — India e-commerce expects phone for COD
+   * verification + delivery. Optional at registration to keep the
+   * funnel short; collected here so the User.phone column (long
+   * present, never populated) gains a value at the first opportunity.
+   *
+   * Strict India mobile prefix: 10 digits starting with 6, 7, 8, or 9.
+   * Non-digits are stripped via the @Transform so paste of "+91 98765
+   * 43210" still passes.
+   */
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) =>
+    typeof value === 'string'
+      ? value.replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '')
+      : value,
+  )
+  @Matches(/^[6-9]\d{9}$/, {
+    message: 'Phone number must be a 10-digit Indian mobile starting with 6, 7, 8, or 9',
+  })
+  phone?: string;
+
+  /**
+   * Phase 16 (2026-05-20) — server-side confirmation of the password
+   * field. The frontend already enforces password === confirmPassword
+   * before submit; this is the second-gate check so an API-only client
+   * cannot bypass it. Equality is asserted by the use-case (not via a
+   * class-validator decorator) so the error message can be a uniform
+   * 422 with a `confirmPassword` field path.
+   */
+  @IsNotEmpty({ message: 'Please confirm your password' })
+  @IsString()
+  @MaxLength(128)
+  confirmPassword!: string;
+
+  /**
+   * DPDP §6 — Terms of Service consent. Required: registration is
+   * refused if missing or false. Stored as a ConsentRecord row
+   * (purpose='TERMS_OF_SERVICE') inside the registration transaction.
+   */
+  @IsBoolean({ message: 'You must agree to the Terms of Service' })
+  acceptTerms!: boolean;
+
+  /**
+   * DPDP §6 — Privacy Policy consent. Required: same shape as
+   * acceptTerms.
+   */
+  @IsBoolean({ message: 'You must agree to the Privacy Policy' })
+  acceptPrivacy!: boolean;
+
+  /**
+   * DPDP §6 — Marketing communications opt-in. Optional: the form
+   * default is false; the user can opt-in. Stored as a ConsentRecord
+   * (purpose='EMAIL_MARKETING'). May be omitted from the request.
+   */
+  @IsOptional()
+  @IsBoolean()
+  acceptMarketing?: boolean;
+
+  /**
+   * CAPTCHA token issued by the frontend widget (Cloudflare Turnstile
+   * by default). Validated server-side via CaptchaVerifierService
+   * before the use-case is invoked. When CAPTCHA_PROVIDER=disabled
+   * (local dev) the validator short-circuits so devs can sign up
+   * without standing up a real captcha challenge.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  captchaToken?: string;
 }

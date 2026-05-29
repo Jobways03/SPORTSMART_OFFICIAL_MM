@@ -44,14 +44,20 @@ export class VerifyResetOtpFranchiseUseCase {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
-    // Check max attempts
-    if (otpRecord.attempts >= otpRecord.maxAttempts) {
+    // Phase 26 (2026-05-20) — atomic CAS attempt increment; see
+    // verify-reset-otp-seller.use-case.ts for rationale. The
+    // franchiseRepo.incrementOtpAttemptsCas method (Phase 18) closes
+    // the race window the previous read-then-increment pattern left.
+    const inc = await this.franchiseRepo.incrementOtpAttemptsCas(
+      otpRecord.id,
+      otpRecord.maxAttempts,
+    );
+    if (!inc.ok) {
       await this.franchiseRepo.expireOtp(otpRecord.id);
-      throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
+      throw new UnauthorizedAppException(
+        'Too many failed attempts. Please request a new OTP.',
+      );
     }
-
-    // Increment attempts
-    await this.franchiseRepo.incrementOtpAttempts(otpRecord.id);
 
     // Compare OTP hash in constant time — see
     // identity/verify-reset-otp.use-case.ts for rationale.
@@ -61,7 +67,7 @@ export class VerifyResetOtpFranchiseUseCase {
     const isMatch =
       actual.length === expected.length && timingSafeEqual(actual, expected);
     if (!isMatch) {
-      const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
+      const remainingAttempts = otpRecord.maxAttempts - inc.attempts;
       if (remainingAttempts <= 0) {
         await this.franchiseRepo.expireOtp(otpRecord.id);
         throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');

@@ -1,35 +1,47 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from '@/lib/auth-context';
 
 export type AuthStatus = 'checking' | 'authed' | 'unauthed';
 
 /**
- * Gate a client page on the presence of an `accessToken` in sessionStorage.
- * Returns the current auth status; pages should branch their data effects on
- * `status === 'authed'` so requests don't fire before the check completes.
+ * Phase 17 (2026-05-20) — cookie-based auth guard.
  *
- * Replaces the inline `if (!sessionStorage.getItem('accessToken')) router.push('/login')`
- * blocks that lived at the top of every protected page.
+ * Replaces the pre-Phase-17 sessionStorage check. The new
+ * implementation reads from the AuthContext, which itself is fed
+ * by GET /auth/me — so the source of truth is the server-validated
+ * httpOnly cookie, not anything in JS-readable storage.
+ *
+ * Behaviour:
+ *   • returns 'checking' while the initial /auth/me probe is in
+ *     flight (one short tick on first mount; cached thereafter via
+ *     the shared context).
+ *   • returns 'authed' once the probe resolves with a user.
+ *   • returns 'unauthed' on probe failure + redirects to the
+ *     configured login path (default /login).
+ *
+ * The redirect uses `router.replace` so the back button does not
+ * land the user on the protected page again.
  */
 export function useAuthGuard(redirectTo: string = '/login'): AuthStatus {
   const router = useRouter();
-  const [status, setStatus] = useState<AuthStatus>('checking');
+  const { status } = useSession();
 
   useEffect(() => {
-    try {
-      if (sessionStorage.getItem('accessToken')) {
-        setStatus('authed');
-      } else {
-        setStatus('unauthed');
-        router.push(redirectTo);
-      }
-    } catch {
-      setStatus('unauthed');
-      router.push(redirectTo);
+    if (status === 'unauthed') {
+      router.replace(redirectTo);
     }
-  }, [router, redirectTo]);
+  }, [status, router, redirectTo]);
 
-  return status;
+  switch (status) {
+    case 'loading':
+      return 'checking';
+    case 'authed':
+      return 'authed';
+    case 'unauthed':
+    default:
+      return 'unauthed';
+  }
 }

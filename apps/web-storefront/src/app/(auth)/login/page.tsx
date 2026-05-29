@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useState, FormEvent } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   Eye,
   EyeOff,
   AlertCircle,
+  CheckCircle2,
   ArrowRight,
   ShieldCheck,
   Truck,
@@ -16,25 +17,49 @@ import {
 import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validateLoginEmail, validateLoginPassword } from '@/lib/validators';
+import { CaptchaWidget } from '@/components/CaptchaWidget';
+import { useSession, broadcastAuthChange } from '@/lib/auth-context';
 
 interface FormErrors {
   email?: string;
   password?: string;
+  captchaToken?: string;
 }
 
-export default function LoginPage() {
+const CAPTCHA_REQUIRED =
+  (process.env.NEXT_PUBLIC_CAPTCHA_PROVIDER ?? 'disabled').toLowerCase() !==
+  'disabled';
+
+function LoginPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { status, refresh } = useSession();
+  const justVerified = searchParams.get('verified') === '1';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [serverError, setServerError] = useState('');
+  const [needsEmailVerification, setNeedsEmailVerification] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
-  // Only surface "required" errors after the user attempts submit. On blur of
-  // an empty field, leave the error state clean so a fresh page never shows
-  // red copy before the user has typed anything.
+  const onCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+  }, []);
+
+  // Phase 17 (2026-05-20) — redirect already-authed visitors away
+  // from /login so the back button doesn't loop them through a
+  // login page they don't need.
+  useEffect(() => {
+    if (status === 'authed') {
+      router.replace('/');
+    }
+  }, [status, router]);
+
   const handleBlur = (field: 'email' | 'password', value: string) => {
     if (!value.trim()) {
       setErrors((prev) => ({ ...prev, [field]: undefined }));
@@ -51,6 +76,9 @@ export default function LoginPage() {
     const pwErr = validateLoginPassword(password);
     if (emErr) newErrors.email = emErr;
     if (pwErr) newErrors.password = pwErr;
+    if (CAPTCHA_REQUIRED && !captchaToken) {
+      newErrors.captchaToken = 'Please complete the captcha';
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -58,6 +86,7 @@ export default function LoginPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setServerError('');
+    setNeedsEmailVerification(false);
     setSubmitAttempted(true);
     if (!validateAll()) {
       const firstErrorField = document.querySelector('[aria-invalid="true"]') as HTMLElement;
@@ -66,24 +95,37 @@ export default function LoginPage() {
     }
     setIsSubmitting(true);
     try {
-      const result = await authService.login({
+      await authService.login({
         email: email.trim().toLowerCase(),
         password,
+        captchaToken: captchaToken || undefined,
       });
-      if (result.data) {
-        try {
-          sessionStorage.setItem('accessToken', result.data.accessToken);
-          sessionStorage.setItem('refreshToken', result.data.refreshToken);
-          if (result.data.user) sessionStorage.setItem('user', JSON.stringify(result.data.user));
-        } catch {}
-        router.push('/');
-      }
+      // Phase 17 (2026-05-20) — cookie-based session: the server has
+      // set httpOnly cookies on the response. The JS layer never
+      // sees the tokens. Refreshing the auth context probes
+      // /auth/me with the new cookies and updates the navbar.
+      await refresh();
+      broadcastAuthChange();
+      // router.replace so the back button doesn't return to /login.
+      router.replace('/');
     } catch (err) {
+      // Force a fresh captcha challenge on every failed submit —
+      // Turnstile/hCaptcha tokens are single-use, so a 4xx without
+      // resetting leaves the form unsubmittable.
+      setCaptchaResetKey((k) => k + 1);
+      setCaptchaToken('');
       if (err instanceof ApiError) {
-        if (err.status === 401) setServerError('Invalid email or password');
-        else if (err.status === 403) setServerError('Account is not active. Please contact support.');
-        else if (err.status === 429) setServerError('Too many login attempts. Please try again later.');
-        else if (err.status === 422 && err.body.errors) {
+        if (err.status === 403 && err.body.code === 'EMAIL_NOT_VERIFIED') {
+          setNeedsEmailVerification(true);
+        } else if (err.status === 401) {
+          setServerError('Invalid email or password');
+        } else if (err.status === 403) {
+          setServerError(err.message || 'Account is not active. Please contact support.');
+        } else if (err.status === 429) {
+          setServerError(err.message || 'Too many login attempts. Please try again later.');
+        } else if (err.status === 400 && err.body.code?.startsWith('CAPTCHA')) {
+          setServerError('Captcha verification failed. Please try again.');
+        } else if (err.status === 422 && err.body.errors) {
           const fieldErrors: FormErrors = {};
           for (const e of err.body.errors) (fieldErrors as Record<string, string>)[e.field] = e.message;
           setErrors(fieldErrors);
@@ -94,16 +136,19 @@ export default function LoginPage() {
     }
   };
 
-  // Suppress "required" errors until a submit has been attempted.
   const visibleEmailError =
     errors.email && (submitAttempted || email.trim()) ? errors.email : undefined;
   const visiblePasswordError =
     errors.password && (submitAttempted || password.trim()) ? errors.password : undefined;
 
+  // While the session probe is running on first mount, render the
+  // form so SSR-shape matches CSR. If the probe resolves to 'authed'
+  // the useEffect redirect above will navigate away.
+  if (status === 'authed') return null;
+
   return (
     <div className="min-h-screen bg-ink-50 flex justify-center">
       <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-[1fr_540px]">
-      {/* Brand panel */}
       <div
         className="hidden lg:block relative overflow-hidden bg-ink-100"
         style={{
@@ -111,7 +156,6 @@ export default function LoginPage() {
             'radial-gradient(ellipse 80% 60% at 85% 15%, rgba(63, 161, 174, 0.45), transparent 60%), radial-gradient(ellipse 70% 50% at 15% 85%, rgba(220, 38, 38, 0.22), transparent 60%), radial-gradient(ellipse 50% 40% at 50% 50%, rgba(250, 204, 21, 0.18), transparent 60%)',
         }}
       >
-        {/* Decorative monogram pattern */}
         <div
           aria-hidden
           className="absolute inset-0 pointer-events-none opacity-[0.04] mix-blend-multiply"
@@ -122,7 +166,6 @@ export default function LoginPage() {
         />
 
         <div className="relative h-full flex flex-col p-12 xl:p-16">
-          {/* Top — logo */}
           <Link href="/" aria-label="Sportsmart home" className="inline-block w-fit">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -132,7 +175,6 @@ export default function LoginPage() {
             />
           </Link>
 
-          {/* Middle — headline + tagline + stats */}
           <div className="flex-1 flex flex-col justify-center max-w-xl">
             <h2 className="font-display text-[clamp(56px,6vw,96px)] leading-[0.92] tracking-tight text-ink-900">
               Play harder.
@@ -146,7 +188,6 @@ export default function LoginPage() {
               save addresses, and shop faster.
             </p>
 
-            {/* Stats row */}
             <dl className="mt-10 grid grid-cols-3 gap-4 max-w-lg">
               {[
                 { v: '200+', l: 'Brands' },
@@ -168,8 +209,7 @@ export default function LoginPage() {
             </dl>
           </div>
 
-          {/* Bottom — testimonial card */}
-          <div className="max-w-md bg-white/70 backdrop-blur-[1px] border border-ink-900/10 p-5 rounded-2xl">
+          <div className="max-w-md bg-white border border-ink-900/10 p-5 rounded-2xl">
             <div className="flex items-center gap-1 text-ink-900" aria-label="5 star rating">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Star key={i} className="size-3.5 fill-current" strokeWidth={0} />
@@ -196,7 +236,6 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Form panel */}
       <div className="flex flex-col">
         <header className="flex items-center justify-between px-6 lg:px-10 py-6">
           <Link href="/" className="lg:hidden font-display text-2xl tracking-wide italic leading-none">
@@ -218,6 +257,32 @@ export default function LoginPage() {
               Welcome back. Enter your credentials to continue.
             </p>
 
+            {justVerified && (
+              <div
+                role="status"
+                className="mt-6 flex items-start gap-2 p-3 border border-success/30 bg-green-50 text-success text-body rounded-2xl"
+              >
+                <CheckCircle2 className="size-4 mt-0.5 shrink-0" />
+                Email verified! Sign in to get started.
+              </div>
+            )}
+            {needsEmailVerification && (
+              <div
+                role="alert"
+                className="mt-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-danger text-body rounded-2xl"
+              >
+                <AlertCircle className="size-4 mt-0.5 shrink-0" />
+                <span>
+                  Your email isn&apos;t verified yet.{' '}
+                  <Link
+                    href={`/register/verify?email=${encodeURIComponent(email.trim().toLowerCase())}`}
+                    className="underline font-semibold"
+                  >
+                    Verify now / resend code
+                  </Link>
+                </span>
+              </div>
+            )}
             {serverError && (
               <div
                 role="alert"
@@ -229,6 +294,7 @@ export default function LoginPage() {
             )}
 
             <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
+              <fieldset disabled={isSubmitting} className="space-y-4 border-0 p-0">
               <div>
                 <label htmlFor="email" className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
                   Email
@@ -238,11 +304,11 @@ export default function LoginPage() {
                   type="email"
                   placeholder="you@example.com"
                   value={email}
+                  maxLength={255}
                   onChange={(e) => setEmail(e.target.value)}
                   onBlur={() => handleBlur('email', email)}
                   aria-invalid={!!visibleEmailError}
                   aria-describedby={visibleEmailError ? 'email-error' : undefined}
-                  disabled={isSubmitting}
                   autoComplete="email"
                   className={`w-full h-12 px-4 border bg-white text-body-lg placeholder:text-ink-400 focus:outline-none transition-colors rounded-full ${
                     visibleEmailError
@@ -272,11 +338,11 @@ export default function LoginPage() {
                     type={showPassword ? 'text' : 'password'}
                     placeholder="Enter your password"
                     value={password}
+                    maxLength={128}
                     onChange={(e) => setPassword(e.target.value)}
                     onBlur={() => handleBlur('password', password)}
                     aria-invalid={!!visiblePasswordError}
                     aria-describedby={visiblePasswordError ? 'password-error' : undefined}
-                    disabled={isSubmitting}
                     autoComplete="current-password"
                     className={`w-full h-12 px-4 pr-12 border bg-white text-body-lg placeholder:text-ink-400 focus:outline-none transition-colors rounded-full ${
                       visiblePasswordError
@@ -301,17 +367,31 @@ export default function LoginPage() {
                 )}
               </div>
 
+              {CAPTCHA_REQUIRED && (
+                <div className="pt-2">
+                  <CaptchaWidget
+                    onToken={onCaptchaToken}
+                    resetKey={captchaResetKey}
+                    className="flex justify-center"
+                  />
+                  {errors.captchaToken && submitAttempted && (
+                    <p role="alert" className="text-caption text-danger text-center mt-2">
+                      {errors.captchaToken}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={isSubmitting}
                 aria-busy={isSubmitting}
                 className="w-full h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-50 inline-flex items-center justify-center gap-2 transition-colors rounded-full"
               >
                 {isSubmitting ? 'Signing in…' : <>Sign in <ArrowRight className="size-4" /></>}
               </button>
+              </fieldset>
             </form>
 
-            {/* Trust strip — fills the empty space below the form */}
             <div className="mt-10 grid grid-cols-3 gap-3 pt-6 border-t border-ink-200">
               {[
                 { icon: ShieldCheck, label: 'Secure sign-in' },
@@ -340,5 +420,13 @@ export default function LoginPage() {
       </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginPageContent />
+    </Suspense>
   );
 }

@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -6,27 +7,87 @@ import {
   Inject,
   Param,
   Patch,
+  Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import { Request } from 'express';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import {
   FranchiseCatalogRepository,
   FRANCHISE_CATALOG_REPOSITORY,
 } from '../../domain/repositories/franchise-catalog.repository.interface';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import {
+  BulkApproveCatalogMappingsDto,
+  CatalogMappingDecisionDto,
+} from '../dtos/franchise-catalog-decision.dto';
 
 @ApiTags('Admin Franchise Catalog')
 @Controller('admin')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('franchise.read')
+// Phase 159n (audit #12) — coarse abuse cap on the catalog-decision surface.
+@Throttle({ default: { limit: 60, ttl: 60_000 } })
 export class AdminFranchiseCatalogController {
   constructor(
     @Inject(FRANCHISE_CATALOG_REPOSITORY)
     private readonly catalogRepo: FranchiseCatalogRepository,
     private readonly prisma: PrismaService,
+    private readonly audit: AuditPublicFacade,
+    private readonly eventBus: EventBusService,
   ) {}
+
+  // Phase 159n — shared audit-log + event emit for a decision (fire-and-forget).
+  private recordDecision(
+    req: Request,
+    args: { action: string; mapping: any; reason?: string },
+  ): void {
+    const adminId = (req as any).adminId as string | undefined;
+    const ua = req.headers['user-agent'];
+    this.audit
+      .writeAuditLog({
+        actorId: adminId ?? 'unknown',
+        actorRole: 'ADMIN',
+        action: args.action,
+        module: 'franchise',
+        resource: 'FranchiseCatalogMapping',
+        resourceId: args.mapping.id,
+        oldValue: null,
+        newValue: { approvalStatus: args.mapping.approvalStatus },
+        metadata: {
+          franchiseId: args.mapping.franchiseId,
+          productId: args.mapping.productId,
+          variantId: args.mapping.variantId ?? null,
+          reason: args.reason ?? null,
+        },
+        ipAddress: req.ip || req.socket?.remoteAddress || undefined,
+        userAgent: typeof ua === 'string' ? ua : undefined,
+      })
+      .catch(() => undefined);
+    this.eventBus
+      .publish({
+        eventName: 'franchise.catalog_mapping.decision',
+        aggregate: 'franchise',
+        aggregateId: args.mapping.franchiseId,
+        occurredAt: new Date(),
+        payload: {
+          mappingId: args.mapping.id,
+          franchiseId: args.mapping.franchiseId,
+          productId: args.mapping.productId,
+          approvalStatus: args.mapping.approvalStatus,
+          reason: args.reason ?? null,
+        },
+      })
+      .catch(() => undefined);
+  }
 
   @Get('franchise-catalog')
   async listAllMappings(
@@ -140,14 +201,19 @@ export class AdminFranchiseCatalogController {
   }
 
   @Patch('franchise-catalog/:mappingId/approve')
+  @Permissions('franchise.catalog.approve')
   @HttpCode(HttpStatus.OK)
-  async approveMapping(@Param('mappingId') mappingId: string) {
+  async approveMapping(
+    @Req() req: Request,
+    @Param('mappingId') mappingId: string,
+  ) {
     const existing = await this.catalogRepo.findById(mappingId);
     if (!existing) {
       throw new NotFoundAppException('Catalog mapping not found');
     }
-
-    const data = await this.catalogRepo.approve(mappingId);
+    const adminId = (req as any).adminId as string | undefined;
+    const data = await this.catalogRepo.approve(mappingId, adminId);
+    this.recordDecision(req, { action: 'FRANCHISE_CATALOG_MAPPING_APPROVED', mapping: data });
 
     return {
       success: true,
@@ -157,14 +223,21 @@ export class AdminFranchiseCatalogController {
   }
 
   @Patch('franchise-catalog/:mappingId/stop')
+  @Permissions('franchise.catalog.approve')
   @HttpCode(HttpStatus.OK)
-  async stopMapping(@Param('mappingId') mappingId: string) {
+  async stopMapping(
+    @Req() req: Request,
+    @Param('mappingId') mappingId: string,
+    @Body() body: CatalogMappingDecisionDto,
+  ) {
     const existing = await this.catalogRepo.findById(mappingId);
     if (!existing) {
       throw new NotFoundAppException('Catalog mapping not found');
     }
-
-    const data = await this.catalogRepo.stop(mappingId);
+    const adminId = (req as any).adminId as string | undefined;
+    const reason = this.cleanReason(body?.reason);
+    const data = await this.catalogRepo.stop(mappingId, adminId, reason);
+    this.recordDecision(req, { action: 'FRANCHISE_CATALOG_MAPPING_STOPPED', mapping: data, reason: reason ?? undefined });
 
     return {
       success: true,
@@ -174,8 +247,13 @@ export class AdminFranchiseCatalogController {
   }
 
   @Patch('franchise-catalog/:mappingId/reject')
+  @Permissions('franchise.catalog.approve')
   @HttpCode(HttpStatus.OK)
-  async rejectMapping(@Param('mappingId') mappingId: string) {
+  async rejectMapping(
+    @Req() req: Request,
+    @Param('mappingId') mappingId: string,
+    @Body() body: CatalogMappingDecisionDto,
+  ) {
     // Reject moves the mapping into a "needs revision" state. The
     // franchise can edit the row and re-submit; the next PATCH from
     // their end auto-resets the status to PENDING_APPROVAL for
@@ -184,14 +262,51 @@ export class AdminFranchiseCatalogController {
     if (!existing) {
       throw new NotFoundAppException('Catalog mapping not found');
     }
-
-    const data = await this.catalogRepo.reject(mappingId);
+    const adminId = (req as any).adminId as string | undefined;
+    const reason = this.cleanReason(body?.reason);
+    const data = await this.catalogRepo.reject(mappingId, adminId, reason);
+    this.recordDecision(req, { action: 'FRANCHISE_CATALOG_MAPPING_REJECTED', mapping: data, reason: reason ?? undefined });
 
     return {
       success: true,
       message: 'Catalog mapping rejected. The franchise can edit and re-submit.',
       data,
     };
+  }
+
+  // Phase 159n (audit #15) — bulk approve for franchise onboarding (1000-SKU
+  // batches were one-click-each). Each id is approved + audited individually
+  // so a single bad id doesn't void the batch; the response reports both.
+  @Post('franchise-catalog/bulk-approve')
+  @Permissions('franchise.catalog.approve')
+  @HttpCode(HttpStatus.OK)
+  async bulkApprove(
+    @Req() req: Request,
+    @Body() body: BulkApproveCatalogMappingsDto,
+  ) {
+    const adminId = (req as any).adminId as string | undefined;
+    const approved: string[] = [];
+    const skipped: Array<{ mappingId: string; reason: string }> = [];
+    for (const mappingId of body.mappingIds) {
+      const existing = await this.catalogRepo.findById(mappingId);
+      if (!existing) {
+        skipped.push({ mappingId, reason: 'not found' });
+        continue;
+      }
+      const data = await this.catalogRepo.approve(mappingId, adminId);
+      this.recordDecision(req, { action: 'FRANCHISE_CATALOG_MAPPING_APPROVED', mapping: data });
+      approved.push(mappingId);
+    }
+    return {
+      success: true,
+      message: `Approved ${approved.length} mapping(s)${skipped.length ? `, skipped ${skipped.length}` : ''}`,
+      data: { approved, skipped },
+    };
+  }
+
+  private cleanReason(reason: string | undefined): string | null {
+    if (!reason) return null;
+    return reason.replace(/<[^>]*>/g, '').trim() || null;
   }
 
   /**

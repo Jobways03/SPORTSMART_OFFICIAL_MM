@@ -1,4 +1,11 @@
-import { apiClient, ApiResponse } from '@/lib/api-client';
+import { apiClient, API_BASE, ApiResponse } from '@/lib/api-client';
+
+/** Extract the filename from a `Content-Disposition: attachment; filename="..."` header. */
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 export type ReturnStatus =
   | 'REQUESTED'
@@ -283,4 +290,91 @@ export const adminReturnsService = {
   closeReturn(returnId: string): Promise<ApiResponse> {
     return apiClient(`/admin/returns/${returnId}/close`, { method: 'PATCH' });
   },
+
+  // ── Bulk operations (SUPER_ADMIN only, hard-capped at 100) ──────
+  bulkApprove(returnIds: string[]): Promise<ApiResponse<{ results: BulkResult[] }>> {
+    return apiClient(`/admin/returns/bulk-approve`, {
+      method: 'POST',
+      body: JSON.stringify({ returnIds }),
+    });
+  },
+
+  bulkClose(returnIds: string[]): Promise<ApiResponse<{ results: BulkResult[] }>> {
+    return apiClient(`/admin/returns/bulk-close`, {
+      method: 'POST',
+      body: JSON.stringify({ returnIds }),
+    });
+  },
+
+  // ── CSV export ─────────────────────────────────────────────────
+  /**
+   * Trigger a CSV download. Uses fetch (not the JSON apiClient) so we can read
+   * the Blob body together with the X-Export-* / Content-Disposition headers.
+   * The browser still buffers the whole file into the Blob; for large result
+   * sets the server caps at 50k rows and reports `truncated` so the UI can
+   * warn the operator.
+   */
+  async exportCsv(params: {
+    status?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    search?: string;
+    sellerId?: string;
+    franchiseId?: string;
+    qcDecision?: string;
+    refundMethod?: string;
+    nodeType?: string;
+  } = {}): Promise<{
+    blob: Blob;
+    total: number | null;
+    truncated: boolean;
+    filename: string;
+  }> {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) qs.set(key, value);
+    }
+    const token =
+      (typeof window !== 'undefined' && sessionStorage.getItem('adminAccessToken')) || '';
+    const res = await fetch(
+      `${API_BASE}/api/v1/admin/returns/export${qs.toString() ? `?${qs}` : ''}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(text || `Export failed (${res.status})`);
+    }
+    const totalHeader = res.headers.get('X-Export-Total');
+    return {
+      blob: await res.blob(),
+      total: totalHeader != null ? Number(totalHeader) : null,
+      truncated: res.headers.get('X-Export-Truncated') === 'true',
+      filename:
+        parseContentDispositionFilename(res.headers.get('Content-Disposition')) ||
+        'returns-export.csv',
+    };
+  },
+
+  // ── Customer return history ────────────────────────────────────
+  getCustomerHistory(customerId: string): Promise<
+    ApiResponse<{ items: ReturnListItem[]; aggregates: CustomerHistoryAggregates }>
+  > {
+    return apiClient(
+      `/admin/returns/customers/${encodeURIComponent(customerId)}/history`,
+    );
+  },
 };
+
+export interface BulkResult {
+  id: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface CustomerHistoryAggregates {
+  totalReturns: number;
+  totalRefundedAmount: number;
+  refundedCount: number;
+  rejectedCount: number;
+  pendingCount: number;
+}

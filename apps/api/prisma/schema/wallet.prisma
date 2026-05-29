@@ -19,6 +19,52 @@ enum WalletTransactionType {
   DEBIT_ADJUSTMENT // admin manual debit (chargeback, fraud reversal)
 }
 
+// Phase 70 (2026-05-22) — Phase 66 audit Gap #8. Minimal saga
+// state for the wallet-refund-on-checkout-cancel flow. Pre-Phase-70
+// the refund call in CheckoutService was `try { … } catch { /* ignore */ }`
+// — a downstream failure left the wallet debited with no audit
+// trail and no retry. The saga row is written on either side of
+// the call:
+//   • PENDING when we're about to attempt
+//   • COMPLETED when the wallet credit succeeded
+//   • FAILED + lastError + attempts++ when it threw
+// A cron sweeps FAILED rows for retry; permanent failures (5
+// attempts) emit an ops event so finance can reconcile.
+enum WalletRefundSagaStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  ABANDONED
+}
+
+model WalletRefundSaga {
+  id            String                 @id @default(uuid())
+  customerId    String                 @map("customer_id")
+  orderId       String                 @map("order_id")
+  amountInPaise BigInt                 @map("amount_in_paise")
+  reason        String
+  status        WalletRefundSagaStatus @default(PENDING)
+  attempts      Int                    @default(0)
+  lastError     String?                @map("last_error")
+  lastAttemptAt DateTime?              @map("last_attempt_at")
+  completedAt   DateTime?              @map("completed_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
+
+  // No FK to User to keep cross-module decoupling — the wallet
+  // facade re-resolves customerId at retry time. The orderId is a
+  // string for the same reason (orders and wallet are separate
+  // modules with their own retention policies).
+
+  // (orderId, customerId, amountInPaise) tuple is unique per saga
+  // run so retries don't double-write. The partial unique index in
+  // the migration enforces this for PENDING rows; COMPLETED rows
+  // are kept for audit and don't participate in the unique.
+  @@index([status, lastAttemptAt])
+  @@index([orderId])
+  @@map("wallet_refund_sagas")
+}
+
 enum WalletTransactionStatus {
   PENDING // initiated, awaiting external confirmation (e.g. gateway webhook)
   COMPLETED
@@ -27,19 +73,19 @@ enum WalletTransactionStatus {
 }
 
 model Wallet {
-  id             String   @id @default(uuid())
-  userId         String   @unique @map("user_id")
+  id               String    @id @default(uuid())
+  userId           String    @unique @map("user_id")
   // Sum of COMPLETED transactions. Maintained transactionally with the
   // ledger row insert so the two never disagree.
   // Phase 2 (PR 2.2) — BigInt. See file header for the rationale.
-  balanceInPaise BigInt   @default(0) @map("balance_in_paise")
+  balanceInPaise   BigInt    @default(0) @map("balance_in_paise")
   // Currency is fixed to INR for the platform but stored explicitly so
   // analytics + statement endpoints don't need to scrape it from elsewhere.
-  currency       String   @default("INR")
+  currency         String    @default("INR")
   // Optimistic-locking guard. Bumped on every credit/debit so concurrent
   // mutations (refund + checkout deduction at the same instant) detect
   // conflict at the DB layer instead of silently overwriting.
-  version        Int      @default(0)
+  version          Int       @default(0)
   // Admin-controlled freeze. When true, all credit/debit calls reject
   // unless the caller passes `bypassBlock: true` (only the unblock
   // endpoint should ever set that). Used for fraud holds & disputes.
@@ -47,8 +93,8 @@ model Wallet {
   blockedReason    String?   @map("blocked_reason")
   blockedAt        DateTime? @map("blocked_at")
   blockedByAdminId String?   @map("blocked_by_admin_id")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions WalletTransaction[]
@@ -85,12 +131,9 @@ model WalletTransaction {
   createdByAdminId    String?                 @map("created_by_admin_id")
   createdAt           DateTime                @default(now()) @map("created_at")
 
-  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  wallet      Wallet             @relation(fields: [walletId], references: [id], onDelete: Cascade)
   adjustments WalletAdjustment[]
 
-  @@index([walletId, createdAt(sort: Desc)])
-  @@index([userId, createdAt(sort: Desc)])
-  @@index([referenceType, referenceId])
   // Phase 3 (PR 3.2) — wallet idempotency. Two writes with the SAME
   // (referenceType, referenceId, type) collide at the DB level, so a
   // refund-credit triggered twice (network retry, replay, manual
@@ -98,6 +141,9 @@ model WalletTransaction {
   // in unique indexes by default, so admin-manual rows (no reference)
   // continue to coexist freely.
   @@unique([referenceType, referenceId, type])
+  @@index([walletId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([referenceType, referenceId])
   @@map("wallet_transactions")
 }
 
@@ -170,26 +216,26 @@ model WalletAdjustment {
   // if Section 34 weren't time-barring it. Reported separately in
   // GSTR-1 / 3B so finance can show audit how much GST cost the
   // platform absorbed in the period.
-  wouldHaveBeenTaxableInPaise   BigInt? @map("would_have_been_taxable_in_paise")
-  wouldHaveBeenCgstInPaise      BigInt? @map("would_have_been_cgst_in_paise")
-  wouldHaveBeenSgstInPaise      BigInt? @map("would_have_been_sgst_in_paise")
-  wouldHaveBeenIgstInPaise      BigInt? @map("would_have_been_igst_in_paise")
-  wouldHaveBeenTotalTaxInPaise  BigInt? @map("would_have_been_total_tax_in_paise")
+  wouldHaveBeenTaxableInPaise  BigInt? @map("would_have_been_taxable_in_paise")
+  wouldHaveBeenCgstInPaise     BigInt? @map("would_have_been_cgst_in_paise")
+  wouldHaveBeenSgstInPaise     BigInt? @map("would_have_been_sgst_in_paise")
+  wouldHaveBeenIgstInPaise     BigInt? @map("would_have_been_igst_in_paise")
+  wouldHaveBeenTotalTaxInPaise BigInt? @map("would_have_been_total_tax_in_paise")
 
   reason String
 
   // Audit trail
-  requestedByAdminId      String?   @map("requested_by_admin_id")
-  requestedAt             DateTime  @default(now()) @map("requested_at")
+  requestedByAdminId     String?   @map("requested_by_admin_id")
+  requestedAt            DateTime  @default(now()) @map("requested_at")
   // First sign-off on a dual-approval row. Stays null on single-approval
   // rows (the row goes straight from PENDING_APPROVAL to APPROVED).
-  firstApprovedByAdminId  String?   @map("first_approved_by_admin_id")
-  firstApprovedAt         DateTime? @map("first_approved_at")
-  approvedByAdminId       String?   @map("approved_by_admin_id")
-  approvedAt              DateTime? @map("approved_at")
-  rejectedByAdminId       String?   @map("rejected_by_admin_id")
-  rejectedAt              DateTime? @map("rejected_at")
-  rejectionReason         String?   @map("rejection_reason")
+  firstApprovedByAdminId String?   @map("first_approved_by_admin_id")
+  firstApprovedAt        DateTime? @map("first_approved_at")
+  approvedByAdminId      String?   @map("approved_by_admin_id")
+  approvedAt             DateTime? @map("approved_at")
+  rejectedByAdminId      String?   @map("rejected_by_admin_id")
+  rejectedAt             DateTime? @map("rejected_at")
+  rejectionReason        String?   @map("rejection_reason")
 
   // Set on approval — references the wallet_transactions row that
   // actually moved the money.
@@ -202,11 +248,11 @@ model WalletAdjustment {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  customer            User                @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  wallet              Wallet?             @relation(fields: [walletId], references: [id], onDelete: Restrict)
-  return              Return?             @relation(fields: [returnId], references: [id], onDelete: Restrict)
-  sourceTaxDocument   TaxDocument?        @relation("WalletAdjustmentSourceInvoice", fields: [sourceTaxDocumentId], references: [id], onDelete: Restrict)
-  walletTransaction   WalletTransaction?  @relation(fields: [walletTransactionId], references: [id], onDelete: Restrict)
+  customer          User               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  wallet            Wallet?            @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  return            Return?            @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  sourceTaxDocument TaxDocument?       @relation("WalletAdjustmentSourceInvoice", fields: [sourceTaxDocumentId], references: [id], onDelete: Restrict)
+  walletTransaction WalletTransaction? @relation(fields: [walletTransactionId], references: [id], onDelete: Restrict)
 
   @@index([customerId])
   @@index([walletId])

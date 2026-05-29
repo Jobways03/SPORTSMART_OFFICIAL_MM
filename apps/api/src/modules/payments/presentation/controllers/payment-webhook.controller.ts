@@ -20,6 +20,49 @@ import {
 } from '../../../../core/exceptions';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
+import { z } from 'zod';
+
+// Phase 69 (2026-05-22) — Phase 66 audit Gap #23. Defence-in-depth
+// Zod schema for the webhook payload. The HMAC signature already
+// gates integrity, but the schema makes the failure mode explicit
+// for malformed payloads (manual-replay tools, payload-shape drift
+// after a Razorpay API update) — instead of TypeScript silently
+// trusting an `as` cast and the downstream code throwing a less
+// helpful "Cannot read properties of undefined" surface, we reject
+// at the boundary with a structured error.
+const razorpayPaymentEntitySchema = z.object({
+  id: z.string().min(1, 'payment.entity.id is required'),
+  // order_id is optional in the type for legacy compatibility,
+  // but the amount-mismatch guard rejects when absent.
+  order_id: z.string().optional(),
+  notes: z
+    .object({
+      masterOrderId: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
+  status: z.string().min(1, 'payment.entity.status is required'),
+  // Paise as integer. Razorpay always speaks integer paise; reject
+  // negatives or floats so the amount-mismatch guard receives a
+  // safe value.
+  amount: z.number().int().nonnegative(),
+  captured: z.boolean().optional(),
+});
+
+const razorpayWebhookSchema = z.object({
+  event: z.string().min(1, 'event is required'),
+  // Unix seconds, optional for legacy replay tools.
+  created_at: z.number().int().positive().optional(),
+  payload: z.object({
+    payment: z
+      .object({
+        entity: razorpayPaymentEntitySchema,
+      })
+      .optional(),
+  }),
+});
+
+type ZodParsedWebhook = z.infer<typeof razorpayWebhookSchema>;
 
 // Cache duplicate event IDs for 24h. Razorpay's retry window is shorter
 // than this so anything we've already processed within the window will
@@ -207,9 +250,27 @@ export class PaymentWebhookController {
   async handleRazorpayWebhook(
     @Headers('x-razorpay-signature') signature: string,
     @Req() req: RawBodyRequest<Request>,
-    @Body() payload: RazorpayWebhookPayload,
+    @Body() rawPayload: unknown,
   ) {
     this.verifySignature(req.rawBody, signature);
+
+    // Phase 69 (2026-05-22) — Phase 66 audit Gap #23. Zod-validate
+    // the payload shape AFTER the HMAC pass. The signature has
+    // already proven the body is authentic; the schema check
+    // prevents downstream `Cannot read property of undefined`
+    // surfaces if Razorpay drifts the payload shape, and surfaces
+    // malformed events as a clear 400 (with code WEBHOOK_PAYLOAD_INVALID).
+    const parseResult = razorpayWebhookSchema.safeParse(rawPayload);
+    if (!parseResult.success) {
+      const issues = parseResult.error.issues
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      this.logger.warn(`Razorpay webhook payload failed schema: ${issues}`);
+      throw new BadRequestAppException(
+        `Webhook payload shape invalid: ${issues}`,
+      );
+    }
+    const payload: ZodParsedWebhook = parseResult.data;
 
     // Phase 4 (PR 4.7) — replay-window check. Runs after signature
     // verification (no point checking timestamp on an unsigned/forged

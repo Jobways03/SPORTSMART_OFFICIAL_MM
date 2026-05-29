@@ -42,66 +42,19 @@ export class SettlementsPublicFacade {
     );
   }
 
-  /**
-   * Preview a settlement for a seller within a date range.
-   */
-  async previewSettlement(
-    sellerId: string,
-    periodStart: Date,
-    periodEnd: Date,
-  ): Promise<{
-    sellerId: string;
-    periodStart: Date;
-    periodEnd: Date;
-    totalOrders: number;
-    totalItems: number;
-    totalPlatformAmount: number;
-    totalPlatformMargin: number;
-    netPayable: number;
-  }> {
-    const commissions = await this.prisma.commissionRecord.findMany({
-      where: {
-        sellerId,
-        status: 'PENDING',
-        createdAt: { gte: periodStart, lte: periodEnd },
-      },
-    });
+  // Phase 142 — the dead per-seller `previewSettlement` was removed. It had
+  // zero callers and used different aggregation math than createCycle (per-unit
+  // platformPrice×qty vs the snapshotted totals, no settlementId:null filter,
+  // createdAt instead of settlableAt, row-count instead of summed quantity) —
+  // a dry-run that would have misled operators. The real dry-run is
+  // SettlementService.previewCycle, which shares createCycle's aggregator.
 
-    let totalPlatformAmount = 0;
-    let totalPlatformMargin = 0;
-    const orderIds = new Set<string>();
-
-    for (const c of commissions) {
-      totalPlatformAmount += Number(c.platformPrice ?? 0) * (c.quantity ?? 1);
-      totalPlatformMargin += Number(c.platformMargin ?? 0);
-      if (c.masterOrderId) orderIds.add(c.masterOrderId);
-    }
-
-    const netPayable = totalPlatformAmount - totalPlatformMargin;
-
-    return {
-      sellerId,
-      periodStart,
-      periodEnd,
-      totalOrders: orderIds.size,
-      totalItems: commissions.length,
-      totalPlatformAmount,
-      totalPlatformMargin,
-      netPayable,
-    };
-  }
-
-  /**
-   * Approve a settlement cycle run.
-   */
-  async approveSettlementRun(runId: string): Promise<void> {
-    await this.prisma.settlementCycle.update({
-      where: { id: runId },
-      data: { status: 'APPROVED' },
-    });
-
-    this.logger.log(`Settlement run ${runId} approved`);
-  }
+  // Phase 144 — the dead `approveSettlementRun` was removed. It did a bare
+  // `cycle.update({ status: 'APPROVED' })` with no transaction, no
+  // sellerSettlement cascade, no TCS/TDS, no re-validation, no audit, no actor —
+  // if ever called it would leave a corrupt state (cycle APPROVED, settlements
+  // still PENDING). It had zero callers. Approval goes through
+  // SettlementService.approveCycle, the only correct path.
 
   /**
    * Get a payout statement by ID.
@@ -187,5 +140,63 @@ export class SettlementsPublicFacade {
   async getAffiliateLedger(affiliateId: string): Promise<any[]> {
     this.logger.warn(`Affiliate ledger not yet available for ${affiliateId}`);
     return [];
+  }
+
+  /**
+   * Phase 28+ — list every SellerSettlement whose cycle.periodEnd lands
+   * inside the supplied [startUtc, endUtc) window. Returns the columns
+   * the tax module's marketplace GSTR-1 commission aggregator needs,
+   * plus an embedded seller-snapshot (gstin, legal name, state code)
+   * pulled from the seller record. Keeps the SellerSettlement table
+   * + Seller table reads inside the settlements/seller module
+   * boundary.
+   */
+  async listSettlementsForCommissionGstr(
+    startUtc: Date,
+    endUtc: Date,
+  ): Promise<
+    Array<{
+      sellerId: string;
+      totalPlatformMargin: number;
+      totalPlatformMarginInPaise: bigint | null;
+      cgstOnCommissionInPaise: bigint | null;
+      sgstOnCommissionInPaise: bigint | null;
+      igstOnCommissionInPaise: bigint | null;
+      totalCommissionGstInPaise: bigint | null;
+      commissionGstRateBps: number | null;
+      commissionGstSplitType: 'CGST_SGST' | 'IGST' | null;
+      seller: {
+        gstin: string | null;
+        legalBusinessName: string | null;
+        sellerShopName: string | null;
+        gstStateCode: string | null;
+      } | null;
+    }>
+  > {
+    const rows = await (this.prisma as any).sellerSettlement.findMany({
+      where: { cycle: { periodEnd: { gte: startUtc, lt: endUtc } } },
+      include: {
+        seller: {
+          select: {
+            gstin: true,
+            legalBusinessName: true,
+            sellerShopName: true,
+            gstStateCode: true,
+          },
+        },
+      },
+    });
+    return rows.map((s: any) => ({
+      sellerId: s.sellerId,
+      totalPlatformMargin: Number(s.totalPlatformMargin ?? 0),
+      totalPlatformMarginInPaise: s.totalPlatformMarginInPaise ?? null,
+      cgstOnCommissionInPaise: s.cgstOnCommissionInPaise ?? null,
+      sgstOnCommissionInPaise: s.sgstOnCommissionInPaise ?? null,
+      igstOnCommissionInPaise: s.igstOnCommissionInPaise ?? null,
+      totalCommissionGstInPaise: s.totalCommissionGstInPaise ?? null,
+      commissionGstRateBps: s.commissionGstRateBps ?? null,
+      commissionGstSplitType: s.commissionGstSplitType ?? null,
+      seller: s.seller ?? null,
+    }));
   }
 }

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 
+type SellerType = 'D2C' | 'RETAIL';
+
 interface Seller {
   sellerId: string;
   sellerName: string;
@@ -12,6 +14,8 @@ interface Seller {
   phoneNumber: string | null;
   status: string;
   verificationStatus: string;
+  // Phase 38 — D2C / RETAIL discriminator on the list response.
+  sellerType: SellerType | null;
   isEmailVerified: boolean;
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
@@ -122,6 +126,13 @@ export default function SellersPage() {
   const searchParams = useSearchParams();
   const initialFilter = (searchParams.get('filter') as FilterKey) || 'all';
   const initialSearch = searchParams.get('search') || '';
+  // Phase 38 — read the type filter from the URL on first load so the
+  // dropdown's state survives a page refresh / shared link.
+  const initialTypeRaw = searchParams.get('sellerType');
+  const initialType: SellerType | 'all' =
+    initialTypeRaw === 'D2C' || initialTypeRaw === 'RETAIL'
+      ? initialTypeRaw
+      : 'all';
 
   const [data, setData] = useState<SellersResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,21 +145,24 @@ export default function SellersPage() {
       ? initialFilter
       : 'all',
   );
+  const [typeFilter, setTypeFilter] = useState<SellerType | 'all'>(initialType);
 
   const fetchSellers = useCallback(
     (p: number) => {
       setLoading(true);
       const params = new URLSearchParams({ page: String(p), limit: '50' });
       if (search.trim()) params.set('search', search.trim());
+      // Phase 38 — narrow the SQL-side query by D2C / RETAIL when set.
+      if (typeFilter !== 'all') params.set('sellerType', typeFilter);
 
       apiClient<SellersResponse>(`/admin/sellers?${params}`)
         .then((res) => {
           if (res.data) setData(res.data);
         })
-        .catch(() => {})
+        .catch((err) => console.warn(err))
         .finally(() => setLoading(false));
     },
-    [search],
+    [search, typeFilter],
   );
 
   useEffect(() => {
@@ -258,6 +272,22 @@ export default function SellersPage() {
             aria-label="Search sellers"
           />
         </div>
+
+        {/* Phase 38 — D2C / RETAIL type filter. Triggers an SQL-side
+            re-query (refresh on change) so paging stays accurate. */}
+        <select
+          aria-label="Seller type"
+          value={typeFilter}
+          onChange={(e) => {
+            setTypeFilter(e.target.value as SellerType | 'all');
+            setPage(1);
+          }}
+          style={styles.typeSelect}
+        >
+          <option value="all">All seller types</option>
+          <option value="D2C">D2C only</option>
+          <option value="RETAIL">Retail only</option>
+        </select>
       </div>
 
       {/* ── States ─────────────────────────────────────────── */}
@@ -273,6 +303,7 @@ export default function SellersPage() {
                 <thead>
                   <tr>
                     <th style={styles.th}>Seller</th>
+                    <th style={styles.th}>Type</th>
                     <th style={styles.th}>Status</th>
                     <th style={styles.th}>Verification</th>
                     <th style={styles.th}>Profile</th>
@@ -413,6 +444,19 @@ function SellerRow({
             </div>
           </div>
         </div>
+      </td>
+      <td style={styles.td}>
+        {/* Phase 38 — D2C / RETAIL discriminator badge. Distinct
+            colour from Status so it reads as "what kind of seller"
+            rather than "where is this seller in the lifecycle". */}
+        {s.sellerType ? (
+          <Pill
+            label={s.sellerType}
+            tone={s.sellerType === 'D2C' ? 'info' : 'neutral'}
+          />
+        ) : (
+          <span style={{ color: '#94a3b8', fontSize: 12 }}>—</span>
+        )}
       </td>
       <td style={styles.td}>
         <Pill label={status.label} tone={status.tone} />
@@ -614,6 +658,7 @@ function SkeletonTable() {
           <thead>
             <tr>
               <th style={styles.th}>Seller</th>
+              <th style={styles.th}>Type</th>
               <th style={styles.th}>Status</th>
               <th style={styles.th}>Verification</th>
               <th style={styles.th}>Profile</th>
@@ -634,6 +679,9 @@ function SkeletonTable() {
                       />
                     </div>
                   </div>
+                </td>
+                <td style={styles.td}>
+                  <div style={{ ...styles.skelLine, width: 56, height: 22 }} />
                 </td>
                 <td style={styles.td}>
                   <div style={{ ...styles.skelLine, width: 80, height: 22 }} />
@@ -823,6 +871,20 @@ const styles: Record<string, React.CSSProperties> = {
     outline: 'none',
     boxSizing: 'border-box',
     transition: 'border-color 0.12s, box-shadow 0.12s',
+  },
+  typeSelect: {
+    height: 38,
+    padding: '0 32px 0 12px',
+    fontSize: 14,
+    color: '#0f172a',
+    background: '#ffffff',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    outline: 'none',
+    boxSizing: 'border-box',
+    cursor: 'pointer',
   },
 
   card: {

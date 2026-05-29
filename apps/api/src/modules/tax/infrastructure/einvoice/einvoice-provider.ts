@@ -13,6 +13,19 @@
 
 import type { DocumentType } from '@prisma/client';
 
+// Phase 90 (2026-05-23) — Gap #12. NIC's `subSupplyType` discriminator
+// covers domestic-B2B / SEZ-with-payment / SEZ-without-payment / export
+// variants. The classifier picks the value from buyer GSTIN + supplier
+// GSTIN state code + reverseChargeApplicable flag and threads it
+// through the provider payload.
+export type EInvoiceTransactionCategory =
+  | 'B2B' // domestic registered buyer
+  | 'SEZWP' // SEZ supply with payment of IGST
+  | 'SEZWOP' // SEZ supply without payment (LUT)
+  | 'EXPWP' // export with payment of IGST
+  | 'EXPWOP' // export without payment (LUT)
+  | 'DEXP'; // deemed export
+
 export interface IrnGenerateInput {
   /** Invoice-side identifiers — the IRP request payload mirrors NIC's
    *  schema field-for-field once the real adapter lands. */
@@ -27,6 +40,21 @@ export interface IrnGenerateInput {
   sgstInPaise: bigint;
   igstInPaise: bigint;
   cessInPaise: bigint;
+  // Phase 90 — Gap #12 / #23-#25. Carry the tax-treatment markers NIC
+  // requires on every payload. Without these the stub silently
+  // accepts; NIC rejects with a cryptic schema error.
+  transactionCategory: EInvoiceTransactionCategory;
+  reverseChargeApplicable: boolean;
+  /** Two-digit GST state code for the place of supply (CBIC's POS
+   *  rules require this when supplier and buyer states differ from the
+   *  derived place of supply). */
+  placeOfSupplyStateCode?: string | null;
+  // Phase 90 — Gap #10 credit/debit note linkage. When set, the
+  // provider includes the original invoice's IRN + document number
+  // in the IRP payload (mandatory per CBIC for CN/DN).
+  originalIrn?: string | null;
+  originalDocumentNumber?: string | null;
+  originalDocumentDate?: Date | null;
   lineItems: Array<{
     productName: string;
     hsnOrSacCode: string | null;

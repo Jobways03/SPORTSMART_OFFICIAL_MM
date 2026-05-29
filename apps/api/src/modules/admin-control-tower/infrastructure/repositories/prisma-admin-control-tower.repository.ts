@@ -438,27 +438,185 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
    *  Operations (mapping suspension)
    * ───────────────────────────────────────────────────────────────── */
 
-  async findSellerBasic(sellerId: string): Promise<{ id: string; sellerName: string; isDeleted: boolean } | null> {
+  async findSellerBasic(
+    sellerId: string,
+  ): Promise<{ id: string; sellerName: string; isDeleted: boolean; status: string } | null> {
     return this.prisma.seller.findUnique({
       where: { id: sellerId },
-      select: { id: true, sellerName: true, isDeleted: true },
+      select: { id: true, sellerName: true, isDeleted: true, status: true },
     });
   }
 
-  async suspendSellerMappings(sellerId: string): Promise<number> {
-    const result = await this.prisma.sellerProductMapping.updateMany({
-      where: { sellerId, isActive: true },
-      data: { isActive: false },
+  async suspendSellerMappings(
+    sellerId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<{ count: number; affectedMappingIds: string[] }> {
+    // Phase 59 (2026-05-22) — status-conditional bulk suspend
+    // (audit Gaps #1 + #2 + #3). Pre-Phase-59 this was a blind
+    // `updateMany WHERE sellerId AND isActive=true`, conflating
+    // every reason a mapping might be inactive. The new path
+    // only touches mappings currently APPROVED + active, stamps
+    // who/when/why, and returns the affected ids so the caller
+    // can release reservations + emit per-row events.
+    return this.prisma.$transaction(async (tx) => {
+      const candidates = await tx.sellerProductMapping.findMany({
+        where: { sellerId, approvalStatus: 'APPROVED', isActive: true },
+        select: { id: true },
+      });
+      if (candidates.length === 0) {
+        return { count: 0, affectedMappingIds: [] };
+      }
+      const ids = candidates.map((c) => c.id);
+      const result = await tx.sellerProductMapping.updateMany({
+        where: {
+          id: { in: ids },
+          approvalStatus: 'APPROVED',
+          isActive: true,
+        },
+        data: {
+          approvalStatus: 'SUSPENDED',
+          isActive: false,
+          suspendedBy: adminId,
+          suspendedAt: new Date(),
+          suspensionReason: reason,
+          // Clear stale reactivation stamps from a prior cycle so
+          // the row reads as "currently suspended" not "currently
+          // reactivated then re-suspended later".
+          reactivatedBy: null,
+          reactivatedAt: null,
+          reactivationReason: null,
+        },
+      });
+      return { count: result.count, affectedMappingIds: ids };
     });
-    return result.count;
   }
 
-  async activateSellerMappings(sellerId: string): Promise<number> {
-    const result = await this.prisma.sellerProductMapping.updateMany({
-      where: { sellerId, isActive: false },
-      data: { isActive: true },
+  async activateSellerMappings(
+    sellerId: string,
+    adminId: string,
+    reason: string,
+  ): Promise<{ count: number; affectedMappingIds: string[] }> {
+    // Phase 59 — symmetric reverse. Only lifts mappings that were
+    // bulk-suspended (approvalStatus='SUSPENDED' + isActive=false).
+    // STOPPED / REJECTED / PENDING_APPROVAL rows are untouched —
+    // a stopped mapping requires the explicit /reapprove path
+    // (Phase 57), a rejected mapping requires seller resubmit
+    // (Phase 56), and a pending mapping requires the per-mapping
+    // /approve flow.
+    return this.prisma.$transaction(async (tx) => {
+      const candidates = await tx.sellerProductMapping.findMany({
+        where: { sellerId, approvalStatus: 'SUSPENDED', isActive: false },
+        select: { id: true },
+      });
+      if (candidates.length === 0) {
+        return { count: 0, affectedMappingIds: [] };
+      }
+      const ids = candidates.map((c) => c.id);
+      const result = await tx.sellerProductMapping.updateMany({
+        where: {
+          id: { in: ids },
+          approvalStatus: 'SUSPENDED',
+          isActive: false,
+        },
+        data: {
+          approvalStatus: 'APPROVED',
+          isActive: true,
+          reactivatedBy: adminId,
+          reactivatedAt: new Date(),
+          reactivationReason: reason,
+        },
+      });
+      return { count: result.count, affectedMappingIds: ids };
     });
-    return result.count;
+  }
+
+  async releaseReservationsForMappings(
+    mappingIds: string[],
+  ): Promise<Array<{
+    reservationId: string;
+    mappingId: string;
+    quantity: number;
+    orderId: string | null;
+    customerId: string | null;
+    sessionId: string | null;
+    cartId: string | null;
+    stockQty: number;
+    beforeReservedQty: number;
+    afterReservedQty: number;
+  }>> {
+    // Phase 59 (2026-05-22) — releases active reservations on
+    // suspended mappings (audit Gap #6). Per-row CAS flip pattern
+    // matches Phase 58's seller-side helper + the
+    // reservation-expiry sweep so a concurrent expiry doesn't
+    // double-decrement reservedQty.
+    if (mappingIds.length === 0) return [];
+    const reservations = await this.prisma.stockReservation.findMany({
+      where: { mappingId: { in: mappingIds }, status: 'RESERVED' },
+      select: {
+        id: true,
+        mappingId: true,
+        quantity: true,
+        orderId: true,
+        customerId: true,
+        sessionId: true,
+        cartId: true,
+      },
+    });
+    if (reservations.length === 0) return [];
+
+    const out: Array<{
+      reservationId: string;
+      mappingId: string;
+      quantity: number;
+      orderId: string | null;
+      customerId: string | null;
+      sessionId: string | null;
+      cartId: string | null;
+      stockQty: number;
+      beforeReservedQty: number;
+      afterReservedQty: number;
+    }> = [];
+
+    for (const r of reservations) {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const flip = await tx.stockReservation.updateMany({
+          where: { id: r.id, status: 'RESERVED' },
+          data: { status: 'RELEASED', releasedAt: new Date() },
+        });
+        if (flip.count === 0) return null;
+        const mappingBefore = await tx.sellerProductMapping.findUnique({
+          where: { id: r.mappingId },
+          select: { stockQty: true, reservedQty: true },
+        });
+        if (!mappingBefore) return null;
+        const newReserved = Math.max(mappingBefore.reservedQty - r.quantity, 0);
+        await tx.sellerProductMapping.update({
+          where: { id: r.mappingId },
+          data: { reservedQty: newReserved },
+        });
+        return {
+          beforeReservedQty: mappingBefore.reservedQty,
+          afterReservedQty: newReserved,
+          stockQty: mappingBefore.stockQty,
+        };
+      });
+      if (result) {
+        out.push({
+          reservationId: r.id,
+          mappingId: r.mappingId,
+          quantity: r.quantity,
+          orderId: r.orderId,
+          customerId: r.customerId,
+          sessionId: r.sessionId,
+          cartId: r.cartId,
+          stockQty: result.stockQty,
+          beforeReservedQty: result.beforeReservedQty,
+          afterReservedQty: result.afterReservedQty,
+        });
+      }
+    }
+    return out;
   }
 
   /* ─────────────────────────────────────────────────────────────────

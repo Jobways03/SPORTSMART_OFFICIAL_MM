@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, notFound } from 'next/navigation';
 import { useModal } from '@sportsmart/ui';
 import { NovaTabs } from '../components/nova-tabs';
 import {
@@ -14,6 +14,7 @@ import { ApiError } from '@/lib/api-client';
 const PAGE_SIZE = 20;
 
 export default function NovaProductsPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const router = useRouter();
   const { confirmDialog, notify } = useModal();
   const [data, setData] = useState<{ items: OwnBrandProduct[]; total: number } | null>(null);

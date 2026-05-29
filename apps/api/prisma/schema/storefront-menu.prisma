@@ -14,39 +14,72 @@ enum MenuLinkType {
 }
 
 model StorefrontMenu {
-  id        String               @id @default(cuid())
-  handle    String               @unique
-  name      String
-  items     StorefrontMenuItem[]
-  createdAt DateTime             @default(now()) @map("created_at")
-  updatedAt DateTime             @updatedAt @map("updated_at")
+  id          String               @id @default(cuid())
+  handle      String               @unique
+  name        String
+  // Phase 48 (2026-05-21) — soft-disable + soft-delete
+  isActive    Boolean              @default(true) @map("is_active")
+  deletedAt   DateTime?            @map("deleted_at")
+  createdById String?              @map("created_by_id")
+  updatedById String?              @map("updated_by_id")
+  items       StorefrontMenuItem[]
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
 
   @@map("storefront_menus")
 }
 
 model StorefrontMenuItem {
-  id         String               @id @default(cuid())
-  menuId     String               @map("menu_id")
-  menu       StorefrontMenu       @relation(fields: [menuId], references: [id], onDelete: Cascade)
-  parentId   String?              @map("parent_id")
-  parent     StorefrontMenuItem?  @relation("MenuItemTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children   StorefrontMenuItem[] @relation("MenuItemTree")
-  position   Int                  @default(0)
-  label      String
-  linkType   MenuLinkType         @default(NONE) @map("link_type")
+  id           String               @id @default(cuid())
+  menuId       String               @map("menu_id")
+  menu         StorefrontMenu       @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  parentId     String?              @map("parent_id")
+  parent       StorefrontMenuItem?  @relation("MenuItemTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children     StorefrontMenuItem[] @relation("MenuItemTree")
+  position     Int                  @default(0)
+  label        String
+  // Phase 48 — customer-facing label override. If null, label is used.
+  displayLabel String?              @map("display_label")
+  linkType     MenuLinkType         @default(NONE) @map("link_type")
   // Polymorphic ref. Interpretation depends on linkType:
   //   COLLECTION/CATEGORY/BRAND/PRODUCT → entity id
   //   PAGE → page slug
   //   URL  → absolute or root-relative URL string
   //   NONE → null (the item is just a header / non-clickable group)
-  linkRef    String?              @map("link_ref")
+  linkRef      String?              @map("link_ref")
   // Optional Shopify-style tag filter applied to a COLLECTION link
   // ("hats,blue,summer" → adds ?tags=hats,blue,summer to the link).
-  filterTags String[]             @default([]) @map("filter_tags")
-  createdAt  DateTime             @default(now()) @map("created_at")
-  updatedAt  DateTime             @updatedAt @map("updated_at")
+  filterTags   String[]             @default([]) @map("filter_tags")
+  // Phase 48 — soft-disable + soft-delete + rendering hints
+  isActive     Boolean              @default(true) @map("is_active")
+  deletedAt    DateTime?            @map("deleted_at")
+  openInNewTab Boolean              @default(false) @map("open_in_new_tab")
+  relNofollow  Boolean              @default(false) @map("rel_nofollow")
+  createdAt    DateTime             @default(now()) @map("created_at")
+  updatedAt    DateTime             @updatedAt @map("updated_at")
 
   @@index([menuId, parentId, position])
   @@index([menuId])
+  // Phase 48 — partial composite index for the public tree query
+  // (active, non-deleted items ordered by position within parent).
+  @@index([menuId, isActive, parentId, position])
   @@map("storefront_menu_items")
+}
+
+// Phase 48 (2026-05-21) — audit log for menu + item mutations. Lets
+// marketing answer "who deleted the cricket nav link on July 4". Best-
+// effort writes — a failure does NOT block the mutation.
+model MenuAuditLog {
+  id           String   @id @default(uuid())
+  resourceType String   @map("resource_type") // 'MENU' | 'MENU_ITEM'
+  resourceId   String   @map("resource_id")
+  action       String // 'CREATE' | 'UPDATE' | 'DELETE' | 'REORDER'
+  prevState    Json?    @map("prev_state")
+  newState     Json?    @map("new_state")
+  actorId      String?  @map("actor_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([resourceType, resourceId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("menu_audit_logs")
 }

@@ -13,16 +13,19 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { FranchiseCatalogService } from '../../application/services/franchise-catalog.service';
-import { FranchiseAddCatalogMappingDto } from '../dtos/franchise-add-catalog-mapping.dto';
+import { FranchiseAddCatalogMappingDto, BulkAddCatalogMappingsDto } from '../dtos/franchise-add-catalog-mapping.dto';
 import { FranchiseUpdateCatalogMappingDto } from '../dtos/franchise-update-catalog-mapping.dto';
 import { FranchiseActiveGuard } from '../../../../core/guards';
 
 @ApiTags('Franchise Catalog')
 @Controller('franchise/catalog')
 @UseGuards(FranchiseAuthGuard, FranchiseActiveGuard)
+// Phase 159n (audit #12) — coarse abuse cap on the franchise catalog surface.
+@Throttle({ default: { limit: 60, ttl: 60_000 } })
 export class FranchiseCatalogController {
   constructor(
     private readonly catalogService: FranchiseCatalogService,
@@ -125,7 +128,7 @@ export class FranchiseCatalogController {
   @HttpCode(HttpStatus.CREATED)
   async addMappings(
     @Req() req: Request,
-    @Body() body: { mappings: FranchiseAddCatalogMappingDto[] },
+    @Body() body: BulkAddCatalogMappingsDto,
   ) {
     const franchiseId = (req as any).franchiseId;
     const mappingsData = body.mappings.map((m) => ({

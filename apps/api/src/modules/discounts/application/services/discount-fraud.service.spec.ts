@@ -39,6 +39,10 @@ function makeMocks(envOverrides: Record<string, any> = {}) {
       envOverrides[key] ?? fallback,
     getNumber: (key: string, fallback: number) =>
       envOverrides[key] ?? fallback,
+    // Phase 62 (2026-05-22) — DiscountFraudService now reads
+    // COUPON_ATTEMPT_IP_HASH_SALT via getString (audit Gap #21).
+    getString: (key: string, fallback?: string) =>
+      envOverrides[key] ?? fallback ?? 'test-salt-min-16chars',
   };
 
   return {
@@ -179,6 +183,21 @@ describe('DiscountFraudService.recordAttempt', () => {
         }),
       }),
     );
+  });
+
+  // Phase 62 (2026-05-22) — audit Gap #21. The recorded row stores
+  // a salted hash of the IP, not the plaintext value.
+  it('hashes the IP address instead of persisting plaintext (Phase 62 — Gap #21)', async () => {
+    const m = makeMocks();
+    m.couponAttemptCreate.mockResolvedValue({ id: 'a1' });
+    const svc = new DiscountFraudService(m.prisma, m.env);
+    await svc.recordAttempt(
+      { customerId: 'c1', ipAddress: '1.2.3.4', codeAttempted: 'SUMMER10' },
+      'VALID',
+    );
+    const data = m.couponAttemptCreate.mock.calls[0][0].data;
+    expect(data.ipAddress).toBeNull();
+    expect(data.ipHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('feature flag OFF skips the write', async () => {

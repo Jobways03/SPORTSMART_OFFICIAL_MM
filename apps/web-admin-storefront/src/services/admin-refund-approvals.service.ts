@@ -35,6 +35,11 @@ export interface RefundInstructionRow {
   idempotencyKey: string | null;
   approvedBy: string | null;
   approvedAt: string | null;
+  // Phase 125 — dual-approval (two-person rule). The first approver of a
+  // high-value refund; the row stays PENDING_APPROVAL until a second, DISTINCT
+  // approver releases it (then approvedBy holds that second approver).
+  firstApprovedBy: string | null;
+  firstApprovedAt: string | null;
   rejectedBy: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
@@ -45,6 +50,16 @@ export interface RefundInstructionRow {
   gatewayRefundId: string | null;
   createdAt: string;
   updatedAt: string;
+  // Transient flags returned by the approve/reject mutations (NOT persisted):
+  //  - approve → pendingSecondApproval=true means only the FIRST of two
+  //    required approvals was recorded; a second, distinct approver must still
+  //    approve before the money moves.
+  pendingSecondApproval?: boolean;
+  //  - reject → summary of the dispute liability-ledger reversal that ran.
+  liabilityReversal?: {
+    reversedAny: boolean;
+    needsManual: boolean;
+  } | null;
 }
 
 /**

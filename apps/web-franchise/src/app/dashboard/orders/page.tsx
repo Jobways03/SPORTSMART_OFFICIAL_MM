@@ -476,8 +476,6 @@ const router = useRouter();
                         <td style={tdStyle}>
                           <DeliveryMethodBadge
                             method={(so as any).deliveryMethod ?? null}
-                            awb={(so as any).ithinkAwb}
-                            courier={(so as any).ithinkLogistic}
                           />
                         </td>
                         <td style={tdStyle}>{fmtDate(so.createdAt)}</td>

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, notFound } from 'next/navigation';
 import { NovaTabs } from '../../components/nova-tabs';
 import {
   adminNovaService,
@@ -21,6 +21,7 @@ const ALLOWED_TRANSITIONS: Record<OwnBrandProcurementStatus, OwnBrandProcurement
 };
 
 export default function ProcurementDetailPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const { id } = useParams<{ id: string }>();
   const [detail, setDetail] = useState<ProcurementDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,7 +88,7 @@ export default function ProcurementDetailPage() {
   const canReceive = detail.status === 'PLACED' || detail.status === 'IN_TRANSIT';
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: '#0F1115' }}>NOVA</h1>
       <p style={{ marginTop: 4, marginBottom: 16, fontSize: 14, color: '#525A65' }}>
         Sportsmart's own-brand warehouses, products, stocks, and procurement.

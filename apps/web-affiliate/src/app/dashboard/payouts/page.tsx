@@ -23,6 +23,10 @@ interface PayoutRequest {
   tdsAmount: string;
   netAmount: string;
   financialYear: string;
+  // Phase 159e — TDS disclosure (which section/rate, and whether PAN was on file).
+  tdsSection?: string | null;
+  tdsRateBps?: number | null;
+  panOnFileAtDeduction?: boolean | null;
   status: 'REQUESTED' | 'APPROVED' | 'PROCESSING' | 'PAID' | 'FAILED' | 'CANCELLED';
   requestedAt: string;
   paidAt?: string | null;
@@ -91,7 +95,18 @@ export default function PayoutsPage() {
     setRequestError('');
     setRequesting(true);
     try {
-      await apiFetch('/affiliate/me/payouts', { method: 'POST', body: JSON.stringify({}) });
+      // Phase 154 — one idempotency key per click so a double-submit (or a
+      // retry on a flaky network) returns the first request instead of racing
+      // a second one. crypto.randomUUID is available in all modern browsers.
+      const idempotencyKey =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await apiFetch('/affiliate/me/payouts', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        headers: { 'X-Idempotency-Key': idempotencyKey },
+      });
       await load();
     } catch (e: any) {
       setRequestError(e?.message ?? 'Payout request failed.');
@@ -109,6 +124,9 @@ export default function PayoutsPage() {
 
   const checks = [
     { label: 'Account is ACTIVE', done: profile?.status === 'ACTIVE', body: profile?.status !== 'ACTIVE' ? 'Wait for admin approval.' : null },
+    // KYC check temporarily removed (KYC feature disabled).
+    // Phase 154 — KYC is gated again on the backend (AFFILIATE_KYC_GATE_ENABLED,
+    // default ON), so surface it in the eligibility checklist.
     { label: 'KYC verified', done: profile?.kycStatus === 'VERIFIED', body: profile?.kycStatus !== 'VERIFIED' ? 'Complete it on the KYC page.' : null, href: '/dashboard/kyc' },
     { label: 'Primary payout method added', done: !!primaryMethod, body: !primaryMethod ? 'Add a bank account or UPI below.' : null },
     { label: `Balance ≥ ${formatINR(MIN_PAYOUT)}`, done: eligibleAmount >= MIN_PAYOUT, body: eligibleAmount < MIN_PAYOUT ? `You have ${formatINR(eligibleAmount)} eligible.` : null },
@@ -361,7 +379,26 @@ function PayoutHistoryCard({ request: r }: { request: PayoutRequest }) {
       <div style={{ marginTop: 12, padding: '10px 12px', background: '#f8fafc', border: '1px solid #f1f5f9', borderRadius: 8, fontSize: 12, color: '#475569', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
         <Breakdown label="Gross" value={formatINR(r.grossAmount)} />
         <Breakdown label="Reversal" value={Number(r.reversalDebit) > 0 ? `-${formatINR(r.reversalDebit)}` : '—'} tone={Number(r.reversalDebit) > 0 ? 'danger' : undefined} />
-        <Breakdown label="TDS" value={Number(r.tdsAmount) > 0 ? `-${formatINR(r.tdsAmount)}` : '—'} tone={Number(r.tdsAmount) > 0 ? 'danger' : undefined} />
+        {/* Phase 159e — disclose the TDS section, rate, and PAN status. */}
+        <Breakdown
+          label={
+            Number(r.tdsAmount) > 0
+              ? `TDS (${[
+                  r.tdsSection ? `§${r.tdsSection === '194O' ? '194-O' : r.tdsSection}` : null,
+                  r.tdsRateBps != null ? `${r.tdsRateBps / 100}%` : null,
+                  r.panOnFileAtDeduction === true
+                    ? 'PAN on file'
+                    : r.panOnFileAtDeduction === false
+                    ? 'no PAN'
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(', ')})`
+              : 'TDS'
+          }
+          value={Number(r.tdsAmount) > 0 ? `-${formatINR(r.tdsAmount)}` : '—'}
+          tone={Number(r.tdsAmount) > 0 ? 'danger' : undefined}
+        />
         <Breakdown label="Reference" value={r.transactionRef ?? '—'} mono />
       </div>
       {r.failureReason && (

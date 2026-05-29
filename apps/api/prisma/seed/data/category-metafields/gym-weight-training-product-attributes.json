@@ -1,0 +1,383 @@
+{
+  "dumbbells": [
+    {
+      "key": "dumbbell_type",
+      "name": "Dumbbell Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Fixed", "Adjustable", "Studio/Neoprene", "Hex"]
+    },
+    {
+      "key": "weight_kg",
+      "name": "Weight (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["1-5", "5-10", "10-15", "15-20", "20-30", "30-40", "40-50", "50+"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Cast Iron", "Rubber Coated", "Chrome", "Neoprene", "Urethane", "Vinyl"]
+    },
+    {
+      "key": "sold_as",
+      "name": "Sold As",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Single", "Pair", "Set with Rack"]
+    }
+  ],
+  "barbells": [
+    {
+      "key": "barbell_type",
+      "name": "Barbell Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Olympic", "Standard", "EZ Curl", "Trap/Hex Bar", "Safety Squat Bar", "Swiss Bar"]
+    },
+    {
+      "key": "bar_weight_kg",
+      "name": "Bar Weight (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["5", "10", "15", "20", "25", "30"]
+    },
+    {
+      "key": "bar_length",
+      "name": "Bar Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["4ft", "5ft", "6ft", "7ft"]
+    },
+    {
+      "key": "weight_capacity_kg",
+      "name": "Weight Capacity (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Up to 100", "100-200", "200-350", "350-500", "500+"]
+    },
+    {
+      "key": "sleeve_type",
+      "name": "Sleeve Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Olympic (2 inch)", "Standard (1 inch)"]
+    }
+  ],
+  "weight-plates": [
+    {
+      "key": "plate_type",
+      "name": "Plate Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Olympic", "Standard", "Bumper", "Fractional/Change", "Competition"]
+    },
+    {
+      "key": "weight_kg",
+      "name": "Weight (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["0.5-2.5", "5", "10", "15", "20", "25"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Cast Iron", "Rubber Coated", "Bumper Rubber", "Urethane", "Chrome"]
+    },
+    {
+      "key": "hole_size",
+      "name": "Hole Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Olympic (2 inch)", "Standard (1 inch)"]
+    },
+    {
+      "key": "sold_as",
+      "name": "Sold As",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Single", "Pair", "Set"]
+    }
+  ],
+  "kettlebells": [
+    {
+      "key": "kettlebell_type",
+      "name": "Kettlebell Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Cast Iron", "Competition", "Adjustable", "Vinyl Coated", "Soft/Sand Filled"]
+    },
+    {
+      "key": "weight_kg",
+      "name": "Weight (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["4-8", "8-12", "12-16", "16-24", "24-32", "32-48"]
+    },
+    {
+      "key": "handle_type",
+      "name": "Handle Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Standard", "Wide Handle", "Competition (33mm)", "Double Handle"]
+    }
+  ],
+  "benches": [
+    {
+      "key": "bench_type",
+      "name": "Bench Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Flat", "Adjustable Incline/Decline", "Olympic Weight Bench", "Folding", "Preacher Curl", "Ab Bench"]
+    },
+    {
+      "key": "weight_capacity_kg",
+      "name": "Weight Capacity (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Up to 150", "150-250", "250-350", "350-500", "500+"]
+    },
+    {
+      "key": "foldable",
+      "name": "Foldable",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "frame_material",
+      "name": "Frame Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Steel", "Heavy Gauge Steel", "Commercial Grade Steel"]
+    }
+  ],
+  "power-racks-cages": [
+    {
+      "key": "rack_type",
+      "name": "Rack Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Full Power Rack", "Half Rack", "Squat Stand", "Smith Machine", "Functional Trainer", "Wall Mounted"]
+    },
+    {
+      "key": "weight_capacity_kg",
+      "name": "Weight Capacity (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Up to 200", "200-350", "350-500", "500+"]
+    },
+    {
+      "key": "attachments_included",
+      "name": "Attachments Included",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": ["Pull-Up Bar", "Dip Bars", "J-Hooks", "Safety Arms", "Lat Pulldown", "Cable Crossover", "Landmine"]
+    },
+    {
+      "key": "use_type",
+      "name": "Use Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Home", "Commercial", "Light Commercial"]
+    }
+  ],
+  "cable-machines": [
+    {
+      "key": "machine_type",
+      "name": "Machine Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Lat Pulldown", "Cable Crossover", "Single Pulley", "Dual Adjustable Pulley", "Multi-Station"]
+    },
+    {
+      "key": "weight_stack_kg",
+      "name": "Weight Stack (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Up to 50", "50-80", "80-100", "100-150", "150+"]
+    },
+    {
+      "key": "use_type",
+      "name": "Use Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Home", "Commercial", "Light Commercial"]
+    }
+  ],
+  "resistance-bands-tubes": [
+    {
+      "key": "band_type",
+      "name": "Band Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Loop Band", "Tube with Handles", "Pull-Up Assist Band", "Mini Band", "Therapy Band", "Fabric Band"]
+    },
+    {
+      "key": "resistance_level",
+      "name": "Resistance Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Extra Light", "Light", "Medium", "Heavy", "Extra Heavy"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Latex", "Fabric", "TPE", "Rubber"]
+    },
+    {
+      "key": "sold_as",
+      "name": "Sold As",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Single", "Set"]
+    }
+  ],
+  "gym-machines": [
+    {
+      "key": "machine_type",
+      "name": "Machine Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Leg Press", "Chest Press", "Shoulder Press", "Leg Extension/Curl", "Pec Deck", "Seated Row", "Multi-Gym"]
+    },
+    {
+      "key": "resistance_type",
+      "name": "Resistance Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Weight Stack", "Plate Loaded", "Hydraulic", "Air Resistance"]
+    },
+    {
+      "key": "weight_capacity_kg",
+      "name": "Weight Capacity (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Up to 100", "100-150", "150-250", "250+"]
+    },
+    {
+      "key": "use_type",
+      "name": "Use Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Home", "Commercial", "Light Commercial"]
+    }
+  ],
+  "cardio-machines": [
+    {
+      "key": "machine_type",
+      "name": "Machine Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Treadmill", "Exercise Bike", "Elliptical", "Rowing Machine", "Stair Climber", "Air Bike", "Ski Erg"]
+    },
+    {
+      "key": "resistance_type",
+      "name": "Resistance Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Magnetic", "Air", "Friction", "Water", "Motorized"]
+    },
+    {
+      "key": "max_user_weight_kg",
+      "name": "Max User Weight (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Up to 100", "100-130", "130-150", "150-180", "180+"]
+    },
+    {
+      "key": "foldable",
+      "name": "Foldable",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "display_console",
+      "name": "Display Console",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Basic LCD", "Backlit LCD", "Touchscreen", "No Display"]
+    },
+    {
+      "key": "use_type",
+      "name": "Use Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": ["Home", "Commercial", "Light Commercial"]
+    }
+  ],
+  "pull-up-dip-stations": [
+    {
+      "key": "station_type",
+      "name": "Station Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Pull-Up Bar (Doorway)", "Free Standing Pull-Up Bar", "Power Tower", "Wall Mounted", "Ceiling Mounted", "Dip Station"]
+    },
+    {
+      "key": "weight_capacity_kg",
+      "name": "Weight Capacity (kg)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Up to 100", "100-150", "150-200", "200+"]
+    },
+    {
+      "key": "grip_positions",
+      "name": "Grip Positions",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": ["Wide", "Narrow", "Neutral", "Angled"]
+    }
+  ],
+  "gym-flooring": [
+    {
+      "key": "flooring_type",
+      "name": "Flooring Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Rubber Tiles", "Rubber Rolls", "Interlocking Mats", "Foam Tiles", "Deadlift Platform"]
+    },
+    {
+      "key": "thickness_mm",
+      "name": "Thickness (mm)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["6-10", "10-15", "15-20", "20-30", "30+"]
+    },
+    {
+      "key": "coverage_area",
+      "name": "Coverage Per Piece",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["1x1 ft", "2x2 ft", "3x3 ft", "4x6 ft", "Roll (4ft wide)"]
+    }
+  ],
+  "weightlifting-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Weightlifting Belt", "Wrist Wraps", "Knee Sleeves", "Lifting Straps", "Barbell Collars", "Chalk", "Gym Gloves", "Elbow Sleeves"]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["XS", "S", "M", "L", "XL", "2XL", "One Size"]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Leather", "Nylon", "Neoprene", "Elastic", "Cotton"]
+    }
+  ]
+}

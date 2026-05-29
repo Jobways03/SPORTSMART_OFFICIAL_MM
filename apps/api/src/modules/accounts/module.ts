@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthGuard } from '../../core/guards';
 import { MoneyModule } from '../../core/money/money.module';
+// Phase 146 — batch mark-paid delegates to the hardened single-settlement path.
+import { SettlementsModule } from '../settlements/module';
 
 // Repository
 import { ACCOUNTS_REPOSITORY } from './domain/repositories/accounts.repository.interface';
@@ -22,7 +24,7 @@ import { AccountsSettlementsController } from './presentation/controllers/accoun
 import { AccountsReportsController } from './presentation/controllers/accounts-reports.controller';
 
 @Module({
-  imports: [MoneyModule],
+  imports: [MoneyModule, SettlementsModule],
   controllers: [
     AccountsDashboardController,
     AccountsSettlementsController,

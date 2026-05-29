@@ -608,13 +608,22 @@ export default function ProductDetailPage() {
               </section>
             )}
 
-            {/* Story 3.5 — volume-pricing upsell strip. Display-only at
-                v1; renders nothing when the product has no tiers, so
-                this is a no-op for the long tail of products. */}
+            {/* Story 3.5 / Phase 44 (2026-05-21) — volume pricing strip.
+                Now passes listUnitPrice from the selected-variant /
+                base-price source so the strip can render the effective
+                per-unit price next to each rung. currentQuantity stays
+                at 1 here because the PDP doesn't have a quantity
+                selector yet; the cart UI is where the customer changes
+                qty, and the strip re-renders on PDP revisit. */}
             <PricingTiersStrip
               productId={product.id}
               variantId={selectedVariant?.id ?? null}
               currentQuantity={1}
+              listUnitPrice={
+                currentPrice !== null && currentPrice !== undefined
+                  ? Number(currentPrice)
+                  : undefined
+              }
             />
 
             {/* Specs */}

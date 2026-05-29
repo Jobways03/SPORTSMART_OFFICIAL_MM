@@ -52,21 +52,75 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       if (!isNaN(max)) conditions.push(Prisma.sql`COALESCE(p.base_price, 0) <= ${max}`);
     }
 
-    // Metafield filters
+    // Phase 40 (2026-05-21) — type-aware metafield filter SQL.
+    //
+    // Pre-Phase-40 every filter key fanned out into a OR across
+    // value_text + value_boolean + value_json regardless of the
+    // definition type (Gap #5). This had two problems:
+    //   (a) Semantic — a SINGLE_LINE_TEXT field matched against a
+    //       JSON-array column produced confusing false positives.
+    //   (b) Performance — three column predicates per filter; the
+    //       boolean clause was hardcoded against values[0] which
+    //       ignored multi-value semantics.
+    //
+    // The fix resolves each filter key to its (type, id) once via a
+    // join inside the EXISTS, then picks the right column predicate.
+    // Multiple def ids share the same key across CATEGORY ancestry —
+    // matching by key (rather than definitionId) keeps that intentional
+    // OR-across-ancestors behaviour while still per-type.
     const BUILT_IN_FILTER_KEYS = new Set(['brand', 'availability', 'price_range']);
     if (filterObj) {
       for (const [filterKey, rawValue] of Object.entries(filterObj)) {
         if (BUILT_IN_FILTER_KEYS.has(filterKey)) continue;
-        if (rawValue) {
-          const values = String(rawValue).split(',').map((v) => v.trim()).filter(Boolean);
-          if (values.length > 0) {
-            conditions.push(Prisma.sql`EXISTS (
-              SELECT 1 FROM product_metafields pm JOIN metafield_definitions md ON md.id = pm.metafield_definition_id
-              WHERE pm.product_id = p.id AND md.key = ${filterKey}
-                AND (pm.value_text IN (${Prisma.join(values)}) OR pm.value_boolean = ${values[0] === 'true'} OR pm.value_json @> ${JSON.stringify(values)}::jsonb)
-            )`);
-          }
-        }
+        if (!rawValue) continue;
+
+        // NFKC normalize to collapse unicode-trick variants (e.g.
+        // Cyrillic 'о' vs Latin 'o'). Lower-case for case-insensitive
+        // match. The seller-side write path also lowercases so the
+        // two sides stay aligned. Empty values dropped.
+        const values = String(rawValue)
+          .split(',')
+          .map((v) => v.trim().normalize('NFKC'))
+          .filter(Boolean);
+        if (values.length === 0) continue;
+
+        // Boolean filter: any input that explicitly is 'true' or
+        // 'false' (multi-value boolean is meaningless — bound to single).
+        const booleanGuess = values.length === 1 && (values[0] === 'true' || values[0] === 'false');
+        const numericGuess = values.every((v) => Number.isFinite(Number(v)));
+
+        // Per-type EXISTS. The CASE on md.type guards each predicate
+        // so the planner picks the right index (value_text /
+        // value_boolean / value_numeric / value_json).
+        conditions.push(Prisma.sql`EXISTS (
+          SELECT 1 FROM product_metafields pm
+          JOIN metafield_definitions md ON md.id = pm.metafield_definition_id
+          WHERE pm.product_id = p.id
+            AND md.key = ${filterKey}
+            AND (
+              -- text / single-select / color / url / file
+              (md.type IN ('SINGLE_LINE_TEXT','MULTI_LINE_TEXT','SINGLE_SELECT','COLOR','URL','FILE_REFERENCE')
+                AND pm.value_text IS NOT NULL
+                AND pm.value_text IN (${Prisma.join(values)}))
+              OR
+              -- multi-select stored as JSON array
+              (md.type = 'MULTI_SELECT'
+                AND pm.value_json IS NOT NULL
+                AND pm.value_json ?| array[${Prisma.join(values)}])
+              OR
+              -- boolean only when input looks boolean
+              (md.type = 'BOOLEAN'
+                AND ${booleanGuess}::boolean
+                AND pm.value_boolean = ${values[0] === 'true'})
+              OR
+              -- numeric range filter (values supplied as min,max)
+              (md.type IN ('NUMBER_INTEGER','NUMBER_DECIMAL','RATING')
+                AND ${numericGuess}::boolean
+                AND pm.value_numeric IS NOT NULL
+                AND pm.value_numeric >= ${Number(values[0])}
+                AND pm.value_numeric <= ${Number(values[values.length - 1])})
+            )
+        )`);
       }
     }
 
@@ -91,7 +145,11 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
         p.compare_at_price::numeric AS "compareAtPrice", p.has_variants AS "hasVariants",
         COALESCE(
           (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1),
-          (SELECT pvi.url FROM product_variant_images pvi JOIN product_variants pv ON pv.id = pvi.variant_id WHERE pv.product_id = p.id AND pv.is_deleted = false ORDER BY pvi.sort_order ASC LIMIT 1)
+          -- Phase 41 (2026-05-21) — variant fallback now prefers
+          -- pvi.is_primary DESC so the hero stays stable across
+          -- reorders. The sort_order tiebreaker keeps legacy data
+          -- (no primary set) behaving as before.
+          (SELECT pvi.url FROM product_variant_images pvi JOIN product_variants pv ON pv.id = pvi.variant_id WHERE pv.product_id = p.id AND pv.is_deleted = false ORDER BY pvi.is_primary DESC, pvi.sort_order ASC LIMIT 1)
         ) AS "primaryImageUrl",
         COALESCE(
           (SELECT array_agg(url ORDER BY rn) FROM (
@@ -138,14 +196,27 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
   }
 
   async findProductDetailBySlug(slug: string): Promise<any | null> {
+    // Phase 30 (2026-05-21) — defensive `moderationStatus='APPROVED'`
+    // predicate. The browse query at line 389 always filters both
+    // status + moderationStatus; the by-slug query was filtering
+    // status only. A row that drifts to status=ACTIVE without a
+    // matching moderationStatus=APPROVED (e.g. via the raw
+    // /status admin endpoint that skips the moderation column) was
+    // reachable by slug but invisible to browse. The two queries are
+    // now consistent.
     return this.prisma.product.findFirst({
-      where: { slug, isDeleted: false, status: 'ACTIVE' },
+      where: {
+        slug,
+        isDeleted: false,
+        status: 'ACTIVE',
+        moderationStatus: 'APPROVED',
+      },
       select: {
         id: true, productCode: true, title: true, slug: true, shortDescription: true,
         description: true, hasVariants: true, basePrice: true, compareAtPrice: true,
         category: { select: { id: true, name: true, slug: true } },
         brand: { select: { id: true, name: true, slug: true } },
-        images: { orderBy: { sortOrder: 'asc' }, select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
+        images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
         tags: { select: { tag: true } },
         seo: { select: { metaTitle: true, metaDescription: true, handle: true } },
         options: {
@@ -165,7 +236,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
             optionValues: {
               select: { optionValue: { select: { id: true, value: true, displayValue: true, optionDefinition: { select: { id: true, name: true, displayName: true, type: true } } } } },
             },
-            images: { orderBy: { sortOrder: 'asc' }, select: { id: true, url: true, altText: true, sortOrder: true } },
+            images: { orderBy: [{ isPrimary: 'desc' }, { sortOrder: 'asc' }], select: { id: true, url: true, altText: true, sortOrder: true, isPrimary: true } },
           },
           orderBy: { sortOrder: 'asc' },
         },
@@ -215,13 +286,37 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     return this.prisma.storefrontFilter.findUnique({ where: { id } });
   }
 
-  async reorderFilterConfigs(ids: string[]): Promise<void> {
-    for (let i = 0; i < ids.length; i++) {
-      await this.prisma.storefrontFilter.update({
-        where: { id: ids[i] },
-        data: { sortOrder: i },
-      });
+  /**
+   * Phase 40 (2026-05-21) — transactional reorder with id-existence
+   * validation. Pre-Phase-40 a fake id silently no-op'd one slot of
+   * the order, or threw 500 mid-loop leaving the table half-applied.
+   *
+   * Now: pre-fetch the existing ids, refuse if any input id is
+   * missing, then apply every sortOrder write in a single $transaction
+   * so the table is either fully reordered or untouched.
+   */
+  async reorderFilterConfigs(ids: string[]): Promise<{ updated: number }> {
+    if (ids.length === 0) return { updated: 0 };
+
+    const existing = await this.prisma.storefrontFilter.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+    const existingSet = new Set(existing.map((r) => r.id));
+    const missing = ids.filter((id) => !existingSet.has(id));
+    if (missing.length > 0) {
+      throw new Error(`Unknown storefront filter ids: ${missing.join(', ')}`);
     }
+
+    await this.prisma.$transaction(
+      ids.map((id, i) =>
+        this.prisma.storefrontFilter.update({
+          where: { id },
+          data: { sortOrder: i },
+        }),
+      ),
+    );
+    return { updated: ids.length };
   }
 
   async findPostOfficeByPincode(pincode: string): Promise<any[]> {
@@ -414,7 +509,22 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     return results[0] ?? null;
   }
 
-  async computeTextMetafieldFacets(defKey: string, allConditions: Prisma.Sql[]): Promise<{ value: string; count: number }[]> {
+  /**
+   * Phase 40 (2026-05-21) — default LIMIT bumped 50 → 200, hard-capped
+   * at 500. Closes audit gap #15. Categories with rich choice sets
+   * (e.g. "Brand Sub-collection" with 80+ values) no longer truncate
+   * to the most-common 50 silently.
+   *
+   * The cap protects against an aggressive frontend asking for a
+   * million rows — the GROUP BY is cheap but unbounded LIMIT pulls
+   * memory and bandwidth.
+   */
+  async computeTextMetafieldFacets(
+    defKey: string,
+    allConditions: Prisma.Sql[],
+    limit?: number,
+  ): Promise<{ value: string; count: number }[]> {
+    const effectiveLimit = Math.min(Math.max(limit ?? 200, 1), 500);
     const metafieldKeyCondition = Prisma.sql`EXISTS (
       SELECT 1 FROM metafield_definitions md
       WHERE md.id = pm.metafield_definition_id AND md.key = ${defKey}
@@ -440,7 +550,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       ) AS combined
       GROUP BY val
       ORDER BY count DESC
-      LIMIT 50
+      LIMIT ${effectiveLimit}
     `);
   }
 
@@ -457,15 +567,29 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     return results.map((r) => r.category_id);
   }
 
+  /**
+   * Phase 40 (2026-05-21) — reads the new `isFilterable=true` flag
+   * instead of the prior hardcoded type allowlist. Closes audit gaps:
+   *   #7 NUMBER_INTEGER / NUMBER_DECIMAL / RATING + DIMENSION /
+   *      WEIGHT / VOLUME / JSON all become eligible as filters when
+   *      the admin opts in via the new toggle.
+   *   #8 Filterability is a single explicit boolean column, not an
+   *      implicit "exists row in StorefrontFilter" hint.
+   *
+   * Active + isFilterable + CATEGORY ownerType + in the category
+   * ancestor set. Ordering follows the new filterDisplayOrder column,
+   * with sortOrder as a tiebreaker so existing admin orderings carry
+   * forward.
+   */
   async findFilterableDefinitions(categoryIds: string[]): Promise<any[]> {
     return this.prisma.metafieldDefinition.findMany({
       where: {
         isActive: true,
+        isFilterable: true,
         categoryId: { in: categoryIds },
         ownerType: 'CATEGORY',
-        type: { in: ['SINGLE_SELECT', 'MULTI_SELECT', 'BOOLEAN', 'COLOR'] },
       },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      orderBy: [{ filterDisplayOrder: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     });
   }
 

@@ -1,0 +1,553 @@
+{
+  "tennis-rackets": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "head_size",
+      "name": "Head Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "oversize", "label": "Oversize (105+ sq in)" },
+        { "value": "midplus", "label": "Midplus (98–104 sq in)" },
+        { "value": "midsize", "label": "Midsize (85–97 sq in)" },
+        { "value": "junior", "label": "Junior (19\"–26\")" }
+      ]
+    },
+    {
+      "key": "weight_class",
+      "name": "Weight Class",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "lightweight", "label": "Lightweight (Under 280g)" },
+        { "value": "medium", "label": "Medium (280–310g)" },
+        { "value": "heavy", "label": "Heavy (310g+)" }
+      ]
+    },
+    {
+      "key": "playing_style",
+      "name": "Playing Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "power", "label": "Power" },
+        { "value": "control", "label": "Control" },
+        { "value": "spin", "label": "Spin" },
+        { "value": "all_round", "label": "All-Round / Tweener" }
+      ]
+    },
+    {
+      "key": "grip_size",
+      "name": "Grip Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 5,
+      "choices": [
+        { "value": "g0", "label": "G0 / L0 (4\")" },
+        { "value": "g1", "label": "G1 / L1 (4 1/8\")" },
+        { "value": "g2", "label": "G2 / L2 (4 1/4\")" },
+        { "value": "g3", "label": "G3 / L3 (4 3/8\")" },
+        { "value": "g4", "label": "G4 / L4 (4 1/2\")" },
+        { "value": "g5", "label": "G5 / L5 (4 5/8\")" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "strung",
+      "name": "Strung",
+      "type": "BOOLEAN",
+      "sortOrder": 6,
+      "description": "Whether the racket comes pre-strung"
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" },
+        { "value": "professional", "label": "Professional / Tour" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 8,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "green", "label": "Green" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-strings": [
+    {
+      "key": "string_material",
+      "name": "String Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "polyester", "label": "Polyester (Poly)" },
+        { "value": "nylon", "label": "Nylon / Synthetic Gut" },
+        { "value": "natural_gut", "label": "Natural Gut" },
+        { "value": "multifilament", "label": "Multifilament" },
+        { "value": "kevlar", "label": "Kevlar" },
+        { "value": "hybrid_set", "label": "Hybrid Set" }
+      ]
+    },
+    {
+      "key": "gauge",
+      "name": "Gauge (Thickness)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "15", "label": "15 (1.35–1.41mm)" },
+        { "value": "15l", "label": "15L (1.30–1.34mm)" },
+        { "value": "16", "label": "16 (1.26–1.30mm)" },
+        { "value": "16l", "label": "16L (1.22–1.26mm)" },
+        { "value": "17", "label": "17 (1.20–1.24mm)" },
+        { "value": "17l", "label": "17L (1.15–1.20mm)" },
+        { "value": "18", "label": "18 (1.10–1.16mm)" }
+      ]
+    },
+    {
+      "key": "playing_style",
+      "name": "Playing Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "power", "label": "Power" },
+        { "value": "control", "label": "Control" },
+        { "value": "spin", "label": "Spin" },
+        { "value": "comfort", "label": "Comfort / Arm-Friendly" },
+        { "value": "durability", "label": "Durability" }
+      ]
+    },
+    {
+      "key": "length_type",
+      "name": "Length Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "single_set", "label": "Single Set (12m)" },
+        { "value": "reel", "label": "Reel (200m)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "natural", "label": "Natural" },
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-balls": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "pressurised", "label": "Pressurised (Match)" },
+        { "value": "pressureless", "label": "Pressureless (Practice)" },
+        { "value": "foam", "label": "Foam (Starter / Kids)" }
+      ]
+    },
+    {
+      "key": "court_surface",
+      "name": "Court Surface",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "all_court", "label": "All Court" },
+        { "value": "clay", "label": "Clay Court" },
+        { "value": "hard", "label": "Hard Court" },
+        { "value": "grass", "label": "Grass Court" }
+      ]
+    },
+    {
+      "key": "stage",
+      "name": "Stage (Learner Level)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "description": "ITF colour-coded progression balls for beginners",
+      "choices": [
+        { "value": "standard", "label": "Standard (Full Speed)" },
+        { "value": "stage_1_green", "label": "Stage 1 – Green (25% slower)" },
+        { "value": "stage_2_orange", "label": "Stage 2 – Orange (50% slower)" },
+        { "value": "stage_3_red", "label": "Stage 3 – Red (75% slower)" }
+      ]
+    },
+    {
+      "key": "pack_size",
+      "name": "Pack Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "3_pack", "label": "3-Pack (Tube)" },
+        { "value": "4_pack", "label": "4-Pack (Tube)" },
+        { "value": "12_pack", "label": "12-Pack (Bag)" },
+        { "value": "24_pack", "label": "24-Pack (Bag)" },
+        { "value": "48_pack", "label": "48-Pack (Bag)" },
+        { "value": "72_pack", "label": "72-Pack (Case)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "yellow", "label": "Yellow (Standard)" },
+        { "value": "green_yellow", "label": "Green / Yellow (Stage 1)" },
+        { "value": "orange", "label": "Orange (Stage 2)" },
+        { "value": "red", "label": "Red (Stage 3)" },
+        { "value": "white", "label": "White" }
+      ]
+    }
+  ],
+
+  "tennis-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "court_surface",
+      "name": "Court Surface",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "all_court", "label": "All Court" },
+        { "value": "clay", "label": "Clay Court" },
+        { "value": "hard", "label": "Hard Court" },
+        { "value": "grass", "label": "Grass Court" },
+        { "value": "carpet", "label": "Carpet / Indoor" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" },
+        { "value": "professional", "label": "Professional / Tour" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "polo_shirt", "label": "Polo Shirt" },
+        { "value": "t_shirt", "label": "T-Shirt" },
+        { "value": "tank_top", "label": "Tank Top / Singlet" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "skirt", "label": "Skirt / Skort" },
+        { "value": "dress", "label": "Tennis Dress" },
+        { "value": "track_jacket", "label": "Track Jacket / Warm-Up" },
+        { "value": "track_pants", "label": "Track Pants" },
+        { "value": "hoodie", "label": "Hoodie / Sweatshirt" },
+        { "value": "cap", "label": "Cap / Visor" },
+        { "value": "headband", "label": "Headband" },
+        { "value": "wristband", "label": "Wristband" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "racket_bag_3", "label": "3-Racket Bag" },
+        { "value": "racket_bag_6", "label": "6-Racket Bag" },
+        { "value": "racket_bag_9", "label": "9-Racket Bag" },
+        { "value": "racket_bag_12", "label": "12+ Racket Bag (Tour)" },
+        { "value": "backpack", "label": "Tennis Backpack" },
+        { "value": "duffle", "label": "Duffle Bag" },
+        { "value": "tote", "label": "Tote Bag" },
+        { "value": "single_racket", "label": "Single Racket Cover" }
+      ]
+    },
+    {
+      "key": "thermal_protection",
+      "name": "Thermal Protection",
+      "type": "BOOLEAN",
+      "sortOrder": 2,
+      "description": "Insulated compartment to protect strings from heat"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-grips-overgrips": [
+    {
+      "key": "grip_type",
+      "name": "Grip Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "replacement_grip", "label": "Replacement Grip (Base)" },
+        { "value": "overgrip", "label": "Overgrip" }
+      ]
+    },
+    {
+      "key": "feel",
+      "name": "Feel",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "tacky", "label": "Tacky (High Grip)" },
+        { "value": "dry", "label": "Dry (Absorbent)" },
+        { "value": "cushioned", "label": "Cushioned (Comfort)" }
+      ]
+    },
+    {
+      "key": "pack_size",
+      "name": "Pack Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "single", "label": "Single (1-Pack)" },
+        { "value": "3_pack", "label": "3-Pack" },
+        { "value": "12_pack", "label": "12-Pack" },
+        { "value": "30_pack", "label": "30-Pack" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "vibration_dampener", "label": "Vibration Dampener" },
+        { "value": "lead_tape", "label": "Lead Tape" },
+        { "value": "stencil_ink", "label": "Stencil & Ink" },
+        { "value": "ball_hopper", "label": "Ball Hopper / Basket" },
+        { "value": "ball_machine", "label": "Ball Machine" },
+        { "value": "ball_pressuriser", "label": "Ball Pressuriser / Saver" },
+        { "value": "racket_weight", "label": "Racket Weight / Balancer" },
+        { "value": "elbow_support", "label": "Elbow / Wrist Support" },
+        { "value": "ball_clip", "label": "Ball Clip / Holder" },
+        { "value": "scoreboard", "label": "Scoreboard" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "tennis-nets-court-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "full_net", "label": "Full-Size Net" },
+        { "value": "mini_net", "label": "Mini / Portable Net" },
+        { "value": "practice_net", "label": "Practice / Rebound Net" },
+        { "value": "net_posts", "label": "Net Posts / Centre Strap" },
+        { "value": "court_lines", "label": "Court Lines / Markers" },
+        { "value": "target_sheet", "label": "Target Sheet" },
+        { "value": "wind_screen", "label": "Wind Screen" }
+      ]
+    },
+    {
+      "key": "portability",
+      "name": "Portability",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "portable", "label": "Portable / Foldable" },
+        { "value": "semi_permanent", "label": "Semi-Permanent" },
+        { "value": "permanent", "label": "Permanent / Fixed" }
+      ]
+    }
+  ]
+}

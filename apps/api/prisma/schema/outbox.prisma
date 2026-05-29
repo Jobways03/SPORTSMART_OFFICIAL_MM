@@ -25,23 +25,23 @@ enum OutboxEventState {
 }
 
 model OutboxEvent {
-  id             String           @id @default(uuid())
+  id            String           @id @default(uuid())
   // Mirror DomainEvent shape so writers don't reshape their payloads.
-  eventName      String           @map("event_name")
-  aggregate      String
-  aggregateId    String           @map("aggregate_id")
-  payload        Json
-  occurredAt     DateTime         @map("occurred_at")
+  eventName     String           @map("event_name")
+  aggregate     String
+  aggregateId   String           @map("aggregate_id")
+  payload       Json
+  occurredAt    DateTime         @map("occurred_at")
   // Lifecycle.
-  state          OutboxEventState @default(PENDING)
-  publishedAt    DateTime?        @map("published_at")
+  state         OutboxEventState @default(PENDING)
+  publishedAt   DateTime?        @map("published_at")
   // Retry bookkeeping. `nextAttemptAt` lets the publisher do
   // "WHERE state = PENDING AND nextAttemptAt <= now()" with a single
   // index — backoff times are persisted, not in-memory.
-  attempts       Int              @default(0)
-  lastError      String?          @map("last_error")
-  nextAttemptAt  DateTime         @default(now()) @map("next_attempt_at")
-  createdAt      DateTime         @default(now()) @map("created_at")
+  attempts      Int              @default(0)
+  lastError     String?          @map("last_error")
+  nextAttemptAt DateTime         @default(now()) @map("next_attempt_at")
+  createdAt     DateTime         @default(now()) @map("created_at")
 
   // Hot index for the publisher's "what's pending" query.
   @@index([state, nextAttemptAt])
@@ -57,16 +57,16 @@ model OutboxEvent {
 // Phase 8's notifications. Kept indefinitely until manually replayed
 // or archived — they're rare and ops needs the audit trail.
 model OutboxDeadLetter {
-  id             String   @id @default(uuid())
-  outboxEventId  String   @map("outbox_event_id")
-  eventName      String   @map("event_name")
-  aggregate      String
-  aggregateId    String   @map("aggregate_id")
-  payload        Json
-  failureReason  String   @map("failure_reason")
-  attempts       Int
+  id            String   @id @default(uuid())
+  outboxEventId String   @map("outbox_event_id")
+  eventName     String   @map("event_name")
+  aggregate     String
+  aggregateId   String   @map("aggregate_id")
+  payload       Json
+  failureReason String   @map("failure_reason")
+  attempts      Int
   // When the publisher gave up.
-  deadAt         DateTime @default(now()) @map("dead_at")
+  deadAt        DateTime @default(now()) @map("dead_at")
 
   @@index([eventName, deadAt])
   @@index([aggregate, aggregateId])

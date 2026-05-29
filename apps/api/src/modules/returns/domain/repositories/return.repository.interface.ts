@@ -14,6 +14,25 @@ export interface CreateReturnData {
     reasonCategory: string;
     reasonDetail?: string;
   }>;
+  // Phase 93 (2026-05-23) — atomic-creation extensions.
+  //   Gap #1  — evidence rows persisted inside the tx.
+  //   Gap #2  — seller-response state set during the create.
+  //   Gap #8  — node snapshot frozen at creation time.
+  evidenceFileUrls?: string[];
+  sellerResponseStatus?: 'PENDING' | 'NOT_REQUIRED';
+  sellerNotifiedAt?: Date;
+  sellerResponseDueAt?: Date;
+  sellerIdSnapshot?: string | null;
+  franchiseIdSnapshot?: string | null;
+  nodeTypeSnapshot?: 'SELLER' | 'FRANCHISE' | null;
+  // Phase 95 (2026-05-23) — Phase 93 deferred #26 closure. When set,
+  // the repo folds the PENDING→ON_HOLD commission freeze for this
+  // sub-order into the same $transaction as the Return.create. Pre-
+  // Phase-95 the freeze happened as a separate updateMany after the
+  // create returned; a crash between the two left a return without
+  // its commission freeze (the next settlement cycle would have
+  // mistakenly paid the seller). The repo now writes both atomically.
+  commissionFreezeReason?: string;
 }
 
 export interface FindByCustomerParams {
@@ -96,14 +115,22 @@ export interface ReturnRepository {
   getReturnedQuantityForOrderItem(orderItemId: string): Promise<number>;
 
   // ── QC (Phase R3) ─────────────────────────────────────────────────────
+  // Phase 97 (2026-05-23) — extended for per-item linkage + content
+  // metadata (Gap #8 / #27).
   addEvidence(data: {
     returnId: string;
+    returnItemId?: string;
+    evidenceType?: string;
     uploadedBy: string;
     uploaderId?: string;
     fileType: string;
     fileUrl: string;
     publicId?: string;
     description?: string;
+    width?: number;
+    height?: number;
+    bytes?: number;
+    contentHash?: string;
   }): Promise<any>;
 
   updateReturnItemQc(
@@ -126,7 +153,8 @@ export interface ReturnRepository {
     },
   ): Promise<any>;
 
-  incrementRefundAttempts(returnId: string): Promise<any>;
+  // Phase 101 — Refund Retry audit Gap #24 closure. incrementRefundAttempts
+  // had zero callers; removed.
 
   // ── Analytics (Phase R6) ──────────────────────────────────────────────
   getAnalyticsSummary(params?: {

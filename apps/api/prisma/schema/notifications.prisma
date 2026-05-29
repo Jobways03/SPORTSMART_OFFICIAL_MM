@@ -106,13 +106,13 @@ model NotificationSuppression {
 /// blocks if `optedOutAt` is non-null, and decides text-vs-template
 /// from `lastInboundAt`. The inbound webhook updates both fields.
 model WhatsappSession {
-  id          String @id @default(uuid())
+  id         String  @id @default(uuid())
   /// E.164 phone number without leading "+". Always digits-only so
   /// lookup keys stay stable regardless of how upstream formatted it.
-  phoneE164   String @unique @map("phone_e164")
+  phoneE164  String  @unique @map("phone_e164")
   /// Optional link to a customer record. Helps ops correlate without
   /// joining via Customer.phoneNumber, which may differ in formatting.
-  customerId  String? @map("customer_id")
+  customerId String? @map("customer_id")
 
   /// Last inbound message timestamp from this phone. The 24-hour
   /// customer service window starts here. NULL = never replied.
@@ -143,22 +143,22 @@ model WhatsappSession {
 /// changes. The session row is updated separately and is the source
 /// of truth for the 24h window.
 model WhatsappInbound {
-  id              String   @id @default(uuid())
+  id                String   @id @default(uuid())
   /// Provider message id from Meta — used for dedupe (webhook can
   /// deliver the same message multiple times under retry).
-  providerMessageId String  @unique @map("provider_message_id")
+  providerMessageId String   @unique @map("provider_message_id")
   /// Sender E.164, digits-only.
-  fromPhoneE164   String   @map("from_phone_e164")
+  fromPhoneE164     String   @map("from_phone_e164")
   /// Message type from Meta: "text" | "interactive" | "button" | ...
-  messageType     String   @map("message_type")
+  messageType       String   @map("message_type")
   /// Extracted plain-text body for STOP-keyword detection. May be
   /// empty for non-text messages (sticker, image, etc.).
-  textBody        String?  @db.Text @map("text_body")
+  textBody          String?  @map("text_body") @db.Text
   /// Whether STOP-keyword detection fired on this message.
-  isOptOutSignal  Boolean  @default(false) @map("is_opt_out_signal")
+  isOptOutSignal    Boolean  @default(false) @map("is_opt_out_signal")
   /// Original Meta webhook payload. Stored as JSON for replay/debug.
-  rawPayload      Json     @map("raw_payload")
-  receivedAt      DateTime @default(now()) @map("received_at")
+  rawPayload        Json     @map("raw_payload")
+  receivedAt        DateTime @default(now()) @map("received_at")
 
   @@index([fromPhoneE164, receivedAt(sort: Desc)])
   @@index([receivedAt(sort: Desc)])

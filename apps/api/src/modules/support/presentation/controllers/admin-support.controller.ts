@@ -11,8 +11,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   BadRequestAppException,
@@ -22,6 +24,7 @@ import { SupportService } from '../../application/services/support.service';
 import {
   AssignDto,
   CreateCategoryDto,
+  PromoteTicketToDisputeDto,
   ReplyDto,
   SetPriorityDto,
   SetStatusDto,
@@ -47,31 +50,39 @@ export class AdminSupportController {
   }
 
   @Post('categories')
-  @Permissions('support.assign')
-  async createCategory(@Body() body: CreateCategoryDto) {
-    const data = await this.support.createCategory({
-      name: body.name,
-      description: body.description,
-      scopedTo: body.scopedTo,
-      sortOrder: body.sortOrder,
-    });
+  @Permissions('support.categoriesManage')
+  async createCategory(@Req() req: any, @Body() body: CreateCategoryDto) {
+    const data = await this.support.createCategory(
+      {
+        name: body.name,
+        description: body.description,
+        scopedTo: body.scopedTo,
+        sortOrder: body.sortOrder,
+      },
+      req.adminId,
+    );
     return { success: true, message: 'Category created', data };
   }
 
   @Patch('categories/:id')
-  @Permissions('support.assign')
+  @Permissions('support.categoriesManage')
   async updateCategory(
+    @Req() req: any,
     @Param('id') id: string,
     @Body() body: UpdateCategoryDto,
   ) {
-    const data = await this.support.updateCategory(id, body);
+    const data = await this.support.updateCategory(id, body, req.adminId);
     return { success: true, message: 'Category updated', data };
   }
 
   @Delete('categories/:id')
-  @Permissions('support.assign')
-  async softDeleteCategory(@Param('id') id: string) {
-    const data = await this.support.updateCategory(id, { active: false });
+  @Permissions('support.categoriesManage')
+  async softDeleteCategory(@Req() req: any, @Param('id') id: string) {
+    const data = await this.support.updateCategory(
+      id,
+      { active: false },
+      req.adminId,
+    );
     return { success: true, message: 'Category deactivated', data };
   }
 
@@ -115,6 +126,7 @@ export class AdminSupportController {
 
   @Post('tickets/:id/messages')
   @Permissions('support.reply')
+  @Idempotent()
   async reply(
     @Req() req: any,
     @Param('id') id: string,
@@ -140,21 +152,22 @@ export class AdminSupportController {
 
   @Patch('tickets/:id/assign')
   @Permissions('support.assign')
-  async assign(@Param('id') id: string, @Body() body: AssignDto) {
-    const data = await this.support.assign(id, body.adminId ?? null);
+  async assign(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: AssignDto,
+  ) {
+    const data = await this.support.assign(id, body.adminId ?? null, req.adminId);
     return { success: true, message: 'Ticket assigned', data };
   }
 
   @Patch('tickets/:id/status')
-  @Permissions('support.assign')
+  @Permissions('support.setStatus')
   async setStatus(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: SetStatusDto & { resolutionSummary?: string },
+    @Body() body: SetStatusDto,
   ) {
-    if (!body?.status) {
-      throw new BadRequestAppException('status is required');
-    }
     const data = await this.support.setStatus(
       id,
       body.status,
@@ -165,12 +178,13 @@ export class AdminSupportController {
   }
 
   @Patch('tickets/:id/priority')
-  @Permissions('support.assign')
-  async setPriority(@Param('id') id: string, @Body() body: SetPriorityDto) {
-    if (!body?.priority) {
-      throw new BadRequestAppException('priority is required');
-    }
-    const data = await this.support.setPriority(id, body.priority);
+  @Permissions('support.setPriority')
+  async setPriority(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: SetPriorityDto,
+  ) {
+    const data = await this.support.setPriority(id, body.priority, req.adminId);
     return { success: true, message: 'Priority updated', data };
   }
 
@@ -181,38 +195,21 @@ export class AdminSupportController {
 
   @Post('tickets/:id/promote-to-dispute')
   @Permissions('support.promoteToDispute')
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
   async promoteToDispute(
     @Req() req: any,
     @Param('id') id: string,
-    @Body()
-    body: {
-      kind: string;
-      severity?: number;
-      summary?: string;
-      internalNote?: string;
-    },
+    @Body() body: PromoteTicketToDisputeDto,
   ) {
-    if (!body?.kind) {
-      throw new BadRequestAppException('kind is required');
-    }
-    const allowedKinds = [
-      'RETURN_REJECTED',
-      'WRONG_ITEM_RECEIVED',
-      'DAMAGED_IN_TRANSIT',
-      'MISSING_FROM_PARCEL',
-      'OTHER',
-    ];
-    if (!allowedKinds.includes(body.kind)) {
-      throw new BadRequestAppException(
-        `kind must be one of: ${allowedKinds.join(', ')}`,
-      );
-    }
+    // kind / severity / summary / internalNote are validated by the DTO —
+    // kind via @IsEnum(DisputeKind), so the hand-maintained allowlist is gone.
     const adminName = req.adminName || req.adminEmail || 'Admin';
     const data = await this.support.promoteToDispute({
       ticketId: id,
       adminId: req.adminId,
       adminName,
-      kind: body.kind as any,
+      kind: body.kind,
       severity: body.severity,
       summary: body.summary,
       internalNote: body.internalNote,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CartService } from '../services/cart.service';
+import type { CartItemForTaxPreview } from '../../domain/repositories/cart.repository.interface';
 
 @Injectable()
 export class CartPublicFacade {
@@ -28,5 +29,16 @@ export class CartPublicFacade {
    */
   async countActiveItemsForProduct(productId: string): Promise<number> {
     return this.cartService.countActiveItemsForProduct(productId);
+  }
+
+  /**
+   * Phase 37 — minimal active-cart projection for the tax module's
+   * cart-side preview. Excludes save-for-later items. The tax module
+   * never reads the cart table directly.
+   */
+  async getItemsForTaxPreview(
+    customerId: string,
+  ): Promise<CartItemForTaxPreview[]> {
+    return this.cartService.getItemsForTaxPreview(customerId);
   }
 }

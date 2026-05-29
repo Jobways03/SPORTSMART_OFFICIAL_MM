@@ -10,14 +10,19 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
+import { Request, Response } from 'express';
 import { AffiliateAuthGuard } from '../../../../core/guards';
+import { NotFoundAppException } from '../../../../core/exceptions';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AffiliateRegistrationService } from '../../application/services/affiliate-registration.service';
@@ -55,6 +60,7 @@ export class AffiliateSelfController {
     private readonly payoutService: AffiliatePayoutService,
     private readonly cloudinary: CloudinaryAdapter,
     private readonly prisma: PrismaService,
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   /**
@@ -84,6 +90,50 @@ export class AffiliateSelfController {
       message: 'TDS records fetched',
       data: { records },
     };
+  }
+
+  // Phase 159f — §194-O per-quarter tax summary (gross / TDS / status /
+  // can-download-Form-16A), scoped to the requester's own affiliateId.
+  @Get('tax/summary')
+  async myTaxSummary(@Req() req: Request) {
+    const affiliateId = (req as any).affiliateId;
+    const data = await this.payoutService.getAffiliateTaxSummary(affiliateId);
+    return { success: true, message: 'Tax summary fetched', data: { quarters: data } };
+  }
+
+  // Phase 159f — download the affiliate's own Form 16A for a quarter. 404 until
+  // the admin has issued the certificate (status CERTIFICATE_ISSUED). Ownership
+  // is enforced by AffiliateAuthGuard + the affiliateId-scoped query.
+  @Get('tax/:filingPeriod/form-16a')
+  async downloadForm16A(
+    @Req() req: Request,
+    @Param('filingPeriod') filingPeriod: string,
+    @Res() res: Response,
+  ) {
+    const affiliateId = (req as any).affiliateId;
+    const html = await this.payoutService.renderAffiliateForm16A(affiliateId, filingPeriod);
+    if (!html) {
+      throw new NotFoundAppException('Form 16A is not available yet for this quarter.');
+    }
+    const ua = req.headers['user-agent'];
+    this.audit
+      .writeAuditLog({
+        actorId: affiliateId,
+        actorRole: 'AFFILIATE',
+        action: 'AFFILIATE_FORM16A_DOWNLOADED',
+        module: 'affiliate',
+        resource: 'AffiliateTds194OLedger',
+        resourceId: filingPeriod,
+        ipAddress: req.ip,
+        userAgent: typeof ua === 'string' ? ua : undefined,
+      })
+      .catch(() => undefined);
+    // Sanitise the path param before it enters a response header (CRLF / header
+    // injection guard) — only safe filename chars.
+    const safe = filingPeriod.replace(/[^A-Za-z0-9-]/g, '');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', `inline; filename="form-16A-${safe}.html"`);
+    res.send(html);
   }
 
   @Get()
@@ -145,7 +195,11 @@ export class AffiliateSelfController {
   }
 
   // ── KYC ─────────────────────────────────────────────────────
-
+  // KYC endpoints temporarily disabled (commented out per product
+  // request). Routes are removed from the controller; the service +
+  // DTOs remain available for re-enabling. Restore by uncommenting
+  // the block below and the matching frontend pieces.
+  /*
   @Get('kyc')
   async getKyc(@Req() req: Request) {
     const affiliateId = (req as any).affiliateId;
@@ -175,17 +229,6 @@ export class AffiliateSelfController {
     };
   }
 
-  /**
-   * Upload a KYC document image. Affiliate picks a JPG/PNG/WEBP scan
-   * of their PAN or Aadhaar card; we push it to Cloudinary in a
-   * folder scoped to this affiliate, and return the secure URL the
-   * caller then submits as `panDocumentUrl` / `aadhaarDocumentUrl`
-   * via POST /affiliate/me/kyc.
-   *
-   * Image-only by design — Cloudinary's upload pipeline rejects
-   * non-image MIME types up front (see CloudinaryAdapter), and we
-   * reinforce with magic-byte validation to defeat misnamed files.
-   */
   @Post('kyc/upload/:kind')
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(
@@ -233,6 +276,7 @@ export class AffiliateSelfController {
       },
     };
   }
+  */
 
   // ── Payout methods + requests ───────────────────────────────
 
@@ -280,9 +324,15 @@ export class AffiliateSelfController {
 
   @Post('payouts')
   @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Idempotent()
   async requestPayout(@Req() req: Request) {
     const affiliateId = (req as any).affiliateId;
-    const data = await this.payoutService.requestPayout({ affiliateId });
+    const data = await this.payoutService.requestPayout({
+      affiliateId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') ?? undefined,
+    });
     return {
       success: true,
       message: 'Payout requested. Admin will review and process the transfer.',

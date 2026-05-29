@@ -70,7 +70,20 @@ function buildService(repoOverride?: FakeAdminRepo) {
     consume: async () => false,
     remainingCount: async () => 0,
   } as any;
-  const svc = new AdminMfaService(repo as any, cipher, env, backupCodes);
+  // Phase 25 (2026-05-20) — AdminMfaService now writes to the unified
+  // audit log and emits `admin.mfa.*` events for the side-channel
+  // notification path. The enrolment tests don't observe these, so
+  // pass no-op stubs.
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+  const events = { emit: jest.fn() } as any;
+  const svc = new AdminMfaService(
+    repo as any,
+    cipher,
+    env,
+    backupCodes,
+    audit,
+    events,
+  );
   return { svc, repo, cipher };
 }
 
@@ -98,7 +111,7 @@ describe('AdminMfaService.beginEnrollment (PR 10.4)', () => {
 
     // One write happened, against the pending column.
     expect(repo.updates).toHaveLength(1);
-    const ciphertext = repo.updates[0].data.mfaPendingSecretCiphertext as string;
+    const ciphertext = repo.updates[0]!.data.mfaPendingSecretCiphertext as string;
     expect(ciphertext).toBeTruthy();
     // The ciphertext should decrypt back to the same secret the
     // otpauth URL embeds — proves we're not double-generating.
@@ -146,7 +159,7 @@ describe('AdminMfaService.beginEnrollment (PR 10.4)', () => {
       mfaPendingSecretCiphertext: 'previous-attempt-ciphertext',
     });
     await svc.beginEnrollment('admin-1');
-    const ciphertext = repo.updates[0].data.mfaPendingSecretCiphertext as string;
+    const ciphertext = repo.updates[0]!.data.mfaPendingSecretCiphertext as string;
     expect(ciphertext).not.toBe('previous-attempt-ciphertext');
   });
 });
@@ -173,7 +186,7 @@ describe('AdminMfaService.completeEnrollment (PR 10.4)', () => {
     await svc.completeEnrollment('admin-1', currentCode);
 
     expect(repo.updates).toHaveLength(1);
-    const update = repo.updates[0].data;
+    const update = repo.updates[0]!.data;
     // Live column gets the pending ciphertext.
     expect(update.mfaSecretCiphertext).toBe(pendingCt);
     // Pending column is cleared.

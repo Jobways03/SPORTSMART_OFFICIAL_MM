@@ -1,10 +1,12 @@
 import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { SearchPublicFacade } from '../../application/facades/search-public.facade';
 
 @ApiTags('Search')
 @Controller()
+@Permissions('catalog.write')
 export class SearchExtraController {
   constructor(private readonly facade: SearchPublicFacade) {}
 

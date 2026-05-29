@@ -51,6 +51,34 @@ export const adminMetafieldsService = {
     });
   },
 
+  /**
+   * Phase 40 (2026-05-21) — toggle a definition as a storefront filter.
+   */
+  markDefinitionFilterable(
+    id: string,
+    payload: {
+      isFilterable: boolean;
+      defaultFilterType?: string;
+      defaultFilterLabel?: string;
+      filterDisplayOrder?: number;
+    },
+  ): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/admin/metafield-definitions/${id}/filterable`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  bulkMarkDefinitionsFilterable(
+    definitionIds: string[],
+    isFilterable: boolean,
+  ): Promise<ApiResponse<any>> {
+    return apiClient<any>('/admin/metafield-definitions/bulk-filterable', {
+      method: 'POST',
+      body: JSON.stringify({ definitionIds, isFilterable }),
+    });
+  },
+
   // ─── Product Metafield Values ──────────────────────────────────
 
   getProductMetafields(productId: string): Promise<ApiResponse<MetafieldsResult>> {
@@ -62,6 +90,21 @@ export const adminMetafieldsService = {
       method: 'PUT',
       body: JSON.stringify({ metafields }),
     });
+  },
+
+  /**
+   * DELETE /admin/products/:productId/metafields/:metafieldId — remove a single
+   * metafield value. The corresponding metafield-definition stays; only this
+   * product's value for it is cleared.
+   */
+  deleteProductMetafield(
+    productId: string,
+    metafieldId: string,
+  ): Promise<ApiResponse<void>> {
+    return apiClient<void>(
+      `/admin/products/${productId}/metafields/${metafieldId}`,
+      { method: 'DELETE' },
+    );
   },
 
   // ─── Storefront Filter Configuration ──────────────────────────

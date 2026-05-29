@@ -16,12 +16,20 @@ import {
   STATUS_COLOR,
   STATUS_LABEL,
 } from '@/services/admin-refund-approvals.service';
+import { usePermissions } from '@/lib/permissions';
 
 export default function RefundApprovalDetailPage() {
   const { id } = useParams<{ id: string }>();
+  // Phase 132 — approve and reject are now distinct permissions. Hide the
+  // action the operator can't perform (the API enforces it regardless, but a
+  // 403 on click is worse UX than not showing the button).
+  const { hasPermission } = usePermissions();
+  const canApprove = hasPermission('refunds.approve');
+  const canReject = hasPermission('refunds.reject');
   const [row, setRow] = useState<RefundInstructionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
 
   const [showReject, setShowReject] = useState(false);
@@ -46,9 +54,17 @@ export default function RefundApprovalDetailPage() {
   const onApprove = async () => {
     if (busy) return;
     setError('');
+    setNotice('');
     setBusy(true);
     try {
-      await adminRefundApprovalsService.approve(id);
+      const res = await adminRefundApprovalsService.approve(id);
+      // Phase 125 — a high-value refund's FIRST approval only records the
+      // approver; a second, distinct admin must approve to release the money.
+      if (res.data?.pendingSecondApproval) {
+        setNotice(
+          'First approval recorded. A second, different approver must approve before the refund is released.',
+        );
+      }
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Approve failed');
@@ -61,9 +77,24 @@ export default function RefundApprovalDetailPage() {
     if (busy) return;
     if (!rejectReason.trim()) return setError('Reason is required');
     setError('');
+    setNotice('');
     setBusy(true);
     try {
-      await adminRefundApprovalsService.reject(id, rejectReason.trim());
+      const res = await adminRefundApprovalsService.reject(id, rejectReason.trim());
+      // Phase 127 — the reject reverses the dispute's liability attribution.
+      // Surface what happened so finance knows whether ops follow-up is needed.
+      const rev = res.data?.liabilityReversal;
+      if (rev?.needsManual) {
+        setNotice(
+          'Refund rejected. A liability row (seller debit / courier claim) was already applied or in-flight — an ops task has been queued to reverse it manually.',
+        );
+      } else if (rev?.reversedAny) {
+        setNotice(
+          'Refund rejected and the dispute’s liability attribution was reversed.',
+        );
+      } else {
+        setNotice('Refund rejected.');
+      }
       setShowReject(false);
       setRejectReason('');
       await refresh();
@@ -102,7 +133,7 @@ export default function RefundApprovalDetailPage() {
   const src = row.source;
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1100 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1100, margin: '0 auto' }}>
       <Link href="/dashboard/finance/refund-approvals" style={{ color: '#2A8595', fontSize: 13, fontWeight: 600 }}>
         ← Back to refund approvals
       </Link>
@@ -126,6 +157,12 @@ export default function RefundApprovalDetailPage() {
       {error && (
         <div style={{ marginTop: 12, padding: 10, border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c', borderRadius: 12, fontSize: 13 }}>
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div style={{ marginTop: 12, padding: 10, border: '1px solid #93c5fd', background: '#eff6ff', color: '#1e40af', borderRadius: 12, fontSize: 13 }}>
+          {notice}
         </div>
       )}
 
@@ -275,37 +312,67 @@ export default function RefundApprovalDetailPage() {
 
           {isPending && (
             <Card title="Decide">
+              {/* Phase 125 — dual-approval: a recorded first approval is shown
+                  so the second reviewer knows this click releases the money,
+                  and so the first approver knows they can't also be the second. */}
+              {row.firstApprovedBy && (
+                <div style={{ marginBottom: 12, padding: 10, border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', borderRadius: 8, fontSize: 12, lineHeight: 1.5 }}>
+                  <strong>First approval recorded</strong> by{' '}
+                  <code style={{ fontSize: 11 }}>{row.firstApprovedBy.slice(0, 8)}…</code>
+                  {row.firstApprovedAt && (
+                    <> on {new Date(row.firstApprovedAt).toLocaleString('en-IN')}</>
+                  )}
+                  . A second, <strong>distinct</strong> approver must approve to
+                  release — the same admin cannot approve twice.
+                </div>
+              )}
               <p style={{ margin: 0, marginBottom: 12, fontSize: 12, color: '#525A65', lineHeight: 1.5 }}>
                 Approving runs the saga and credits the customer wallet.
-                Rejecting cancels the instruction; the underlying
-                dispute decision stands unless ops reverses it separately.
+                High-value refunds require two distinct approvers. Rejecting
+                cancels the instruction and reverses the dispute&apos;s liability
+                attribution; the dispute decision itself stands unless ops
+                reverses it separately.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  disabled={busy}
-                  style={{
-                    height: 38, border: 'none', background: '#15803d', color: '#fff',
-                    borderRadius: 9999, fontSize: 13, fontWeight: 600,
-                    cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1,
-                  }}
-                >
-                  {busy ? 'Approving…' : `Approve — release ₹${rupees}`}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowReject(true)}
-                  disabled={busy}
-                  style={{
-                    height: 38, border: '1px solid #fca5a5',
-                    background: '#fff', color: '#b91c1c',
-                    borderRadius: 9999, fontSize: 13, fontWeight: 600,
-                    cursor: busy ? 'wait' : 'pointer',
-                  }}
-                >
-                  Reject
-                </button>
+                {canApprove && (
+                  <button
+                    type="button"
+                    onClick={onApprove}
+                    disabled={busy}
+                    style={{
+                      height: 38, border: 'none', background: '#15803d', color: '#fff',
+                      borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                      cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    {busy
+                      ? 'Approving…'
+                      : row.firstApprovedBy
+                        ? `Approve (2 of 2) — release ₹${rupees}`
+                        : `Approve ₹${rupees}`}
+                  </button>
+                )}
+                {canReject && (
+                  <button
+                    type="button"
+                    onClick={() => setShowReject(true)}
+                    disabled={busy}
+                    style={{
+                      height: 38, border: '1px solid #fca5a5',
+                      background: '#fff', color: '#b91c1c',
+                      borderRadius: 9999, fontSize: 13, fontWeight: 600,
+                      cursor: busy ? 'wait' : 'pointer',
+                    }}
+                  >
+                    Reject
+                  </button>
+                )}
+                {!canApprove && !canReject && (
+                  <p style={{ margin: 0, fontSize: 12, color: '#7A828F', lineHeight: 1.5 }}>
+                    You can view this refund but don&apos;t have permission to
+                    approve or reject it.
+                  </p>
+                )}
               </div>
             </Card>
           )}

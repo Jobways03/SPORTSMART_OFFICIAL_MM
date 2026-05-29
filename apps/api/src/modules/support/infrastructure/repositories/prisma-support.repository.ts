@@ -106,7 +106,11 @@ export class PrismaSupportRepository implements SupportRepository {
     const [items, total] = await Promise.all([
       this.prisma.ticket.findMany({
         where,
-        orderBy: { lastMessageAt: 'desc' },
+        // Prisma orders enums by declaration order (LOW→URGENT), so `desc`
+        // surfaces URGENT first. Only the admin queue opts into this.
+        orderBy: filter.sortByPriority
+          ? [{ priority: 'desc' }, { lastMessageAt: 'desc' }]
+          : { lastMessageAt: 'desc' },
         skip,
         take: limit,
       }),

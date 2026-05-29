@@ -48,6 +48,14 @@ describe('Admin money operations — SUPER_ADMIN only', () => {
   it('AdminSettlementController.markPaid', () =>
     expectRoles(AdminSettlementController, 'markPaid', ['SUPER_ADMIN']));
 
+  // Phase 141 — cycle create/cancel lock (or release) commission records into a
+  // payout cycle; tightened to SUPER_ADMIN to mirror the approve/pay gates.
+  it('AdminSettlementController.createCycle', () =>
+    expectRoles(AdminSettlementController, 'createCycle', ['SUPER_ADMIN']));
+
+  it('AdminSettlementController.cancelCycle', () =>
+    expectRoles(AdminSettlementController, 'cancelCycle', ['SUPER_ADMIN']));
+
   it('AdminFranchiseSettlementsController.approveSettlement', () =>
     expectRoles(AdminFranchiseSettlementsController, 'approveSettlement', [
       'SUPER_ADMIN',
@@ -113,14 +121,14 @@ describe('Admin discounts mutations — SUPER_ADMIN + SELLER_ADMIN', () => {
   );
 });
 
-describe('Admin control-tower bulk + override mutations — SUPER_ADMIN only', () => {
-  // Platform-wide pricing rewrite and manual routing override are the
-  // highest-blast-radius admin ops in the control tower.
-  it.each(['bulkUpdatePricing', 'reassignSubOrder'])(
-    'AdminDashboardController.%s',
-    (method) =>
-      expectRoles(AdminDashboardController, method, ['SUPER_ADMIN']),
-  );
+describe('Admin control-tower bulk mutations — SUPER_ADMIN only', () => {
+  // Platform-wide pricing rewrite is the highest-blast-radius control-tower op.
+  // (reassignSubOrder moved to AdminOrdersController and is now gated by the
+  // granular @Permissions('orders.reassign') — held by SUPER_ADMIN +
+  // SELLER_OPERATIONS — so it's covered by the permission-registry coverage
+  // spec, not this @Roles check.)
+  it('AdminDashboardController.bulkUpdatePricing', () =>
+    expectRoles(AdminDashboardController, 'bulkUpdatePricing', ['SUPER_ADMIN']));
 });
 
 describe('Admin control-tower seller catalog suspension — SUPER_ADMIN + SELLER_ADMIN', () => {

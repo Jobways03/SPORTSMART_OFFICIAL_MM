@@ -7,6 +7,14 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
+import { SettlementService } from '../../../settlements/settlement.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+
+type BatchActorContext = {
+  adminId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+};
 
 type BatchMarkPaidItem = {
   id: string;
@@ -33,6 +41,11 @@ export class AccountsSettlementService {
     // Phase 7 (PR 7.5) — paise-sibling dual-write for franchise +
     // seller settlement cycle creates.
     private readonly moneyDualWrite: MoneyDualWriteHelper,
+    // Phase 146 — batch seller mark-paid delegates here (audit + TCS/TDS +
+    // version-CAS + UTR-unique + paise, all inherited from the single path).
+    private readonly settlementService: SettlementService,
+    // Phase 146 — franchise batch mark-paid writes its own audit row.
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   async listSettlementCycles(
@@ -746,7 +759,7 @@ export class AccountsSettlementService {
    */
   async batchMarkPaid(
     items: BatchMarkPaidItem[],
-    actorContext?: { adminId?: string },
+    actorContext?: BatchActorContext,
   ): Promise<{
     results: BatchMarkPaidResult[];
     affectedCycles: string[];
@@ -760,8 +773,12 @@ export class AccountsSettlementService {
       );
     }
 
+    const ctx: BatchActorContext = actorContext ?? {};
     const results: BatchMarkPaidResult[] = [];
     const affectedCycleIds = new Set<string>();
+    // Phase 146 — reject a settlementId listed twice in one payload (the second
+    // would otherwise fail with "already paid" mid-batch).
+    const seen = new Set<string>();
 
     for (const item of items) {
       try {
@@ -771,14 +788,20 @@ export class AccountsSettlementService {
         if (item.type !== 'seller' && item.type !== 'franchise') {
           throw new Error(`Unsupported type: ${item.type}`);
         }
+        const dedupeKey = `${item.type}:${item.id}`;
+        if (seen.has(dedupeKey)) {
+          throw new Error('Duplicate settlement in batch payload');
+        }
+        seen.add(dedupeKey);
 
         if (item.type === 'seller') {
-          const cycleId = await this.markSellerPaid(item.id, item.reference);
+          const cycleId = await this.markSellerPaid(item.id, item.reference, ctx);
           affectedCycleIds.add(cycleId);
         } else {
           const cycleId = await this.markFranchisePaid(
             item.id,
             item.reference,
+            ctx,
           );
           affectedCycleIds.add(cycleId);
         }
@@ -813,51 +836,31 @@ export class AccountsSettlementService {
   private async markSellerPaid(
     settlementId: string,
     utrReference: string,
+    actorContext: BatchActorContext,
   ): Promise<string> {
-    const settlement = await this.prisma.sellerSettlement.findUnique({
+    // Phase 146 — DELEGATE to the single hardened path so this batch item gets
+    // the full treatment: status guards, version-CAS, UTR-unique (P2002),
+    // commission cascade (PENDING-guarded), TCS/TDS hooks, paise dual-write,
+    // paidByAdminId, and a full audit_logs row with actor/IP/UA. No duplication.
+    const result = await this.settlementService.markSettlementPaid(
+      settlementId,
+      utrReference,
+      actorContext,
+    );
+    if (!result.success) {
+      throw new Error(result.message);
+    }
+    const s = await this.prisma.sellerSettlement.findUnique({
       where: { id: settlementId },
-      include: { cycle: true },
+      select: { cycleId: true },
     });
-    if (!settlement) throw new Error('Seller settlement not found');
-    if (settlement.status === 'PAID')
-      throw new Error('Seller settlement already paid');
-    if (settlement.cycle.status !== 'APPROVED')
-      throw new Error(
-        `Cycle must be APPROVED before paying (current: ${settlement.cycle.status})`,
-      );
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.sellerSettlement.update({
-        where: { id: settlementId },
-        data: { status: 'PAID', paidAt: new Date(), utrReference },
-      });
-      await tx.commissionRecord.updateMany({
-        where: { settlementId },
-        data: { status: 'SETTLED' },
-      });
-    });
-
-    this.eventBus
-      .publish({
-        eventName: 'seller.settlement.paid',
-        aggregate: 'SellerSettlement',
-        aggregateId: settlementId,
-        occurredAt: new Date(),
-        payload: {
-          settlementId,
-          sellerId: settlement.sellerId,
-          utrReference,
-          amount: Number(settlement.totalSettlementAmount),
-        },
-      })
-      .catch(() => {});
-
-    return settlement.cycleId;
+    return s!.cycleId;
   }
 
   private async markFranchisePaid(
     settlementId: string,
     paymentReference: string,
+    actorContext: BatchActorContext,
   ): Promise<string> {
     const settlement = await this.prisma.franchiseSettlement.findUnique({
       where: { id: settlementId },
@@ -870,11 +873,24 @@ export class AccountsSettlementService {
         `Only APPROVED settlements can be paid (current: ${settlement.status})`,
       );
 
+    const ref = paymentReference.trim();
+
     await this.prisma.$transaction(async (tx) => {
-      await tx.franchiseSettlement.update({
-        where: { id: settlementId },
-        data: { status: 'PAID', paidAt: new Date(), paymentReference },
+      // Phase 146 — version-CAS + paidByAdminId provenance.
+      const claim = await tx.franchiseSettlement.updateMany({
+        where: { id: settlementId, status: 'APPROVED' },
+        data: {
+          status: 'PAID',
+          paidAt: new Date(),
+          paymentReference: ref,
+          paidByAdminId: actorContext.adminId ?? null,
+        },
       });
+      if (claim.count === 0) {
+        throw new Error('Franchise settlement changed state concurrently');
+      }
+      // Status-only flip — no money column on this update, so no paise sibling
+      // to mirror (the ledger amounts were frozen at cycle creation).
       await tx.franchiseFinanceLedger.updateMany({
         where: { settlementBatchId: settlementId },
         data: { status: 'SETTLED' },
@@ -890,11 +906,35 @@ export class AccountsSettlementService {
         payload: {
           settlementId,
           franchiseId: settlement.franchiseId,
-          paymentReference,
+          paymentReference: ref,
           netPayableToFranchise: Number(settlement.netPayableToFranchise),
         },
       })
       .catch(() => {});
+
+    // Phase 146 — franchise payouts are real money movements; audit them too
+    // (the seller path audits via markSettlementPaid).
+    this.audit
+      .writeAuditLog({
+        actorId: actorContext.adminId,
+        actorRole: 'ADMIN',
+        action: 'MARK_SETTLEMENT_PAID',
+        module: 'accounts',
+        resource: 'franchise_settlement',
+        resourceId: settlementId,
+        oldValue: { status: settlement.status },
+        newValue: { status: 'PAID', paymentReference: ref },
+        metadata: {
+          franchiseId: settlement.franchiseId,
+          cycleId: settlement.cycleId,
+          netPayableToFranchise: Number(settlement.netPayableToFranchise),
+        },
+        ipAddress: actorContext.ipAddress,
+        userAgent: actorContext.userAgent,
+      })
+      .catch((err) => {
+        this.logger.error(`Franchise payout audit failed: ${(err as Error).message}`);
+      });
 
     return settlement.cycleId;
   }
@@ -974,10 +1014,87 @@ export class AccountsSettlementService {
       return null;
     }
 
+    // Phase 33 — side-loaded per-settlement statutory-deduction
+    // breakdown (TCS Section 52 + TDS Section 194-O + 18% commission
+    // GST). Mirrors the existing `discountDeductionsBySeller` pattern
+    // so the frontend can render a tax column / expander without
+    // restructuring the cycle response shape. Keyed by SellerSettlement
+    // id, not sellerId (the same seller can have multiple settlements
+    // across cycles; here we are scoped to one cycle so it's the same
+    // 1:1, but keying by settlement id is the safe contract).
+    //
+    // Paise → string serialisation: BigInt over JSON, precision-safe.
+    // Net payout formula mirrors
+    // SettlementTds194OHookService.computeNetPayoutInPaise:
+    //   net = totalSettlement − tcs − tds − totalCommissionGst
+    const settlementsAny = sellerSettlements as Array<
+      (typeof sellerSettlements)[number] & {
+        tcsDeductedInPaise?: bigint | null;
+        tcsRateBpsSnapshot?: number | null;
+        tcsFilingPeriod?: string | null;
+        tdsDeductedInPaise?: bigint | null;
+        tdsRateBpsSnapshot?: number | null;
+        tdsFilingPeriod?: string | null;
+        commissionGstRateBps?: number | null;
+        commissionGstSplitType?: string | null;
+        cgstOnCommissionInPaise?: bigint | null;
+        sgstOnCommissionInPaise?: bigint | null;
+        igstOnCommissionInPaise?: bigint | null;
+        totalCommissionGstInPaise?: bigint | null;
+      }
+    >;
+    const taxBreakdownBySettlement: Record<
+      string,
+      {
+        tcsDeductedInPaise: string;
+        tcsRateBpsSnapshot: number;
+        tcsFilingPeriod: string | null;
+        tdsDeductedInPaise: string;
+        tdsRateBpsSnapshot: number;
+        tdsFilingPeriod: string | null;
+        commissionGstRateBps: number;
+        commissionGstSplitType: string | null;
+        cgstOnCommissionInPaise: string;
+        sgstOnCommissionInPaise: string;
+        igstOnCommissionInPaise: string;
+        totalCommissionGstInPaise: string;
+        netPayoutInPaise: string;
+      }
+    > = {};
+    for (const s of settlementsAny) {
+      const tcs = s.tcsDeductedInPaise ?? 0n;
+      const tds = s.tdsDeductedInPaise ?? 0n;
+      const commissionGst = s.totalCommissionGstInPaise ?? 0n;
+      // Convert the legacy Decimal totalSettlementAmount to paise via
+      // Math.round(x*100). Same conversion the seller payout page
+      // uses; safe for amounts up to ~₹90T per row.
+      const settlementPaise = BigInt(
+        Math.round(Number(s.totalSettlementAmount || 0) * 100),
+      );
+      let netPaise = settlementPaise - tcs - tds - commissionGst;
+      if (netPaise < 0n) netPaise = 0n;
+      taxBreakdownBySettlement[s.id] = {
+        tcsDeductedInPaise: tcs.toString(),
+        tcsRateBpsSnapshot: s.tcsRateBpsSnapshot ?? 100,
+        tcsFilingPeriod: s.tcsFilingPeriod ?? null,
+        tdsDeductedInPaise: tds.toString(),
+        tdsRateBpsSnapshot: s.tdsRateBpsSnapshot ?? 100,
+        tdsFilingPeriod: s.tdsFilingPeriod ?? null,
+        commissionGstRateBps: s.commissionGstRateBps ?? 1800,
+        commissionGstSplitType: s.commissionGstSplitType ?? null,
+        cgstOnCommissionInPaise: (s.cgstOnCommissionInPaise ?? 0n).toString(),
+        sgstOnCommissionInPaise: (s.sgstOnCommissionInPaise ?? 0n).toString(),
+        igstOnCommissionInPaise: (s.igstOnCommissionInPaise ?? 0n).toString(),
+        totalCommissionGstInPaise: commissionGst.toString(),
+        netPayoutInPaise: netPaise.toString(),
+      };
+    }
+
     return {
       cycle,
       sellerSettlements,
       franchiseSettlements,
+      taxBreakdownBySettlement,
       summary: {
         totalSellerPayable: sellerSettlements.reduce(
           (sum, s) => sum + Number(s.totalSettlementAmount || 0),

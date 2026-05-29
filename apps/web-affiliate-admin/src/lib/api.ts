@@ -3,8 +3,23 @@
  * (`adminToken`), attaches it on every request, and on 401 wipes
  * the session and redirects to /login.
  */
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+/**
+ * Resolve the API base. Dev fallback is fine; production with a
+ * missing env would silently issue API calls against localhost from
+ * each user's browser — throw at module load instead.
+ */
+function resolveApiBase(): string {
+  const v = process.env.NEXT_PUBLIC_API_URL;
+  if (v) return v;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'NEXT_PUBLIC_API_URL must be set in production for web-affiliate-admin — refusing to default to localhost.',
+    );
+  }
+  return 'http://localhost:8000/api/v1';
+}
+
+export const API_BASE = resolveApiBase();
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: any) {

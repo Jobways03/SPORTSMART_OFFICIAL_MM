@@ -4,9 +4,11 @@ import {
   UserRepository,
   UserWithRoles,
   PasswordResetOtpRecord,
+  EmailVerificationOtpRecord,
   CustomerProfile,
   CustomerProfileWithPassword,
   UpdateCustomerProfileInput,
+  RegistrationConsentInput,
 } from '../../domain/repositories/user.repository';
 
 @Injectable()
@@ -54,7 +56,6 @@ export class PrismaUserRepository implements UserRepository {
         email: true,
         phone: true,
         emailVerified: true,
-        phoneVerified: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -75,7 +76,6 @@ export class PrismaUserRepository implements UserRepository {
         email: true,
         phone: true,
         emailVerified: true,
-        phoneVerified: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -89,13 +89,13 @@ export class PrismaUserRepository implements UserRepository {
     id: string,
     data: UpdateCustomerProfileInput,
   ): Promise<CustomerProfile> {
-    // If email is changing, mark as unverified again
+    // If email is changing, mark as unverified again. Phase 27
+    // (2026-05-21) — phoneVerified column dropped; phone-change
+    // no longer needs to reset a verification flag since the
+    // platform doesn't gate any flow on phone verification.
     const updates: any = { ...data };
     if (data.email !== undefined) {
       updates.emailVerified = false;
-    }
-    if (data.phone !== undefined) {
-      updates.phoneVerified = false;
     }
     const user = await this.prisma.user.update({
       where: { id },
@@ -107,7 +107,6 @@ export class PrismaUserRepository implements UserRepository {
         email: true,
         phone: true,
         emailVerified: true,
-        phoneVerified: true,
         status: true,
         createdAt: true,
         updatedAt: true,
@@ -165,10 +164,58 @@ export class PrismaUserRepository implements UserRepository {
     });
   }
 
+  /**
+   * Phase 17 (2026-05-20) — atomic failed-login increment.
+   *
+   * The earlier read-then-set lost concurrent increments: two parallel
+   * wrong passwords both saw `failedLoginAttempts = N`, both computed
+   * `N+1`, both wrote `N+1` — the count stayed at N+1 instead of N+2,
+   * so the 5-attempt lockout effectively took 10+ attempts under
+   * contention. This variant:
+   *
+   *   1. Issues a single UPDATE with `{ increment: 1 }` so the DB
+   *      serialises the bump.
+   *   2. Reads the post-increment count from the same row (Prisma's
+   *      `update` returns the new value).
+   *   3. If the count crossed `maxAttempts`, performs a follow-up
+   *      update to stamp `lockUntil`. Two-write is fine: in the worst
+   *      case two parallel callers both observe "exceeded" and both
+   *      stamp a similar time-window — idempotent at the column.
+   */
+  async recordFailedLoginAtomic(
+    userId: string,
+    maxAttempts: number,
+    lockDurationMs: number,
+  ): Promise<{ failedLoginAttempts: number; lockUntil: Date | null }> {
+    const after = await this.prisma.user.update({
+      where: { id: userId },
+      data: { failedLoginAttempts: { increment: 1 } },
+      select: { failedLoginAttempts: true },
+    });
+    const failedLoginAttempts = after.failedLoginAttempts;
+
+    if (failedLoginAttempts >= maxAttempts) {
+      const lockUntil = new Date(Date.now() + lockDurationMs);
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { lockUntil },
+      });
+      return { failedLoginAttempts, lockUntil };
+    }
+    return { failedLoginAttempts, lockUntil: null };
+  }
+
   async clearLoginLockout(userId: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
       data: { failedLoginAttempts: 0, lockUntil: null },
+    });
+  }
+
+  async touchLastLogin(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date() },
     });
   }
 
@@ -178,48 +225,261 @@ export class PrismaUserRepository implements UserRepository {
     firstName: string;
     lastName: string;
     email: string;
+    phone?: string | null;
     passwordHash: string;
+    otpHash: string;
+    otpExpiresAt: Date;
+    consents: RegistrationConsentInput[];
   }): Promise<{
     id: string;
     email: string;
     firstName: string;
     lastName: string;
-  }> {
-    return this.prisma.$transaction(async (tx) => {
-      // Resolve CUSTOMER role first — if it's missing, fail the whole
-      // transaction so we never create an orphan user without a role.
-      // The prior silent `if (customerRole)` swallow is how 6 customers
-      // ended up un-login-able: registration ran before seed-admin had
-      // inserted the system roles, so the role lookup returned null and
-      // the create was skipped. UserAuthGuard requires
-      // roles.includes('CUSTOMER'); an un-roled user = instant 401 on
-      // every subsequent request.
-      const customerRole = await tx.role.findUnique({
-        where: { name: 'CUSTOMER' },
+    otpId: string;
+  } | null> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Resolve CUSTOMER role first — if it's missing, fail the whole
+        // transaction so we never create an orphan user without a role.
+        // The prior silent `if (customerRole)` swallow is how 6 customers
+        // ended up un-login-able: registration ran before seed-admin had
+        // inserted the system roles, so the role lookup returned null and
+        // the create was skipped. UserAuthGuard requires
+        // roles.includes('CUSTOMER'); an un-roled user = instant 401 on
+        // every subsequent request.
+        const customerRole = await tx.role.findUnique({
+          where: { name: 'CUSTOMER' },
+        });
+        if (!customerRole) {
+          throw new Error(
+            'CUSTOMER role missing from database — run `pnpm run seed:admin` to provision system roles before registering users.',
+          );
+        }
+
+        const newUser = await tx.user.create({
+          data: {
+            firstName: data.firstName,
+            lastName: data.lastName,
+            email: data.email,
+            // Phase 21 (2026-05-20) — phone is optional at registration
+            // (India e-commerce expects it for COD + delivery). The
+            // schema column is @unique nullable; Postgres ignores null
+            // duplicates, so two phone-less rows are still legal. A
+            // collision on a populated phone surfaces as P2002 below
+            // and is collapsed into the uniform duplicate-email path.
+            phone: data.phone ?? null,
+            passwordHash: data.passwordHash,
+            // Phase 16 (2026-05-20) — new customers are inactive until
+            // OTP verification. LoginUserUseCase refuses to sign tokens
+            // for users in PENDING_VERIFICATION; the verify use-case
+            // flips the row to ACTIVE inside the same transaction that
+            // marks the OTP consumed.
+            status: 'PENDING_VERIFICATION',
+            emailVerified: false,
+          },
+        });
+
+        await tx.roleAssignment.create({
+          data: {
+            userId: newUser.id,
+            roleId: customerRole.id,
+          },
+        });
+
+        // DPDP §6 — store the customer's consent choices for each
+        // purpose presented at registration. The audit row (legal
+        // record) is written by the use-case after the transaction
+        // commits; this is the indexed projection used by marketing
+        // dispatchers + the privacy page.
+        //
+        // Phase 28 (2026-05-21) — every row pins consent_version so a
+        // DPDP audit can answer "what notice did the user agree to?"
+        for (const consent of data.consents) {
+          await tx.consentRecord.create({
+            data: {
+              userId: newUser.id,
+              purpose: consent.purpose,
+              granted: consent.granted,
+              consentVersion: consent.consentVersion,
+              source: consent.source ?? 'register-form',
+              ipAddress: consent.ipAddress ?? null,
+              userAgent: consent.userAgent ?? null,
+            },
+          });
+        }
+
+        // OTP row — SHA-256 hash, 10-minute TTL. Creating the row
+        // inside the same transaction means a registration with no
+        // verification OTP is unreachable; the registration is the
+        // atomic unit.
+        const otp = await tx.emailVerificationOtp.create({
+          data: {
+            userId: newUser.id,
+            otpHash: data.otpHash,
+            expiresAt: data.otpExpiresAt,
+          },
+        });
+
+        return {
+          id: newUser.id,
+          email: newUser.email,
+          firstName: newUser.firstName,
+          lastName: newUser.lastName,
+          otpId: otp.id,
+        };
       });
-      if (!customerRole) {
-        throw new Error(
-          'CUSTOMER role missing from database — run `pnpm run seed:admin` to provision system roles before registering users.',
-        );
+    } catch (error: any) {
+      // Duplicate-email collision: return null so the use-case can
+      // emit a uniform "check your inbox" response instead of leaking
+      // account existence to an enumeration attacker.
+      if (error?.code === 'P2002' && error?.meta?.target?.includes('email')) {
+        return null;
       }
+      throw error;
+    }
+  }
 
-      const newUser = await tx.user.create({
+  // ── Email-verification OTP operations ─────────────────────
+
+  async findByEmailForVerification(email: string): Promise<{
+    id: string;
+    email: string;
+    status: string;
+    emailVerified: boolean;
+  } | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        status: true,
+        emailVerified: true,
+      },
+    });
+    return user as unknown as
+      | { id: string; email: string; status: string; emailVerified: boolean }
+      | null;
+  }
+
+  async createEmailVerificationOtp(
+    userId: string,
+    otpHash: string,
+    expiresAt: Date,
+  ): Promise<{ id: string }> {
+    const otp = await this.prisma.emailVerificationOtp.create({
+      data: { userId, otpHash, expiresAt },
+      select: { id: true },
+    });
+    return otp;
+  }
+
+  async findActiveEmailVerificationOtp(
+    userId: string,
+  ): Promise<EmailVerificationOtpRecord | null> {
+    return this.prisma.emailVerificationOtp.findFirst({
+      where: {
+        userId,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    }) as Promise<EmailVerificationOtpRecord | null>;
+  }
+
+  async findRecentEmailVerificationOtp(
+    userId: string,
+    cooldownSeconds: number,
+  ): Promise<EmailVerificationOtpRecord | null> {
+    return this.prisma.emailVerificationOtp.findFirst({
+      where: {
+        userId,
+        verifiedAt: null,
+        createdAt: {
+          gte: new Date(Date.now() - cooldownSeconds * 1000),
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    }) as Promise<EmailVerificationOtpRecord | null>;
+  }
+
+  /**
+   * Phase 27 (2026-05-21) — counts EmailVerificationOtp rows created
+   * since a given timestamp. Powers the hourly resend cap on the
+   * resend-verification-otp use case (parallel to the password-reset
+   * countOtpsSince added Phase 26, but querying the separate
+   * email_verification_otps table).
+   */
+  async countEmailVerificationOtpsSince(
+    userId: string,
+    since: Date,
+  ): Promise<number> {
+    return this.prisma.emailVerificationOtp.count({
+      where: { userId, createdAt: { gte: since } },
+    });
+  }
+
+  async invalidateActiveEmailVerificationOtps(userId: string): Promise<void> {
+    // Mirrors PasswordResetOtp.invalidateActiveOtps: set expiresAt to
+    // now() on every still-active row, so the verify use-case's
+    // "active OTP" lookup misses on them.
+    await this.prisma.emailVerificationOtp.updateMany({
+      where: {
+        userId,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { expiresAt: new Date() },
+    });
+  }
+
+  async expireEmailVerificationOtp(otpId: string): Promise<void> {
+    await this.prisma.emailVerificationOtp.update({
+      where: { id: otpId },
+      data: { expiresAt: new Date() },
+    });
+  }
+
+  async incrementEmailVerificationOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }> {
+    // Atomic CAS — the WHERE expresses "still active AND below cap"
+    // so concurrent verifies cannot both pass.
+    const res = await this.prisma.emailVerificationOtp.updateMany({
+      where: {
+        id: otpId,
+        attempts: { lt: maxAttempts },
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (res.count !== 1) return { ok: false };
+    const after = await this.prisma.emailVerificationOtp.findUnique({
+      where: { id: otpId },
+      select: { attempts: true },
+    });
+    return { ok: true, attempts: after?.attempts ?? 0 };
+  }
+
+  async markEmailVerified(otpId: string, userId: string): Promise<void> {
+    // Atomic: OTP consumed + user activated. Either both land or
+    // neither does. A crash mid-transaction never leaves a user
+    // with a consumed OTP but no ACTIVE status.
+    await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.emailVerificationOtp.update({
+        where: { id: otpId },
+        data: { verifiedAt: now },
+      });
+      await tx.user.update({
+        where: { id: userId },
         data: {
-          firstName: data.firstName,
-          lastName: data.lastName,
-          email: data.email,
-          passwordHash: data.passwordHash,
+          status: 'ACTIVE',
+          emailVerified: true,
+          emailVerifiedAt: now,
         },
       });
-
-      await tx.roleAssignment.create({
-        data: {
-          userId: newUser.id,
-          roleId: customerRole.id,
-        },
-      });
-
-      return newUser;
     });
   }
 
@@ -245,6 +505,17 @@ export class PrismaUserRepository implements UserRepository {
       },
       orderBy: { createdAt: 'desc' },
     }) as Promise<PasswordResetOtpRecord | null>;
+  }
+
+  /**
+   * Phase 26 (2026-05-20) — count OTPs created since `since`. Used by
+   * the resend-OTP use case to enforce the per-account hourly cap
+   * (mirror of countOtpsSince in seller / franchise repos).
+   */
+  async countOtpsSince(userId: string, since: Date): Promise<number> {
+    return this.prisma.passwordResetOtp.count({
+      where: { userId, createdAt: { gte: since } },
+    });
   }
 
   async findActiveOtp(userId: string): Promise<PasswordResetOtpRecord | null> {
@@ -286,6 +557,41 @@ export class PrismaUserRepository implements UserRepository {
       where: { id: otpId },
       data: { attempts: { increment: 1 } },
     });
+  }
+
+  /**
+   * Phase 1 / H5 — atomic CAS increment. Returns the post-increment
+   * attempts count if the row was updated (attempts < maxAttempts at
+   * the moment of the increment), or null if the cap was already
+   * reached. Replaces the read-then-increment pattern in
+   * verify-reset-otp.use-case which two concurrent verifies could
+   * both pass.
+   *
+   * Implemented via updateMany so the WHERE clause expresses the
+   * "below cap" predicate atomically; updateMany returns `count` so
+   * the caller can tell whether the row was eligible. A follow-up
+   * findUnique fetches the new attempts value.
+   */
+  async incrementOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }> {
+    const res = await this.prisma.passwordResetOtp.updateMany({
+      where: {
+        id: otpId,
+        attempts: { lt: maxAttempts },
+        usedAt: null,
+        verifiedAt: null,
+        expiresAt: { gte: new Date() },
+      },
+      data: { attempts: { increment: 1 } },
+    });
+    if (res.count !== 1) return { ok: false };
+    const after = await this.prisma.passwordResetOtp.findUnique({
+      where: { id: otpId },
+      select: { attempts: true },
+    });
+    return { ok: true, attempts: after?.attempts ?? 0 };
   }
 
   async expireOtp(otpId: string): Promise<void> {

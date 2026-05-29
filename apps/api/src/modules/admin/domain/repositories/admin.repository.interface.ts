@@ -105,7 +105,6 @@ export interface CustomerDetail {
   phone: string | null;
   status: string;
   emailVerified: boolean;
-  phoneVerified: boolean;
   createdAt: Date;
   addresses: any[];
 }
@@ -130,6 +129,20 @@ export interface AdminRepository {
     select?: Record<string, boolean>,
   ): Promise<Partial<AdminRecord> | null>;
   updateAdmin(adminId: string, data: Record<string, unknown>): Promise<void>;
+  /**
+   * Phase 1 / H3 — atomic anti-replay advance for the TOTP step
+   * counter. Updates `mfaLastUsedStep` to `step` ONLY if the column
+   * is currently null OR strictly less than `step`. Returns true when
+   * the advance landed, false when another concurrent verify already
+   * advanced past this step (the same TOTP was being replayed).
+   *
+   * The check-and-advance is a single SQL UPDATE so two parallel
+   * verifies presenting the same code cannot both win.
+   */
+  advanceMfaLastUsedStepCas(
+    adminId: string,
+    step: number,
+  ): Promise<boolean>;
   createAdminSession(data: {
     adminId: string;
     refreshToken: string;
@@ -147,6 +160,18 @@ export interface AdminRepository {
     adminId: string;
     expiresAt: Date;
     revokedAt: Date | null;
+    // Phase 23 (2026-05-20) — needed for absolute-lifetime cap.
+    createdAt: Date;
+  } | null>;
+  /**
+   * Phase 1 / C6 — secondary lookup on the burned-hash slot
+   * (`previousRefreshTokenHash`). A hit means the caller presented
+   * a token that was already rotated out → theft. The use-case
+   * revokes every session for the actor on hit.
+   */
+  findAdminSessionByPreviousRefreshToken(rawToken: string): Promise<{
+    id: string;
+    adminId: string;
   } | null>;
   /**
    * Rotate the refresh token on an existing session (and bump expiresAt).
@@ -164,6 +189,32 @@ export interface AdminRepository {
   // tolerance; the Prisma implementation provides it.
   markSessionStepUpVerified?(sessionId: string): Promise<void>;
 
+  /**
+   * Phase 25 (2026-05-20) — race-safe MFA enrolment commit.
+   *
+   * Pre-Phase-25 the service did `findAdminById` (check mfaEnabledAt
+   * is null) then a separate `updateAdmin`. Two concurrent
+   * completeEnrollment calls with the same valid TOTP code could both
+   * pass the check, both write the four columns idempotently, then
+   * both call generateAndHashForAdmin and overwrite each other's
+   * backup-code hashes — the admin sees two different code lists
+   * from two response bodies and only the last one is real.
+   *
+   * This method runs the commit as a single updateMany guarded by
+   * `mfaEnabledAt: null`. Returns true when this caller's row update
+   * actually landed (count === 1), false when another concurrent
+   * complete already committed. The caller then knows whether to
+   * generate backup codes or to surface a 409.
+   *
+   * Optional on the interface for test stub tolerance.
+   */
+  commitMfaEnrollmentAtomic?(args: {
+    adminId: string;
+    pendingCiphertext: string;
+    enabledAt: Date;
+    lastUsedStep: number;
+  }): Promise<boolean>;
+
   // ── Admin password reset OTP ────────────────────────────────
   findRecentAdminOtp(params: {
     adminId: string;
@@ -179,6 +230,23 @@ export interface AdminRepository {
     expiresAt: Date;
   }): Promise<void>;
   incrementAdminOtpAttempts(otpId: string): Promise<void>;
+  /**
+   * Phase 26 (2026-05-20) — atomic CAS attempt increment. Returns the
+   * post-increment attempts count if the row was eligible (active +
+   * below cap) at the moment of the increment, or {ok:false} when
+   * ineligible. Closes the race where two concurrent verifies both
+   * observe `attempts < maxAttempts`. Mirror of
+   * UserRepository.incrementOtpAttemptsCas + Seller / Franchise variants.
+   */
+  incrementAdminOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }>;
+  /**
+   * Phase 26 (2026-05-20) — count of admin OTPs created since a given
+   * timestamp. Powers the per-admin hourly resend cap.
+   */
+  countAdminOtpsSince(adminId: string, since: Date): Promise<number>;
   expireAdminOtp(otpId: string): Promise<void>;
   markAdminOtpVerified(otpId: string, resetToken: string): Promise<void>;
   findAdminOtpByResetToken(
@@ -216,13 +284,48 @@ export interface AdminRepository {
   ): Promise<void>;
 
   // ── Impersonation log ──────────────────────────────────────
+  // Phase 28 (2026-05-21) — extended to support franchise via the
+  // targetActorType + targetActorId pair. sellerId is preserved for
+  // back-compat with old readers when targetActorType=SELLER. The
+  // tokenJti is the Redis-revocation key (see end-impersonation flow).
   createImpersonationLog(data: {
     adminId: string;
-    sellerId: string;
+    targetActorType: 'SELLER' | 'FRANCHISE';
+    targetActorId: string;
     tokenId: string;
+    tokenJti: string;
+    reason?: string | null;
     ipAddress: string | null;
     userAgent: string | null;
   }): Promise<{ id: string }>;
+
+  /**
+   * Phase 28 (2026-05-21) — locate the active impersonation log row
+   * for a given JTI so the end-impersonation flow can stamp endedAt
+   * + clear the Redis key in one transaction.
+   */
+  findImpersonationLogByJti(
+    tokenJti: string,
+  ): Promise<{
+    id: string;
+    adminId: string;
+    targetActorType: 'SELLER' | 'FRANCHISE';
+    targetActorId: string;
+    endedAt: Date | null;
+    revokedAt: Date | null;
+  } | null>;
+
+  /**
+   * Phase 28 (2026-05-21) — mark an impersonation as ended (clean
+   * exit) or revoked (force-stop). Updates isActive=false in the
+   * same write so existing isActive readers see the change.
+   */
+  endImpersonationLog(args: {
+    id: string;
+    endedAt: Date;
+    revokedAt?: Date | null;
+    revokedReason?: string | null;
+  }): Promise<void>;
 
   // ── Seller messages ────────────────────────────────────────
   createSellerMessage(data: {

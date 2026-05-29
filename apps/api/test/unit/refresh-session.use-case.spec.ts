@@ -41,13 +41,18 @@ const fakeEnv = {
       case 'JWT_REFRESH_TTL':
         return '30d';
       case 'JWT_ACCESS_TTL':
-        return '7d';
+        return '15m';
       case 'JWT_CUSTOMER_SECRET':
         return 'unit-test-customer-secret-min16-chars';
       default:
         return fallback ?? '';
     }
   },
+  // Phase 17 (2026-05-20) — use-case now consults getOptional('APP_URL')
+  // for the JWT issuer claim and getNumber for the absolute session
+  // lifetime cap. Tests mock both with safe defaults.
+  getOptional: (_key: string) => undefined,
+  getNumber: (_key: string, fallback?: number) => fallback ?? 60,
 } as any;
 
 const fakeLogger = {

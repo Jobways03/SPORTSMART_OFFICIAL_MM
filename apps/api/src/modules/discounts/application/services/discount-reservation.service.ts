@@ -308,6 +308,25 @@ export class DiscountReservationService {
       );
     }
 
+    // Phase 62 (2026-05-22) — increment Discount.usedCount when a
+    // redemption flips to REDEEMED (audit Gap #5). Pre-Phase-62
+    // allocation mode never bumped this counter, so the
+    // validateCouponForCheckout short-circuit at line 466
+    // (`discount.usedCount >= discount.maxUses`) was dead — admin
+    // dashboards also reported 0 uses for active discounts. The
+    // increment happens inside the same tx as the status flip so a
+    // rollback unwinds both atomically.
+    const redemption = await client.discountRedemption.findUnique({
+      where: { id: args.redemptionId },
+      select: { discountId: true },
+    });
+    if (redemption?.discountId) {
+      await client.discount.update({
+        where: { id: redemption.discountId },
+        data: { usedCount: { increment: 1 } },
+      });
+    }
+
     // Phase E (P1.1) — emit redeemed event. We re-fetch lightweight
     // metadata to populate the event payload; the audit row's
     // resourceId is the redemption id which is enough to correlate

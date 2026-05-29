@@ -1,9 +1,36 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import {
+  BadRequestAppException,
+  ConflictAppException,
+  NotFoundAppException,
+} from '../../core/exceptions';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AuditPublicFacade } from '../audit/application/facades/audit-public.facade';
 import { MoneyDualWriteHelper } from '../../core/money/money-dual-write.helper';
 import { toPaise } from '../../core/money/money-field-registry';
+// Phase 148 — formula-injection-safe CSV (the shared util neutralises
+// =/+/-/@-leading cells); replaces the inline csvQuote (RFC-4180 only).
+import { toCsv } from '../../core/utils';
 import { SettlementTcsHookService } from '../tax/application/services/settlement-tcs-hook.service';
+import { SettlementTds194OHookService } from '../tax/application/services/settlement-tds-194o-hook.service';
+import { computeCommissionGst } from '../tax/domain/commission-gst-calculator';
+
+// Phase 142 — the per-seller aggregation shape shared by createCycle (writes)
+// and previewCycle (dry-run). `records` only needs `id` for the consumer (the
+// claim updateMany), though the full rows are stored during grouping.
+interface EligibleSellerGroup {
+  sellerName: string;
+  // Phase 28 — captured for commission-GST place-of-supply; may be empty for
+  // legacy sellers without a registered GSTIN (calculator falls back to IGST).
+  sellerStateCode: string;
+  records: Array<{ id: string }>;
+  totalPlatformAmount: Prisma.Decimal;
+  totalSettlementAmount: Prisma.Decimal;
+  totalPlatformMargin: Prisma.Decimal;
+  totalItems: number;
+  orderIds: Set<string>;
+}
 
 @Injectable()
 export class SettlementService {
@@ -17,31 +44,117 @@ export class SettlementService {
     private readonly moneyDualWrite: MoneyDualWriteHelper,
     // Phase 17 GST — TCS deduction at approval + collection at mark-paid.
     private readonly tcsHook: SettlementTcsHookService,
+    // Phase 27 — Section 194-O Income-Tax TDS deduction at approval +
+    // withholding at mark-paid. Independent of TCS — both stamp
+    // their own ledger row and denorm columns on SellerSettlement.
+    private readonly tdsHook: SettlementTds194OHookService,
   ) {}
 
-  /* ── T3: Create settlement cycle ── */
-  async createCycle(periodStart: Date, periodEnd: Date) {
-    // Find all PENDING commission records within the date range that
-    // aren't already attached to a settlement. The `settlementId: null`
-    // guard keeps this idempotent across concurrent / overlapping
-    // createCycle calls — a record can only be grouped into one cycle.
-    // Without it, two cycles with overlapping date ranges both pick
-    // up the same PENDING record and the second updateMany (see below)
-    // overwrites the first cycle's settlementId, silently detaching
-    // records from the earlier cycle's aggregate totals.
+  /**
+   * Phase 142 — single source of truth for "which PENDING commissions are
+   * eligible for a cycle in [periodStart, periodEnd], grouped by seller, with
+   * exact Decimal totals". createCycle (writes) and previewCycle (dry-run) BOTH
+   * call this, so the dry-run numbers are — by construction — exactly what
+   * createCycle would produce. (Previously the only preview path was a dead,
+   * per-seller facade with different aggregation math.)
+   */
+  private async aggregateEligibleCommissions(
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<{
+    pendingRecords: Array<{ id: string }>;
+    sellerMap: Map<string, EligibleSellerGroup>;
+    cycleTotalAmount: Prisma.Decimal;
+    cycleTotalMargin: Prisma.Decimal;
+  }> {
     const pendingRecords = await this.prisma.commissionRecord.findMany({
       where: {
         status: 'PENDING',
         settlementId: null,
-        createdAt: {
-          gte: periodStart,
-          lte: periodEnd,
-        },
+        // Phase 136 — STABLE settlable date (sub-order return-window end), with
+        // a createdAt fallback for legacy rows; a backfill no longer dumps
+        // months-old deliveries into the current cycle.
+        OR: [
+          { settlableAt: { gte: periodStart, lte: periodEnd } },
+          { settlableAt: null, createdAt: { gte: periodStart, lte: periodEnd } },
+        ],
       },
       include: {
-        seller: { select: { id: true, sellerShopName: true } },
+        seller: { select: { id: true, sellerShopName: true, gstStateCode: true } },
       },
     });
+
+    const sellerMap = new Map<string, EligibleSellerGroup>();
+    for (const rec of pendingRecords) {
+      const existing = sellerMap.get(rec.sellerId);
+      if (existing) {
+        existing.records.push(rec);
+        existing.totalPlatformAmount = existing.totalPlatformAmount.plus(
+          rec.totalPlatformAmount,
+        );
+        existing.totalSettlementAmount = existing.totalSettlementAmount.plus(
+          rec.totalSettlementAmount,
+        );
+        existing.totalPlatformMargin = existing.totalPlatformMargin.plus(
+          rec.platformMargin,
+        );
+        existing.totalItems += rec.quantity;
+        existing.orderIds.add(rec.subOrderId);
+      } else {
+        sellerMap.set(rec.sellerId, {
+          sellerName: rec.seller?.sellerShopName || rec.sellerName,
+          sellerStateCode: rec.seller?.gstStateCode ?? '',
+          records: [rec],
+          totalPlatformAmount: new Prisma.Decimal(rec.totalPlatformAmount),
+          totalSettlementAmount: new Prisma.Decimal(rec.totalSettlementAmount),
+          totalPlatformMargin: new Prisma.Decimal(rec.platformMargin),
+          totalItems: rec.quantity,
+          orderIds: new Set([rec.subOrderId]),
+        });
+      }
+    }
+
+    let cycleTotalAmount = new Prisma.Decimal(0);
+    let cycleTotalMargin = new Prisma.Decimal(0);
+    for (const data of sellerMap.values()) {
+      cycleTotalAmount = cycleTotalAmount.plus(data.totalSettlementAmount);
+      cycleTotalMargin = cycleTotalMargin.plus(data.totalPlatformMargin);
+    }
+
+    return { pendingRecords, sellerMap, cycleTotalAmount, cycleTotalMargin };
+  }
+
+  /* ── T3: Create settlement cycle ── */
+  async createCycle(
+    periodStart: Date,
+    periodEnd: Date,
+    actor?: { adminId?: string },
+  ) {
+    // Phase 141 — reject a period that overlaps an existing non-cancelled
+    // cycle. The settlementId:null claim already prevents a record landing in
+    // two cycles, but two coexisting cycles for overlapping ranges confuse
+    // finance reporting. Fail fast before doing any work.
+    const overlap = await this.prisma.settlementCycle.findFirst({
+      where: {
+        status: { notIn: ['CANCELLED'] },
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
+      select: { id: true, status: true },
+    });
+    if (overlap) {
+      throw new BadRequestAppException(
+        `An overlapping settlement cycle already exists (${overlap.id}, status ${overlap.status}). ` +
+          'Cancel it or choose a non-overlapping period.',
+      );
+    }
+
+    // Phase 142 — shared aggregator (identical SELECT + grouping + Decimal
+    // totals as previewCycle, so a dry-run is exactly what this commits). The
+    // settlementId:null filter inside keeps cycle assignment idempotent — a
+    // record can only ever be grouped into one cycle.
+    const { pendingRecords, sellerMap, cycleTotalAmount, cycleTotalMargin } =
+      await this.aggregateEligibleCommissions(periodStart, periodEnd);
 
     if (pendingRecords.length === 0) {
       return {
@@ -50,57 +163,27 @@ export class SettlementService {
       };
     }
 
-    // Group by seller
-    const sellerMap = new Map<
-      string,
-      {
-        sellerName: string;
-        records: typeof pendingRecords;
-        totalPlatformAmount: number;
-        totalSettlementAmount: number;
-        totalPlatformMargin: number;
-        totalItems: number;
-        orderIds: Set<string>;
-      }
-    >();
+    // Phase 28 — Look up the marketplace's own GST state code once
+    // so every seller settlement uses the same place-of-supply origin.
+    // Empty when no PlatformGstProfile is seeded — calculator falls
+    // back to IGST conservatively in that case.
+    const platformProfile = await this.prisma.platformGstProfile.findFirst({
+      where: { isDefault: true, isActive: true },
+      select: { gstStateCode: true },
+    });
+    const marketplaceStateCode = platformProfile?.gstStateCode ?? '';
 
-    for (const rec of pendingRecords) {
-      const existing = sellerMap.get(rec.sellerId);
-      if (existing) {
-        existing.records.push(rec);
-        existing.totalPlatformAmount += Number(rec.totalPlatformAmount);
-        existing.totalSettlementAmount += Number(rec.totalSettlementAmount);
-        existing.totalPlatformMargin += Number(rec.platformMargin);
-        existing.totalItems += rec.quantity;
-        existing.orderIds.add(rec.subOrderId);
-      } else {
-        sellerMap.set(rec.sellerId, {
-          sellerName: rec.seller?.sellerShopName || rec.sellerName,
-          records: [rec],
-          totalPlatformAmount: Number(rec.totalPlatformAmount),
-          totalSettlementAmount: Number(rec.totalSettlementAmount),
-          totalPlatformMargin: Number(rec.platformMargin),
-          totalItems: rec.quantity,
-          orderIds: new Set([rec.subOrderId]),
-        });
-      }
-    }
-
-    // Create cycle in a transaction
+    // Create cycle in a transaction. cycleTotalAmount / cycleTotalMargin come
+    // from the shared aggregator above (same numbers the preview returned).
     const cycle = await this.prisma.$transaction(async (tx) => {
-      let cycleTotalAmount = 0;
-      let cycleTotalMargin = 0;
-
-      for (const [, data] of sellerMap) {
-        cycleTotalAmount += data.totalSettlementAmount;
-        cycleTotalMargin += data.totalPlatformMargin;
-      }
-
       const newCycle = await tx.settlementCycle.create({
         data: this.moneyDualWrite.applyPaise('settlementCycle', {
           periodStart,
           periodEnd,
           status: 'DRAFT',
+          // Phase 141 — created-by provenance (the most consequential write
+          // in the flow; the audit row below records the rest).
+          createdByAdminId: actor?.adminId ?? null,
           // .toFixed(2) gives a Decimal-string so the helper's toPaise
           // can convert exactly; the previous `Math.round(x*100)/100`
           // expression yields a fractional JS Number that toPaise
@@ -110,8 +193,73 @@ export class SettlementService {
         }),
       });
 
+      // ── Phase 150: Post-settlement reversal netting ──────────────────
+      // Pull every PENDING SellerDebit for the sellers in this cycle so each
+      // seller's payout is offset by the claw-backs recorded against their
+      // already-settled commissions (returns / RTO / disputes). Without this
+      // the debits accumulate forever and the platform silently eats every
+      // post-settlement refund. One query (sellerId IN [...]) — no N+1 — then
+      // grouped in-memory oldest-first so the earliest debts are recovered
+      // first. settlementId stays null until applied (so a concurrent cycle /
+      // a cancel can still claim or release it; we CAS on PENDING below).
+      const cycleSellerIds = Array.from(sellerMap.keys());
+      const pendingDebits = cycleSellerIds.length
+        ? await tx.sellerDebit.findMany({
+            where: { sellerId: { in: cycleSellerIds }, status: 'PENDING' },
+            orderBy: { createdAt: 'asc' },
+          })
+        : [];
+      const debitsBySeller = new Map<string, typeof pendingDebits>();
+      for (const d of pendingDebits) {
+        const arr = debitsBySeller.get(d.sellerId) ?? [];
+        arr.push(d);
+        debitsBySeller.set(d.sellerId, arr);
+      }
+      // Σ claw-back netted across all sellers — used to reduce the cycle's
+      // headline totalAmount so it stays equal to Σ net per-seller payouts.
+      let cycleClawbackPaise = 0n;
+
       // Create per-seller settlements
       for (const [sellerId, data] of sellerMap) {
+        // Phase 28 — compute the commission-GST split at row-creation
+        // time so the settlement is fully GST-aware from the first
+        // moment it exists. Frozen with the marketplace + seller state
+        // codes so a later PlatformGstProfile / Seller.gstStateCode
+        // change doesn't rewrite the historical split.
+        const commissionGst = computeCommissionGst({
+          commissionAmountInPaise: BigInt(
+            data.totalPlatformMargin.mul(100).toFixed(0),
+          ),
+          marketplaceStateCode,
+          sellerStateCode: data.sellerStateCode,
+        });
+
+        // ── Phase 150: net this seller's PENDING claw-backs into the payout.
+        // Greedy: apply a debit in full only if the running payout can still
+        // absorb it (floor at zero — a seller is never paid a negative amount).
+        // Debits that would overdraw stay PENDING and carry forward to a future
+        // cycle; we keep scanning so a smaller later debit can still fill the
+        // remaining headroom. approvedSettlementAmount keeps the GROSS figure
+        // (Phase 147 immutable snapshot); the claw-back is recorded as a
+        // negative SettlementAdjustment and `totalSettlementAmount` is the net.
+        const grossSettlementPaise = BigInt(
+          data.totalSettlementAmount.mul(100).toFixed(0),
+        );
+        const sellerDebits = debitsBySeller.get(sellerId) ?? [];
+        let appliedPaise = 0n;
+        const appliedDebits: typeof sellerDebits = [];
+        for (const debit of sellerDebits) {
+          if (debit.amountInPaise <= 0n) continue;
+          if (appliedPaise + debit.amountInPaise <= grossSettlementPaise) {
+            appliedPaise += debit.amountInPaise;
+            appliedDebits.push(debit);
+          }
+        }
+        const netSettlementDec = data.totalSettlementAmount.sub(
+          new Prisma.Decimal(appliedPaise.toString()).div(100),
+        );
+        cycleClawbackPaise += appliedPaise;
+
         const sellerSettlement = await tx.sellerSettlement.create({
           data: this.moneyDualWrite.applyPaise('sellerSettlement', {
             cycleId: newCycle.id,
@@ -121,9 +269,29 @@ export class SettlementService {
             totalItems: data.totalItems,
             // Same Decimal-string conversion as the cycle totals above.
             totalPlatformAmount: data.totalPlatformAmount.toFixed(2),
-            totalSettlementAmount: data.totalSettlementAmount.toFixed(2),
+            // Phase 150 — net of any post-settlement claw-backs applied below
+            // (== gross when the seller has no PENDING debits).
+            totalSettlementAmount: netSettlementDec.toFixed(2),
+            // Phase 147 — immutable approved-gross snapshot (= the settlement
+            // amount at creation; never mutated, so adjustments can't destroy it).
+            // Stays GROSS even when a claw-back nets the payout down, so the
+            // balance breakdown can show earnings vs adjustments separately.
+            approvedSettlementAmount: data.totalSettlementAmount.toFixed(2),
             totalPlatformMargin: data.totalPlatformMargin.toFixed(2),
             status: 'PENDING',
+            // Phase 28 — commission-GST denorm columns. Rate stored
+            // even when total is 0 so the historical rate snapshot is
+            // useful for audits.
+            commissionGstRateBps: commissionGst.rateBps,
+            commissionGstSplitType: commissionGst.splitType,
+            cgstOnCommissionInPaise: commissionGst.cgstInPaise,
+            sgstOnCommissionInPaise: commissionGst.sgstInPaise,
+            igstOnCommissionInPaise: commissionGst.igstInPaise,
+            totalCommissionGstInPaise: commissionGst.totalGstInPaise,
+            commissionGstMarketplaceStateCode:
+              marketplaceStateCode || null,
+            commissionGstSellerStateCode:
+              data.sellerStateCode || null,
           }),
         });
 
@@ -131,10 +299,83 @@ export class SettlementService {
         // `settlementId: null` so a concurrent createCycle racing the
         // same record loses the claim — only one cycle wins.
         const recordIds = data.records.map((r) => r.id);
-        await tx.commissionRecord.updateMany({
-          where: { id: { in: recordIds }, settlementId: null },
+        const attached = await tx.commissionRecord.updateMany({
+          // Phase 137 — also require status PENDING. A record HELD (→ ON_HOLD)
+          // between the (non-transactional) candidate read and this attach must
+          // not be pulled into the cycle. If the count drops, a record changed
+          // state mid-flight — abort the whole cycle (rolls back) so the cycle
+          // totals can never include a record that wasn't actually attached
+          // (which would otherwise risk a double-pay). The admin retries; the
+          // next read excludes the held record.
+          where: { id: { in: recordIds }, settlementId: null, status: 'PENDING' },
           data: this.moneyDualWrite.applyPaise('commissionRecord', {
             settlementId: sellerSettlement.id,
+          }),
+        });
+        if (attached.count !== recordIds.length) {
+          throw new ConflictAppException(
+            'A commission record changed state (held / settled) during cycle ' +
+              'creation. No cycle was created — retry.',
+          );
+        }
+
+        // ── Phase 150: mark the netted claw-backs APPLIED + record each as a
+        // negative adjustment line. The updateMany CAS on status PENDING means
+        // a debit cancelled (or already applied by a racing op) between the
+        // read above and here drops the count — we abort the whole cycle so a
+        // debit can never be double-applied or applied after being contested.
+        if (appliedDebits.length > 0) {
+          const applied = await tx.sellerDebit.updateMany({
+            where: {
+              id: { in: appliedDebits.map((d) => d.id) },
+              status: 'PENDING',
+            },
+            data: {
+              status: 'APPLIED',
+              settlementId: sellerSettlement.id,
+              settlementAdjustedAt: new Date(),
+            },
+          });
+          if (applied.count !== appliedDebits.length) {
+            throw new ConflictAppException(
+              'A seller debit changed state (cancelled / applied) during cycle ' +
+                'creation. No cycle was created — retry.',
+            );
+          }
+          for (const debit of appliedDebits) {
+            // amount + amountInPaise set explicitly (negative) — NOT via
+            // applyPaise, whose toPaise contract is for positive Decimal-strings.
+            await tx.settlementAdjustment.create({
+              data: {
+                settlementId: sellerSettlement.id,
+                amount: new Prisma.Decimal(debit.amountInPaise.toString())
+                  .div(100)
+                  .neg()
+                  .toFixed(2),
+                amountInPaise: -debit.amountInPaise,
+                adjustmentType: 'CLAWBACK',
+                status: 'ACTIVE',
+                reason: `Post-settlement claw-back (${debit.sourceType})`.slice(
+                  0,
+                  200,
+                ),
+                notes: `SellerDebit ${debit.id} · source ${debit.sourceType}:${debit.sourceId}`,
+                createdByAdminId: actor?.adminId ?? null,
+              },
+            });
+          }
+        }
+      }
+
+      // Phase 150 — reduce the cycle headline by the claw-backs netted across
+      // all sellers, so cycle.totalAmount stays == Σ net per-seller payouts.
+      if (cycleClawbackPaise > 0n) {
+        return tx.settlementCycle.update({
+          where: { id: newCycle.id },
+          data: this.moneyDualWrite.applyPaise('settlementCycle', {
+            totalAmount: cycleTotalAmount
+              .sub(new Prisma.Decimal(cycleClawbackPaise.toString()).div(100))
+              .toFixed(2),
           }),
         });
       }
@@ -142,7 +383,245 @@ export class SettlementService {
       return newCycle;
     });
 
+    // Phase 141 — audit the cycle creation (locking 100s/1000s of commission
+    // records to a payout cycle is the flow's most consequential write).
+    // Best-effort so the audit subsystem can't roll back a committed cycle.
+    this.audit
+      .writeAuditLog({
+        actorId: actor?.adminId ?? 'system',
+        actorRole: 'ADMIN',
+        action: 'settlement.cycle_created',
+        module: 'settlements',
+        resource: 'settlement_cycle',
+        resourceId: cycle.id,
+        newValue: {
+          periodStart: periodStart.toISOString(),
+          periodEnd: periodEnd.toISOString(),
+          sellerCount: sellerMap.size,
+          recordCount: pendingRecords.length,
+          totalAmount: cycle.totalAmount?.toString?.() ?? null,
+        },
+      })
+      .catch((e) =>
+        this.logger.error(`Failed to audit cycle creation: ${e}`),
+      );
+
     return { cycle, message: 'Settlement cycle created successfully' };
+  }
+
+  /* ── Phase 141: Preview a cycle (read-only, no write) ── */
+  /**
+   * Runs the same candidate SELECT + per-seller grouping as createCycle but
+   * commits nothing — so an operator can see "this cycle would include N
+   * records totalling ₹X across M sellers" (and whether the period overlaps an
+   * existing cycle) before committing.
+   */
+  async previewCycle(
+    periodStart: Date,
+    periodEnd: Date,
+    actor?: { adminId?: string },
+  ) {
+    const overlap = await this.prisma.settlementCycle.findFirst({
+      where: {
+        status: { notIn: ['CANCELLED'] },
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
+      select: { id: true, status: true, periodStart: true, periodEnd: true },
+    });
+
+    // Phase 142 — SAME aggregator createCycle uses, so the dry-run numbers are
+    // exactly what a subsequent create would write (only-PENDING, settlementId
+    // null, settlableAt-windowed). No mutation: no transaction, no writes.
+    const { pendingRecords, sellerMap, cycleTotalAmount, cycleTotalMargin } =
+      await this.aggregateEligibleCommissions(periodStart, periodEnd);
+
+    // Phase 150 — surface the post-settlement claw-backs createCycle will net
+    // off each seller's payout, so the dry-run matches the commit (audit #6).
+    const previewSellerIds = Array.from(sellerMap.keys());
+    const previewDebits = previewSellerIds.length
+      ? await this.prisma.sellerDebit.findMany({
+          where: { sellerId: { in: previewSellerIds }, status: 'PENDING' },
+          orderBy: { createdAt: 'asc' },
+          select: { sellerId: true, amountInPaise: true },
+        })
+      : [];
+    const previewDebitsBySeller = new Map<string, bigint[]>();
+    for (const d of previewDebits) {
+      const arr = previewDebitsBySeller.get(d.sellerId) ?? [];
+      arr.push(d.amountInPaise);
+      previewDebitsBySeller.set(d.sellerId, arr);
+    }
+    let previewClawbackPaise = 0n;
+
+    const sellerBreakdown = Array.from(sellerMap.entries()).map(
+      ([sellerId, data]) => {
+        // Same greedy floor-at-zero apply createCycle does, read-only.
+        const grossPaise = BigInt(
+          data.totalSettlementAmount.mul(100).toFixed(0),
+        );
+        const sellerDebitAmounts = previewDebitsBySeller.get(sellerId) ?? [];
+        let appliedPaise = 0n;
+        let pendingPaise = 0n;
+        for (const amt of sellerDebitAmounts) {
+          if (amt <= 0n) continue;
+          pendingPaise += amt;
+          if (appliedPaise + amt <= grossPaise) appliedPaise += amt;
+        }
+        previewClawbackPaise += appliedPaise;
+        const netDec = data.totalSettlementAmount.sub(
+          new Prisma.Decimal(appliedPaise.toString()).div(100),
+        );
+        return {
+          sellerId,
+          sellerName: data.sellerName,
+          recordCount: data.records.length,
+          totalOrders: data.orderIds.size,
+          // sum of quantity (not row count) — matches what createCycle writes.
+          totalItems: data.totalItems,
+          totalPlatformAmount: data.totalPlatformAmount.toFixed(2),
+          totalSettlementAmount: data.totalSettlementAmount.toFixed(2),
+          // Phase 150 — claw-back preview (pending = all owed; applied = what
+          // fits under this cycle's payout; net = the actual payout).
+          pendingClawbackInPaise: pendingPaise.toString(),
+          appliedClawbackInPaise: appliedPaise.toString(),
+          netSettlementAmount: netDec.toFixed(2),
+          totalPlatformMargin: data.totalPlatformMargin.toFixed(2),
+        };
+      },
+    );
+    const netCycleTotalDec = cycleTotalAmount.sub(
+      new Prisma.Decimal(previewClawbackPaise.toString()).div(100),
+    );
+
+    // Phase 142 — optional forensic trail: record what projected numbers the
+    // operator saw before committing. Best-effort; never blocks the read.
+    if (actor?.adminId) {
+      this.audit
+        .writeAuditLog({
+          actorId: actor.adminId,
+          actorRole: 'ADMIN',
+          action: 'settlement.cycle_previewed',
+          module: 'settlements',
+          resource: 'settlement_cycle',
+          resourceId: 'preview',
+          newValue: {
+            periodStart: periodStart.toISOString(),
+            periodEnd: periodEnd.toISOString(),
+            recordCount: pendingRecords.length,
+            sellerCount: sellerMap.size,
+            totalAmount: cycleTotalAmount.toFixed(2),
+          },
+        })
+        .catch((e) => this.logger.error(`Failed to audit cycle preview: ${e}`));
+    }
+
+    return {
+      isDryRun: true,
+      // The cycle service is seller-commission-scoped; franchise settlements
+      // run on their own pipeline (franchise-settlement.service), so a seller
+      // preview never silently omits franchise money — it's a different cycle.
+      scope: 'SELLER' as const,
+      periodStart,
+      periodEnd,
+      recordCount: pendingRecords.length,
+      sellerCount: sellerMap.size,
+      totalSettlementAmount: cycleTotalAmount.toFixed(2),
+      // Phase 150 — claw-backs netted across all sellers + the resulting net
+      // payout (== cycle.totalAmount that createCycle will write).
+      totalClawbackInPaise: previewClawbackPaise.toString(),
+      netSettlementAmount: netCycleTotalDec.toFixed(2),
+      totalMargin: cycleTotalMargin.toFixed(2),
+      sellerBreakdown,
+      overlap: overlap
+        ? {
+            id: overlap.id,
+            status: overlap.status,
+            periodStart: overlap.periodStart,
+            periodEnd: overlap.periodEnd,
+          }
+        : null,
+      // "as of" — the result is a point-in-time snapshot; the commission cron
+      // may add rows before the operator confirms (create re-aggregates).
+      asOf: new Date().toISOString(),
+    };
+  }
+
+  /* ── Phase 141: Cancel a DRAFT/PREVIEWED cycle ── */
+  /**
+   * Reverses an erroneously-created cycle: releases its claimed commission
+   * records (settlementId → null, so a corrected cycle can re-claim them),
+   * marks the seller settlements + the cycle CANCELLED, all in one transaction.
+   * Only DRAFT/PREVIEWED cycles can be cancelled — once APPROVED/PAID the money
+   * has moved (or TCS/TDS ledgers exist) and the reversal flow must be used.
+   */
+  async cancelCycle(
+    cycleId: string,
+    actor: { adminId?: string },
+    reason: string,
+  ) {
+    const safeReason = (reason ?? '').replace(/<[^>]*>/g, '').trim();
+    if (safeReason.length < 3) {
+      throw new BadRequestAppException(
+        'A reason (min 3 chars) is required to cancel a settlement cycle.',
+      );
+    }
+
+    const released = await this.prisma.$transaction(async (tx) => {
+      const cycle = await tx.settlementCycle.findUnique({
+        where: { id: cycleId },
+        include: { sellerSettlements: { select: { id: true } } },
+      });
+      if (!cycle) throw new NotFoundAppException('Settlement cycle not found');
+      if (cycle.status !== 'DRAFT' && cycle.status !== 'PREVIEWED') {
+        throw new BadRequestAppException(
+          `Cannot cancel a cycle in ${cycle.status} state — only DRAFT/PREVIEWED cycles can be cancelled. Use the reversal flow for an approved/paid cycle.`,
+        );
+      }
+
+      const settlementIds = cycle.sellerSettlements.map((s) => s.id);
+      let releasedCount = 0;
+      if (settlementIds.length > 0) {
+        const released = await tx.commissionRecord.updateMany({
+          where: { settlementId: { in: settlementIds } },
+          data: this.moneyDualWrite.applyPaise('commissionRecord', {
+            settlementId: null,
+          }),
+        });
+        releasedCount = released.count;
+        await tx.sellerSettlement.updateMany({
+          where: { cycleId },
+          data: { status: 'CANCELLED' as any },
+        });
+      }
+
+      await tx.settlementCycle.update({
+        where: { id: cycleId },
+        data: { status: 'CANCELLED' },
+      });
+
+      return releasedCount;
+    });
+
+    this.audit
+      .writeAuditLog({
+        actorId: actor.adminId ?? 'system',
+        actorRole: 'ADMIN',
+        action: 'settlement.cycle_cancelled',
+        module: 'settlements',
+        resource: 'settlement_cycle',
+        resourceId: cycleId,
+        newValue: { reason: safeReason, releasedRecordCount: released },
+      })
+      .catch((e) =>
+        this.logger.error(`Failed to audit cycle cancellation: ${e}`),
+      );
+
+    return {
+      success: true,
+      message: `Settlement cycle cancelled; ${released} commission record(s) released back to the pool.`,
+      releasedRecordCount: released,
+    };
   }
 
   /* ── T3: List cycles ── */
@@ -161,7 +640,10 @@ export class SettlementService {
     ]);
 
     return {
-      cycles,
+      // Phase 141 — key is `items` to match the FE contract. It previously
+      // returned `cycles`, so the FE's `data.items` was always undefined and
+      // the list silently rendered empty (the fallback unwrap didn't help).
+      items: cycles,
       pagination: {
         page,
         limit,
@@ -180,8 +662,12 @@ export class SettlementService {
           orderBy: { totalSettlementAmount: 'desc' },
           include: {
             _count: { select: { commissionRecords: true } },
+            // Phase 145 — payout actor name for the row's "paid by X" display.
+            paidByAdmin: { select: { name: true } },
           },
         },
+        // Phase 144 — resolve the approving admin's name for the detail page.
+        approvedByAdmin: { select: { name: true, email: true } },
       },
     });
 
@@ -243,13 +729,62 @@ export class SettlementService {
       }
     }
 
-    return { ...cycle, discountDeductionsBySeller };
+    // Phase 141 — the stored totalAmount/totalMargin are a creation-time
+    // snapshot. If a record was frozen (return) or adjusted after the cycle was
+    // created, the snapshot drifts from what is actually payable. Recompute the
+    // live payable totals (still-PENDING attached records — exactly what
+    // markPaid will pay) so the detail/approval UI shows reality, and surface
+    // the held count so the operator knows a record dropped out.
+    const settlementIds = (cycle.sellerSettlements ?? []).map((s: any) => s.id);
+    let liveTotals = {
+      totalSettlementAmount: '0.00',
+      totalMargin: '0.00',
+      payableRecordCount: 0,
+      heldRecordCount: 0,
+      driftedFromSnapshot: false,
+    };
+    if (settlementIds.length > 0) {
+      const payable = await this.prisma.commissionRecord.aggregate({
+        where: { settlementId: { in: settlementIds }, status: 'PENDING' },
+        _sum: { totalSettlementAmount: true, platformMargin: true },
+        _count: true,
+      });
+      const heldRecordCount = await this.prisma.commissionRecord.count({
+        where: {
+          settlementId: { in: settlementIds },
+          status: { in: ['ON_HOLD', 'REFUNDED'] },
+        },
+      });
+      const liveAmount = payable._sum.totalSettlementAmount ?? new Prisma.Decimal(0);
+      liveTotals = {
+        totalSettlementAmount: liveAmount.toFixed(2),
+        totalMargin: (payable._sum.platformMargin ?? new Prisma.Decimal(0)).toFixed(2),
+        payableRecordCount: payable._count,
+        heldRecordCount,
+        driftedFromSnapshot: !new Prisma.Decimal(cycle.totalAmount).equals(liveAmount),
+      };
+    }
+
+    return { ...cycle, discountDeductionsBySeller, liveTotals };
   }
 
   /* ── T3: Approve cycle ── */
-  async approveCycle(cycleId: string, actorId?: string) {
+  async approveCycle(cycleId: string, actorId?: string, notes?: string) {
+    // Phase 144 — approval is the most consequential write in the finance
+    // pipeline (it commits sellers' payouts + triggers TCS/TDS). Load the
+    // settlements + their live commission state so we can re-validate before
+    // committing, not blind-write creation-time totals.
     const cycle = await this.prisma.settlementCycle.findUnique({
       where: { id: cycleId },
+      include: {
+        sellerSettlements: {
+          include: {
+            commissionRecords: {
+              select: { id: true, status: true, platformMargin: true },
+            },
+          },
+        },
+      },
     });
 
     if (!cycle) {
@@ -263,17 +798,91 @@ export class SettlementService {
       };
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.settlementCycle.update({
-        where: { id: cycleId },
-        data: { status: 'APPROVED' },
-      });
+    // Phase 144 — reject an empty cycle (every record reversed since creation).
+    if (cycle.sellerSettlements.length === 0) {
+      return {
+        success: false,
+        message: 'Cannot approve an empty cycle (it has no seller settlements).',
+      };
+    }
 
+    // Phase 144 — re-validate the stored per-seller totals against the LIVE
+    // commission state. A return arriving between creation and approval flips a
+    // commission PENDING → ON_HOLD/REFUNDED; the stored settlement total still
+    // counts it, so approving (and computing TCS/TDS) would use stale numbers.
+    // We reject on any drift and route the operator to cancel + recreate (which
+    // recomputes every total — incl. the frozen GST split — cleanly).
+    for (const s of cycle.sellerSettlements) {
+      const liveMargin = s.commissionRecords
+        .filter((r) => r.status === 'PENDING')
+        .reduce((sum, r) => sum.plus(r.platformMargin), new Prisma.Decimal(0));
+      const storedMargin = new Prisma.Decimal(s.totalPlatformMargin);
+      if (!liveMargin.equals(storedMargin)) {
+        return {
+          success: false,
+          message:
+            `Settlement totals are stale for seller ${s.sellerName} ` +
+            `(stored ₹${storedMargin.toFixed(2)}, live ₹${liveMargin.toFixed(2)} ` +
+            'after holds/reversals since cycle creation). Cancel this cycle and ' +
+            'recreate it so the totals — and the GST split — recompute cleanly.',
+        };
+      }
+    }
+
+    const safeNotes = notes
+      ? notes.replace(/<[^>]*>/g, '').trim().slice(0, 500) || null
+      : null;
+
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      // Version-CAS: the flip only commits if the cycle is still DRAFT/PREVIEWED.
+      // Two concurrent approvals → the second sees count 0 → 409, so TCS/TDS
+      // hooks (below) run exactly once.
+      const claim = await tx.settlementCycle.updateMany({
+        where: { id: cycleId, status: { in: ['DRAFT', 'PREVIEWED'] } },
+        data: {
+          status: 'APPROVED',
+          approvedByAdminId: actorId ?? null,
+          approvedAt: new Date(),
+          approvalNotes: safeNotes,
+        },
+      });
+      if (claim.count === 0) {
+        throw new ConflictAppException(
+          'Cycle status changed concurrently — reload and retry.',
+        );
+      }
+
+      // Status-guarded cascade: only PENDING settlements flip to APPROVED (a
+      // hypothetically already-PAID row is never downgraded).
       await tx.sellerSettlement.updateMany({
-        where: { cycleId },
+        where: { cycleId, status: 'PENDING' },
         data: { status: 'APPROVED' },
       });
+      return true;
     });
+    if (!claimed) {
+      return { success: false, message: 'Settlement cycle approval failed' };
+    }
+
+    // Phase 144 — business-level audit of the approval (TCS/TDS hooks record
+    // their own ledger actor; this is the cycle-approved event itself).
+    this.audit
+      .writeAuditLog({
+        actorId: actorId ?? 'system',
+        actorRole: 'ADMIN',
+        action: 'settlement.cycle_approved',
+        module: 'settlements',
+        resource: 'settlement_cycle',
+        resourceId: cycleId,
+        oldValue: { status: cycle.status },
+        newValue: {
+          status: 'APPROVED',
+          totalAmount: cycle.totalAmount?.toString?.() ?? null,
+          sellerCount: cycle.sellerSettlements.length,
+          notes: safeNotes,
+        },
+      })
+      .catch((e) => this.logger.error(`Failed to audit cycle approval: ${e}`));
 
     // Phase 17 GST — apply TCS to every SellerSettlement in the cycle.
     // Runs after the APPROVED flip so the TCS hook sees the settlements
@@ -292,10 +901,26 @@ export class SettlementService {
       );
     }
 
+    // Phase 27 — apply Section 194-O TDS in the same pass. The two
+    // hooks operate on different denorm columns + different ledger
+    // tables, so a TCS failure doesn't block TDS and vice versa.
+    let tdsResult;
+    try {
+      tdsResult = await this.tdsHook.applyToCycleOnApprove({
+        cycleId,
+        actorId,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `194-O TDS apply-on-approve failed for cycle ${cycleId}: ${(err as Error).message}`,
+      );
+    }
+
     return {
       success: true,
       message: 'Settlement cycle approved',
       tcs: tcsResult,
+      tds: tdsResult,
     };
   }
 
@@ -303,7 +928,13 @@ export class SettlementService {
   async markSettlementPaid(
     settlementId: string,
     utrReference: string,
-    actorContext?: { adminId?: string; ipAddress?: string; userAgent?: string },
+    actorContext?: {
+      adminId?: string;
+      ipAddress?: string;
+      userAgent?: string;
+      paymentMethod?: string;
+      paymentProofUrl?: string;
+    },
   ) {
     const settlement = await this.prisma.sellerSettlement.findUnique({
       where: { id: settlementId },
@@ -325,40 +956,82 @@ export class SettlementService {
       };
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      // Mark seller settlement as paid
-      await tx.sellerSettlement.update({
-        where: { id: settlementId },
-        data: {
-          status: 'PAID',
-          paidAt: new Date(),
-          utrReference,
-        },
-      });
+    const trimmedUtr = utrReference.trim();
 
-      // Update all linked commission records to SETTLED
-      await tx.commissionRecord.updateMany({
-        where: { settlementId },
-        data: this.moneyDualWrite.applyPaise('commissionRecord', {
-          status: 'SETTLED',
-        }),
-      });
-
-      // Check if all seller settlements in the cycle are paid
-      const pendingCount = await tx.sellerSettlement.count({
-        where: {
-          cycleId: settlement.cycleId,
-          status: { not: 'PAID' },
-        },
-      });
-
-      if (pendingCount === 0) {
-        await tx.settlementCycle.update({
-          where: { id: settlement.cycleId },
-          data: { status: 'PAID' },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // Phase 145 — version-CAS: only an APPROVED (or previously-FAILED, i.e.
+        // a retry) settlement can be paid. Two concurrent mark-paid calls →
+        // the second sees count 0 → 409, so the TCS/TDS hooks run exactly once.
+        const claim = await tx.sellerSettlement.updateMany({
+          where: { id: settlementId, status: { in: ['APPROVED', 'FAILED'] } },
+          data: {
+            status: 'PAID',
+            paidAt: new Date(),
+            utrReference: trimmedUtr,
+            // Phase 145 — denormalise the actor + payment metadata onto the row
+            // (list/CSV "paid by X" without an audit_logs join). Clear any prior
+            // failure reason on a successful retry.
+            paidByAdminId: actorContext?.adminId ?? null,
+            paymentMethod: actorContext?.paymentMethod ?? null,
+            paymentProofUrl: actorContext?.paymentProofUrl ?? null,
+            paymentFailureReason: null,
+          },
         });
+        if (claim.count === 0) {
+          throw new ConflictAppException(
+            'Settlement is not in a payable state (must be APPROVED or FAILED) or it changed concurrently.',
+          );
+        }
+
+        // Update all linked commission records to SETTLED. Phase 137 — guard on
+        // status PENDING so a record that somehow became ON_HOLD/REFUNDED after
+        // cycle attach is NOT marked SETTLED (defense-in-depth; the hold path
+        // already refuses to hold a cycled record, so this should never differ).
+        await tx.commissionRecord.updateMany({
+          where: { settlementId, status: 'PENDING' },
+          data: this.moneyDualWrite.applyPaise('commissionRecord', {
+            status: 'SETTLED',
+          }),
+        });
+
+        // Auto-flip the parent cycle to PAID only when NO settlement is left
+        // unpaid — a FAILED settlement is `not: 'PAID'`, so it correctly blocks
+        // the flip until it's retried. Phase 146 — count BOTH seller AND
+        // franchise children (a cycle can hold both); counting seller-only
+        // would prematurely flip a cycle whose franchise payouts are pending.
+        const [sellerPending, franchisePending] = await Promise.all([
+          tx.sellerSettlement.count({
+            where: { cycleId: settlement.cycleId, status: { not: 'PAID' } },
+          }),
+          tx.franchiseSettlement.count({
+            where: { cycleId: settlement.cycleId, status: { not: 'PAID' } },
+          }),
+        ]);
+
+        if (sellerPending === 0 && franchisePending === 0) {
+          await tx.settlementCycle.update({
+            where: { id: settlement.cycleId },
+            data: { status: 'PAID' },
+          });
+        }
+      });
+    } catch (err) {
+      // Phase 145 — the UTR unique index rejects a duplicate bank reference.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        return {
+          success: false,
+          message:
+            `UTR "${trimmedUtr}" is already recorded on another settlement. ` +
+            'Verify the bank reference — a duplicate usually means a copy-paste ' +
+            'error or a real payment failure.',
+        };
       }
-    });
+      throw err;
+    }
 
     // Phase 17 GST — flip the linked TCS row COMPUTED → COLLECTED so
     // the GSTR-8 export reflects "TCS money actually collected from
@@ -374,6 +1047,28 @@ export class SettlementService {
       );
     }
 
+    // Phase 27 — same pattern for the 194-O TDS row. The TDS amount
+    // has been deducted from the seller's payout; flip the ledger
+    // COMPUTED → WITHHELD so admin sees it in the "challan-pending"
+    // queue. Best-effort: re-runnable via the admin endpoint if it
+    // fails here.
+    try {
+      await this.tdsHook.markWithheldOnPay({ settlementId });
+    } catch (err) {
+      this.logger.warn(
+        `194-O TDS mark-withheld failed for settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
+
+    // Phase 145 — actual ₹ wired = gross settlement − TCS − TDS − commission-GST
+    // (all paise). Recording it (alongside the gross) means an auditor reading
+    // the log sees what actually left the bank, not just the pre-tax figure.
+    const netAmountInPaise =
+      BigInt(settlement.totalSettlementAmountInPaise ?? 0) -
+      BigInt(settlement.tcsDeductedInPaise ?? 0) -
+      BigInt(settlement.tdsDeductedInPaise ?? 0) -
+      BigInt(settlement.totalCommissionGstInPaise ?? 0);
+
     // Audit the payout — settlement payouts are real money movements and
     // need to be traceable to a specific admin action with the UTR.
     this.audit
@@ -385,11 +1080,13 @@ export class SettlementService {
         resource: 'seller_settlement',
         resourceId: settlementId,
         oldValue: { status: settlement.status },
-        newValue: { status: 'PAID', utrReference },
+        newValue: { status: 'PAID', utrReference: trimmedUtr },
         metadata: {
           sellerId: settlement.sellerId,
           cycleId: settlement.cycleId,
-          amount: Number(settlement.totalSettlementAmount ?? 0),
+          grossAmount: Number(settlement.totalSettlementAmount ?? 0),
+          netAmountInPaise: netAmountInPaise.toString(),
+          paymentMethod: actorContext?.paymentMethod ?? null,
         },
         ipAddress: actorContext?.ipAddress,
         userAgent: actorContext?.userAgent,
@@ -399,6 +1096,76 @@ export class SettlementService {
       });
 
     return { success: true, message: 'Settlement marked as paid' };
+  }
+
+  /* ── Phase 145: Mark a seller settlement payout as FAILED ── */
+  /**
+   * Records a botched payout (bank rejected / reversed the transfer) as a
+   * resting FAILED state with a reason, so it can later be retried
+   * (FAILED → PAID via markSettlementPaid) with a full audit chain — instead of
+   * silently leaving the settlement APPROVED and re-trying blind.
+   */
+  async markSettlementFailed(
+    settlementId: string,
+    reason: string,
+    actorContext?: { adminId?: string; ipAddress?: string; userAgent?: string },
+  ) {
+    const safeReason = (reason ?? '').replace(/<[^>]*>/g, '').trim();
+    if (safeReason.length < 3) {
+      return {
+        success: false,
+        message: 'A failure reason (min 3 chars) is required.',
+      };
+    }
+
+    const settlement = await this.prisma.sellerSettlement.findUnique({
+      where: { id: settlementId },
+      include: { cycle: true },
+    });
+    if (!settlement) {
+      return { success: false, message: 'Seller settlement not found' };
+    }
+    if (settlement.status === 'PAID') {
+      return {
+        success: false,
+        message:
+          'Cannot fail an already-paid settlement; use the reversal flow to claw back a confirmed payout.',
+      };
+    }
+
+    // Version-CAS: only an APPROVED settlement (or one already FAILED, e.g. to
+    // update the reason) can be marked failed.
+    const claim = await this.prisma.sellerSettlement.updateMany({
+      where: { id: settlementId, status: { in: ['APPROVED', 'FAILED'] } },
+      data: { status: 'FAILED', paymentFailureReason: safeReason },
+    });
+    if (claim.count === 0) {
+      return {
+        success: false,
+        message:
+          'Settlement is not in a state that can be marked failed (must be APPROVED/FAILED).',
+      };
+    }
+
+    this.audit
+      .writeAuditLog({
+        actorId: actorContext?.adminId,
+        actorRole: 'ADMIN',
+        action: 'MARK_SETTLEMENT_FAILED',
+        module: 'settlements',
+        resource: 'seller_settlement',
+        resourceId: settlementId,
+        oldValue: { status: settlement.status },
+        newValue: { status: 'FAILED', reason: safeReason },
+        metadata: { sellerId: settlement.sellerId, cycleId: settlement.cycleId },
+        ipAddress: actorContext?.ipAddress,
+        userAgent: actorContext?.userAgent,
+      })
+      .catch((err) => {
+        this.logger.error(`Audit write failed: ${(err as Error).message}`);
+      });
+
+    return { success: true, message: 'Settlement marked as failed' };
   }
 
   /* ── T4: Seller earnings summary ── */
@@ -755,69 +1522,269 @@ export class SettlementService {
     amount: number;
     reason: string;
     notes?: string;
+    adjustmentType?: string;
+    referenceDocumentUrl?: string;
+    idempotencyKey?: string;
     adminId?: string;
+    ipAddress?: string;
+    userAgent?: string;
   }) {
     if (!Number.isFinite(args.amount) || args.amount === 0) {
-      throw new Error('amount must be a non-zero number');
+      throw new BadRequestAppException('amount must be a non-zero number');
     }
-    if (!args.reason?.trim()) {
-      throw new Error('reason is required');
+    // Phase 147 — sanity bound: an adjustment can't exceed ₹10,00,000 either way
+    // (guards a fat-finger that would dwarf the settlement).
+    if (Math.abs(args.amount) > 1_000_000) {
+      throw new BadRequestAppException('amount out of range (max ±1,000,000)');
     }
-    const settlement = await this.prisma.sellerSettlement.findUnique({
-      where: { id: args.settlementId },
-    });
-    if (!settlement) throw new Error('Settlement not found');
-    if (settlement.status === 'PAID') {
-      throw new Error('Cannot adjust a PAID settlement; use a follow-up cycle');
+    const safeReason = (args.reason ?? '').replace(/<[^>]*>/g, '').trim();
+    if (safeReason.length < 3) {
+      throw new BadRequestAppException('reason (min 3 chars) is required');
+    }
+    const safeNotes = args.notes
+      ? args.notes.replace(/<[^>]*>/g, '').trim().slice(0, 2000) || null
+      : null;
+    const adjustmentType = args.adjustmentType ?? 'OTHER';
+    const paiseIncrement = toPaise(args.amount.toFixed(2));
+
+    // Phase 147 — idempotency: if this key already produced an adjustment,
+    // return it instead of double-applying (network-retry safety).
+    if (args.idempotencyKey) {
+      const existing = await this.prisma.settlementAdjustment.findFirst({
+        where: { idempotencyKey: args.idempotencyKey },
+      });
+      if (existing) return existing;
     }
 
-    const adjustment = await this.prisma.settlementAdjustment.create({
-      data: this.moneyDualWrite.applyPaise('settlementAdjustment', {
-        settlementId: args.settlementId,
-        // .toFixed(2) is defensive — args.amount is a JS Number and
-        // toPaise refuses fractional Numbers. Most callers pass whole
-        // rupee values today, but the conversion is cheap and keeps
-        // the call site safe against payload changes.
-        amount: args.amount.toFixed(2),
-        reason: args.reason.trim(),
-        notes: args.notes?.trim() || null,
-        createdByAdminId: args.adminId ?? null,
-      }),
-    });
+    let outcome: { created: any; prevTotal: number; sellerId: string; cycleId: string };
+    try {
+      // Phase 147 — the row create + the parent settlement net + the cycle
+      // aggregate all move together (was three unguarded writes).
+      outcome = await this.prisma.$transaction(async (tx) => {
+        const settlement = await tx.sellerSettlement.findUnique({
+          where: { id: args.settlementId },
+          include: { cycle: true },
+        });
+        if (!settlement) throw new NotFoundAppException('Settlement not found');
+        if (settlement.status === 'PAID') {
+          throw new BadRequestAppException(
+            'Cannot adjust a PAID settlement; use a follow-up cycle',
+          );
+        }
+        if (settlement.cycle.status === 'PAID') {
+          throw new BadRequestAppException(
+            'Cannot adjust a settlement whose cycle is already PAID',
+          );
+        }
+        // Phase 153 — a settlement locked into an active payout batch already
+        // had its amount snapshotted onto the Payout row + (likely) exported to
+        // the bank file. Adjusting it now would leave the bank paying the stale
+        // pre-adjustment amount while the settlement total moved — a guaranteed
+        // reconciliation break. Cancel the batch (which releases the lock) or
+        // adjust in the next cycle.
+        if (settlement.payoutBatchId) {
+          throw new BadRequestAppException(
+            'Cannot adjust a settlement that is in an active payout batch ' +
+              `(${settlement.payoutBatchId}). Cancel the batch to release it, or adjust in the next cycle.`,
+          );
+        }
 
-    // Increment-operator dual-write: the MoneyDualWriteHelper only
-    // supports `set:` (its header comment is explicit about this), so
-    // we hand-compute the paise increment via the same toPaise() the
-    // helper uses internally. Keeping both columns in lockstep on an
-    // atomic Postgres-side increment is the only correct shape here.
-    const amountInPaiseIncrement = toPaise(args.amount.toFixed(2));
-    await this.prisma.sellerSettlement.update({
-      where: { id: args.settlementId },
-      data: {
-        totalSettlementAmount: { increment: args.amount },
-        ...(amountInPaiseIncrement !== null
-          ? { totalSettlementAmountInPaise: { increment: amountInPaiseIncrement } }
-          : {}),
-      },
-    });
+        const created = await tx.settlementAdjustment.create({
+          data: this.moneyDualWrite.applyPaise('settlementAdjustment', {
+            settlementId: args.settlementId,
+            amount: args.amount.toFixed(2),
+            adjustmentType: adjustmentType as any,
+            status: 'ACTIVE' as any,
+            reason: safeReason,
+            notes: safeNotes,
+            referenceDocumentUrl: args.referenceDocumentUrl?.trim() || null,
+            createdByAdminId: args.adminId ?? null,
+            idempotencyKey: args.idempotencyKey ?? null,
+          }),
+        });
 
-    await this.audit.writeAuditLog({
-      actorId: args.adminId,
-      action: 'settlement.adjust',
-      module: 'settlements',
-      resource: 'sellerSettlement',
-      resourceId: args.settlementId,
-      newValue: { amount: args.amount, reason: args.reason },
-    });
+        // totalSettlementAmount = current NET payable (gross + active
+        // adjustments); approvedSettlementAmount keeps the immutable gross.
+        await tx.sellerSettlement.update({
+          where: { id: args.settlementId },
+          data: {
+            totalSettlementAmount: { increment: args.amount },
+            ...(paiseIncrement !== null
+              ? { totalSettlementAmountInPaise: { increment: paiseIncrement } }
+              : {}),
+          },
+        });
+        // Phase 147 — keep the parent cycle aggregate in sync (was stale).
+        await tx.settlementCycle.update({
+          where: { id: settlement.cycleId },
+          data: {
+            totalAmount: { increment: args.amount },
+            ...(paiseIncrement !== null
+              ? { totalAmountInPaise: { increment: paiseIncrement } }
+              : {}),
+          },
+        });
 
-    return adjustment;
+        return {
+          created,
+          prevTotal: Number(settlement.totalSettlementAmount),
+          sellerId: settlement.sellerId,
+          cycleId: settlement.cycleId,
+        };
+      });
+    } catch (err) {
+      // Concurrent same-key insert lost the race → return the winner's row.
+      if (
+        args.idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const existing = await this.prisma.settlementAdjustment.findFirst({
+          where: { idempotencyKey: args.idempotencyKey },
+        });
+        if (existing) return existing;
+      }
+      throw err;
+    }
+
+    this.audit
+      .writeAuditLog({
+        actorId: args.adminId,
+        actorRole: 'ADMIN',
+        action: 'settlement.adjust',
+        module: 'settlements',
+        resource: 'seller_settlement',
+        resourceId: args.settlementId,
+        oldValue: { totalSettlementAmount: outcome.prevTotal },
+        newValue: {
+          amount: args.amount,
+          adjustmentType,
+          reason: safeReason,
+          newTotal: outcome.prevTotal + args.amount,
+        },
+        metadata: {
+          sellerId: outcome.sellerId,
+          cycleId: outcome.cycleId,
+          adjustmentId: outcome.created.id,
+        },
+        ipAddress: args.ipAddress,
+        userAgent: args.userAgent,
+      })
+      .catch((e) => this.logger.error(`Adjustment audit failed: ${e}`));
+
+    return outcome.created;
   }
 
-  async listAdjustments(settlementId: string) {
-    return this.prisma.settlementAdjustment.findMany({
-      where: { settlementId },
-      orderBy: { createdAt: 'asc' },
+  /* ── Phase 147: Void an adjustment (reverses its effect on the totals) ── */
+  async voidAdjustment(
+    adjustmentId: string,
+    args: {
+      adminId?: string;
+      voidReason: string;
+      ipAddress?: string;
+      userAgent?: string;
+    },
+  ) {
+    const safeReason = (args.voidReason ?? '').replace(/<[^>]*>/g, '').trim();
+    if (safeReason.length < 3) {
+      throw new BadRequestAppException('A void reason (min 3 chars) is required.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const adj = await tx.settlementAdjustment.findUnique({
+        where: { id: adjustmentId },
+        include: { settlement: { include: { cycle: true } } },
+      });
+      if (!adj) throw new NotFoundAppException('Adjustment not found');
+      if (adj.status === 'VOIDED') {
+        return { alreadyVoided: true, adj };
+      }
+      if (adj.settlement.status === 'PAID' || adj.settlement.cycle.status === 'PAID') {
+        throw new BadRequestAppException(
+          'Cannot void an adjustment on a paid settlement/cycle; use the reversal flow.',
+        );
+      }
+
+      const claim = await tx.settlementAdjustment.updateMany({
+        where: { id: adjustmentId, status: 'ACTIVE' },
+        data: {
+          status: 'VOIDED',
+          voidedByAdminId: args.adminId ?? null,
+          voidedAt: new Date(),
+          voidReason: safeReason,
+        },
+      });
+      if (claim.count === 0) {
+        throw new ConflictAppException('Adjustment changed state concurrently');
+      }
+
+      // Reverse the effect on the settlement net + the cycle aggregate.
+      const amt = Number(adj.amount);
+      const paiseDec = toPaise(amt.toFixed(2));
+      await tx.sellerSettlement.update({
+        where: { id: adj.settlementId },
+        data: {
+          totalSettlementAmount: { decrement: amt },
+          ...(paiseDec !== null
+            ? { totalSettlementAmountInPaise: { decrement: paiseDec } }
+            : {}),
+        },
+      });
+      await tx.settlementCycle.update({
+        where: { id: adj.settlement.cycleId },
+        data: {
+          totalAmount: { decrement: amt },
+          ...(paiseDec !== null
+            ? { totalAmountInPaise: { decrement: paiseDec } }
+            : {}),
+        },
+      });
+      return { alreadyVoided: false, adj };
     });
+
+    if (!result.alreadyVoided) {
+      this.audit
+        .writeAuditLog({
+          actorId: args.adminId,
+          actorRole: 'ADMIN',
+          action: 'settlement.adjust_void',
+          module: 'settlements',
+          resource: 'settlement_adjustment',
+          resourceId: adjustmentId,
+          oldValue: { status: 'ACTIVE', amount: Number(result.adj.amount) },
+          newValue: { status: 'VOIDED', reason: safeReason },
+          metadata: {
+            settlementId: result.adj.settlementId,
+            cycleId: result.adj.settlement.cycleId,
+          },
+          ipAddress: args.ipAddress,
+          userAgent: args.userAgent,
+        })
+        .catch((e) => this.logger.error(`Void audit failed: ${e}`));
+    }
+
+    return {
+      success: true,
+      message: result.alreadyVoided
+        ? 'Adjustment was already voided'
+        : 'Adjustment voided',
+      adjustmentId,
+    };
+  }
+
+  async listAdjustments(settlementId: string, page = 1, limit = 50) {
+    const take = Math.min(200, Math.max(1, limit));
+    const skip = (Math.max(1, page) - 1) * take;
+    const [items, total] = await Promise.all([
+      this.prisma.settlementAdjustment.findMany({
+        where: { settlementId },
+        orderBy: { createdAt: 'asc' },
+        skip,
+        take,
+      }),
+      this.prisma.settlementAdjustment.count({ where: { settlementId } }),
+    ]);
+    return { items, total, page: Math.max(1, page), limit: take };
   }
 
   /**
@@ -844,54 +1811,173 @@ export class SettlementService {
    * pluggable formatter (`TallyAccountingExporter`,
    * `QuickBooksAccountingExporter`) once we have a second consumer.
    */
-  async exportCycleToTallyCsv(cycleId: string): Promise<string> {
+  async exportCycleToTallyCsv(
+    cycleId: string,
+    actor?: { adminId?: string; ipAddress?: string; userAgent?: string },
+  ): Promise<string> {
     const cycle = await this.prisma.settlementCycle.findUnique({
       where: { id: cycleId },
       include: {
         sellerSettlements: {
           include: {
-            seller: { select: { sellerShopName: true, sellerName: true } },
+            seller: {
+              select: {
+                sellerShopName: true,
+                sellerName: true,
+                gstin: true,
+                legalBusinessName: true,
+                gstStateCode: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        // Phase 148 — franchise payouts in the same cycle were invisible.
+        franchiseSettlements: {
+          include: {
+            franchise: {
+              select: {
+                businessName: true,
+                gstNumber: true,
+                panNumber: true,
+                gstStateCode: true,
+              },
+            },
           },
           orderBy: { createdAt: 'asc' },
         },
       },
     });
-    if (!cycle) throw new Error(`SettlementCycle ${cycleId} not found`);
+    if (!cycle) throw new NotFoundAppException(`SettlementCycle ${cycleId} not found`);
 
     const dateStr = formatDDMMYYYY(cycle.periodEnd ?? new Date());
-    const cycleShort = cycle.id.slice(0, 8).toUpperCase();
+    // Phase 148 — 12-char cycle prefix (was 8) to cut voucher-no collision risk.
+    const cyclePrefix = cycle.id.slice(0, 12).toUpperCase();
     const periodStr =
       cycle.periodStart && cycle.periodEnd
         ? `${formatDDMMYYYY(cycle.periodStart)} to ${formatDDMMYYYY(cycle.periodEnd)}`
         : 'unknown period';
+    const periodStart = cycle.periodStart ? formatDDMMYYYY(cycle.periodStart) : '';
+    const periodEnd = cycle.periodEnd ? formatDDMMYYYY(cycle.periodEnd) : '';
+    const rupees = (p: bigint | number | null | undefined) =>
+      (Number(p ?? 0) / 100).toFixed(2);
 
-    const rows = cycle.sellerSettlements.map((s, idx) => {
-      const sellerLabel =
+    type Row = Record<string, string>;
+    const rows: Row[] = [];
+
+    cycle.sellerSettlements.forEach((s, idx) => {
+      const party =
         s.seller?.sellerShopName?.trim() ||
         s.seller?.sellerName?.trim() ||
         `Seller ${s.sellerId.slice(0, 8)}`;
-      const amount = Number(s.totalSettlementAmount).toFixed(2);
-      const margin = Number(s.totalPlatformMargin ?? 0).toFixed(2);
-      const narration =
-        `Settlement ${cycleShort} for ${sellerLabel} — ` +
-        `${periodStr}, items=${s.totalItems ?? 0}, ` +
-        `platform margin Rs ${margin}`;
-      const voucherNo = `SM/${cycleShort}/${(idx + 1).toString().padStart(4, '0')}`;
-      // CSV quoting: wrap any field containing comma / quote / newline.
-      return [
-        dateStr,
-        voucherNo,
-        'Payment',
-        csvQuote(sellerLabel),
-        '"SportSmart Bank"',
-        amount,
-        csvQuote(narration),
-      ].join(',');
+      const net = Number(s.totalSettlementAmount);
+      const approved = Number(s.approvedSettlementAmount ?? s.totalSettlementAmount);
+      rows.push({
+        'Cycle ID': cycle.id,
+        'Period Start': periodStart,
+        'Period End': periodEnd,
+        'Settlement Type': 'SELLER',
+        'Voucher Date': dateStr,
+        'Voucher No': `SM/${cyclePrefix}/S${(idx + 1).toString().padStart(4, '0')}`,
+        'Voucher Type': 'Payment',
+        'Party Name': party,
+        // PAN is embedded in the GSTIN (chars 3-12) when present.
+        GSTIN: s.seller?.gstin ?? '',
+        PAN: s.seller?.gstin ? s.seller.gstin.slice(2, 12) : '',
+        'Legal Name': s.seller?.legalBusinessName ?? '',
+        'State Code': s.seller?.gstStateCode ?? '',
+        'Approved Amount': approved.toFixed(2),
+        'Adjustments Total': (net - approved).toFixed(2),
+        'Net Payable': net.toFixed(2),
+        'TCS Deducted': rupees(s.tcsDeductedInPaise),
+        'TDS Deducted': rupees(s.tdsDeductedInPaise),
+        'CGST On Commission': rupees(s.cgstOnCommissionInPaise),
+        'SGST On Commission': rupees(s.sgstOnCommissionInPaise),
+        'IGST On Commission': rupees(s.igstOnCommissionInPaise),
+        'Total Commission GST': rupees(s.totalCommissionGstInPaise),
+        'Payment Status': s.status,
+        'Paid Date': s.paidAt ? formatDDMMYYYY(s.paidAt) : '',
+        'UTR Reference': s.utrReference ?? '',
+        'Particulars (DR)': party,
+        'Particulars (CR)': 'SportSmart Bank',
+        Narration:
+          `Settlement ${cyclePrefix} for ${party} — ${periodStr}, ` +
+          `items=${s.totalItems ?? 0}, platform margin Rs ${Number(s.totalPlatformMargin ?? 0).toFixed(2)}`,
+      });
     });
 
-    const header =
-      'Voucher Date,Voucher No,Voucher Type,Particulars (DR),Particulars (CR),Amount,Narration';
-    return [header, ...rows].join('\n');
+    cycle.franchiseSettlements.forEach((f, idx) => {
+      const party = f.franchise?.businessName?.trim() || `Franchise ${f.franchiseId.slice(0, 8)}`;
+      const net = Number(f.netPayableToFranchise ?? 0);
+      rows.push({
+        'Cycle ID': cycle.id,
+        'Period Start': periodStart,
+        'Period End': periodEnd,
+        'Settlement Type': 'FRANCHISE',
+        'Voucher Date': dateStr,
+        'Voucher No': `SM/${cyclePrefix}/F${(idx + 1).toString().padStart(4, '0')}`,
+        'Voucher Type': 'Payment',
+        'Party Name': party,
+        GSTIN: f.franchise?.gstNumber ?? '',
+        PAN: f.franchise?.panNumber ?? '',
+        'Legal Name': party,
+        'State Code': f.franchise?.gstStateCode ?? '',
+        // Franchise settlements have no adjustment ledger; net == approved.
+        'Approved Amount': net.toFixed(2),
+        'Adjustments Total': '0.00',
+        'Net Payable': net.toFixed(2),
+        // Seller-commission TCS/TDS/GST don't apply to the franchise model.
+        'TCS Deducted': '',
+        'TDS Deducted': '',
+        'CGST On Commission': '',
+        'SGST On Commission': '',
+        'IGST On Commission': '',
+        'Total Commission GST': '',
+        'Payment Status': f.status,
+        'Paid Date': f.paidAt ? formatDDMMYYYY(f.paidAt) : '',
+        'UTR Reference': f.paymentReference ?? '',
+        'Particulars (DR)': party,
+        'Particulars (CR)': 'SportSmart Bank',
+        Narration: `Franchise settlement ${cyclePrefix} for ${party} — ${periodStr}`,
+      });
+    });
+
+    const headers = [
+      'Cycle ID', 'Period Start', 'Period End', 'Settlement Type',
+      'Voucher Date', 'Voucher No', 'Voucher Type', 'Party Name',
+      'GSTIN', 'PAN', 'Legal Name', 'State Code',
+      'Approved Amount', 'Adjustments Total', 'Net Payable',
+      'TCS Deducted', 'TDS Deducted',
+      'CGST On Commission', 'SGST On Commission', 'IGST On Commission', 'Total Commission GST',
+      'Payment Status', 'Paid Date', 'UTR Reference',
+      'Particulars (DR)', 'Particulars (CR)', 'Narration',
+    ];
+
+    // Phase 148 — exporting a cycle's payment vouchers (seller financials) must
+    // leave a forensic trail. Best-effort; never blocks the download.
+    if (actor?.adminId) {
+      this.audit
+        .writeAuditLog({
+          actorId: actor.adminId,
+          actorRole: 'ADMIN',
+          action: 'settlement.cycle_exported',
+          module: 'settlements',
+          resource: 'settlement_cycle',
+          resourceId: cycleId,
+          newValue: {
+            rowCount: rows.length,
+            sellerCount: cycle.sellerSettlements.length,
+            franchiseCount: cycle.franchiseSettlements.length,
+          },
+          ipAddress: actor.ipAddress,
+          userAgent: actor.userAgent,
+        })
+        .catch((e) => this.logger.error(`Cycle export audit failed: ${e}`));
+    }
+
+    // toCsv (shared util) handles RFC-4180 quoting AND formula-injection
+    // neutralisation for every cell; BOM so Excel/Tally read Indic names.
+    return toCsv(rows, headers, { bom: true });
   }
 
   /**
@@ -908,58 +1994,146 @@ export class SettlementService {
     cycleId: string,
   ): Promise<
     Array<{
+      settlementType: 'SELLER' | 'FRANCHISE';
       sellerId: string;
       sellerName: string;
+      paymentStatus: string;
       openingBalanceInPaise: string;
+      cycleEarningsInPaise: string;
+      cycleAdjustmentsInPaise: string;
       cycleAmountInPaise: string;
+      cyclePaidInPaise: string;
       closingBalanceInPaise: string;
     }>
   > {
+    // Phase 149 — TRUE outstanding-balance ledger (was "cumulative-paid +
+    // cycle-amount", which is a running payment flow, not a balance):
+    //   opening  = outstanding carried forward = SUM of prior settlements still
+    //              owed (status NOT PAID/CANCELLED) whose cycle period precedes
+    //              this one. (This equals the prior cycle's closing balance.)
+    //   closing  = opening + cycleNet − cyclePaid  (= outstanding after).
+    // Computed at read time from current state; deterministic for finalised
+    // cycles because Phase 147 forbids adjusting a PAID settlement.
     const cycle = await this.prisma.settlementCycle.findUnique({
       where: { id: cycleId },
       include: {
         sellerSettlements: {
           include: { seller: { select: { sellerShopName: true } } },
         },
+        franchiseSettlements: {
+          include: { franchise: { select: { businessName: true } } },
+        },
       },
     });
     if (!cycle || !cycle.periodStart) {
-      throw new Error(`SettlementCycle ${cycleId} not found or has no periodStart`);
+      throw new NotFoundAppException(
+        `SettlementCycle ${cycleId} not found or has no periodStart`,
+      );
     }
+    const periodStart = cycle.periodStart;
+
+    // ── Prior outstanding (single query each — no N+1) ──
+    const sellerIds = cycle.sellerSettlements.map((s) => s.sellerId);
+    const priorSellerOutstanding = new Map<string, bigint>();
+    if (sellerIds.length > 0) {
+      const prior = await this.prisma.sellerSettlement.findMany({
+        where: {
+          sellerId: { in: sellerIds },
+          // Owed-but-not-settled (CANCELLED is voided, not owed).
+          status: { notIn: ['PAID', 'CANCELLED'] },
+          // Belongs to an EARLIER cycle (by the cycle's period, not row createdAt).
+          cycle: { periodStart: { lt: periodStart } },
+        },
+        select: { sellerId: true, totalSettlementAmountInPaise: true },
+      });
+      for (const r of prior) {
+        priorSellerOutstanding.set(
+          r.sellerId,
+          (priorSellerOutstanding.get(r.sellerId) ?? 0n) +
+            (r.totalSettlementAmountInPaise ?? 0n),
+        );
+      }
+    }
+
+    const franchiseIds = cycle.franchiseSettlements.map((f) => f.franchiseId);
+    const priorFranchiseOutstanding = new Map<string, bigint>();
+    if (franchiseIds.length > 0) {
+      const prior = await this.prisma.franchiseSettlement.findMany({
+        where: {
+          franchiseId: { in: franchiseIds },
+          status: { not: 'PAID' },
+          cycle: { periodStart: { lt: periodStart } },
+        },
+        select: { franchiseId: true, netPayableToFranchise: true },
+      });
+      for (const r of prior) {
+        const paise = BigInt(
+          new Prisma.Decimal(r.netPayableToFranchise ?? 0).mul(100).toFixed(0),
+        );
+        priorFranchiseOutstanding.set(
+          r.franchiseId,
+          (priorFranchiseOutstanding.get(r.franchiseId) ?? 0n) + paise,
+        );
+      }
+    }
+
     const out: Array<{
+      settlementType: 'SELLER' | 'FRANCHISE';
       sellerId: string;
       sellerName: string;
+      paymentStatus: string;
       openingBalanceInPaise: string;
+      cycleEarningsInPaise: string;
+      cycleAdjustmentsInPaise: string;
       cycleAmountInPaise: string;
+      cyclePaidInPaise: string;
       closingBalanceInPaise: string;
     }> = [];
 
     for (const s of cycle.sellerSettlements) {
-      // Sum every PAID settlement (paise sibling) for this seller
-      // BEFORE the cycle start.
-      const prior = await this.prisma.sellerSettlement.findMany({
-        where: {
-          sellerId: s.sellerId,
-          status: 'PAID',
-          createdAt: { lt: cycle.periodStart },
-        },
-        select: { totalSettlementAmountInPaise: true },
-      });
-      const openingInPaise = prior.reduce(
-        (sum, r) => sum + (r.totalSettlementAmountInPaise ?? 0n),
-        0n,
-      );
-      const cycleAmountInPaise = s.totalSettlementAmountInPaise ?? 0n;
-      const closingInPaise = openingInPaise + cycleAmountInPaise;
+      const opening = priorSellerOutstanding.get(s.sellerId) ?? 0n;
+      const net = s.totalSettlementAmountInPaise ?? 0n; // earnings + adjustments
+      const earnings = s.approvedSettlementAmountInPaise ?? net;
+      const adjustments = net - earnings;
+      const paid = s.status === 'PAID' ? net : 0n;
+      const closing = opening + net - paid;
       out.push({
+        settlementType: 'SELLER',
         sellerId: s.sellerId,
         sellerName:
           s.seller?.sellerShopName?.trim() ?? `Seller ${s.sellerId.slice(0, 8)}`,
-        openingBalanceInPaise: openingInPaise.toString(),
-        cycleAmountInPaise: cycleAmountInPaise.toString(),
-        closingBalanceInPaise: closingInPaise.toString(),
+        paymentStatus: s.status,
+        openingBalanceInPaise: opening.toString(),
+        cycleEarningsInPaise: earnings.toString(),
+        cycleAdjustmentsInPaise: adjustments.toString(),
+        cycleAmountInPaise: net.toString(),
+        cyclePaidInPaise: paid.toString(),
+        closingBalanceInPaise: closing.toString(),
       });
     }
+
+    for (const f of cycle.franchiseSettlements) {
+      const opening = priorFranchiseOutstanding.get(f.franchiseId) ?? 0n;
+      const net = BigInt(
+        new Prisma.Decimal(f.netPayableToFranchise ?? 0).mul(100).toFixed(0),
+      );
+      const paid = f.status === 'PAID' ? net : 0n;
+      const closing = opening + net - paid;
+      out.push({
+        settlementType: 'FRANCHISE',
+        sellerId: f.franchiseId,
+        sellerName:
+          f.franchise?.businessName?.trim() ?? `Franchise ${f.franchiseId.slice(0, 8)}`,
+        paymentStatus: f.status,
+        openingBalanceInPaise: opening.toString(),
+        cycleEarningsInPaise: net.toString(), // no separate franchise adjustment ledger
+        cycleAdjustmentsInPaise: '0',
+        cycleAmountInPaise: net.toString(),
+        cyclePaidInPaise: paid.toString(),
+        closingBalanceInPaise: closing.toString(),
+      });
+    }
+
     return out;
   }
 }
@@ -971,9 +2145,6 @@ function formatDDMMYYYY(d: Date): string {
   return `${day}/${month}/${year}`;
 }
 
-function csvQuote(s: string): string {
-  if (/[",\n\r]/.test(s)) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}
+// Phase 148 — the inline csvQuote (RFC-4180 only, formula-injection-vulnerable)
+// was removed; exportCycleToTallyCsv now uses the shared toCsv() which
+// neutralises =/+/-/@-leading cells.

@@ -10,9 +10,16 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { FranchiseOrdersService } from '../../application/services/franchise-orders.service';
 import { BadRequestAppException } from '../../../../core/exceptions';
+import {
+  SellerAcceptOrderDto,
+  SellerRejectOrderDto,
+} from '../../../orders/presentation/dtos/seller-actions.dto';
+import { UpdateFulfillmentStatusDto } from '../../../orders/presentation/dtos/update-fulfillment-status.dto';
 
 @ApiTags('Franchise Orders')
 @Controller('franchise/orders')
@@ -52,11 +59,15 @@ export class FranchiseOrdersController {
     return { success: true, message: 'Order retrieved', data };
   }
 
+  // Phase 80 (2026-05-22) — acceptance audit Gaps #15/#16/#23.
+  // DTO + idempotency + throttle parity with the seller endpoints.
   @Patch(':subOrderId/accept')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Idempotent()
   async acceptOrder(
     @Req() req: any,
     @Param('subOrderId') subOrderId: string,
-    @Body() body: { expectedDispatchDate?: string },
+    @Body() body: SellerAcceptOrderDto,
   ) {
     const data = await this.franchiseOrdersService.acceptOrder(
       subOrderId,
@@ -67,14 +78,12 @@ export class FranchiseOrdersController {
   }
 
   @Patch(':subOrderId/reject')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Idempotent()
   async rejectOrder(
     @Req() req: any,
     @Param('subOrderId') subOrderId: string,
-    @Body()
-    body: {
-      reason?: 'OUT_OF_STOCK' | 'CANNOT_SHIP' | 'LOCATION_ISSUE' | 'OTHER';
-      note?: string;
-    },
+    @Body() body: SellerRejectOrderDto,
   ) {
     const data = await this.franchiseOrdersService.rejectOrder(
       subOrderId,
@@ -84,26 +93,25 @@ export class FranchiseOrdersController {
     return { success: true, message: data.message, data };
   }
 
+  // Phase 82 (2026-05-23) — pack/ship audit Gap #11/#24. Symmetric
+  // with seller endpoint: shared DTO + @Throttle + @Idempotent.
   @Patch(':subOrderId/status')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Idempotent()
   async updateFulfillmentStatus(
     @Req() req: any,
     @Param('subOrderId') subOrderId: string,
-    @Body() body: { status: string; trackingNumber?: string; courierName?: string },
+    @Body() body: UpdateFulfillmentStatusDto,
   ) {
-    if (!body.status) {
-      throw new BadRequestAppException(
-        'status is required (PACKED, SHIPPED)',
-      );
-    }
     const data = await this.franchiseOrdersService.updateFulfillmentStatus(
       subOrderId,
       req.franchiseId,
-      body.status.toUpperCase(),
+      body.status,
       { trackingNumber: body.trackingNumber, courierName: body.courierName },
     );
     return {
       success: true,
-      message: `Order status updated to ${body.status.toUpperCase()}`,
+      message: `Order status updated to ${body.status}`,
       data,
     };
   }

@@ -2,12 +2,13 @@ import { Injectable, Inject } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { ConflictAppException } from '../../../../core/exceptions';
+import { BadRequestAppException } from '../../../../core/exceptions';
 import { FranchiseRegisterResponseData } from '../../presentation/dtos/franchise-auth-response.dto';
 import {
   FranchisePartnerRepository,
   FRANCHISE_PARTNER_REPOSITORY,
 } from '../../domain/repositories/franchise.repository.interface';
+import { SendFranchiseEmailVerificationUseCase } from './send-franchise-email-verification.use-case';
 
 interface RegisterFranchiseInput {
   ownerName: string;
@@ -15,42 +16,102 @@ interface RegisterFranchiseInput {
   email: string;
   phoneNumber: string;
   password: string;
+  confirmPassword: string;
+  acceptTerms: boolean;
+  acceptPrivacy: boolean;
+  acceptMarketing?: boolean;
 }
 
+/**
+ * Phase 20 (2026-05-20) — Franchise registration use case.
+ *
+ *   • confirmPassword + acceptTerms + acceptPrivacy validation.
+ *   • Duplicate email/phone → uniform `requiresVerification: true`
+ *     payload (no enumeration leak) with timing-soak delay.
+ *   • OTP email sent synchronously; surfaced as
+ *     `verificationEmailSent` so the verify page can warn the user
+ *     if SMTP failed.
+ *   • franchise.registered event still fires (Phase 20 also wires a
+ *     consumer to send a welcome email).
+ */
 @Injectable()
 export class RegisterFranchiseUseCase {
+  private static readonly DUPLICATE_TIMING_DELAY_MIN_MS = 200;
+  private static readonly DUPLICATE_TIMING_DELAY_MAX_MS = 450;
+
   constructor(
     @Inject(FRANCHISE_PARTNER_REPOSITORY)
     private readonly franchiseRepo: FranchisePartnerRepository,
     private readonly eventBus: EventBusService,
+    private readonly sendEmailVerificationOtp: SendFranchiseEmailVerificationUseCase,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('RegisterFranchiseUseCase');
   }
 
-  async execute(input: RegisterFranchiseInput): Promise<FranchiseRegisterResponseData> {
-    const { ownerName, businessName, email, phoneNumber, password } = input;
+  async execute(
+    input: RegisterFranchiseInput,
+  ): Promise<FranchiseRegisterResponseData> {
+    const {
+      ownerName,
+      businessName,
+      email,
+      phoneNumber,
+      password,
+      confirmPassword,
+      acceptTerms,
+      acceptPrivacy,
+    } = input;
 
-    // Application-level duplicate checks (for specific error messages)
+    if (password !== confirmPassword) {
+      throw new BadRequestAppException(
+        'Passwords do not match',
+        'PASSWORDS_DO_NOT_MATCH',
+      );
+    }
+    if (acceptTerms !== true) {
+      throw new BadRequestAppException(
+        'You must agree to the Terms of Service to create an account',
+        'TERMS_NOT_ACCEPTED',
+      );
+    }
+    if (acceptPrivacy !== true) {
+      throw new BadRequestAppException(
+        'You must agree to the Privacy Policy to create an account',
+        'PRIVACY_NOT_ACCEPTED',
+      );
+    }
+
+    const uniformDuplicateResponse: FranchiseRegisterResponseData = {
+      email,
+      requiresVerification: true,
+      verificationEmailSent: true,
+      message:
+        'If this email or phone is not already registered, a 6-digit verification code has been sent to your email. Check your inbox.',
+    };
+
     const existingByEmail = await this.franchiseRepo.findByEmail(email);
-    if (existingByEmail) {
-      throw new ConflictAppException('A franchise account with this email already exists');
-    }
-
     const existingByPhone = await this.franchiseRepo.findByPhone(phoneNumber);
-    if (existingByPhone) {
-      throw new ConflictAppException('A franchise account with this phone number already exists');
+    if (existingByEmail || existingByPhone) {
+      // Burn bcrypt-equivalent time + soak so duplicate-path latency
+      // matches create-path latency.
+      await bcrypt.hash(password, 12);
+      await this.timingSoakDelay();
+      this.logger.log(
+        `Franchise register: duplicate email/phone absorbed (uniform 202 returned)`,
+      );
+      return uniformDuplicateResponse;
     }
 
-    // Hash password with cost factor 12
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Retry loop to handle franchise code collisions (race condition guard)
-    let franchise;
+    // Retry loop for franchise-code generation race.
+    let franchise:
+      | Awaited<ReturnType<FranchisePartnerRepository['createFranchise']>>
+      | undefined;
     let retries = 3;
     while (retries > 0) {
       const franchiseCode = await this.franchiseRepo.generateNextFranchiseCode();
-
       try {
         franchise = await this.franchiseRepo.createFranchise({
           ownerName,
@@ -62,51 +123,77 @@ export class RegisterFranchiseUseCase {
         });
         break;
       } catch (error: any) {
-        // DB-level unique constraint fallback (race condition guard)
         if (error?.code === 'P2002') {
           const target = error?.meta?.target;
-
-          // If franchise_code collision, retry with a new code
-          if (target?.includes('franchise_code')) {
+          if (target?.includes?.('franchise_code')) {
             retries--;
             if (retries === 0) {
-              throw new ConflictAppException('Failed to generate unique franchise code');
+              throw new BadRequestAppException(
+                'Failed to generate unique franchise code. Please try again.',
+              );
             }
             continue;
           }
-
-          if (target?.includes('email')) {
-            throw new ConflictAppException('A franchise account with this email already exists');
-          }
-          if (target?.includes('phone_number')) {
-            throw new ConflictAppException('A franchise account with this phone number already exists');
-          }
-          throw new ConflictAppException('A franchise account with these details already exists');
+          // P2002 on email/phone → race with another concurrent register.
+          // Return uniform response (enumeration safety).
+          await this.timingSoakDelay();
+          return uniformDuplicateResponse;
         }
         throw error;
       }
     }
 
-    // Emit domain event (fire and forget)
-    this.eventBus.publish({
-      eventName: 'franchise.registered',
-      aggregate: 'franchise',
-      aggregateId: franchise!.id,
-      occurredAt: new Date(),
-      payload: { franchiseId: franchise!.id, email: franchise!.email },
-    }).catch((err) => {
-      this.logger.error(`Failed to publish franchise registration event: ${err}`);
-    });
+    const created = franchise!;
 
-    this.logger.log(`Franchise registered: ${franchise!.id}`);
+    this.eventBus
+      .publish({
+        eventName: 'franchise.registered',
+        aggregate: 'franchise',
+        aggregateId: created.id,
+        occurredAt: new Date(),
+        payload: {
+          franchiseId: created.id,
+          email: created.email,
+          ownerName: created.ownerName,
+          businessName: created.businessName,
+        },
+      })
+      .catch((err) => {
+        this.logger.error(
+          `Failed to publish franchise.registered for ${created.id}: ${err}`,
+        );
+      });
+
+    let verificationEmailSent = true;
+    try {
+      const result = await this.sendEmailVerificationOtp.execute(created.id);
+      verificationEmailSent = result.sent;
+    } catch (err) {
+      verificationEmailSent = false;
+      this.logger.error(
+        `Verification OTP send failed for new franchise ${created.id}: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+    }
+
+    this.logger.log(`Franchise registered: ${created.id}`);
 
     return {
-      franchiseId: franchise!.id,
-      franchiseCode: franchise!.franchiseCode,
-      ownerName: franchise!.ownerName,
-      businessName: franchise!.businessName,
-      email: franchise!.email,
-      phoneNumber: franchise!.phoneNumber,
+      email: created.email,
+      requiresVerification: true,
+      verificationEmailSent,
+      message: verificationEmailSent
+        ? 'A 6-digit verification code has been sent to your email. It expires in 10 minutes.'
+        : 'Your account was created, but we could not send the verification email right now. Please use the resend option on the verification page.',
+      franchiseId: created.id,
     };
+  }
+
+  private timingSoakDelay(): Promise<void> {
+    const min = RegisterFranchiseUseCase.DUPLICATE_TIMING_DELAY_MIN_MS;
+    const max = RegisterFranchiseUseCase.DUPLICATE_TIMING_DELAY_MAX_MS;
+    const delay = min + Math.random() * (max - min);
+    return new Promise((resolve) => setTimeout(resolve, delay));
   }
 }

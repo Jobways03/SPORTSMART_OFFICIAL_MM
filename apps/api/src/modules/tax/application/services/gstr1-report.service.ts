@@ -25,10 +25,16 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { escapeCsvField } from '../../../../core/utils/csv.util';
+import { BadRequestAppException } from '../../../../core/exceptions';
 import {
   aggregateGstr1,
   type Gstr1Aggregate,
 } from '../../domain/gstr1-aggregator';
+
+// Phase 159x (audit #14) — IST is UTC+05:30 and India observes no DST, so a
+// fixed offset is correct; naming it removes the bare 5.5*60*60*1000 literal.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 export interface Gstr1Section4Csv {
   section: 'B2B';
@@ -63,6 +69,29 @@ export class Gstr1ReportService {
     sellerId: string;
     filingPeriod: string; // "YYYY-MM"
   }): Promise<Gstr1Aggregate> {
+    // Phase 159x (audit #12) — fail fast on an invalid seller rather than
+    // silently emitting empty CSVs. A GSTR-1 only makes sense for a real,
+    // GST-registered seller.
+    const seller = await this.prisma.seller.findUnique({
+      where: { id: args.sellerId },
+      select: {
+        id: true,
+        gstins: {
+          where: { verifiedAt: { not: null } },
+          select: { id: true },
+          take: 1,
+        },
+      },
+    });
+    if (!seller) {
+      throw new BadRequestAppException(`Seller ${args.sellerId} not found`);
+    }
+    if (seller.gstins.length === 0) {
+      throw new BadRequestAppException(
+        `Seller ${args.sellerId} has no verified GSTIN; cannot generate GSTR-1`,
+      );
+    }
+
     const { startUtc, endUtc } = monthRangeUtc(args.filingPeriod);
     const docs = await this.prisma.taxDocument.findMany({
       where: {
@@ -73,7 +102,49 @@ export class Gstr1ReportService {
       include: { lines: true },
       orderBy: { generatedAt: 'asc' },
     });
-    return aggregateGstr1(docs);
+    const agg = aggregateGstr1(docs);
+    // Phase 159x (audit B3/#8) — surface data-integrity warnings (e.g. a
+    // taxable invoice with no line items whose rate was back-calculated) so
+    // they don't pass silently into the filed return.
+    if (agg.warnings.length > 0) {
+      this.logger.warn(
+        `GSTR-1 ${args.filingPeriod} seller=${args.sellerId}: ` +
+          `${agg.warnings.length} data-integrity warning(s): ${agg.warnings.join(' | ')}`,
+      );
+    }
+    return agg;
+  }
+
+  /**
+   * Phase 159x (audit #17) — section-wise counts + headline totals so the
+   * admin UI can preview a filing period without downloading all 6 CSVs.
+   */
+  async previewForSeller(args: { sellerId: string; filingPeriod: string }) {
+    const agg = await this.aggregateForSeller(args);
+    return {
+      sellerId: args.sellerId,
+      filingPeriod: args.filingPeriod,
+      counts: {
+        b2b: agg.b2b.length,
+        b2cLarge: agg.b2cLarge.length,
+        b2cSmall: agg.b2cSmall.length,
+        creditNotes: agg.creditNotes.filter((n) => n.noteType === 'CREDIT').length,
+        debitNotes: agg.creditNotes.filter((n) => n.noteType === 'DEBIT').length,
+        hsn: agg.hsn.length,
+        documentsIssued: agg.documentsIssued.reduce((s, d) => s + d.count, 0),
+      },
+      totals: {
+        taxableRupees: paiseToRupees(agg.totals.taxableInPaise),
+        cgstRupees: paiseToRupees(agg.totals.cgstInPaise),
+        sgstRupees: paiseToRupees(agg.totals.sgstInPaise),
+        igstRupees: paiseToRupees(agg.totals.igstInPaise),
+        cessRupees: paiseToRupees(agg.totals.cessInPaise),
+        invoiceValueRupees: paiseToRupees(agg.totals.invoiceValueInPaise),
+        creditNoteValueRupees: paiseToRupees(agg.totals.creditNoteValueInPaise),
+        debitNoteValueRupees: paiseToRupees(agg.totals.debitNoteValueInPaise),
+      },
+      warnings: agg.warnings,
+    };
   }
 
   /**
@@ -85,8 +156,9 @@ export class Gstr1ReportService {
     filingPeriod: string;
   }): Promise<string> {
     const agg = await this.aggregateForSeller(args);
+    // Phase 159x (audit B2) — IRN + IRN Date appended for the NIC B2B upload.
     const header =
-      'Invoice Number,Invoice Date,Buyer GSTIN,Place of Supply,Invoice Value,Taxable Value,CGST,SGST,IGST,Cess,Reverse Charge';
+      'Invoice Number,Invoice Date,Buyer GSTIN,Place of Supply,Invoice Value,Taxable Value,CGST,SGST,IGST,Cess,Reverse Charge,IRN,IRN Date';
     const rows = agg.b2b.map((r) =>
       [
         csvCell(r.documentNumber),
@@ -100,6 +172,8 @@ export class Gstr1ReportService {
         paiseToRupees(r.igstInPaise),
         paiseToRupees(r.cessInPaise),
         r.reverseChargeApplicable ? 'Y' : 'N',
+        csvCell(r.irn ?? ''),
+        csvCell(r.irnDate ? r.irnDate.toISOString().slice(0, 10) : ''),
       ].join(','),
     );
     return [header, ...rows].join('\n');
@@ -157,12 +231,15 @@ export class Gstr1ReportService {
     filingPeriod: string;
   }): Promise<string> {
     const agg = await this.aggregateForSeller(args);
+    // Phase 159x (audit — DEBIT_NOTE) — §9B carries both credit and debit
+    // notes; the Note Type column distinguishes them for the NIC upload.
     const header =
-      'Credit Note Number,Credit Note Date,Original Invoice Number,Buyer GSTIN,Buyer Type,Place of Supply,Note Value,Taxable Reversal,CGST Reversal,SGST Reversal,IGST Reversal,Cess Reversal';
+      'Note Number,Note Date,Note Type,Original Invoice Number,Buyer GSTIN,Buyer Type,Place of Supply,Note Value,Taxable Reversal,CGST Reversal,SGST Reversal,IGST Reversal,Cess Reversal';
     const rows = agg.creditNotes.map((r) =>
       [
         csvCell(r.documentNumber),
         csvCell(r.documentDate.toISOString().slice(0, 10)),
+        r.noteType,
         csvCell(r.originalInvoiceNumber),
         csvCell(r.buyerGstin ?? ''),
         r.buyerType,
@@ -228,11 +305,13 @@ function paiseToRupees(p: bigint): string {
   return negative ? `-${rupees}` : rupees;
 }
 
+// Phase 159x (audit B1) — delegate to the shared core helper, which adds the
+// CSV/formula-injection guard (CWE-1236: leading = + - @ TAB CR neutralised
+// with a `'` prefix) on top of RFC-4180 quoting. The prior local impl quoted
+// commas/quotes/newlines only — a `=cmd|'/c calc'!A1` invoice number landed in
+// Excel as a live formula.
 function csvCell(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
+  return escapeCsvField(value);
 }
 
 function monthRangeUtc(filingPeriod: string): {
@@ -245,11 +324,9 @@ function monthRangeUtc(filingPeriod: string): {
   }
   const y = parseInt(match[1]!, 10);
   const m = parseInt(match[2]!, 10);
-  const startUtc = new Date(Date.UTC(y, m - 1, 1) - 5.5 * 60 * 60 * 1000);
+  const startUtc = new Date(Date.UTC(y, m - 1, 1) - IST_OFFSET_MS);
   const nextY = m === 12 ? y + 1 : y;
   const nextM = m === 12 ? 0 : m;
-  const endUtc = new Date(
-    Date.UTC(nextY, nextM, 1) - 5.5 * 60 * 60 * 1000,
-  );
+  const endUtc = new Date(Date.UTC(nextY, nextM, 1) - IST_OFFSET_MS);
   return { startUtc, endUtc };
 }

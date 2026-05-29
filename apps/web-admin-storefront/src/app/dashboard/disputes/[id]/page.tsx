@@ -5,21 +5,34 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
   adminDisputesService,
+  AssignableAdmin,
   DisputeDetail,
   DisputeMessage,
   DisputeStatus,
   STATUS_COLOR,
   KIND_LABEL,
 } from '@/services/admin-disputes.service';
+import CaseTimeline from '@/components/CaseTimeline';
+import { usePermissions } from '@/lib/permissions';
 
 export default function DisputeDetailPage() {
   const { id } = useParams<{ id: string }>();
+  // Phase 134 — internal (admin-only) notes need a finer permission than a
+  // customer-visible reply. Hide the toggle when the admin lacks it (the API
+  // enforces it too, soak-aware).
+  const { hasPermission } = usePermissions();
+  const canInternalNote = hasPermission('disputes.internalNote');
   const [detail, setDetail] = useState<DisputeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reply, setReply] = useState('');
   const [internal, setInternal] = useState(false);
+  // Idempotency key for the reply POST (endpoint is @Idempotent). Held stable
+  // for the current draft so a timeout-then-reclick dedupes; regenerated after
+  // each successful send.
+  const [replyKey, setReplyKey] = useState<string>(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
+  const [assignable, setAssignable] = useState<AssignableAdmin[]>([]);
 
   // Decision form (Phase 12 — outcome alone no longer enough; admin
   // must also pick liabilityParty + customerRemedy per ADR-016).
@@ -77,6 +90,16 @@ export default function DisputeDetailPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Load the ACTIVE admins this operator can assign to (scoped endpoint —
+  // the full admin directory is SUPER_ADMIN-only). Best-effort: if it fails
+  // the dropdown just shows "Unassigned" + the current assignee.
+  useEffect(() => {
+    adminDisputesService
+      .assignableAdmins()
+      .then((res) => { if (res.data) setAssignable(res.data); })
+      .catch(() => undefined);
+  }, []);
+
   // 5-second background poll. Catches customer replies that landed on
   // the linked support ticket and were mirrored into the dispute
   // thread by DisputeMirrorHandler / mirrorTicketMessageToDispute.
@@ -119,8 +142,9 @@ export default function DisputeDetailPage() {
     if (!reply.trim() || busy) return;
     setBusy(true); busyRef.current = true;
     try {
-      await adminDisputesService.reply(id, reply.trim(), internal);
+      await adminDisputesService.reply(id, reply.trim(), replyKey, internal);
       setReply(''); setInternal(false);
+      setReplyKey(crypto.randomUUID()); // fresh key for the next message
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send');
@@ -138,6 +162,13 @@ export default function DisputeDetailPage() {
   const setSev = async (n: number) => {
     setBusy(true); busyRef.current = true;
     try { await adminDisputesService.setSeverity(id, n); refresh(); }
+    finally { setBusy(false); busyRef.current = false; }
+  };
+
+  const setAssignee = async (adminId: string | null) => {
+    setBusy(true); busyRef.current = true;
+    try { await adminDisputesService.assign(id, adminId); refresh(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Could not assign'); }
     finally { setBusy(false); busyRef.current = false; }
   };
 
@@ -224,7 +255,7 @@ export default function DisputeDetailPage() {
   const isResolved = detail.status.startsWith('RESOLVED_') || detail.status === 'CLOSED';
 
   return (
-    <div style={{ padding: '24px 32px', display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, maxWidth: 1280 }}>
+    <div style={{ padding: '24px 32px', display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20, maxWidth: 1280, margin: '0 auto' }}>
       <div>
         <Link href="/dashboard/disputes" style={{ color: '#525A65', fontSize: 13, textDecoration: 'none', display: 'inline-block', marginBottom: 12 }}>
           ← Back to disputes
@@ -350,10 +381,14 @@ export default function DisputeDetailPage() {
                 background: internal ? '#fefce8' : '#fff', borderRadius: 12, fontSize: 14, resize: 'vertical', outline: 'none', boxSizing: 'border-box', fontFamily: 'inherit',
               }} />
             <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label style={{ fontSize: 13, color: '#525A65', cursor: 'pointer' }}>
-                <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} style={{ accentColor: '#d97706', marginRight: 6 }} />
-                Internal note
-              </label>
+              {canInternalNote ? (
+                <label style={{ fontSize: 13, color: '#525A65', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} style={{ accentColor: '#d97706', marginRight: 6 }} />
+                  Internal note
+                </label>
+              ) : (
+                <span />
+              )}
               <button type="submit" disabled={!reply.trim() || busy} style={{
                 height: 38, padding: '0 18px', border: 'none', background: internal ? '#d97706' : '#0F1115', color: '#fff',
                 borderRadius: 9999, fontWeight: 600, fontSize: 14, cursor: !reply.trim() || busy ? 'not-allowed' : 'pointer', opacity: !reply.trim() || busy ? 0.5 : 1,
@@ -363,6 +398,14 @@ export default function DisputeDetailPage() {
             </div>
           </form>
         )}
+
+        <div style={{ marginTop: 16 }}>
+          <CaseTimeline
+            caseKind="dispute"
+            caseId={detail.id}
+            refreshKey={detail.updatedAt}
+          />
+        </div>
       </div>
 
       <aside style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -384,6 +427,30 @@ export default function DisputeDetailPage() {
             onChange={(e) => setSev(Number(e.target.value))} disabled={busy || isResolved}
             style={{ width: '100%' }} />
           <p style={{ marginTop: 4, fontSize: 11, color: '#7A828F' }}>1 (lowest) — 100 (urgent)</p>
+        </Card>
+
+        <Card title="Assigned reviewer">
+          <select
+            value={detail.assignedAdminId ?? ''}
+            onChange={(e) => setAssignee(e.target.value || null)}
+            disabled={busy}
+            style={{ width: '100%', height: 36, padding: '0 10px', border: '1px solid #D2D6DC', borderRadius: 9999, fontSize: 13 }}
+          >
+            <option value="">Unassigned</option>
+            {assignable.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+            {/* Keep an out-of-list (e.g. now-inactive) current assignee selectable
+                so opening the page doesn't silently re-show them as unassigned. */}
+            {detail.assignedAdminId && !assignable.some((a) => a.id === detail.assignedAdminId) && (
+              <option value={detail.assignedAdminId}>Current assignee (inactive)</option>
+            )}
+          </select>
+          {detail.assignedAt && (
+            <p style={{ marginTop: 4, fontSize: 11, color: '#7A828F' }}>
+              Assigned · {new Date(detail.assignedAt).toLocaleString('en-IN')}
+            </p>
+          )}
         </Card>
 
         {detail.decisionRationale && (

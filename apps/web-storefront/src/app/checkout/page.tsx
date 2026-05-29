@@ -20,6 +20,10 @@ import {
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
+import {
+  customerTaxProfileService,
+  CustomerTaxProfile,
+} from '@/services/customer-tax-profile.service';
 
 interface Address {
   id: string;
@@ -67,6 +71,44 @@ interface CheckoutItem {
   reservationId: string | null;
 }
 
+// Phase 30 — tax preview shape returned by the checkout API. Paise
+// values are BigInt-safe strings (the backend serialises BigInt to
+// string to survive JSON without precision loss).
+interface CheckoutTaxPreview {
+  subtotalTaxableInPaise: string;
+  cgstInPaise: string;
+  sgstInPaise: string;
+  igstInPaise: string;
+  cessInPaise: string;
+  totalTaxInPaise: string;
+  rawTotalInPaise: string;
+  roundOffInPaise: string;
+  grandTotalInPaise: string;
+  hasIgst: boolean;
+  hasCgstSgst: boolean;
+  incompleteItemCount: number;
+  // Phase 36 — per-line drill-down. May be missing on legacy responses.
+  lines?: CheckoutTaxPreviewLine[];
+}
+
+// Phase 36 — one entry per cart line, in input order.
+interface CheckoutTaxPreviewLine {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  unitPriceInPaise: string;
+  taxableInPaise: string;
+  cgstInPaise: string;
+  sgstInPaise: string;
+  igstInPaise: string;
+  cessInPaise: string;
+  gstRateBps: number;
+  cessRateBps: number;
+  isIntraState: boolean;
+  supplyTaxability: string;
+  isIncomplete: boolean;
+}
+
 interface CheckoutData {
   items: CheckoutItem[];
   totalAmount: number;
@@ -76,6 +118,7 @@ interface CheckoutData {
   unserviceableCount: number;
   addressSnapshot: Record<string, string>;
   expiresAt: string;
+  taxPreview: CheckoutTaxPreview | null;
 }
 
 const inputBase =
@@ -130,6 +173,12 @@ export default function CheckoutPage() {
   const [removingUnserviceable, setRemovingUnserviceable] = useState(false);
   const [error, setError] = useState('');
   const [checkoutData, setCheckoutData] = useState<CheckoutData | null>(null);
+  // Phase 36 — per-line tax drill-down expansion. Keyed by
+  // `${productId}:${variantId ?? ''}` so a product with multiple
+  // variants in the cart can expand independently.
+  const [expandedTaxLines, setExpandedTaxLines] = useState<Set<string>>(
+    new Set(),
+  );
 
   const [couponInput, setCouponInput] = useState('');
   const [couponApplying, setCouponApplying] = useState(false);
@@ -178,6 +227,37 @@ export default function CheckoutPage() {
   const [pincodeError, setPincodeError] = useState('');
   const [selectedPlace, setSelectedPlace] = useState('');
   const [pincodeAutoFilled, setPincodeAutoFilled] = useState(false);
+
+  // B2B tax profile — Phase 37 picker. Buyers with 2+ tax profiles can
+  // pick which GSTIN this order's invoice goes against; the chosen ID
+  // is sent to placeOrder and snapshotted on MasterOrder. Default
+  // selection mirrors the legacy "isDefault" rule.
+  const [taxProfiles, setTaxProfiles] = useState<CustomerTaxProfile[]>([]);
+  const [selectedTaxProfileId, setSelectedTaxProfileId] = useState<string | null>(null);
+  const defaultTaxProfile =
+    taxProfiles.find((p) => p.id === selectedTaxProfileId) ??
+    taxProfiles.find((p) => p.isDefault) ??
+    null;
+
+  useEffect(() => {
+    if (authStatus !== 'authed') return;
+    let cancelled = false;
+    customerTaxProfileService
+      .list()
+      .then((res) => {
+        if (cancelled) return;
+        const profiles = res.data ?? [];
+        setTaxProfiles(profiles);
+        const def = profiles.find((p) => p.isDefault) ?? null;
+        setSelectedTaxProfileId(def?.id ?? null);
+      })
+      .catch(() => {
+        // Non-critical — checkout still works without B2B context.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
 
   async function lookupPincode(pincode: string) {
     if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
@@ -565,6 +645,10 @@ export default function CheckoutPage() {
           ...(selectedShippingOptionId ? { shippingOptionId: selectedShippingOptionId } : {}),
           ...(referralCode ? { referralCode } : {}),
           ...(walletApplyAmountInPaise > 0 ? { walletApplyAmountInPaise } : {}),
+          // Phase 37 — buyer-picked B2B GSTIN profile snapshot. Only
+          // sent when distinct from the global default; the backend
+          // tolerates null/undefined and falls back to isDefault.
+          ...(selectedTaxProfileId ? { taxProfileId: selectedTaxProfileId } : {}),
         }),
         signal: abort.signal,
       });
@@ -591,6 +675,42 @@ export default function CheckoutPage() {
   };
 
   const formatPrice = (price: number) => `₹${Number(price).toLocaleString('en-IN')}`;
+  // Phase 30 GST — format a BigInt-paise string returned by the
+  // tax-preview API as ₹X,XX,XXX.YY (Indian grouping, 2 decimals).
+  // Uses BigInt arithmetic so values > Number.MAX_SAFE_INTEGER paise
+  // (₹90T+) still render exactly. Empty / unparseable input → "₹0.00".
+  // BigInt() ctor calls (rather than `Nn` literals) because the
+  // storefront tsconfig targets ES2017 to match the wider Next.js
+  // build matrix.
+  const formatPaiseString = (paise: string): string => {
+    let value: bigint;
+    try {
+      value = BigInt(paise);
+    } catch {
+      return '₹0.00';
+    }
+    const ZERO = BigInt(0);
+    const HUNDRED = BigInt(100);
+    const negative = value < ZERO;
+    const abs = negative ? -value : value;
+    const rupees = abs / HUNDRED;
+    const remainder = abs % HUNDRED;
+    const rupeesStr = rupees
+      .toString()
+      .replace(/\B(?=(\d{2})+(\d{3})(?!\d))/g, ',');
+    const paiseStr = remainder.toString().padStart(2, '0');
+    return `${negative ? '-' : ''}₹${rupeesStr}.${paiseStr}`;
+  };
+  const formatPaiseStringSigned = (paise: string): string => {
+    let value: bigint;
+    try {
+      value = BigInt(paise);
+    } catch {
+      return formatPaiseString('0');
+    }
+    if (value > BigInt(0)) return `+${formatPaiseString(paise)}`;
+    return formatPaiseString(paise);
+  };
   const itemNoun = (n: number) => (n === 1 ? 'item' : 'items');
 
   useEffect(() => {
@@ -1079,11 +1199,31 @@ export default function CheckoutPage() {
                   unitPrice: c.unitPrice, lineTotal: c.lineTotal, serviceable: true,
                   allocatedSellerName: null, estimatedDeliveryDays: null,
                   reservationId: null,
-                } as CheckoutItem))).map((item, idx) => (
+                } as CheckoutItem))).map((item, idx) => {
+                  // Phase 36 — look up the matching per-line tax entry
+                  // returned by the preview. Exact match on
+                  // (productId, variantId).
+                  const taxLine = checkoutData?.taxPreview?.lines?.find(
+                    (l) =>
+                      l.productId === item.productId &&
+                      (l.variantId ?? null) === (item.variantId ?? null),
+                  );
+                  const taxKey = `${item.productId}:${item.variantId ?? ''}`;
+                  const isExpanded = expandedTaxLines.has(taxKey);
+                  const toggleTax = () => {
+                    setExpandedTaxLines((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(taxKey)) next.delete(taxKey);
+                      else next.add(taxKey);
+                      return next;
+                    });
+                  };
+                  return (
                   <li
                     key={idx}
-                    className={`flex gap-4 p-4 ${item.serviceable ? '' : 'opacity-60'}`}
+                    className={`p-4 ${item.serviceable ? '' : 'opacity-60'}`}
                   >
+                    <div className="flex gap-4">
                     <div className="size-16 bg-ink-100 grid place-items-center overflow-hidden shrink-0">
                       {item.imageUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
@@ -1123,14 +1263,94 @@ export default function CheckoutPage() {
                           {item.unserviceableReason || 'Cannot be delivered to this address'}
                         </div>
                       )}
+                      {/* Phase 36 — drill-down toggle. Only shows when
+                          the backend returned a tax line for this row. */}
+                      {item.serviceable && taxLine && (
+                        <button
+                          type="button"
+                          onClick={toggleTax}
+                          className="mt-1 text-caption text-ink-600 underline hover:text-ink-900"
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? 'Hide GST breakdown' : 'GST breakdown'}
+                        </button>
+                      )}
                     </div>
                     <div className="text-body font-semibold text-ink-900 tabular">
                       {item.serviceable
                         ? formatPrice(item.lineTotal)
                         : <span className="text-danger line-through">{formatPrice(item.lineTotal)}</span>}
                     </div>
+                    </div>
+                    {/* Phase 36 — expanded per-line GST breakdown */}
+                    {isExpanded && taxLine && (
+                      <div className="mt-3 ml-20 p-3 bg-ink-50 rounded text-caption text-ink-800">
+                        <div className="flex justify-between">
+                          <span>Taxable value</span>
+                          <span className="tabular font-medium">
+                            {formatPaiseString(taxLine.taxableInPaise)}
+                          </span>
+                        </div>
+                        {taxLine.supplyTaxability !== 'TAXABLE' &&
+                          taxLine.supplyTaxability !== 'ZERO_RATED' && (
+                            <div className="text-ink-600 mt-1">
+                              {taxLine.supplyTaxability.replace(/_/g, ' ')} —
+                              no GST applies
+                            </div>
+                          )}
+                        {taxLine.isIntraState &&
+                          (taxLine.cgstInPaise !== '0' ||
+                            taxLine.sgstInPaise !== '0') && (
+                            <>
+                              <div className="flex justify-between mt-1">
+                                <span>
+                                  CGST ({(taxLine.gstRateBps / 200).toFixed(2)}%)
+                                </span>
+                                <span className="tabular">
+                                  {formatPaiseString(taxLine.cgstInPaise)}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>
+                                  SGST ({(taxLine.gstRateBps / 200).toFixed(2)}%)
+                                </span>
+                                <span className="tabular">
+                                  {formatPaiseString(taxLine.sgstInPaise)}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        {!taxLine.isIntraState && taxLine.igstInPaise !== '0' && (
+                          <div className="flex justify-between mt-1">
+                            <span>
+                              IGST ({(taxLine.gstRateBps / 100).toFixed(2)}%)
+                            </span>
+                            <span className="tabular">
+                              {formatPaiseString(taxLine.igstInPaise)}
+                            </span>
+                          </div>
+                        )}
+                        {taxLine.cessInPaise !== '0' && (
+                          <div className="flex justify-between mt-1">
+                            <span>
+                              Cess ({(taxLine.cessRateBps / 100).toFixed(2)}%)
+                            </span>
+                            <span className="tabular">
+                              {formatPaiseString(taxLine.cessInPaise)}
+                            </span>
+                          </div>
+                        )}
+                        {taxLine.isIncomplete && (
+                          <div className="mt-2 text-ink-600">
+                            Tax config incomplete — the final invoice may
+                            differ.
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             </section>
           </div>
@@ -1153,6 +1373,96 @@ export default function CheckoutPage() {
                   <div className="text-caption text-ink-600">Pay when you receive</div>
                 </div>
               </div>
+            </div>
+
+            {/* Phase 37 — Tax invoice picker. Three states:
+                  - 0 profiles: B2C invoice; offer add-GSTIN link
+                  - 1 profile: show as read-only with "Change" link
+                  - 2+ profiles: dropdown to pick which GSTIN this
+                    order's invoice goes against. ID is sent to
+                    placeOrder and snapshotted on MasterOrder so
+                    tax-document.service prefers it over the global
+                    default. */}
+            <div className="mb-5">
+              <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
+                Tax invoice
+              </div>
+              {taxProfiles.length === 0 ? (
+                <div className="flex items-start justify-between gap-3 p-3 border border-dashed border-ink-300 rounded-lg bg-ink-50">
+                  <div className="min-w-0">
+                    <div className="text-body font-medium text-ink-900">
+                      Personal (B2C) invoice
+                    </div>
+                    <div className="text-caption text-ink-600">
+                      Buying for business? Add your GSTIN to get a B2B tax invoice.
+                    </div>
+                  </div>
+                  <Link
+                    href="/account/tax-profiles"
+                    className="text-caption font-semibold text-ink-900 underline shrink-0"
+                  >
+                    Add GSTIN
+                  </Link>
+                </div>
+              ) : taxProfiles.length === 1 && defaultTaxProfile ? (
+                <div className="flex items-start justify-between gap-3 p-3 border border-ink-200 rounded-lg bg-white">
+                  <div className="min-w-0">
+                    <div className="text-body font-semibold text-ink-900 truncate">
+                      {defaultTaxProfile.legalName}
+                    </div>
+                    <div
+                      className="text-caption text-ink-600 truncate"
+                      style={{ fontFamily: 'var(--font-mono, monospace)' }}
+                    >
+                      GSTIN: {defaultTaxProfile.gstin}
+                    </div>
+                    <div className="text-caption text-ink-500 mt-1">
+                      Invoice issued as B2B.
+                    </div>
+                  </div>
+                  <Link
+                    href="/account/tax-profiles"
+                    className="text-caption font-semibold text-ink-900 underline shrink-0"
+                  >
+                    Change
+                  </Link>
+                </div>
+              ) : (
+                <div className="p-3 border border-ink-200 rounded-lg bg-white">
+                  <label className="text-caption text-ink-600 block mb-1">
+                    Pick a GSTIN for this order
+                  </label>
+                  <select
+                    value={selectedTaxProfileId ?? ''}
+                    onChange={(e) =>
+                      setSelectedTaxProfileId(e.target.value || null)
+                    }
+                    className="w-full border border-ink-300 rounded p-2 text-body"
+                  >
+                    {taxProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.legalName} — {p.gstin}
+                        {p.isDefault ? ' (default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {defaultTaxProfile && (
+                    <div className="mt-2 text-caption text-ink-500">
+                      Invoice issued as B2B to{' '}
+                      <span className="font-medium text-ink-700">
+                        {defaultTaxProfile.legalName}
+                      </span>
+                      .
+                    </div>
+                  )}
+                  <Link
+                    href="/account/tax-profiles"
+                    className="mt-2 inline-block text-caption text-ink-700 underline"
+                  >
+                    Manage profiles
+                  </Link>
+                </div>
+              )}
             </div>
 
             {/* Shipping options (v1) */}
@@ -1358,15 +1668,79 @@ export default function CheckoutPage() {
                   <span className="tabular">-{formatPrice(walletApplyAmount)}</span>
                 </div>
               )}
-              {/* Phase 26 GST — make it explicit that prices are
-                  inclusive so the customer isn't surprised by tax at
-                  the total. The per-line CGST/SGST/IGST breakdown is
-                  surfaced post-placement on the order detail page and
-                  in the downloadable invoice. */}
-              <div className="flex justify-between text-ink-500 text-caption">
-                <span>GST</span>
-                <span>Included in price</span>
-              </div>
+              {/* Phase 30 GST — explicit CGST/SGST/IGST/cess breakdown
+                  computed by CheckoutTaxPreviewService. Falls back to
+                  the inclusive-pricing string when the backend couldn't
+                  compute (e.g. addresses missing state code). For
+                  inclusive-priced products (B2C default) the tax lines
+                  inform but DON'T add to the running total — Subtotal
+                  already includes them. The aggregate total at the
+                  bottom of the summary is the customer-facing number. */}
+              {checkoutData?.taxPreview ? (
+                <>
+                  {checkoutData.taxPreview.hasCgstSgst && (
+                    <>
+                      <div className="flex justify-between text-ink-500 text-caption">
+                        <span>CGST (incl.)</span>
+                        <span className="tabular">
+                          {formatPaiseString(
+                            checkoutData.taxPreview.cgstInPaise,
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-ink-500 text-caption">
+                        <span>SGST (incl.)</span>
+                        <span className="tabular">
+                          {formatPaiseString(
+                            checkoutData.taxPreview.sgstInPaise,
+                          )}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  {checkoutData.taxPreview.hasIgst && (
+                    <div className="flex justify-between text-ink-500 text-caption">
+                      <span>IGST (incl.)</span>
+                      <span className="tabular">
+                        {formatPaiseString(
+                          checkoutData.taxPreview.igstInPaise,
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {Number(checkoutData.taxPreview.cessInPaise) > 0 && (
+                    <div className="flex justify-between text-ink-500 text-caption">
+                      <span>Compensation cess (incl.)</span>
+                      <span className="tabular">
+                        {formatPaiseString(
+                          checkoutData.taxPreview.cessInPaise,
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {Number(checkoutData.taxPreview.roundOffInPaise) !== 0 && (
+                    <div className="flex justify-between text-ink-500 text-caption">
+                      <span>Round off</span>
+                      <span className="tabular">
+                        {formatPaiseStringSigned(
+                          checkoutData.taxPreview.roundOffInPaise,
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {checkoutData.taxPreview.incompleteItemCount > 0 && (
+                    <div className="text-caption text-ink-500 italic mt-1">
+                      Some items don&apos;t yet have full GST data — final
+                      invoice may show a slightly different split.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex justify-between text-ink-500 text-caption">
+                  <span>GST</span>
+                  <span>Included in price</span>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between items-baseline pt-4 mb-5">

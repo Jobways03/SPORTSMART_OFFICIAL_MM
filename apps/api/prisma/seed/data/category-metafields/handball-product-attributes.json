@@ -1,0 +1,359 @@
+{
+  "handballs": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "match", "label": "Match Ball" },
+        { "value": "training", "label": "Training Ball" },
+        { "value": "soft", "label": "Soft / Foam Ball" },
+        { "value": "beach", "label": "Beach Handball" }
+      ]
+    },
+    {
+      "key": "ball_size",
+      "name": "Ball Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "0", "label": "Size 0 (Mini / Kids Under 8)" },
+        { "value": "1", "label": "Size 1 (Youth / Women Under 14)" },
+        { "value": "2", "label": "Size 2 (Women / Youth Boys)" },
+        { "value": "3", "label": "Size 3 (Men)" }
+      ]
+    },
+    {
+      "key": "ihf_approved",
+      "name": "IHF Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "handball-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "position_fit",
+      "name": "Position Fit",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "wing", "label": "Wing (Lightweight)" },
+        { "value": "back", "label": "Back Court (Cushioned)" },
+        { "value": "pivot", "label": "Pivot / Line (Stability)" },
+        { "value": "all_round", "label": "All-Round" },
+        { "value": "goalkeeper", "label": "Goalkeeper" }
+      ]
+    },
+    {
+      "key": "non_marking_sole",
+      "name": "Non-Marking Sole",
+      "type": "BOOLEAN",
+      "sortOrder": 5
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "handball-goalkeeper-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "gk_pants", "label": "Goalkeeper Pants (Padded)" },
+        { "value": "gk_shirt", "label": "Goalkeeper Shirt (Padded)" },
+        { "value": "gk_shorts", "label": "Goalkeeper Shorts (Padded)" },
+        { "value": "gk_set", "label": "Goalkeeper Set" }
+      ]
+    },
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "handball-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "jersey", "label": "Jersey" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "socks", "label": "Socks" },
+        { "value": "warm_up", "label": "Warm-Up / Training Top" },
+        { "value": "track_suit", "label": "Track Suit" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "handball-protective-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "knee_pad", "label": "Knee Pad" },
+        { "value": "elbow_pad", "label": "Elbow Pad" },
+        { "value": "ankle_support", "label": "Ankle Support" },
+        { "value": "finger_tape", "label": "Finger Tape / Support" },
+        { "value": "mouthguard", "label": "Mouthguard" },
+        { "value": "shoulder_pad", "label": "Shoulder Pad" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" }
+      ]
+    }
+  ],
+  "handball-grip-resin": [
+    {
+      "key": "resin_type",
+      "name": "Resin Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "natural", "label": "Natural Resin" },
+        { "value": "synthetic", "label": "Synthetic Resin" },
+        { "value": "wax", "label": "Grip Wax" },
+        { "value": "spray", "label": "Grip Spray" },
+        { "value": "resin_remover", "label": "Resin Remover / Cleaner" }
+      ]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "single", "label": "Single" },
+        { "value": "2_pack", "label": "2 Pack" },
+        { "value": "team_pack", "label": "Team Pack" }
+      ]
+    }
+  ],
+  "handball-goals-nets": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "full_size_goal", "label": "Full Size Goal (3x2m)" },
+        { "value": "mini_goal", "label": "Mini / Training Goal" },
+        { "value": "goal_net", "label": "Goal Net" },
+        { "value": "target_sheet", "label": "Target Sheet / Reducer" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" }
+      ]
+    }
+  ],
+  "handball-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "backpack", "label": "Backpack" },
+        { "value": "holdall", "label": "Holdall / Sports Bag" },
+        { "value": "ball_bag", "label": "Ball Bag" },
+        { "value": "shoe_bag", "label": "Shoe Bag" },
+        { "value": "team_bag", "label": "Team Equipment Bag" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

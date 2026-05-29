@@ -36,6 +36,8 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'returns.read', 'returns.approve', 'returns.reject',
       'returns.schedulePickup', 'returns.receive',
       'returns.uploadQcEvidence', 'returns.qcDecide', 'returns.close',
+      'returns.export',
+      'sellerReversals.read', 'sellerReversals.approve',
       'refunds.read', 'refunds.initiate', 'refunds.confirm', 'refunds.retry',
       'paymentOps.read', 'paymentOps.transition',
       'recon.read',
@@ -61,7 +63,8 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'returns.read', 'returns.approve', 'returns.reject',
       'returns.schedulePickup', 'returns.receive',
       'returns.uploadQcEvidence', 'returns.qcDecide', 'returns.overrideQc',
-      'returns.close',
+      'returns.close', 'returns.export',
+      'sellerReversals.read', 'sellerReversals.approve',
       'refunds.read', 'refunds.initiate', 'refunds.approve',
       'refunds.confirm', 'refunds.retry', 'refunds.manualConfirm',
       'wallets.read', 'wallets.adjust',
@@ -227,7 +230,7 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'Tax/GST module owner — invoices, credit notes, e-way bills, e-invoices, GSTR reports, TCS, and the wallet-adjustments approval queue.',
     permissions: [
       // Core tax surface
-      'tax.read', 'tax.configure', 'tax.gstin.verify',
+      'tax.read', 'tax.configure', 'tax.gstn.verify',
       'tax.invoice.read', 'tax.invoice.download', 'tax.invoice.regeneratePdf',
       'tax.creditNote.read', 'tax.creditNote.download', 'tax.creditNote.create',
       'tax.creditNote.timebarOverride', 'tax.creditNote.timebarReview',

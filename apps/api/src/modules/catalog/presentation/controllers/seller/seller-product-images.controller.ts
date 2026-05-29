@@ -25,13 +25,12 @@ import { ReApprovalService } from '../../../application/services/re-approval.ser
 import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
 import { ReorderImagesDto } from '../../dtos/reorder-images.dto';
 import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
-
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
-
-const MULTER_OPTIONS = {
-  limits: { fileSize: MAX_FILE_SIZE },
-};
+import {
+  ALLOWED_IMAGE_MIME_TYPES,
+  IMAGE_MULTER_OPTIONS,
+  MAX_IMAGE_BYTES,
+  sanitizeAltText,
+} from '../_helpers/image-upload';
 
 @ApiTags('Seller Products')
 @Controller('seller/products/:productId/images')
@@ -49,32 +48,22 @@ export class SellerProductImagesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseInterceptors(FileInterceptor('image', MULTER_OPTIONS))
+  @UseInterceptors(FileInterceptor('image', IMAGE_MULTER_OPTIONS))
   async uploadImage(
     @Req() req: Request,
     @Param('productId') productId: string,
     @UploadedFile() file: Express.Multer.File,
+    @Body('altText') altTextRaw?: string,
   ) {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    // Validate file
-    if (!file || !file.buffer) {
-      throw new AppException('No image file provided', 'BAD_REQUEST');
+    if (!file || !file.buffer) throw new AppException('No image file provided', 'BAD_REQUEST');
+    if (!(ALLOWED_IMAGE_MIME_TYPES as readonly string[]).includes(file.mimetype)) {
+      throw new AppException('Only JPG, PNG, and WEBP images are allowed', 'BAD_REQUEST');
     }
+    if (file.size > MAX_IMAGE_BYTES) throw new AppException('Image must not exceed 5MB', 'BAD_REQUEST');
 
-    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-      throw new AppException(
-        'Only JPG, PNG, and WEBP images are allowed',
-        'BAD_REQUEST',
-      );
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      throw new AppException('Image must not exceed 5MB', 'BAD_REQUEST');
-    }
-
-    // Upload to Cloudinary
     let uploadResult;
     try {
       uploadResult = await this.cloudinary.upload(file.buffer, {
@@ -85,38 +74,68 @@ export class SellerProductImagesController {
       this.logger.error(
         `Cloudinary upload failed for product ${productId}: ${error?.message}`,
       );
-      throw new AppException(
-        'Image upload failed. Please try again.',
-        'EXTERNAL_SERVICE_ERROR',
-      );
+      throw new AppException('Image upload failed. Please try again.', 'EXTERNAL_SERVICE_ERROR');
     }
 
-    // Check if this is the first image (set as primary)
+    // Phase 42 (2026-05-21) — Gap #7 fix. Cloudinary asset is in
+    // cloud; from here on, any throw orphans it. The catch block
+    // does a best-effort delete and rethrows the original error.
+    // Also handles the Phase 29 partial-unique retry for primary
+    // (concurrent first-image race) the same way the admin path does.
     const existingImages = await this.imageRepo.countByProduct(productId);
+    let isPrimary = existingImages === 0;
+    const altText = sanitizeAltText(altTextRaw);
 
-    const isPrimary = existingImages === 0;
-    const sortOrder = existingImages;
+    let image;
+    try {
+      image = await this.imageRepo.createProductImage({
+        productId,
+        url: uploadResult.secureUrl,
+        publicId: uploadResult.publicId,
+        isPrimary,
+        sortOrder: existingImages,
+        altText,
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002' && isPrimary) {
+        isPrimary = false;
+        try {
+          image = await this.imageRepo.createProductImage({
+            productId,
+            url: uploadResult.secureUrl,
+            publicId: uploadResult.publicId,
+            isPrimary,
+            sortOrder: existingImages,
+            altText,
+          });
+        } catch (retryErr: any) {
+          await this.cleanupCloudinary(uploadResult.publicId);
+          throw retryErr;
+        }
+      } else {
+        await this.cleanupCloudinary(uploadResult.publicId);
+        throw err;
+      }
+    }
 
-    const image = await this.imageRepo.createProductImage({
-      productId,
-      url: uploadResult.secureUrl,
-      publicId: uploadResult.publicId,
-      isPrimary,
-      sortOrder,
-    });
-
-    // Trigger re-approval if product was APPROVED/ACTIVE
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
+    this.logger.log(`Image uploaded for product ${productId}: ${image.id}`);
+    return { success: true, message: 'Image uploaded successfully', data: image };
+  }
 
-    this.logger.log(
-      `Image uploaded for product ${productId}: ${image.id}`,
-    );
-
-    return {
-      success: true,
-      message: 'Image uploaded successfully',
-      data: image,
-    };
+  /**
+   * Phase 42 (2026-05-21) — best-effort Cloudinary cleanup on
+   * post-upload failure. Mirrors the admin product path's helper.
+   */
+  private async cleanupCloudinary(publicId: string | null | undefined): Promise<void> {
+    if (!publicId) return;
+    try {
+      await this.cloudinary.delete(publicId);
+    } catch (err: any) {
+      this.logger.error(
+        `Cloudinary cleanup failed for orphaned asset ${publicId}: ${err?.message}`,
+      );
+    }
   }
 
   @Delete(':imageId')
@@ -180,15 +199,48 @@ export class SellerProductImagesController {
     const sellerId = (req as any).sellerId;
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    // Trigger re-approval if product was APPROVED/ACTIVE
-    await this.reApprovalService.triggerIfNeeded(productId, sellerId);
-
+    // Phase 42 (2026-05-21) — Gap #9 fix. Re-approval is fired only
+    // AFTER the reorder succeeds. Pre-Phase-42 the trigger ran first,
+    // so a reorder that failed (e.g. cross-product id mismatch) still
+    // flipped the product back to SUBMITTED — undoing nothing.
     const images = await this.imageRepo.reorderProductImages(productId, dto.imageIds);
+    await this.reApprovalService.triggerIfNeeded(productId, sellerId);
 
     return {
       success: true,
       message: 'Images reordered successfully',
       data: images,
     };
+  }
+
+  /**
+   * Phase 42 (2026-05-21) — Gap #1 fix. Explicit "set primary" so the
+   * UI's Primary badge can be reassigned without delete+reupload.
+   *
+   * The repo demotes the previous primary and promotes the target in
+   * one transaction (partial-unique-safe). Scope is validated by:
+   *   1. ownershipService — seller owns the URL's productId
+   *   2. findProductImage(imageId, productId) — id belongs to the product
+   *
+   * Re-approval triggers after the flip so a fresh hero image goes
+   * back through moderation.
+   */
+  @Patch(':imageId/primary')
+  @HttpCode(HttpStatus.OK)
+  async setPrimary(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Param('imageId') imageId: string,
+  ) {
+    const sellerId = (req as any).sellerId;
+    await this.ownershipService.validateOwnership(sellerId, productId);
+
+    const image = await this.imageRepo.findProductImage(imageId, productId);
+    if (!image) throw new NotFoundAppException('Image not found');
+
+    await this.imageRepo.setImagePrimary(imageId);
+    await this.reApprovalService.triggerIfNeeded(productId, sellerId);
+
+    return { success: true, message: 'Primary image updated', data: { id: imageId } };
   }
 }

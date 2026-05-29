@@ -7,11 +7,17 @@ import { Gstr1ReportService } from '../../src/modules/tax/application/services/g
 // tax-gstr1-aggregator.spec.ts. These tests cover the CSV header
 // shape + period→UTC-range translation + paise→rupees rendering.
 
-function makeService(documents: any[] = []): {
+function makeService(
+  documents: any[] = [],
+  seller: any = { id: 's-1', gstins: [{ id: 'g-1' }] }, // Phase 159x (#12)
+): {
   service: Gstr1ReportService;
   prisma: any;
 } {
   const prisma = {
+    seller: {
+      findUnique: jest.fn().mockResolvedValue(seller),
+    },
     taxDocument: {
       findMany: jest.fn().mockResolvedValue(documents),
     },
@@ -44,6 +50,21 @@ describe('Gstr1ReportService.aggregateForSeller', () => {
     await expect(
       service.aggregateForSeller({ sellerId: 's-1', filingPeriod: '202604' }),
     ).rejects.toThrow(/Invalid filing period/);
+  });
+
+  // Phase 159x (audit #12) — invalid seller fails fast instead of empty CSVs.
+  it('rejects a non-existent seller', async () => {
+    const { service } = makeService([], null);
+    await expect(
+      service.aggregateForSeller({ sellerId: 'nope', filingPeriod: '2026-04' }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('rejects a seller with no verified GSTIN', async () => {
+    const { service } = makeService([], { id: 's-1', gstins: [] });
+    await expect(
+      service.aggregateForSeller({ sellerId: 's-1', filingPeriod: '2026-04' }),
+    ).rejects.toThrow(/no verified GSTIN/);
   });
 });
 
@@ -258,5 +279,72 @@ describe('Gstr1ReportService.generateDocumentsIssuedCsv', () => {
     // Sorted alphabetically: LEGACY_RECEIPT, TAX_INVOICE.
     expect(data[0]).toBe('LEGACY_RECEIPT,1');
     expect(data[1]).toBe('TAX_INVOICE,2');
+  });
+});
+
+// Phase 159x — audit B1 (formula injection), B2 (IRN), DEBIT_NOTE.
+function b2bDoc(over: any = {}) {
+  return {
+    id: 'd-1',
+    documentNumber: 'SM-INV-000001',
+    documentType: 'TAX_INVOICE',
+    generatedAt: new Date(Date.UTC(2026, 3, 15)),
+    buyerGstin: '07AAGCB1234C1Z5',
+    sellerStateCode: '29',
+    placeOfSupplyStateCode: '07',
+    taxableAmountInPaise: 100_000n,
+    cgstAmountInPaise: 0n,
+    sgstAmountInPaise: 0n,
+    igstAmountInPaise: 18_000n,
+    cessAmountInPaise: 0n,
+    documentTotalInPaise: 118_000n,
+    reverseChargeApplicable: false,
+    originalDocumentNumber: null,
+    irn: null,
+    ackDate: null,
+    status: 'GENERATED',
+    lines: [],
+    ...over,
+  };
+}
+
+describe('Gstr1ReportService CSV hardening (B1 / B2 / DEBIT_NOTE)', () => {
+  it('B1 — neutralises a formula-injection invoice number with a leading quote', async () => {
+    const { service } = makeService([
+      b2bDoc({ documentNumber: "=cmd|'/c calc'!A1" }),
+    ]);
+    const csv = await service.generateB2bCsv({ sellerId: 's-1', filingPeriod: '2026-04' });
+    // The dangerous cell is prefixed with a single quote so Excel treats it as
+    // text, not a formula. (No double-quote wrapping here — the value has no
+    // comma/quote/newline that would trigger RFC-4180 quoting.)
+    expect(csv).toContain("'=cmd");
+    // The formula must never sit at a cell boundary unprefixed.
+    expect(csv).not.toMatch(/(^|,|\n)=cmd/);
+  });
+
+  it('B2 — B2B CSV includes IRN + IRN Date columns and values', async () => {
+    const ack = new Date(Date.UTC(2026, 3, 15));
+    const { service } = makeService([
+      b2bDoc({ irn: 'IRN1234567890', ackDate: ack }),
+    ]);
+    const csv = await service.generateB2bCsv({ sellerId: 's-1', filingPeriod: '2026-04' });
+    expect(csv.split('\n')[0]).toMatch(/IRN,IRN Date$/);
+    const data = csv.split('\n')[1].split(',');
+    expect(data[11]).toBe('IRN1234567890');
+    expect(data[12]).toBe('2026-04-15');
+  });
+
+  it('DEBIT_NOTE — §9B CSV has a Note Type column and reports DEBIT', async () => {
+    const { service } = makeService([
+      b2bDoc({
+        documentNumber: 'SM-DN-1',
+        documentType: 'DEBIT_NOTE',
+        originalDocumentNumber: 'SM-INV-5',
+        documentTotalInPaise: 23_600n,
+      }),
+    ]);
+    const csv = await service.generateCreditNoteCsv({ sellerId: 's-1', filingPeriod: '2026-04' });
+    expect(csv.split('\n')[0]).toMatch(/Note Number,Note Date,Note Type/);
+    expect(csv.split('\n')[1].split(',')[2]).toBe('DEBIT');
   });
 });

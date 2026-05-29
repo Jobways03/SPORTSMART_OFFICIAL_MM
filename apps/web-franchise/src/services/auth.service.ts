@@ -11,6 +11,46 @@ export interface FranchiseRegisterPayload {
   email: string;
   phoneNumber: string;
   password: string;
+  confirmPassword: string;
+  acceptTerms: boolean;
+  acceptPrivacy: boolean;
+  acceptMarketing?: boolean;
+  captchaToken?: string;
+}
+
+/**
+ * Phase 20 (2026-05-20) — Uniform register response. Same shape on
+ * the happy and duplicate-email/phone paths so the API doesn't leak
+ * account existence.
+ */
+export interface FranchiseRegisterResponseData {
+  email: string;
+  requiresVerification: true;
+  verificationEmailSent: boolean;
+  message: string;
+  franchiseId?: string;
+}
+
+export interface FranchiseVerifyEmailPayload {
+  email: string;
+  otp: string;
+  captchaToken?: string;
+}
+
+export interface FranchiseVerifyEmailResponseData {
+  email: string;
+  verified: true;
+}
+
+export interface FranchiseResendVerificationOtpPayload {
+  email: string;
+  captchaToken?: string;
+}
+
+export interface FranchiseResendVerificationOtpResponseData {
+  email: string;
+  message: string;
+  retryAfterSeconds?: number;
 }
 
 export interface FranchiseLoginResponse {
@@ -42,11 +82,41 @@ export const franchiseAuthService = {
     });
   },
 
-  register(payload: FranchiseRegisterPayload): Promise<ApiResponse> {
-    return apiClient('/franchise/auth/register', {
+  register(
+    payload: FranchiseRegisterPayload,
+  ): Promise<ApiResponse<FranchiseRegisterResponseData>> {
+    return apiClient<FranchiseRegisterResponseData>('/franchise/auth/register', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  },
+
+  /**
+   * Phase 20 (2026-05-20) — public verify-email; unauthenticated.
+   * Closes the chicken-and-egg the prior flow had.
+   */
+  verifyEmail(
+    payload: FranchiseVerifyEmailPayload,
+  ): Promise<ApiResponse<FranchiseVerifyEmailResponseData>> {
+    return apiClient<FranchiseVerifyEmailResponseData>(
+      '/franchise/auth/verify-email',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+
+  resendVerificationOtp(
+    payload: FranchiseResendVerificationOtpPayload,
+  ): Promise<ApiResponse<FranchiseResendVerificationOtpResponseData>> {
+    return apiClient<FranchiseResendVerificationOtpResponseData>(
+      '/franchise/auth/resend-verification-otp',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
   },
 
   forgotPassword(email: string): Promise<ApiResponse> {
@@ -77,10 +147,6 @@ export const franchiseAuthService = {
   /**
    * Server-side logout — POST /franchise/auth/logout revokes every
    * active FranchiseSession, then we clear local sessionStorage.
-   * Server-side first so a stolen refresh token can't be replayed
-   * after the user clicks logout. Network failure is best-effort; the
-   * local clear still runs (the user expects to be logged out client-
-   * side regardless).
    */
   async logout(): Promise<void> {
     try {

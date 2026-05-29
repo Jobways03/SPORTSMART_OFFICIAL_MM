@@ -689,6 +689,64 @@ export class WalletAdjustmentService {
       `WalletAdjustment ${updated.id} APPROVED + posted as ` +
         `wallet_transaction ${txId}`,
     );
+
+    // Phase 109 (2026-05-25) — complete the return lifecycle. For a time-barred
+    // refund the wallet adjustment IS the customer refund, so once it posts we
+    // flip the linked Return to REFUNDED. submitQcDecision deliberately left it
+    // in QC_APPROVED (it skipped the gateway/instant refund to avoid a
+    // double-pay), so without this the return would be stuck even though the
+    // customer has now been paid. Best-effort: a failure here is logged loudly
+    // (money already moved) rather than rolling back the approval.
+    if (adj.kind === 'TIME_BARRED_CREDIT_NOTE' && adj.returnId) {
+      await this.prisma.return
+        .update({
+          where: { id: adj.returnId },
+          data: {
+            status: 'REFUNDED',
+            refundMethod: 'WALLET',
+            refundReference: `adjustment:${adj.id}`,
+            refundProcessedAt: new Date(),
+            refundInitiatedBy: 'SYSTEM',
+            refundInitiatedAt: new Date(),
+            refundFailureReason: null,
+            financeReviewedBy: approvedByAdminId,
+            financeReviewedAt: new Date(),
+          },
+        })
+        .catch((err) => {
+          this.logger.error(
+            `WalletAdjustment ${adj.id} posted, but failed to flip return ` +
+              `${adj.returnId} to REFUNDED: ${(err as Error).message} — ` +
+              `return is stuck in QC_APPROVED; ops must reconcile.`,
+          );
+        });
+
+      // Phase 109 (2026-05-25) — book the absorbed GST (the platform can no
+      // longer reclaim it via a credit note) as a PlatformExpense so GSTR
+      // reconciliation can trace it. Only when there was GST to absorb (null
+      // for legacy / no-invoice returns). The sourceId is namespaced so it
+      // doesn't collide with a liability-ledger PlatformExpense(RETURN,
+      // returnId) written at QC time.
+      const absorbedGstInPaise = adj.wouldHaveBeenTotalTaxInPaise;
+      if (absorbedGstInPaise && absorbedGstInPaise > 0n) {
+        await this.prisma.platformExpense
+          .create({
+            data: {
+              sourceType: 'RETURN',
+              sourceId: `gst-timebar:${adj.returnId}`,
+              expenseType: 'ABSORBED_GST',
+              amountInPaise: absorbedGstInPaise,
+              reason: `Section 34 time-barred return ${adj.returnId} — platform absorbed GST (no credit note issued).`,
+            },
+          })
+          .catch((expErr) => {
+            this.logger.error(
+              `Failed to record absorbed-GST PlatformExpense for adjustment ${adj.id}: ${(expErr as Error).message}`,
+            );
+          });
+      }
+    }
+
     return updated;
   }
 

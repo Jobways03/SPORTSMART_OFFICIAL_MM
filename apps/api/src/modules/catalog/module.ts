@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 
 // Facade
 import { CatalogPublicFacade } from './application/facades/catalog-public.facade';
@@ -13,11 +13,18 @@ import { ReApprovalService } from './application/services/re-approval.service';
 import { ServiceabilityService } from './application/services/serviceability.service';
 import { SellerAllocationService } from './application/services/seller-allocation.service';
 import { PostOfficeCacheService } from './application/services/post-office-cache.service';
-import { DuplicateDetectionService } from './application/services/duplicate-detection.service';
 import { CatalogCacheService } from './application/services/catalog-cache.service';
 import { StockSyncService } from './application/services/stock-sync.service';
 // Story 3.5 — pricing tier service (display-only at v1).
 import { ProductPricingTierService } from './application/services/product-pricing-tier.service';
+// Phase 44 (2026-05-21) — resolver that picks best-eligible tier for a line.
+import { PricingResolutionService } from './application/services/pricing-resolution.service';
+// Phase 45 (2026-05-21) — atomic tax-config attestation w/ audit log.
+import { ProductTaxAttestationService } from './application/services/product-tax-attestation.service';
+// Phase 39 (2026-05-21) — required-metafield enforcement on submit/approve.
+import { MetafieldValidationService } from './application/services/metafield-validation.service';
+// Phase 40 (2026-05-21) — runtime filter-value validation against choices[].
+import { StorefrontFilterValidatorService } from './application/services/storefront-filter-validator.service';
 
 // Guards
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
@@ -83,15 +90,26 @@ import { StorefrontFiltersController } from './presentation/controllers/public/s
 // Story 3.5 — pricing tier controllers (admin CRUD + public read).
 import { AdminProductPricingTiersController } from './presentation/controllers/admin/admin-product-pricing-tiers.controller';
 import { StorefrontProductPricingTiersController } from './presentation/controllers/public/storefront-product-pricing-tiers.controller';
+// Phase 44 (2026-05-21) — seller-facing CRUD (audit gap #4).
+import { SellerProductPricingTiersController } from './presentation/controllers/seller/seller-product-pricing-tiers.controller';
 
 // Controllers - Seller (Service Area)
 import { SellerServiceAreaController } from './presentation/controllers/seller/seller-service-area.controller';
 
 // Cross-module imports
 import { CartModule } from '../cart/module';
+// Phase 51 (2026-05-21) — pulls StockMovementLedgerService into the
+// catalog module so seller-driven manual stock updates land in the
+// audit ledger (pre-Phase-51 they bypassed the ledger entirely).
+import { InventoryModule } from '../inventory/module';
+// Phase 57 (2026-05-22) — pulls AuditPublicFacade so admin
+// mapping-approval transitions land in the tamper-evident audit
+// chain (pre-Phase-57 only logger.log was written, leaving no
+// queryable forensic trail of who approved what when).
+import { AuditModule } from '../audit/module';
 
 @Module({
-  imports: [CartModule],
+  imports: [forwardRef(() => CartModule), InventoryModule, AuditModule],
   controllers: [
     CatalogReferenceController,
     StorefrontProductsController,
@@ -119,6 +137,7 @@ import { CartModule } from '../cart/module';
     SellerServiceAreaController,
     AdminProductPricingTiersController,
     StorefrontProductPricingTiersController,
+    SellerProductPricingTiersController,
   ],
   providers: [
     // ── Repository bindings ─────────────────────────────────────────────
@@ -146,10 +165,13 @@ import { CartModule } from '../cart/module';
     // 165K-row post_offices reference dataset.
     PostOfficeCacheService,
     SellerAllocationService,
-    DuplicateDetectionService,
     CatalogCacheService,
     StockSyncService,
     ProductPricingTierService,
+    PricingResolutionService,
+    ProductTaxAttestationService,
+    MetafieldValidationService,
+    StorefrontFilterValidatorService,
 
     // ── Guards & adapters ───────────────────────────────────────────────
     SellerAuthGuard,
@@ -160,6 +182,13 @@ import { CartModule } from '../cart/module';
     // been soft-deleted beyond the retention window.
     CloudinaryOrphanSweepCron,
   ],
-  exports: [CatalogPublicFacade, STOREFRONT_REPOSITORY],
+  // Phase 59 (2026-05-22) — CatalogCacheService exported so the
+  // admin-control-tower bulk suspend/activate path can invalidate
+  // the storefront product-list cache without going through an
+  // event subscriber indirection (audit Gap #11).
+  // STOREFRONT_REPOSITORY exported so checkout's CustomerAddressService
+  // can route pincode lookups through the storefront repo (India Post
+  // fallback + auto-seed).
+  exports: [CatalogPublicFacade, STOREFRONT_REPOSITORY, CatalogCacheService],
 })
 export class CatalogModule {}

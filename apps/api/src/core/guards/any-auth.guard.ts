@@ -2,6 +2,7 @@ import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
+import { readAccessCookie } from '../auth/auth-cookie.helper';
 import { UnauthorizedAppException } from '../exceptions';
 
 export type ActorType = 'CUSTOMER' | 'SELLER' | 'FRANCHISE' | 'ADMIN' | 'AFFILIATE';
@@ -31,26 +32,52 @@ export class AnyAuthGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest();
-    const authHeader = request.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // Follow-up #H40 — accept token from Bearer OR any of the five
+    // persona httpOnly cookies. When a Bearer header is present it
+    // wins (one persona); otherwise we try each cookie in order so
+    // a browser logged in as multiple personas resolves the request
+    // to whichever persona's cookie verifies first.
+    const authHeader = request.headers.authorization;
+    const bearer =
+      authHeader && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7)
+        : undefined;
+
+    type AttemptKey = { type: ActorType; secret: string; token: string };
+    const personaSecrets: Array<{
+      type: ActorType;
+      persona: Parameters<typeof readAccessCookie>[1];
+      secret: string;
+    }> = [
+      { type: 'CUSTOMER',  persona: 'customer',  secret: this.envService.getString('JWT_CUSTOMER_SECRET') },
+      { type: 'SELLER',    persona: 'seller',    secret: this.envService.getString('JWT_SELLER_SECRET') },
+      { type: 'FRANCHISE', persona: 'franchise', secret: this.envService.getString('JWT_FRANCHISE_SECRET') },
+      { type: 'ADMIN',     persona: 'admin',     secret: this.envService.getString('JWT_ADMIN_SECRET') },
+      { type: 'AFFILIATE', persona: 'affiliate', secret: this.envService.getString('JWT_AFFILIATE_SECRET') },
+    ];
+
+    const attempts: AttemptKey[] = [];
+    if (bearer) {
+      // Bearer present: try it against every persona secret.
+      for (const p of personaSecrets) {
+        attempts.push({ type: p.type, secret: p.secret, token: bearer });
+      }
+    } else {
+      // No Bearer: try the persona-scoped cookie for each persona.
+      for (const p of personaSecrets) {
+        const cookieToken = readAccessCookie(request, p.persona);
+        if (cookieToken) {
+          attempts.push({ type: p.type, secret: p.secret, token: cookieToken });
+        }
+      }
+    }
+
+    if (attempts.length === 0) {
       throw new UnauthorizedAppException('Authentication required');
     }
 
-    const token = authHeader.slice(7);
-
-    // Order matters only as a microopt — most traffic is customer.
-    // We try every secret because there's no in-band hint of which
-    // persona issued the token.
-    const attempts: Array<{ type: ActorType; secret: string }> = [
-      { type: 'CUSTOMER',  secret: this.envService.getString('JWT_CUSTOMER_SECRET') },
-      { type: 'SELLER',    secret: this.envService.getString('JWT_SELLER_SECRET') },
-      { type: 'FRANCHISE', secret: this.envService.getString('JWT_FRANCHISE_SECRET') },
-      { type: 'ADMIN',     secret: this.envService.getString('JWT_ADMIN_SECRET') },
-      { type: 'AFFILIATE', secret: this.envService.getString('JWT_AFFILIATE_SECRET') },
-    ];
-
-    for (const { type, secret } of attempts) {
+    for (const { type, secret, token } of attempts) {
       try {
         const payload = jwt.verify(token, secret, JWT_VERIFY_OPTIONS) as any;
         if (payload?.sub) {

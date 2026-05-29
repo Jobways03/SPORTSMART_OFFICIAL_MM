@@ -41,7 +41,12 @@ export type StockMovementKind =
   | 'RESTOCKED'
   | 'WRITE_OFF'
   | 'MANUAL_ADJUST'
-  | 'INITIAL';
+  | 'INITIAL'
+  // Phase 53 (2026-05-21) — extended to cover franchise damage/loss
+  // patterns + audit-driven corrections.
+  | 'DAMAGE'
+  | 'LOSS'
+  | 'AUDIT_CORRECTION';
 
 export interface StockMovementInput {
   /** SellerProductMapping id or OwnBrandStock id depending on `resource`. */
@@ -120,7 +125,12 @@ export class StockMovementLedgerService {
             referenceType: input.referenceType ?? null,
             referenceId: input.referenceId ?? null,
             actorId: input.actorId ?? null,
-            actorRole: input.actorRole ?? 'SYSTEM',
+            // Phase 53 (2026-05-21) — default flipped from 'SYSTEM'
+            // to 'UNKNOWN' so a future code path that forgets to
+            // pass actorRole is immediately visible in forensic
+            // queries (audit Gap #15). 'SYSTEM' should be explicit
+            // for cron-driven writes.
+            actorRole: input.actorRole ?? 'UNKNOWN',
           },
         });
       } catch (err) {
@@ -137,7 +147,7 @@ export class StockMovementLedgerService {
     try {
       await this.audit.writeAuditLog({
         actorId: input.actorId,
-        actorRole: input.actorRole ?? 'SYSTEM',
+        actorRole: input.actorRole ?? 'UNKNOWN',
         action: `STOCK_${input.kind}`,
         module: 'inventory',
         resource: input.resource,

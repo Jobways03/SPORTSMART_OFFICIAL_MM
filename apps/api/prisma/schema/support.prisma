@@ -74,6 +74,10 @@ model Ticket {
   subject      String
   status       TicketStatus   @default(OPEN)
   priority     TicketPriority @default(NORMAL)
+  // priorityUpdatedBy / At capture who last changed the priority and when; the
+  // full from→to chain lives in audit_logs (action=ticket.priority_changed).
+  priorityUpdatedBy String?   @map("priority_updated_by")
+  priorityUpdatedAt DateTime? @map("priority_updated_at")
 
   // ── Polymorphic creator ─────────────────────────────────────────
   creatorType  TicketActorType @map("creator_type")
@@ -83,8 +87,12 @@ model Ticket {
   creatorEmail String          @map("creator_email")
 
   // ── Assignment (admin owner of the ticket) ──────────────────────
-  // Null = unassigned, lives in the queue.
-  assignedAdminId String? @map("assigned_admin_id")
+  // Null = unassigned, lives in the queue. assignedAt / assignedByAdminId
+  // capture WHEN and BY WHOM the current assignment was made (both null when
+  // unassigned); the full who→whom chain lives in audit_logs (action=ticket.assigned).
+  assignedAdminId   String?   @map("assigned_admin_id")
+  assignedAt        DateTime? @map("assigned_at")
+  assignedByAdminId String?   @map("assigned_by_admin_id")
 
   // ── Categorization ──────────────────────────────────────────────
   categoryId String? @map("category_id")
@@ -100,12 +108,12 @@ model Ticket {
   // the messages table per row.
   lastMessageAt DateTime @default(now()) @map("last_message_at")
 
-  resolvedAt      DateTime? @map("resolved_at")
-  closedAt        DateTime? @map("closed_at")
-  closedByAdminId String?   @map("closed_by_admin_id")
+  resolvedAt        DateTime? @map("resolved_at")
+  closedAt          DateTime? @map("closed_at")
+  closedByAdminId   String?   @map("closed_by_admin_id")
   // Free-text summary captured when admin closes the ticket. Surfaced
   // back to the customer in the closed-state UI and stored for audit.
-  resolutionSummary String? @map("resolution_summary")
+  resolutionSummary String?   @map("resolution_summary")
 
   // ── SLA targets (computed at create / on priority change) ───────
   // First-response target — when the admin must reply for SLA to be
@@ -136,6 +144,8 @@ model Ticket {
   @@index([creatorType, creatorId, lastMessageAt(sort: Desc)])
   // Admin queue: sort by activity, optionally filtered by status
   @@index([status, lastMessageAt(sort: Desc)])
+  // Admin queue priority-first sort (URGENT → LOW, then recency).
+  @@index([priority, lastMessageAt(sort: Desc)])
   @@index([assignedAdminId, status])
   // Cross-link from order/return detail pages
   @@index([relatedOrderId])

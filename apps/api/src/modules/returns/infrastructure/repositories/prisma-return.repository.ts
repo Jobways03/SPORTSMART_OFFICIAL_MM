@@ -314,7 +314,63 @@ export class PrismaReturnRepository implements ReturnRepository {
   }
 
   async create(data: CreateReturnData): Promise<any> {
+    // Phase 93 (2026-05-23) — Customer Return Request hardening.
+    //   Gap #1/#2 — evidence + seller-response state inside the tx.
+    //   Gap #6    — SELECT FOR UPDATE on OrderItem rows + duplicate-
+    //               active re-check under the lock.
+    //   Gap #8    — node snapshot persisted at creation time.
+    //   Gap #21   — items aggregated by orderItemId (callers may also
+    //               de-dup but repo enforces).
     return this.prisma.$transaction(async (tx) => {
+      const aggregated = new Map<
+        string,
+        { quantity: number; reasonCategory: string; reasonDetail?: string }
+      >();
+      for (const it of data.items) {
+        const existing = aggregated.get(it.orderItemId);
+        if (existing) {
+          existing.quantity += it.quantity;
+        } else {
+          aggregated.set(it.orderItemId, {
+            quantity: it.quantity,
+            reasonCategory: it.reasonCategory,
+            reasonDetail: it.reasonDetail,
+          });
+        }
+      }
+      const orderItemIds = Array.from(aggregated.keys());
+
+      // Gap #6 — row lock + duplicate-active recheck under the lock.
+      if (orderItemIds.length > 0) {
+        await tx.$queryRawUnsafe(
+          `SELECT id FROM order_items WHERE id IN (${orderItemIds
+            .map((_, idx) => `$${idx + 1}`)
+            .join(',')}) FOR UPDATE`,
+          ...orderItemIds,
+        );
+        const activeDup = await tx.returnItem.findFirst({
+          where: {
+            orderItemId: { in: orderItemIds },
+            return: { status: { notIn: ['REJECTED', 'CANCELLED'] } },
+          },
+          select: {
+            id: true,
+            orderItemId: true,
+            return: { select: { returnNumber: true } },
+          },
+        });
+        if (activeDup) {
+          throw Object.assign(
+            new Error(
+              `An active return (${
+                activeDup.return?.returnNumber ?? 'unknown'
+              }) already exists for this item`,
+            ),
+            { code: 'DUPLICATE_ACTIVE_RETURN' },
+          );
+        }
+      }
+
       const created = await tx.return.create({
         data: {
           returnNumber: data.returnNumber,
@@ -325,18 +381,26 @@ export class PrismaReturnRepository implements ReturnRepository {
           initiatedBy: data.initiatedBy,
           initiatorId: data.initiatorId,
           customerNotes: data.customerNotes,
+          // Gap #2 seller-response state.
+          sellerResponseStatus: (data.sellerResponseStatus ?? null) as any,
+          sellerNotifiedAt: data.sellerNotifiedAt ?? null,
+          sellerResponseDueAt: data.sellerResponseDueAt ?? null,
+          // Gap #8 node snapshot.
+          sellerIdSnapshot: data.sellerIdSnapshot ?? null,
+          franchiseIdSnapshot: data.franchiseIdSnapshot ?? null,
+          nodeTypeSnapshot: data.nodeTypeSnapshot ?? null,
           items: {
-            create: data.items.map((item) => ({
-              orderItemId: item.orderItemId,
-              quantity: item.quantity,
-              reasonCategory: item.reasonCategory as any,
-              reasonDetail: item.reasonDetail,
-            })),
+            create: Array.from(aggregated.entries()).map(
+              ([orderItemId, it]) => ({
+                orderItemId,
+                quantity: it.quantity,
+                reasonCategory: it.reasonCategory as any,
+                reasonDetail: it.reasonDetail,
+              }),
+            ),
           },
         },
-        include: {
-          items: true,
-        },
+        include: { items: true },
       });
 
       await tx.returnStatusHistory.create({
@@ -346,9 +410,48 @@ export class PrismaReturnRepository implements ReturnRepository {
           toStatus: 'REQUESTED',
           changedBy: data.initiatedBy,
           changedById: data.initiatorId,
-          notes: 'Return request submitted',
+          notes:
+            data.initiatedBy === 'CUSTOMER'
+              ? 'Customer acknowledged forfeit policy at submission'
+              : 'Return request submitted',
         },
       });
+
+      // Gap #1 — evidence rows inside the tx.
+      if (data.evidenceFileUrls && data.evidenceFileUrls.length > 0) {
+        await tx.returnEvidence.createMany({
+          data: data.evidenceFileUrls.map((url) => ({
+            returnId: created.id,
+            uploadedBy: data.initiatedBy,
+            uploaderId: data.initiatorId,
+            fileType: 'IMAGE',
+            fileUrl: url,
+            description: 'Customer-submitted issue evidence',
+          })),
+        });
+      }
+
+      // Phase 95 (2026-05-23) — Phase 93 deferred #26 closure.
+      // Commission freeze inside the same tx. Pre-Phase-95 this ran
+      // as a sequential post-create updateMany — a crash between the
+      // create and the freeze let the settlement cron pay out a
+      // commission that should have been held pending the return
+      // outcome. Folding into the tx makes the two atomic.
+      if (data.commissionFreezeReason) {
+        const freeze = await tx.commissionRecord.updateMany({
+          where: {
+            subOrderId: data.subOrderId,
+            status: 'PENDING' as any,
+          },
+          data: {
+            status: 'ON_HOLD' as any,
+            adjustmentReason: data.commissionFreezeReason,
+          },
+        });
+        // Stash count on the returned object so the service can audit
+        // it without re-querying.
+        (created as any).__commissionFrozenCount = freeze.count;
+      }
 
       return created;
     });
@@ -405,6 +508,41 @@ export class PrismaReturnRepository implements ReturnRepository {
   // ── Sequence ────────────────────────────────────────────────────────────
 
   async generateNextReturnNumber(): Promise<string> {
+    // Phase 95 (2026-05-23) — Phase 93 deferred #29 closure.
+    //
+    // Pre-Phase-95 this wrapped a Serializable-isolation tx around an
+    // UPSERT on a singleton ReturnSequence row. Every concurrent
+    // creator serialized on that one row, with ~50ms retry cost on
+    // contention. Under burst load (mass-cancellation wave) the
+    // serialization point became the bottleneck for return creation.
+    //
+    // Postgres SEQUENCE.nextval is a single atomic increment with no
+    // row lock — orders of magnitude faster than the Serializable
+    // upsert. Gaps from rolled-back txs are acceptable here (return
+    // numbers only need uniqueness + monotonic, not gap-free).
+    //
+    // Fallback path uses the legacy table when nextval raises (e.g.,
+    // local dev DBs that haven't applied the migration yet). The
+    // fallback is best-effort and intentionally racy at low scale.
+    const year = new Date().getFullYear();
+    try {
+      const rows = await this.prisma.$queryRawUnsafe<
+        Array<{ nextval: bigint | number }>
+      >("SELECT nextval('return_number_seq') AS nextval");
+      const n = Number(rows[0]?.nextval ?? 0);
+      if (n > 0) {
+        return `RET-${year}-${String(n).padStart(6, '0')}`;
+      }
+    } catch (err) {
+      // Fall through to the legacy path. We log so the migration
+      // skew is observable in production.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[generateNextReturnNumber] sequence unavailable, falling back to ReturnSequence: ${
+          (err as Error)?.message ?? 'unknown error'
+        }`,
+      );
+    }
     return this.prisma.$transaction(
       async (tx) => {
         const seq = await tx.returnSequence.upsert({
@@ -412,7 +550,6 @@ export class PrismaReturnRepository implements ReturnRepository {
           create: { id: 1, lastNumber: 1 },
           update: { lastNumber: { increment: 1 } },
         });
-        const year = new Date().getFullYear();
         const padded = String(seq.lastNumber).padStart(6, '0');
         return `RET-${year}-${padded}`;
       },
@@ -452,23 +589,35 @@ export class PrismaReturnRepository implements ReturnRepository {
 
   async addEvidence(data: {
     returnId: string;
+    returnItemId?: string;
+    evidenceType?: string;
     uploadedBy: string;
     uploaderId?: string;
     fileType: string;
     fileUrl: string;
     publicId?: string;
     description?: string;
+    width?: number;
+    height?: number;
+    bytes?: number;
+    contentHash?: string;
   }): Promise<any> {
     return this.prisma.returnEvidence.create({
       data: {
         returnId: data.returnId,
+        returnItemId: data.returnItemId ?? null,
+        evidenceType: data.evidenceType ?? null,
         uploadedBy: data.uploadedBy,
         uploaderId: data.uploaderId,
         fileType: data.fileType,
         fileUrl: data.fileUrl,
         publicId: data.publicId,
         description: data.description,
-      },
+        width: data.width ?? null,
+        height: data.height ?? null,
+        bytes: data.bytes ?? null,
+        contentHash: data.contentHash ?? null,
+      } as any,
     });
   }
 
@@ -517,15 +666,9 @@ export class PrismaReturnRepository implements ReturnRepository {
     });
   }
 
-  async incrementRefundAttempts(returnId: string): Promise<any> {
-    return this.prisma.return.update({
-      where: { id: returnId },
-      data: this.moneyDualWrite.applyPaise('return', {
-        refundAttempts: { increment: 1 },
-        refundLastAttemptAt: new Date(),
-      }),
-    });
-  }
+  // Phase 101 (2026-05-23) — Refund Retry audit Gap #24 closure.
+  // The `incrementRefundAttempts` method existed but had zero callers
+  // (only recordRefundAttempt is used). Removed.
 
   // ── Analytics (Phase R6) ────────────────────────────────────────────────
 

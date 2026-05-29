@@ -1,0 +1,121 @@
+// ============================================
+// Phase 27 — Section 194-O Income-Tax TDS (CBDT) ledger.
+// ============================================
+//
+// Section 194-O of the Income Tax Act, 1961 (introduced via Finance
+// Act 2020, in force from 2020-10-01) requires an Electronic Commerce
+// Operator (Sportsmart) to deduct income-tax at source on the gross
+// amount of sale facilitated for an e-commerce participant (the
+// seller). The TDS is on the GROSS sale value INCLUDING GST — this
+// is the distinction from Section 52 GST TCS, which is on the NET
+// taxable value EXCLUDING GST.
+//
+// Rate:
+//   1.0% (100 bps) — seller has furnished a verified PAN
+//   5.0% (500 bps) — seller has NOT furnished a valid PAN
+//                    (Section 206AA penalty rate)
+//
+// Threshold exemption (Section 194-O sub-section 2):
+//   Individual / HUF sellers whose aggregate gross sale in an FY
+//   does not exceed ₹5,00,000 AND who have furnished PAN/Aadhaar
+//   are EXEMPT from TDS. We model this via the seller-level
+//   `is194OExempt` admin attestation; we do NOT compute the
+//   aggregate dynamically (that would couple to ledger replay).
+//   Admins flip the flag once they've reviewed the seller's annual
+//   sale projection.
+//
+// Filing cadence:
+//   Quarterly — Form 26Q (TDS return) by the seventh of the month
+//   following the quarter end. Form 16A (TDS certificate) issued
+//   to the deductee within 15 days of the Form 26Q filing.
+//
+// One row per (sellerId, filingPeriod). filingPeriod here is a
+// quarter string (e.g. "2026-Q3" for Oct-Dec 2026), distinct from
+// the TCS monthly format. Aggregation across the constituent
+// SellerSettlements happens dynamically at compute time; this
+// table is the snapshot + lifecycle record.
+//
+// See:
+//   - docs/tax/TDS_194O_POLICY.md (forthcoming)
+//   - CBDT Notification 4/2021 (procedural framework)
+
+enum Tds194OStatus {
+  // Computed at settlement-run time; the corresponding settlement
+  // will deduct the TDS amount from the seller's payout.
+  COMPUTED
+  // Settlement has paid out to the seller; the TDS amount is
+  // withheld by the marketplace pending challan deposit. Parallel to
+  // TCS COLLECTED.
+  WITHHELD
+  // Challan deposited with the Income Tax Department (admin
+  // marked-deposited with the challan reference).
+  DEPOSITED
+  // Form 16A issued to the seller; closes the row for the period.
+  CERTIFICATE_ISSUED
+  // Reversed via correction; `correctionOfId` points to the
+  // replacement row.
+  REVERSED
+}
+
+model Section194OTdsLedger {
+  id String @id @default(uuid())
+
+  // Business key. We never create rows for OWN_BRAND / SPORTSMART
+  // suppliers (the platform doesn't deduct TDS on itself).
+  sellerId     String @map("seller_id")
+  // Quarter string "YYYY-Qn": "2026-Q1" = Apr-Jun, Q2 = Jul-Sep,
+  // Q3 = Oct-Dec, Q4 = Jan-Mar (Indian FY).
+  filingPeriod String @map("filing_period")
+
+  // Frozen snapshot at compute time so a later PAN status change
+  // doesn't rewrite filed history.
+  sellerPanNumber String? @map("seller_pan_number")
+  sellerPanLast4  String? @map("seller_pan_last_4")
+  sellerLegalName String? @map("seller_legal_name")
+  hadVerifiedPan  Boolean @default(false) @map("had_verified_pan")
+
+  // Gross sale aggregates (paise) at computation time. Distinct
+  // from the TCS net-taxable base: this is GROSS including GST.
+  grossSaleInPaise                BigInt @default(0) @map("gross_sale_in_paise")
+  // Refunds / cancellations that reduce the gross within the same
+  // quarter. Carried-forward when negative (similar to TCS).
+  refundReversalInPaise           BigInt @default(0) @map("refund_reversal_in_paise")
+  netSaleInPaise                  BigInt @default(0) @map("net_sale_in_paise")
+  adjustmentCarriedForwardInPaise BigInt @default(0) @map("adjustment_carried_forward_in_paise")
+
+  // Rate snapshot (100 = 1%, 500 = 5%).
+  tdsRateBps Int    @default(100) @map("tds_rate_bps")
+  tdsInPaise BigInt @default(0) @map("tds_in_paise")
+
+  status Tds194OStatus @default(COMPUTED)
+
+  // Lifecycle stamps + audit trail.
+  computedAt          DateTime  @default(now()) @map("computed_at")
+  computedBy          String?   @map("computed_by")
+  computedReason      String?   @map("computed_reason")
+  withheldAt          DateTime? @map("withheld_at")
+  settlementId        String?   @map("settlement_id")
+  depositedAt         DateTime? @map("deposited_at")
+  depositedBy         String?   @map("deposited_by")
+  challanReference    String?   @map("challan_reference")
+  certificateIssuedAt DateTime? @map("certificate_issued_at")
+  certificateIssuedBy String?   @map("certificate_issued_by")
+  certificateNumber   String?   @map("certificate_number")
+
+  // Correction lineage. A REVERSED row is paired with a corrected
+  // replacement whose `correctionOfId` points back to this row.
+  correctionOfId String? @map("correction_of_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  // Back-link to the settlement(s) that withheld this TDS row.
+  // Usually 1:1; N permitted for correction-flow flexibility.
+  sellerSettlements SellerSettlement[]
+
+  @@index([sellerId, filingPeriod])
+  @@index([filingPeriod])
+  @@index([status])
+  @@map("section_194o_tds_ledger")
+}

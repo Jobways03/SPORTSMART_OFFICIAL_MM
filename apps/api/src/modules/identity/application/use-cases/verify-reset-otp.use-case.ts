@@ -35,6 +35,16 @@ export class VerifyResetOtpUseCase {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
+    // Phase 26 (2026-05-20) — re-check status at verify time. The
+    // forgot-password use case rejects non-ACTIVE accounts up front,
+    // but admin may have suspended the account between the OTP send
+    // and the verify. Without this check, a suspended user completes
+    // the verify and burns a reset-token slot that the subsequent
+    // login attempt would reject anyway. Matches admin reset behaviour.
+    if (user.status !== 'ACTIVE') {
+      throw new UnauthorizedAppException('Invalid or expired OTP');
+    }
+
     // Find the latest unexpired, unused OTP for this user
     const otpRecord = await this.userRepo.findActiveOtp(user.id);
 
@@ -42,15 +52,23 @@ export class VerifyResetOtpUseCase {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
-    // Check max attempts
-    if (otpRecord.attempts >= otpRecord.maxAttempts) {
-      // Expire this OTP
+    // Phase 1 / H5 — atomic check-and-increment. The previous
+    // read-then-increment pattern let two concurrent verifies both
+    // observe `attempts = 0`, both pass the `< maxAttempts` check,
+    // both run their increments → attempts undercounted relative to
+    // requests, and a brute-force attacker could trade rate-limit
+    // budget for extra guesses. The CAS variant atomically refuses
+    // the increment when the cap is already reached.
+    const inc = await this.userRepo.incrementOtpAttemptsCas(
+      otpRecord.id,
+      otpRecord.maxAttempts,
+    );
+    if (!inc.ok) {
       await this.userRepo.expireOtp(otpRecord.id);
-      throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
+      throw new UnauthorizedAppException(
+        'Too many failed attempts. Please request a new OTP.',
+      );
     }
-
-    // Increment attempts
-    await this.userRepo.incrementOtpAttempts(otpRecord.id);
 
     // Compare OTP hash in constant time. Both values are 64-char hex
     // strings from sha256 so lengths always match, but the explicit
@@ -61,7 +79,7 @@ export class VerifyResetOtpUseCase {
     const isMatch =
       actual.length === expected.length && timingSafeEqual(actual, expected);
     if (!isMatch) {
-      const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
+      const remainingAttempts = otpRecord.maxAttempts - inc.attempts;
       if (remainingAttempts <= 0) {
         // Expire after last failed attempt
         await this.userRepo.expireOtp(otpRecord.id);

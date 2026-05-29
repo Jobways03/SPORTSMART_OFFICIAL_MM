@@ -220,6 +220,18 @@ describe('AdminMfaService.stepUp (PR 10.10)', () => {
     async markSessionStepUpVerified(sessionId: string) {
       this.markedSessions.push(sessionId);
     }
+    // Phase 26 (2026-05-20) — service now calls advanceMfaLastUsedStepCas
+    // on the TOTP path before stamping step-up. Mirror prod semantics:
+    // succeed when null or strictly less than `step`, else fail.
+    async advanceMfaLastUsedStepCas(id: string, step: number): Promise<boolean> {
+      const row = this.rows.get(id);
+      if (!row) return false;
+      if (row.mfaLastUsedStep != null && row.mfaLastUsedStep >= step) {
+        return false;
+      }
+      row.mfaLastUsedStep = step;
+      return true;
+    }
   }
 
   function computeCurrentCode(secret: string): string {
@@ -241,7 +253,20 @@ describe('AdminMfaService.stepUp (PR 10.10)', () => {
   }
 
   function buildService(repo: FakeRepo, backupCodes = makeBackupCodesStub()) {
-    return new AdminMfaService(repo as any, cipher, makeEnv(), backupCodes);
+    // Phase 25 (2026-05-20) — AdminMfaService gained AuditPublicFacade
+    // + EventEmitter2 deps for the unified audit + side-channel email
+    // hooks. The step-up test matrix doesn't observe either, so stub
+    // them to no-ops.
+    const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+    const events = { emit: jest.fn() } as any;
+    return new AdminMfaService(
+      repo as any,
+      cipher,
+      makeEnv(),
+      backupCodes,
+      audit,
+      events,
+    );
   }
 
   it('rejects an admin not found', async () => {
@@ -280,10 +305,10 @@ describe('AdminMfaService.stepUp (PR 10.10)', () => {
     await svc.stepUp('admin-1', 'sess-1', code);
 
     expect(repo.markedSessions).toEqual(['sess-1']);
-    // Anti-replay baseline advanced to the verified step.
-    expect(
-      repo.adminUpdates.find((u) => u.data.mfaLastUsedStep !== undefined),
-    ).toBeTruthy();
+    // Phase 26 (2026-05-20) — anti-replay baseline now advances via
+    // advanceMfaLastUsedStepCas (atomic) rather than a follow-up
+    // updateAdmin call. Assert the column landed on the row directly.
+    expect(repo.rows.get('admin-1')!.mfaLastUsedStep).toBeGreaterThan(0);
   });
 
   it('rejects a replayed TOTP code (already-used step)', async () => {

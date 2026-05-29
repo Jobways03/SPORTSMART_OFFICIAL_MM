@@ -1,34 +1,56 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch } from '../../lib/api';
+import { CaptchaWidget } from '../../components/CaptchaWidget';
+
+const CAPTCHA_REQUIRED =
+  (process.env.NEXT_PUBLIC_CAPTCHA_PROVIDER ?? 'disabled').toLowerCase() !==
+  'disabled';
 
 /**
  * Step 1 of the affiliate password reset flow. Submits the email
  * address and (silently) triggers a 6-digit OTP email. The endpoint
  * always returns 200 to avoid leaking which emails have accounts.
+ *
+ * Phase 22 (2026-05-20) — CAPTCHA gate added so a scripted attacker
+ * can't enumerate registered emails by burning the cooldown.
  */
 export default function ForgotPasswordPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+  const onCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    if (CAPTCHA_REQUIRED && !captchaToken) {
+      setError('Please complete the captcha challenge.');
+      return;
+    }
     setLoading(true);
     try {
       await apiFetch('/affiliate/auth/forgot-password', {
         method: 'POST',
-        body: JSON.stringify({ email: email.trim().toLowerCase() }),
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          captchaToken: captchaToken || undefined,
+        }),
       });
       // Stash the email so /verify-otp + /reset-password know who's resetting.
       sessionStorage.setItem('affiliateResetEmail', email.trim().toLowerCase());
       router.push('/verify-otp');
     } catch (e: any) {
+      setCaptchaResetKey((k) => k + 1);
+      setCaptchaToken('');
       setError(e?.message ?? 'Could not send the OTP. Please try again.');
     } finally {
       setLoading(false);
@@ -61,6 +83,12 @@ export default function ForgotPasswordPage() {
           disabled={loading}
           style={inputStyle}
         />
+
+        {CAPTCHA_REQUIRED && (
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+            <CaptchaWidget onToken={onCaptchaToken} resetKey={captchaResetKey} />
+          </div>
+        )}
 
         <button
           type="submit"

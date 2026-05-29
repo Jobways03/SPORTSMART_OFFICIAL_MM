@@ -39,6 +39,7 @@ export class AdminQueuesController {
   }
 
   @Get(':resource')
+  @Permissions('audit.read')
   async list(
     @Param('resource') resource: string,
     @Query('page') page?: string,

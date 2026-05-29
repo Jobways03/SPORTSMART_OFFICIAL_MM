@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useModal } from '@sportsmart/ui';
 import { RequirePermission, usePermissions } from '@/lib/permissions';
 import {
@@ -32,6 +32,7 @@ function UsersInner() {
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [resettingPwd, setResettingPwd] = useState<AdminUser | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'ALL' | AdminAccountStatus>('ALL');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -92,7 +93,16 @@ function UsersInner() {
     }
   };
 
-  const activeCount = users.filter((u) => u.status === 'ACTIVE').length;
+  const counts = useMemo(() => {
+    const acc = { ALL: users.length, ACTIVE: 0, SUSPENDED: 0, INACTIVE: 0 };
+    for (const u of users) acc[u.status]++;
+    return acc;
+  }, [users]);
+
+  const filteredUsers = useMemo(() => {
+    if (statusFilter === 'ALL') return users;
+    return users.filter((u) => u.status === statusFilter);
+  }, [users, statusFilter]);
 
   return (
     <div style={{ padding: '28px 28px' }}>
@@ -110,6 +120,27 @@ function UsersInner() {
       </div>
 
       <div style={toolbar}>
+        <div style={tabsBar} role="tablist" aria-label="Filter by status">
+          {(
+            [
+              { key: 'ALL', label: `All ${counts.ALL}` },
+              { key: 'ACTIVE', label: `Active ${counts.ACTIVE}` },
+              { key: 'SUSPENDED', label: `Suspended ${counts.SUSPENDED}` },
+              { key: 'INACTIVE', label: `Inactive ${counts.INACTIVE}` },
+            ] as { key: 'ALL' | AdminAccountStatus; label: string }[]
+          ).map((t) => (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={statusFilter === t.key}
+              onClick={() => setStatusFilter(t.key)}
+              style={{ ...tabBtn, ...(statusFilter === t.key ? tabBtnActive : {}) }}
+              type="button"
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <div style={searchWrap}>
           <span style={searchIconSlot}>
             <SearchIcon />
@@ -120,9 +151,6 @@ function UsersInner() {
             onChange={(e) => setSearch(e.target.value)}
             style={searchInput}
           />
-        </div>
-        <div style={countPill}>
-          <strong>{activeCount}</strong> active · {users.length} total
         </div>
       </div>
 
@@ -136,13 +164,13 @@ function UsersInner() {
         <div style={tableWrap}>
           <table style={tableStyle}>
             <colgroup>
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '20%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '17%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '12%' }} />
               <col style={{ width: '15%' }} />
+              <col style={{ width: '24%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '19%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '56px' }} />
             </colgroup>
             <thead>
               <tr style={trHead}>
@@ -156,7 +184,7 @@ function UsersInner() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {filteredUsers.map((u) => (
                 <tr key={u.id} style={tr}>
                   <td style={{ ...td, fontWeight: 600 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -185,7 +213,13 @@ function UsersInner() {
                     <StatusBadge status={u.status} />
                   </td>
                   <td style={{ ...td, color: '#64748b', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
-                    {u.lastLoginAt ? formatLastLogin(u.lastLoginAt) : <span style={{ color: '#94a3b8' }}>Never</span>}
+                    {u.lastLoginAt ? (
+                      <span title={formatLastLoginAbsolute(u.lastLoginAt)}>
+                        {formatLastLogin(u.lastLoginAt)}
+                      </span>
+                    ) : (
+                      <span style={{ color: '#94a3b8' }}>Never</span>
+                    )}
                   </td>
                   <td style={{ ...td, textAlign: 'right', overflow: 'visible' }}>
                     <RowActions
@@ -199,10 +233,12 @@ function UsersInner() {
                   </td>
                 </tr>
               ))}
-              {users.length === 0 && (
+              {filteredUsers.length === 0 && (
                 <tr>
                   <td colSpan={7} style={{ ...td, textAlign: 'center', color: '#94a3b8', padding: 30 }}>
-                    No admin users found.
+                    {users.length === 0
+                      ? 'No admin users found.'
+                      : `No ${statusFilter === 'ALL' ? '' : statusFilter.toLowerCase() + ' '}admins match your filters.`}
                   </td>
                 </tr>
               )}
@@ -344,16 +380,13 @@ function RowActions({
   return (
     <div
       ref={wrapRef}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, position: 'relative' }}
+      style={{ display: 'inline-flex', alignItems: 'center', position: 'relative' }}
     >
-      <button type="button" onClick={onEdit} style={btnEdit}>
-        Edit
-      </button>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         style={kebabBtn}
-        aria-label="More actions"
+        aria-label="Actions"
         aria-haspopup="menu"
         aria-expanded={open}
       >
@@ -361,6 +394,14 @@ function RowActions({
       </button>
       {open && (
         <div role="menu" style={menuPanel}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onEdit(); }}
+            style={menuItem}
+          >
+            <PencilIcon /> Edit admin
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -375,6 +416,7 @@ function RowActions({
             onClick={() => { setOpen(false); onToggleStatus(); }}
             disabled={isSelf}
             style={{ ...menuItem, opacity: isSelf ? 0.45 : 1, cursor: isSelf ? 'not-allowed' : 'pointer' }}
+            title={isSelf ? 'You can\'t change your own status here' : undefined}
           >
             {user.status === 'ACTIVE' ? <PauseIcon /> : <PlayIcon />}
             {user.status === 'ACTIVE' ? 'Suspend' : 'Activate'}
@@ -386,12 +428,22 @@ function RowActions({
             onClick={() => { setOpen(false); onDeactivate(); }}
             disabled={isSelf}
             style={{ ...menuItem, color: '#B91C1C', opacity: isSelf ? 0.45 : 1, cursor: isSelf ? 'not-allowed' : 'pointer' }}
+            title={isSelf ? 'You can\'t deactivate yourself' : undefined}
           >
             <TrashIcon /> Deactivate
           </button>
         </div>
       )}
     </div>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
   );
 }
 
@@ -402,11 +454,26 @@ function formatLastLogin(iso: string): string {
   const mins = Math.floor(diffMs / 60000);
   const hrs = Math.floor(mins / 60);
   const days = Math.floor(hrs / 24);
+  const weeks = Math.floor(days / 7);
+  const months = Math.floor(days / 30);
+  const years = Math.floor(days / 365);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
   if (hrs < 24) return `${hrs}h ago`;
   if (days < 7) return `${days}d ago`;
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  if (weeks < 5) return `${weeks}w ago`;
+  if (months < 12) return `${months}mo ago`;
+  return `${years}y ago`;
+}
+
+function formatLastLoginAbsolute(iso: string): string {
+  return new Date(iso).toLocaleString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function SearchIcon() {
@@ -815,14 +882,46 @@ const pageSubtitle: React.CSSProperties = {
 const toolbar: React.CSSProperties = {
   marginBottom: 14,
   display: 'flex',
+  justifyContent: 'space-between',
   gap: 12,
   alignItems: 'center',
   flexWrap: 'wrap',
 };
+const tabsBar: React.CSSProperties = {
+  display: 'inline-flex',
+  gap: 4,
+  borderBottom: '1px solid #e2e8f0',
+  flex: 1,
+  minWidth: 0,
+};
+const tabBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  height: 38,
+  padding: '0 14px',
+  fontSize: 13,
+  fontWeight: 500,
+  color: '#64748b',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '2px solid transparent',
+  marginBottom: -1,
+  cursor: 'pointer',
+  transition: 'color 0.12s, border-color 0.12s',
+  fontFamily: 'inherit',
+};
+const tabBtnActive: React.CSSProperties = {
+  color: '#0f172a',
+  // Full shorthand to avoid mixing shorthand+longhand (React warns
+  // about borderBottom + borderBottomColor on the same element).
+  borderBottom: '2px solid #0f172a',
+  fontWeight: 600,
+};
 const searchWrap: React.CSSProperties = {
   position: 'relative',
-  flex: '1 1 280px',
-  maxWidth: 360,
+  width: 280,
+  flexShrink: 0,
 };
 const searchIconSlot: React.CSSProperties = {
   position: 'absolute',

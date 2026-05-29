@@ -148,8 +148,11 @@ describe('WalletService.verifyTopup — Phase 0 amount-check', () => {
       expect.objectContaining({
         kind: 'AMOUNT_MISMATCH',
         providerPaymentId: razorpayPaymentId,
+        // Phase 143 — production now emits the gateway amount as a BigInt paise
+        // value (ADR-007 migration); the guard itself is unchanged (it still
+        // rejects the ₹1-for-₹10k attack — this assertion proves it fires).
         expectedInPaise: 1_000_000,
-        actualInPaise: 100,
+        actualInPaise: BigInt(100),
         severity: 95,
       }),
     );

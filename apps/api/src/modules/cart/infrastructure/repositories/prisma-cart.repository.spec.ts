@@ -19,6 +19,14 @@ import { PrismaCartRepository } from './prisma-cart.repository';
  * distinct), so the row lock is what guarantees no-duplicate for
  * base-product line items. For variant-bearing items the row lock
  * also prevents the racey-create P2002 error path.
+ *
+ * Sprint 3 Story 2.3 — snap-back behaviour: every write through this
+ * primitive sets `savedForLater: false`. Re-adding an item that was
+ * parked for later flips it back into the active cart with the new
+ * quantity added, matching typical e-commerce UX. The spec
+ * expectations below assert that flag on both the create + update
+ * paths so a regression that drops the snap-back becomes a hard
+ * test failure.
  */
 
 type TxLike = {
@@ -27,11 +35,13 @@ type TxLike = {
     findFirst: jest.Mock;
     update: jest.Mock;
     create: jest.Mock;
+    count: jest.Mock;
   };
 };
 
 function buildTxMock(opts: {
   existing?: { id: string; quantity: number } | null;
+  cartLineCount?: number;
 } = {}): TxLike {
   return {
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'cart-1' }]),
@@ -39,9 +49,19 @@ function buildTxMock(opts: {
       findFirst: jest.fn().mockResolvedValue(opts.existing ?? null),
       update: jest.fn().mockResolvedValue(undefined),
       create: jest.fn().mockResolvedValue(undefined),
+      // Phase 61 (2026-05-22) — the create branch now counts cart
+      // lines inside the lock to enforce the per-cart line cap
+      // (audit Gap #23). Default 0 keeps existing tests green.
+      count: jest.fn().mockResolvedValue(opts.cartLineCount ?? 0),
     },
   };
 }
+
+const DEFAULT_ARGS = {
+  availableStock: 100,
+  unitPriceInPaiseSnapshot: 99900n,
+  cartLineCap: 50,
+};
 
 function buildPrismaMock(tx: TxLike) {
   return {
@@ -55,7 +75,7 @@ describe('PrismaCartRepository.incrementOrCreateCartItem (PR 1.9)', () => {
     const prisma = buildPrismaMock(tx);
     const repo = new PrismaCartRepository(prisma);
 
-    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 2);
+    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 2, DEFAULT_ARGS);
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
@@ -65,7 +85,7 @@ describe('PrismaCartRepository.incrementOrCreateCartItem (PR 1.9)', () => {
     const prisma = buildPrismaMock(tx);
     const repo = new PrismaCartRepository(prisma);
 
-    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 2);
+    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 2, DEFAULT_ARGS);
 
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
     const [tmpl] = tx.$queryRaw.mock.calls[0];
@@ -81,12 +101,14 @@ describe('PrismaCartRepository.incrementOrCreateCartItem (PR 1.9)', () => {
     const prisma = buildPrismaMock(tx);
     const repo = new PrismaCartRepository(prisma);
 
-    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 3);
+    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 3, DEFAULT_ARGS);
 
     expect(tx.cartItem.update).toHaveBeenCalledTimes(1);
+    // Sprint 3 Story 2.3 — snap-back: re-add flips savedForLater
+    // back to false alongside the quantity increment.
     expect(tx.cartItem.update).toHaveBeenCalledWith({
       where: { id: 'item-1' },
-      data: { quantity: 7 },
+      data: { quantity: 7, savedForLater: false },
     });
     expect(tx.cartItem.create).not.toHaveBeenCalled();
   });
@@ -96,11 +118,22 @@ describe('PrismaCartRepository.incrementOrCreateCartItem (PR 1.9)', () => {
     const prisma = buildPrismaMock(tx);
     const repo = new PrismaCartRepository(prisma);
 
-    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 5);
+    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', 'var-1', 5, DEFAULT_ARGS);
 
     expect(tx.cartItem.create).toHaveBeenCalledTimes(1);
+    // Sprint 3 Story 2.3 — new rows default to active cart, not
+    // saved-for-later.
+    // Phase 61 (2026-05-22) — create branch also writes the
+    // add-time price snapshot.
     expect(tx.cartItem.create).toHaveBeenCalledWith({
-      data: { cartId: 'cart-1', productId: 'prod-1', variantId: 'var-1', quantity: 5 },
+      data: {
+        cartId: 'cart-1',
+        productId: 'prod-1',
+        variantId: 'var-1',
+        quantity: 5,
+        savedForLater: false,
+        unitPriceAtAddInPaise: DEFAULT_ARGS.unitPriceInPaiseSnapshot,
+      },
     });
     expect(tx.cartItem.update).not.toHaveBeenCalled();
   });
@@ -110,13 +143,20 @@ describe('PrismaCartRepository.incrementOrCreateCartItem (PR 1.9)', () => {
     const prisma = buildPrismaMock(tx);
     const repo = new PrismaCartRepository(prisma);
 
-    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', null, 2);
+    await repo.incrementOrCreateCartItem('cart-1', 'prod-1', null, 2, DEFAULT_ARGS);
 
     expect(tx.cartItem.findFirst).toHaveBeenCalledWith({
       where: { cartId: 'cart-1', productId: 'prod-1', variantId: null },
     });
     expect(tx.cartItem.create).toHaveBeenCalledWith({
-      data: { cartId: 'cart-1', productId: 'prod-1', variantId: null, quantity: 2 },
+      data: {
+        cartId: 'cart-1',
+        productId: 'prod-1',
+        variantId: null,
+        quantity: 2,
+        savedForLater: false,
+        unitPriceAtAddInPaise: DEFAULT_ARGS.unitPriceInPaiseSnapshot,
+      },
     });
   });
 
@@ -127,13 +167,14 @@ describe('PrismaCartRepository.incrementOrCreateCartItem (PR 1.9)', () => {
         findFirst: jest.fn(),
         update: jest.fn(),
         create: jest.fn(),
+        count: jest.fn(),
       },
     } as TxLike;
     const prisma = buildPrismaMock(tx);
     const repo = new PrismaCartRepository(prisma);
 
     await expect(
-      repo.incrementOrCreateCartItem('missing-cart', 'prod-1', 'var-1', 1),
+      repo.incrementOrCreateCartItem('missing-cart', 'prod-1', 'var-1', 1, DEFAULT_ARGS),
     ).rejects.toThrow(/cart/i);
 
     expect(tx.cartItem.findFirst).not.toHaveBeenCalled();

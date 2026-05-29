@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, notFound } from 'next/navigation';
 import { NovaTabs } from '../../components/nova-tabs';
 import {
   adminNovaService,
@@ -20,6 +20,7 @@ interface LineItem {
 const EMPTY_LINE: LineItem = { productId: '', variantId: '', quantityOrdered: '', unitCost: '' };
 
 export default function NewProcurementPage() {
+  if (process.env.NEXT_PUBLIC_FEATURE_NOVA !== 'true') notFound();
   const router = useRouter();
   const [warehouses, setWarehouses] = useState<OwnBrandWarehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState('');
@@ -32,7 +33,7 @@ export default function NewProcurementPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    adminNovaService.listWarehouses(true).then((res) => res.data && setWarehouses(res.data)).catch(() => {});
+    adminNovaService.listWarehouses(true).then((res) => res.data && setWarehouses(res.data)).catch((err) => console.warn(err));
   }, []);
 
   const addItem = () => setItems([...items, { ...EMPTY_LINE }]);
@@ -83,7 +84,7 @@ export default function NewProcurementPage() {
   };
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 920 }}>
+    <div style={{ padding: '24px 32px', maxWidth: 920, margin: '0 auto' }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: '#0F1115' }}>NOVA</h1>
       <p style={{ marginTop: 4, marginBottom: 16, fontSize: 14, color: '#525A65' }}>
         Sportsmart's own-brand warehouses, products, stocks, and procurement.

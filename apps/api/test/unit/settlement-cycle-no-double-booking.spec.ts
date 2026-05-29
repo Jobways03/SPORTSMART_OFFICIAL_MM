@@ -28,6 +28,8 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
     const calls: Array<{ op: string; args: any }> = [];
     const tx = {
       settlementCycle: {
+        // Phase 159v (audit #13) — overlap pre-check; no overlapping cycles here.
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'cycle-1', periodStart: new Date(), periodEnd: new Date() }),
       },
@@ -63,6 +65,8 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
         }),
       },
       franchiseSettlement: {
+        // Phase 159v (audit #13) — overlap pre-check counts prior settlements.
+        count: jest.fn().mockResolvedValue(0),
         create: jest.fn(async (args: any) => {
           calls.push({ op: 'settlement.create', args });
           return { id: 'settle-fr-A', ...args.data };
@@ -93,17 +97,21 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
     const ledgerOps = calls.filter((c) =>
       c.op === 'ledger.updateMany' || c.op === 'ledger.findMany',
     );
+    // Guard the indexed access for noUncheckedIndexedAccess strict mode.
+    expect(ledgerOps.length).toBeGreaterThanOrEqual(2);
+    const claim = ledgerOps[0]!;
+    const refetch = ledgerOps[1]!;
     // First ledger op MUST be the claim (updateMany), not a read.
-    expect(ledgerOps[0].op).toBe('ledger.updateMany');
+    expect(claim.op).toBe('ledger.updateMany');
     // The claim filters on status=PENDING so a racing tx sees zero.
-    expect(ledgerOps[0].args.where.status).toBe('PENDING');
-    expect(ledgerOps[0].args.data.status).toBe('ACCRUED');
-    expect(ledgerOps[0].args.data.settlementBatchId).toBe('cycle-1');
+    expect(claim.args.where.status).toBe('PENDING');
+    expect(claim.args.data.status).toBe('ACCRUED');
+    expect(claim.args.data.settlementBatchId).toBe('cycle-1');
 
     // Second op is the re-fetch by our cycle's marker (cycle.id), so
     // another tx running in parallel can't observe our claimed rows.
-    expect(ledgerOps[1].op).toBe('ledger.findMany');
-    expect(ledgerOps[1].args.where.settlementBatchId).toBe('cycle-1');
+    expect(refetch.op).toBe('ledger.findMany');
+    expect(refetch.args.where.settlementBatchId).toBe('cycle-1');
   });
 
   it('short-circuits with empty settlements when the atomic claim returns zero rows', async () => {
@@ -127,6 +135,6 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
     // second updateMany — it's the per-franchise re-point.
     const updateManys = calls.filter((c) => c.op === 'ledger.updateMany');
     expect(updateManys).toHaveLength(2);
-    expect(updateManys[1].args.data.settlementBatchId).toBe('settle-fr-A');
+    expect(updateManys[1]!.args.data.settlementBatchId).toBe('settle-fr-A');
   });
 });

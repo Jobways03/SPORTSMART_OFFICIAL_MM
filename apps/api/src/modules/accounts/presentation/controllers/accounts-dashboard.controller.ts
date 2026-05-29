@@ -6,11 +6,21 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AccountsDashboardService } from '../../application/services/accounts-dashboard.service';
 
+/**
+ * Phase 24 (2026-05-20) — class-level @Permissions('settlements.read')
+ * because every method is a finance read. Pre-Phase-24 no @Permissions
+ * decorator existed, so PermissionsGuard let every logged-in admin
+ * read platform / seller / franchise financial overviews. The default
+ * grant for SELLER_OPERATIONS + AFFILIATE_ADMIN already includes
+ * settlements.read.
+ */
 @ApiTags('Admin Accounts - Dashboard')
 @Controller('admin/accounts/dashboard')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('settlements.read')
 export class AccountsDashboardController {
   constructor(
     private readonly dashboardService: AccountsDashboardService,

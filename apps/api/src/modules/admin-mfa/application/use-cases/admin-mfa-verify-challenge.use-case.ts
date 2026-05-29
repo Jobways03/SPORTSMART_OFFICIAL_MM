@@ -1,8 +1,15 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
-import { JWT_ALGORITHM } from '../../../../core/auth/jwt-constants';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { RedisService } from '../../../../bootstrap/cache/redis.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { AccessLogService } from '../../../access-log/application/services/access-log.service';
+import {
+  JWT_ALGORITHM,
+  JWT_AUDIENCE_ADMIN,
+} from '../../../../core/auth/jwt-constants';
 import {
   BadRequestAppException,
   UnauthorizedAppException,
@@ -27,10 +34,26 @@ interface AdminMfaVerifyChallengeInput {
   ipAddress?: string;
 }
 
+const MFA_AUDIT_MODULE = 'admin-mfa';
+const MFA_AUDIT_RESOURCE = 'AdminSession';
+
+// Phase 26 (2026-05-20) — per-admin MFA brute-force lockout.
+// Symmetric with the password lockout (MAX_FAILED_ATTEMPTS=5,
+// LOCK_DURATION_MINUTES=15 in admin-login.use-case.ts). Defeats
+// per-IP-throttle bypass via NAT / rotating proxies.
+const MFA_MAX_FAILED_ATTEMPTS = 5;
+const MFA_LOCK_DURATION_MS = 15 * 60 * 1000;
+
 interface AdminMfaChallengeClaims {
   sub: string;
   email: string;
   aud: string;
+  // Phase 26 (2026-05-20) — JTI for one-time-use enforcement. Older
+  // challenge tokens (pre-Phase-26) may not carry one; the consume
+  // step treats a missing JTI as "skip JTI tracking" rather than
+  // failing closed, to avoid breaking in-flight challenges across
+  // a deploy boundary.
+  jti?: string;
 }
 
 /**
@@ -61,12 +84,29 @@ interface AdminMfaChallengeClaims {
  */
 @Injectable()
 export class AdminMfaVerifyChallengeUseCase {
+  private readonly logger = new Logger(AdminMfaVerifyChallengeUseCase.name);
+
   constructor(
     @Inject(ADMIN_REPOSITORY)
     private readonly adminRepo: AdminRepository,
     private readonly envService: EnvService,
     private readonly cipher: MfaSecretCipher,
     private readonly backupCodes: BackupCodesService,
+    // Phase 23 (2026-05-20) — audit + event hooks. Every MFA verify
+    // outcome (success / wrong-code / replay / backup-code-used) lands
+    // in the unified AuditLog so incident response can answer "who
+    // tried MFA, when, from where, with what result". Backup-code use
+    // additionally fires admin.mfa.backup_code_used so the email
+    // notification handler can warn the admin out-of-band.
+    private readonly audit: AuditPublicFacade,
+    private readonly eventBus: EventBusService,
+    // Phase 26 (2026-05-20) — writes the LOGIN_SUCCESS row to
+    // access_log on MFA-pass so admins with MFA enrolled don't drop
+    // off the new-device / spike detectors that walk that table.
+    private readonly accessLog: AccessLogService,
+    // Phase 26 — one-time-use enforcement for challenge JTI. SET NX
+    // EX on the challenge consume path: first verify wins; replay 401s.
+    private readonly redis: RedisService,
   ) {}
 
   async execute(input: AdminMfaVerifyChallengeInput): Promise<AdminLoginSession> {
@@ -86,6 +126,38 @@ export class AdminMfaVerifyChallengeUseCase {
       );
     }
 
+    // Phase 26 (2026-05-20) — one-time-use enforcement. The challenge
+    // signs a `jti` claim; we SET NX EX on that key here. First
+    // verify wins; replays (including with a fresh next-step TOTP)
+    // are 401'd before any DB work. Falling open on no-JTI keeps
+    // mid-deploy in-flight challenges working — older tokens lack
+    // the claim entirely and only get the existing TOTP-step replay
+    // defence.
+    if (claims.jti) {
+      const consumed = await this.redis.acquireLock(
+        `admin:mfa:challenge:${claims.jti}`,
+        // TTL slightly longer than the challenge expiry so a captured
+        // token cannot be replayed after the JWT itself expires (the
+        // jwt.verify above would already 401, but defence-in-depth).
+        15 * 60,
+      );
+      if (!consumed) {
+        this.writeAudit(
+          claims.sub,
+          null,
+          'ADMIN_MFA_CHALLENGE_REPLAY',
+          {
+            jti: claims.jti,
+            ipAddress,
+            userAgent,
+          },
+        );
+        throw new UnauthorizedAppException(
+          'This MFA challenge has already been used. Re-authenticate to obtain a fresh challenge.',
+        );
+      }
+    }
+
     // 2. Fetch admin's encrypted secret + enrollment timestamp.
     const admin = await this.adminRepo.findAdminById(claims.sub, {
       name: true,
@@ -95,7 +167,10 @@ export class AdminMfaVerifyChallengeUseCase {
       mfaSecretCiphertext: true,
       mfaEnabledAt: true,
       mfaLastUsedStep: true,
-    });
+      // Phase 26 (2026-05-20) — per-admin MFA brute-force counter.
+      failedMfaAttempts: true,
+      mfaLockUntil: true,
+    } as any);
     if (!admin) {
       throw new UnauthorizedAppException('Admin not found');
     }
@@ -111,6 +186,23 @@ export class AdminMfaVerifyChallengeUseCase {
       );
     }
 
+    // Phase 26 (2026-05-20) — per-admin lockout check. The per-IP
+    // throttle is in place at the controller layer (5/60s) but
+    // breaks against NAT or rotating-proxy attackers; this
+    // per-account counter closes that gap. 5 wrong codes in 15min
+    // → mfaLockUntil set; subsequent verifies are 401'd until expiry.
+    const mfaLockUntil = (admin as any).mfaLockUntil as Date | null | undefined;
+    if (mfaLockUntil && mfaLockUntil.getTime() > Date.now()) {
+      this.writeAudit(claims.sub, admin.role ?? null, 'ADMIN_MFA_LOCKED', {
+        until: mfaLockUntil.toISOString(),
+        ipAddress,
+        userAgent,
+      });
+      throw new UnauthorizedAppException(
+        'MFA verification is temporarily locked for this account after too many failed attempts. Try again later.',
+      );
+    }
+
     // 3. Verify code. Dispatch on format: backup codes look like
     //    XXXXX-XXXXX (alphanumeric); TOTP codes are 6 digits.
     //    The split keeps the TOTP-vs-backup-code paths cleanly
@@ -119,6 +211,7 @@ export class AdminMfaVerifyChallengeUseCase {
     //    (they're single-use by construction: the matching hash
     //    is removed from the persisted list on consume).
     let stepToCommit: number | undefined;
+    let usedBackupCode = false;
     if (isBackupCodeFormat(code)) {
       // PR 10.9 — backup-code recovery path. Used when the admin
       // has lost their authenticator device. BackupCodesService
@@ -126,16 +219,33 @@ export class AdminMfaVerifyChallengeUseCase {
       // the consumed entry on success.
       const consumed = await this.backupCodes.consume(claims.sub, code);
       if (!consumed) {
+        await this.bumpFailedAttempts(
+          claims.sub,
+          (admin as any).failedMfaAttempts as number | undefined,
+          admin.role ?? null,
+          'invalid_backup_code',
+          ipAddress,
+          userAgent,
+        );
         throw new UnauthorizedAppException(
           'Invalid backup code. If you have run out of backup codes, contact an admin with full account rights for manual recovery.',
         );
       }
+      usedBackupCode = true;
       // stepToCommit stays undefined — backup-code use doesn't
       // advance mfaLastUsedStep (no step to record).
     } else {
       const secret = this.cipher.decrypt(admin.mfaSecretCiphertext);
       const verify = verifyTotpCode({ secret, code });
       if (!verify.valid) {
+        await this.bumpFailedAttempts(
+          claims.sub,
+          (admin as any).failedMfaAttempts as number | undefined,
+          admin.role ?? null,
+          'invalid_totp',
+          ipAddress,
+          userAgent,
+        );
         throw new UnauthorizedAppException(
           'Invalid TOTP code. Check your authenticator app and try again.',
         );
@@ -143,21 +253,24 @@ export class AdminMfaVerifyChallengeUseCase {
 
       // PR 10.7 — anti-replay. The TOTP step counter is monotonic
       // (unix_seconds / period). Rejecting codes for step <=
-      // mfaLastUsedStep closes the replay window: an attacker who
-      // captured a single in-flight TOTP code (shoulder-surf,
-      // leaked screenshot) can no longer present it again within
-      // the 30s validity AND the ±1-step skew tolerance.
-      //
-      // <= rather than <: a code at the same step is a literal
-      // replay of the same code. Strict-less-than would let the
-      // same TOTP value re-authenticate up to N times within its
-      // validity window (where N is bounded only by network RTT).
+      // mfaLastUsedStep closes the replay window.
       if (
         verify.step !== undefined &&
         admin.mfaLastUsedStep !== null &&
         admin.mfaLastUsedStep !== undefined &&
         verify.step <= admin.mfaLastUsedStep
       ) {
+        this.writeAudit(
+          claims.sub,
+          admin.role ?? null,
+          'ADMIN_MFA_REPLAY_DETECTED',
+          {
+            attemptedStep: verify.step,
+            lastUsedStep: admin.mfaLastUsedStep,
+            ipAddress,
+            userAgent,
+          },
+        );
         throw new UnauthorizedAppException(
           'This TOTP code has already been used. Wait for the next code from your authenticator app and try again.',
         );
@@ -174,13 +287,41 @@ export class AdminMfaVerifyChallengeUseCase {
     // TOTP success. Backup-code consume doesn't have a step to
     // record; the consumed hash being spliced out of the persisted
     // list is the anti-replay mechanism for that path.
-    const updateData: Record<string, unknown> = {
-      lastLoginAt: new Date(),
-    };
+    //
+    // Phase 1 / H3 — the step advance now goes through the atomic
+    // CAS variant so two concurrent verifies presenting the same
+    // TOTP code cannot both win. If the CAS fails (returns false),
+    // another verify already advanced past this step → replay.
     if (stepToCommit !== undefined) {
-      updateData.mfaLastUsedStep = stepToCommit;
+      const advanced = await this.adminRepo.advanceMfaLastUsedStepCas(
+        claims.sub,
+        stepToCommit,
+      );
+      if (!advanced) {
+        this.writeAudit(
+          claims.sub,
+          admin.role ?? null,
+          'ADMIN_MFA_REPLAY_DETECTED',
+          {
+            attemptedStep: stepToCommit,
+            reason: 'cas_failed',
+            ipAddress,
+            userAgent,
+          },
+        );
+        throw new UnauthorizedAppException(
+          'This TOTP code has already been used. Wait for the next code from your authenticator app and try again.',
+        );
+      }
     }
-    await this.adminRepo.updateAdmin(claims.sub, updateData);
+    await this.adminRepo.updateAdmin(claims.sub, {
+      lastLoginAt: new Date(),
+      // Phase 26 (2026-05-20) — reset the MFA brute-force counter on
+      // every successful verify. Mirrors AdminLoginUseCase clearing
+      // failedLoginAttempts when the password succeeds.
+      failedMfaAttempts: 0,
+      mfaLockUntil: null,
+    });
 
     const refreshToken = randomUUID();
     const refreshTtl = this.parseTimeToMs(
@@ -194,7 +335,8 @@ export class AdminMfaVerifyChallengeUseCase {
       expiresAt: new Date(Date.now() + refreshTtl),
     });
 
-    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '7d');
+    // Phase 23 (2026-05-20) — fallback tightened from '7d' → '15m'.
+    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '15m');
     const accessTtlSeconds = Math.floor(this.parseTimeToMs(accessTtl) / 1000);
     const accessToken = jwt.sign(
       {
@@ -204,8 +346,88 @@ export class AdminMfaVerifyChallengeUseCase {
         sessionId: session.id,
       },
       this.envService.getString('JWT_ADMIN_SECRET'),
-      { expiresIn: accessTtlSeconds, algorithm: JWT_ALGORITHM },
+      {
+        expiresIn: accessTtlSeconds,
+        algorithm: JWT_ALGORITHM,
+        // Phase 26 (2026-05-20) — audience pin parity with the
+        // non-MFA login token; AdminAuthGuard requires this.
+        audience: JWT_AUDIENCE_ADMIN,
+      },
     );
+
+    // Phase 26 (2026-05-20) — write the LOGIN_SUCCESS row to
+    // access_log here, post-MFA. Pre-Phase-26 AdminAuthController.login
+    // wrote LOGIN_SUCCESS unconditionally for any response carrying an
+    // adminId, including the challenge-only halt; that gave MFA-enrolled
+    // admins a misleading LOGIN_SUCCESS row at the password step.
+    // Phase 26 split: login writes LOGIN_SUCCESS only for non-MFA;
+    // verify writes it for the MFA path. Best-effort — audit completeness
+    // never blocks a successful authentication.
+    this.accessLog
+      .record({
+        actorType: 'ADMIN',
+        actorId: claims.sub,
+        actorRole: admin.role ?? null,
+        kind: 'LOGIN_SUCCESS',
+        ipAddress,
+        userAgent,
+      })
+      .catch(() => undefined);
+
+    // Phase 23 (2026-05-20) — audit log + event hooks on success.
+    if (usedBackupCode) {
+      this.writeAudit(
+        claims.sub,
+        admin.role ?? null,
+        'ADMIN_MFA_BACKUP_CODE_USED',
+        { sessionId: session.id, ipAddress, userAgent },
+      );
+      // Fire an event so the email notification handler can warn the
+      // admin out-of-band that a backup code was used — recovery
+      // signal worth surfacing to the affected admin.
+      this.eventBus
+        .publish({
+          eventName: 'admin.mfa.backup_code_used',
+          aggregate: 'admin',
+          aggregateId: claims.sub,
+          occurredAt: new Date(),
+          payload: {
+            adminId: claims.sub,
+            email: admin.email ?? null,
+            ipAddress: ipAddress ?? null,
+            userAgent: userAgent ?? null,
+          },
+        })
+        .catch(() => undefined);
+    } else {
+      this.writeAudit(claims.sub, admin.role ?? null, 'ADMIN_MFA_SUCCESS', {
+        sessionId: session.id,
+        ipAddress,
+        userAgent,
+      });
+      // Phase 26 (2026-05-20) — notify admin out-of-band on every
+      // successful TOTP-MFA login. Pre-Phase-26 only backup-code use
+      // notified; an attacker who phished password + TOTP could
+      // log in repeatedly without the legitimate admin seeing a
+      // signal. The email is the side-channel "your account was
+      // accessed at T from IP X" warning. Best-effort; never
+      // blocks the login.
+      this.eventBus
+        .publish({
+          eventName: 'admin.mfa.login_succeeded',
+          aggregate: 'admin',
+          aggregateId: claims.sub,
+          occurredAt: new Date(),
+          payload: {
+            adminId: claims.sub,
+            email: admin.email ?? null,
+            ipAddress: ipAddress ?? null,
+            userAgent: userAgent ?? null,
+            sessionId: session.id,
+          },
+        })
+        .catch(() => undefined);
+    }
 
     return {
       accessToken,
@@ -218,6 +440,75 @@ export class AdminMfaVerifyChallengeUseCase {
         role: admin.role ?? '',
       },
     };
+  }
+
+  /**
+   * Phase 26 (2026-05-20) — Increment the per-admin MFA failure
+   * counter, set the 15-min lock when threshold is hit, and emit
+   * the audit row in one place so both failure paths (bad TOTP /
+   * bad backup code) share the same accounting. Best-effort: a DB
+   * write failure here must not swallow the underlying "wrong
+   * code" 401 the caller is about to throw — that error is the
+   * load-bearing signal to the user.
+   */
+  private async bumpFailedAttempts(
+    adminId: string,
+    currentCount: number | undefined,
+    actorRole: string | null,
+    reason: string,
+    ipAddress: string | undefined,
+    userAgent: string | undefined,
+  ): Promise<void> {
+    const next = (currentCount ?? 0) + 1;
+    const lock =
+      next >= MFA_MAX_FAILED_ATTEMPTS
+        ? new Date(Date.now() + MFA_LOCK_DURATION_MS)
+        : null;
+    try {
+      await this.adminRepo.updateAdmin(adminId, {
+        failedMfaAttempts: next,
+        mfaLockUntil: lock,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to bump MFA failure counter for ${adminId}: ${(err as Error)?.message}`,
+      );
+    }
+    this.writeAudit(adminId, actorRole, 'ADMIN_MFA_FAILED', {
+      reason,
+      failedMfaAttempts: next,
+      locked: lock !== null,
+      lockUntil: lock?.toISOString(),
+      ipAddress,
+      userAgent,
+    });
+  }
+
+  private writeAudit(
+    adminId: string,
+    actorRole: string | null,
+    action: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    this.audit
+      .writeAuditLog({
+        actorId: adminId,
+        actorRole: actorRole ?? undefined,
+        action,
+        module: MFA_AUDIT_MODULE,
+        resource: MFA_AUDIT_RESOURCE,
+        resourceId: adminId,
+        metadata,
+        ipAddress:
+          typeof metadata.ipAddress === 'string' ? metadata.ipAddress : undefined,
+        userAgent:
+          typeof metadata.userAgent === 'string' ? metadata.userAgent : undefined,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Audit log write failed for ${action}: ${(err as Error)?.message}`,
+        ),
+      );
   }
 
   // Same parser as AdminLoginUseCase. The two TTL strings live in

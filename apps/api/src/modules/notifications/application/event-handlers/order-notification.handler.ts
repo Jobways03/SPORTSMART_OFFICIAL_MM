@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
+import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
+import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { EmailService } from '../../../../integrations/email/email.service';
@@ -12,6 +14,8 @@ export class OrderNotificationHandler {
     private readonly emailService: EmailService,
     private readonly prisma: PrismaService,
     private readonly logger: AppLoggerService,
+    // Phase 2 / M21-M32 — outbox-replay dedup. See wallet handler.
+    protected readonly eventDedup: EventDeduplicationService,
   ) {
     this.logger.setContext('OrderNotificationHandler');
   }
@@ -73,6 +77,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.master.created')
+  @IdempotentHandler()
   async onOrderPlaced(event: DomainEvent<{ masterOrderId: string; orderNumber: string; totalAmount: number; itemCount: number }>) {
     try {
       const order = await this.getMasterOrderContext(event.payload.masterOrderId);
@@ -104,6 +109,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('payments.payment.captured')
+  @IdempotentHandler()
   async onPaymentReceived(event: DomainEvent<{ masterOrderId: string; orderNumber: string; amount: number; paymentMethod: string; paymentReference?: string }>) {
     try {
       const order = await this.getMasterOrderContext(event.payload.masterOrderId);
@@ -141,6 +147,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.sub_order.status_changed')
+  @IdempotentHandler()
   async onSubOrderStatusChanged(event: DomainEvent<{ subOrderId: string; previousStatus: string; newStatus: string }>) {
     try {
       // Only send email when sub-order is SHIPPED
@@ -152,15 +159,24 @@ export class OrderNotificationHandler {
 
       // The shipping block is conditional. Build it via safeHtml so
       // courier name / tracking number (carrier-controlled) are escaped.
+      // Phase 82 (2026-05-23) — pack/ship audit Gap #10/#16. When the
+      // sub-order has a derived `trackingUrl`, render it as a
+      // clickable "Track your order" link so customers don't have to
+      // copy-paste the AWB into the courier's website.
       let shippingBlock = '';
       if (subOrder.trackingNumber) {
         const courierRow = subOrder.courierName
           ? safeHtml`<p style="margin: 4px 0;"><strong>Courier:</strong> ${subOrder.courierName}</p>`
           : '';
+        const trackingUrl = (subOrder as any).trackingUrl as string | null | undefined;
+        const trackingLinkRow = trackingUrl
+          ? safeHtml`<p style="margin: 8px 0 0;"><a href="${trackingUrl}" style="display: inline-block; padding: 8px 14px; background: #2563eb; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600;">Track your order</a></p>`
+          : '';
         shippingBlock = safeHtml`
           <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
             ${rawHtml(courierRow)}
             <p style="margin: 4px 0;"><strong>Tracking Number:</strong> ${subOrder.trackingNumber}</p>
+            ${rawHtml(trackingLinkRow)}
           </div>
         `;
       }
@@ -275,6 +291,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.master.routed')
+  @IdempotentHandler()
   async onOrderRouted(
     event: DomainEvent<{ masterOrderId: string; subOrderCount: number }>,
   ) {
@@ -295,11 +312,89 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.sub_order.reassigned')
+  @IdempotentHandler()
   async onSubOrderReassigned(event: DomainEvent<{ subOrderId: string }>) {
     await this.notifyFulfillmentNode(event.payload.subOrderId, true);
   }
 
+  /**
+   * Phase 81 (2026-05-22) — sub-order cancel audit Gap #7. Customer
+   * notification subscriber for mid-flow admin cancellations. The
+   * `orders.sub_order.cancelled_by_admin` event already carries
+   * everything we need (customerId, masterOrderId, orderNumber,
+   * reason, refund context). Pre-Phase-81 the event was published
+   * but only the affiliate-commission handler consumed it.
+   */
+  @OnEvent('orders.sub_order.cancelled_by_admin')
+  @IdempotentHandler()
+  async onSubOrderCancelledByAdmin(
+    event: DomainEvent<{
+      subOrderId: string;
+      masterOrderId: string;
+      orderNumber: string;
+      customerId?: string;
+      reason?: string;
+      paymentStatus?: string;
+      paymentMethod?: string;
+      newMasterStatus?: string | null;
+      subOrderSubTotalInPaise?: string;
+    }>,
+  ) {
+    try {
+      const subOrder = await this.getSubOrderContext(event.payload.subOrderId);
+      if (!subOrder?.masterOrder?.customer?.email) return;
+      const name =
+        `${subOrder.masterOrder.customer.firstName} ${subOrder.masterOrder.customer.lastName}`.trim();
+      const refundEligible =
+        event.payload.paymentStatus === 'PAID' &&
+        event.payload.paymentMethod === 'ONLINE';
+      // Refund amount in rupees for display (paise → rupees ÷ 100).
+      const refundAmount = (() => {
+        if (!refundEligible || !event.payload.subOrderSubTotalInPaise) return null;
+        try {
+          const paise = BigInt(event.payload.subOrderSubTotalInPaise);
+          return (Number(paise) / 100).toFixed(2);
+        } catch {
+          return null;
+        }
+      })();
+      const reasonRow = event.payload.reason
+        ? safeHtml`<p style="margin: 4px 0;"><strong>Reason:</strong> ${event.payload.reason}</p>`
+        : '';
+      const refundRow = refundAmount
+        ? safeHtml`<p style="margin: 4px 0; color: #065f46;"><strong>Refund:</strong> ₹${refundAmount} will be credited back to your original payment method within 5-7 business days.</p>`
+        : '';
+      const partialBlurb =
+        event.payload.newMasterStatus === 'PARTIALLY_CANCELLED'
+          ? safeHtml`<p>The rest of your order is unaffected and will be delivered as planned.</p>`
+          : '';
+
+      const content = safeHtml`
+        <h3 style="color: #dc2626; margin-top: 0;">Part of Your Order has been Cancelled</h3>
+        <p>Hi ${name},</p>
+        <p>We've cancelled part of your order <strong>${event.payload.orderNumber}</strong>. We're sorry for the inconvenience.</p>
+        <div style="background: #fff; border-radius: 6px; padding: 16px; margin: 16px 0;">
+          ${rawHtml(reasonRow)}
+          ${rawHtml(refundRow)}
+        </div>
+        ${rawHtml(partialBlurb)}
+        <p>If you have any questions, please reach out to our support team.</p>
+      `;
+
+      await this.emailService.send({
+        to: subOrder.masterOrder.customer.email,
+        subject: `Order Cancellation - ${event.payload.orderNumber} - SPORTSMART`,
+        html: this.wrapTemplate(content),
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to send orders.sub_order.cancelled_by_admin email: ${(err as Error).message}`,
+      );
+    }
+  }
+
   @OnEvent('orders.sub_order.created')
+  @IdempotentHandler()
   async onNewSubOrderCreated(event: DomainEvent<{ subOrderId: string }>) {
     // Auto-reallocation after a rejection creates a fresh sub-order for a
     // new node — treat it like a reassignment so the new node is notified.
@@ -307,6 +402,7 @@ export class OrderNotificationHandler {
   }
 
   @OnEvent('orders.sub_order.delivered')
+  @IdempotentHandler()
   async onOrderDelivered(event: DomainEvent<{ subOrderId: string; masterOrderId: string; deliveredAt: Date }>) {
     try {
       const subOrder = await this.getSubOrderContext(event.payload.subOrderId);

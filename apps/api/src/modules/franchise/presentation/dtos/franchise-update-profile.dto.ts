@@ -1,5 +1,10 @@
 import { IsOptional, IsString, MinLength, MaxLength, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
+import {
+  FRANCHISE_PAN_REGEX,
+  FRANCHISE_GSTIN_REGEX,
+  IsValidGstinChecksum,
+} from './franchise-kyc.validators';
 
 export class FranchiseUpdateProfileDto {
   @IsOptional()
@@ -73,16 +78,17 @@ export class FranchiseUpdateProfileDto {
 
   @IsOptional()
   @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @Matches(/^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$/, {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @Matches(FRANCHISE_GSTIN_REGEX, {
     message: 'Please enter a valid GST number',
   })
+  @IsValidGstinChecksum()
   gstNumber?: string;
 
   @IsOptional()
   @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
-  @Matches(/^[A-Z]{5}\d{4}[A-Z]{1}$/, {
+  @Matches(FRANCHISE_PAN_REGEX, {
     message: 'Please enter a valid PAN number',
   })
   panNumber?: string;

@@ -59,7 +59,6 @@ export class CustomerDataExportService {
         email: true,
         phone: true,
         emailVerified: true,
-        phoneVerified: true,
         status: true,
         createdAt: true,
         updatedAt: true,

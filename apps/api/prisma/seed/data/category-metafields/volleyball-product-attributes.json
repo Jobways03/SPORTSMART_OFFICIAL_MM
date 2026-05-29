@@ -1,0 +1,420 @@
+{
+  "volleyballs": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "indoor_match", "label": "Indoor Match Ball" },
+        { "value": "indoor_training", "label": "Indoor Training Ball" },
+        { "value": "beach_match", "label": "Beach Match Ball" },
+        { "value": "beach_training", "label": "Beach Training Ball" },
+        { "value": "recreational", "label": "Recreational / Soft Touch" },
+        { "value": "mini", "label": "Mini / Skills Ball" }
+      ]
+    },
+    {
+      "key": "ball_size",
+      "name": "Ball Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "size_5", "label": "Size 5 (Official – Adult)" },
+        { "value": "size_4", "label": "Size 4 (Youth)" },
+        { "value": "mini", "label": "Mini" }
+      ]
+    },
+    {
+      "key": "fivb_approved",
+      "name": "FIVB Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 3,
+      "description": "Approved for official FIVB-sanctioned competitions"
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Competition" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white_blue_yellow", "label": "White / Blue / Yellow (Classic)" },
+        { "value": "white_green", "label": "White / Green" },
+        { "value": "white_red", "label": "White / Red" },
+        { "value": "yellow_blue", "label": "Yellow / Blue" },
+        { "value": "white", "label": "White" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "volleyball-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "age_group",
+      "name": "Age Group",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "adult", "label": "Adult" },
+        { "value": "youth", "label": "Youth" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "shoe_cut",
+      "name": "Shoe Cut",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "low", "label": "Low-Top" },
+        { "value": "mid", "label": "Mid-Top" }
+      ]
+    },
+    {
+      "key": "position",
+      "name": "Position",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "setter", "label": "Setter (Lightweight / Agility)" },
+        { "value": "hitter", "label": "Hitter / Spiker (Cushioning / Jump)" },
+        { "value": "libero", "label": "Libero (Low-Profile / Speed)" },
+        { "value": "all_round", "label": "All-Round" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Competition" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "volleyball-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "jersey", "label": "Jersey / Match Top" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "tights", "label": "Tights / Spandex" },
+        { "value": "full_kit", "label": "Full Kit (Jersey + Shorts)" },
+        { "value": "warm_up_jacket", "label": "Warm-Up Jacket" },
+        { "value": "warm_up_pants", "label": "Warm-Up Pants" },
+        { "value": "compression_top", "label": "Compression Top" },
+        { "value": "compression_shorts", "label": "Compression Shorts" },
+        { "value": "training_tshirt", "label": "Training T-Shirt" },
+        { "value": "socks", "label": "Socks" }
+      ]
+    },
+    {
+      "key": "sleeve_length",
+      "name": "Sleeve Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "sleeveless", "label": "Sleeveless" },
+        { "value": "short", "label": "Short Sleeve" },
+        { "value": "long", "label": "Long Sleeve" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "volleyball-protective-gear": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "knee_pads", "label": "Knee Pads" },
+        { "value": "elbow_pads", "label": "Elbow Pads" },
+        { "value": "ankle_brace", "label": "Ankle Brace / Support" },
+        { "value": "finger_tape", "label": "Finger Tape / Splints" },
+        { "value": "arm_sleeves", "label": "Arm Sleeves (Passing)" },
+        { "value": "padded_shorts", "label": "Padded Shorts (Libero)" },
+        { "value": "sports_goggles", "label": "Sports Goggles" },
+        { "value": "mouthguard", "label": "Mouthguard" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "volleyball-nets-posts": [
+    {
+      "key": "net_type",
+      "name": "Net Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "indoor_competition", "label": "Indoor Competition Net" },
+        { "value": "indoor_training", "label": "Indoor Training Net" },
+        { "value": "outdoor_beach", "label": "Beach / Outdoor Net" },
+        { "value": "portable", "label": "Portable / Freestanding" },
+        { "value": "backyard", "label": "Backyard / Recreational" },
+        { "value": "net_only", "label": "Net Only (Replacement)" }
+      ]
+    },
+    {
+      "key": "net_height",
+      "name": "Net Height",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "men", "label": "Men's (2.43m / 7'11\")" },
+        { "value": "women", "label": "Women's (2.24m / 7'4\")" },
+        { "value": "adjustable", "label": "Adjustable" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "portability",
+      "name": "Portability",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "portable", "label": "Portable / Foldable" },
+        { "value": "semi_permanent", "label": "Semi-Permanent" },
+        { "value": "permanent", "label": "Permanent / Fixed" }
+      ]
+    },
+    {
+      "key": "fivb_approved",
+      "name": "FIVB Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 4,
+      "description": "Approved for official FIVB-sanctioned competitions"
+    }
+  ],
+
+  "volleyball-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "backpack", "label": "Backpack" },
+        { "value": "duffle", "label": "Duffle Bag" },
+        { "value": "ball_bag", "label": "Ball Bag / Carrier" },
+        { "value": "drawstring", "label": "Drawstring / Gym Sack" },
+        { "value": "shoe_bag", "label": "Shoe Bag" },
+        { "value": "team_bag", "label": "Team Equipment Bag" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Personal)" },
+        { "value": "medium", "label": "Medium (Full Gear)" },
+        { "value": "large", "label": "Large (Multi-Ball / Team)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "volleyball-training-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "setting_target", "label": "Setting Target" },
+        { "value": "hitting_trainer", "label": "Hitting / Spiking Trainer" },
+        { "value": "blocking_pad", "label": "Blocking Pad" },
+        { "value": "serve_trainer", "label": "Serve Trainer" },
+        { "value": "passing_target", "label": "Passing Target" },
+        { "value": "resistance_bands", "label": "Resistance Bands" },
+        { "value": "ball_cart", "label": "Ball Cart" },
+        { "value": "ball_pump", "label": "Ball Pump" },
+        { "value": "coaching_board", "label": "Coaching Board / Clipboard" },
+        { "value": "scoreboard", "label": "Scoreboard" },
+        { "value": "antenna_set", "label": "Antenna Set" },
+        { "value": "referee_stand", "label": "Referee Stand / Platform" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / League" },
+        { "value": "professional", "label": "Professional / Competition" }
+      ]
+    }
+  ]
+}

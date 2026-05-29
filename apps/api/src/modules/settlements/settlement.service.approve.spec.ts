@@ -16,7 +16,11 @@
  * yields the same client so test assertions see the writes.
  */
 import 'reflect-metadata';
+import { Prisma } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { SettlementService } from './settlement.service';
+import { MarkPaidDto } from './dtos/create-cycle.dto';
 
 function makeTxShim(client: any): any {
   return {
@@ -34,6 +38,8 @@ function buildService(opts: {
   pendingCount?: number;
 } = {}) {
   const settlementCycleUpdate = jest.fn().mockResolvedValue(undefined);
+  // Phase 144 — approval now flips via updateMany (version-CAS).
+  const settlementCycleUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const sellerSettlementUpdate = jest.fn().mockResolvedValue(undefined);
   const sellerSettlementUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const commissionRecordUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
@@ -45,12 +51,17 @@ function buildService(opts: {
     settlementCycle: {
       findUnique: jest.fn().mockResolvedValue(opts.cycle ?? null),
       update: settlementCycleUpdate,
+      updateMany: settlementCycleUpdateMany,
     },
     sellerSettlement: {
       findUnique: jest.fn().mockResolvedValue(opts.settlement ?? null),
       update: sellerSettlementUpdate,
       updateMany: sellerSettlementUpdateMany,
       count: sellerSettlementCount,
+    },
+    // Phase 146 — the mark-paid cycle rollup now counts franchise children too.
+    franchiseSettlement: {
+      count: jest.fn().mockResolvedValue(0),
     },
     commissionRecord: {
       updateMany: commissionRecordUpdateMany,
@@ -71,18 +82,63 @@ function buildService(opts: {
       .fn()
       .mockResolvedValue({ collected: true }),
   } as any;
+  // Phase 27 — TDS hook stub. Same shape as the TCS stub above so the
+  // approve-cycle path can call both without the test caring about the
+  // return shape.
+  const tdsHook = {
+    applyToCycleOnApprove: jest
+      .fn()
+      .mockResolvedValue({
+        cycleId: '',
+        settlementsProcessed: 0,
+        settlementsSkipped: 0,
+        settlementsExempt: 0,
+        settlementsFailed: 0,
+        failedSettlementIds: [],
+        totalTdsDeductedInPaise: 0n,
+        filingPeriod: '2026-Q1',
+      }),
+    markWithheldOnPay: jest
+      .fn()
+      .mockResolvedValue({ ledgerId: null, flipped: false }),
+  } as any;
 
-  const service = new SettlementService(prisma, audit, moneyDualWrite, tcsHook);
+  const service = new SettlementService(
+    prisma,
+    audit,
+    moneyDualWrite,
+    tcsHook,
+    tdsHook,
+  );
   return {
     service,
     prisma,
     settlementCycleUpdate,
+    settlementCycleUpdateMany,
     sellerSettlementUpdate,
     sellerSettlementUpdateMany,
     commissionRecordUpdateMany,
     tcsHook,
   };
 }
+
+// Phase 144 — a cycle whose stored totals match its live PENDING commission
+// state, so the approve re-validation passes (no drift → no rejection).
+const cleanCycle = (id: string, status: string) => ({
+  id,
+  status,
+  totalAmount: '30.00',
+  sellerSettlements: [
+    {
+      id: `${id}-ss1`,
+      sellerName: 'Acme',
+      totalPlatformMargin: '30.00',
+      commissionRecords: [
+        { id: 'cr1', status: 'PENDING', platformMargin: '30.00' },
+      ],
+    },
+  ],
+});
 
 describe('SettlementService.approveCycle (Phase 15)', () => {
   it('returns success:false when the cycle does not exist', async () => {
@@ -101,25 +157,33 @@ describe('SettlementService.approveCycle (Phase 15)', () => {
     expect(result.message).toMatch(/Cannot approve.*PAID/);
   });
 
-  it('flips DRAFT → APPROVED and cascades to SellerSettlement rows', async () => {
+  it('flips DRAFT → APPROVED (version-CAS) and cascades to SellerSettlement rows', async () => {
     const {
       service,
-      settlementCycleUpdate,
+      settlementCycleUpdateMany,
       sellerSettlementUpdateMany,
       tcsHook,
     } = buildService({
-      cycle: { id: 'c-1', status: 'DRAFT' },
+      cycle: cleanCycle('c-1', 'DRAFT'),
     });
 
-    const result = await service.approveCycle('c-1', 'admin-1');
+    const result = await service.approveCycle('c-1', 'admin-1', 'looks good');
 
     expect(result.success).toBe(true);
-    expect(settlementCycleUpdate).toHaveBeenCalledWith({
-      where: { id: 'c-1' },
-      data: { status: 'APPROVED' },
+    // Phase 144 — version-CAS flip: updateMany guarded on the source status,
+    // stamping the approving admin + timestamp + notes.
+    expect(settlementCycleUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'c-1', status: { in: ['DRAFT', 'PREVIEWED'] } },
+      data: expect.objectContaining({
+        status: 'APPROVED',
+        approvedByAdminId: 'admin-1',
+        approvedAt: expect.any(Date),
+        approvalNotes: 'looks good',
+      }),
     });
+    // Status-guarded cascade — only PENDING settlements flip.
     expect(sellerSettlementUpdateMany).toHaveBeenCalledWith({
-      where: { cycleId: 'c-1' },
+      where: { cycleId: 'c-1', status: 'PENDING' },
       data: { status: 'APPROVED' },
     });
     expect(tcsHook.applyToCycleOnApprove).toHaveBeenCalledWith({
@@ -129,24 +193,84 @@ describe('SettlementService.approveCycle (Phase 15)', () => {
   });
 
   it('also accepts a PREVIEWED cycle (the typical happy path)', async () => {
-    const { service, settlementCycleUpdate } = buildService({
-      cycle: { id: 'c-1', status: 'PREVIEWED' },
+    const { service, settlementCycleUpdateMany } = buildService({
+      cycle: cleanCycle('c-1', 'PREVIEWED'),
     });
     const result = await service.approveCycle('c-1', 'admin-1');
     expect(result.success).toBe(true);
-    expect(settlementCycleUpdate).toHaveBeenCalled();
+    expect(settlementCycleUpdateMany).toHaveBeenCalled();
   });
 
   it('swallows TCS hook failures — cycle stays APPROVED', async () => {
-    const { service, settlementCycleUpdate, tcsHook } = buildService({
-      cycle: { id: 'c-1', status: 'PREVIEWED' },
+    const { service, settlementCycleUpdateMany, tcsHook } = buildService({
+      cycle: cleanCycle('c-1', 'PREVIEWED'),
     });
     (tcsHook.applyToCycleOnApprove as jest.Mock).mockRejectedValueOnce(
       new Error('TCS upstream timeout'),
     );
     const result = await service.approveCycle('c-1', 'admin-1');
     expect(result.success).toBe(true);
-    expect(settlementCycleUpdate).toHaveBeenCalled();
+    expect(settlementCycleUpdateMany).toHaveBeenCalled();
+  });
+
+  it('rejects an empty cycle (no seller settlements)', async () => {
+    const { service, settlementCycleUpdateMany } = buildService({
+      cycle: { id: 'c-1', status: 'DRAFT', sellerSettlements: [] },
+    });
+    const result = await service.approveCycle('c-1', 'admin-1');
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/empty cycle/i);
+    expect(settlementCycleUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects when stored totals drifted from live commission state', async () => {
+    const { service, settlementCycleUpdateMany } = buildService({
+      cycle: {
+        id: 'c-1',
+        status: 'DRAFT',
+        totalAmount: '30.00',
+        sellerSettlements: [
+          {
+            id: 'c-1-ss1',
+            sellerName: 'Acme',
+            totalPlatformMargin: '30.00',
+            // a record was held since creation → live PENDING margin is 20, not 30
+            commissionRecords: [
+              { id: 'cr1', status: 'PENDING', platformMargin: '20.00' },
+              { id: 'cr2', status: 'ON_HOLD', platformMargin: '10.00' },
+            ],
+          },
+        ],
+      },
+    });
+    const result = await service.approveCycle('c-1', 'admin-1');
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/stale/i);
+    expect(settlementCycleUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('409s when the version-CAS loses (concurrent approve)', async () => {
+    const { service, settlementCycleUpdateMany } = buildService({
+      cycle: cleanCycle('c-1', 'DRAFT'),
+    });
+    settlementCycleUpdateMany.mockResolvedValueOnce({ count: 0 });
+    // ConflictAppException — the CAS lost; no double TCS/TDS run.
+    await expect(service.approveCycle('c-1', 'admin-1')).rejects.toThrow(
+      /changed concurrently/i,
+    );
+  });
+
+  it('stamps a cycle_approved audit row', async () => {
+    const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) };
+    const { service } = (() => {
+      const built = buildService({ cycle: cleanCycle('c-1', 'DRAFT') });
+      (built.service as any).audit = audit;
+      return built;
+    })();
+    await service.approveCycle('c-1', 'admin-9');
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'settlement.cycle_approved', actorId: 'admin-9' }),
+    );
   });
 });
 
@@ -186,10 +310,10 @@ describe('SettlementService.markSettlementPaid (Phase 15)', () => {
     expect(result.message).toMatch(/approved before/i);
   });
 
-  it('flips the settlement to PAID with the UTR and the current time', async () => {
+  it('flips the settlement to PAID (version-CAS) with UTR + actor + time', async () => {
     const {
       service,
-      sellerSettlementUpdate,
+      sellerSettlementUpdateMany,
       commissionRecordUpdateMany,
     } = buildService({
       settlement: APPROVED_SETTLEMENT,
@@ -197,20 +321,104 @@ describe('SettlementService.markSettlementPaid (Phase 15)', () => {
 
     await service.markSettlementPaid('ss-1', 'HDFC-UTR-12345', {
       adminId: 'admin-7',
+      paymentMethod: 'NEFT',
     });
 
-    expect(sellerSettlementUpdate).toHaveBeenCalledWith({
-      where: { id: 'ss-1' },
+    // Phase 145 — version-CAS: updateMany guarded on a payable source status,
+    // stamping the actor + payment metadata onto the row.
+    expect(sellerSettlementUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'ss-1', status: { in: ['APPROVED', 'FAILED'] } },
       data: expect.objectContaining({
         status: 'PAID',
         utrReference: 'HDFC-UTR-12345',
         paidAt: expect.any(Date),
+        paidByAdminId: 'admin-7',
+        paymentMethod: 'NEFT',
       }),
     });
     // Linked commission records flip to SETTLED in the same transaction.
+    // Phase 137 — guarded on status PENDING so a record held/refunded after
+    // cycle attach is never marked SETTLED.
     expect(commissionRecordUpdateMany).toHaveBeenCalledWith({
-      where: { settlementId: 'ss-1' },
+      where: { settlementId: 'ss-1', status: 'PENDING' },
       data: expect.objectContaining({ status: 'SETTLED' }),
     });
+  });
+
+  it('surfaces a friendly message on a duplicate UTR (P2002)', async () => {
+    const { service, sellerSettlementUpdateMany } = buildService({
+      settlement: APPROVED_SETTLEMENT,
+    });
+    sellerSettlementUpdateMany.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+    const result = await service.markSettlementPaid('ss-1', 'DUPUTR123456', {
+      adminId: 'admin-7',
+    });
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/already recorded/i);
+  });
+});
+
+describe('SettlementService.markSettlementFailed (Phase 145)', () => {
+  const APPROVED = {
+    id: 'ss-1',
+    cycleId: 'c-1',
+    sellerId: 's-1',
+    status: 'APPROVED',
+    cycle: { id: 'c-1', status: 'APPROVED' },
+  };
+
+  it('flips an APPROVED settlement to FAILED with the reason', async () => {
+    const { service, sellerSettlementUpdateMany } = buildService({
+      settlement: APPROVED,
+    });
+    const result = await service.markSettlementFailed('ss-1', 'bank reversed NEFT', {
+      adminId: 'admin-7',
+    });
+    expect(result.success).toBe(true);
+    expect(sellerSettlementUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'ss-1', status: { in: ['APPROVED', 'FAILED'] } },
+      data: { status: 'FAILED', paymentFailureReason: 'bank reversed NEFT' },
+    });
+  });
+
+  it('rejects a too-short reason', async () => {
+    const { service } = buildService({ settlement: APPROVED });
+    const result = await service.markSettlementFailed('ss-1', 'no');
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/reason/i);
+  });
+
+  it('refuses to fail an already-PAID settlement', async () => {
+    const { service } = buildService({
+      settlement: { ...APPROVED, status: 'PAID' },
+    });
+    const result = await service.markSettlementFailed('ss-1', 'too late now');
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/already-paid|reversal/i);
+  });
+});
+
+describe('MarkPaidDto validation (Phase 145)', () => {
+  it('rejects a UTR with markup / illegal chars (XSS-safe)', async () => {
+    const dto = plainToInstance(MarkPaidDto, { utrReference: '<script>x' });
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'utrReference')).toBe(true);
+  });
+
+  it('rejects a too-short UTR', async () => {
+    const dto = plainToInstance(MarkPaidDto, { utrReference: 'abc' });
+    expect((await validate(dto)).some((e) => e.property === 'utrReference')).toBe(true);
+  });
+
+  it('accepts a valid NEFT UTR + gateway payout id', async () => {
+    for (const utr of ['HDFC0001234567890', 'pout_Nx9a-bc_123']) {
+      const dto = plainToInstance(MarkPaidDto, { utrReference: utr });
+      expect(await validate(dto)).toHaveLength(0);
+    }
   });
 });
