@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { IStorefrontRepository, StorefrontListParams } from '../../domain/repositories/storefront.repository.interface';
 import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class PrismaStorefrontRepository implements IStorefrontRepository {
+  private readonly logger = new Logger(PrismaStorefrontRepository.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async findProductsPaginated(params: StorefrontListParams): Promise<{ products: any[]; total: number }> {
@@ -74,6 +76,10 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     switch (sortBy) {
       case 'price_asc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) ASC`; break;
       case 'price_desc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) DESC`; break;
+      case 'popular':
+        // Best sellers — rank by total units sold (order_items), newest as tiebreak.
+        orderByClause = Prisma.sql`ORDER BY (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.product_id = p.id) DESC, p.created_at DESC`;
+        break;
       default: orderByClause = Prisma.sql`ORDER BY p.created_at DESC`; break;
     }
 
@@ -219,14 +225,99 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
   }
 
   async findPostOfficeByPincode(pincode: string): Promise<any[]> {
+    const select = {
+      officeName: true, officeType: true, delivery: true,
+      district: true, state: true, latitude: true, longitude: true,
+    } as const;
+    const orderBy = [{ officeType: 'asc' as const }, { officeName: 'asc' as const }];
+
+    const local = await this.prisma.postOffice.findMany({
+      where: { pincode },
+      select,
+      orderBy,
+    });
+    if (local.length > 0) return local;
+
+    // Fallback: the `post_offices` master table is unpopulated in most
+    // environments (165K-row bulk load is a separate ops task). Pull
+    // the canonical India Post dataset on-demand from postalpincode.in
+    // and persist it so subsequent lookups are local. Failure is
+    // silent — caller still sees an empty list and renders the
+    // "pincode not found" UX, exactly as before the fallback existed.
+    const fetched = await this.fetchAndPersistFromIndiaPost(pincode);
+    if (fetched.length === 0) return [];
+
     return this.prisma.postOffice.findMany({
       where: { pincode },
-      select: {
-        officeName: true, officeType: true, delivery: true,
-        district: true, state: true, latitude: true, longitude: true,
-      },
-      orderBy: [{ officeType: 'asc' }, { officeName: 'asc' }],
+      select,
+      orderBy,
     });
+  }
+
+  // postalpincode.in is a free public mirror of India Post's directory.
+  // Response is an array with one envelope per query; we only send one
+  // pincode so we read index 0.
+  //
+  // Cert note: as of 2026-05 the host's TLS certificate is expired.
+  // We bypass verification *only* for this specific endpoint via a
+  // dedicated undici Agent — the data is public, non-sensitive, and
+  // the alternative is the feature simply not working. Do not copy
+  // this pattern for anything carrying authn/PII.
+  private static indiaPostAgent = new (require('undici').Agent)({
+    connect: { rejectUnauthorized: false },
+  });
+
+  private async fetchAndPersistFromIndiaPost(pincode: string): Promise<any[]> {
+    try {
+      const { fetch: undiciFetch } = require('undici');
+      const res = await undiciFetch(`https://api.postalpincode.in/pincode/${pincode}`, {
+        signal: AbortSignal.timeout(4000),
+        dispatcher: PrismaStorefrontRepository.indiaPostAgent,
+      });
+      if (!res.ok) return [];
+      const body = (await res.json()) as Array<{
+        Status: string;
+        PostOffice: Array<{
+          Name: string; BranchType: string; DeliveryStatus: string;
+          District: string; State: string; Circle: string;
+          Region: string; Division: string;
+        }> | null;
+      }>;
+      const envelope = body?.[0];
+      if (!envelope || envelope.Status !== 'Success' || !envelope.PostOffice?.length) {
+        return [];
+      }
+
+      const rows = envelope.PostOffice.map(po => ({
+        circleName: po.Circle ?? '',
+        regionName: po.Region ?? '',
+        divisionName: po.Division ?? '',
+        officeName: po.Name,
+        pincode,
+        officeType: this.normalizeOfficeType(po.BranchType),
+        delivery: po.DeliveryStatus ?? 'Delivery',
+        district: po.District ?? '',
+        state: po.State ?? '',
+      }));
+      await this.prisma.postOffice.createMany({ data: rows, skipDuplicates: true });
+      return rows;
+    } catch (err) {
+      this.logger.warn(
+        `India Post fallback failed for ${pincode}: ${(err as Error).message}`,
+      );
+      return [];
+    }
+  }
+
+  private normalizeOfficeType(branchType: string | undefined): string {
+    // India Post returns "Branch Office" / "Sub Office" / "Head Office";
+    // our schema stores the 2-letter abbreviation used elsewhere in the app.
+    switch ((branchType ?? '').toLowerCase()) {
+      case 'head office': return 'HO';
+      case 'sub office':  return 'SO';
+      case 'branch office':
+      default:            return 'BO';
+    }
   }
 
   async findAllOptionDefinitions(): Promise<any[]> {

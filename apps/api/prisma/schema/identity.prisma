@@ -46,6 +46,8 @@ model User {
   walletAdjustments WalletAdjustment[]
   // Sprint 3 Story 2.2 — buyer-facing wishlist (see wishlist.prisma).
   wishlistItems     WishlistItem[]
+  // User-generated product reviews (see product-reviews.prisma).
+  productReviews    ProductReview[]
 
   @@map("users")
 }

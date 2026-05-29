@@ -1,0 +1,46 @@
+// Product reviews — user-generated content posted from the customer
+// PDP. Reviews always start as PENDING and require admin moderation
+// before they show up on the public storefront / mobile reviews
+// section. The storefront only ever queries APPROVED rows.
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ProductReview {
+  id              String       @id @default(uuid())
+  productId       String       @map("product_id")
+  product         Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId          String       @map("user_id")
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  rating          Int          // 1-5; enforced at the service layer too
+  title           String?
+  body            String       @db.Text
+
+  status          ReviewStatus @default(PENDING)
+  // Set to true when the user has at least one DELIVERED suborder
+  // containing this product at review-creation time. Used to render
+  // the "VERIFIED" badge — not enforced (users can review without
+  // purchase but lose the badge).
+  verifiedBuyer   Boolean      @default(false) @map("verified_buyer")
+
+  // Moderation audit trail. Populated when status changes from
+  // PENDING → APPROVED/REJECTED. Full timeline is the audit chain.
+  moderatedAt     DateTime?    @map("moderated_at")
+  moderatedById   String?      @map("moderated_by_id")
+  rejectionReason String?      @map("rejection_reason") @db.Text
+
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  // One review per (product, user) — repeated submissions overwrite.
+  @@unique([productId, userId])
+  // Hot path: storefront query is "approved reviews for this product".
+  @@index([productId, status])
+  // Admin moderation queue order: pending oldest-first.
+  @@index([status, createdAt])
+  @@map("product_reviews")
+}

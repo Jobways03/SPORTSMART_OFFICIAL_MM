@@ -135,5 +135,9 @@ ALTER TABLE "product_metafields" ADD CONSTRAINT "product_metafields_metafield_de
 -- AddForeignKey
 ALTER TABLE "storefront_filters" ADD CONSTRAINT "storefront_filters_metafield_definition_id_fkey" FOREIGN KEY ("metafield_definition_id") REFERENCES "metafield_definitions"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- RenameIndex
-ALTER INDEX "settlement_cycles_period_idx" RENAME TO "settlement_cycles_period_start_period_end_idx";
+-- RenameIndex (idempotent — earlier migration 20260401113531_init already performs this rename)
+DO $$
+BEGIN
+  ALTER INDEX "settlement_cycles_period_idx" RENAME TO "settlement_cycles_period_start_period_end_idx";
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;

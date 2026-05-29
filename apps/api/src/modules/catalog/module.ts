@@ -160,6 +160,6 @@ import { CartModule } from '../cart/module';
     // been soft-deleted beyond the retention window.
     CloudinaryOrphanSweepCron,
   ],
-  exports: [CatalogPublicFacade],
+  exports: [CatalogPublicFacade, STOREFRONT_REPOSITORY],
 })
 export class CatalogModule {}

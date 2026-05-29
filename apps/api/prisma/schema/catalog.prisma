@@ -217,6 +217,8 @@ model Product {
   // Story 3.5 — quantity-based pricing tiers for upsell hints on PDP.
   // Display-only at v1; cart-time application is a separate story.
   pricingTiers             ProductPricingTier[]
+  // User-generated reviews (see product-reviews.prisma).
+  reviews                  ProductReview[]
 
   @@index([sellerId])
   @@index([categoryId])

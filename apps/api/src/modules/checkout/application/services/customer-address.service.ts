@@ -9,6 +9,10 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import {
+  STOREFRONT_REPOSITORY,
+  IStorefrontRepository,
+} from '../../../catalog/domain/repositories/storefront.repository.interface';
 
 // Sprint 3 Story 2.4 — format validation that runs BEFORE we hit the
 // pincode database. Reject obvious junk upfront (saves a DB roundtrip
@@ -66,6 +70,10 @@ export class CustomerAddressService {
     @Inject(CHECKOUT_REPOSITORY)
     private readonly repo: ICheckoutRepository,
     private readonly prisma: PrismaService,
+    // Routed through the storefront repo so unknown pincodes trigger the
+    // India Post fallback + auto-seed the post_offices table.
+    @Inject(STOREFRONT_REPOSITORY)
+    private readonly storefrontRepo: IStorefrontRepository,
   ) {}
 
   async listAddresses(customerId: string) {
@@ -101,16 +109,11 @@ export class CustomerAddressService {
     validateContactFields(input);
 
     // Validate pincode against PostOffice database and auto-populate
-    // city / state / locality when available.
-    const postOffice = await this.prisma.postOffice.findFirst({
-      where: { pincode: postalCode },
-      select: {
-        pincode: true,
-        officeName: true,
-        district: true,
-        state: true,
-      },
-    });
+    // city / state / locality when available. The storefront repo runs
+    // an India Post fallback if the master table is unseeded, so we
+    // don't reject valid pincodes just because nobody loaded the dump.
+    const entries = await this.storefrontRepo.findPostOfficeByPincode(postalCode);
+    const postOffice = entries[0];
 
     if (!postOffice) {
       throw new BadRequestAppException(
@@ -169,10 +172,8 @@ export class CustomerAddressService {
 
     // Validate pincode if it's being changed
     if (input.postalCode && input.postalCode !== existing.postalCode) {
-      const postOffice = await this.prisma.postOffice.findFirst({
-        where: { pincode: input.postalCode },
-        select: { pincode: true, district: true, state: true, officeName: true },
-      });
+      const entries = await this.storefrontRepo.findPostOfficeByPincode(input.postalCode);
+      const postOffice = entries[0];
       if (!postOffice) {
         throw new BadRequestAppException(
           `Invalid pincode: ${input.postalCode} — not found in our database`,

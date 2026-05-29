@@ -1890,6 +1890,27 @@ export class OrdersService {
     return ORDER_STATUS_LABELS[status] || status;
   }
 
+  /**
+   * Customer-facing status derivation. The master OrderStatus enum has no
+   * PACKED stage (packed lives on the sub-order's fulfillmentStatus), so a
+   * packed-but-not-yet-shipped order would otherwise read "Confirmed" to the
+   * customer while the seller portal shows "Packed". Surface PACKED when a
+   * shipment is packed and the order hasn't advanced to DISPATCHED/DELIVERED.
+   */
+  private deriveCustomerOrderStatus(
+    masterStatus: string,
+    subOrders: Array<{ fulfillmentStatus?: string }> = [],
+  ): string {
+    const beyondPacked = ['DISPATCHED', 'DELIVERED', 'CANCELLED'];
+    if (
+      !beyondPacked.includes(masterStatus) &&
+      subOrders.some((so) => so.fulfillmentStatus === 'PACKED')
+    ) {
+      return 'PACKED';
+    }
+    return masterStatus;
+  }
+
   async listCustomerOrders(
     customerId: string,
     page: number,
@@ -1909,24 +1930,31 @@ export class OrdersService {
     // We DO surface deliveryMethod + tracking URL since customers
     // benefit from knowing how the order is being delivered and where
     // to click for live tracking.
-    const sanitized = orders.map((o: any) => ({
-      ...o,
-      orderStatusLabel: this.mapOrderStatusLabel(o.orderStatus),
-      subOrders: o.subOrders.map((so: any) => ({
-        id: so.id,
-        subTotal: so.subTotal,
-        paymentStatus: so.paymentStatus,
-        fulfillmentStatus: so.fulfillmentStatus,
-        acceptStatus: so.acceptStatus,
-        deliveredAt: so.deliveredAt,
-        deliveryMethod: so.deliveryMethod,
-        ithinkAwb: so.ithinkAwb,
-        ithinkLogistic: so.ithinkLogistic,
-        ithinkTrackingUrl: so.ithinkTrackingUrl,
-        selfDeliveryStatus: so.selfDeliveryStatus,
-        items: so.items,
-      })),
-    }));
+    const sanitized = orders.map((o: any) => {
+      const derivedStatus = this.deriveCustomerOrderStatus(
+        o.orderStatus,
+        o.subOrders,
+      );
+      return {
+        ...o,
+        orderStatus: derivedStatus,
+        orderStatusLabel: this.mapOrderStatusLabel(derivedStatus),
+        subOrders: o.subOrders.map((so: any) => ({
+          id: so.id,
+          subTotal: so.subTotal,
+          paymentStatus: so.paymentStatus,
+          fulfillmentStatus: so.fulfillmentStatus,
+          acceptStatus: so.acceptStatus,
+          deliveredAt: so.deliveredAt,
+          deliveryMethod: so.deliveryMethod,
+          ithinkAwb: so.ithinkAwb,
+          ithinkLogistic: so.ithinkLogistic,
+          ithinkTrackingUrl: so.ithinkTrackingUrl,
+          selfDeliveryStatus: so.selfDeliveryStatus,
+          items: so.items,
+        })),
+      };
+    });
 
     return {
       orders: sanitized,
@@ -2105,9 +2133,14 @@ export class OrdersService {
     // Add customer-friendly status label. Tracking + delivery method
     // are surfaced so the customer detail screen can render a
     // "Track via iThink" link or display the self-delivery progress.
+    const derivedStatus = this.deriveCustomerOrderStatus(
+      order.orderStatus,
+      order.subOrders,
+    );
     return {
       ...order,
-      orderStatusLabel: this.mapOrderStatusLabel(order.orderStatus),
+      orderStatus: derivedStatus,
+      orderStatusLabel: this.mapOrderStatusLabel(derivedStatus),
       appliedDiscount,
       shipping,
       timeline,

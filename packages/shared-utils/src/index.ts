@@ -6,6 +6,7 @@ export type {
   ApiResponse,
   ApiClientConfig,
   ApiClient,
+  TokenStorage,
 } from './api-client';
 
 // Money formatting — BigInt-safe paise↔rupee conversions used by every

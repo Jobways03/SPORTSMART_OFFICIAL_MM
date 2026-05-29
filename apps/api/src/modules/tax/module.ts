@@ -49,6 +49,7 @@ import { SellerTaxDocumentsController } from './presentation/controllers/seller-
 import { FranchiseTaxDocumentsController } from './presentation/controllers/franchise-tax-documents.controller';
 import { AdminTaxReportsController } from './presentation/controllers/admin-tax-reports.controller';
 import { AdminTaxOperationsController } from './presentation/controllers/admin-tax-operations.controller';
+import { TaxPdfFileController } from './presentation/controllers/tax-pdf-file.controller';
 import { TaxCreditNoteTimeBarCron } from './application/jobs/tax-credit-note-timebar.cron';
 import { TaxDocumentPdfRetryCron } from './application/jobs/tax-document-pdf-retry.cron';
 import { EInvoiceRetryCron } from './application/jobs/einvoice-retry.cron';
@@ -146,6 +147,9 @@ const taxPdfStorageProvider = {
     FranchiseTaxDocumentsController,
     AdminTaxReportsController,
     AdminTaxOperationsController,
+    // Dev-only: serves stub-stored invoice files over HTTP so the
+    // download link isn't an unopenable file:// path.
+    TaxPdfFileController,
   ],
   providers: [
     // Phase 25 — guards consumed by the controllers above. Same
