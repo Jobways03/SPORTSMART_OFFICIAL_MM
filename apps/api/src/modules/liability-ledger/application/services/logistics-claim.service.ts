@@ -96,4 +96,45 @@ export class LogisticsClaimService {
       },
     });
   }
+
+  /**
+   * Phase 127 — reverse the claim for a source (e.g. a dispute whose refund
+   * finance rejected). Only a PENDING claim can be cancelled silently:
+   *   - PENDING   → CANCELLED ('reversed')
+   *   - CANCELLED → no-op ('already_reversed') — replay-safe
+   *   - SUBMITTED/ACCEPTED/RECOVERED/REJECTED → 'needs_manual': a claim is
+   *     already in flight with the courier; withdrawing it is an ops action.
+   *   - no row    → 'none'
+   */
+  async reverseForSource(args: {
+    sourceType: LedgerSourceType;
+    sourceId: string;
+    reason: string;
+  }): Promise<'reversed' | 'already_reversed' | 'needs_manual' | 'none'> {
+    const row = await this.prisma.logisticsClaim.findUnique({
+      where: {
+        sourceType_sourceId: {
+          sourceType: args.sourceType,
+          sourceId: args.sourceId,
+        },
+      },
+    });
+    if (!row) return 'none';
+    if (row.status === 'CANCELLED') return 'already_reversed';
+    if (row.status !== 'PENDING') {
+      this.logger.warn(
+        `LogisticsClaim ${row.id} is ${row.status}, not PENDING — claim already in flight; ` +
+          `manual withdrawal needed for ${args.sourceType}:${args.sourceId}`,
+      );
+      return 'needs_manual';
+    }
+    await this.prisma.logisticsClaim.update({
+      where: { id: row.id },
+      data: { status: 'CANCELLED' as LogisticsClaimStatus, notes: args.reason },
+    });
+    this.logger.log(
+      `LogisticsClaim ${row.id} reversed (CANCELLED) for ${args.sourceType}:${args.sourceId}: ${args.reason}`,
+    );
+    return 'reversed';
+  }
 }

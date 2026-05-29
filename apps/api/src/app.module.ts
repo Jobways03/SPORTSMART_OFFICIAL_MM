@@ -7,7 +7,7 @@ import { LoggingModule } from './bootstrap/logging/logging.module';
 import { EventsModule } from './bootstrap/events/events.module';
 import { SecurityModule } from './bootstrap/security/security.module';
 import { EmailModule } from './integrations/email/email.module';
-import { IThinkModule } from './integrations/ithink/ithink.module';
+import { CaptchaModule } from './integrations/captcha/captcha.module';
 import { WhatsAppModule } from './integrations/whatsapp/whatsapp.module';
 
 // core
@@ -87,7 +87,7 @@ import { TaxModule } from './modules/tax/module';
     RedisModule,
     EventsModule,
     EmailModule,
-    IThinkModule,
+    CaptchaModule,
     WhatsAppModule,
     IdempotencyModule,
     GuardsModule,

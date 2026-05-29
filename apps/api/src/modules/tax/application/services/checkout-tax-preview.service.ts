@@ -26,6 +26,7 @@
 //   - apps/api/src/modules/tax/domain/place-of-supply.ts
 //   - apps/api/src/modules/tax/domain/round-off.ts
 
+import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { SupplyTaxability } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
@@ -34,6 +35,8 @@ import {
   type TaxabilityName,
 } from '../../domain/tax-engine';
 import { computeInvoiceRoundOff } from '../../domain/round-off';
+import { allocateOrderLevel } from '../../../discounts/domain/allocation/allocate';
+import { TaxModeService } from './tax-mode.service';
 
 export interface CheckoutTaxPreviewItem {
   productId: string;
@@ -55,6 +58,32 @@ export interface CheckoutTaxPreviewInput {
   /** Customer shipping state — 2-digit GST code if known; the service
    *  falls back to inter-state IGST when null. */
   customerShippingStateCode: string | null;
+  /**
+   * Phase 65 (2026-05-22) — applied-coupon discount surface (audit
+   * Gaps #1 + #21). Pre-Phase-65 the preview hard-coded
+   * `discountInPaise: 0n` per line, so the tax shown overstated
+   * the real invoice tax whenever a coupon was applied. The new
+   * path accepts the total discount in paise + the eligible product
+   * ids + the tax treatment, runs the canonical
+   * `allocateOrderLevel` proportional split, and feeds the
+   * per-item allocated discount through to `calculateLineTax`.
+   * Result: preview and snapshot agree byte-for-byte.
+   */
+  discount?: {
+    totalInPaise: bigint;
+    /** When supplied, allocation is restricted to the listed
+     *  productIds (mirrors AMOUNT_OFF_PRODUCTS / specific-product
+     *  rules). Empty = all items eligible. */
+    eligibleProductIds?: ReadonlySet<string>;
+    /** Mirrors the Discount.taxTreatment field; non-pre-supply
+     *  treatments produce tax math identical to the no-discount
+     *  case (the engine sees gross). */
+    taxTreatment?:
+      | 'PRE_SUPPLY_TRANSACTIONAL'
+      | 'POST_SUPPLY_LINKED'
+      | 'POST_SUPPLY_UNLINKED'
+      | 'DISPLAY_ONLY';
+  };
 }
 
 // Phase 36 — per-line drill-down. The cart/checkout UI uses this to
@@ -62,6 +91,15 @@ export interface CheckoutTaxPreviewInput {
 // all stringified BigInt-paise to keep the wire shape consistent
 // with the aggregate fields.
 export interface CheckoutTaxPreviewLine {
+  /**
+   * Phase 65 (2026-05-22) — composite key for UI matching (audit
+   * Gap #14). Pre-Phase-65 the UI relied on positional index
+   * alignment; any future reorder (e.g. saved-for-later filter)
+   * would silently display wrong tax against the wrong row. The
+   * composite key is `${productId}:${variantId ?? ''}` and is
+   * stable across reorders.
+   */
+  lineKey: string;
   productId: string;
   variantId: string | null;
   quantity: number;
@@ -70,6 +108,11 @@ export interface CheckoutTaxPreviewLine {
   /** Subtotal of the line BEFORE tax (gross when tax-exclusive, or
    *  gross minus embedded tax when tax-inclusive). */
   taxableInPaise: string;
+  /** Phase 65 — proportional discount allocated to this line in
+   *  paise (audit Gap #21). 0 when no coupon applied. Mirrors the
+   *  amount the snapshot path would record under
+   *  PRE_SUPPLY_TRANSACTIONAL. */
+  discountInPaise: string;
   cgstInPaise: string;
   sgstInPaise: string;
   igstInPaise: string;
@@ -117,13 +160,45 @@ export interface CheckoutTaxPreviewResult {
    *  input items. Lets the UI expand a cart line and see what tax
    *  drove the totals. */
   lines: CheckoutTaxPreviewLine[];
+  /**
+   * Phase 65 (2026-05-22) — productIds that couldn't be loaded
+   * from the catalog (e.g. soft-deleted or archived between cart-
+   * add and preview) (audit Gap #17). UI can surface these as
+   * "Item unavailable" rather than silently showing 0 tax.
+   */
+  missingItemIds: string[];
+  /**
+   * Phase 65 (2026-05-22) — server timestamp of the compute
+   * (audit Gap #23). Lets the UI invalidate a stale render when
+   * the cart changes mid-flow.
+   */
+  previewedAt: string;
+  /**
+   * Phase 65 (2026-05-22) — deterministic hash of the preview
+   * inputs (cart contents + address + coupon + tax profile). The
+   * UI re-fetches when the cart changes and compares against the
+   * last-known hash; a mismatch means the customer is looking at
+   * a stale preview and the place-order button is dimmed until
+   * the new preview returns (audit Gap #23).
+   */
+  inputHash: string;
 }
 
 @Injectable()
 export class CheckoutTaxPreviewService {
   private readonly logger = new Logger(CheckoutTaxPreviewService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 65 (2026-05-22) — STRICT mode gate (audit Gaps #3 + #11
+    // + #12 + #13). Pre-Phase-65 the preview silently used schema
+    // defaults (taxInclusivePricing=true, supplyTaxability=TAXABLE,
+    // gstRateBps=0) when a product was missing tax config; the
+    // customer saw ₹0 GST on a TAXABLE product. STRICT mode now
+    // surfaces a TaxStrictModeViolationError; AUDIT logs; OFF
+    // preserves the old behaviour for dev.
+    private readonly taxMode: TaxModeService,
+  ) {}
 
   async previewForSession(
     input: CheckoutTaxPreviewInput,
@@ -153,7 +228,13 @@ export class CheckoutTaxPreviewService {
       await Promise.all([
         productIds.length > 0
           ? this.prisma.product.findMany({
-              where: { id: { in: productIds } },
+              // Phase 65 (2026-05-22) — filter inactive / soft-deleted
+              // products (audit Gap #16). Pre-Phase-65 an archived
+              // product still got taxed at its stale gstRateBps; the
+              // customer saw tax for something they can't actually
+              // checkout. Missing products are reported via
+              // missingItemIds[].
+              where: { id: { in: productIds }, status: 'ACTIVE', isDeleted: false },
               select: {
                 id: true,
                 hsnCode: true,
@@ -161,6 +242,10 @@ export class CheckoutTaxPreviewService {
                 supplyTaxability: true,
                 taxInclusivePricing: true,
                 cessRateBps: true,
+                // Phase 65 (audit Gap #13) — surface
+                // taxConfigVerified so STRICT mode can refuse to
+                // preview an un-attested TAXABLE product.
+                taxConfigVerified: true,
               },
             })
           : Promise.resolve([]),
@@ -203,14 +288,80 @@ export class CheckoutTaxPreviewService {
     let hasIgst = false;
     let hasCgstSgst = false;
     let incompleteItemCount = 0;
+    // Phase 65 (2026-05-22) — products that didn't resolve from
+    // catalog (audit Gap #17). Soft-deleted / archived products are
+    // already filtered by the `status='ACTIVE'` clause above; this
+    // tracks the resulting absence in the productById map.
+    const missingItemIds: string[] = [];
     // Phase 36 — per-line drill-down for the cart/checkout expand UI.
     const lines: CheckoutTaxPreviewLine[] = [];
 
-    for (const it of input.items) {
+    // Phase 65 (audit Gaps #1 + #21) — discount allocation. Use the
+    // canonical allocateOrderLevel domain function so preview and
+    // snapshot agree byte-for-byte. Only run when a coupon is
+    // applied AND the discount is PRE_SUPPLY_TRANSACTIONAL (the
+    // only treatment that affects taxable value); other treatments
+    // pass through with 0 discount per line, matching the snapshot.
+    const discountByLineIdx = new Map<number, bigint>();
+    if (
+      input.discount &&
+      input.discount.totalInPaise > 0n &&
+      (input.discount.taxTreatment ?? 'PRE_SUPPLY_TRANSACTIONAL') ===
+        'PRE_SUPPLY_TRANSACTIONAL'
+    ) {
+      const allocatorItems = input.items.map((it, idx) => ({
+        // Synthesize a stable id from the line index — the
+        // allocator only needs string identity, not a real
+        // OrderItem row.
+        orderItemId: `preview-${idx}`,
+        productId: it.productId,
+        variantId: it.variantId ?? null,
+        subOrderId: 'preview',
+        sellerId: it.sellerId ?? null,
+        grossInPaise: it.unitPriceInPaise * BigInt(it.quantity),
+        unitPriceInPaise: it.unitPriceInPaise,
+        quantity: it.quantity,
+      }));
+      const eligibleSet = input.discount.eligibleProductIds;
+      try {
+        const alloc = allocateOrderLevel({
+          items: allocatorItems,
+          totalDiscountInPaise: input.discount.totalInPaise,
+          eligibleProductIds:
+            eligibleSet && eligibleSet.size > 0
+              ? new Set(eligibleSet)
+              : undefined,
+        });
+        const allocByOrderItemId = new Map(
+          alloc.allocations.map((a) => [a.orderItemId, a.discountInPaise]),
+        );
+        allocatorItems.forEach((ai, idx) => {
+          const d = allocByOrderItemId.get(ai.orderItemId) ?? 0n;
+          if (d > 0n) discountByLineIdx.set(idx, d);
+        });
+      } catch (err) {
+        // Allocator throws when no eligible items / zero gross.
+        // Preview should still produce a tax breakdown (just
+        // without the discount); a logger.warn lets ops see the
+        // edge case.
+        this.logger.warn(
+          `Discount allocation failed in preview: ${(err as Error).message}. Falling back to no-discount preview.`,
+        );
+      }
+    }
+
+    for (let idx = 0; idx < input.items.length; idx++) {
+      const it = input.items[idx]!;
       const product = productById.get(it.productId);
       const variant = it.variantId
         ? variantById.get(it.variantId)
         : null;
+
+      // Phase 65 (audit Gap #17) — explicitly track missing
+      // products separately from the per-line "incomplete" hint.
+      if (!product) {
+        missingItemIds.push(it.productId);
+      }
 
       const gstRateBps =
         variant?.gstRateBpsOverride ??
@@ -239,14 +390,12 @@ export class CheckoutTaxPreviewService {
       const grossInPaise =
         it.unitPriceInPaise * BigInt(it.quantity);
 
+      // Phase 65 (audit Gaps #1 + #21) — proportional discount.
+      const lineDiscountInPaise = discountByLineIdx.get(idx) ?? 0n;
+
       const tax = calculateLineTax({
         grossInPaise,
-        // Cart discount allocation runs at placeOrder time; the
-        // preview deliberately doesn't try to second-guess it. If
-        // the customer applied a coupon, the post-placement invoice
-        // will reflect a slightly lower subtotal — banner copy
-        // tells them.
-        discountInPaise: 0n,
+        discountInPaise: lineDiscountInPaise,
         gstRateBps,
         cessRateBps,
         priceIncludesTax,
@@ -275,13 +424,53 @@ export class CheckoutTaxPreviewService {
         incompleteItemCount++;
       }
 
+      // Phase 65 (audit Gaps #3 + #11 + #12 + #13) — STRICT mode
+      // gate. Any condition that pre-Phase-65 fell through to a
+      // schema default now raises a TaxModeViolation; the
+      // TaxModeService decides whether to log (AUDIT) or throw
+      // (STRICT). OFF mode preserves the pre-Phase-65 silent
+      // fallback for dev.
+      if (!product) {
+        await this.taxMode.report({
+          code: 'tax_preview.product_missing',
+          message: `Product ${it.productId} not found in catalog for tax preview`,
+          context: { productId: it.productId, variantId: it.variantId },
+        });
+      } else if (isTaxable && !hasCompleteConfig) {
+        await this.taxMode.report({
+          code: 'tax_preview.taxable_without_hsn_or_rate',
+          message: `TAXABLE product ${it.productId} missing HSN code or non-zero rate`,
+          context: {
+            productId: it.productId,
+            variantId: it.variantId,
+            hsnCode: variant?.hsnCodeOverride ?? product.hsnCode,
+            gstRateBps,
+          },
+        });
+      } else if (isTaxable && !product.taxConfigVerified) {
+        // Phase 65 (audit Gap #13) — taxConfigVerified is the
+        // admin-attested signal that the rate + HSN are correct.
+        // Un-attested TAXABLE products are previewed in OFF/AUDIT
+        // mode (with a logged violation) but blocked in STRICT.
+        await this.taxMode.report({
+          code: 'tax_preview.tax_config_unverified',
+          message: `TAXABLE product ${it.productId} has not been admin-attested`,
+          context: { productId: it.productId },
+        });
+      }
+
+      // Phase 65 (audit Gap #14) — composite line key for the UI.
+      const lineKey = `${it.productId}:${it.variantId ?? ''}`;
+
       // Phase 36 — record the per-line breakdown for the drill-down UI.
       lines.push({
+        lineKey,
         productId: it.productId,
         variantId: it.variantId,
         quantity: it.quantity,
         unitPriceInPaise: it.unitPriceInPaise.toString(),
         taxableInPaise: tax.taxableInPaise.toString(),
+        discountInPaise: lineDiscountInPaise.toString(),
         cgstInPaise: tax.cgstInPaise.toString(),
         sgstInPaise: tax.sgstInPaise.toString(),
         igstInPaise: tax.igstInPaise.toString(),
@@ -307,6 +496,35 @@ export class CheckoutTaxPreviewService {
       );
     }
 
+    // Phase 65 (audit Gap #23) — input hash so the UI can
+    // invalidate a stale render. Deterministic over the inputs
+    // that affect the tax math (items + address + coupon + tax
+    // profile). Hex digest is fine: collision risk is moot since
+    // the only consumer is "did anything change?" comparison.
+    const inputHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          items: input.items.map((it) => ({
+            p: it.productId,
+            v: it.variantId,
+            q: it.quantity,
+            u: it.unitPriceInPaise.toString(),
+            s: it.sellerId,
+          })),
+          state: input.customerShippingStateCode,
+          discount: input.discount
+            ? {
+                t: input.discount.totalInPaise.toString(),
+                e: input.discount.eligibleProductIds
+                  ? [...input.discount.eligibleProductIds].sort()
+                  : null,
+                tt: input.discount.taxTreatment ?? null,
+              }
+            : null,
+        }),
+      )
+      .digest('hex');
+
     return {
       subtotalTaxableInPaise: subtotalTaxable.toString(),
       cgstInPaise: totalCgst.toString(),
@@ -321,6 +539,9 @@ export class CheckoutTaxPreviewService {
       hasCgstSgst,
       incompleteItemCount,
       lines,
+      missingItemIds,
+      previewedAt: new Date().toISOString(),
+      inputHash,
     };
   }
 }
@@ -340,5 +561,8 @@ function zeroPreview(): CheckoutTaxPreviewResult {
     hasCgstSgst: false,
     incompleteItemCount: 0,
     lines: [],
+    missingItemIds: [],
+    previewedAt: new Date().toISOString(),
+    inputHash: createHash('sha256').update('empty').digest('hex'),
   };
 }

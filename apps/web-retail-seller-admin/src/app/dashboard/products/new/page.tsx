@@ -285,12 +285,13 @@ export default function CreateProductPage() {
       const payload = buildPayload();
       const res = await adminProductsService.createProduct(payload);
 
+      // Phase 32 (2026-05-21) — missing-id branch surfaces an error
+      // (was misleading "saved as draft" toast).
       if (res.data?.id) {
         showToast('success', 'Product created successfully.');
         setTimeout(() => router.push(`/dashboard/products/${res.data!.id}/edit`), 800);
       } else {
-        showToast('success', 'Product saved as draft.');
-        setTimeout(() => router.push('/dashboard/products'), 800);
+        showToast('error', 'Product creation returned an unexpected response. Please refresh and check the products list.');
       }
     } catch (err) {
       if (err instanceof ApiError) {

@@ -78,3 +78,20 @@ export function buildStateIndex(rows: Array<{ gstStateCode: string; stateName: s
   }
   return m;
 }
+
+/**
+ * Phase 159z — code → canonical state-name lookup. Inverse of
+ * `buildStateIndex`. Used by GSTR-8 to populate the CBIC "Place of
+ * Supply" CSV column from `place_of_supply_state_code` and by the
+ * GSTR-8 JSON exporter to denormalise the per-row breakdown.
+ *
+ * The canonical name is the india_states.stateName as seeded; case
+ * and punctuation match the CBIC list (e.g. 'Jammu & Kashmir').
+ */
+export function buildCodeToNameIndex(rows: Array<{ gstStateCode: string; stateName: string }>): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const r of rows) {
+    m.set(r.gstStateCode, r.stateName);
+  }
+  return m;
+}

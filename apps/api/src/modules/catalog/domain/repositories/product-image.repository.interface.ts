@@ -17,6 +17,15 @@ export interface IProductImageRepository {
   deleteVariantImage(imageId: string): Promise<void>;
   deleteVariantImagesByPublicId(variantIds: string[], publicId: string): Promise<void>;
   reorderVariantImages(variantId: string, imageIds: string[]): Promise<void>;
+  // Phase 41 (2026-05-21) — variant-image isPrimary helpers.
+  findFirstByVariant(variantId: string): Promise<any | null>;
+  setVariantImagePrimary(imageId: string): Promise<void>;
+  /**
+   * Phase 41 — after a delete, if no variant image carries
+   * isPrimary=true, promote the lowest sort_order survivor so the
+   * variant always has a hero (mirrors the ProductImage pattern).
+   */
+  ensureVariantHasPrimary(variantId: string): Promise<void>;
 
   // ── Color sibling lookup ──
   findColorSiblingVariantIds(productId: string, variantId: string): Promise<string[]>;

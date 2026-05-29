@@ -14,6 +14,8 @@ import { UploadSellerMediaUseCase } from './application/use-cases/upload-seller-
 import { DeleteSellerMediaUseCase } from './application/use-cases/delete-seller-media.use-case';
 import { SendEmailVerificationOtpUseCase } from './application/use-cases/send-email-verification-otp.use-case';
 import { VerifySellerEmailUseCase } from './application/use-cases/verify-seller-email.use-case';
+import { PublicVerifySellerEmailUseCase } from './application/use-cases/public-verify-seller-email.use-case';
+import { ResendSellerVerificationOtpUseCase } from './application/use-cases/resend-seller-verification-otp.use-case';
 import { SubmitSellerOnboardingUseCase } from './application/use-cases/submit-seller-onboarding.use-case';
 import { ApproveSellerUseCase } from './application/use-cases/approve-seller.use-case';
 import { RejectSellerUseCase } from './application/use-cases/reject-seller.use-case';
@@ -25,6 +27,7 @@ import { SellerRegisterController } from './presentation/controllers/seller-regi
 import { SellerLoginController } from './presentation/controllers/seller-login.controller';
 import { SellerRefreshController } from './presentation/controllers/seller-refresh.controller';
 import { SellerLogoutController } from './presentation/controllers/seller-logout.controller';
+import { SellerAuthMeController } from './presentation/controllers/seller-auth-me.controller';
 import { SellerForgotPasswordController } from './presentation/controllers/seller-forgot-password.controller';
 import { SellerResetPasswordController } from './presentation/controllers/seller-reset-password.controller';
 import { SellerProfileController } from './presentation/controllers/seller-profile.controller';
@@ -34,7 +37,9 @@ import { SellerDeliveryMethodsController } from './presentation/controllers/sell
 import { SubmitSellerOnboardingController } from './presentation/controllers/submit-seller-onboarding.controller';
 import { ApproveSellerController } from './presentation/controllers/approve-seller.controller';
 import { RejectSellerController } from './presentation/controllers/reject-seller.controller';
+import { SellerBankDetailsController } from './presentation/controllers/seller-bank-details.controller';
 import { SellerDeliveryMethodsService } from './application/services/seller-delivery-methods.service';
+import { SellerBankDetailsService } from './application/services/seller-bank-details.service';
 import { SELLER_REPOSITORY } from './domain/repositories/seller.repository.interface';
 import { PrismaSellerRepository } from './infrastructure/repositories/prisma-seller.repository';
 import { SellerAuditHandler } from './application/event-handlers/seller-audit.handler';
@@ -45,6 +50,7 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
     SellerLoginController,
     SellerRefreshController,
     SellerLogoutController,
+    SellerAuthMeController,
     SellerForgotPasswordController,
     SellerResetPasswordController,
     SellerProfileController,
@@ -54,9 +60,11 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
     SubmitSellerOnboardingController,
     ApproveSellerController,
     RejectSellerController,
+    SellerBankDetailsController,
   ],
   providers: [
     SellerDeliveryMethodsService,
+    SellerBankDetailsService,
     {
       provide: SELLER_REPOSITORY,
       useClass: PrismaSellerRepository,
@@ -77,6 +85,8 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
     DeleteSellerMediaUseCase,
     SendEmailVerificationOtpUseCase,
     VerifySellerEmailUseCase,
+    PublicVerifySellerEmailUseCase,
+    ResendSellerVerificationOtpUseCase,
     SubmitSellerOnboardingUseCase,
     ApproveSellerUseCase,
     RejectSellerUseCase,
@@ -91,6 +101,8 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
     // decorators on the handler are never bound.
     SellerAuditHandler,
   ],
-  exports: [SellerPublicFacade],
+  // Phase 151 — export the bank-details service so the payouts module can
+  // decrypt the beneficiary account number for the bank export file.
+  exports: [SellerPublicFacade, SellerBankDetailsService],
 })
 export class SellerModule {}

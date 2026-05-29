@@ -7,6 +7,8 @@ import { PolicyEvaluatorService } from '../authorization/policy-evaluator.servic
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
 import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
+import { RbacOrphanEventHandler } from '../authorization/rbac-orphan-event.handler';
+import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-impersonating.guard';
 
 /**
  * Phase 4 — Global guards module.
@@ -38,6 +40,15 @@ import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
     AuthorizationAuditService,
     AdminPermissionResolver,
     RbacOrphanSweepCron,
+    // Phase 24 (2026-05-20) — listens to rbac.orphan_permission_detected
+    // events emitted by the sweep cron and surfaces them via logger +
+    // unified audit. @OnEvent decorators bind on provider registration.
+    RbacOrphanEventHandler,
+    // Phase 28 (2026-05-21) — blocks destructive routes when the
+    // request is authenticated via an admin impersonation token. Pure
+    // metadata-driven guard; reads req.isImpersonation set by the
+    // seller / franchise auth guards.
+    BlockedWhileImpersonatingGuard,
   ],
   exports: [
     PermissionsGuard,
@@ -49,6 +60,7 @@ import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
     AuthorizationAuditService,
     AdminPermissionResolver,
     RbacOrphanSweepCron,
+    BlockedWhileImpersonatingGuard,
   ],
 })
 export class GuardsModule {}

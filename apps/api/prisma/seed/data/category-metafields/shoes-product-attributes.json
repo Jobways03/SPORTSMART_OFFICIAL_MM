@@ -1,0 +1,945 @@
+{
+  "casual-sneakers": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "narrow", "label": "Narrow" },
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" },
+        { "value": "extra_wide", "label": "Extra Wide" }
+      ]
+    },
+    {
+      "key": "closure_type",
+      "name": "Closure Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "lace_up", "label": "Lace-Up" },
+        { "value": "slip_on", "label": "Slip-On" },
+        { "value": "velcro", "label": "Velcro / Strap" },
+        { "value": "zip", "label": "Zip" }
+      ]
+    },
+    {
+      "key": "cut_style",
+      "name": "Cut Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "low", "label": "Low Top" },
+        { "value": "mid", "label": "Mid Top" },
+        { "value": "high", "label": "High Top" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "brown", "label": "Brown" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "walking-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "narrow", "label": "Narrow" },
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" },
+        { "value": "extra_wide", "label": "Extra Wide" }
+      ]
+    },
+    {
+      "key": "arch_support",
+      "name": "Arch Support",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "neutral", "label": "Neutral" },
+        { "value": "stability", "label": "Stability / Support" },
+        { "value": "motion_control", "label": "Motion Control" }
+      ]
+    },
+    {
+      "key": "waterproof",
+      "name": "Waterproof",
+      "type": "BOOLEAN",
+      "sortOrder": 5
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "brown", "label": "Brown" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "hiking-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "trail_shoe", "label": "Trail / Hiking Shoe (Low)" },
+        { "value": "mid_boot", "label": "Mid-Cut Boot" },
+        { "value": "high_boot", "label": "High-Cut / Backpacking Boot" },
+        { "value": "approach_shoe", "label": "Approach Shoe" },
+        { "value": "sandal", "label": "Hiking Sandal" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" },
+        { "value": "14", "label": "14" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "waterproof",
+      "name": "Waterproof",
+      "type": "BOOLEAN",
+      "sortOrder": 5
+    },
+    {
+      "key": "terrain_type",
+      "name": "Terrain Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "light_trail", "label": "Light Trail" },
+        { "value": "rugged_trail", "label": "Rugged Trail" },
+        { "value": "mountaineering", "label": "Mountaineering" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "brown", "label": "Brown / Tan" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "green", "label": "Green" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "gym-training-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "training_type",
+      "name": "Training Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "cross_training", "label": "Cross Training" },
+        { "value": "weightlifting", "label": "Weightlifting" },
+        { "value": "hiit", "label": "HIIT / Circuit" },
+        { "value": "aerobics", "label": "Aerobics / Dance Fitness" },
+        { "value": "general", "label": "General Gym" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "drop_height",
+      "name": "Drop Height",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "description": "Heel-to-toe drop",
+      "choices": [
+        { "value": "zero_drop", "label": "Zero Drop (0mm)" },
+        { "value": "low", "label": "Low Drop (1-4mm)" },
+        { "value": "medium", "label": "Medium Drop (5-8mm)" },
+        { "value": "standard", "label": "Standard Drop (9mm+)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "cycling-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "cycling_type",
+      "name": "Cycling Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "road", "label": "Road Cycling" },
+        { "value": "mountain", "label": "Mountain Bike (MTB)" },
+        { "value": "gravel", "label": "Gravel / Adventure" },
+        { "value": "indoor_spin", "label": "Indoor / Spin" },
+        { "value": "touring", "label": "Touring / Commuter" }
+      ]
+    },
+    {
+      "key": "cleat_compatibility",
+      "name": "Cleat Compatibility",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "spd", "label": "SPD (2-Bolt)" },
+        { "value": "spd_sl", "label": "SPD-SL (3-Bolt)" },
+        { "value": "look", "label": "Look (3-Bolt)" },
+        { "value": "flat", "label": "Flat / No Cleat" },
+        { "value": "speedplay", "label": "Speedplay" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size (EU)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "36", "label": "36" },
+        { "value": "37", "label": "37" },
+        { "value": "38", "label": "38" },
+        { "value": "39", "label": "39" },
+        { "value": "40", "label": "40" },
+        { "value": "41", "label": "41" },
+        { "value": "42", "label": "42" },
+        { "value": "43", "label": "43" },
+        { "value": "44", "label": "44" },
+        { "value": "45", "label": "45" },
+        { "value": "46", "label": "46" },
+        { "value": "47", "label": "47" },
+        { "value": "48", "label": "48" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "closure_type",
+      "name": "Closure Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "boa_dial", "label": "BOA Dial" },
+        { "value": "velcro", "label": "Velcro Strap" },
+        { "value": "lace", "label": "Lace-Up" },
+        { "value": "buckle", "label": "Buckle" },
+        { "value": "combo", "label": "Combination" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "boxing-wrestling-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "boxing", "label": "Boxing Boots" },
+        { "value": "wrestling", "label": "Wrestling Shoes" },
+        { "value": "mma", "label": "MMA Training Shoes" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" },
+        { "value": "14", "label": "14" }
+      ]
+    },
+    {
+      "key": "cut_style",
+      "name": "Cut Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "low", "label": "Low Top" },
+        { "value": "mid", "label": "Mid Top" },
+        { "value": "high", "label": "High Top" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "gold", "label": "Gold" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "slides-sandals": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "style_type",
+      "name": "Style Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "slides", "label": "Slides" },
+        { "value": "flip_flops", "label": "Flip Flops" },
+        { "value": "sports_sandal", "label": "Sports Sandal" },
+        { "value": "recovery_slide", "label": "Recovery Slide" },
+        { "value": "pool_shoe", "label": "Pool / Shower Shoe" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "indoor-court-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "sport",
+      "name": "Sport",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "squash", "label": "Squash" },
+        { "value": "racquetball", "label": "Racquetball" },
+        { "value": "handball", "label": "Handball" },
+        { "value": "futsal", "label": "Futsal" },
+        { "value": "multi_court", "label": "Multi-Court / General" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "non_marking_sole",
+      "name": "Non-Marking Sole",
+      "type": "BOOLEAN",
+      "sortOrder": 5
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "skating-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "skate_type",
+      "name": "Skate Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "skateboard", "label": "Skateboard Shoes" },
+        { "value": "ice_skates", "label": "Ice Skates" },
+        { "value": "inline_skates", "label": "Inline / Roller Skates" },
+        { "value": "roller_quad", "label": "Quad Roller Skates" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "water-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "aqua_shoe", "label": "Aqua Shoe" },
+        { "value": "neoprene_boot", "label": "Neoprene Boot" },
+        { "value": "water_sandal", "label": "Water Sandal" },
+        { "value": "reef_shoe", "label": "Reef / Dive Shoe" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "climbing-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "climbing_style",
+      "name": "Climbing Style",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "bouldering", "label": "Bouldering" },
+        { "value": "sport", "label": "Sport Climbing" },
+        { "value": "trad", "label": "Trad / Multi-Pitch" },
+        { "value": "all_round", "label": "All-Round" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size (EU)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "34", "label": "34" },
+        { "value": "35", "label": "35" },
+        { "value": "36", "label": "36" },
+        { "value": "37", "label": "37" },
+        { "value": "38", "label": "38" },
+        { "value": "39", "label": "39" },
+        { "value": "40", "label": "40" },
+        { "value": "41", "label": "41" },
+        { "value": "42", "label": "42" },
+        { "value": "43", "label": "43" },
+        { "value": "44", "label": "44" },
+        { "value": "45", "label": "45" },
+        { "value": "46", "label": "46" }
+      ]
+    },
+    {
+      "key": "closure_type",
+      "name": "Closure Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "lace", "label": "Lace-Up" },
+        { "value": "velcro", "label": "Velcro" },
+        { "value": "slip_on", "label": "Slip-On" }
+      ]
+    },
+    {
+      "key": "profile",
+      "name": "Profile / Downturn",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "flat", "label": "Flat (Beginner)" },
+        { "value": "moderate", "label": "Moderate Downturn" },
+        { "value": "aggressive", "label": "Aggressive Downturn" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "football-studs": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "ground_type",
+      "name": "Ground Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "fg", "label": "Firm Ground (FG)" },
+        { "value": "sg", "label": "Soft Ground (SG)" },
+        { "value": "ag", "label": "Artificial Grass (AG)" },
+        { "value": "tf", "label": "Turf (TF)" },
+        { "value": "in", "label": "Indoor (IN)" },
+        { "value": "mg", "label": "Multi Ground (MG)" }
+      ]
+    },
+    {
+      "key": "shoe_size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "1", "label": "1" },
+        { "value": "2", "label": "2" },
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+        { "value": "6", "label": "6" },
+        { "value": "7", "label": "7" },
+        { "value": "8", "label": "8" },
+        { "value": "9", "label": "9" },
+        { "value": "10", "label": "10" },
+        { "value": "11", "label": "11" },
+        { "value": "12", "label": "12" },
+        { "value": "13", "label": "13" }
+      ]
+    },
+    {
+      "key": "shoe_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "elite", "label": "Elite / Pro" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

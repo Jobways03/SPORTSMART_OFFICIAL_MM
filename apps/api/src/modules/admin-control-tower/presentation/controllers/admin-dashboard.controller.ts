@@ -6,14 +6,43 @@ import {
   Param,
   Query,
   Body,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
 import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { AdminDashboardService } from '../../application/services/admin-dashboard.service';
 import { AdminOperationsService, BulkPricingUpdate } from '../../application/services/admin-operations.service';
+import {
+  BulkActivateMappingsDto,
+  BulkSuspendMappingsDto,
+} from '../dtos/seller-mapping-suspension.dto';
 
+/**
+ * Phase 24 (2026-05-20) — Audit-driven hardening.
+ *
+ * Pre-Phase-24 the four read endpoints (KPIs, product performance,
+ * seller performance, allocation analytics) wired AdminAuthGuard +
+ * RolesGuard + PermissionsGuard but declared neither @Permissions nor
+ * @Roles. PermissionsGuard.canActivate returns true when
+ * requiredPermissions.length === 0, so every read endpoint was
+ * effectively "any logged-in admin". A SELLER_SUPPORT admin could
+ * read every business KPI on the control tower.
+ *
+ * Now each read uses @Permissions('analytics.read') so only admins
+ * granted the read-analytics permission can hit them. SELLER_SUPPORT
+ * and SELLER_OPERATIONS already have analytics.read in their default
+ * role grant; SELLER_ADMIN inherits via custom-role assignment.
+ *
+ * Write endpoints already had @Roles('SUPER_ADMIN') (or
+ * SUPER_ADMIN + SELLER_ADMIN) — kept as-is and additionally
+ * annotated with a money-moving permission so the audit log carries
+ * the same provenance regardless of how the route was reached.
+ */
 @ApiTags('Admin Control Tower')
 @Controller('admin')
 @UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
@@ -26,6 +55,7 @@ export class AdminDashboardController {
   // ── T1: KPIs ────────────────────────────────────────────────────────────
 
   @Get('dashboard/kpis')
+  @Permissions('analytics.read')
   async getKpis() {
     const data = await this.dashboardService.getKpis();
     return { success: true, message: 'Dashboard KPIs retrieved', data };
@@ -34,6 +64,7 @@ export class AdminDashboardController {
   // ── T2: Product performance ─────────────────────────────────────────────
 
   @Get('dashboard/product-performance')
+  @Permissions('analytics.read')
   async getProductPerformance(
     @Query('period') period?: string,
     @Query('limit') limit?: string,
@@ -48,6 +79,7 @@ export class AdminDashboardController {
   // ── T3: Seller performance ──────────────────────────────────────────────
 
   @Get('dashboard/seller-performance')
+  @Permissions('analytics.read')
   async getSellerPerformance() {
     const data = await this.dashboardService.getSellerPerformance();
     return { success: true, message: 'Seller performance retrieved', data };
@@ -56,6 +88,7 @@ export class AdminDashboardController {
   // ── T4: Allocation analytics ────────────────────────────────────────────
 
   @Get('dashboard/allocation-analytics')
+  @Permissions('analytics.read')
   async getAllocationAnalytics() {
     const data = await this.dashboardService.getAllocationAnalytics();
     return { success: true, message: 'Allocation analytics retrieved', data };
@@ -68,6 +101,7 @@ export class AdminDashboardController {
   // cross-seller impact → SUPER_ADMIN only.
   @Patch('products/bulk-pricing')
   @Roles('SUPER_ADMIN')
+  @Permissions('catalog.write')
   async bulkUpdatePricing(
     @Body() body: { updates: BulkPricingUpdate[] },
   ) {
@@ -75,36 +109,61 @@ export class AdminDashboardController {
     return { success: true, message: 'Bulk pricing update completed', data };
   }
 
-  // ── T6: Override allocation (reassign sub-order) ────────────────────────
-
-  // Reassigning a sub-order moves earnings from one seller to another
-  // and bypasses the normal routing engine. SUPER_ADMIN only.
-  @Post('orders/:subOrderId/reassign')
-  @Roles('SUPER_ADMIN')
-  async reassignSubOrder(
-    @Param('subOrderId') subOrderId: string,
-    @Body() body: { sellerId: string },
-  ) {
-    const data = await this.operationsService.reassignSubOrder(subOrderId, body.sellerId);
-    return { success: true, message: 'Sub-order reassigned', data };
-  }
+  // ── T6: Override allocation (reassign sub-order) — REMOVED in Phase 78
+  //
+  // Phase 78 (2026-05-22) — reassign audit Gap #6. The legacy
+  // POST /admin/orders/:subOrderId/reassign that lived here is removed.
+  // The modern, canonical endpoint is
+  //   POST /admin/orders/sub-orders/:subOrderId/reassign
+  // wired in AdminOrdersController. It supports SELLER and FRANCHISE
+  // targets, captures a mandatory reason + admin actor, writes a
+  // tx-atomic OrderReassignmentLog with FK to Admin, and publishes a
+  // transactional outbox event for downstream subscribers.
 
   // ── T7: Seller mapping suspension ───────────────────────────────────────
 
   // Suspend/activate of a seller's full catalog is an operational
   // seller-account action on par with delete/impersonate — allow
   // SUPER_ADMIN and SELLER_ADMIN (same tier as those).
+  //
+  // Phase 59 (2026-05-22) — both endpoints now accept a mandatory
+  // reason body (audit Gaps #5 + #12), pass adminId from the JWT
+  // through to the service (audit Gap #3), and carry @Idempotent
+  // so a retried POST returns the cached response instead of
+  // re-firing audit + event + cache-invalidate (audit Gap #9).
   @Post('sellers/:sellerId/suspend-mappings')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
-  async suspendMappings(@Param('sellerId') sellerId: string) {
-    const data = await this.operationsService.suspendSellerMappings(sellerId);
+  @Permissions('sellers.suspend')
+  @Idempotent()
+  async suspendMappings(
+    @Req() req: Request,
+    @Param('sellerId') sellerId: string,
+    @Body() dto: BulkSuspendMappingsDto,
+  ) {
+    const adminId = (req as any).adminId as string | undefined;
+    const data = await this.operationsService.suspendSellerMappings(
+      sellerId,
+      adminId,
+      dto.reason,
+    );
     return { success: true, message: 'Seller mappings suspended', data };
   }
 
   @Post('sellers/:sellerId/activate-mappings')
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
-  async activateMappings(@Param('sellerId') sellerId: string) {
-    const data = await this.operationsService.activateSellerMappings(sellerId);
+  @Permissions('sellers.suspend')
+  @Idempotent()
+  async activateMappings(
+    @Req() req: Request,
+    @Param('sellerId') sellerId: string,
+    @Body() dto: BulkActivateMappingsDto,
+  ) {
+    const adminId = (req as any).adminId as string | undefined;
+    const data = await this.operationsService.activateSellerMappings(
+      sellerId,
+      adminId,
+      dto.reason,
+    );
     return { success: true, message: 'Seller mappings activated', data };
   }
 }

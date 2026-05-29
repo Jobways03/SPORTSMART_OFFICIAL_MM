@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   Equals,
   IsArray,
@@ -13,7 +14,8 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { sanitizeOptionalText } from '../../../../core/util/sanitize-text';
 
 const RETURN_REASON_CATEGORIES = [
   'DEFECTIVE',
@@ -40,9 +42,15 @@ export class CreateReturnItemDto {
   @IsIn(RETURN_REASON_CATEGORIES as unknown as string[])
   reasonCategory!: string;
 
+  // Phase 95 (2026-05-23) — Phase 93 deferred #22 closure. Defense-
+  // in-depth HTML strip at the DTO boundary. Admin UI escapes at
+  // render time, but a hostile payload sitting in the column is a
+  // footgun for any future code path that logs/renders without
+  // escaping (CSV exports, PDF generation, etc).
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @Transform(({ value }) => sanitizeOptionalText(value, { maxLength: 500 }))
   reasonDetail?: string;
 }
 
@@ -53,13 +61,20 @@ export class CreateReturnDto {
 
   @IsArray()
   @ArrayMinSize(1)
+  // Phase 93 (2026-05-23) — Gap #13/#21 array cap. A reasonable upper
+  // bound stops a hostile client from sending 10k items in one POST.
+  // 100 items is well above any real-world cart size.
+  @ArrayMaxSize(100)
   @ValidateNested({ each: true })
   @Type(() => CreateReturnItemDto)
   items!: CreateReturnItemDto[];
 
+  // Phase 95 (2026-05-23) — Phase 93 deferred #20 closure. See
+  // reasonDetail above for rationale.
   @IsOptional()
   @IsString()
   @MaxLength(1000)
+  @Transform(({ value }) => sanitizeOptionalText(value, { maxLength: 1000 }))
   customerNotes?: string;
 
   // ── Fair-forfeit gate ─────────────────────────────────────────
@@ -84,6 +99,12 @@ export class CreateReturnDto {
   // still allowed (defaults to []).
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(10)
   @IsString({ each: true })
+  // Phase 93 (2026-05-23) — Gap #5/#24. Format validation runs at the
+  // DTO boundary; allowlist validation lives in the service so the
+  // env-driven allowlist (Cloudinary cloud name) can shift without
+  // re-deploying the DTO.
+  @MaxLength(2048, { each: true })
   evidenceFileUrls?: string[];
 }

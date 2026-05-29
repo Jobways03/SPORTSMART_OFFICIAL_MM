@@ -2,6 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { createHash, timingSafeEqual } from 'crypto';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { UnauthorizedAppException, BadRequestAppException } from '../../../../core/exceptions';
 import {
   FranchisePartnerRepository,
@@ -11,6 +12,8 @@ import {
 interface VerifyFranchiseEmailInput {
   franchiseId: string;
   otp: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
 }
 
 @Injectable()
@@ -20,12 +23,14 @@ export class VerifyFranchiseEmailUseCase {
     private readonly franchiseRepo: FranchisePartnerRepository,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
+    // Phase 27 (2026-05-21) — audit verify outcomes.
+    private readonly audit: AuditPublicFacade,
   ) {
     this.logger.setContext('VerifyFranchiseEmailUseCase');
   }
 
   async execute(input: VerifyFranchiseEmailInput): Promise<{ isEmailVerified: boolean }> {
-    const { franchiseId, otp } = input;
+    const { franchiseId, otp, ipAddress, userAgent } = input;
 
     const franchise = await this.franchiseRepo.findByIdSelect(franchiseId, {
       id: true,
@@ -50,14 +55,24 @@ export class VerifyFranchiseEmailUseCase {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
-    // Check max attempts
-    if (otpRecord.attempts >= otpRecord.maxAttempts) {
+    // Phase 27 (2026-05-21) — atomic CAS attempt increment. See
+    // verify-seller-email.use-case.ts for full rationale; the
+    // public-verify-franchise-email path already uses this pattern.
+    const inc = await this.franchiseRepo.incrementOtpAttemptsCas(
+      otpRecord.id,
+      otpRecord.maxAttempts,
+    );
+    if (!inc.ok) {
       await this.franchiseRepo.expireOtp(otpRecord.id);
-      throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
+      this.writeAudit(franchiseId, 'FRANCHISE_EMAIL_VERIFY_FAILED', {
+        reason: 'attempts_cap_reached',
+        ipAddress,
+        userAgent,
+      });
+      throw new UnauthorizedAppException(
+        'Too many failed attempts. Please request a new OTP.',
+      );
     }
-
-    // Increment attempts
-    await this.franchiseRepo.incrementOtpAttempts(otpRecord.id);
 
     // Compare OTP hash in constant time — see
     // identity/verify-reset-otp.use-case.ts for rationale.
@@ -67,11 +82,22 @@ export class VerifyFranchiseEmailUseCase {
     const isMatch =
       actual.length === expected.length && timingSafeEqual(actual, expected);
     if (!isMatch) {
-      const remainingAttempts = otpRecord.maxAttempts - (otpRecord.attempts + 1);
+      const remainingAttempts = otpRecord.maxAttempts - inc.attempts;
       if (remainingAttempts <= 0) {
         await this.franchiseRepo.expireOtp(otpRecord.id);
+        this.writeAudit(franchiseId, 'FRANCHISE_EMAIL_VERIFY_FAILED', {
+          reason: 'attempts_cap_reached_after_mismatch',
+          ipAddress,
+          userAgent,
+        });
         throw new UnauthorizedAppException('Too many failed attempts. Please request a new OTP.');
       }
+      this.writeAudit(franchiseId, 'FRANCHISE_EMAIL_VERIFY_FAILED', {
+        reason: 'invalid_otp',
+        remainingAttempts,
+        ipAddress,
+        userAgent,
+      });
       throw new UnauthorizedAppException(`Invalid OTP. ${remainingAttempts} attempt(s) remaining.`);
     }
 
@@ -92,7 +118,37 @@ export class VerifyFranchiseEmailUseCase {
     });
 
     this.logger.log(`Franchise email verified: ${franchiseId}`);
+    this.writeAudit(franchiseId, 'FRANCHISE_EMAIL_VERIFY_SUCCESS', {
+      ipAddress,
+      userAgent,
+    });
 
     return { isEmailVerified: true };
+  }
+
+  private writeAudit(
+    franchiseId: string,
+    action: string,
+    metadata: Record<string, unknown>,
+  ): void {
+    this.audit
+      .writeAuditLog({
+        actorId: franchiseId,
+        actorRole: 'FRANCHISE',
+        action,
+        module: 'franchise-auth',
+        resource: 'FranchisePartner',
+        resourceId: franchiseId,
+        newValue: metadata,
+        ipAddress:
+          typeof metadata.ipAddress === 'string' ? metadata.ipAddress : undefined,
+        userAgent:
+          typeof metadata.userAgent === 'string' ? metadata.userAgent : undefined,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Audit log write failed for ${action} (${franchiseId}): ${(err as Error)?.message}`,
+        ),
+      );
   }
 }

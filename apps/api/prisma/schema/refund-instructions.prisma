@@ -26,6 +26,10 @@ enum RefundSourceType {
   MANUAL
   // Replacement orders that need a price-difference settle-up.
   REPLACEMENT
+  // Phase 74 (2026-05-22) — Phase 73 approve/reject audit Gap #1.
+  // Verifier rejected a prepaid order; refund saga reverses the
+  // gateway + wallet portions back to the customer.
+  VERIFICATION_REJECTION
 }
 
 enum RefundMethod {
@@ -38,40 +42,40 @@ enum RefundMethod {
 }
 
 enum RefundInstructionStatus {
-  PENDING_APPROVAL  // high-value or risk-flagged; awaits manager
-  APPROVED          // ready for execution
-  PROCESSING        // saga in flight
-  SUCCESS           // money landed
-  FAILED            // gateway said no AND retries exhausted
-  RETRYING          // failed once but inside retry budget
-  MANUAL_REQUIRED   // COD with no UPI/bank → ops to wire manually
-  CANCELLED         // refund was retracted before execution
+  PENDING_APPROVAL // high-value or risk-flagged; awaits manager
+  APPROVED // ready for execution
+  PROCESSING // saga in flight
+  SUCCESS // money landed
+  FAILED // gateway said no AND retries exhausted
+  RETRYING // failed once but inside retry budget
+  MANUAL_REQUIRED // COD with no UPI/bank → ops to wire manually
+  CANCELLED // refund was retracted before execution
 }
 
 model RefundInstruction {
-  id           String                  @id @default(uuid())
+  id         String           @id @default(uuid())
   // Polymorphic linkage to the source — RETURN row id, DISPUTE row id,
   // etc. Kept as a String pair (no FK) per the strict-modular-monolith
   // ADR; cross-module FK churn would defeat the boundary discipline.
-  sourceType   RefundSourceType        @map("source_type")
-  sourceId     String                  @map("source_id")
-  customerId   String                  @map("customer_id")
+  sourceType RefundSourceType @map("source_type")
+  sourceId   String           @map("source_id")
+  customerId String           @map("customer_id")
   // Optional — present for refunds that trace back to an order; absent
   // for goodwill credits not tied to a specific order.
-  orderId      String?                 @map("order_id")
+  orderId    String?          @map("order_id")
 
   // Money — paise as canonical (ADR-004 / ADR-007).
-  amountInPaise BigInt                 @map("amount_in_paise")
-  currency      String                 @default("INR")
+  amountInPaise BigInt @map("amount_in_paise")
+  currency      String @default("INR")
 
-  refundMethod  RefundMethod            @map("refund_method")
-  status        RefundInstructionStatus @default(APPROVED)
+  refundMethod RefundMethod            @map("refund_method")
+  status       RefundInstructionStatus @default(APPROVED)
 
   // Idempotency: when present, two callers can't accidentally produce
   // two instructions for the same refund. Nullable because not every
   // caller has an idempotency context (manual ops). When supplied,
   // unique cluster-wide.
-  idempotencyKey String?                @unique @map("idempotency_key")
+  idempotencyKey String? @unique @map("idempotency_key")
 
   // Cross-system identifiers populated by the saga.
   gatewayRefundId     String? @map("gateway_refund_id")
@@ -87,12 +91,21 @@ model RefundInstruction {
   // wallet credits) or rejects (instruction CANCELLED + reason
   // recorded). approvedBy column was added forward-looking in
   // 20260505140000; rejection columns added in 20260507100000.
-  approvedBy      String?    @map("approved_by")
-  approvedAt      DateTime?  @map("approved_at")
-  rejectedBy      String?    @map("rejected_by")
-  rejectedAt      DateTime?  @map("rejected_at")
-  rejectionReason String?    @map("rejection_reason")
-  processedAt     DateTime?  @map("processed_at")
+  approvedBy      String?   @map("approved_by")
+  approvedAt      DateTime? @map("approved_at")
+  rejectedBy      String?   @map("rejected_by")
+  rejectedAt      DateTime? @map("rejected_at")
+  rejectionReason String?   @map("rejection_reason")
+  processedAt     DateTime? @map("processed_at")
+
+  // Phase 125 — dual-approval (two-person rule) for high-value refunds.
+  // Refunds at/above REFUND_DUAL_APPROVAL_THRESHOLD_PAISE require TWO
+  // distinct finance approvers (separation of duties). The FIRST approver
+  // is recorded here and the instruction stays PENDING_APPROVAL; a second,
+  // DISTINCT approver then populates approvedBy and releases the saga.
+  // Below the threshold these stay null and a single approvedBy suffices.
+  firstApprovedBy String?   @map("first_approved_by")
+  firstApprovedAt DateTime? @map("first_approved_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -103,6 +116,9 @@ model RefundInstruction {
   @@index([status])
   // For the reconciliation cron: "find PROCESSING refunds older than X".
   @@index([status, processedAt])
+  // Finance reporting: refunds grouped by method (+ status), e.g.
+  // "bank-transfer refunds awaiting approval".
+  @@index([refundMethod, status])
   @@map("refund_instructions")
 }
 
@@ -111,6 +127,8 @@ enum RefundSagaStatus {
   IN_PROGRESS
   COMPLETED
   COMPENSATING
+  COMPENSATED
+  COMPENSATION_FAILED
   FAILED
 }
 
@@ -118,24 +136,53 @@ enum RefundSagaStatus {
 // Sagas"): forward steps each have a compensating action. `steps` and
 // `compensations` are arrays of { name, status, attempts, result, error,
 // startedAt, completedAt } records — see RefundSagaService for the shape.
+// Phase 100 (2026-05-23) — Phase 98 audit Gap #20 closure.
+//
+// Idempotent landing zone for Razorpay refund webhook events. The
+// `eventId @unique` constraint dedups Razorpay's at-least-once
+// delivery. `processed_at` is stamped after the side-effects run
+// (Return.status flip + outbox publish) so a failed mid-process
+// crash can be safely retried.
+model RazorpayRefundWebhookEvent {
+  id                String    @id @default(uuid())
+  eventId           String    @unique @map("event_id")
+  eventType         String    @map("event_type")
+  refundId          String?   @map("refund_id")
+  paymentId         String?   @map("payment_id")
+  rawPayload        Json      @map("raw_payload")
+  processedAt       DateTime? @map("processed_at")
+  processedOutcome  String?   @map("processed_outcome")
+  receivedAt        DateTime  @default(now()) @map("received_at")
+
+  @@index([refundId])
+  @@index([receivedAt(sort: Desc)])
+  @@map("razorpay_refund_webhook_events")
+}
+
 model RefundSaga {
-  id             String           @id @default(uuid())
-  refundType     RefundSourceType @map("refund_type")
+  id            String           @id @default(uuid())
+  refundType    RefundSourceType @map("refund_type")
   // Source aggregate id (return/dispute/etc.) — matches the
   // corresponding RefundInstruction.sourceId.
-  sourceId       String           @map("source_id")
+  sourceId      String           @map("source_id")
   // Optional link to the instruction the saga drives. A saga can
   // exist briefly without an instruction (in the create-instruction
   // step), so this is nullable.
-  instructionId  String?          @map("instruction_id")
-  amountInPaise  BigInt           @map("amount_in_paise")
-  customerId     String           @map("customer_id")
-  status         RefundSagaStatus @default(STARTED)
-  steps          Json
-  compensations  Json?
-  startedAt      DateTime         @default(now()) @map("started_at")
-  completedAt    DateTime?        @map("completed_at")
-  failureReason  String?          @map("failure_reason")
+  instructionId String?          @map("instruction_id")
+  // Phase 96 (2026-05-23) — Phase 99 audit Gap #11 / #15 closure.
+  // Mirror RefundInstruction.idempotencyKey so concurrent saga.run
+  // calls for the same instruction collapse to one row.
+  idempotencyKey       String?  @unique @map("idempotency_key")
+  walletTransactionId  String?  @map("wallet_transaction_id")
+  gatewayRefundId      String?  @map("gateway_refund_id")
+  amountInPaise BigInt           @map("amount_in_paise")
+  customerId    String           @map("customer_id")
+  status        RefundSagaStatus @default(STARTED)
+  steps         Json
+  compensations Json?
+  startedAt     DateTime         @default(now()) @map("started_at")
+  completedAt   DateTime?        @map("completed_at")
+  failureReason String?          @map("failure_reason")
 
   @@index([status, startedAt])
   @@index([sourceId])

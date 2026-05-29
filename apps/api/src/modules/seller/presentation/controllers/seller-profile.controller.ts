@@ -11,7 +11,11 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { SellerAuthGuard } from '../../../../core/guards';
+import {
+  BlockedWhileImpersonating,
+  BlockedWhileImpersonatingGuard,
+  SellerAuthGuard,
+} from '../../../../core/guards';
 import { GetSellerProfileUseCase } from '../../application/use-cases/get-seller-profile.use-case';
 import { UpdateSellerProfileUseCase } from '../../application/use-cases/update-seller-profile.use-case';
 import { ChangeSellerPasswordUseCase } from '../../application/use-cases/change-seller-password.use-case';
@@ -20,7 +24,13 @@ import { SellerChangePasswordDto } from '../dtos/seller-change-password.dto';
 
 @ApiTags('Seller Profile')
 @Controller('seller/profile')
-@UseGuards(SellerAuthGuard)
+// Phase 28 (2026-05-21) — BlockedWhileImpersonatingGuard added to
+// the chain so methods that opt in via @BlockedWhileImpersonating()
+// (change-password below) refuse requests from admin impersonation
+// tokens. Read-only and ordinary profile edits stay allowed during
+// impersonation — that's the legitimate "view what the target sees"
+// debugging use case.
+@UseGuards(SellerAuthGuard, BlockedWhileImpersonatingGuard)
 export class SellerProfileController {
   constructor(
     private readonly getSellerProfileUseCase: GetSellerProfileUseCase,
@@ -58,6 +68,10 @@ export class SellerProfileController {
 
   @Post('change-password')
   @HttpCode(HttpStatus.OK)
+  // Phase 28 (2026-05-21) — password change is the highest-value
+  // action an impersonating admin could perform on a seller account
+  // (post-change they'd own the account permanently). Hard-block.
+  @BlockedWhileImpersonating()
   async changePassword(
     @Req() req: Request,
     @Body() dto: SellerChangePasswordDto,

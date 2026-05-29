@@ -1,14 +1,18 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { StockMovementKind } from '@prisma/client';
 import {
   BadRequestAppException,
+  ConflictAppException,
   NotFoundAppException,
   ForbiddenAppException,
 } from '../../../../core/exceptions';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   InventoryManagementRepository,
   INVENTORY_MANAGEMENT_REPOSITORY,
 } from '../../domain/repositories/inventory-management.repository.interface';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
+import { StockMovementLedgerService } from './stock-movement-ledger.service';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -126,14 +130,42 @@ export class InventoryManagementService {
     @Inject(INVENTORY_MANAGEMENT_REPOSITORY)
     private readonly repo: InventoryManagementRepository,
     private readonly franchiseFacade: FranchisePublicFacade,
+    // Phase 53 (2026-05-21) — direct prisma access for SELECT FOR
+    // UPDATE row locking on the adjust path. The repo doesn't expose
+    // a row-locked update primitive.
+    private readonly prisma: PrismaService,
+    // Phase 53 (2026-05-21) — every adjust/import writes a
+    // MANUAL_ADJUST StockMovement ledger row so seller-driven stock
+    // changes are no longer forensically invisible (audit Gap #1).
+    private readonly stockLedger: StockMovementLedgerService,
   ) {}
 
   // ── T2: Manual stock adjustment ─────────────────────────────────────
 
+  /**
+   * Phase 53 (2026-05-21) — row-locked stock adjustment with
+   * mandatory reason + ledger write.
+   *
+   * Pre-Phase-53 the service did a plain read-then-write with no row
+   * lock and no ledger entry, so:
+   *   - Concurrent reservation + adjust could violate stockQty >=
+   *     reservedQty; the DB CHECK surfaced as a generic 500.
+   *   - Seller-initiated stock changes left no forensic trail.
+   *   - Reason wasn't even collected.
+   *
+   * Now the whole thing happens inside a single $transaction:
+   *   1. SELECT … FOR UPDATE the mapping row (blocks concurrent
+   *      reservations that also FOR UPDATE).
+   *   2. Verify ownership + sign + floor under the lock.
+   *   3. Update stockQty + write a StockMovement row referencing the
+   *      adjustment, in the same transaction so partial failure
+   *      rolls back both.
+   */
   async adjustStock(
     mappingId: string,
     adjustment: number,
     sellerId?: string,
+    options: { reason?: string; actorId?: string; actorRole?: string; kind?: StockMovementKind } = {},
   ): Promise<{
     id: string;
     stockQty: number;
@@ -146,46 +178,157 @@ export class InventoryManagementService {
     if (!Number.isInteger(adjustment)) {
       throw new BadRequestAppException('Adjustment must be an integer');
     }
-
-    const mapping = await this.repo.findMappingById(mappingId);
-
-    if (!mapping) {
-      throw new NotFoundAppException(`Mapping ${mappingId} not found`);
-    }
-
-    // If sellerId provided, verify ownership
-    if (sellerId && mapping.sellerId !== sellerId) {
-      throw new ForbiddenAppException(
-        'You do not have permission to adjust stock for this mapping',
-      );
-    }
-
-    const newStockQty = mapping.stockQty + adjustment;
-    if (newStockQty < 0) {
+    // Phase 53 — reason is mandatory. The DTO enforces length; this
+    // is the service-layer defence so any internal caller that
+    // bypasses the controller still gets the same forensic guarantee.
+    if (!options.reason || options.reason.trim().length < 3) {
       throw new BadRequestAppException(
-        `Cannot reduce stock below 0. Current stock: ${mapping.stockQty}, adjustment: ${adjustment}`,
+        'reason is required (min 3 characters)',
       );
     }
 
-    // Ensure available stock doesn't go negative
-    if (newStockQty < mapping.reservedQty) {
-      throw new BadRequestAppException(
-        `Cannot reduce stock below reserved quantity. Current reserved: ${mapping.reservedQty}, resulting stock: ${newStockQty}`,
-      );
-    }
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Acquire the row lock on the mapping. Postgres-only — uses
+      // raw SQL because Prisma's query builder doesn't expose FOR
+      // UPDATE. Parameterised so the id can't be SQL-injected.
+      const locked = await tx.$queryRaw<
+        Array<{
+          id: string;
+          seller_id: string;
+          stock_qty: number;
+          reserved_qty: number;
+        }>
+      >`
+        SELECT id, seller_id, stock_qty, reserved_qty
+        FROM seller_product_mappings
+        WHERE id = ${mappingId}
+        FOR UPDATE
+      `;
+      if (locked.length === 0) {
+        throw new NotFoundAppException(`Mapping ${mappingId} not found`);
+      }
+      const before = locked[0]!;
 
-    const updated = await this.repo.updateMappingStock(mappingId, newStockQty);
+      if (sellerId && before.seller_id !== sellerId) {
+        throw new ForbiddenAppException(
+          'You do not have permission to adjust stock for this mapping',
+        );
+      }
+
+      const newStockQty = before.stock_qty + adjustment;
+      if (newStockQty < 0) {
+        throw new BadRequestAppException(
+          `Cannot reduce stock below 0. Current stock: ${before.stock_qty}, adjustment: ${adjustment}`,
+        );
+      }
+      if (newStockQty < before.reserved_qty) {
+        // Inside-lock floor check. With the lock held no concurrent
+        // reservation can sneak between this and the write below.
+        throw new ConflictAppException(
+          `Cannot reduce stock below reserved quantity. Current reserved: ${before.reserved_qty}, resulting stock: ${newStockQty}`,
+        );
+      }
+
+      const updated = await tx.sellerProductMapping.update({
+        where: { id: mappingId },
+        data: { stockQty: newStockQty },
+        select: { id: true, stockQty: true, reservedQty: true },
+      });
+
+      return {
+        before: { stockQty: before.stock_qty, reservedQty: before.reserved_qty },
+        after: { stockQty: updated.stockQty, reservedQty: updated.reservedQty },
+        updated,
+      };
+    });
+
+    // Ledger write fires after the transaction commits. Best-effort:
+    // a ledger outage must NOT roll back the stock adjustment (the
+    // mapping row is the source of truth).
+    await this.stockLedger.record({
+      resource: 'SellerProductMapping',
+      resourceId: mappingId,
+      kind: options.kind ?? StockMovementKind.MANUAL_ADJUST,
+      quantityDelta: Math.abs(adjustment),
+      beforeStockQty: result.before.stockQty,
+      afterStockQty: result.after.stockQty,
+      beforeReservedQty: result.before.reservedQty,
+      afterReservedQty: result.after.reservedQty,
+      reason: options.reason,
+      referenceType: 'MANUAL_ADJUSTMENT',
+      referenceId: mappingId,
+      actorId: options.actorId,
+      actorRole: options.actorRole ?? (sellerId ? 'SELLER' : 'UNKNOWN'),
+    });
 
     this.logger.log(
-      `Stock adjusted for mapping ${mappingId}: ${adjustment > 0 ? '+' : ''}${adjustment} → stockQty=${updated.stockQty}`,
+      `Stock adjusted for mapping ${mappingId}: ${adjustment > 0 ? '+' : ''}${adjustment} → stockQty=${result.updated.stockQty}`,
     );
 
     return {
-      id: updated.id,
-      stockQty: updated.stockQty,
-      reservedQty: updated.reservedQty,
-      availableStock: updated.stockQty - updated.reservedQty,
+      id: result.updated.id,
+      stockQty: result.updated.stockQty,
+      reservedQty: result.updated.reservedQty,
+      availableStock: result.updated.stockQty - result.updated.reservedQty,
     };
+  }
+
+  /**
+   * Phase 53 (2026-05-21) — admin-driven adjustment. Different from
+   * the seller path in three ways:
+   *   - actorRole='ADMIN' (drives ledger attribution)
+   *   - kind selectable (MANUAL_ADJUST / WRITE_OFF / RESTOCKED /
+   *     AUDIT_CORRECTION / DAMAGE / LOSS)
+   *   - no sellerId ownership check (admin can adjust any mapping)
+   *
+   * Delegates to adjustStock with the kind override and admin
+   * attribution. The permission gate (inventory.adjust, plus
+   * inventory.adjust.write_off for WRITE_OFF kind) is enforced at
+   * the controller layer.
+   */
+  async adjustForAdmin(
+    mappingId: string,
+    adjustment: number,
+    reason: string,
+    adminId: string,
+    kind?: StockMovementKind,
+  ): Promise<{
+    id: string;
+    stockQty: number;
+    reservedQty: number;
+    availableStock: number;
+  }> {
+    return this.adjustStock(mappingId, adjustment, undefined, {
+      reason,
+      actorId: adminId,
+      actorRole: 'ADMIN',
+      kind: kind ?? StockMovementKind.MANUAL_ADJUST,
+    });
+  }
+
+  /**
+   * Phase 53 (2026-05-21) — seller-scoped wrapper over
+   * getMappingMovements that verifies the seller owns the mapping
+   * before returning the ledger. Used by the new seller history
+   * endpoint (audit Gap #12). Throws Forbidden on mismatch so
+   * existence isn't leaked.
+   */
+  async getMappingMovementsForSeller(
+    sellerId: string,
+    mappingId: string,
+    page: number,
+    limit: number,
+  ): Promise<{ movements: MappingMovement[]; total: number }> {
+    const mapping = await this.repo.findMappingById(mappingId);
+    if (!mapping) {
+      throw new NotFoundAppException(`Mapping ${mappingId} not found`);
+    }
+    if (mapping.sellerId !== sellerId) {
+      throw new ForbiddenAppException(
+        'You do not have permission to view this mapping',
+      );
+    }
+    return this.getMappingMovements(mappingId, page, limit);
   }
 
   // ── T3: Low stock queries ───────────────────────────────────────────
@@ -484,13 +627,30 @@ export class InventoryManagementService {
 
   // ── T5: Stock import by masterSku ───────────────────────────────────
 
+  /**
+   * Phase 53 (2026-05-21) — bulk stock import. Now requires a
+   * reason and writes a per-item MANUAL_ADJUST ledger row so the
+   * CSV-import path is no longer a ledger blind spot (audit Gap #7).
+   *
+   * Each item runs in its own transaction so one bad row doesn't
+   * roll back the whole import. The per-row floor check inside the
+   * transaction (under FOR UPDATE) closes the race with concurrent
+   * reservations.
+   */
   async importStockBySku(
     sellerId: string,
     items: StockImportItem[],
+    reason: string,
+    actorId?: string,
   ): Promise<{
     updated: number;
     skipped: { masterSku: string; reason: string }[];
   }> {
+    if (!reason || reason.trim().length < 3) {
+      throw new BadRequestAppException(
+        'reason is required (min 3 characters)',
+      );
+    }
     if (!items || items.length === 0) {
       throw new BadRequestAppException('Items array must not be empty');
     }
@@ -564,8 +724,72 @@ export class InventoryManagementService {
         continue;
       }
 
-      await this.repo.setMappingStockQty(mapping.id, item.stockQty);
-      updated++;
+      // Phase 53 — row-locked update + ledger write per item, inside
+      // a single $transaction so the ledger row is atomic with the
+      // stock change.
+      try {
+        const txResult = await this.prisma.$transaction(async (tx) => {
+          const locked = await tx.$queryRaw<
+            Array<{ stock_qty: number; reserved_qty: number }>
+          >`
+            SELECT stock_qty, reserved_qty
+            FROM seller_product_mappings
+            WHERE id = ${mapping.id}
+            FOR UPDATE
+          `;
+          if (locked.length === 0) {
+            throw new Error('not_found');
+          }
+          const before = locked[0]!;
+          if (item.stockQty < before.reserved_qty) {
+            throw new Error('below_reserved');
+          }
+          await tx.sellerProductMapping.update({
+            where: { id: mapping.id },
+            data: { stockQty: item.stockQty },
+          });
+          return { before: { stockQty: before.stock_qty, reservedQty: before.reserved_qty } };
+        });
+
+        // Ledger write — skip if no actual change.
+        const delta = item.stockQty - txResult.before.stockQty;
+        if (delta !== 0) {
+          await this.stockLedger.record({
+            resource: 'SellerProductMapping',
+            resourceId: mapping.id,
+            kind: StockMovementKind.MANUAL_ADJUST,
+            quantityDelta: Math.abs(delta),
+            beforeStockQty: txResult.before.stockQty,
+            afterStockQty: item.stockQty,
+            beforeReservedQty: txResult.before.reservedQty,
+            afterReservedQty: txResult.before.reservedQty,
+            reason: `Bulk import: ${reason}`,
+            referenceType: 'BULK_IMPORT',
+            referenceId: mapping.id,
+            actorId,
+            actorRole: 'SELLER',
+          });
+        }
+        updated++;
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg === 'below_reserved') {
+          skipped.push({
+            masterSku: item.masterSku,
+            reason: `Cannot reduce stock below reservedQty`,
+          });
+        } else if (msg === 'not_found') {
+          skipped.push({
+            masterSku: item.masterSku,
+            reason: 'Mapping disappeared mid-import (already deleted)',
+          });
+        } else {
+          skipped.push({
+            masterSku: item.masterSku,
+            reason: `Unexpected error: ${msg}`,
+          });
+        }
+      }
     }
 
     this.logger.log(

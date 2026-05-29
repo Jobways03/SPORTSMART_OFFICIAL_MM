@@ -2,7 +2,7 @@
 
 import React from 'react';
 
-export type DeliveryMethod = 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null | undefined;
+export type DeliveryMethod = 'SELF_DELIVERY' | null | undefined;
 
 export interface DeliveryMethodBadgeProps {
   method: DeliveryMethod;
@@ -70,14 +70,6 @@ export function DeliveryMethodBadge({
 
 function configFor(method: DeliveryMethod) {
   switch (method) {
-    case 'ITHINK_LOGISTICS':
-      return {
-        label: 'iThink',
-        icon: '\u{1F69A}',
-        bg: '#eff6ff',
-        fg: '#1e3a8a',
-        border: '#bfdbfe',
-      };
     case 'SELF_DELIVERY':
       return {
         label: 'Self Delivery',

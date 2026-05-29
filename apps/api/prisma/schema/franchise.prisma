@@ -26,9 +26,55 @@ model FranchisePartner {
   locality String?
   country  String?
 
-  // Compliance
-  gstNumber String? @map("gst_number")
-  panNumber String? @map("pan_number")
+  // Compliance — Phase 20 (2026-05-20) @unique constraints.
+  // Postgres treats NULL as distinct so multiple pre-onboarding rows
+  // with `gstNumber=NULL` coexist; once set, the value must be
+  // unique across all non-deleted franchises.
+  gstNumber    String? @unique @map("gst_number")
+  panNumber    String? @unique @map("pan_number")
+  gstStateCode String? @map("gst_state_code")
+  panLast4     String? @map("pan_last_4")
+
+  /// Phase 20 (2026-05-20) — KYC submission snapshot timestamp +
+  /// JSON snapshot of the payload the franchise submitted. The
+  /// snapshot is the canonical record of what the franchise
+  /// declared at the moment of submission (admin reviewers can
+  /// diff this against the live row to spot post-submission
+  /// edits).
+  kycSubmittedAt          DateTime? @map("kyc_submitted_at")
+  kycSubmittedPayloadJson Json?     @map("kyc_submitted_payload_json")
+  /// Phase 20 (2026-05-20) — DPDP / consent-archive timestamp.
+  kycConfirmedAccurateAt  DateTime? @map("kyc_confirmed_accurate_at")
+
+  /// Phase 20 (2026-05-20) — admin-review audit columns. Split out
+  /// from the previously decorative status/verification flips so
+  /// admin actions are queryable + a rejection reason is durably
+  /// stored on the row (not just on an event payload nobody
+  /// consumed).
+  verificationReviewedAt      DateTime? @map("verification_reviewed_at")
+  verificationReviewedBy      String?   @map("verification_reviewed_by")
+  verificationRejectionReason String?   @map("verification_rejection_reason")
+  verificationApprovalNotes   String?   @map("verification_approval_notes")
+  /// Phase 20 (2026-05-20) — approval-action audit columns. The
+  /// status field carries the current value; these record exactly
+  /// when the admin moved PENDING → APPROVED and APPROVED → ACTIVE
+  /// (two-step model).
+  approvedAt                  DateTime? @map("approved_at")
+  approvedBy                  String?   @map("approved_by")
+  activatedAt                 DateTime? @map("activated_at")
+  activatedBy                 String?   @map("activated_by")
+  // Phase 159i — actor + reason for the suspend/deactivate transitions (audit:
+  // only approve/activate were stamped; the FranchiseStatusHistory table is the
+  // full ordered trail).
+  suspendedAt                 DateTime? @map("suspended_at")
+  suspendedBy                 String?   @map("suspended_by")
+  suspensionReason            String?   @map("suspension_reason") @db.Text
+  deactivatedAt               DateTime? @map("deactivated_at")
+  deactivatedBy               String?   @map("deactivated_by")
+  deactivationReason          String?   @map("deactivation_reason") @db.Text
+  /// Phase 20 (2026-05-20) — exact moment isEmailVerified flipped
+  /// to true. Distinct from the boolean which only answers "now?".
+  emailVerifiedAt             DateTime? @map("email_verified_at")
 
   // Commission rates (per-franchise configurable)
   onlineFulfillmentRate Decimal @default(15) @map("online_fulfillment_rate") @db.Decimal(5, 2)
@@ -43,19 +89,10 @@ model FranchisePartner {
   warehousePincode String? @map("warehouse_pincode")
 
   // ─── Logistics entitlements (franchise-admin controlled) ──────
-  // Toggled by franchise admin in web-franchise-admin. The franchise
-  // picks the actual delivery method per shipment from whatever is
-  // enabled here.
-  ithinkEnabled         Boolean                       @default(false) @map("ithink_enabled")
-  ithinkPickupAddressId String?                       @map("ithink_pickup_address_id")
-  ithinkWarehouseStatus IThinkWarehouseApprovalStatus @default(NOT_REGISTERED) @map("ithink_warehouse_status")
-  ithinkRegisteredAt    DateTime?                     @map("ithink_registered_at")
-  // SHA-256 of (warehouseAddress + city + state + warehousePincode +
-  // phoneNumber) captured at registration. Drift detection compares
-  // current vs registered hash on every profile save.
-  ithinkRegisteredAddressHash String?                 @map("ithink_registered_address_hash")
-  selfDeliveryEnabled   Boolean                       @default(false) @map("self_delivery_enabled")
-  selfDeliveryPincodes  Json?                         @map("self_delivery_pincodes")
+  // Toggled by franchise admin in web-franchise-admin. Self-delivery
+  // is the only delivery method today (iThink removed).
+  selfDeliveryEnabled         Boolean                       @default(false) @map("self_delivery_enabled")
+  selfDeliveryPincodes        Json?                         @map("self_delivery_pincodes")
 
   // Profile & branding
   profileImageUrl             String? @map("profile_image_url")
@@ -87,6 +124,19 @@ model FranchisePartner {
   settlements         FranchiseSettlement[]
   staff               FranchiseStaff[]
   procurementPrices   FranchiseProcurementPrice[]
+  /// Phase 20 (2026-05-20) — 1:1 bank details back-relation.
+  bankDetails         FranchiseBankDetails?
+  /// Phase 159i — ordered status-transition trail.
+  statusHistory       FranchiseStatusHistory[]
+  /// Phase 159j — ordered KYC-verification-transition trail.
+  verificationHistory FranchiseVerificationEvent[]
+  /// Phase 159l — append-only procurement-price change trail.
+  procurementPriceHistory FranchiseProcurementPriceHistory[]
+  /// Phase 159m — admin-assigned pincode coverage + its change trail.
+  pincodeMappings       FranchisePincodeMapping[]
+  pincodeMappingEvents  FranchisePincodeMappingEvent[]
+  /// Phase 159n — catalog-mapping decision trail.
+  catalogMappingEvents  FranchiseCatalogMappingEvent[]
 
   @@index([status])
   @@index([isProfileCompleted])
@@ -101,6 +151,45 @@ model FranchisePartner {
   // does a seq scan on the whole franchise table.
   @@index([contractEndDate])
   @@map("franchise_partners")
+}
+
+// Phase 159i — append-only franchise status-transition log. The dedicated
+// actor columns on FranchisePartner hold the LATEST actor per transition type;
+// this keeps the full ordered timeline (who moved it from what to what + why).
+model FranchiseStatusHistory {
+  id               String   @id @default(uuid())
+  franchiseId      String   @map("franchise_id")
+  fromStatus       String   @map("from_status")
+  toStatus         String   @map("to_status")
+  changedByAdminId String?  @map("changed_by_admin_id")
+  reason           String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@index([franchiseId, createdAt])
+  @@map("franchise_status_history")
+}
+
+// Phase 159j — append-only franchise KYC-verification-transition log. Mirrors
+// FranchiseStatusHistory but for the verification lifecycle
+// (NOT_VERIFIED → UNDER_REVIEW → VERIFIED/REJECTED). The dedicated
+// verificationReviewedBy/At + reason columns on FranchisePartner hold the
+// LATEST reviewer; this keeps the full ordered who-moved-it-from-what-to-what
+// trail so a flipped verdict (e.g. VERIFIED → NOT_VERIFIED) is reconstructable.
+model FranchiseVerificationEvent {
+  id               String   @id @default(uuid())
+  franchiseId      String   @map("franchise_id")
+  fromStatus       String   @map("from_status")
+  toStatus         String   @map("to_status")
+  changedByAdminId String?  @map("changed_by_admin_id")
+  reason           String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@index([franchiseId, createdAt])
+  @@map("franchise_verification_events")
 }
 
 // Per-franchise negotiated procurement price. When a row exists for
@@ -120,6 +209,11 @@ model FranchiseProcurementPrice {
   landedUnitCost Decimal  @map("landed_unit_cost") @db.Decimal(10, 2)
   notes          String?
   createdBy      String?  @map("created_by")
+  // Phase 159l — last-modifier (was lost on overwrite; only createdBy existed)
+  // + optimistic-concurrency version (bumped on every update; the upsert path
+  // does a version-CAS so two concurrent admin edits can't silently clobber).
+  updatedBy      String?  @map("updated_by")
+  version        Int      @default(0)
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
@@ -130,27 +224,152 @@ model FranchiseProcurementPrice {
   @@map("franchise_procurement_prices")
 }
 
+// Phase 159l — append-only audit trail for per-franchise procurement-price
+// changes (audit #4/#13/#14). Keyed on franchiseId + product/variant rather
+// than the price-row id so the history survives a row DELETE (the "what was
+// the negotiated price on date X / who changed it / why" question must be
+// answerable even after the override is removed). Mirrors
+// FranchiseStatusHistory / FranchiseVerificationEvent.
+model FranchiseProcurementPriceHistory {
+  id                 String   @id @default(uuid())
+  franchiseId        String   @map("franchise_id")
+  productId          String   @map("product_id")
+  variantId          String?  @map("variant_id")
+  action             String // UPSERT_CREATE | UPSERT_UPDATE | DELETE | APPROVAL_WRITEBACK
+  oldLandedUnitCost  Decimal? @map("old_landed_unit_cost") @db.Decimal(10, 2)
+  newLandedUnitCost  Decimal? @map("new_landed_unit_cost") @db.Decimal(10, 2)
+  changeReason       String?  @map("change_reason")
+  changedByAdminId   String?  @map("changed_by_admin_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@index([franchiseId, productId, variantId, createdAt])
+  @@map("franchise_procurement_price_history")
+}
+
+// Phase 159m — admin-assigned pincode → franchise coverage map. Consulted by
+// the routing engine (serviceability + allocation) in "supplement" mode: when
+// a customer pincode has ≥1 active mapping, ONLY mapped franchises are eligible
+// (ranked by priority desc, then distance); a pincode with no mapping falls
+// back to distance-based discovery. Multi-franchise-per-pincode is allowed
+// (unique on franchiseId+pincode); an admin achieves strict 1-of-N by mapping
+// each pincode to a single franchise.
+model FranchisePincodeMapping {
+  id           String    @id @default(uuid())
+  franchiseId  String    @map("franchise_id")
+  pincode      String // 6-digit Indian PIN
+  // Higher wins when multiple franchises map the same pincode. 0..1000.
+  priority     Int       @default(100)
+  isActive     Boolean   @default(true) @map("is_active")
+  reason       String?
+  assignedById String?   @map("assigned_by_id")
+  assignedAt   DateTime  @default(now()) @map("assigned_at")
+  removedById  String?   @map("removed_by_id")
+  removedAt    DateTime? @map("removed_at")
+  // Optimistic-concurrency token; bumped on every update (version-CAS).
+  version      Int       @default(0)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@unique([franchiseId, pincode])
+  // Hot path: routing looks up active franchises for a pincode.
+  @@index([pincode, isActive])
+  @@index([franchiseId, isActive])
+  @@map("franchise_pincode_mappings")
+}
+
+// Phase 159m — append-only audit trail for pincode-mapping changes. Keyed on
+// franchiseId + pincode so it survives a mapping-row delete (who assigned /
+// removed / re-prioritised a pincode, when, why).
+model FranchisePincodeMappingEvent {
+  id          String   @id @default(uuid())
+  mappingId   String?  @map("mapping_id")
+  franchiseId String   @map("franchise_id")
+  pincode     String
+  // ASSIGNED | REACTIVATED | DEACTIVATED | REMOVED | PRIORITY_CHANGED | BULK_ASSIGNED
+  action      String
+  oldValue    Json?    @map("old_value")
+  newValue    Json?    @map("new_value")
+  reason      String?
+  actorId     String?  @map("actor_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@index([franchiseId, createdAt])
+  @@index([mappingId])
+  @@map("franchise_pincode_mapping_events")
+}
+
 model FranchiseSession {
-  id                 String    @id @default(uuid())
-  franchisePartnerId String    @map("franchise_partner_id")
-  refreshToken       String    @map("refresh_token")
+  id                       String    @id @default(uuid())
+  franchisePartnerId       String    @map("franchise_partner_id")
+  /// Phase 20 (2026-05-20) — column stores SHA-256(rawRefreshToken).
+  /// Despite the name, never plaintext. Same contract as the
+  /// customer + seller session tables. Eventual rename to
+  /// `refresh_token_hash` is deferred to avoid cascading caller
+  /// changes; the doc comment is load-bearing for incident review.
+  refreshToken             String    @map("refresh_token")
   // Phase 1 / C6 — refresh-token reuse detection. See AdminSession
   // for the contract.
-  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
-  userAgent          String?   @map("user_agent")
-  ipAddress          String?   @map("ip_address")
-  expiresAt          DateTime  @map("expires_at")
-  revokedAt          DateTime? @map("revoked_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
+  previousRefreshTokenHash String?   @map("previous_refresh_token_hash")
+  userAgent                String?   @map("user_agent")
+  ipAddress                String?   @map("ip_address")
+  expiresAt                DateTime  @map("expires_at")
+  revokedAt                DateTime? @map("revoked_at")
+  /// Phase 27 (2026-05-21) — forensic columns; see identity.prisma.
+  revokedBy                String?   @map("revoked_by")
+  revocationReason         String?   @map("revocation_reason") @db.Text
+  /// Phase 27 (2026-05-21) — bumped on each refresh-rotation.
+  lastUsedAt               DateTime? @map("last_used_at")
+  /// Phase 27 (2026-05-21) — UA-derived label.
+  deviceLabel              String?   @map("device_label") @db.VarChar(64)
+  createdAt                DateTime  @default(now()) @map("created_at")
 
   franchisePartner FranchisePartner @relation(fields: [franchisePartnerId], references: [id], onDelete: Cascade)
 
   @@index([franchisePartnerId])
   @@index([refreshToken])
   @@index([previousRefreshTokenHash])
+  /// Phase 20 (2026-05-20) — coverage indexes for the per-request
+  /// guard lookup + the revoke-all sweep.
+  @@index([franchisePartnerId, revokedAt])
+  @@index([franchisePartnerId, expiresAt])
   @@map("franchise_sessions")
 }
 
+/// Phase 20 (2026-05-20) — Franchise payout bank details.
+/// One-to-one with FranchisePartner. Account number AES-256-GCM
+/// encrypted via FRANCHISE_BANK_ENCRYPTION_KEY; last-4 stored
+/// separately for masked display. Mirrors SellerBankDetails.
+model FranchiseBankDetails {
+  id                 String    @id @default(uuid())
+  franchisePartnerId String    @unique @map("franchise_partner_id")
+  accountHolderName  String    @map("account_holder_name") @db.VarChar(150)
+  accountNumberEnc   String    @map("account_number_enc")
+  accountNumberLast4 String    @map("account_number_last_4") @db.VarChar(4)
+  ifscCode           String    @map("ifsc_code") @db.VarChar(11)
+  bankName           String?   @map("bank_name") @db.VarChar(150)
+  upiVpa             String?   @map("upi_vpa") @db.VarChar(100)
+  verifiedAt         DateTime? @map("verified_at")
+  verifiedBy         String?   @map("verified_by")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  franchisePartner FranchisePartner @relation(fields: [franchisePartnerId], references: [id], onDelete: Cascade)
+
+  @@map("franchise_bank_details")
+}
+
+/// Phase 20 (2026-05-20) — Franchise OTP table.
+///
+/// Stores OTPs for BOTH password-reset and email-verification
+/// purposes, distinguished by the `purpose` column. Model name kept
+/// for backward-compat; the TypeScript-side `FranchiseOtpPurpose`
+/// union pins the legal values.
 model FranchisePasswordResetOtp {
   id                 String    @id @default(uuid())
   franchisePartnerId String    @map("franchise_partner_id")
@@ -167,6 +386,12 @@ model FranchisePasswordResetOtp {
   franchisePartner FranchisePartner @relation(fields: [franchisePartnerId], references: [id], onDelete: Cascade)
 
   @@index([franchisePartnerId])
+  /// Phase 20 (2026-05-20) — every OTP lookup queries by (partnerId,
+  /// purpose, status). Composite index removes the full-scan over a
+  /// franchise's OTP history.
+  @@index([franchisePartnerId, purpose])
+  /// Phase 20 (2026-05-20) — expiry-sweep job predicate.
+  @@index([expiresAt])
   @@map("franchise_password_reset_otps")
 }
 
@@ -183,6 +408,22 @@ model FranchiseCatalogMapping {
   isListedForOnlineFulfillment Boolean               @default(true) @map("is_listed_for_online_fulfillment")
   isActive                     Boolean               @default(true) @map("is_active")
   approvalStatus               MappingApprovalStatus @default(PENDING_APPROVAL) @map("approval_status")
+  // Phase 159n (audit #5) — admin-decision actor/reason attribution. The
+  // status column carries the current value; these record who/when/why so a
+  // REJECTED/STOPPED mapping is explicable to the franchise + auditors.
+  approvedById      String?   @map("approved_by_id")
+  approvedAt        DateTime? @map("approved_at")
+  rejectedById      String?   @map("rejected_by_id")
+  rejectedAt        DateTime? @map("rejected_at")
+  rejectionReason   String?   @map("rejection_reason")
+  stoppedById       String?   @map("stopped_by_id")
+  stoppedAt         DateTime? @map("stopped_at")
+  stopReason        String?   @map("stop_reason")
+  removedById       String?   @map("removed_by_id")
+  removedAt         DateTime? @map("removed_at")
+  // Optimistic-concurrency token; bumped on every admin decision / franchise
+  // edit so a concurrent approve-vs-edit can't silently clobber.
+  version           Int       @default(0)
   createdAt                    DateTime              @default(now()) @map("created_at")
   updatedAt                    DateTime              @updatedAt @map("updated_at")
 
@@ -194,7 +435,34 @@ model FranchiseCatalogMapping {
   @@index([franchiseId, isActive])
   @@index([productId])
   @@index([approvalStatus])
+  // Phase 159n — per-franchise "my pending mappings" query + the
+  // variant-soft-delete cleanup handler's updateMany WHERE variantId.
+  @@index([franchiseId, approvalStatus])
+  @@index([variantId])
   @@map("franchise_catalog_mappings")
+}
+
+// Phase 159n (audit #5/#10-history) — append-only catalog-mapping decision
+// trail (created / edited-resubmitted / approved / rejected / stopped /
+// removed). Mirrors the other franchise lifecycle history tables.
+model FranchiseCatalogMappingEvent {
+  id          String   @id @default(uuid())
+  mappingId   String?  @map("mapping_id")
+  franchiseId String   @map("franchise_id")
+  productId   String   @map("product_id")
+  variantId   String?  @map("variant_id")
+  // CREATED | EDITED_RESUBMITTED | APPROVED | REJECTED | STOPPED | REMOVED
+  action      String
+  reason      String?
+  actorId     String?  @map("actor_id")
+  actorRole   String   @map("actor_role") // ADMIN | FRANCHISE
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@index([franchiseId, createdAt])
+  @@index([mappingId])
+  @@map("franchise_catalog_mapping_events")
 }
 
 // ── Franchise Stock (computed snapshot) ─────────────────────
@@ -282,8 +550,8 @@ model ProcurementRequest {
   /// for requests still SUBMITTED past their deadline; ops can see
   /// from `slaBreachedAt` which were already notified so we don't
   /// re-notify on every tick.
-  slaApproveBy   DateTime? @map("sla_approve_by")
-  slaBreachedAt  DateTime? @map("sla_breached_at")
+  slaApproveBy  DateTime? @map("sla_approve_by")
+  slaBreachedAt DateTime? @map("sla_breached_at")
 
   // Shipment tracking — captured by admin on /dispatch so the franchise can
   // answer "where is my shipment?" without a support ping.
@@ -301,12 +569,36 @@ model ProcurementRequest {
 
   franchise FranchisePartner         @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   items     ProcurementRequestItem[]
+  events    ProcurementRequestEvent[]
 
   @@index([franchiseId, status])
   @@index([status])
   @@index([requestNumber])
   @@index([status, slaApproveBy])
   @@map("procurement_requests")
+}
+
+/// Phase 159p (audit #12 + audit-trail gap) — append-only transition history
+/// for a procurement request. Pre-159p only a single `approvedBy` column
+/// existed, so "who submitted / dispatched / received / settled / cancelled
+/// this, and when" was unanswerable. One row per status transition.
+model ProcurementRequestEvent {
+  id                   String   @id @default(uuid())
+  procurementRequestId String   @map("procurement_request_id")
+  // SUBMITTED | APPROVED | PARTIALLY_APPROVED | REJECTED | DISPATCHED |
+  // RECEIVED | PARTIALLY_RECEIVED | SETTLED | CANCELLED
+  action               String
+  fromStatus           String?  @map("from_status")
+  toStatus             String   @map("to_status")
+  actorId              String?  @map("actor_id")
+  actorType            String   @map("actor_type") // ADMIN | FRANCHISE | SYSTEM
+  reason               String?
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  request ProcurementRequest @relation(fields: [procurementRequestId], references: [id], onDelete: Cascade)
+
+  @@index([procurementRequestId, createdAt])
+  @@map("procurement_request_events")
 }
 
 model ProcurementRequestItem {
@@ -353,9 +645,9 @@ model FranchisePosSale {
   id            String  @id @default(uuid())
   saleNumber    String  @unique @map("sale_number")
   franchiseId   String  @map("franchise_id")
-  saleType      String  @default("WALK_IN") @map("sale_type") // WALK_IN, PHONE_ORDER, LOCAL_DELIVERY
-  customerName  String? @map("customer_name")
-  customerPhone String? @map("customer_phone")
+  saleType      PosSaleType @default(WALK_IN) @map("sale_type")
+  customerName  String?     @map("customer_name")
+  customerPhone String?     @map("customer_phone")
 
   grossAmount    Decimal @map("gross_amount") @db.Decimal(10, 2)
   discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(10, 2)
@@ -367,58 +659,134 @@ model FranchisePosSale {
   // is always 0 today; the column is kept for shape parity with
   // tax_documents.cgst/sgst/igst in case of future PHONE_ORDER cross-
   // state delivery. Sum across items equals these.
-  cgstAmount               Decimal @default(0) @map("cgst_amount") @db.Decimal(10, 2)
-  sgstAmount               Decimal @default(0) @map("sgst_amount") @db.Decimal(10, 2)
-  igstAmount               Decimal @default(0) @map("igst_amount") @db.Decimal(10, 2)
+  cgstAmount         Decimal @default(0) @map("cgst_amount") @db.Decimal(10, 2)
+  sgstAmount         Decimal @default(0) @map("sgst_amount") @db.Decimal(10, 2)
+  igstAmount         Decimal @default(0) @map("igst_amount") @db.Decimal(10, 2)
   // 2-digit GSTIN state code at the time of sale (e.g. 36 = Telangana).
   // Snapshotted so a later franchise relocation doesn't rewrite history.
-  placeOfSupplyState       String? @map("place_of_supply_state")
+  placeOfSupplyState String? @map("place_of_supply_state")
 
-  paymentMethod String        @default("CASH") @map("payment_method") // CASH, UPI, CARD
-  status        PosSaleStatus @default(COMPLETED)
+  paymentMethod PosPaymentMethod @default(CASH) @map("payment_method")
+  status        PosSaleStatus    @default(COMPLETED)
+
+  // Phase 159q (audit #6) — payment settlement state + reference. Physical-POS
+  // sales are COMPLETED on record; an integrated gateway (follow-up) would set
+  // PENDING and flip via webhook. paymentReference holds the UPI txn id / card
+  // auth code when supplied.
+  paymentStatus    PosPaymentStatus    @default(COMPLETED) @map("payment_status")
+  paymentReference String?             @map("payment_reference")
+  paymentSettledAt DateTime?           @map("payment_settled_at")
+
+  // Phase 159q (audit #10) — tax-invoice generation state (was log-only).
+  taxInvoiceStatus PosTaxInvoiceStatus @default(PENDING) @map("tax_invoice_status")
+  taxInvoiceId     String?             @map("tax_invoice_id")
+
+  // Phase 159q (audit #13) — commission rate snapshotted at sale time so a
+  // cross-cycle return reverses at the ORIGINAL rate, not today's.
+  commissionRate Decimal? @map("commission_rate") @db.Decimal(5, 2)
+
+  // Phase 159r (POS void/return audit #11) — total refunded back to the
+  // customer across all returns of this sale, so "sales with refund > X" is
+  // answerable without aggregating the ledger.
+  refundedAmount Decimal @default(0) @map("refunded_amount") @db.Decimal(10, 2)
 
   soldAt           DateTime  @default(now()) @map("sold_at")
   createdByStaffId String?   @map("created_by_staff_id")
   voidedAt         DateTime? @map("voided_at")
   voidReason       String?   @map("void_reason")
+  // Phase 159r (audit #10) — void/return actor + return audit columns.
+  voidedBy         String?   @map("voided_by")
+  returnedAt       DateTime? @map("returned_at")
+  returnedBy       String?   @map("returned_by")
+  returnReason     String?   @map("return_reason")
   createdAt        DateTime  @default(now()) @map("created_at")
 
   franchise FranchisePartner       @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   items     FranchisePosSaleItem[]
+  returns   FranchisePosReturn[]
 
   @@index([franchiseId, soldAt])
   @@index([status])
   @@index([saleNumber])
+  // Phase 159q (audit #15) — daily report groups by paymentMethod.
+  @@index([franchiseId, paymentMethod, soldAt])
+  // Phase 159s (POS report audit) — void/return count queries filter on status
+  // within the day range.
+  @@index([franchiseId, status, soldAt])
   @@map("franchise_pos_sales")
 }
 
+/// Phase 159r (POS void/return audit #6) — a customer return as a first-class
+/// record, not just a status flip on the sale. One row per return event; a sale
+/// can have several (partial returns). Anchors the refund + (future) credit note.
+model FranchisePosReturn {
+  id              String          @id @default(uuid())
+  returnNumber    String          @unique @map("return_number")
+  saleId          String          @map("sale_id")
+  franchiseId     String          @map("franchise_id")
+  refundAmount    Decimal         @map("refund_amount") @db.Decimal(10, 2)
+  refundMethod    PosRefundMethod @map("refund_method")
+  refundReference String?         @map("refund_reference")
+  returnReason    String?         @map("return_reason")
+  returnedBy      String?         @map("returned_by")
+  returnedAt      DateTime        @default(now()) @map("returned_at")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  sale  FranchisePosSale         @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  items FranchisePosReturnItem[]
+
+  @@index([saleId])
+  @@index([franchiseId, returnedAt])
+  @@map("franchise_pos_returns")
+}
+
+model FranchisePosReturnItem {
+  id         String                 @id @default(uuid())
+  returnId   String                 @map("return_id")
+  saleItemId String                 @map("sale_item_id")
+  returnQty  Int                    @map("return_qty")
+  condition  PosReturnItemCondition @default(SALEABLE)
+  createdAt  DateTime               @default(now()) @map("created_at")
+
+  posReturn FranchisePosReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@index([saleItemId])
+  @@map("franchise_pos_return_items")
+}
+
 model FranchisePosSaleItem {
-  id           String   @id @default(uuid())
-  saleId       String   @map("sale_id")
-  productId    String   @map("product_id")
-  variantId    String?  @map("variant_id")
-  globalSku    String   @map("global_sku")
-  franchiseSku String?  @map("franchise_sku")
-  productTitle String   @map("product_title")
-  variantTitle String?  @map("variant_title")
+  id           String  @id @default(uuid())
+  saleId       String  @map("sale_id")
+  productId    String  @map("product_id")
+  variantId    String? @map("variant_id")
+  globalSku    String  @map("global_sku")
+  franchiseSku String? @map("franchise_sku")
+  productTitle String  @map("product_title")
+  variantTitle String? @map("variant_title")
   quantity     Int
-  unitPrice    Decimal  @map("unit_price") @db.Decimal(10, 2)
-  lineDiscount Decimal  @default(0) @map("line_discount") @db.Decimal(10, 2)
-  lineTotal    Decimal  @map("line_total") @db.Decimal(10, 2)
+  // Phase 159r (POS void/return audit #1) — cumulative units returned across ALL
+  // return rounds. The over-return guard checks returnedQty + thisReturn <=
+  // quantity; pre-159r only the per-call qty was checked against the original,
+  // so 5+5+5 against a 5-unit line slipped through.
+  returnedQty  Int     @default(0) @map("returned_qty")
+  unitPrice    Decimal @map("unit_price") @db.Decimal(10, 2)
+  lineDiscount Decimal @default(0) @map("line_discount") @db.Decimal(10, 2)
+  lineTotal    Decimal @map("line_total") @db.Decimal(10, 2)
 
   // Phase 26 GST (POS) — per-item tax snapshot. Snapshotted at sale time
   // so later catalog HSN / rate changes don't rewrite history. Pricing
   // mode for POS is always INCLUSIVE (retail price quotes include GST).
   // gstRateBps stored as basis points (1800 = 18%) for arithmetic
   // precision; matches OrderItemTaxSnapshot convention.
-  hsnCode       String?  @map("hsn_code")
-  gstRateBps    Int      @default(0) @map("gst_rate_bps")
-  taxableAmount Decimal  @default(0) @map("taxable_amount") @db.Decimal(10, 2)
-  cgstAmount    Decimal  @default(0) @map("cgst_amount") @db.Decimal(10, 2)
-  sgstAmount    Decimal  @default(0) @map("sgst_amount") @db.Decimal(10, 2)
-  igstAmount    Decimal  @default(0) @map("igst_amount") @db.Decimal(10, 2)
+  hsnCode       String? @map("hsn_code")
+  gstRateBps    Int     @default(0) @map("gst_rate_bps")
+  taxableAmount Decimal @default(0) @map("taxable_amount") @db.Decimal(10, 2)
+  cgstAmount    Decimal @default(0) @map("cgst_amount") @db.Decimal(10, 2)
+  sgstAmount    Decimal @default(0) @map("sgst_amount") @db.Decimal(10, 2)
+  igstAmount    Decimal @default(0) @map("igst_amount") @db.Decimal(10, 2)
 
-  createdAt    DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   sale FranchisePosSale @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
@@ -505,12 +873,15 @@ model FranchiseSettlement {
   status           FranchiseSettlementStatus @default(PENDING)
   paidAt           DateTime?                 @map("paid_at")
   paymentReference String?                   @map("payment_reference")
+  // Phase 146 — payout provenance (mirrors SellerSettlement.paidByAdminId).
+  paidByAdminId    String?                   @map("paid_by_admin_id")
   createdAt        DateTime                  @default(now()) @map("created_at")
   updatedAt        DateTime                  @updatedAt @map("updated_at")
 
   cycle         SettlementCycle          @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   franchise     FranchisePartner         @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   ledgerEntries FranchiseFinanceLedger[]
+  paidByAdmin   Admin?                   @relation("FranchiseSettlementPaidBy", fields: [paidByAdminId], references: [id], onDelete: SetNull)
 
   @@unique([cycleId, franchiseId])
   @@index([cycleId])
@@ -522,21 +893,69 @@ model FranchiseSettlement {
 // ── Franchise Staff ───────────────────────────────────────────
 
 model FranchiseStaff {
-  id           String             @id @default(uuid())
-  franchiseId  String             @map("franchise_id")
-  name         String
-  email        String             @unique
-  phone        String?
-  passwordHash String             @map("password_hash")
-  role         FranchiseStaffRole @default(POS_OPERATOR)
-  isActive     Boolean            @default(true) @map("is_active")
+  id    String @id @default(uuid())
+  franchiseId String @map("franchise_id")
+  name  String
+  // Phase 159t (staff audit #5/#6) — email is NO LONGER globally unique (that
+  // leaked existence across franchises + blocked multi-franchise employees +
+  // orphaned soft-deleted rows). Uniqueness is now a PARTIAL unique index
+  // (franchise_id, email) WHERE status <> 'TERMINATED', defined in the
+  // migration (Prisma can't express partial uniques). Same for phone (#16).
+  email String
+  phone String?
+  // Phase 159u (staff-auth B4) — nullable: an INVITED staff has no password
+  // until they activate via the emailed invite token + set their own.
+  passwordHash String? @map("password_hash")
+  role  FranchiseStaffRole   @default(POS_OPERATOR)
+  // Phase 159t (audit #12) — richer lifecycle than the isActive boolean.
+  // isActive is kept (synced) for back-compat with existing reads.
+  status   FranchiseStaffStatus @default(ACTIVE)
+  isActive Boolean              @default(true) @map("is_active")
+
+  // Phase 159u (staff-auth B2) — per-staff permission overrides on top of the
+  // role defaults (resolveStaffPermissions). Null = pure role defaults.
+  permissions Json? @map("permissions")
+  // Phase 159u (staff-auth B4) — invitation/activation. SHA-256(token).
+  inviteTokenHash String?   @map("invite_token_hash")
+  inviteExpiresAt DateTime? @map("invite_expires_at")
+
+  // Phase 159t (audit #8/#15) — lifecycle audit + activity columns.
+  createdBy        String?   @map("created_by")
+  suspendedBy      String?   @map("suspended_by")
+  suspendedAt      DateTime? @map("suspended_at")
+  suspensionReason String?   @map("suspension_reason")
+  lastLoginAt      DateTime? @map("last_login_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  franchise FranchisePartner       @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  sessions  FranchiseStaffSession[]
 
   @@index([franchiseId, isActive])
-  @@index([email])
+  @@index([franchiseId, status])
+  @@index([inviteTokenHash])
   @@map("franchise_staff")
+}
+
+/// Phase 159u (staff-auth B1) — staff refresh-session, mirroring
+/// FranchiseSession. `refreshToken` stores SHA-256(rawToken), never plaintext.
+/// Rotated on refresh; revoked on logout and on suspend/terminate.
+model FranchiseStaffSession {
+  id           String    @id @default(uuid())
+  staffId      String    @map("staff_id")
+  refreshToken String    @map("refresh_token")
+  userAgent    String?   @map("user_agent")
+  ipAddress    String?   @map("ip_address")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  lastUsedAt   DateTime? @map("last_used_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  staff FranchiseStaff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([staffId])
+  @@index([refreshToken])
+  @@index([staffId, revokedAt])
+  @@map("franchise_staff_sessions")
 }

@@ -159,43 +159,15 @@ const { returnId } = useParams<{ returnId: string }>();
     }
   };
 
-  const handleQcSubmit = async () => {if (!returnId || !ret) return;
-    // Validate all items have outcomes
-    for (const item of ret.items) {
-      const dec = qcDecisions[item.id];
-      if (!dec || !dec.qcOutcome) {
-        void notify('Please select an outcome for all items');
-        return;
-      }
-      if (dec.qcQuantityApproved < 0 || dec.qcQuantityApproved > item.quantity) {
-        void notify(
-          `Approved quantity for an item must be between 0 and ${item.quantity}`,
-        );
-        return;
-      }
-    }
-    setActionLoading('qc');
-    try {
-      const decisions = ret.items.map((item) => ({
-        returnItemId: item.id,
-        qcOutcome: qcDecisions[item.id].qcOutcome,
-        qcQuantityApproved: Number(qcDecisions[item.id].qcQuantityApproved),
-        qcNotes: qcDecisions[item.id].qcNotes || undefined,
-      }));
-      await franchiseReturnsService.submitQc(
-        returnId,
-        decisions,
-        overallNotes || undefined,
-      );
-      setShowQcModal(false);
-      setOverallNotes('');
-      fetchReturn();
-    } catch (err) {
-      if (err instanceof ApiError) void notify(err.body.message || 'Failed to submit QC');
-      else void notify('Failed to submit QC');
-    } finally {
-      setActionLoading(null);
-    }
+  // Phase 100 (2026-05-23) — QC audit Gap #2 closure. QC submission
+  // is admin-only on the backend (the `/franchise/returns/:id/
+  // qc-decision` route does NOT exist and the service-side guard
+  // rejects non-ADMIN actorType). Pre-Phase-100 this handler 404'd
+  // on every click. Stubbed out — admin handles QC in the admin
+  // dashboards. Franchise upload of evidence (above) still works
+  // and is the franchise's contribution to the QC decision.
+  const handleQcSubmit = async () => {
+    void notify('QC decisions are completed by admin in the admin dashboard.');
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {if (!returnId || !e.target.files || e.target.files.length === 0) return;
@@ -242,8 +214,15 @@ const { returnId } = useParams<{ returnId: string }>();
     );
   }
 
-  const canMarkReceived = ret.status === 'IN_TRANSIT' || ret.status === 'SHIPPED';
-  const canSubmitQc = ret.status === 'RECEIVED' || ret.status === 'QC_IN_PROGRESS';
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #2 closure. Drop
+  // the dead 'SHIPPED' arm (not a valid ReturnStatus) and add
+  // 'PICKUP_SCHEDULED' so the button surfaces when admin used the
+  // courier-never-scanned shortcut.
+  const canMarkReceived =
+    ret.status === 'IN_TRANSIT' || ret.status === 'PICKUP_SCHEDULED';
+  // Phase 100 — QC submission is admin-only (backend refuses non-
+  // ADMIN actorType). Kept false so the dead QC block never renders.
+  const canSubmitQc = false;
 
   return (
     <div>

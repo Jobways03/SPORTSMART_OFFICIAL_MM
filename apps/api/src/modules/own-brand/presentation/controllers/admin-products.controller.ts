@@ -8,11 +8,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { OwnBrandService } from '../../application/services/own-brand.service';
 
 @ApiTags('NOVA — Products')
 @Controller('admin/nova/products')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('nova.write')
 export class AdminNovaProductsController {
   constructor(private readonly service: OwnBrandService) {}
 

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { DataValidationService } from '../../application/services/data-validation.service';
 
 /**
@@ -30,6 +31,7 @@ export class DataValidationController {
   @Get('data-validation')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Run data integrity validation across the system' })
+  @Permissions('analytics.read')
   async runDataValidation() {
     return this.dataValidationService.runDataValidation();
   }

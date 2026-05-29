@@ -15,7 +15,11 @@ export interface ProductListItem {
   slug: string;
   status: string;
   moderationStatus: string;
+  // Phase 32 (2026-05-21) — structured columns + re-submission flag.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
+  isReSubmission: boolean;
   hasVariants: boolean;
   basePrice: string | null;
   baseStock: number | null;

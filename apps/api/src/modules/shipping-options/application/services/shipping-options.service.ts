@@ -7,17 +7,20 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  Optional,
+  ConflictException,
 } from '@nestjs/common';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 
-// Sprint 3 Story 2.4 — compute "today + N days" as an ISO date string
-// (YYYY-MM-DD). Uses server-local day boundaries; for an India-only
-// marketplace that's IST and consistent enough for buyer-side EDD.
-// If/when we add weekend or holiday awareness, change here, not in
-// every controller that calls quoteForCart.
+// Phase 91 (2026-05-23) — Gap #21 IST-aware EDD. Pre-Phase-91 the
+// helper used `new Date()` server-local; for a non-IST server this
+// produced wrong dates. Force the IST offset so a 23:00 UTC server
+// clock still computes 04:30 IST → next day correctly.
 function addDaysIsoDate(daysAhead: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + daysAhead);
-  return d.toISOString().slice(0, 10);
+  const now = new Date();
+  const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  ist.setUTCDate(ist.getUTCDate() + daysAhead);
+  return ist.toISOString().slice(0, 10);
 }
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
@@ -58,11 +61,32 @@ export interface QuoteResult {
   estimatedDeliveryTo: string | null;
 }
 
+// Phase 91 — Gap #19 platform price cap. Mirrored from
+// ShippingPricingService.MAX_PRICE_PAISE to avoid the cyclic import.
+const PLATFORM_PRICE_CAP_PAISE = 1_00_000_00; // ₹1,00,000
+
 @Injectable()
 export class ShippingOptionsService {
   private readonly logger = new Logger(ShippingOptionsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 91 — Gap #11 event emission + Gap #10 audit log.
+    @Optional() private readonly eventBus?: EventBusService,
+  ) {}
+
+  private emit(eventName: string, payload: Record<string, unknown>): void {
+    if (!this.eventBus) return;
+    void this.eventBus
+      .publish({
+        eventName,
+        aggregate: 'ShippingOption',
+        aggregateId: String(payload.optionId ?? ''),
+        occurredAt: new Date(),
+        payload,
+      })
+      .catch(() => undefined);
+  }
 
   // ── Admin CRUD ───────────────────────────────────────────────
 
@@ -79,20 +103,55 @@ export class ShippingOptionsService {
     return opt;
   }
 
-  async create(input: ShippingOptionInput) {
+  async create(input: ShippingOptionInput, actorId?: string | null) {
     this.validate(input);
-    return this.prisma.shippingOption.create({
-      data: this.toPrismaData(input, /* isCreate */ true),
-    });
+    try {
+      const created = await this.prisma.shippingOption.create({
+        data: this.toPrismaData(input, /* isCreate */ true),
+      });
+      this.emit('shipping.option.created', {
+        optionId: created.id,
+        name: created.name,
+        actorId: actorId ?? null,
+      });
+      return created;
+    } catch (err: any) {
+      // Phase 91 — Gap #8 name uniqueness collision → clean 409.
+      if (err?.code === 'P2002') {
+        throw new ConflictException(
+          'A shipping option with this name already exists.',
+        );
+      }
+      throw err;
+    }
   }
 
-  async update(id: string, input: Partial<ShippingOptionInput>) {
-    await this.get(id); // throws if missing
+  async update(
+    id: string,
+    input: Partial<ShippingOptionInput>,
+    actorId?: string | null,
+  ) {
+    await this.get(id);
     this.validate(input, /* allowPartial */ true);
-    return this.prisma.shippingOption.update({
-      where: { id },
-      data: this.toPrismaData(input, /* isCreate */ false),
-    });
+    try {
+      const updated = await this.prisma.shippingOption.update({
+        where: { id },
+        data: this.toPrismaData(input, /* isCreate */ false),
+      });
+      this.emit('shipping.option.updated', {
+        optionId: id,
+        actorId: actorId ?? null,
+        changes: Object.keys(input ?? {}),
+      });
+      return updated;
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictException(
+          'A shipping option with this name already exists.',
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -101,7 +160,10 @@ export class ShippingOptionsService {
    * isActive=false so it disappears from the customer + admin lists.
    * Hard delete only when no orders point to it (clean dev/test path).
    */
-  async delete(id: string): Promise<{ hardDeleted: boolean }> {
+  async delete(
+    id: string,
+    actorId?: string | null,
+  ): Promise<{ hardDeleted: boolean }> {
     const refCount = await this.prisma.masterOrder.count({
       where: { shippingOptionId: id },
     });
@@ -110,9 +172,18 @@ export class ShippingOptionsService {
         where: { id },
         data: { isActive: false },
       });
+      this.emit('shipping.option.deactivated', {
+        optionId: id,
+        actorId: actorId ?? null,
+        reason: 'referenced by past orders',
+      });
       return { hardDeleted: false };
     }
     await this.prisma.shippingOption.delete({ where: { id } });
+    this.emit('shipping.option.deleted', {
+      optionId: id,
+      actorId: actorId ?? null,
+    });
     return { hardDeleted: true };
   }
 
@@ -223,6 +294,13 @@ export class ShippingOptionsService {
       const v = BigInt(input.priceInPaise as any);
       if (v < 0n) {
         throw new BadRequestException('Price cannot be negative');
+      }
+      // Phase 91 — Gap #19 upper-bound cap (₹1,00,000). Admin typo
+      // protection — a ₹50 lakh shipping option would survive today.
+      if (v > BigInt(PLATFORM_PRICE_CAP_PAISE)) {
+        throw new BadRequestException(
+          `Price exceeds platform cap of ₹${PLATFORM_PRICE_CAP_PAISE / 100}.`,
+        );
       }
     }
     if (

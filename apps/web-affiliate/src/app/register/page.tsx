@@ -1,13 +1,25 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useCallback, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { apiFetch, ApiError } from '@/lib/api';
+import { CaptchaWidget } from '@/components/CaptchaWidget';
+
+const CAPTCHA_REQUIRED =
+  (process.env.NEXT_PUBLIC_CAPTCHA_PROVIDER ?? 'disabled').toLowerCase() !==
+  'disabled';
 
 /**
  * Affiliate registration form. Submits an application — admin must
  * approve before the account becomes ACTIVE. Mirrors the SRS §5.1
- * registration fields.
+ * registration fields plus the Phase-22 audit additions: confirm
+ * password, Terms + Privacy consent, optional marketing opt-in.
+ *
+ * Phase 22 (2026-05-20) — switched from raw `fetch` to the shared
+ * `apiFetch` helper. The helper adds cookie credentials, handles the
+ * SportsMart `{ success, data }` envelope, and surfaces ApiError so
+ * the 4xx handling below works uniformly.
  */
 export default function RegisterPage() {
   const router = useRouter();
@@ -17,14 +29,24 @@ export default function RegisterPage() {
     email: '',
     phone: '',
     password: '',
+    confirmPassword: '',
     websiteUrl: '',
     socialHandle: '',
     joinReason: '',
   });
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acceptPrivacy, setAcceptPrivacy] = useState(false);
+  const [acceptMarketing, setAcceptMarketing] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+  const onCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+  }, []);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const update = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((p) => ({ ...p, [k]: e.target.value }));
@@ -32,35 +54,56 @@ export default function RegisterPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    if (form.password !== form.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    if (!acceptTerms) {
+      setError('You must agree to the Terms of Service to apply.');
+      return;
+    }
+    if (!acceptPrivacy) {
+      setError('You must agree to the Privacy Policy to apply.');
+      return;
+    }
+    if (CAPTCHA_REQUIRED && !captchaToken) {
+      setError('Please complete the captcha challenge.');
+      return;
+    }
     setLoading(true);
     try {
-      const apiBase =
-        process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
-      const payload: any = {
-        firstName: form.firstName.trim(),
-        lastName: form.lastName.trim(),
-        email: form.email.trim(),
-        password: form.password,
-      };
-      payload.phone = form.phone.trim();
-      if (form.websiteUrl.trim()) payload.websiteUrl = form.websiteUrl.trim();
-      if (form.socialHandle.trim()) payload.socialHandle = form.socialHandle.trim();
-      if (form.joinReason.trim()) payload.joinReason = form.joinReason.trim();
-
-      const res = await fetch(`${apiBase}/affiliate/register`, {
+      await apiFetch('/affiliate/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          firstName: form.firstName.trim(),
+          lastName: form.lastName.trim(),
+          email: form.email.trim().toLowerCase(),
+          phone: form.phone.trim(),
+          password: form.password,
+          websiteUrl: form.websiteUrl.trim() || undefined,
+          socialHandle: form.socialHandle.trim() || undefined,
+          joinReason: form.joinReason.trim() || undefined,
+          acceptTerms,
+          acceptPrivacy,
+          acceptMarketing,
+          captchaToken: captchaToken || undefined,
+        }),
       });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(body?.message || 'Could not submit your application.');
-        return;
-      }
       setSuccess(true);
-      setTimeout(() => router.push('/login'), 2500);
-    } catch {
-      setError('Could not reach the server. Please try again.');
+      // Redirect immediately — the API already returned the uniform
+      // 201, so further waiting just risks the user closing the tab.
+      router.replace('/login?applied=1');
+    } catch (err) {
+      // Force a fresh captcha challenge on every failed submit —
+      // Turnstile / hCaptcha tokens are single-use, so a 4xx without
+      // resetting would leave the form unsubmittable.
+      setCaptchaResetKey((k) => k + 1);
+      setCaptchaToken('');
+      if (err instanceof ApiError) {
+        setError(err.message || 'Could not submit your application.');
+      } else {
+        setError('Could not reach the server. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -216,6 +259,47 @@ export default function RegisterPage() {
           </div>
         </Field>
 
+        <Field label="Confirm password" required>
+          <div style={{ position: 'relative' }}>
+            <input
+              type={showConfirmPassword ? 'text' : 'password'}
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={form.confirmPassword}
+              onChange={update('confirmPassword')}
+              disabled={loading}
+              style={{ ...inputStyle, paddingRight: 44 }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowConfirmPassword((v) => !v)}
+              aria-label={
+                showConfirmPassword ? 'Hide password' : 'Show password'
+              }
+              aria-pressed={showConfirmPassword}
+              tabIndex={-1}
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                height: '100%',
+                width: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: '#64748b',
+                padding: 0,
+              }}
+            >
+              {showConfirmPassword ? '🙈' : '👁'}
+            </button>
+          </div>
+        </Field>
+
         <Field label="Website / blog URL (optional)">
           <input
             type="url"
@@ -246,6 +330,53 @@ export default function RegisterPage() {
             style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
           />
         </Field>
+
+        <div style={{ marginTop: 12, marginBottom: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#374151' }}>
+            <input
+              type="checkbox"
+              checked={acceptTerms}
+              onChange={(e) => setAcceptTerms(e.target.checked)}
+              disabled={loading}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              I agree to the{' '}
+              <Link href="/legal/terms" target="_blank" style={{ color: '#2563eb' }}>Terms of Service</Link>
+              {' '}*
+            </span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#374151' }}>
+            <input
+              type="checkbox"
+              checked={acceptPrivacy}
+              onChange={(e) => setAcceptPrivacy(e.target.checked)}
+              disabled={loading}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              I agree to the{' '}
+              <Link href="/legal/privacy" target="_blank" style={{ color: '#2563eb' }}>Privacy Policy</Link>
+              {' '}*
+            </span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#64748b' }}>
+            <input
+              type="checkbox"
+              checked={acceptMarketing}
+              onChange={(e) => setAcceptMarketing(e.target.checked)}
+              disabled={loading}
+              style={{ marginTop: 3 }}
+            />
+            <span>Send me affiliate program updates (optional).</span>
+          </label>
+        </div>
+
+        {CAPTCHA_REQUIRED && (
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+            <CaptchaWidget onToken={onCaptchaToken} resetKey={captchaResetKey} />
+          </div>
+        )}
 
         <button
           type="submit"

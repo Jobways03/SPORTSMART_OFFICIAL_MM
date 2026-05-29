@@ -106,19 +106,30 @@ export const sellerDisputesService = {
     return apiClient<DisputeDetail>(`/seller/disputes/${id}`);
   },
 
-  /** POST /seller/disputes — file a new dispute (e.g. against a customer return). */
-  file(payload: FileDisputePayload) {
+  /**
+   * POST /seller/disputes — file a new dispute (e.g. contesting a customer
+   * return). The endpoint is @Idempotent, so an X-Idempotency-Key is required;
+   * generate it once per submission so a retry / double-click doesn't create
+   * two disputes.
+   */
+  file(payload: FileDisputePayload, idempotencyKey: string) {
     return apiClient<Dispute>('/seller/disputes', {
       method: 'POST',
       body: JSON.stringify(payload),
+      headers: { 'X-Idempotency-Key': idempotencyKey },
     });
   },
 
-  /** POST /seller/disputes/:id/messages — reply / add a note. */
-  reply(id: string, body: string) {
+  /**
+   * POST /seller/disputes/:id/messages — reply / add a note. The endpoint is
+   * @Idempotent, so an X-Idempotency-Key is required; pass a key that stays
+   * stable across retries of the same message so a retry can't double-post.
+   */
+  reply(id: string, body: string, idempotencyKey: string) {
     return apiClient<DisputeMessage>(`/seller/disputes/${id}/messages`, {
       method: 'POST',
       body: JSON.stringify({ body }),
+      headers: { 'X-Idempotency-Key': idempotencyKey },
     });
   },
 

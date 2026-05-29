@@ -1,0 +1,428 @@
+{
+  "bows": [
+    {
+      "key": "bow_type",
+      "name": "Bow Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "recurve", "label": "Recurve" },
+        { "value": "compound", "label": "Compound" },
+        { "value": "longbow", "label": "Longbow / Traditional" },
+        { "value": "barebow", "label": "Barebow" },
+        { "value": "youth", "label": "Youth / Beginner Set" }
+      ]
+    },
+    {
+      "key": "hand_orientation",
+      "name": "Hand Orientation",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "right", "label": "Right Handed" },
+        { "value": "left", "label": "Left Handed" }
+      ]
+    },
+    {
+      "key": "draw_weight",
+      "name": "Draw Weight (lbs)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "10_20", "label": "10-20 lbs (Youth)" },
+        { "value": "20_30", "label": "20-30 lbs (Beginner)" },
+        { "value": "30_40", "label": "30-40 lbs" },
+        { "value": "40_50", "label": "40-50 lbs" },
+        { "value": "50_60", "label": "50-60 lbs" },
+        { "value": "60_70", "label": "60-70 lbs" },
+        { "value": "70_plus", "label": "70+ lbs" }
+      ]
+    },
+    {
+      "key": "draw_length",
+      "name": "Draw Length (inches)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "22_24", "label": "22-24\"" },
+        { "value": "25_26", "label": "25-26\"" },
+        { "value": "27_28", "label": "27-28\"" },
+        { "value": "29_30", "label": "29-30\"" },
+        { "value": "31_32", "label": "31-32\"" },
+        { "value": "adjustable", "label": "Adjustable" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced / Competition" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "camo", "label": "Camo" },
+        { "value": "wood", "label": "Wood / Natural" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "arrows": [
+    {
+      "key": "arrow_material",
+      "name": "Arrow Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "carbon", "label": "Carbon" },
+        { "value": "aluminum", "label": "Aluminum" },
+        { "value": "carbon_aluminum", "label": "Carbon / Aluminum Hybrid" },
+        { "value": "fiberglass", "label": "Fiberglass" },
+        { "value": "wood", "label": "Wood (Traditional)" }
+      ]
+    },
+    {
+      "key": "arrow_length",
+      "name": "Arrow Length (inches)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "26", "label": "26\"" },
+        { "value": "28", "label": "28\"" },
+        { "value": "29", "label": "29\"" },
+        { "value": "30", "label": "30\"" },
+        { "value": "31", "label": "31\"" },
+        { "value": "32", "label": "32\"" },
+        { "value": "33", "label": "33\"" }
+      ]
+    },
+    {
+      "key": "spine",
+      "name": "Spine (Stiffness)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "300", "label": "300 (Stiff)" },
+        { "value": "340", "label": "340" },
+        { "value": "400", "label": "400 (Medium)" },
+        { "value": "500", "label": "500" },
+        { "value": "600", "label": "600 (Flexible)" },
+        { "value": "700_plus", "label": "700+ (Youth)" }
+      ]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "3_pack", "label": "3 Pack" },
+        { "value": "6_pack", "label": "6 Pack" },
+        { "value": "12_pack", "label": "12 Pack (Dozen)" },
+        { "value": "24_pack", "label": "24 Pack" }
+      ]
+    }
+  ],
+  "arrow-tips-points": [
+    {
+      "key": "tip_type",
+      "name": "Tip Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "field_point", "label": "Field Point (Practice)" },
+        { "value": "target_point", "label": "Target Point" },
+        { "value": "broadhead_fixed", "label": "Broadhead – Fixed Blade" },
+        { "value": "broadhead_mechanical", "label": "Broadhead – Mechanical" },
+        { "value": "judo_point", "label": "Judo / Small Game Point" },
+        { "value": "bullet_point", "label": "Bullet Point" }
+      ]
+    },
+    {
+      "key": "grain_weight",
+      "name": "Grain Weight",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "75", "label": "75 grain" },
+        { "value": "100", "label": "100 grain" },
+        { "value": "125", "label": "125 grain" },
+        { "value": "150", "label": "150 grain" }
+      ]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "3_pack", "label": "3 Pack" },
+        { "value": "6_pack", "label": "6 Pack" },
+        { "value": "12_pack", "label": "12 Pack" }
+      ]
+    }
+  ],
+  "quivers": [
+    {
+      "key": "quiver_type",
+      "name": "Quiver Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "hip", "label": "Hip / Belt Quiver" },
+        { "value": "back", "label": "Back Quiver" },
+        { "value": "bow_mounted", "label": "Bow-Mounted Quiver" },
+        { "value": "ground", "label": "Ground Quiver" },
+        { "value": "target", "label": "Target / Field Quiver" }
+      ]
+    },
+    {
+      "key": "arrow_capacity",
+      "name": "Arrow Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "3_4", "label": "3-4 Arrows" },
+        { "value": "5_6", "label": "5-6 Arrows" },
+        { "value": "8_12", "label": "8-12 Arrows" },
+        { "value": "12_plus", "label": "12+ Arrows" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "camo", "label": "Camo" },
+        { "value": "brown", "label": "Brown / Leather" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "archery-targets": [
+    {
+      "key": "target_type",
+      "name": "Target Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "bag", "label": "Bag Target" },
+        { "value": "block", "label": "Block / Layered Foam" },
+        { "value": "3d", "label": "3D Target" },
+        { "value": "paper_face", "label": "Paper Target Face" },
+        { "value": "straw_boss", "label": "Straw Boss" }
+      ]
+    },
+    {
+      "key": "target_size",
+      "name": "Target Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Up to 18\")" },
+        { "value": "medium", "label": "Medium (18-24\")" },
+        { "value": "large", "label": "Large (24-36\")" },
+        { "value": "xl", "label": "XL (36\"+)" }
+      ]
+    }
+  ],
+  "archery-protective-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "arm_guard", "label": "Arm Guard / Bracer" },
+        { "value": "finger_tab", "label": "Finger Tab" },
+        { "value": "shooting_glove", "label": "Shooting Glove" },
+        { "value": "chest_guard", "label": "Chest Guard" },
+        { "value": "thumb_ring", "label": "Thumb Ring" }
+      ]
+    },
+    {
+      "key": "hand_orientation",
+      "name": "Hand Orientation",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "right", "label": "Right Handed" },
+        { "value": "left", "label": "Left Handed" },
+        { "value": "universal", "label": "Universal" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    }
+  ],
+  "bow-sights-rests": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "single_pin", "label": "Sight – Single Pin" },
+        { "value": "multi_pin", "label": "Sight – Multi Pin" },
+        { "value": "target_sight", "label": "Sight – Target / Olympic" },
+        { "value": "drop_away_rest", "label": "Arrow Rest – Drop Away" },
+        { "value": "whisker_biscuit", "label": "Arrow Rest – Whisker Biscuit" },
+        { "value": "blade_rest", "label": "Arrow Rest – Blade" }
+      ]
+    },
+    {
+      "key": "hand_orientation",
+      "name": "Hand Orientation",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "right", "label": "Right Handed" },
+        { "value": "left", "label": "Left Handed" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "camo", "label": "Camo" },
+        { "value": "silver", "label": "Silver" }
+      ]
+    }
+  ],
+  "bowstrings-cables": [
+    {
+      "key": "string_type",
+      "name": "String Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "recurve_string", "label": "Recurve Bowstring" },
+        { "value": "compound_string", "label": "Compound Bowstring" },
+        { "value": "compound_cable", "label": "Compound Cable" },
+        { "value": "longbow_string", "label": "Longbow String" },
+        { "value": "string_set", "label": "String + Cable Set" }
+      ]
+    },
+    {
+      "key": "string_length",
+      "name": "String Length (inches)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "48", "label": "48\"" },
+        { "value": "54", "label": "54\"" },
+        { "value": "58", "label": "58\"" },
+        { "value": "62", "label": "62\"" },
+        { "value": "66", "label": "66\"" },
+        { "value": "68", "label": "68\"" },
+        { "value": "70", "label": "70\"" },
+        { "value": "custom", "label": "Custom / Other" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "archery-bags-cases": [
+    {
+      "key": "case_type",
+      "name": "Case Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "bow_case_soft", "label": "Bow Case – Soft" },
+        { "value": "bow_case_hard", "label": "Bow Case – Hard" },
+        { "value": "bow_backpack", "label": "Bow Backpack" },
+        { "value": "arrow_tube", "label": "Arrow Tube / Case" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "camo", "label": "Camo" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "archery-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "stabilizer", "label": "Stabilizer" },
+        { "value": "release_aid", "label": "Release Aid / Trigger" },
+        { "value": "bow_stringer", "label": "Bow Stringer" },
+        { "value": "bow_stand", "label": "Bow Stand" },
+        { "value": "nocking_point", "label": "Nocking Point / D-Loop" },
+        { "value": "arrow_puller", "label": "Arrow Puller" },
+        { "value": "bow_wax", "label": "Bow Wax / String Wax" },
+        { "value": "fletching", "label": "Fletching / Vanes" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "camo", "label": "Camo" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

@@ -2,8 +2,17 @@ import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { AccessActorType, AccessEventKind } from '@prisma/client';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AccessLogService } from '../../application/services/access-log.service';
 
+/**
+ * Phase 24 (2026-05-20) — Every read now annotated with
+ * @Permissions('audit.read'). Pre-Phase-24 the controller wired
+ * PermissionsGuard but declared no @Permissions, meaning every route
+ * passed the guard with `requiredPermissions.length === 0`. Any
+ * logged-in admin could read brute-force spike data + cross-actor
+ * login history.
+ */
 @ApiTags('Admin Access Logs')
 @Controller('admin/access-logs')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
@@ -17,6 +26,8 @@ export class AdminAccessLogController {
    * collide with the parameterised one.
    */
   @Get('spike/failed-logins')
+
+  @Permissions('audit.read')
   async failedLoginSpike(
     @Query('hours') hours?: string,
     @Query('minFailures') minFailures?: string,
@@ -35,6 +46,8 @@ export class AdminAccessLogController {
    * segment doesn't get swallowed.
    */
   @Get('recent-failures')
+
+  @Permissions('audit.read')
   async recentFailures(
     @Query('actorType') actorType?: string,
     @Query('hours') hours?: string,
@@ -58,6 +71,8 @@ export class AdminAccessLogController {
    * segment doesn't get swallowed.
    */
   @Get('recent-actors')
+
+  @Permissions('audit.read')
   async recentActors(
     @Query('actorType') actorType?: string,
     @Query('actorRole') actorRole?: string,
@@ -79,6 +94,8 @@ export class AdminAccessLogController {
    * route so the literal `by-role` segment doesn't get swallowed.
    */
   @Get('by-role/:actorRole')
+
+  @Permissions('audit.read')
   async listByRole(
     @Param('actorRole') actorRole: string,
     @Query('actorType') actorType?: string,
@@ -99,6 +116,9 @@ export class AdminAccessLogController {
   }
 
   @Get(':actorType/:actorId')
+
+
+  @Permissions('audit.read')
   async listForActor(
     @Param('actorType') actorType: string,
     @Param('actorId') actorId: string,

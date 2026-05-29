@@ -14,7 +14,9 @@ interface FiledPayload {
   filedByType: 'CUSTOMER' | 'SELLER' | 'ADMIN';
   filedById: string;
   filedByName: string;
+  masterOrderId: string | null;
   subOrderId: string | null;
+  returnId: string | null;
   summary: string;
 }
 
@@ -25,6 +27,8 @@ interface MessageAddedPayload {
   senderId: string;
   senderName: string;
   messagePreview: string;
+  // Defence-in-depth flag; the service only publishes for non-internal notes.
+  isInternalNote?: boolean;
   filedByType: 'CUSTOMER' | 'SELLER' | 'ADMIN';
   filedById: string;
   subOrderId: string | null;
@@ -66,20 +70,31 @@ export class DisputeNotificationHandler {
   @IdempotentHandler()
   async onFiled(event: DomainEvent<FiledPayload>) {
     const p = event.payload;
-    const sellerId = await this.affectedSellerId(p.subOrderId);
-    // Notify the affected seller when buyer files; notify a fallback
-    // (no specific buyer notification needed — they just filed it).
-    if (p.filedByType === 'CUSTOMER' && sellerId) {
-      // Phase 5.4 (2026-05-16) — every user-controlled interpolation
-      // (filer name, dispute number, summary text) now goes through
-      // safeHtml so customer-supplied content can't inject markup into
-      // the seller's notification email. The kind label is platform-
-      // controlled (enum) and reformatted in JS, so it's safe.
-      const kindLabel = p.kind.replace(/_/g, ' ').toLowerCase();
-      await this.send(sellerId, {
-        subject: `New dispute against your order — ${p.disputeNumber}`,
-        body: safeHtml`<p>${p.filedByName} has opened a dispute (${kindLabel}) on order ${p.disputeNumber}.</p><blockquote>${p.summary}</blockquote><p>Please respond in your seller dashboard.</p>`,
-      });
+    // Phase 5.4 (2026-05-16) — every user-controlled interpolation (filer
+    // name, dispute number, summary) goes through safeHtml so customer/seller
+    // content can't inject markup. The kind label is platform-controlled
+    // (enum) and reformatted in JS, so it's safe.
+    const kindLabel = p.kind.replace(/_/g, ' ').toLowerCase();
+
+    if (p.filedByType === 'CUSTOMER') {
+      // Buyer filed → notify the affected seller.
+      const sellerId = await this.affectedSellerId(p.subOrderId);
+      if (sellerId) {
+        await this.send(sellerId, {
+          subject: `New dispute against your order — ${p.disputeNumber}`,
+          body: safeHtml`<p>${p.filedByName} has opened a dispute (${kindLabel}) on order ${p.disputeNumber}.</p><blockquote>${p.summary}</blockquote><p>Please respond in your seller dashboard.</p>`,
+        });
+      }
+    } else if (p.filedByType === 'SELLER') {
+      // Phase 110 — seller is contesting a return → let the customer know it's
+      // under additional review (it may affect their refund timing).
+      const customerId = await this.affectedCustomerId(p);
+      if (customerId) {
+        await this.send(customerId, {
+          subject: `Your return is under additional review — ${p.disputeNumber}`,
+          body: safeHtml`<p>The seller has raised a query about your return (${kindLabel}). Our team is reviewing it and will share the outcome — this may affect your refund timing.</p>`,
+        });
+      }
     }
   }
 
@@ -87,6 +102,9 @@ export class DisputeNotificationHandler {
   @IdempotentHandler()
   async onMessage(event: DomainEvent<MessageAddedPayload>) {
     const p = event.payload;
+    // Defence-in-depth: never notify on an internal admin note, even if a
+    // future change were to publish one (the service today does not).
+    if (p.isInternalNote) return;
     const sellerId = await this.affectedSellerId(p.subOrderId);
 
     // Notify the parties who are NOT the sender.
@@ -124,14 +142,31 @@ export class DisputeNotificationHandler {
       p.amountInPaise != null
         ? `₹${(p.amountInPaise / 100).toFixed(2)}`
         : null;
+    // Phase 131 — do NOT echo the raw decision rationale to the filer. It's
+    // the admin's INTERNAL reasoning (may reference internal notes, liability
+    // attribution, other parties) and lives in audit_logs + the admin view.
+    // The customer/filer gets the outcome + amount + a neutral invitation to
+    // ask. If product later wants a customer-facing explanation, add a
+    // dedicated `customerFacingRationale` field rather than leaking this one.
     await this.send(p.filedById, {
       subject: `Dispute ${p.disputeNumber} — decision: ${outcomeLabel}`,
-      body: safeHtml`<p>The Sportsmart team has decided your dispute in favour of the <strong>${outcomeLabel}</strong>.</p>${
+      body: safeHtml`<p>The Sportsmart team has reviewed and decided your dispute in favour of the <strong>${outcomeLabel}</strong>.</p>${
         amountInRupees
           ? safeHtml`<p><strong>Refund amount:</strong> ${amountInRupees}</p>`
           : ''
-      }<blockquote>${p.rationale}</blockquote>`,
+      }<p>If you have any questions about this decision, reply to this email and our team will help.</p>`,
     });
+
+    // Phase 123 — also notify the affected seller when they aren't the filer.
+    // A customer-filed dispute's seller learns the outcome here; a seller-filed
+    // dispute's seller IS the filer and was already notified above.
+    const sellerId = await this.affectedSellerId(p.subOrderId);
+    if (sellerId && sellerId !== p.filedById) {
+      await this.send(sellerId, {
+        subject: `Dispute ${p.disputeNumber} resolved — ${outcomeLabel}`,
+        body: safeHtml`<p>A dispute on your order has been resolved in favour of the <strong>${outcomeLabel}</strong>. Any settlement impact will reflect in your ledger.</p>`,
+      });
+    }
   }
 
   // ── helpers ──────────────────────────────────────────────────────
@@ -143,6 +178,36 @@ export class DisputeNotificationHandler {
       select: { sellerId: true },
     });
     return sub?.sellerId ?? null;
+  }
+
+  /** Resolve the customer behind a dispute's linked return / order graph. */
+  private async affectedCustomerId(p: {
+    masterOrderId: string | null;
+    subOrderId: string | null;
+    returnId: string | null;
+  }): Promise<string | null> {
+    if (p.returnId) {
+      const ret = await this.prisma.return.findUnique({
+        where: { id: p.returnId },
+        select: { customerId: true },
+      });
+      if (ret?.customerId) return ret.customerId;
+    }
+    if (p.subOrderId) {
+      const sub = await this.prisma.subOrder.findUnique({
+        where: { id: p.subOrderId },
+        select: { masterOrder: { select: { customerId: true } } },
+      });
+      if (sub?.masterOrder?.customerId) return sub.masterOrder.customerId;
+    }
+    if (p.masterOrderId) {
+      const o = await this.prisma.masterOrder.findUnique({
+        where: { id: p.masterOrderId },
+        select: { customerId: true },
+      });
+      if (o?.customerId) return o.customerId;
+    }
+    return null;
   }
 
   private async send(

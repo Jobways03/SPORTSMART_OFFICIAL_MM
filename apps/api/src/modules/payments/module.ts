@@ -1,17 +1,35 @@
 import { Module } from '@nestjs/common';
 import { PaymentsPublicFacade } from './application/facades/payments-public.facade';
 import { PaymentStatusPollerService } from './application/services/payment-status-poller.service';
+// Phase 66 (2026-05-22) — payment expiry sweep cron (audit Gap #18).
+import { PaymentExpirySweepCron } from './application/jobs/payment-expiry-sweep.cron';
+// Phase 70 (2026-05-22) — Payment entity scaffolding.
+import { PaymentLifecycleService } from './application/services/payment-lifecycle.service';
 import { AdminPaymentsController } from './presentation/controllers/admin-payments.controller';
 import { PaymentWebhookController } from './presentation/controllers/payment-webhook.controller';
-import { AdminAuthGuard } from '../../core/guards';
+// Phase 66 (audit Gap #14) — customer payment status query.
+// Replaces the U-prefix dead stub.
+import { GetPaymentStatusController } from './presentation/controllers/get-payment-status.controller';
+import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
 import { OrdersModule } from '../orders/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { FranchiseModule } from '../franchise/module';
 
 @Module({
   imports: [OrdersModule, RazorpayModule, FranchiseModule],
-  controllers: [AdminPaymentsController, PaymentWebhookController],
-  providers: [PaymentsPublicFacade, PaymentStatusPollerService, AdminAuthGuard],
-  exports: [PaymentsPublicFacade],
+  controllers: [
+    AdminPaymentsController,
+    PaymentWebhookController,
+    GetPaymentStatusController,
+  ],
+  providers: [
+    PaymentsPublicFacade,
+    PaymentStatusPollerService,
+    PaymentExpirySweepCron,
+    PaymentLifecycleService,
+    AdminAuthGuard,
+    UserAuthGuard,
+  ],
+  exports: [PaymentsPublicFacade, PaymentLifecycleService],
 })
 export class PaymentsModule {}

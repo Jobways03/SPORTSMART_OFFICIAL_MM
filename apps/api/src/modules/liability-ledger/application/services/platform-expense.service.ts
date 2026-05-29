@@ -73,4 +73,38 @@ export class PlatformExpenseService {
       throw err;
     }
   }
+
+  /**
+   * Phase 127 — reverse the expense for a source (e.g. a goodwill credit
+   * whose refund finance rejected). A platform expense has no in-flight
+   * lifecycle, so it's always reversible — a soft mark (reversedAt) keeps
+   * the row for audit while excluding it from cost totals. Idempotent:
+   *   - not reversed → reversedAt stamped ('reversed')
+   *   - reversed     → no-op ('already_reversed') — replay-safe
+   *   - no row       → 'none'
+   */
+  async reverseForSource(args: {
+    sourceType: LedgerSourceType;
+    sourceId: string;
+    reason: string;
+  }): Promise<'reversed' | 'already_reversed' | 'none'> {
+    const row = await this.prisma.platformExpense.findUnique({
+      where: {
+        sourceType_sourceId: {
+          sourceType: args.sourceType,
+          sourceId: args.sourceId,
+        },
+      },
+    });
+    if (!row) return 'none';
+    if (row.reversedAt) return 'already_reversed';
+    await this.prisma.platformExpense.update({
+      where: { id: row.id },
+      data: { reversedAt: new Date(), reversalReason: args.reason },
+    });
+    this.logger.log(
+      `PlatformExpense ${row.id} reversed for ${args.sourceType}:${args.sourceId}: ${args.reason}`,
+    );
+    return 'reversed';
+  }
 }

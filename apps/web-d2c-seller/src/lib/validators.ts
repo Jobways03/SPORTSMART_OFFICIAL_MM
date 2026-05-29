@@ -37,12 +37,22 @@ export function validateEmail(value: string): string | null {
 export function validatePhoneNumber(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return 'Phone number is required';
-  const digits = trimmed.replace(/\D/g, '');
+  // Phase 18 (2026-05-20) — strict India mobile format mirroring
+  // the backend DTO so frontend rejects the same shapes the server
+  // will. Strip leading 91 country-code if the user typed it.
+  let digits = trimmed.replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length === 12) {
+    digits = digits.slice(2);
+  }
   if (digits.length === 0) return 'Phone number must contain only digits';
-  if (digits.length < 10) return 'Phone number must be at least 10 digits';
-  if (digits.length > 15) return 'Phone number must not exceed 15 digits';
+  if (!/^[6-9]\d{9}$/.test(digits)) {
+    return 'Enter a 10-digit Indian mobile number starting with 6, 7, 8, or 9';
+  }
   return null;
 }
+
+// Phase 18 helpers `validateConfirmPassword` and `validateOtp` live
+// below (single source of truth at the bottom of this file).
 
 export function validatePassword(value: string): string | null {
   if (!value) return 'Password is required';

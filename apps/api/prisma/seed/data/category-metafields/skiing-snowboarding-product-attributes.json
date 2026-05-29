@@ -1,0 +1,791 @@
+{
+  "skis": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "ski_type",
+      "name": "Ski Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "all_mountain", "label": "All-Mountain" },
+        { "value": "carving", "label": "Carving / Piste" },
+        { "value": "freeride", "label": "Freeride / Powder" },
+        { "value": "freestyle", "label": "Freestyle / Park" },
+        { "value": "touring", "label": "Touring / Backcountry" },
+        { "value": "cross_country", "label": "Cross-Country" },
+        { "value": "race", "label": "Race" }
+      ]
+    },
+    {
+      "key": "ski_length",
+      "name": "Ski Length (cm)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "100_120", "label": "100-120 cm (Kids)" },
+        { "value": "120_140", "label": "120-140 cm (Junior)" },
+        { "value": "140_155", "label": "140-155 cm" },
+        { "value": "155_165", "label": "155-165 cm" },
+        { "value": "165_175", "label": "165-175 cm" },
+        { "value": "175_185", "label": "175-185 cm" },
+        { "value": "185_plus", "label": "185+ cm" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" },
+        { "value": "expert", "label": "Expert" }
+      ]
+    },
+    {
+      "key": "bindings_included",
+      "name": "Bindings Included",
+      "type": "BOOLEAN",
+      "sortOrder": 5
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snowboards": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "board_type",
+      "name": "Board Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "all_mountain", "label": "All-Mountain" },
+        { "value": "freestyle", "label": "Freestyle / Park" },
+        { "value": "freeride", "label": "Freeride / Powder" },
+        { "value": "splitboard", "label": "Splitboard (Touring)" }
+      ]
+    },
+    {
+      "key": "board_length",
+      "name": "Board Length (cm)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "100_120", "label": "100-120 cm (Kids)" },
+        { "value": "120_140", "label": "120-140 cm (Junior)" },
+        { "value": "140_150", "label": "140-150 cm" },
+        { "value": "150_155", "label": "150-155 cm" },
+        { "value": "155_160", "label": "155-160 cm" },
+        { "value": "160_165", "label": "160-165 cm" },
+        { "value": "165_plus", "label": "165+ cm" }
+      ]
+    },
+    {
+      "key": "profile",
+      "name": "Profile",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "camber", "label": "Camber" },
+        { "value": "rocker", "label": "Rocker" },
+        { "value": "flat", "label": "Flat" },
+        { "value": "hybrid_camber", "label": "Hybrid Camber" },
+        { "value": "hybrid_rocker", "label": "Hybrid Rocker" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" },
+        { "value": "expert", "label": "Expert" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "ski-snowboard-boots": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "boot_type",
+      "name": "Boot Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "ski_boot", "label": "Ski Boot" },
+        { "value": "snowboard_boot", "label": "Snowboard Boot" },
+        { "value": "cross_country", "label": "Cross-Country Boot" },
+        { "value": "touring", "label": "Touring / AT Boot" }
+      ]
+    },
+    {
+      "key": "boot_size",
+      "name": "Size (Mondo)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "19", "label": "19.0" },
+        { "value": "20", "label": "20.0" },
+        { "value": "21", "label": "21.0" },
+        { "value": "22", "label": "22.0" },
+        { "value": "23", "label": "23.0" },
+        { "value": "24", "label": "24.0" },
+        { "value": "25", "label": "25.0" },
+        { "value": "25_5", "label": "25.5" },
+        { "value": "26", "label": "26.0" },
+        { "value": "26_5", "label": "26.5" },
+        { "value": "27", "label": "27.0" },
+        { "value": "27_5", "label": "27.5" },
+        { "value": "28", "label": "28.0" },
+        { "value": "28_5", "label": "28.5" },
+        { "value": "29", "label": "29.0" },
+        { "value": "29_5", "label": "29.5" },
+        { "value": "30", "label": "30.0" },
+        { "value": "31", "label": "31.0" }
+      ]
+    },
+    {
+      "key": "flex_rating",
+      "name": "Flex Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "soft", "label": "Soft (Beginner)" },
+        { "value": "medium", "label": "Medium (Intermediate)" },
+        { "value": "stiff", "label": "Stiff (Advanced)" },
+        { "value": "very_stiff", "label": "Very Stiff (Expert/Race)" }
+      ]
+    },
+    {
+      "key": "boot_width",
+      "name": "Width",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "narrow", "label": "Narrow" },
+        { "value": "standard", "label": "Standard" },
+        { "value": "wide", "label": "Wide" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "ski-snowboard-bindings": [
+    {
+      "key": "binding_type",
+      "name": "Binding Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "ski_alpine", "label": "Ski – Alpine" },
+        { "value": "ski_touring", "label": "Ski – Touring / AT" },
+        { "value": "ski_cross_country", "label": "Ski – Cross-Country" },
+        { "value": "snowboard_strap", "label": "Snowboard – Strap-In" },
+        { "value": "snowboard_rear_entry", "label": "Snowboard – Rear Entry" },
+        { "value": "snowboard_step_on", "label": "Snowboard – Step-On" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate" },
+        { "value": "advanced", "label": "Advanced" },
+        { "value": "expert", "label": "Expert" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-helmets": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (48-52cm)" },
+        { "value": "s", "label": "S (51-55cm)" },
+        { "value": "m", "label": "M (55-59cm)" },
+        { "value": "l", "label": "L (59-63cm)" },
+        { "value": "xl", "label": "XL (61-65cm)" }
+      ]
+    },
+    {
+      "key": "mips",
+      "name": "MIPS Technology",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    },
+    {
+      "key": "visor",
+      "name": "Built-In Visor",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-goggles": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "fit_size",
+      "name": "Fit Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small Fit" },
+        { "value": "medium", "label": "Medium Fit" },
+        { "value": "large", "label": "Large Fit" }
+      ]
+    },
+    {
+      "key": "lens_type",
+      "name": "Lens Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "mirrored", "label": "Mirrored" },
+        { "value": "photochromic", "label": "Photochromic (Adaptive)" },
+        { "value": "low_light", "label": "Low Light / Yellow" },
+        { "value": "all_weather", "label": "All-Weather" },
+        { "value": "interchangeable", "label": "Interchangeable Lens" }
+      ]
+    },
+    {
+      "key": "otg",
+      "name": "Over The Glasses (OTG)",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Frame Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-jackets": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "jacket_type",
+      "name": "Jacket Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "insulated", "label": "Insulated" },
+        { "value": "shell", "label": "Shell (No Insulation)" },
+        { "value": "3_in_1", "label": "3-in-1 (Shell + Inner)" },
+        { "value": "softshell", "label": "Softshell" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "waterproof_rating",
+      "name": "Waterproof Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "5k", "label": "5,000mm (Light Snow)" },
+        { "value": "10k", "label": "10,000mm (Moderate)" },
+        { "value": "15k", "label": "15,000mm (Heavy)" },
+        { "value": "20k_plus", "label": "20,000mm+ (Extreme)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-pants": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "pant_type",
+      "name": "Pant Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "insulated", "label": "Insulated Pants" },
+        { "value": "shell", "label": "Shell Pants" },
+        { "value": "bib", "label": "Bib Pants" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "waterproof_rating",
+      "name": "Waterproof Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "5k", "label": "5,000mm (Light Snow)" },
+        { "value": "10k", "label": "10,000mm (Moderate)" },
+        { "value": "15k", "label": "15,000mm (Heavy)" },
+        { "value": "20k_plus", "label": "20,000mm+ (Extreme)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "gloves", "label": "Gloves (5-Finger)" },
+        { "value": "mittens", "label": "Mittens" },
+        { "value": "lobster", "label": "Lobster / Trigger" },
+        { "value": "liner", "label": "Liner Gloves" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "ski-poles": [
+    {
+      "key": "pole_type",
+      "name": "Pole Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "alpine", "label": "Alpine / Downhill" },
+        { "value": "touring", "label": "Touring (Adjustable)" },
+        { "value": "cross_country", "label": "Cross-Country" },
+        { "value": "race", "label": "Race" }
+      ]
+    },
+    {
+      "key": "pole_length",
+      "name": "Pole Length (cm)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "80_90", "label": "80-90 cm (Kids)" },
+        { "value": "95_105", "label": "95-105 cm" },
+        { "value": "110_115", "label": "110-115 cm" },
+        { "value": "120_125", "label": "120-125 cm" },
+        { "value": "130_135", "label": "130-135 cm" },
+        { "value": "adjustable", "label": "Adjustable" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "aluminum", "label": "Aluminum" },
+        { "value": "carbon", "label": "Carbon" },
+        { "value": "composite", "label": "Composite" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "silver", "label": "Silver" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-base-layers": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "top", "label": "Base Layer Top" },
+        { "value": "bottom", "label": "Base Layer Bottom" },
+        { "value": "set", "label": "Set (Top + Bottom)" },
+        { "value": "neck_gaiter", "label": "Neck Gaiter / Balaclava" },
+        { "value": "socks", "label": "Ski / Snow Socks" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "fabric_type",
+      "name": "Fabric Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "merino_wool", "label": "Merino Wool" },
+        { "value": "synthetic", "label": "Synthetic" },
+        { "value": "blend", "label": "Merino/Synthetic Blend" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-bags-packs": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "ski_bag", "label": "Ski Bag" },
+        { "value": "snowboard_bag", "label": "Snowboard Bag" },
+        { "value": "boot_bag", "label": "Boot Bag" },
+        { "value": "helmet_bag", "label": "Helmet / Goggle Bag" },
+        { "value": "backcountry_pack", "label": "Backcountry Pack" },
+        { "value": "ski_roller", "label": "Ski Roller / Travel Bag" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "snow-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "wax_tuning", "label": "Wax / Tuning Kit" },
+        { "value": "stomp_pad", "label": "Stomp Pad" },
+        { "value": "boot_dryer", "label": "Boot Dryer" },
+        { "value": "goggle_lens", "label": "Replacement Goggle Lens" },
+        { "value": "avalanche_beacon", "label": "Avalanche Beacon" },
+        { "value": "avalanche_probe", "label": "Avalanche Probe" },
+        { "value": "avalanche_shovel", "label": "Avalanche Shovel" },
+        { "value": "ski_lock", "label": "Ski / Board Lock" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

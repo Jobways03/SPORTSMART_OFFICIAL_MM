@@ -54,16 +54,47 @@ interface SubOrder {
   franchise: { id: string; businessName: string; warehousePincode?: string | null; status?: string } | null;
 }
 
+// Phase 79 (2026-05-22) — history audit Gaps #1/#2/#5/#6/#7/#12/#13.
+// Expanded shape so the UI can render actor, eventType badge,
+// sub-order context, failure reason, and new-sub-order linkage.
 interface ReassignmentLog {
   id: string;
   subOrderId: string;
+  masterOrderId: string;
+  // Phase 78/79 — discriminator + canonical id columns.
+  fromNodeType: 'SELLER' | 'FRANCHISE';
+  fromNodeId: string | null;
+  toNodeType: 'SELLER' | 'FRANCHISE';
+  toNodeId: string | null;
+  // Legacy fields, still populated by the enricher for back-compat.
   fromSellerId: string;
   toSellerId: string | null;
+  // Resolved display names (sellers OR franchises).
+  fromName: string;
+  toName: string;
   fromSellerName: string;
   toSellerName: string;
   reason: string;
+  // Phase 79 — Gap #12. Distinct from `reason` for successful=false rows.
+  failureReason: string | null;
   successful: boolean;
   newSubOrderId: string | null;
+  // Phase 79 — Gap #1. Admin actor enrichment.
+  reassignedBy: string | null;
+  reassignedByName: string | null;
+  reassignedByEmail: string | null;
+  reassignmentSequence: number;
+  // Phase 79 — Gap #6. Discriminates manual vs auto-cascade in the UI.
+  eventType:
+    | 'ADMIN_MANUAL_OVERRIDE'
+    | 'AUTO_AFTER_SELLER_REJECT'
+    | 'AUTO_AFTER_FRANCHISE_REJECT'
+    | 'AUTO_AFTER_EXCEPTION_REMEDIATE';
+  // Phase 79 — Gap #5/#13. Sub-order context.
+  subOrderItemCount: number | null;
+  subOrderIndex: number | null;
+  newSubOrderItemCount: number | null;
+  newSubOrderIndex: number | null;
   createdAt: string;
 }
 
@@ -94,6 +125,16 @@ interface OrderDetail {
   verifiedAt: string | null;
   verifiedBy: string | null;
   verificationRemarks: string | null;
+  // Phase 71 — risk-band + score + reasons + version + provenance.
+  // Returned by /admin/orders/:id (orders.service.getOrder spreads
+  // these in via the MasterOrder select).
+  verificationRiskScore?: number | null;
+  verificationRiskBand?: 'GREEN' | 'YELLOW' | 'RED' | null;
+  verificationRiskReasons?: string[] | null;
+  verificationScoredAt?: string | null;
+  verificationScoredBy?: string | null;
+  verificationScoreSource?: 'RULES' | 'MANUAL' | null;
+  verificationScoreVersion?: number | null;
   itemCount: number;
   createdAt: string;
   shippingAddressSnapshot: {
@@ -119,6 +160,24 @@ interface OrderDetail {
   // breakdown. Empty arrays for legacy orders placed before allocation
   // went live.
   discountBreakdown?: DiscountBreakdown;
+  // Phase 159c — affiliate referral attribution panel (null if none).
+  affiliateAttribution?: AffiliateAttributionDetail | null;
+}
+
+interface AffiliateAttributionDetail {
+  id: string;
+  affiliateId: string;
+  source: 'LINK' | 'COUPON';
+  code: string | null;
+  status: 'ACTIVE' | 'REVERSED' | 'FRAUD_VOIDED';
+  capturedAt: string;
+  affiliate?: { firstName?: string | null; lastName?: string | null; email?: string | null } | null;
+  commission?: {
+    id: string;
+    status: string;
+    commissionAmount: string | number;
+    commissionPercentage: string | number;
+  } | null;
 }
 
 interface DiscountBreakdown {
@@ -534,6 +593,27 @@ export default function OrderDetailPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [verifyRemarks, setVerifyRemarks] = useState('');
   const [verifySuccess, setVerifySuccess] = useState(false);
+  // Phase 74 — reject modal state (Phase 73 audit Gap #7).
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectError, setRejectError] = useState<string | null>(null);
+  // Phase 75 — routing preview state (Phase 73 audit Gap #23).
+  const [routingPreview, setRoutingPreview] = useState<{
+    masterOrderId: string;
+    customerPincode: string | null;
+    items: Array<{
+      orderItemId: string;
+      productId: string;
+      variantId: string | null;
+      quantity: number;
+      productTitle: string;
+      serviceable: boolean;
+      primary: { mappingId: string; sellerId: string | null; sellerShopName: string | null; distanceKm: number | null; nodeType: string } | null;
+      reason: string | null;
+    }>;
+    summary: { totalItems: number; serviceableItems: number; unserviceableItems: number };
+  } | null>(null);
+  const [routingPreviewLoading, setRoutingPreviewLoading] = useState(false);
 
   // Reassignment state
   const [reassignSubOrderId, setReassignSubOrderId] = useState<string | null>(null);
@@ -558,12 +638,27 @@ export default function OrderDetailPage() {
 
   const submitCancel = async () => {
     if (!cancelSubOrderId || cancelling) return;
+    // Phase 81 (2026-05-22) — sub-order cancel audit Gap #11. Reason
+    // is required server-side (DTO @Length(10, 500)); enforce on the
+    // UI so admins see the validation error immediately instead of
+    // bouncing off a 400.
+    const trimmed = cancelReason.trim();
+    if (trimmed.length < 10) {
+      setCancelError('Cancellation reason is required (minimum 10 characters)');
+      return;
+    }
     setCancelError('');
     setCancelling(true);
     try {
       await apiClient(`/admin/orders/sub-orders/${cancelSubOrderId}/cancel`, {
         method: 'PATCH',
-        body: JSON.stringify({ reason: cancelReason.trim() || undefined }),
+        body: JSON.stringify({ reason: trimmed }),
+        headers: {
+          // Phase 81 — @Idempotent on the controller; this key guards
+          // against double-clicks while the spinner is up so the
+          // refund saga only fires once.
+          'X-Idempotency-Key': `cancel-sub-order-${cancelSubOrderId}-${Date.now()}`,
+        },
       });
       setCancelSubOrderId(null);
       setCancelReason('');
@@ -595,6 +690,59 @@ export default function OrderDetailPage() {
     } finally {
       clearTimeout(timer);
       setActionLoading(null);
+    }
+  };
+
+  // Phase 74 (2026-05-22) — Phase 73 audit Gap #7. Reject now
+  // requires a reason (10..500 chars). Pre-Phase-74 the button
+  // posted to /reject-order with no body; the backend stored
+  // nothing.
+  const handleRejectOrder = async () => {
+    const trimmed = rejectReason.trim();
+    if (trimmed.length < 10) {
+      setRejectError('Reason must be at least 10 characters');
+      return;
+    }
+    setActionLoading('reject-order');
+    setRejectError(null);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 60_000);
+    try {
+      await apiClient(`/admin/orders/${id}/reject-order`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: trimmed }),
+        signal: abort.signal,
+        headers: {
+          'X-Idempotency-Key': `reject-${id}-${Date.now()}`,
+        },
+      });
+      setShowRejectModal(false);
+      setRejectReason('');
+      fetchOrder();
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        setRejectError('The server took too long to respond. Please retry.');
+      } else {
+        setRejectError(err?.body?.message || err?.message || 'Reject failed');
+      }
+    } finally {
+      clearTimeout(timer);
+      setActionLoading(null);
+    }
+  };
+
+  // Phase 75 (Phase 73 audit Gap #23) — routing preview.
+  const handleRoutingPreview = async () => {
+    setRoutingPreviewLoading(true);
+    try {
+      const res = await apiClient<NonNullable<typeof routingPreview>>(
+        `/admin/orders/${id}/routing-preview`,
+      );
+      if (res.data) setRoutingPreview(res.data);
+    } catch (err: any) {
+      void notify(err?.body?.message || err?.message || 'Routing preview failed');
+    } finally {
+      setRoutingPreviewLoading(false);
     }
   };
 
@@ -642,6 +790,14 @@ export default function OrderDetailPage() {
 
   const handleReassign = async (node: EligibleNode) => {
     if (!reassignSubOrderId) return;
+    // Phase 78 (2026-05-22) — reassign audit Gap #1. Reason is required
+    // at the server (DTO @Length(10, 500)); enforce on the UI so admins
+    // see the error immediately instead of bouncing off a 400.
+    const trimmed = reassignReason.trim();
+    if (trimmed.length < 10) {
+      setReassignError('Reassignment reason is required (minimum 10 characters)');
+      return;
+    }
     setReassigning(true);
     setReassignError('');
     try {
@@ -650,8 +806,13 @@ export default function OrderDetailPage() {
         body: JSON.stringify({
           nodeType: node.nodeType,
           nodeId: node.nodeId,
-          reason: reassignReason || undefined,
+          reason: trimmed,
         }),
+        headers: {
+          // Phase 78 — @Idempotent on the controller; this key guards
+          // against double-clicks while the spinner is up.
+          'X-Idempotency-Key': `reassign-${reassignSubOrderId}-${Date.now()}`,
+        },
       });
       setReassignSubOrderId(null);
       setEligibleNodes([]);
@@ -798,6 +959,11 @@ export default function OrderDetailPage() {
         </div>
       )}
 
+      {/* Phase 71 — risk band + reasons + rescore (audit Gap #5). */}
+      {order.verificationRiskBand && (
+        <RiskBadgeCard order={order} orderId={id} onRescore={fetchOrder} />
+      )}
+
       {/* -- Verify Order Card -- */}
       {isPlaced && order.paymentStatus !== 'CANCELLED' && (
         <div style={{
@@ -809,6 +975,93 @@ export default function OrderDetailPage() {
           </div>
           <div style={{ fontSize: 13, color: '#78350f', marginBottom: 16 }}>
             Please call the customer to verify this order. Once verified, it will be automatically routed to the best eligible seller.
+          </div>
+
+          {/* Phase 75 (Phase 73 audit Gap #23) — routing preview. */}
+          <div style={{ marginBottom: 16 }}>
+            {!routingPreview ? (
+              <button
+                onClick={handleRoutingPreview}
+                disabled={routingPreviewLoading}
+                style={{
+                  padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                  border: '1px solid #d97706', background: '#fff', color: '#92400e',
+                  borderRadius: 6, cursor: 'pointer',
+                }}
+              >
+                {routingPreviewLoading ? 'Loading preview…' : 'Show routing preview'}
+              </button>
+            ) : (
+              <div style={{
+                background: '#fff', border: '1px solid #fde68a',
+                borderRadius: 8, padding: 12,
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  alignItems: 'center', marginBottom: 8,
+                }}>
+                  <strong style={{ fontSize: 13, color: '#92400e' }}>
+                    Routing preview
+                    {' — '}
+                    <span style={{ color: routingPreview.summary.unserviceableItems === 0 ? '#16a34a' : '#dc2626' }}>
+                      {routingPreview.summary.serviceableItems}/{routingPreview.summary.totalItems} items routable
+                    </span>
+                  </strong>
+                  <button
+                    onClick={() => setRoutingPreview(null)}
+                    style={{ background: 'none', border: 'none', color: '#92400e', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    Hide
+                  </button>
+                </div>
+                <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: '#78350f' }}>
+                      <th style={{ padding: '4px 6px' }}>Product</th>
+                      <th style={{ padding: '4px 6px' }}>Qty</th>
+                      <th style={{ padding: '4px 6px' }}>Allocated to</th>
+                      <th style={{ padding: '4px 6px' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {routingPreview.items.map((it) => (
+                      <tr key={it.orderItemId} style={{ borderTop: '1px solid #fde68a' }}>
+                        <td style={{ padding: '4px 6px', color: '#451a03' }}>{it.productTitle || it.productId}</td>
+                        <td style={{ padding: '4px 6px' }}>{it.quantity}</td>
+                        <td style={{ padding: '4px 6px' }}>
+                          {it.primary ? (
+                            <>
+                              {it.primary.sellerShopName ?? it.primary.sellerId ?? it.primary.mappingId}
+                              {it.primary.distanceKm != null && (
+                                <span style={{ color: '#6b7280' }}>
+                                  {' '}({it.primary.distanceKm.toFixed(1)} km)
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span style={{ color: '#9ca3af' }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '4px 6px' }}>
+                          {it.serviceable ? (
+                            <span style={{ color: '#16a34a', fontWeight: 600 }}>OK</span>
+                          ) : (
+                            <span style={{ color: '#dc2626', fontWeight: 600 }} title={it.reason ?? ''}>
+                              ✗ {it.reason ?? 'unserviceable'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {routingPreview.summary.unserviceableItems > 0 && (
+                  <div style={{ fontSize: 11, color: '#dc2626', marginTop: 8 }}>
+                    Some items can't be routed at the customer's pincode. Verifying will move the order to EXCEPTION_QUEUE.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: 12 }}>
@@ -842,7 +1095,11 @@ export default function OrderDetailPage() {
               {actionLoading === 'verify' ? 'Verifying & Routing...' : 'Verify & Route'}
             </button>
             <button
-              onClick={() => handleAction(`/admin/orders/${order.id}/reject-order`, 'reject-order')}
+              onClick={() => {
+                setRejectError(null);
+                setRejectReason('');
+                setShowRejectModal(true);
+              }}
               disabled={!!actionLoading}
               style={{ padding: '10px 24px', fontSize: 13, fontWeight: 700, border: 'none', background: '#dc2626', color: '#fff', borderRadius: 8, cursor: 'pointer' }}
             >
@@ -1317,38 +1574,176 @@ export default function OrderDetailPage() {
               />
             )}
 
-          {/* -- Reassignment History -- */}
-          {order.reassignmentLogs && order.reassignmentLogs.length > 0 && (
+          {/* -- Affiliate attribution (Phase 159c — audit L1) -- */}
+          {order.affiliateAttribution && (
             <div style={cardStyle}>
-              <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Reassignment History</h3>
-              <div style={{ borderLeft: '2px solid #c4b5fd', paddingLeft: 16, marginLeft: 4 }}>
-                {order.reassignmentLogs.map((log) => (
-                  <div key={log.id} style={{ position: 'relative', paddingBottom: 16, borderBottom: '1px solid #f3f4f6', marginBottom: 12 }}>
-                    <div style={{
-                      position: 'absolute', left: -22, top: 4,
-                      width: 10, height: 10, borderRadius: '50%',
-                      background: log.successful ? '#22c55e' : '#ef4444',
-                      border: '2px solid #fff',
-                    }} />
-                    <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
-                      <span style={{ fontWeight: 600 }}>{log.fromSellerName}</span>
-                      <span style={{ color: '#6b7280' }}> → </span>
-                      <span style={{ fontWeight: 600 }}>{log.toSellerName}</span>
-                      {!log.successful && (
-                        <span style={{ fontSize: 11, color: '#dc2626', fontWeight: 600, marginLeft: 8 }}>FAILED</span>
-                      )}
+              <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Affiliate attribution</h3>
+              {(() => {
+                const a = order.affiliateAttribution!;
+                const affName =
+                  `${a.affiliate?.firstName ?? ''} ${a.affiliate?.lastName ?? ''}`.trim() ||
+                  a.affiliate?.email ||
+                  a.affiliateId;
+                return (
+                  <div style={{ fontSize: 13, color: '#374151', display: 'grid', gap: 8 }}>
+                    <div>
+                      Attributed to <strong>{affName}</strong> via {a.source}
+                      {a.code ? (
+                        <>
+                          {' '}
+                          (<code>{a.code}</code>)
+                        </>
+                      ) : null}
                     </div>
-                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                      {log.reason}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span>Attribution:</span>
+                      <StatusBadge label={a.status} variant={a.status === 'ACTIVE' ? 'success' : 'danger'} />
                     </div>
-                    <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
-                      {fmtDate(log.createdAt)}
+                    {a.commission ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span>
+                          Commission <strong>{fmt(Number(a.commission.commissionAmount))}</strong> (
+                          {Number(a.commission.commissionPercentage)}%)
+                        </span>
+                        <StatusBadge
+                          label={a.commission.status}
+                          variant={
+                            ['PAID', 'CONFIRMED'].includes(a.commission.status)
+                              ? 'success'
+                              : ['CANCELLED', 'REVERSED'].includes(a.commission.status)
+                              ? 'danger'
+                              : 'warning'
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <div style={{ color: '#6b7280' }}>
+                        No commission yet — created when payment is captured.
+                      </div>
+                    )}
+                    <div style={{ color: '#9ca3af', fontSize: 11 }}>
+                      Captured {new Date(a.capturedAt).toLocaleString('en-IN')}
                     </div>
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </div>
           )}
+
+          {/* -- Reassignment History (Phase 79 — always rendered for Gap #14) -- */}
+          <div style={cardStyle}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>Reassignment History</h3>
+            {!order.reassignmentLogs || order.reassignmentLogs.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#6b7280', padding: '12px 0' }}>
+                No reassignments — this order was fulfilled by its originally allocated node.
+              </div>
+            ) : (
+              <div style={{ borderLeft: '2px solid #c4b5fd', paddingLeft: 16, marginLeft: 4 }}>
+                {order.reassignmentLogs.map((log) => {
+                  // Phase 79 — Gap #6. Visual badge per eventType so an
+                  // ops analyst can tell admin overrides from system
+                  // cascades at a glance.
+                  const eventBadge = (() => {
+                    switch (log.eventType) {
+                      case 'ADMIN_MANUAL_OVERRIDE':
+                        return { label: 'Admin override', bg: '#ede9fe', fg: '#5b21b6' };
+                      case 'AUTO_AFTER_SELLER_REJECT':
+                        return { label: 'Auto · seller rejected', bg: '#fef3c7', fg: '#92400e' };
+                      case 'AUTO_AFTER_FRANCHISE_REJECT':
+                        return { label: 'Auto · franchise rejected', bg: '#fef3c7', fg: '#92400e' };
+                      case 'AUTO_AFTER_EXCEPTION_REMEDIATE':
+                        return { label: 'Auto · exception recovery', bg: '#dbeafe', fg: '#1e40af' };
+                      default:
+                        return { label: log.eventType, bg: '#f3f4f6', fg: '#374151' };
+                    }
+                  })();
+                  return (
+                    <div key={log.id} style={{ position: 'relative', paddingBottom: 16, borderBottom: '1px solid #f3f4f6', marginBottom: 12 }}>
+                      <div style={{
+                        position: 'absolute', left: -22, top: 4,
+                        width: 10, height: 10, borderRadius: '50%',
+                        background: log.successful ? '#22c55e' : '#ef4444',
+                        border: '2px solid #fff',
+                      }} />
+                      {/* Phase 79 — Gap #6 badge + Gap #5 sub-order context line */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                          letterSpacing: '0.05em', padding: '2px 8px', borderRadius: 4,
+                          background: eventBadge.bg, color: eventBadge.fg,
+                        }}>
+                          {eventBadge.label}
+                        </span>
+                        {log.subOrderIndex !== null && (
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>
+                            Sub-order #{log.subOrderIndex}
+                            {log.subOrderItemCount !== null ? ` · ${log.subOrderItemCount} item${log.subOrderItemCount !== 1 ? 's' : ''}` : ''}
+                            {log.reassignmentSequence > 1 ? ` · attempt ${log.reassignmentSequence}` : ''}
+                          </span>
+                        )}
+                        {!log.successful && (
+                          <span style={{ fontSize: 10, color: '#dc2626', fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: '#fee2e2' }}>
+                            FAILED
+                          </span>
+                        )}
+                      </div>
+                      {/* Phase 79 — Gap #2 node-type aware naming */}
+                      <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+                        <span style={{ fontWeight: 600 }}>
+                          {log.fromNodeType === 'FRANCHISE' ? 'Franchise: ' : 'Seller: '}
+                          {log.fromName}
+                        </span>
+                        <span style={{ color: '#6b7280' }}> → </span>
+                        <span style={{ fontWeight: 600 }}>
+                          {log.toNodeType === 'FRANCHISE' ? 'Franchise: ' : 'Seller: '}
+                          {log.toName}
+                        </span>
+                      </div>
+                      {/* Phase 79 — Gap #12 failure reason distinct from primary reason */}
+                      {log.successful && (
+                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                          {log.reason}
+                        </div>
+                      )}
+                      {!log.successful && (
+                        <>
+                          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                            <span style={{ fontWeight: 600 }}>Trigger:</span> {log.reason}
+                          </div>
+                          {log.failureReason && (
+                            <div style={{ fontSize: 12, color: '#991b1b', marginTop: 2 }}>
+                              <span style={{ fontWeight: 600 }}>Failure:</span> {log.failureReason}
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {/* Phase 79 — Gap #13 newSubOrderId linkage */}
+                      {log.newSubOrderId && log.newSubOrderIndex !== null && (
+                        <div style={{ fontSize: 12, color: '#0369a1', marginTop: 2 }}>
+                          → Created Sub-order #{log.newSubOrderIndex}
+                          {log.newSubOrderItemCount !== null
+                            ? ` (${log.newSubOrderItemCount} item${log.newSubOrderItemCount !== 1 ? 's' : ''})`
+                            : ''}
+                        </div>
+                      )}
+                      {/* Phase 79 — Gap #1 admin actor display */}
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <span>{fmtDate(log.createdAt)}</span>
+                        {log.reassignedByName ? (
+                          <span>
+                            by <span style={{ fontWeight: 600, color: '#374151' }}>{log.reassignedByName}</span>
+                            {log.reassignedByEmail ? ` (${log.reassignedByEmail})` : ''}
+                          </span>
+                        ) : (
+                          <span style={{ fontStyle: 'italic' }}>by system</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {/* -- Timeline -- */}
           <div style={cardStyle}>
@@ -1487,21 +1882,28 @@ export default function OrderDetailPage() {
               </button>
             </div>
 
-            {/* Reason input */}
+            {/* Phase 78 — reason is REQUIRED (min 10 chars). Server-side
+                DTO enforces 10..500; this surfaces the rule to the admin
+                before they click a candidate so they don't get a 400. */}
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                Reason for reassignment (optional)
+                Reason for reassignment <span style={{ color: '#dc2626' }}>*</span>
               </label>
               <input
                 type="text"
                 value={reassignReason}
                 onChange={(e) => setReassignReason(e.target.value)}
-                placeholder="e.g. Seller out of stock, faster delivery needed..."
+                placeholder="e.g. Seller out of stock, faster delivery needed (min 10 chars)..."
                 style={{
-                  width: '100%', padding: '10px 12px', border: '1px solid #d1d5db',
+                  width: '100%', padding: '10px 12px',
+                  border: `1px solid ${reassignReason.trim().length > 0 && reassignReason.trim().length < 10 ? '#dc2626' : '#d1d5db'}`,
                   borderRadius: 8, fontSize: 13, boxSizing: 'border-box',
                 }}
               />
+              <div style={{ fontSize: 11, color: reassignReason.trim().length >= 10 ? '#059669' : '#6b7280', marginTop: 4 }}>
+                {reassignReason.trim().length}/10 characters minimum
+                {reassignReason.trim().length >= 10 ? ' ✓' : ''}
+              </div>
             </div>
 
             {reassignError && (
@@ -1579,10 +1981,13 @@ export default function OrderDetailPage() {
                           <td style={{ padding: '10px', textAlign: 'right' }}>
                             <button
                               onClick={() => handleReassign(node)}
-                              disabled={reassigning}
+                              disabled={reassigning || reassignReason.trim().length < 10}
+                              title={reassignReason.trim().length < 10 ? 'Enter a reason (min 10 chars) first' : ''}
                               style={{
                                 padding: '6px 14px', fontSize: 12, fontWeight: 700,
-                                border: 'none', borderRadius: 6, cursor: 'pointer',
+                                border: 'none', borderRadius: 6,
+                                cursor: reassignReason.trim().length < 10 ? 'not-allowed' : 'pointer',
+                                opacity: reassignReason.trim().length < 10 ? 0.5 : 1,
                                 background: idx === 0 ? '#7c3aed' : '#111',
                                 color: '#fff',
                               }}
@@ -1597,6 +2002,86 @@ export default function OrderDetailPage() {
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Phase 74 — Reject order modal (Phase 73 audit Gap #7). */}
+      {showRejectModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: 16,
+          }}
+          onClick={() => {
+            if (actionLoading !== 'reject-order') {
+              setShowRejectModal(false);
+              setRejectReason('');
+              setRejectError(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 16, padding: 24,
+              width: '100%', maxWidth: 520,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, marginBottom: 6 }}>
+              Reject order
+            </h2>
+            <p style={{ margin: 0, fontSize: 13, color: '#525A65', lineHeight: 1.5, marginBottom: 14 }}>
+              This cancels the order, restores stock, and{' '}
+              {order?.paymentStatus === 'PAID' ? (
+                <strong>initiates a refund of ₹{order?.totalAmount?.toLocaleString('en-IN')} via the original payment method</strong>
+              ) : (
+                <>does not initiate a refund (COD or unpaid).</>
+              )}
+              {' '}A reason is required for the compliance audit trail.
+            </p>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="e.g. Customer unreachable on phone after 3 attempts; address invalid (pincode not serviceable)"
+              style={{
+                width: '100%', minHeight: 100, padding: 12, borderRadius: 8,
+                border: '1px solid #d1d5db', fontSize: 13, resize: 'vertical',
+                boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+              {rejectReason.trim().length}/500 characters (minimum 10)
+            </div>
+            {rejectError && (
+              <div style={{ fontSize: 12, color: '#991b1b', marginTop: 8 }}>{rejectError}</div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setRejectReason('');
+                  setRejectError(null);
+                }}
+                disabled={actionLoading === 'reject-order'}
+                style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', color: '#374151', cursor: 'pointer', fontSize: 13 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectOrder}
+                disabled={rejectReason.trim().length < 10 || actionLoading === 'reject-order'}
+                style={{
+                  padding: '8px 16px', borderRadius: 8, border: 'none',
+                  background: rejectReason.trim().length < 10 ? '#fca5a5' : '#dc2626',
+                  color: '#fff', cursor: rejectReason.trim().length < 10 ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
+                }}
+              >
+                {actionLoading === 'reject-order' ? 'Rejecting…' : 'Reject Order'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1633,21 +2118,29 @@ export default function OrderDetailPage() {
               sub-order CANCELLED. Use the returns flow for delivered items.
             </p>
 
+            {/* Phase 81 (2026-05-22) — reason is REQUIRED. Server-side
+                DTO enforces 10..500 chars. Help text + border colour
+                surface the rule before the admin clicks submit. */}
             <label style={{ display: 'block', fontSize: 12, color: '#525A65', fontWeight: 600, marginBottom: 4 }}>
-              Reason (optional)
+              Reason <span style={{ color: '#dc2626' }}>*</span>
             </label>
             <textarea
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
               rows={3}
               disabled={cancelling}
-              placeholder="e.g. customer requested cancellation pre-shipment"
+              placeholder="e.g. customer requested cancellation pre-shipment (min 10 chars)"
               style={{
-                width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                width: '100%', padding: 10,
+                border: `1px solid ${cancelReason.trim().length > 0 && cancelReason.trim().length < 10 ? '#dc2626' : '#D2D6DC'}`,
                 borderRadius: 8, fontSize: 13, boxSizing: 'border-box',
                 fontFamily: 'inherit', resize: 'vertical',
               }}
             />
+            <div style={{ fontSize: 11, color: cancelReason.trim().length >= 10 ? '#059669' : '#525A65', marginTop: 4 }}>
+              {cancelReason.trim().length}/10 characters minimum
+              {cancelReason.trim().length >= 10 ? ' ✓' : ''}
+            </div>
 
             {cancelError && (
               <div style={{
@@ -1679,13 +2172,14 @@ export default function OrderDetailPage() {
               <button
                 type="button"
                 onClick={submitCancel}
-                disabled={cancelling}
+                disabled={cancelling || cancelReason.trim().length < 10}
+                title={cancelReason.trim().length < 10 ? 'Enter a reason (min 10 chars) first' : ''}
                 style={{
                   height: 36, padding: '0 16px', border: 'none',
                   background: '#dc2626', color: '#fff',
                   borderRadius: 9999, fontSize: 13, fontWeight: 700,
-                  cursor: cancelling ? 'wait' : 'pointer',
-                  opacity: cancelling ? 0.6 : 1,
+                  cursor: cancelling || cancelReason.trim().length < 10 ? 'not-allowed' : 'pointer',
+                  opacity: cancelling || cancelReason.trim().length < 10 ? 0.5 : 1,
                 }}
               >
                 {cancelling ? 'Cancelling…' : 'Cancel sub-order'}
@@ -1876,3 +2370,103 @@ const btnOutline: React.CSSProperties = {
   borderRadius: 8,
   cursor: 'pointer',
 };
+
+// Phase 71 (2026-05-22) — Phase 70 risk-scoring audit Gap #5.
+// Inline risk-band display + rescore button. Surfaced above the
+// Verify Order card so the verifier sees the risk signal before
+// they decide. Pre-Phase-71 the order detail page had no risk
+// surface at all even though the schema columns existed.
+function RiskBadgeCard({
+  order,
+  orderId,
+  onRescore,
+}: {
+  order: OrderDetail;
+  orderId: string;
+  onRescore: () => void;
+}) {
+  const [rescoring, setRescoring] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const band = order.verificationRiskBand;
+  const bgColor = band === 'GREEN' ? '#dcfce7' : band === 'YELLOW' ? '#fef3c7' : '#fee2e2';
+  const borderColor = band === 'GREEN' ? '#16a34a' : band === 'YELLOW' ? '#d97706' : '#dc2626';
+  const fgColor = band === 'GREEN' ? '#166534' : band === 'YELLOW' ? '#92400e' : '#991b1b';
+
+  const handleRescore = async () => {
+    setRescoring(true);
+    setError(null);
+    try {
+      await apiClient(`/admin/verification/orders/${orderId}/rescore`, {
+        method: 'POST',
+      });
+      onRescore();
+    } catch (err: any) {
+      setError(err?.body?.message || err?.message || 'Rescore failed');
+    } finally {
+      setRescoring(false);
+    }
+  };
+
+  return (
+    <div style={{
+      background: bgColor,
+      border: `1px solid ${borderColor}`,
+      borderRadius: 10,
+      padding: '16px 20px',
+      marginBottom: 20,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{
+            padding: '4px 12px',
+            background: borderColor,
+            color: '#fff',
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+          }}>
+            {band} ({order.verificationRiskScore})
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: fgColor }}>
+            Risk score · v{order.verificationScoreVersion ?? 1}
+            {order.verificationScoreSource === 'MANUAL' ? ' · manual override' : ''}
+          </span>
+        </div>
+        <button
+          onClick={handleRescore}
+          disabled={rescoring}
+          style={{
+            padding: '6px 14px',
+            background: '#fff',
+            color: fgColor,
+            border: `1px solid ${borderColor}`,
+            borderRadius: 6,
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: rescoring ? 'wait' : 'pointer',
+          }}
+        >
+          {rescoring ? 'Rescoring…' : 'Rescore'}
+        </button>
+      </div>
+      {Array.isArray(order.verificationRiskReasons) && order.verificationRiskReasons.length > 0 && (
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: fgColor }}>
+          {order.verificationRiskReasons.map((r, i) => (
+            <li key={i} style={{ marginBottom: 2 }}>{r}</li>
+          ))}
+        </ul>
+      )}
+      {error && (
+        <div style={{ marginTop: 8, fontSize: 12, color: '#991b1b' }}>{error}</div>
+      )}
+      {order.verificationScoredAt && (
+        <div style={{ marginTop: 8, fontSize: 11, color: '#6b7280' }}>
+          Scored {new Date(order.verificationScoredAt).toLocaleString()}
+          {order.verificationScoredBy ? ` · by ${order.verificationScoredBy}` : ' · auto'}
+        </div>
+      )}
+    </div>
+  );
+}

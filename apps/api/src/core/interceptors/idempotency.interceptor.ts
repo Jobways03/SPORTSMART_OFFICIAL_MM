@@ -16,7 +16,10 @@ import {
   BadRequestAppException,
   ConflictAppException,
 } from '../exceptions';
-import { IDEMPOTENT_KEY } from '../decorators/idempotent.decorator';
+import {
+  IDEMPOTENT_KEY,
+  IDEMPOTENT_TTL_KEY,
+} from '../decorators/idempotent.decorator';
 import { computeRequestHash, extractActor } from '../idempotency/request-hash.util';
 
 /**
@@ -85,7 +88,17 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const endpoint = `${req.method} ${
       (req as { route?: { path?: string } }).route?.path ?? req.path ?? ''
     }`;
-    const ttlMs = this.env.getNumber('IDEMPOTENCY_TTL_HOURS', 24) * 3_600_000;
+    // Phase 95 (2026-05-23) — Phase 93 deferred #17. Route-level TTL
+    // override (decorator arg) wins over the env default. Capped at
+    // 30 days so a typo doesn't pin a row indefinitely.
+    const routeTtlSeconds = this.reflector.getAllAndOverride<number>(
+      IDEMPOTENT_TTL_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    const ttlMs =
+      typeof routeTtlSeconds === 'number' && routeTtlSeconds > 0
+        ? Math.min(routeTtlSeconds, 30 * 24 * 3600) * 1000
+        : this.env.getNumber('IDEMPOTENCY_TTL_HOURS', 24) * 3_600_000;
     const expiresAt = new Date(Date.now() + ttlMs);
 
     return from(

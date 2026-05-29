@@ -3,6 +3,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { randomUUID } from 'node:crypto';
 import type { NotificationChannel } from '@prisma/client';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { NotificationsPublicFacade } from '../../application/facades/notifications-public.facade';
 
@@ -30,6 +31,7 @@ import { NotificationsPublicFacade } from '../../application/facades/notificatio
 @ApiTags('Admin Notifications')
 @Controller('admin/notifications')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('notifications.write')
 export class AdminNotificationDispatchController {
   constructor(private readonly notifications: NotificationsPublicFacade) {}
 

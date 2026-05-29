@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  Matches,
 } from 'class-validator';
 
 export class AddPayoutMethodDto {
@@ -36,9 +37,12 @@ export class AddPayoutMethodDto {
 }
 
 export class MarkPayoutPaidDto {
-  @IsOptional()
+  // Phase 155 — the bank UTR is REQUIRED to mark a real-money payout paid
+  // (was @IsOptional → UTR-less PAID rows). Alphanumeric, 8–40 chars.
   @IsString()
-  transactionRef?: string;
+  @Length(8, 40)
+  @Matches(/^[A-Za-z0-9]+$/, { message: 'transactionRef (UTR) must be alphanumeric' })
+  transactionRef!: string;
 }
 
 export class MarkPayoutFailedDto {

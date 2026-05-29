@@ -12,6 +12,18 @@ export interface CartItemWithDetails {
   // Sprint 3 Story 2.3 — true when the item is parked, false when
   // it's in the active cart and counts toward order total.
   savedForLater: boolean;
+  // Phase 44 (2026-05-21) — pricing-tier snapshot on the cart row.
+  // The cart service reads these to detect drift between the stored
+  // snapshot and a freshly resolved tier (e.g. after qty change).
+  appliedPricingTierId: string | null;
+  appliedDiscountPercent: any;
+  appliedFixedUnitPrice: any;
+  appliedListUnitPrice: any;
+  // Phase 61 (2026-05-22) — add-time snapshot in paise (audit
+  // Gap #22). The cart service reads this to surface a
+  // `priceChanged` flag when the live price drifts from the
+  // snapshot.
+  unitPriceAtAddInPaise: bigint | null;
   product: {
     id: string;
     title: string;
@@ -21,7 +33,12 @@ export interface CartItemWithDetails {
     baseSku: string | null;
     hasVariants: boolean;
     status: string;
+    isDeleted: boolean;
     images: { url: string }[];
+    // Phase 61 (2026-05-22) — seller shop info threaded through so
+    // the storefront cart can group line items by seller without a
+    // second API call (audit Gap #2).
+    seller: { id: string; sellerName: string | null; sellerShopName: string | null } | null;
   };
   variant: {
     id: string;
@@ -30,6 +47,7 @@ export interface CartItemWithDetails {
     stock: number | null;
     sku: string | null;
     status: string;
+    isDeleted: boolean;
     images: { url: string }[];
   } | null;
 }
@@ -58,7 +76,6 @@ export interface CartRepository {
   findItemsForTaxPreview(customerId: string): Promise<CartItemForTaxPreview[]>;
   upsertCart(customerId: string): Promise<{ id: string }>;
   findCartItem(cartId: string, productId: string, variantId: string | null): Promise<{ id: string; quantity: number } | null>;
-  addCartItem(cartId: string, productId: string, variantId: string | null, quantity: number): Promise<void>;
   updateCartItemQuantity(itemId: string, quantity: number): Promise<void>;
   deleteCartItem(itemId: string): Promise<void>;
   clearCart(cartId: string): Promise<void>;
@@ -67,6 +84,21 @@ export interface CartRepository {
   getAggregatedStock(productId: string, variantId?: string | null): Promise<number>;
   validateProduct(productId: string): Promise<boolean>;
   validateVariant(variantId: string, productId: string): Promise<boolean>;
+  /**
+   * Phase 61 (2026-05-22) — count of active + saved cart-item rows
+   * for a given customer's cart (audit Gap #23). Used by the
+   * service to enforce the per-cart line cap so a hostile authed
+   * user can't grow a cart to thousands of lines.
+   */
+  countCartItemsForCustomer(customerId: string): Promise<number>;
+  /**
+   * Phase 61 (2026-05-22) — abandonment-cleanup helper (audit Gap
+   * #12). Deletes Cart rows whose updatedAt is older than `cutoff`
+   * AND that have no items (or only items also older than `cutoff`).
+   * Returns the number of carts deleted. Idempotent — running
+   * twice in a row is a no-op the second time.
+   */
+  deleteAbandonedCartsOlderThan(cutoff: Date): Promise<number>;
   /** Count cart items currently referencing a given variant. Used to block
    *  catalog admins from soft-deleting variants that customers have in their
    *  carts (would otherwise crash checkout with a NULL variant reference). */
@@ -89,17 +121,56 @@ export interface CartRepository {
    * mechanics; the service stays at the "merge this quantity into the
    * cart" level.
    */
+  /**
+   * Phase 61 (2026-05-22) — primitive signature extended:
+   *   - `availableStock` lets the repo enforce the stock floor
+   *     INSIDE the FOR UPDATE lock (audit Gap #7). Pre-Phase-61
+   *     the service computed existingQty + availableStock outside
+   *     the lock; two parallel adds could both pass the check
+   *     before either incremented.
+   *   - `unitPriceInPaiseSnapshot` is written on the create branch
+   *     so the row carries the add-time price for drift detection
+   *     (audit Gap #22). Snap-back from saved-for-later re-uses
+   *     the existing snapshot if present.
+   *
+   * Throws `StockBelowReservedError`-style typed errors via plain
+   * `Error` with `code='INSUFFICIENT_STOCK'` so the service maps
+   * it to a clean 400. Throws `code='CART_LINE_CAP'` when the
+   * per-cart line cap is hit on a fresh row (existing-row
+   * increments aren't blocked).
+   */
   incrementOrCreateCartItem(
     cartId: string,
     productId: string,
     variantId: string | null,
     quantityDelta: number,
+    args: {
+      availableStock: number;
+      unitPriceInPaiseSnapshot: bigint;
+      cartLineCap: number;
+    },
   ): Promise<void>;
 
   /** Sprint 3 Story 2.3 — set the saved-for-later flag on a cart item.
    *  Idempotent. Caller is responsible for verifying the item belongs
    *  to the requesting customer. */
   setSavedForLater(itemId: string, value: boolean): Promise<void>;
+
+  /**
+   * Phase 44 (2026-05-21) — persist the resolved pricing-tier snapshot.
+   * Called by the cart service whenever the snapshot drifts from the
+   * value already on the row (qty change, tier flipped active, etc).
+   * NULL values clear the snapshot when no tier qualifies.
+   */
+  updateCartItemPricingSnapshot(
+    itemId: string,
+    snapshot: {
+      appliedPricingTierId: string | null;
+      appliedDiscountPercent: number | null;
+      appliedFixedUnitPrice: number | null;
+      appliedListUnitPrice: number | null;
+    },
+  ): Promise<void>;
 
   /**
    * Phase 4.1 (2026-05-16) — atomic move-to-cart with stock check.

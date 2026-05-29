@@ -1,0 +1,587 @@
+{
+  "golf-clubs": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "club_type",
+      "name": "Club Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "driver", "label": "Driver" },
+        { "value": "fairway_wood", "label": "Fairway Wood" },
+        { "value": "hybrid", "label": "Hybrid / Rescue" },
+        { "value": "iron_set", "label": "Iron Set" },
+        { "value": "individual_iron", "label": "Individual Iron" },
+        { "value": "wedge", "label": "Wedge" },
+        { "value": "putter", "label": "Putter" },
+        { "value": "complete_set", "label": "Complete Set (Full Bag)" }
+      ]
+    },
+    {
+      "key": "hand",
+      "name": "Hand",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "right", "label": "Right-Handed" },
+        { "value": "left", "label": "Left-Handed" }
+      ]
+    },
+    {
+      "key": "shaft_type",
+      "name": "Shaft Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "steel", "label": "Steel" },
+        { "value": "graphite", "label": "Graphite" }
+      ]
+    },
+    {
+      "key": "shaft_flex",
+      "name": "Shaft Flex",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 5,
+      "choices": [
+        { "value": "ladies", "label": "Ladies (L)" },
+        { "value": "senior", "label": "Senior (A)" },
+        { "value": "regular", "label": "Regular (R)" },
+        { "value": "stiff", "label": "Stiff (S)" },
+        { "value": "extra_stiff", "label": "Extra Stiff (X)" }
+      ]
+    },
+    {
+      "key": "loft",
+      "name": "Loft",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "description": "Applicable for drivers, woods, and wedges",
+      "choices": [
+        { "value": "8_9", "label": "8°–9° (Driver)" },
+        { "value": "9_10_5", "label": "9°–10.5° (Driver)" },
+        { "value": "10_5_12", "label": "10.5°–12° (Driver)" },
+        { "value": "13_15", "label": "13°–15° (3-Wood)" },
+        { "value": "17_18", "label": "17°–18° (5-Wood)" },
+        { "value": "19_21", "label": "19°–21° (7-Wood / Hybrid)" },
+        { "value": "46_48", "label": "46°–48° (Pitching Wedge)" },
+        { "value": "50_52", "label": "50°–52° (Gap Wedge)" },
+        { "value": "54_56", "label": "54°–56° (Sand Wedge)" },
+        { "value": "58_60", "label": "58°–60° (Lob Wedge)" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / High Handicap" },
+        { "value": "intermediate", "label": "Intermediate / Mid Handicap" },
+        { "value": "advanced", "label": "Advanced / Low Handicap" },
+        { "value": "professional", "label": "Professional / Tour" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 8,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "silver", "label": "Silver" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "white", "label": "White" },
+        { "value": "gold", "label": "Gold" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-balls": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "tour", "label": "Tour / Premium" },
+        { "value": "distance", "label": "Distance" },
+        { "value": "soft_feel", "label": "Soft Feel" },
+        { "value": "practice", "label": "Practice / Range" },
+        { "value": "lake", "label": "Lake / Recycled" }
+      ]
+    },
+    {
+      "key": "construction",
+      "name": "Construction",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "2_piece", "label": "2-Piece (Distance)" },
+        { "value": "3_piece", "label": "3-Piece (All-Round)" },
+        { "value": "4_piece", "label": "4-Piece (Tour)" },
+        { "value": "5_piece", "label": "5-Piece (Premium Tour)" }
+      ]
+    },
+    {
+      "key": "pack_size",
+      "name": "Pack Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "3_pack", "label": "3-Pack (Sleeve)" },
+        { "value": "12_pack", "label": "12-Pack (Dozen)" },
+        { "value": "24_pack", "label": "24-Pack (2 Dozen)" },
+        { "value": "48_pack", "label": "48-Pack (4 Dozen)" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / High Handicap" },
+        { "value": "intermediate", "label": "Intermediate / Mid Handicap" },
+        { "value": "advanced", "label": "Advanced / Low Handicap" },
+        { "value": "professional", "label": "Professional / Tour" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "multicolor", "label": "Multicolor / Assorted" }
+      ]
+    }
+  ],
+
+  "golf-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "stand_bag", "label": "Stand Bag (Carry)" },
+        { "value": "cart_bag", "label": "Cart Bag" },
+        { "value": "tour_bag", "label": "Tour / Staff Bag" },
+        { "value": "pencil_bag", "label": "Pencil / Sunday Bag (Lightweight)" },
+        { "value": "travel_cover", "label": "Travel Cover / Flight Bag" }
+      ]
+    },
+    {
+      "key": "divider_count",
+      "name": "Divider Count",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "4_way", "label": "4-Way" },
+        { "value": "5_way", "label": "5-Way" },
+        { "value": "7_way", "label": "7-Way" },
+        { "value": "14_way", "label": "14-Way (Full Length)" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "waterproof",
+      "name": "Waterproof",
+      "type": "BOOLEAN",
+      "sortOrder": 3,
+      "description": "Waterproof construction and zippers"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "green", "label": "Green" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "hand",
+      "name": "Hand",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "description": "Right-handed golfers wear a left-hand glove and vice versa",
+      "choices": [
+        { "value": "left", "label": "Left Hand (Right-Handed Golfer)" },
+        { "value": "right", "label": "Right Hand (Left-Handed Golfer)" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "medium_large", "label": "M/L" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "glove_material",
+      "name": "Glove Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "cabretta_leather", "label": "Cabretta Leather" },
+        { "value": "synthetic", "label": "Synthetic" },
+        { "value": "hybrid", "label": "Hybrid (Leather + Synthetic)" },
+        { "value": "all_weather", "label": "All-Weather / Rain" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_3_5", "label": "UK 3–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "spiked", "label": "Spiked" },
+        { "value": "spikeless", "label": "Spikeless" },
+        { "value": "hybrid", "label": "Hybrid (Soft Spikes)" }
+      ]
+    },
+    {
+      "key": "waterproof",
+      "name": "Waterproof",
+      "type": "BOOLEAN",
+      "sortOrder": 4,
+      "description": "Waterproof upper for wet conditions"
+    },
+    {
+      "key": "shoe_style",
+      "name": "Shoe Style",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "athletic", "label": "Athletic / Sporty" },
+        { "value": "classic", "label": "Classic / Traditional" },
+        { "value": "casual", "label": "Casual / Lifestyle" },
+        { "value": "boot", "label": "Boot (Winter)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "brown", "label": "Brown" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "polo_shirt", "label": "Polo Shirt" },
+        { "value": "trousers", "label": "Trousers" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "skirt", "label": "Skirt / Skort" },
+        { "value": "mid_layer", "label": "Mid Layer / Quarter Zip" },
+        { "value": "sweater", "label": "Sweater / V-Neck" },
+        { "value": "gilet", "label": "Gilet / Vest" },
+        { "value": "waterproof_jacket", "label": "Waterproof Jacket" },
+        { "value": "waterproof_trousers", "label": "Waterproof Trousers" },
+        { "value": "base_layer", "label": "Base Layer" },
+        { "value": "cap", "label": "Cap / Visor" },
+        { "value": "beanie", "label": "Beanie" },
+        { "value": "belt", "label": "Belt" },
+        { "value": "socks", "label": "Socks" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "khaki", "label": "Khaki / Beige" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-trolleys-carts": [
+    {
+      "key": "trolley_type",
+      "name": "Trolley Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "push_pull", "label": "Push / Pull (Manual)" },
+        { "value": "electric", "label": "Electric (Powered)" },
+        { "value": "remote_control", "label": "Remote Control" }
+      ]
+    },
+    {
+      "key": "wheels",
+      "name": "Wheel Count",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "2_wheel", "label": "2-Wheel" },
+        { "value": "3_wheel", "label": "3-Wheel" },
+        { "value": "4_wheel", "label": "4-Wheel" }
+      ]
+    },
+    {
+      "key": "foldable",
+      "name": "Foldable",
+      "type": "BOOLEAN",
+      "sortOrder": 3,
+      "description": "Compact folding for car boot storage"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-rangefinders-gps": [
+    {
+      "key": "device_type",
+      "name": "Device Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "laser_rangefinder", "label": "Laser Rangefinder" },
+        { "value": "gps_watch", "label": "GPS Watch" },
+        { "value": "gps_handheld", "label": "GPS Handheld" },
+        { "value": "gps_speaker", "label": "GPS Speaker" },
+        { "value": "launch_monitor", "label": "Launch Monitor" }
+      ]
+    },
+    {
+      "key": "slope_mode",
+      "name": "Slope Mode",
+      "type": "BOOLEAN",
+      "sortOrder": 2,
+      "description": "Slope-adjusted distance calculation"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "golf-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "tees", "label": "Tees" },
+        { "value": "ball_markers", "label": "Ball Markers" },
+        { "value": "divot_tool", "label": "Divot Repair Tool" },
+        { "value": "headcover_driver", "label": "Headcover – Driver" },
+        { "value": "headcover_fairway", "label": "Headcover – Fairway" },
+        { "value": "headcover_hybrid", "label": "Headcover – Hybrid" },
+        { "value": "headcover_putter", "label": "Headcover – Putter" },
+        { "value": "towel", "label": "Golf Towel" },
+        { "value": "umbrella", "label": "Golf Umbrella" },
+        { "value": "alignment_sticks", "label": "Alignment Sticks" },
+        { "value": "grip", "label": "Grip (Replacement)" },
+        { "value": "grip_tape", "label": "Grip Tape / Solvent" },
+        { "value": "lead_tape", "label": "Lead Tape" },
+        { "value": "ball_retriever", "label": "Ball Retriever" },
+        { "value": "practice_net", "label": "Practice Net" },
+        { "value": "putting_mat", "label": "Putting Mat / Green" },
+        { "value": "swing_trainer", "label": "Swing Trainer" },
+        { "value": "sunglasses", "label": "Golf Sunglasses" },
+        { "value": "scorecard_holder", "label": "Scorecard Holder" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ]
+}

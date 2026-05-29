@@ -24,6 +24,21 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import {
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+  Min,
+  ValidateIf,
+} from 'class-validator';
+// Phase 89 (2026-05-23) — DTO + override category enum.
+import type { EWayBillOverrideReasonCategory } from '../../domain/eway-bill-events';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   WalletAdjustmentService,
@@ -53,6 +68,105 @@ import {
   CustomerTaxProfileNotFoundError,
 } from '../../application/services/gstn-verification.service';
 
+// Phase 90 (2026-05-23) — typed bodies for the e-invoice endpoints.
+export class CancelEinvoiceDto {
+  // Phase 90 — Gap #19 enum validation. NIC accepts 1/2/3/4 only.
+  @IsInt()
+  @IsIn([1, 2, 3, 4])
+  cancellationCode!: 1 | 2 | 3 | 4;
+
+  @IsString()
+  @Length(10, 500)
+  reason!: string;
+}
+
+export class ResetEinvoiceRetryDto {
+  @IsString()
+  @Length(10, 500)
+  reason!: string;
+}
+
+// Phase 89 (2026-05-23) — typed bodies for the EWB endpoints.
+const TRANSPORT_MODES = ['ROAD', 'RAIL', 'AIR', 'SHIP'] as const;
+const OVERRIDE_CATEGORIES = [
+  'URGENT_DISPATCH',
+  'NIC_OUTAGE',
+  'TEST_SHIPMENT',
+  'GST_EXEMPT',
+  'OTHER',
+] as const;
+
+export class GenerateEwayBillDto {
+  // Phase 89 — Gap #12 NIC requirement check ensures HSN/UQC/qty at
+  // service layer; the body itself just needs transport details.
+  // ROAD requires vehicleNumber; other modes don't.
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z0-9-]{4,16}$/i)
+  vehicleNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 64)
+  transporterId?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 128)
+  transporterName?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  distanceKm?: number;
+
+  @IsOptional()
+  @IsIn(TRANSPORT_MODES as unknown as string[])
+  transportMode?: (typeof TRANSPORT_MODES)[number];
+
+  // Phase 89 — Gap #29. Body can carry origin / destination so the
+  // admin retry path (when resolveAddresses returns nulls) can
+  // populate the row before the provider call.
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{6}$/)
+  fromPincode?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{6}$/)
+  toPincode?: string;
+}
+
+export class CancelEwayBillDto {
+  @IsString()
+  @Length(10, 500)
+  reason!: string;
+}
+
+export class OverrideEwayBillDto {
+  @IsIn(OVERRIDE_CATEGORIES as unknown as string[])
+  reasonCategory!: EWayBillOverrideReasonCategory;
+
+  // Phase 89 — Gap #26. When category=OTHER, require 20+ chars of
+  // free-text justification; other categories allow shorter
+  // (10 char min) since the category is self-descriptive.
+  @IsString()
+  @ValidateIf((o: OverrideEwayBillDto) => o.reasonCategory === 'OTHER')
+  @Length(20, 500, {
+    message: 'reason must be at least 20 chars when reasonCategory=OTHER',
+  })
+  @ValidateIf((o: OverrideEwayBillDto) => o.reasonCategory !== 'OTHER')
+  @Length(10, 500)
+  reason!: string;
+}
+
+export class RevokeOverrideEwayBillDto {
+  @IsString()
+  @Length(10, 500)
+  reason!: string;
+}
+
 @ApiTags('Admin / Tax Ops')
 @Controller('admin/tax')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
@@ -64,6 +178,7 @@ export class AdminTaxOperationsController {
     private readonly einvoice: EInvoiceService,
     private readonly creditNote: CreditNoteService,
     private readonly gstn: GstnVerificationService,
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   // ── Time-bar review queue (Phase 12) ──────────────────────────────
@@ -137,6 +252,19 @@ export class AdminTaxOperationsController {
           },
         })
         .catch(() => undefined);
+      // Compliance audit — admin manually overrode the time-bar classification
+      // and forced a wallet-adjustment refund route.
+      await this.audit
+        .writeAuditLog({
+          actorId: req.adminId,
+          actorRole: req.adminRole,
+          action: 'tax.timebar.route_to_wallet_override',
+          module: 'tax',
+          resource: 'return',
+          resourceId: returnId,
+          metadata: { adjustmentId: adjustment.id, reason: body.reason ?? null },
+        })
+        .catch(() => undefined);
       return {
         success: true,
         message: 'Routed to wallet adjustment',
@@ -174,6 +302,23 @@ export class AdminTaxOperationsController {
           data: {
             financeReviewedBy: req.adminId ?? 'unknown-admin',
             financeReviewedAt: new Date(),
+          },
+        })
+        .catch(() => undefined);
+      // Compliance audit — admin manually forced the credit-note path despite
+      // the time-bar flag ("still in window" override).
+      await this.audit
+        .writeAuditLog({
+          actorId: req.adminId,
+          actorRole: req.adminRole,
+          action: 'tax.timebar.issue_credit_note_override',
+          module: 'tax',
+          resource: 'return',
+          resourceId: returnId,
+          metadata: {
+            creditNoteId: result.creditNote.id,
+            documentNumber: result.creditNote.documentNumber,
+            reason: body.reason ?? null,
           },
         })
         .catch(() => undefined);
@@ -317,17 +462,31 @@ export class AdminTaxOperationsController {
 
   @Post('eway-bills/sub-order/:subOrderId/generate')
   @Permissions('tax.ewayBill.generate')
+  // Phase 89 (2026-05-23) — Gap #11. Network retry can double-call
+  // NIC and mint two EWB numbers under one billable sub-order. The
+  // idempotent decorator caches the response keyed on the request's
+  // X-Idempotency-Key (24h TTL).
+  @Idempotent()
   async generateEwayBill(
     @Param('subOrderId') subOrderId: string,
-    @Body()
-    body: {
-      vehicleNumber?: string;
-      transporterId?: string;
-      transporterName?: string;
-      distanceKm?: number;
-      transportMode?: 'ROAD' | 'RAIL' | 'AIR' | 'SHIP';
-    } = {},
+    @Body() body: GenerateEwayBillDto,
   ) {
+    // Phase 89 — Gap #29. ROAD mode requires a vehicle number per
+    // CBIC; AIR/RAIL/SHIP carry their own identifiers via
+    // transporterId. Body-validation cap.
+    if (
+      (body.transportMode ?? 'ROAD') === 'ROAD' &&
+      !body.vehicleNumber
+    ) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'vehicleNumber is required when transportMode=ROAD',
+          code: 'INVALID_REQUEST',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
     try {
       const ewb = await this.eway.generate(subOrderId, {
         vehicleNumber: body.vehicleNumber ?? null,
@@ -354,17 +513,12 @@ export class AdminTaxOperationsController {
 
   @Post('eway-bills/:id/cancel')
   @Permissions('tax.ewayBill.cancel')
+  @Idempotent()
   async cancelEwayBill(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { reason: string },
+    @Body() body: CancelEwayBillDto,
   ) {
-    if (!body?.reason) {
-      throw new HttpException(
-        { success: false, message: 'reason required', code: 'INVALID_REQUEST' },
-        HttpStatus.BAD_REQUEST,
-      );
-    }
     try {
       const ewb = await this.eway.cancel({
         ewbId: id,
@@ -383,30 +537,61 @@ export class AdminTaxOperationsController {
 
   @Post('eway-bills/:id/override')
   @Permissions('tax.ewayBill.override')
+  @Idempotent()
   async overrideEwayBill(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { reason: string },
+    @Body() body: OverrideEwayBillDto,
   ) {
-    if (!body?.reason) {
-      throw new HttpException(
-        { success: false, message: 'reason required', code: 'INVALID_REQUEST' },
-        HttpStatus.BAD_REQUEST,
-      );
-    }
     try {
       const ewb = await this.eway.adminOverride({
         ewbId: id,
         adminId: req.adminId ?? 'unknown-admin',
         reason: body.reason,
+        reasonCategory: body.reasonCategory,
       });
       return {
         success: true,
         message: 'EWB override stamped',
         data: {
           id: ewb.id,
+          status: ewb.status,
           overrideAdminId: ewb.overrideAdminId,
           overrideAt: ewb.overrideAt,
+          overrideReasonCategory: ewb.overrideReasonCategory,
+        },
+      };
+    } catch (err) {
+      throw mapEwayBillError(err);
+    }
+  }
+
+  /**
+   * Phase 89 (2026-05-23) — Gap #7 revoke endpoint. Returns an
+   * OVERRIDDEN row back to REQUIRED. Senior-ops permission gate.
+   */
+  @Post('eway-bills/:id/override/revoke')
+  @Permissions('tax.ewayBill.override')
+  @Idempotent()
+  async revokeOverrideEwayBill(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: RevokeOverrideEwayBillDto,
+  ) {
+    try {
+      const ewb = await this.eway.revokeOverride({
+        ewbId: id,
+        adminId: req.adminId ?? 'unknown-admin',
+        reason: body.reason,
+      });
+      return {
+        success: true,
+        message: 'EWB override revoked',
+        data: {
+          id: ewb.id,
+          status: ewb.status,
+          overrideRevokedAt: ewb.overrideRevokedAt,
+          overrideRevokedBy: ewb.overrideRevokedBy,
         },
       };
     } catch (err) {
@@ -467,6 +652,10 @@ export class AdminTaxOperationsController {
 
   @Post('einvoices/:documentId/generate')
   @Permissions('tax.einvoice.manage')
+  // Phase 90 (2026-05-23) — Gap #6. @Idempotent caches the response
+  // keyed on the X-Idempotency-Key header (24h TTL) so a network
+  // retry doesn't double-call NIC.
+  @Idempotent()
   async generateEinvoice(@Param('documentId') documentId: string) {
     try {
       const doc = await this.einvoice.generateForDocument(documentId);
@@ -487,21 +676,12 @@ export class AdminTaxOperationsController {
 
   @Post('einvoices/:documentId/cancel')
   @Permissions('tax.einvoice.cancelWithinWindow')
+  @Idempotent()
   async cancelEinvoice(
     @Req() req: any,
     @Param('documentId') documentId: string,
-    @Body() body: { cancellationCode: number; reason: string },
+    @Body() body: CancelEinvoiceDto,
   ) {
-    if (!body?.reason || !body?.cancellationCode) {
-      throw new HttpException(
-        {
-          success: false,
-          message: 'cancellationCode + reason required',
-          code: 'INVALID_REQUEST',
-        },
-        HttpStatus.BAD_REQUEST,
-      );
-    }
     try {
       const doc = await this.einvoice.cancelForDocument({
         documentId,
@@ -513,6 +693,39 @@ export class AdminTaxOperationsController {
         success: true,
         message: 'IRN cancelled',
         data: { id: doc.id, einvoiceStatus: doc.einvoiceStatus },
+      };
+    } catch (err) {
+      throw mapEinvoiceError(err);
+    }
+  }
+
+  /**
+   * Phase 90 (2026-05-23) — Gap #18. Reset einvoiceRetryCount on a
+   * FAILED row so the retry cron picks it back up. Used when NIC
+   * outage clears after the cap was hit.
+   */
+  @Post('einvoices/:documentId/reset-retry')
+  @Permissions('tax.einvoice.manage')
+  @Idempotent()
+  async resetEinvoiceRetry(
+    @Req() req: any,
+    @Param('documentId') documentId: string,
+    @Body() body: ResetEinvoiceRetryDto,
+  ) {
+    try {
+      const doc = await this.einvoice.resetRetryCount({
+        documentId,
+        actorId: req.adminId ?? 'unknown-admin',
+        reason: body.reason,
+      });
+      return {
+        success: true,
+        message: 'Retry counter reset',
+        data: {
+          id: doc.id,
+          einvoiceStatus: doc.einvoiceStatus,
+          einvoiceRetryCount: doc.einvoiceRetryCount,
+        },
       };
     } catch (err) {
       throw mapEinvoiceError(err);

@@ -9,13 +9,21 @@ import {
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AccountsReportsService } from '../../application/services/accounts-reports.service';
 import { AccountsSettlementService } from '../../application/services/accounts-settlement.service';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
+/**
+ * Phase 24 (2026-05-20) — class-level @Permissions('settlements.read')
+ * — every method is a finance/payout/recon read. Pre-Phase-24 no
+ * @Permissions decorator existed; PermissionsGuard let every
+ * logged-in admin pull revenue/margin/payout/recon reports.
+ */
 @ApiTags('Admin Accounts - Reports')
 @Controller('admin/accounts/reports')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('settlements.read')
 export class AccountsReportsController {
   constructor(
     private readonly reportsService: AccountsReportsService,

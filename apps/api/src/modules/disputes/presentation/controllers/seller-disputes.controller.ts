@@ -9,12 +9,27 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import type { DisputeKind, DisputeStatus } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
+import type { DisputeStatus } from '@prisma/client';
 import { SellerAuthGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
+import { NotFoundAppException } from '../../../../core/exceptions';
 import { DisputeService } from '../../application/services/dispute.service';
+import {
+  FileDisputeDto,
+  ReplyDisputeDto,
+  AttachEvidenceDto,
+} from '../dtos/dispute.dtos';
 
+/**
+ * Seller dispute endpoints. D2C and RETAIL sellers intentionally share this
+ * single path — disputes (like returns / settlements / tax) use the same
+ * plumbing for both seller types, so there is deliberately no D2cOnlyGuard /
+ * RetailOnlyGuard here. Access control is SellerAuthGuard + the service-level
+ * ownership check (DisputeService.assertFilerOwnsLinks). See seller-type.guard.ts
+ * for why the type guards are unused by design.
+ */
 @ApiTags('Disputes — Seller')
 @Controller('seller/disputes')
 @UseGuards(SellerAuthGuard)
@@ -25,18 +40,25 @@ export class SellerDisputesController {
   ) {}
 
   @Post()
-  async file(@Req() req: any, @Body() body: {
-    kind: DisputeKind; summary: string;
-    subOrderId?: string; masterOrderId?: string; returnId?: string;
-  }) {
+  // Phase 110 — parity with the (now-removed) customer endpoint: a network
+  // retry must not create a duplicate dispute. Requires X-Idempotency-Key.
+  @Idempotent()
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
+  async file(@Req() req: any, @Body() body: FileDisputeDto) {
     const seller = await this.prisma.seller.findUnique({
-      where: { id: req.sellerId }, select: { sellerName: true },
+      where: { id: req.sellerId },
+      select: { sellerName: true },
     });
     if (!seller) throw new NotFoundAppException('Seller not found');
+    // fileDispute enforces that the linked sub-order/return belongs to this
+    // seller (Phase 110 ownership guard).
     const data = await this.service.fileDispute({
       filer: { type: 'SELLER', id: req.sellerId, name: seller.sellerName },
-      kind: body.kind, summary: body.summary,
-      subOrderId: body.subOrderId, masterOrderId: body.masterOrderId, returnId: body.returnId,
+      kind: body.kind,
+      summary: body.summary,
+      subOrderId: body.subOrderId,
+      masterOrderId: body.masterOrderId,
+      returnId: body.returnId,
     });
     return { success: true, message: 'Dispute filed', data };
   }
@@ -62,37 +84,51 @@ export class SellerDisputesController {
   @Get(':id')
   async get(@Req() req: any, @Param('id') id: string) {
     const data = await this.service.getDisputeForActor(id, {
-      type: 'SELLER', id: req.sellerId, isAdmin: false,
+      type: 'SELLER',
+      id: req.sellerId,
+      isAdmin: false,
     });
     return { success: true, message: 'Dispute retrieved', data };
   }
 
   @Post(':id/messages')
-  async reply(@Req() req: any, @Param('id') id: string, @Body() body: { body: string }) {
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async reply(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: ReplyDisputeDto,
+  ) {
     const seller = await this.prisma.seller.findUnique({
-      where: { id: req.sellerId }, select: { sellerName: true },
+      where: { id: req.sellerId },
+      select: { sellerName: true },
     });
     const data = await this.service.reply({
       disputeId: id,
-      sender: { type: 'SELLER', id: req.sellerId, name: seller?.sellerName ?? 'Seller' },
+      sender: {
+        type: 'SELLER',
+        id: req.sellerId,
+        name: seller?.sellerName ?? 'Seller',
+      },
       body: body.body,
     });
     return { success: true, message: 'Reply sent', data };
   }
 
   @Post(':id/evidence')
+  @Idempotent()
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
   async attachEvidence(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { fileId: string; caption?: string },
+    @Body() body: AttachEvidenceDto,
   ) {
-    if (!body?.fileId?.trim()) {
-      throw new BadRequestAppException('fileId is required');
-    }
-    // getDisputeForActor enforces that the seller is either the filer
-    // or the affected seller of this dispute.
+    // getDisputeForActor enforces dispute access; the service's attachEvidence
+    // enforces evidence-file ownership + existence.
     await this.service.getDisputeForActor(id, {
-      type: 'SELLER', id: req.sellerId, isAdmin: false,
+      type: 'SELLER',
+      id: req.sellerId,
+      isAdmin: false,
     });
     const data = await this.service.attachEvidence({
       disputeId: id,

@@ -47,6 +47,11 @@ export const MONEY_FIELD_REGISTRY: Readonly<
   ],
   sellerSettlement: [
     { decimal: 'totalPlatformAmount', paise: 'totalPlatformAmountInPaise' },
+    // Phase 147 — immutable approved-gross snapshot.
+    {
+      decimal: 'approvedSettlementAmount',
+      paise: 'approvedSettlementAmountInPaise',
+    },
     {
       decimal: 'totalSettlementAmount',
       paise: 'totalSettlementAmountInPaise',

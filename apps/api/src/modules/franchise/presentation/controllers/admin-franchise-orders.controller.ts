@@ -8,11 +8,13 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { FranchiseOrdersService } from '../../application/services/franchise-orders.service';
 
 @ApiTags('Admin Franchise Orders')
 @Controller('admin/franchise-orders')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('franchise.orders')
 export class AdminFranchiseOrdersController {
   constructor(
     private readonly franchiseOrdersService: FranchiseOrdersService,

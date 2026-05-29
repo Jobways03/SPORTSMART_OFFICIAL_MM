@@ -1,6 +1,7 @@
 import { apiClient, ApiResponse } from '@/lib/api-client';
 
-export type ActorType = 'ADMIN' | 'USER' | 'SELLER' | 'FRANCHISE';
+// Phase 27 (2026-05-21) — AFFILIATE added in lockstep with the API.
+export type ActorType = 'ADMIN' | 'USER' | 'SELLER' | 'FRANCHISE' | 'AFFILIATE';
 
 export interface ActiveSessionRow {
   id: string;

@@ -3,6 +3,7 @@ import { Inter, Bebas_Neue, Permanent_Marker } from 'next/font/google';
 import { ModalProvider } from '@sportsmart/ui';
 import { ServiceWorkerRegister } from './_components/sw-register';
 import { GlobalErrorNormalizer } from './_components/global-error-normalizer';
+import { AuthProvider } from '@/lib/auth-context';
 import '../styles/globals.css';
 import '../styles/storefront.css';
 
@@ -148,7 +149,9 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(WEBSITE_JSON_LD) }}
         />
         <GlobalErrorNormalizer />
-        <ModalProvider>{children}</ModalProvider>
+        <AuthProvider>
+          <ModalProvider>{children}</ModalProvider>
+        </AuthProvider>
         <ServiceWorkerRegister />
       </body>
     </html>

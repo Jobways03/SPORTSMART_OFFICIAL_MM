@@ -22,16 +22,16 @@
 // so the same key can be retried.
 
 enum IdempotencyKeyState {
-  PENDING    // claimed, handler still running
-  COMPLETED  // response cached
+  PENDING // claimed, handler still running
+  COMPLETED // response cached
 }
 
 model IdempotencyKey {
   id             String              @id @default(uuid())
   key            String              @unique
-  actorType      String              @map("actor_type")    // CUSTOMER | ADMIN | SELLER | FRANCHISE | AFFILIATE | ANONYMOUS
+  actorType      String              @map("actor_type") // CUSTOMER | ADMIN | SELLER | FRANCHISE | AFFILIATE | ANONYMOUS
   actorId        String              @map("actor_id")
-  endpoint       String                                     // e.g. "POST /api/v1/customer/returns"
+  endpoint       String // e.g. "POST /api/v1/customer/returns"
   requestHash    String              @map("request_hash")
   state          IdempotencyKeyState @default(PENDING)
   responseStatus Int?                @map("response_status")

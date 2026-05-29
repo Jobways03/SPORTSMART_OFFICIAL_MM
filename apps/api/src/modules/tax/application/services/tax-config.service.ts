@@ -19,6 +19,18 @@ export type TaxConfigKey =
   | 'required_hsn_length'
   | 'eway_bill_threshold_paise'
   | 'eway_bill_intra_state_distance_threshold_km'
+  // Phase 89 (2026-05-23) — Gap #18 per-state threshold override.
+  // JSON map keyed on GST state code, e.g.:
+  //   { "27": 1_00_00_00, "33": 1_00_00_00, "07": 1_00_00_00 }
+  // Applies only to intra-state movements; inter-state always uses
+  // the national `eway_bill_threshold_paise`.
+  | 'eway_bill_threshold_paise_by_state'
+  // Phase 89 — Gap #19 retention. Default 3 years post-issuance
+  // matches CBIC's record-retention requirement.
+  | 'eway_bill_raw_payload_retention_days'
+  // Phase 89 — Gap #10 retry policy.
+  | 'eway_bill_max_retries'
+  | 'eway_bill_retry_backoff_minutes'
   | 'shipping_sac_code'
   | 'shipping_gst_rate_bps'
   | 'shipping_tax_inclusive'
@@ -27,6 +39,11 @@ export type TaxConfigKey =
   | 'default_gst_rate_bps_test_mode'
   | 'tax_strict_mode'
   | 'tax_audit_mode'
+  // Phase 159w (GST Mode Toggle audit #7) — authoritative single mode key
+  // ('OFF' | 'AUDIT' | 'STRICT'). The two boolean flags above are kept in sync
+  // for back-compat readers (place-of-supply, env fallback) but this key is the
+  // source of truth, eliminating the two-row partial-update race.
+  | 'tax_mode'
   | 'invoice_generation_enabled'
   | 'credit_note_generation_enabled'
   | 'eway_bill_enabled'

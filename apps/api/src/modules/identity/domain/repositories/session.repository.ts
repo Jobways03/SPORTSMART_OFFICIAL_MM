@@ -10,6 +10,16 @@ export interface SessionRecord {
   ipAddress: string | null;
   expiresAt: Date;
   revokedAt: Date | null;
+  /**
+   * Phase 17 (2026-05-20) — bumps on each rotate. Drives the
+   * inactive-session sweep + the /account/sessions UI.
+   */
+  lastUsedAt?: Date | null;
+  /** Phase 17 (2026-05-20) — operator-friendly device label. */
+  deviceLabel?: string | null;
+  /** Phase 17 (2026-05-20) — exposed so the absolute-lifetime cap on
+   * refresh can compute (now - createdAt) > cap. */
+  createdAt?: Date;
 }
 
 export interface SessionRepository {
@@ -24,6 +34,11 @@ export interface SessionRepository {
    */
   findByPreviousRefreshToken(refreshToken: string): Promise<SessionRecord | null>;
   save(session: unknown): Promise<void>;
+  /**
+   * Revoke a single session by id. Used by the default logout path
+   * (per-device sign-out) — distinct from `revokeAllUserSessions`
+   * which is the "sign out everywhere" admin path.
+   */
   revoke(sessionId: string): Promise<void>;
 
   createSession(data: {
@@ -32,12 +47,19 @@ export interface SessionRepository {
     userAgent: string | null;
     ipAddress: string | null;
     expiresAt: Date;
+    /** Phase 17 (2026-05-20) — operator-friendly device label
+     * derived from the userAgent string. Optional. */
+    deviceLabel?: string | null;
   }): Promise<SessionRecord>;
 
   /**
    * Atomically rotate the refresh token for a session and extend its expiry.
    * Used by the refresh-session flow to issue a fresh refresh token while
    * keeping the same session row (so revocation still works).
+   *
+   * Phase 17 (2026-05-20) — also writes lastUsedAt so the
+   * inactive-session sweep can distinguish "actively used" from
+   * "issued long ago but never touched."
    */
   rotateRefreshToken(
     sessionId: string,

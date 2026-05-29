@@ -23,6 +23,12 @@ function makeMocks() {
       update: couponUpdate,
       findUnique: couponFindUnique,
     },
+    // Phase 67 (audit Gaps #13 + #14) — onUnifiedCouponRedeemed
+    // now checks for an existing attribution row before writing.
+    // Default null = repo path didn't already write (legacy flow).
+    referralAttribution: {
+      findUnique: jest.fn().mockResolvedValue(null),
+    },
   };
 
   const prisma = {
@@ -30,6 +36,10 @@ function makeMocks() {
       findUnique: couponFindUnique,
       findMany: couponFindMany,
       update: couponUpdate,
+    },
+    // Phase 67 — same guard fires on the no-tx branch.
+    referralAttribution: {
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     $transaction: jest.fn(async (cb: any) => cb(txClient)),
   };

@@ -4,7 +4,7 @@ import { AdminRole } from '@prisma/client';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
-import { JWT_VERIFY_OPTIONS } from '../auth/jwt-constants';
+import { JWT_VERIFY_OPTIONS_ADMIN } from '../auth/jwt-constants';
 import { readAccessCookie } from '../auth/auth-cookie.helper';
 import { UnauthorizedAppException } from '../exceptions';
 
@@ -58,7 +58,7 @@ export class AdminAuthGuard implements CanActivate {
       payload = jwt.verify(
         token,
         this.envService.getString('JWT_ADMIN_SECRET'),
-        JWT_VERIFY_OPTIONS,
+        JWT_VERIFY_OPTIONS_ADMIN,
       ) as AdminTokenPayload;
     } catch {
       throw new UnauthorizedAppException('Invalid or expired admin token');

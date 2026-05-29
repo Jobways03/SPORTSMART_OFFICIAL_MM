@@ -68,6 +68,22 @@ export class Section34TimeBarredError extends Error {
   }
 }
 
+/**
+ * Thrown when a return's sub-order has no source tax invoice to credit against
+ * (legacy / unbilled order). The caller routes the refund through the wallet
+ * adjustment (which has a LEGACY_RECEIPT fallback) and flags the return
+ * REQUIRES_FINANCE_REVIEW, rather than failing the QC decision or paying twice.
+ */
+export class SourceInvoiceNotFoundError extends Error {
+  constructor(public readonly subOrderId: string) {
+    super(
+      `No active source tax invoice found for sub-order ${subOrderId}. ` +
+        `Run TaxDocumentService.generateForSubOrder before issuing a credit note.`,
+    );
+    this.name = 'SourceInvoiceNotFoundError';
+  }
+}
+
 export interface GenerateCreditNoteForReturnOptions {
   /** Override "now" — useful for testing the time-bar window. */
   now?: Date;
@@ -152,10 +168,7 @@ export class CreditNoteService {
       orderBy: { generatedAt: 'desc' },
     });
     if (!sourceInvoice) {
-      throw new Error(
-        `No active source tax invoice found for sub-order ${returnRow.subOrderId}. ` +
-          `Run TaxDocumentService.generateForSubOrder before issuing a credit note.`,
-      );
+      throw new SourceInvoiceNotFoundError(returnRow.subOrderId);
     }
     if (!sourceInvoice.generatedAt) {
       throw new Error(`Source invoice ${sourceInvoice.documentNumber} has no generatedAt date.`);

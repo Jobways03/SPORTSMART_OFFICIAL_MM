@@ -11,7 +11,24 @@ model User {
   passwordHash        String     @map("password_hash")
   status              UserStatus @default(ACTIVE)
   emailVerified       Boolean    @default(false) @map("email_verified")
-  phoneVerified       Boolean    @default(false) @map("phone_verified")
+  // Phase 16 (2026-05-20) — compliance-audit timestamps. The boolean
+  // `emailVerified` answers "is this account verified now?" while
+  // `emailVerifiedAt` answers "exactly when did verification land?"
+  // (needed for DPDP audit + for the soak window where a freshly
+  // verified account is rate-limited differently). Nullable because
+  // legacy rows pre-OTP-flow only have the boolean.
+  emailVerifiedAt     DateTime?  @map("email_verified_at")
+  // Phase 27 (2026-05-21) — phone-verification columns dropped. The
+  // platform does not gate any flow on phone verification (COD,
+  // login, recovery all use email). The phoneVerified/phoneVerifiedAt
+  // columns were dead writes — `phoneVerified` was only ever set to
+  // false on phone-change, never to true; no controller / use case /
+  // service consumed it. Removing the columns removes the misleading
+  // half-built schema. The `phone` column itself stays as opaque
+  // contact data for delivery / customer-support.
+  // Tracks the most recent successful login. Written from
+  // LoginUserUseCase; used for inactive-account sweeps + admin tools.
+  lastLoginAt         DateTime?  @map("last_login_at")
   // Brute-force guard — parity with Seller / Franchise / Admin login:
   // after MAX_FAILED_ATTEMPTS consecutive wrong passwords the account
   // locks for LOCK_DURATION_MINUTES. Reset on successful login,
@@ -21,31 +38,32 @@ model User {
   createdAt           DateTime   @default(now()) @map("created_at")
   updatedAt           DateTime   @updatedAt @map("updated_at")
 
-  roleAssignments   RoleAssignment[]
-  sessions          Session[]
-  passwordResetOtps PasswordResetOtp[]
+  roleAssignments       RoleAssignment[]
+  sessions              Session[]
+  passwordResetOtps     PasswordResetOtp[]
+  emailVerificationOtps EmailVerificationOtp[]
   // Phase 14 (2026-05-16) — back-relation for the dedicated DPDP
   // ConsentRecord projection. One row per (userId, purpose).
-  consentRecords    ConsentRecord[]
-  addresses         CustomerAddress[]
-  carts             Cart[]
-  orders            MasterOrder[]
-  returns           Return[]
+  consentRecords        ConsentRecord[]
+  addresses             CustomerAddress[]
+  carts                 Cart[]
+  orders                MasterOrder[]
+  returns               Return[]
   // Optional 1:1 link to an affiliate record. Set when a User signs
   // up with the same email as an existing affiliate. Most users are
   // never affiliates so this stays null forever.
-  affiliate         Affiliate?
+  affiliate             Affiliate?
   // Optional 1:1 link to a wallet record. Created lazily on first
   // top-up / refund credit; users without wallet activity have no row.
-  wallet            Wallet?
+  wallet                Wallet?
   // Phase 1 GST — B2B customers may register one or more GSTINs.
   // Default behaviour for B2C is zero rows on this relation.
-  taxProfiles       CustomerTaxProfile[]
+  taxProfiles           CustomerTaxProfile[]
   // Phase 13 GST — wallet adjustments raised against this user
   // (goodwill credits, time-barred refund routing).
-  walletAdjustments WalletAdjustment[]
+  walletAdjustments     WalletAdjustment[]
   // Sprint 3 Story 2.2 — buyer-facing wishlist (see wishlist.prisma).
-  wishlistItems     WishlistItem[]
+  wishlistItems         WishlistItem[]
 
   @@map("users")
 }
@@ -103,21 +121,54 @@ model RoleAssignment {
 }
 
 model Session {
-  id           String    @id @default(uuid())
-  userId       String    @map("user_id")
-  refreshToken String    @map("refresh_token")
+  id                       String    @id @default(uuid())
+  userId                   String    @map("user_id")
+  /// Phase 3 (PR 3.2) — stores the SHA-256 hash of the raw refresh
+  /// token, NOT the plaintext. Every write hashes the value (see
+  /// PrismaSessionRepository) and every lookup hashes the incoming
+  /// candidate. A DB compromise yields a list of hashes — useless
+  /// for replay. The DB column is `refresh_token_hash` (Phase 17,
+  /// 2026-05-20 rename) so pg_dump readers cannot mistake the
+  /// stored value for plaintext. The Prisma field name stays
+  /// `refreshToken` for backward-compat with the 20+ callers.
+  /// DO NOT write plaintext to this column.
+  refreshToken             String    @map("refresh_token_hash")
   // Phase 3 (PR 3.6) — refresh-token reuse detection. Holds the
   // SHA-256 of the LAST rotation's refresh token (now "burned"). A
   // refresh request that hashes to this value, after missing on the
-  // current `refresh_token` slot, signals theft: revoke every session
-  // for this user. Nullable on new sessions (no rotation yet); written
-  // on every subsequent rotate.
-  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
-  userAgent    String?   @map("user_agent")
-  ipAddress    String?   @map("ip_address")
-  expiresAt    DateTime  @map("expires_at")
-  revokedAt    DateTime? @map("revoked_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  // current refresh-token-hash slot, signals theft: revoke every
+  // session for this user. Nullable on new sessions (no rotation
+  // yet); written on every subsequent rotate.
+  previousRefreshTokenHash String?   @map("previous_refresh_token_hash")
+  /// Phase 17 (2026-05-20) — VarChar cap to bound storage + protect
+  /// against pathological 1MB user-agent strings.
+  userAgent                String?   @map("user_agent") @db.VarChar(512)
+  /// Phase 17 (2026-05-20) — IPv6 max printable form is 45 chars
+  /// (including a zone id); 45 covers both v4 and v6.
+  ipAddress                String?   @map("ip_address") @db.VarChar(45)
+  expiresAt                DateTime  @map("expires_at")
+  revokedAt                DateTime? @map("revoked_at")
+  /// Phase 27 (2026-05-21) — forensic columns. Pre-Phase-27 the
+  /// admin-sessions surface captured the `reason` + actor in the
+  /// unified audit log only; querying "who revoked this session and
+  /// why?" required a JOIN to AuditLog. Storing the revoker + reason
+  /// on the row itself keeps incident-response queries against the
+  /// session table self-contained.
+  revokedBy                String?   @map("revoked_by")
+  revocationReason         String?   @map("revocation_reason") @db.Text
+  /// Phase 17 (2026-05-20) — bump on each refresh-rotation. Drives the
+  /// admin "active sessions" view + the inactive-session sweeper. The
+  /// expiresAt slides forward on every rotate, so without this column
+  /// there's no way to tell "session that's been used once a day for
+  /// 30 days" apart from "session that hasn't been touched since day 1
+  /// of its 30-day window."
+  lastUsedAt               DateTime? @map("last_used_at")
+  /// Phase 17 (2026-05-20) — operator-readable label derived from the
+  /// userAgent at session creation ("Chrome on macOS", "iOS Safari").
+  /// Used by the future /account/sessions page so users can recognise
+  /// which device they're revoking. Free-form; do not parse.
+  deviceLabel              String?   @map("device_label") @db.VarChar(64)
+  createdAt                DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -127,6 +178,12 @@ model Session {
   // The use-case only hits this index when the primary refresh-token
   // lookup misses, so contention is bounded.
   @@index([previousRefreshTokenHash])
+  /// Phase 17 (2026-05-20) — UserAuthGuard queries by (userId,
+  /// revokedAt IS NULL) on every request; ditto the
+  /// revokeAllUserSessions sweep. Without an index, a user with a
+  /// long session history scans more rows than necessary per request.
+  @@index([userId, revokedAt])
+  @@index([userId, expiresAt])
   @@map("sessions")
 }
 
@@ -148,6 +205,39 @@ model PasswordResetOtp {
   @@map("password_reset_otps")
 }
 
+/// Phase 16 (2026-05-20) — Customer registration email-verification
+/// OTP. Mirrors PasswordResetOtp in shape so the verify use-case can
+/// reuse the atomic-CAS attempt-increment pattern. One row per
+/// registration attempt; the resend flow invalidates older active
+/// rows by setting expiresAt = now() before inserting the new one.
+///
+/// - otpHash:    SHA-256 of the 6-digit numeric OTP. Never the plaintext.
+/// - attempts:   incremented on every verify call against this row.
+///               CAS-guarded so concurrent verifies cannot under-count.
+/// - maxAttempts: hard cap (5) — after which the OTP is expired and the
+///               user must request a new one via /resend-otp.
+/// - expiresAt:  10 minutes from createdAt by default. Invalidation =
+///               setting this to <= now().
+/// - verifiedAt: set inside the verify transaction; non-null means the
+///               OTP was successfully consumed and the user.status flip
+///               to ACTIVE landed.
+model EmailVerificationOtp {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  otpHash     String    @map("otp_hash")
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5) @map("max_attempts")
+  expiresAt   DateTime  @map("expires_at")
+  verifiedAt  DateTime? @map("verified_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_otps")
+}
+
 /// Phase 14 (2026-05-16) — DPDP §6 consent tracking.
 ///
 /// One row per (userId, purpose). Stores the current consent state +
@@ -155,25 +245,39 @@ model PasswordResetOtp {
 /// remains in the AuditLog hash chain (the legal record); this table
 /// is the O(1) projection that powers the customer's privacy page and
 /// the marketing-eligibility checks at notification dispatch time.
+///
+/// Phase 28 (2026-05-21) — DPDP §6 informed-consent requires knowing
+/// which privacy-notice version the user agreed to. `consentVersion`
+/// is stamped on every write. Pre-Phase-28 rows have null versions;
+/// the next user-driven change re-stamps with the current version.
 model ConsentRecord {
-  id        String  @id @default(uuid())
-  userId    String  @map("user_id")
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
   /// Canonical purpose enum value. See ConsentService.PURPOSES for the
   /// authoritative list — keep aligned when adding new values.
-  purpose   String
-  granted   Boolean
-  /// Free-form source label: "customer-portal", "checkout-banner",
-  /// "support-ticket", etc. Lets ops attribute a consent change to
+  purpose        String
+  granted        Boolean
+  /// Phase 28 (2026-05-21) — version of the privacy notice / TOS the
+  /// user agreed to at the moment of grant/revoke (e.g. "1.0"). Nullable
+  /// for rows created before the version-stamp landed; new writes
+  /// always populate it via ConsentService.CURRENT_POLICY_VERSION.
+  consentVersion String?  @map("consent_version")
+  /// Free-form source label: "customer-portal", "register-form",
+  /// "cookie-banner", etc. Lets ops attribute a consent change to
   /// the UI / flow that caused it.
-  source    String?
-  ipAddress String? @map("ip_address")
-  userAgent String? @map("user_agent")
-  updatedAt DateTime @updatedAt @map("updated_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  source         String?
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, purpose], name: "consent_records_user_purpose_unique")
   @@index([userId])
+  /// Phase 28 (2026-05-21) — supports `WHERE purpose = ? AND granted = ?`
+  /// batch queries used by the marketing-eligibility check in the
+  /// notification gate.
+  @@index([purpose, granted])
   @@map("consent_records")
 }

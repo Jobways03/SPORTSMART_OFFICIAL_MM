@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   BadRequestAppException,
   NotFoundAppException,
@@ -14,14 +15,36 @@ interface ApproveSellerInput {
   sellerId: string;
   adminId: string;
   notes?: string;
+  ipAddress?: string;
+  userAgent?: string;
 }
 
+/**
+ * Phase 19 (2026-05-20) — Admin "approve seller" use case.
+ *
+ * Key changes vs prior version (addressing audit gaps):
+ *
+ *   1. No longer auto-flips `isGstVerified=true` + `panVerified=true`
+ *      on approve. The audit flagged this as misleading — approval
+ *      is an onboarding-completed signal, not a GSTN-portal lookup.
+ *      A separate admin action (verify-gstin) will set
+ *      `isGstinManuallyVerified=true` after a real portal check.
+ *
+ *   2. Writes to the new `kycApprovalNotes` column instead of
+ *      overloading `gstVerificationNotes`. Also stamps
+ *      `kycReviewedAt` and `kycReviewedBy` so admin actions are
+ *      queryable.
+ *
+ *   3. Writes an `SELLER_APPROVED` AuditLog row capturing the
+ *      decision in the tamper-evident chain.
+ */
 @Injectable()
 export class ApproveSellerUseCase {
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
     private readonly eventBus: EventBusService,
+    private readonly audit: AuditPublicFacade,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('ApproveSellerUseCase');
@@ -59,11 +82,7 @@ export class ApproveSellerUseCase {
       );
     }
 
-    // Phase 26 GST — policy change (2026-05-18): GSTIN + PAN are both
-    // mandatory before activation. Sellers cannot go live without them
-    // — the platform issues GST-compliant tax invoices on their behalf
-    // and needs both fields populated. PAN was already always required
-    // (TDS 194-O); this adds the equivalent GSTIN guard.
+    // Phase 26 GST — GSTIN + PAN both mandatory before activation.
     if (!(seller as any).gstin) {
       throw new BadRequestAppException(
         'Cannot approve a seller without a GSTIN. Ask the seller to submit GSTIN via onboarding before approval.',
@@ -81,16 +100,48 @@ export class ApproveSellerUseCase {
       {
         status: 'ACTIVE',
         verificationStatus: 'VERIFIED',
-        // GSTIN + PAN now mandatory by the guards above, so both
-        // verification flags always flip to true on approval.
-        isGstVerified: true,
-        gstVerifiedAt: now,
-        gstVerifiedBy: adminId,
-        gstVerificationNotes: notes ?? null,
-        panVerified: true,
+        // Phase 19 (2026-05-20) — kyc-review columns (split from
+        // legacy gst_verification_notes overloading).
+        kycApprovalNotes: notes ?? null,
+        kycReviewedAt: now,
+        kycReviewedBy: adminId,
+        // Clear stale rejection state — a previously-rejected seller
+        // who was re-submitted and approved should not still carry
+        // an old rejection reason.
+        kycRejectionReason: null,
+        // DO NOT auto-flip isGstVerified / panVerified. Those flags
+        // now mean "the GSTN portal lookup actually returned a
+        // match" — a separate admin action sets them. Approval is
+        // about onboarding-completed, not GSTN verification.
       },
       { id: true, status: true, verificationStatus: true },
     );
+
+    // Audit row. Best-effort; logging failure must not roll back
+    // the approval. The seller-row update is the source of truth.
+    this.audit
+      .writeAuditLog({
+        actorId: adminId,
+        actorRole: 'ADMIN',
+        action: 'SELLER_APPROVED',
+        module: 'seller',
+        resource: 'Seller',
+        resourceId: sellerId,
+        oldValue: {
+          status: seller.status,
+          verificationStatus: seller.verificationStatus,
+        },
+        newValue: {
+          status: 'ACTIVE',
+          verificationStatus: 'VERIFIED',
+        },
+        metadata: { notes: notes ?? null },
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+      })
+      .catch((err) => {
+        this.logger.error(`Failed to write SELLER_APPROVED audit log: ${err}`);
+      });
 
     this.eventBus
       .publish({

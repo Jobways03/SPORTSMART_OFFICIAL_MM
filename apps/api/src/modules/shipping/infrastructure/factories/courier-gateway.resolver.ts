@@ -6,7 +6,6 @@ import {
   type CourierGatewayResolver,
 } from '../../application/ports/outbound/courier-gateway.port';
 
-import { IThinkCourierAdapter } from '../adapters/ithink-courier.adapter';
 import { SelfDeliveryCourierAdapter } from '../adapters/self-delivery-courier.adapter';
 
 /**
@@ -17,19 +16,15 @@ import { SelfDeliveryCourierAdapter } from '../adapters/self-delivery-courier.ad
  *   3. Registering a case here.
  *
  * Use cases inject `COURIER_GATEWAY_RESOLVER` rather than individual
- * adapters so they stay carrier-agnostic.
+ * adapters so they stay carrier-agnostic. Only SELF_DELIVERY is wired
+ * today (iThink removed); a future courier drops in as a new case.
  */
 @Injectable()
 export class CourierGatewayResolverImpl implements CourierGatewayResolver {
-  constructor(
-    private readonly ithink: IThinkCourierAdapter,
-    private readonly selfDelivery: SelfDeliveryCourierAdapter,
-  ) {}
+  constructor(private readonly selfDelivery: SelfDeliveryCourierAdapter) {}
 
   forMethod(method: DeliveryMethod): CourierGatewayPort {
     switch (method) {
-      case 'ITHINK_LOGISTICS':
-        return this.ithink;
       case 'SELF_DELIVERY':
         return this.selfDelivery;
       default: {

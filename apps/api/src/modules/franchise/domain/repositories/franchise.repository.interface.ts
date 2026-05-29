@@ -14,6 +14,13 @@ export type OtpWithFranchise = FranchisePasswordResetOtp & {
   franchisePartner: FranchisePartner;
 };
 
+/**
+ * Phase 20 (2026-05-20) — canonical OTP-purpose union. Prisma column
+ * stays `String @default("PASSWORD_RESET")` for backward-compat;
+ * this union pins the legal values at the application boundary.
+ */
+export type FranchiseOtpPurpose = 'PASSWORD_RESET' | 'EMAIL_VERIFICATION';
+
 // ── Auth operations ──────────────────────────────────────────
 
 export interface FranchisePartnerRepository {
@@ -22,6 +29,14 @@ export interface FranchisePartnerRepository {
 
   /** Find a franchise partner by phone number (unique lookup). */
   findByPhone(phoneNumber: string): Promise<FranchisePartner | null>;
+
+  /**
+   * Phase 20 (2026-05-20) — duplicate-legal-identity pre-check helpers
+   * used by the onboarding submit use case. Soft-deleted rows are
+   * excluded so a deleted franchise's GST/PAN can be re-claimed.
+   */
+  findByGstNumber(gstNumber: string): Promise<{ id: string } | null>;
+  findByPanNumber(panNumber: string): Promise<{ id: string } | null>;
 
   /** Find a franchise partner by ID (full record). */
   findById(id: string): Promise<FranchisePartner | null>;
@@ -145,6 +160,16 @@ export interface FranchisePartnerRepository {
 
   /** Increment the attempt counter on an OTP. */
   incrementOtpAttempts(id: string): Promise<void>;
+
+  /**
+   * Phase 20 (2026-05-20) — atomic CAS variant. WHERE clause asserts
+   * "still active AND below cap" inside the same UPDATE so concurrent
+   * verify calls cannot both pass the cap check.
+   */
+  incrementOtpAttemptsCas(
+    otpId: string,
+    maxAttempts: number,
+  ): Promise<{ ok: true; attempts: number } | { ok: false }>;
 
   // ── Transactional operations ────────────────────────────────
 

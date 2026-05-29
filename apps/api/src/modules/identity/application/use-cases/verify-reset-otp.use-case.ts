@@ -35,6 +35,16 @@ export class VerifyResetOtpUseCase {
       throw new UnauthorizedAppException('Invalid or expired OTP');
     }
 
+    // Phase 26 (2026-05-20) — re-check status at verify time. The
+    // forgot-password use case rejects non-ACTIVE accounts up front,
+    // but admin may have suspended the account between the OTP send
+    // and the verify. Without this check, a suspended user completes
+    // the verify and burns a reset-token slot that the subsequent
+    // login attempt would reject anyway. Matches admin reset behaviour.
+    if (user.status !== 'ACTIVE') {
+      throw new UnauthorizedAppException('Invalid or expired OTP');
+    }
+
     // Find the latest unexpired, unused OTP for this user
     const otpRecord = await this.userRepo.findActiveOtp(user.id);
 

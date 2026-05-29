@@ -9,6 +9,7 @@ import type {
 } from '@prisma/client';
 import {
   BadRequestAppException,
+  ConflictAppException,
   ForbiddenAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
@@ -16,7 +17,10 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { CaseDuplicateService } from '../../../../core/case-duplicate/case-duplicate.service';
+import { SYSTEM_ROLE_PERMISSIONS } from '../../../../core/authorization/permission-registry';
+import { Prisma } from '@prisma/client';
 import { DisputesPublicFacade } from '../../../disputes/application/facades/disputes-public.facade';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   normalizeOrderRef,
   normalizeReturnRef,
@@ -71,6 +75,32 @@ export interface ReplyArgs {
   isInternalNote?: boolean;
 }
 
+/**
+ * Explicit admin status-transition allow-list. The reply-driven transitions
+ * (nextStatusOnReply) are a strict subset of these.
+ *   OPEN                → IN_PROGRESS | CLOSED (close spam without working it)
+ *   IN_PROGRESS         → OPEN | WAITING_ON_CUSTOMER | RESOLVED | CLOSED
+ *   WAITING_ON_CUSTOMER → IN_PROGRESS | RESOLVED | CLOSED
+ *   RESOLVED            → IN_PROGRESS (reopen) | CLOSED
+ *   CLOSED              → IN_PROGRESS (admin reopen only)
+ */
+const TICKET_STATUS_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
+  OPEN: ['IN_PROGRESS', 'CLOSED'],
+  IN_PROGRESS: ['OPEN', 'WAITING_ON_CUSTOMER', 'RESOLVED', 'CLOSED'],
+  WAITING_ON_CUSTOMER: ['IN_PROGRESS', 'RESOLVED', 'CLOSED'],
+  RESOLVED: ['IN_PROGRESS', 'CLOSED'],
+  CLOSED: ['IN_PROGRESS'],
+};
+
+// Phase 131 — priority escalation ranking. The assignee is notified only when
+// a ticket is *escalated* (rank rises), not on every tweak / de-escalation.
+const TICKET_PRIORITY_RANK: Record<TicketPriority, number> = {
+  LOW: 0,
+  NORMAL: 1,
+  HIGH: 2,
+  URGENT: 3,
+};
+
 @Injectable()
 export class SupportService {
   private readonly logger = new Logger(SupportService.name);
@@ -82,6 +112,7 @@ export class SupportService {
     private readonly caseDuplicates: CaseDuplicateService,
     private readonly disputes: DisputesPublicFacade,
     private readonly env: EnvService,
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   /**
@@ -270,22 +301,13 @@ export class SupportService {
    * at scale.
    */
   async autoAssignTicket(ticketId: string): Promise<string | null> {
-    // 1. Find candidate admins. Permission is granted via either
-    //    system role or custom role; we use the resolved permission
-    //    set on AdminCustomRolePermission as the source of truth.
-    const candidates = await this.prisma.admin.findMany({
-      where: {
-        status: 'ACTIVE',
-        // System roles SELLER_SUPPORT, SELLER_OPERATIONS, SUPER_ADMIN
-        // have `support.reply` by default per the permission registry.
-        role: { in: ['SELLER_SUPPORT', 'SELLER_OPERATIONS', 'SUPER_ADMIN'] },
-      },
-      select: { id: true },
-    });
-    if (candidates.length === 0) return null;
+    // 1. The eligible pool = active admins who actually hold `support.reply`
+    //    (registry role-defaults ∪ custom-role grants), not a hardcoded
+    //    role list. See resolveSupportReplyPool.
+    const candidateIds = await this.resolveSupportReplyPool();
+    if (candidateIds.length === 0) return null;
 
     // 2. For each candidate, count open + in-progress assigned tickets.
-    const candidateIds = candidates.map((c) => c.id);
     const counts = await this.prisma.ticket.groupBy({
       by: ['assignedAdminId'],
       where: {
@@ -304,19 +326,71 @@ export class SupportService {
     // 3. Pick the least-loaded candidate. Ties broken by id order
     //    (stable + cheap).
     let chosen: { id: string; load: number } | null = null;
-    for (const c of candidates) {
-      const load = countById.get(c.id) ?? 0;
+    for (const id of candidateIds) {
+      const load = countById.get(id) ?? 0;
       if (!chosen || load < chosen.load) {
-        chosen = { id: c.id, load };
+        chosen = { id, load };
       }
     }
     if (!chosen) return null;
 
-    await this.repo.updateTicket(ticketId, { assignedAdminId: chosen.id });
+    // 4. Claim via CAS on `assignedAdminId IS NULL`. Auto-assign is
+    //    fire-and-forget on ticket creation and races a concurrent manual
+    //    assign; only stamp when the ticket is still unassigned so we never
+    //    clobber a human triage decision (or a duplicate auto-assign).
+    const claim = await this.prisma.ticket.updateMany({
+      where: { id: ticketId, assignedAdminId: null },
+      data: { assignedAdminId: chosen.id, assignedAt: new Date() },
+    });
+    if (claim.count === 0) {
+      this.logger.log(
+        `Auto-assign skipped for ticket ${ticketId}: already assigned`,
+      );
+      return null;
+    }
     this.logger.log(
       `Auto-assigned ticket ${ticketId} to admin ${chosen.id} (current load: ${chosen.load})`,
     );
     return chosen.id;
+  }
+
+  /**
+   * Phase 128 — the support-assignment pool: active admins who effectively
+   * hold `support.reply`. Effective = the role-default set in the permission
+   * registry (SYSTEM_ROLE_PERMISSIONS) UNION any custom-role grant. Replaces
+   * the old hardcoded `role IN (3 system roles)` filter, which both drifted
+   * from the registry and ignored custom roles entirely. Permissions are
+   * purely additive (no revoke), so a role-grant OR a custom-role-grant is
+   * sufficient + complete.
+   */
+  private async resolveSupportReplyPool(): Promise<string[]> {
+    const rolesWithSupportReply = Object.entries(SYSTEM_ROLE_PERMISSIONS)
+      .filter(([, perms]) =>
+        (perms as readonly string[]).includes('support.reply'),
+      )
+      .map(([role]) => role);
+
+    const customRoleHolders = await this.prisma.adminRoleAssignment.findMany({
+      where: {
+        role: { permissions: { some: { permissionKey: 'support.reply' } } },
+      },
+      select: { adminId: true },
+    });
+    const customRoleAdminIds = customRoleHolders.map((a) => a.adminId);
+
+    const admins = await this.prisma.admin.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [
+          { role: { in: rolesWithSupportReply as any } },
+          ...(customRoleAdminIds.length
+            ? [{ id: { in: customRoleAdminIds } }]
+            : []),
+        ],
+      },
+      select: { id: true },
+    });
+    return admins.map((a) => a.id);
   }
 
   async getTicketDetailForActor(
@@ -353,7 +427,8 @@ export class SupportService {
   }
 
   listTicketsAdmin(filter: ListTicketsFilter): Promise<ListTicketsPage> {
-    return this.repo.listTickets(filter);
+    // Admin triage queue: URGENT floats to the top (then recency).
+    return this.repo.listTickets({ ...filter, sortByPriority: true });
   }
 
   // ── Messages ─────────────────────────────────────────────────────
@@ -372,6 +447,26 @@ export class SupportService {
       throw new BadRequestAppException(
         'Ticket is closed — re-open before replying',
       );
+    }
+
+    // Re-open window: a non-admin reply normally reopens a RESOLVED ticket
+    // (nextStatusOnReply: RESOLVED → IN_PROGRESS). Past the configured window
+    // we stop resurrecting stale tickets and ask for a fresh one. 0 disables it.
+    if (
+      ticket.status === 'RESOLVED' &&
+      args.sender.type !== 'ADMIN' &&
+      ticket.resolvedAt
+    ) {
+      const windowDays = this.env.getNumber('SUPPORT_REOPEN_WINDOW_DAYS', 30);
+      if (
+        windowDays > 0 &&
+        Date.now() - new Date(ticket.resolvedAt).getTime() >
+          windowDays * 24 * 60 * 60 * 1000
+      ) {
+        throw new BadRequestAppException(
+          `This ticket was resolved more than ${windowDays} days ago — please open a new ticket and reference ${ticket.ticketNumber}.`,
+        );
+      }
     }
 
     // Only ADMIN sender can mark a message as an internal note.
@@ -396,6 +491,31 @@ export class SupportService {
       body,
       isInternalNote,
     });
+
+    // Central audit trail for privileged support writes. The TicketMessage row
+    // already records every reply's author/time; we additionally land ADMIN
+    // replies (internal notes especially) in audit_logs so "everything admin X
+    // did" is answerable from the central stream. Customer/seller replies are
+    // self-evident on their own ticket and aren't audited here.
+    if (args.sender.type === 'ADMIN') {
+      this.audit
+        .writeAuditLog({
+          actorId: args.sender.id,
+          actorRole: 'ADMIN',
+          action: isInternalNote
+            ? 'support.internal_note.created'
+            : 'support.admin_reply.created',
+          module: 'support',
+          resource: 'ticket',
+          resourceId: ticket.id,
+          metadata: {
+            messageId: created.id,
+            isInternalNote,
+            length: body.length,
+          },
+        })
+        .catch(() => undefined);
+    }
 
     // Phase 11 (post-Phase-10) — message mirroring for promoted tickets.
     // When the ticket has been promoted to a dispute, customer/seller/etc.
@@ -485,10 +605,104 @@ export class SupportService {
 
   // ── Admin actions ────────────────────────────────────────────────
 
-  async assign(ticketId: string, adminId: string | null): Promise<Ticket> {
+  async assign(
+    ticketId: string,
+    adminId: string | null,
+    calledByAdminId?: string,
+  ): Promise<Ticket> {
     const ticket = await this.repo.findTicketById(ticketId);
     if (!ticket) throw new NotFoundAppException('Ticket not found');
-    return this.repo.updateTicket(ticketId, { assignedAdminId: adminId });
+    if (ticket.status === 'CLOSED') {
+      throw new BadRequestAppException('Cannot reassign a closed ticket');
+    }
+    // Target admin must exist + be ACTIVE — parity with auto-assign, which
+    // already excludes inactive admins. Un-assign (null) skips this.
+    let assignee: { email: string; name: string } | null = null;
+    if (adminId) {
+      const admin = await this.prisma.admin.findUnique({
+        where: { id: adminId },
+        select: { status: true, email: true, name: true, role: true },
+      });
+      if (!admin) throw new BadRequestAppException('Target admin not found');
+      if (admin.status !== 'ACTIVE') {
+        throw new BadRequestAppException(
+          'Cannot assign a ticket to an inactive or suspended admin',
+        );
+      }
+      // Pool check (Phase 128) — parity with auto-assign: the assignee must
+      // actually hold `support.reply`, else the ticket is stranded with
+      // someone who can't act on it. Role-default OR custom-role grant.
+      const holdsSupportReply =
+        (
+          (SYSTEM_ROLE_PERMISSIONS[admin.role] as
+            | readonly string[]
+            | undefined) ?? []
+        ).includes('support.reply') ||
+        (await this.prisma.adminRoleAssignment.count({
+          where: {
+            adminId,
+            role: {
+              permissions: { some: { permissionKey: 'support.reply' } },
+            },
+          },
+        })) > 0;
+      if (!holdsSupportReply) {
+        throw new BadRequestAppException(
+          'Target admin lacks the support.reply permission — they cannot work support tickets',
+        );
+      }
+      assignee = { email: admin.email, name: admin.name ?? admin.email };
+    }
+    // CAS on the prior assignee (Ticket has no version column): if another
+    // writer reassigned between our read and write, count=0 → 409.
+    const result = await this.prisma.ticket.updateMany({
+      where: { id: ticketId, assignedAdminId: ticket.assignedAdminId },
+      data: {
+        assignedAdminId: adminId,
+        assignedAt: adminId ? new Date() : null,
+        assignedByAdminId: adminId ? (calledByAdminId ?? null) : null,
+      },
+    });
+    if (result.count === 0) {
+      throw new ConflictAppException(
+        'Ticket was reassigned by someone else — reload and retry',
+      );
+    }
+    // Durable who→whom→when trail (this IS the assignment history, kept in
+    // audit_logs rather than a dedicated table).
+    this.audit
+      .writeAuditLog({
+        actorId: calledByAdminId,
+        action: 'ticket.assigned',
+        module: 'support',
+        resource: 'ticket',
+        resourceId: ticketId,
+        oldValue: { assignedAdminId: ticket.assignedAdminId },
+        newValue: { assignedAdminId: adminId },
+      })
+      .catch(() => undefined);
+    // Notify the newly-assigned admin (skip on un-assign).
+    if (adminId && assignee) {
+      await this.eventBus
+        .publish({
+          eventName: 'tickets.assigned',
+          aggregate: 'Ticket',
+          aggregateId: ticketId,
+          occurredAt: new Date(),
+          payload: {
+            ticketId,
+            ticketNumber: ticket.ticketNumber,
+            assigneeId: adminId,
+            assigneeEmail: assignee.email,
+            assigneeName: assignee.name,
+            assignedByAdminId: calledByAdminId ?? null,
+          },
+        })
+        .catch(() => undefined);
+    }
+    const updated = await this.repo.findTicketById(ticketId);
+    if (!updated) throw new NotFoundAppException('Ticket not found');
+    return updated;
   }
 
   async setStatus(
@@ -499,8 +713,20 @@ export class SupportService {
   ): Promise<Ticket> {
     const ticket = await this.repo.findTicketById(ticketId);
     if (!ticket) throw new NotFoundAppException('Ticket not found');
+    if (ticket.status === status) return ticket; // no-op — don't rewrite timestamps
 
-    const data: Parameters<SupportRepository['updateTicket']>[1] = { status };
+    // FSM allow-list. The explicit admin path previously accepted ANY jump
+    // (OPEN→CLOSED, CLOSED→IN_PROGRESS, RESOLVED→OPEN, …). Reject anything not
+    // in the lifecycle. Reply-driven moves go through nextStatusOnReply, which
+    // only returns transitions that are also valid here.
+    const allowed = TICKET_STATUS_TRANSITIONS[ticket.status] ?? [];
+    if (!allowed.includes(status)) {
+      throw new BadRequestAppException(
+        `Cannot transition a ticket from ${ticket.status} to ${status}`,
+      );
+    }
+
+    const data: Prisma.TicketUpdateManyMutationInput = { status };
     if (status === 'RESOLVED') {
       data.resolvedAt = new Date();
       if (resolutionSummary?.trim()) {
@@ -525,19 +751,139 @@ export class SupportService {
         this.getSlaConfig(),
       );
     }
-    return this.repo.updateTicket(ticketId, data);
+
+    // CAS on the prior status (Ticket has no version column) so a concurrent
+    // transition can't be silently clobbered.
+    const result = await this.prisma.ticket.updateMany({
+      where: { id: ticketId, status: ticket.status },
+      data,
+    });
+    if (result.count === 0) {
+      throw new ConflictAppException(
+        'Ticket status changed concurrently — reload and retry',
+      );
+    }
+    // Durable from→to trail — this IS the status history, kept in audit_logs.
+    this.audit
+      .writeAuditLog({
+        actorId: adminId,
+        actorRole: 'ADMIN',
+        action: 'support.ticket.status_changed',
+        module: 'support',
+        resource: 'ticket',
+        resourceId: ticketId,
+        oldValue: { status: ticket.status },
+        newValue: { status },
+      })
+      .catch(() => undefined);
+    // Notify downstream (customer email handler, timeline) of the transition.
+    await this.eventBus
+      .publish({
+        eventName: 'tickets.status.changed',
+        aggregate: 'Ticket',
+        aggregateId: ticketId,
+        occurredAt: new Date(),
+        payload: {
+          ticketId,
+          ticketNumber: ticket.ticketNumber,
+          ticketSubject: ticket.subject,
+          fromStatus: ticket.status,
+          toStatus: status,
+          changedByAdminId: adminId,
+          // Snapshotted creator contact so the handler needn't resolve a
+          // polymorphic actor — email goes to the address on the ticket.
+          recipientType: ticket.creatorType,
+          recipientEmail: ticket.creatorEmail,
+          recipientName: ticket.creatorName,
+        },
+      })
+      .catch(() => undefined);
+    const updated = await this.repo.findTicketById(ticketId);
+    if (!updated) throw new NotFoundAppException('Ticket not found');
+    return updated;
   }
 
   async setPriority(
     ticketId: string,
     priority: TicketPriority,
+    calledByAdminId?: string,
   ): Promise<Ticket> {
     const ticket = await this.repo.findTicketById(ticketId);
     if (!ticket) throw new NotFoundAppException('Ticket not found');
-    // Re-base SLA from now whenever priority changes — a downgrade
-    // gives breathing room, an upgrade tightens the deadline.
+    if (ticket.status === 'CLOSED') {
+      throw new BadRequestAppException(
+        'Cannot change priority of a closed ticket',
+      );
+    }
+    if (ticket.priority === priority) return ticket; // no-op — no audit churn
+    // Re-base SLA from now whenever priority changes — a downgrade gives
+    // breathing room, an upgrade tightens the deadline.
     const slaTargetAt = computeSlaTarget(priority, new Date(), this.getSlaConfig());
-    return this.repo.updateTicket(ticketId, { priority, slaTargetAt });
+    // CAS on the prior priority so a concurrent change can't be silently lost.
+    const result = await this.prisma.ticket.updateMany({
+      where: { id: ticketId, priority: ticket.priority },
+      data: {
+        priority,
+        slaTargetAt,
+        priorityUpdatedBy: calledByAdminId ?? null,
+        priorityUpdatedAt: new Date(),
+      },
+    });
+    if (result.count === 0) {
+      throw new ConflictAppException(
+        'Ticket priority changed concurrently — reload and retry',
+      );
+    }
+    this.audit
+      .writeAuditLog({
+        actorId: calledByAdminId,
+        action: 'ticket.priority_changed',
+        module: 'support',
+        resource: 'ticket',
+        resourceId: ticketId,
+        oldValue: { priority: ticket.priority },
+        newValue: { priority },
+      })
+      .catch(() => undefined);
+
+    // Phase 131 — notify the assignee when their ticket is ESCALATED (priority
+    // rank rose), unless they made the change themselves. De-escalations and
+    // lateral tweaks stay silent to avoid notification noise.
+    const escalated =
+      TICKET_PRIORITY_RANK[priority] > TICKET_PRIORITY_RANK[ticket.priority];
+    if (
+      escalated &&
+      ticket.assignedAdminId &&
+      ticket.assignedAdminId !== calledByAdminId
+    ) {
+      const assignee = await this.prisma.admin.findUnique({
+        where: { id: ticket.assignedAdminId },
+        select: { email: true, name: true },
+      });
+      if (assignee?.email) {
+        await this.eventBus
+          .publish({
+            eventName: 'tickets.priority.changed',
+            aggregate: 'Ticket',
+            aggregateId: ticketId,
+            occurredAt: new Date(),
+            payload: {
+              ticketId,
+              ticketNumber: ticket.ticketNumber,
+              fromPriority: ticket.priority,
+              toPriority: priority,
+              assigneeId: ticket.assignedAdminId,
+              assigneeEmail: assignee.email,
+              assigneeName: assignee.name ?? assignee.email,
+            },
+          })
+          .catch(() => undefined);
+      }
+    }
+
+    const updated = await this.repo.findTicketById(ticketId);
+    if (!updated) throw new NotFoundAppException('Ticket not found');
+    return updated;
   }
 
   async closeByCustomer(
@@ -553,11 +899,26 @@ export class SupportService {
       throw new ForbiddenAppException('Not allowed to close this ticket');
     }
     if (ticket.status === 'CLOSED') return ticket;
-    return this.repo.updateTicket(ticketId, {
+    const updated = await this.repo.updateTicket(ticketId, {
       status: 'CLOSED',
       closedAt: new Date(),
       resolvedAt: ticket.resolvedAt ?? new Date(),
     });
+    // The schema's closedByAdminId is null for a customer self-close by design;
+    // capture WHO closed it in the central audit stream instead.
+    this.audit
+      .writeAuditLog({
+        actorId: customer.id,
+        actorRole: customer.type,
+        action: 'support.ticket.closed_by_customer',
+        module: 'support',
+        resource: 'ticket',
+        resourceId: ticketId,
+        oldValue: { status: ticket.status },
+        newValue: { status: 'CLOSED' },
+      })
+      .catch(() => undefined);
+    return updated;
   }
 
   // ── Promotion to dispute ─────────────────────────────────────────
@@ -805,28 +1166,84 @@ export class SupportService {
     return this.repo.listCategories(scopedTo);
   }
 
-  createCategory(input: {
-    name: string;
-    description?: string;
-    scopedTo?: TicketActorType;
-    sortOrder?: number;
-  }) {
+  async createCategory(
+    input: {
+      name: string;
+      description?: string;
+      scopedTo?: TicketActorType;
+      sortOrder?: number;
+    },
+    adminId?: string,
+  ) {
     if (!input.name?.trim()) {
       throw new BadRequestAppException('Name is required');
     }
-    return this.repo.createCategory({
-      name: input.name.trim(),
-      description: input.description?.trim() || null,
-      scopedTo: input.scopedTo ?? null,
-      sortOrder: input.sortOrder ?? 0,
-    });
+    try {
+      const cat = await this.repo.createCategory({
+        name: input.name.trim(),
+        description: input.description?.trim() || null,
+        scopedTo: input.scopedTo ?? null,
+        sortOrder: input.sortOrder ?? 0,
+      });
+      this.audit
+        .writeAuditLog({
+          actorId: adminId,
+          action: 'support.category.created',
+          module: 'support',
+          resource: 'ticket_category',
+          resourceId: cat.id,
+          newValue: { name: cat.name, scopedTo: cat.scopedTo, sortOrder: cat.sortOrder },
+        })
+        .catch(() => undefined);
+      return cat;
+    } catch (err) {
+      // name @unique → P2002. Return a clean 409 instead of a raw 500.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictAppException(
+          `A category named "${input.name.trim()}" already exists`,
+        );
+      }
+      throw err;
+    }
   }
 
-  updateCategory(
+  async updateCategory(
     id: string,
     input: Parameters<SupportRepository['updateCategory']>[1],
+    adminId?: string,
   ) {
-    return this.repo.updateCategory(id, input);
+    try {
+      const cat = await this.repo.updateCategory(id, input);
+      this.audit
+        .writeAuditLog({
+          actorId: adminId,
+          // active:false is the soft-delete path — label it distinctly so
+          // "who turned this category off?" is answerable from the audit log.
+          action:
+            (input as { active?: boolean }).active === false
+              ? 'support.category.deactivated'
+              : 'support.category.updated',
+          module: 'support',
+          resource: 'ticket_category',
+          resourceId: id,
+          newValue: input,
+        })
+        .catch(() => undefined);
+      return cat;
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictAppException(
+          'A category with this name already exists',
+        );
+      }
+      throw err;
+    }
   }
 }
 

@@ -32,6 +32,9 @@ import { FranchisePublicFacade } from './application/facades/franchise-public.fa
 import { CatalogModule } from '../catalog/module';
 import { MoneyModule } from '../../core/money/money.module';
 import { TaxModule } from '../tax/module';
+import { OrdersModule } from '../orders/module';
+// Phase 28 (2026-05-21) — for the shared AdminEndImpersonationUseCase.
+import { AdminModule } from '../admin/module';
 import { FranchiseOrdersService } from './application/services/franchise-orders.service';
 import { FranchiseOrdersController } from './presentation/controllers/franchise-orders.controller';
 import { AdminFranchiseOrdersController } from './presentation/controllers/admin-franchise-orders.controller';
@@ -84,6 +87,8 @@ import { AdminFranchiseInventoryController } from './presentation/controllers/ad
 import { FranchiseProcurementController } from './presentation/controllers/franchise-procurement.controller';
 import { AdminProcurementController } from './presentation/controllers/admin-procurement.controller';
 import { AdminFranchiseProcurementPricingController } from './presentation/controllers/admin-franchise-procurement-pricing.controller';
+import { AdminFranchisePincodesController } from './presentation/controllers/admin-franchise-pincodes.controller';
+import { FranchisePincodeMappingService } from './application/services/franchise-pincode-mapping.service';
 import { FranchisePosController } from './presentation/controllers/franchise-pos.controller';
 import { AdminFranchisePosController } from './presentation/controllers/admin-franchise-pos.controller';
 import { FranchiseEarningsController } from './presentation/controllers/franchise-earnings.controller';
@@ -92,6 +97,7 @@ import { AdminFranchiseFinanceController } from './presentation/controllers/admi
 import { FranchiseEmailVerificationController } from './presentation/controllers/franchise-email-verification.controller';
 import { FranchiseMediaController } from './presentation/controllers/franchise-media.controller';
 import { FranchiseStaffController } from './presentation/controllers/franchise-staff.controller';
+import { FranchiseStaffAuthController } from './presentation/controllers/franchise-staff-auth.controller';
 
 // Auth use-cases
 import { RegisterFranchiseUseCase } from './application/use-cases/register-franchise.use-case';
@@ -111,6 +117,14 @@ import { UpdateFranchiseProfileUseCase } from './application/use-cases/update-fr
 // Email verification use-cases
 import { SendFranchiseEmailVerificationUseCase } from './application/use-cases/send-franchise-email-verification.use-case';
 import { VerifyFranchiseEmailUseCase } from './application/use-cases/verify-franchise-email.use-case';
+import { PublicVerifyFranchiseEmailUseCase } from './application/use-cases/public-verify-franchise-email.use-case';
+import { ResendFranchiseVerificationOtpUseCase } from './application/use-cases/resend-franchise-verification-otp.use-case';
+
+// Phase 20 — Onboarding + Bank details
+import { SubmitFranchiseOnboardingUseCase } from './application/use-cases/submit-franchise-onboarding.use-case';
+import { SubmitFranchiseOnboardingController } from './presentation/controllers/submit-franchise-onboarding.controller';
+import { FranchiseBankDetailsService } from './application/services/franchise-bank-details.service';
+import { FranchiseBankDetailsController } from './presentation/controllers/franchise-bank-details.controller';
 
 // Media use-cases
 import { UploadFranchiseMediaUseCase } from './application/use-cases/upload-franchise-media.use-case';
@@ -118,6 +132,7 @@ import { DeleteFranchiseMediaUseCase } from './application/use-cases/delete-fran
 
 // Staff service
 import { FranchiseStaffService } from './application/services/franchise-staff.service';
+import { FranchiseStaffAuthService } from './application/auth/franchise-staff-auth.service';
 
 // Admin use-cases
 import { AdminListFranchisesUseCase } from './application/use-cases/admin-list-franchises.use-case';
@@ -133,7 +148,23 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
 
 @Module({
   // Tax → Checkout → Franchise → Tax cycle; forwardRef breaks the loop.
-  imports: [CatalogModule, MoneyModule, forwardRef(() => TaxModule)],
+  // Phase 28 (2026-05-21) — AdminModule imported so the
+  // AdminFranchiseController can inject AdminEndImpersonationUseCase
+  // (shared with the seller flow) without duplicating wiring.
+  // AdminModule does not import FranchiseModule so a plain import is
+  // sufficient (no circular-dep forwardRef needed).
+  imports: [
+    CatalogModule,
+    MoneyModule,
+    forwardRef(() => TaxModule),
+    AdminModule,
+    // Phase 82 (2026-05-23) — pack/ship audit. Franchise fulfillment
+    // delegates to the unified OrdersService writer. forwardRef
+    // because OrdersModule already imports FranchiseModule (for
+    // franchise-rejection auto-cascade); the forwardRef breaks that
+    // cycle.
+    forwardRef(() => OrdersModule),
+  ],
   controllers: [
     FranchiseAuthController,
     FranchiseProfileController,
@@ -147,6 +178,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     FranchiseProcurementController,
     AdminProcurementController,
     AdminFranchiseProcurementPricingController,
+    AdminFranchisePincodesController,
     FranchisePosController,
     AdminFranchisePosController,
     FranchiseEarningsController,
@@ -155,7 +187,10 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     FranchiseEmailVerificationController,
     FranchiseMediaController,
     FranchiseStaffController,
+    FranchiseStaffAuthController,
     FranchiseDeliveryMethodsController,
+    SubmitFranchiseOnboardingController,
+    FranchiseBankDetailsController,
   ],
   providers: [
     FranchiseDeliveryMethodsService,
@@ -190,6 +225,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     ProcurementService,
     FranchisePosService,
     FranchiseCommissionService,
+    FranchisePincodeMappingService,
     FranchiseSettlementService,
     FranchiseReservationCleanupService,
     FranchiseCommissionProcessorService,
@@ -217,9 +253,14 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     AdminDeleteFranchiseUseCase,
     SendFranchiseEmailVerificationUseCase,
     VerifyFranchiseEmailUseCase,
+    PublicVerifyFranchiseEmailUseCase,
+    ResendFranchiseVerificationOtpUseCase,
+    SubmitFranchiseOnboardingUseCase,
+    FranchiseBankDetailsService,
     UploadFranchiseMediaUseCase,
     DeleteFranchiseMediaUseCase,
     FranchiseStaffService,
+    FranchiseStaffAuthService,
     FranchiseAuthGuard,
     FranchiseActiveGuard,
     AdminAuthGuard,

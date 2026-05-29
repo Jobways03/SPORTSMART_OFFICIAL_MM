@@ -321,17 +321,27 @@ export default function ReturnDetailPage() {
       );
     }
 
-    if (status === 'REFUNDED') {
+    // Phase 105 (2026-05-23) — Phase 103 audit Gap #10 + #11 closure.
+    // Same as web-d2c-seller-admin: surface Close on QC_REJECTED + add
+    // confirmation prompt.
+    if (status === 'REFUNDED' || status === 'QC_REJECTED') {
       actions.push(
         <button
           key="close"
           className="return-action-btn primary"
           disabled={actionLoading === 'closeReturn'}
-          onClick={() =>
-            runDirectAction('closeReturn', () =>
+          onClick={() => {
+            if (
+              !window.confirm(
+                'Close this return? This action cannot be undone.',
+              )
+            ) {
+              return;
+            }
+            void runDirectAction('closeReturn', () =>
               adminReturnsService.closeReturn(returnId),
-            )
-          }
+            );
+          }}
         >
           {actionLoading === 'closeReturn' ? 'Closing...' : 'Close Return'}
         </button>,
@@ -1016,6 +1026,7 @@ export default function ReturnDetailPage() {
           returnId={ret.id}
           returnNumber={ret.returnNumber}
           items={ret.items}
+          creditNoteEligibilityPreview={ret.creditNoteEligibilityPreview}
           onClose={() => setActiveModal(null)}
           onSuccess={onActionSuccess}
         />
@@ -1024,6 +1035,7 @@ export default function ReturnDetailPage() {
         <InitiateRefundModal
           returnId={ret.id}
           returnNumber={ret.returnNumber}
+          creditNoteEligibilityStatus={ret.creditNoteEligibilityStatus}
           onClose={() => setActiveModal(null)}
           onSuccess={onActionSuccess}
         />

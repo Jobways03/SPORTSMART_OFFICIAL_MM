@@ -19,6 +19,16 @@ enum AffiliateStatus {
   SUSPENDED
 }
 
+// Phase 158 — customer-facing discount type on an affiliate coupon. Was a
+// plain String? (service-validated only); a DB enum is the defence-in-depth +
+// adds FREE_SHIPPING (waives the shipping fee at checkout). NULL = attribution-
+// only (validates, no discount).
+enum AffiliateCustomerDiscountType {
+  PERCENT
+  FIXED
+  FREE_SHIPPING
+}
+
 enum AffiliateKycStatus {
   NOT_STARTED
   PENDING
@@ -52,6 +62,8 @@ enum AffiliatePayoutStatus {
   PAID
   FAILED
   CANCELLED
+  // Phase 154 — admin rejected before approval (distinct from bank-side FAILED).
+  REJECTED
 }
 
 // ============================================
@@ -81,11 +93,29 @@ model Affiliate {
   approvedById     String?         @map("approved_by_id")
   rejectedAt       DateTime?       @map("rejected_at")
   rejectionReason  String?         @map("rejection_reason") @db.Text
+  /// Phase 22 (2026-05-20) — action-specific actor columns.
+  /// Pre-Phase-22 the service overloaded `approvedById` for reject /
+  /// suspend / deactivate / reactivate, making admin-action audit
+  /// queries indistinguishable. Each action now stamps its own
+  /// column so "who suspended this affiliate?" is directly answerable.
+  rejectedById     String?         @map("rejected_by_id")
   suspendedAt      DateTime?       @map("suspended_at")
   suspensionReason String?         @map("suspension_reason") @db.Text
+  suspendedById    String?         @map("suspended_by_id")
+  deactivatedAt    DateTime?       @map("deactivated_at")
+  deactivatedById  String?         @map("deactivated_by_id")
+  reactivatedAt    DateTime?       @map("reactivated_at")
+  reactivatedById  String?         @map("reactivated_by_id")
+  // Phase 159h — why the affiliate was reactivated (KYC cleared, fraud probe
+  // resolved, etc.). Optional; the status-history row is the canonical trail.
+  reactivationReason String?       @map("reactivation_reason") @db.Text
 
   // Commission rate override (SRS §8.2). null → use Settings default.
   commissionPercentage Decimal? @map("commission_percentage") @db.Decimal(5, 2)
+  // Phase 159 — denormalised "who/when last changed the rate" for fast
+  // display; the full ordered trail lives in AffiliateCommissionRateHistory.
+  commissionPercentageUpdatedById String?   @map("commission_percentage_updated_by_id")
+  commissionPercentageUpdatedAt   DateTime? @map("commission_percentage_updated_at")
 
   // Denormalised KYC summary for fast eligibility checks (SRS §15.1).
   // Full KYC details live on AffiliateKyc.
@@ -98,8 +128,10 @@ model Affiliate {
   failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
   lockUntil           DateTime? @map("lock_until")
   emailVerified       Boolean   @default(false) @map("email_verified")
-  phoneVerified       Boolean   @default(false) @map("phone_verified")
-  phoneVerifiedAt     DateTime? @map("phone_verified_at")
+  // Phase 27 (2026-05-21) — phoneVerified + phoneVerifiedAt columns
+  // dropped (mirror of the User cleanup). Affiliate phone is opaque
+  // contact data; nothing in the codebase gated on the verification
+  // flag and AffiliatePhoneVerificationOtp had zero writers / readers.
 
   // Fraud (SRS §14)
   fraudFlagCount Int     @default(0) @map("fraud_flag_count")
@@ -108,23 +140,68 @@ model Affiliate {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user                  User?                           @relation(fields: [userId], references: [id], onDelete: SetNull)
-  couponCodes           AffiliateCouponCode[]
-  referrals             Referral[]
-  attributions          ReferralAttribution[]
-  commissions           AffiliateCommission[]
-  kyc                   AffiliateKyc?
-  payoutMethods         AffiliatePayoutMethodRecord[]
-  payoutRequests        AffiliatePayoutRequest[]
-  tdsRecords            AffiliateTdsRecord[]
-  passwordResetOtps     AffiliatePasswordResetOtp[]
-  phoneVerificationOtps AffiliatePhoneVerificationOtp[]
-  sessions              AffiliateSession[]
+  user              User?                         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  couponCodes       AffiliateCouponCode[]
+  referrals         Referral[]
+  attributions      ReferralAttribution[]
+  commissions       AffiliateCommission[]
+  kyc               AffiliateKyc?
+  payoutMethods     AffiliatePayoutMethodRecord[]
+  payoutRequests    AffiliatePayoutRequest[]
+  tdsRecords        AffiliateTdsRecord[]
+  passwordResetOtps AffiliatePasswordResetOtp[]
+  sessions          AffiliateSession[]
+  statusHistory     AffiliateStatusHistory[]
+  commissionRateHistory AffiliateCommissionRateHistory[]
+  tds194oLedger     AffiliateTds194OLedger[]
 
   @@index([status])
   @@index([email])
   @@index([userId])
+  /// Phase 22 (2026-05-20) — Admin affiliate queue filters on
+  /// kycStatus; without an index the listing scans every row.
+  @@index([kycStatus])
   @@map("affiliates")
+}
+
+// Phase 156 — append-only status-transition log. The dedicated actor columns
+// on Affiliate (approvedById / rejectedById / suspendedById / deactivatedById /
+// reactivatedById) capture the LATEST actor per transition type; this table
+// keeps the full ORDERED timeline (e.g. suspended → reactivated → suspended
+// again, by different admins) for the audit trail.
+model AffiliateStatusHistory {
+  id               String   @id @default(uuid())
+  affiliateId      String   @map("affiliate_id")
+  fromStatus       String?  @map("from_status")
+  toStatus         String   @map("to_status")
+  changedByAdminId String?  @map("changed_by_admin_id")
+  reason           String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId, createdAt])
+  @@map("affiliate_status_history")
+}
+
+// Phase 159 — append-only commission-rate change log (audit Critical #3).
+// commissionPercentage on the Affiliate row is the LATEST rate; this keeps
+// the ordered trail (who changed it from what to what, and why). A null
+// fromRate/toRate means "was/now using the platform default" (override
+// cleared). Mirrors AffiliateStatusHistory.
+model AffiliateCommissionRateHistory {
+  id               String   @id @default(uuid())
+  affiliateId      String   @map("affiliate_id")
+  fromRate         Decimal? @map("from_rate") @db.Decimal(5, 2)
+  toRate           Decimal? @map("to_rate") @db.Decimal(5, 2)
+  changedByAdminId String?  @map("changed_by_admin_id")
+  reason           String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  @@index([affiliateId, createdAt])
+  @@map("affiliate_commission_rate_history")
 }
 
 // Follow-up #123 — mirrors AdminSession / SellerSession / FranchiseSession.
@@ -133,50 +210,53 @@ model Affiliate {
 // backed refresh token closes the long-window-stolen-token attack class
 // and aligns affiliate with the other four personas.
 model AffiliateSession {
-  id          String    @id @default(uuid())
-  affiliateId String    @map("affiliate_id")
-  refreshToken String   @map("refresh_token")
+  id                       String    @id @default(uuid())
+  affiliateId              String    @map("affiliate_id")
+  /// Phase 22 (2026-05-20) — Column renamed `refresh_token` →
+  /// `refresh_token_hash`. The stored value has always been the
+  /// SHA-256 hex of the raw token (via `hashRefreshToken()`); only
+  /// the name lied. pg_dump readers + incident-response engineers
+  /// now see the truth. The Prisma field name stays `refreshToken`
+  /// for backward-compat with existing call sites.
+  refreshToken             String    @map("refresh_token_hash")
   // Phase 1 / C6 — refresh-token reuse detection. When a session
   // rotates, the prior refresh token's SHA-256 hash is preserved here
   // for one cycle so a replay of the old token surfaces as a theft
   // signal and revokes every session for the affiliate.
-  previousRefreshTokenHash String? @map("previous_refresh_token_hash")
-  userAgent   String?   @map("user_agent")
-  ipAddress   String?   @map("ip_address")
-  expiresAt   DateTime  @map("expires_at")
-  revokedAt   DateTime? @map("revoked_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  previousRefreshTokenHash String?   @map("previous_refresh_token_hash")
+  userAgent                String?   @map("user_agent") @db.VarChar(512)
+  ipAddress                String?   @map("ip_address") @db.VarChar(45)
+  expiresAt                DateTime  @map("expires_at")
+  revokedAt                DateTime? @map("revoked_at")
+  /// Phase 27 (2026-05-21) — forensic columns; see identity.prisma.
+  revokedBy                String?   @map("revoked_by")
+  revocationReason         String?   @map("revocation_reason") @db.Text
+  /// Phase 27 (2026-05-21) — bumped on each refresh-rotation.
+  lastUsedAt               DateTime? @map("last_used_at")
+  /// Phase 27 (2026-05-21) — UA-derived label.
+  deviceLabel              String?   @map("device_label") @db.VarChar(64)
+  createdAt                DateTime  @default(now()) @map("created_at")
 
   affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
 
   @@index([affiliateId])
   @@index([refreshToken])
   @@index([previousRefreshTokenHash])
+  /// Phase 22 (2026-05-20) — composite indexes for the AffiliateAuthGuard's
+  /// per-request "is this session still valid?" lookup, the
+  /// inactive-session sweeper, and the admin "active sessions" view.
+  @@index([affiliateId, revokedAt])
+  @@index([affiliateId, expiresAt])
   @@map("affiliate_sessions")
 }
 
-// ── Phone verification OTP ────────────────────────────────────
-// Authenticated affiliate sends OTP to a candidate phone number,
-// then submits the code to mark `phoneVerified = true`. Stores the
-// candidate phone on the OTP row so a verified change of phone can
-// happen atomically with the OTP exchange — without that, an attacker
-// could swap the affiliate's phone field between send and verify.
-model AffiliatePhoneVerificationOtp {
-  id             String    @id @default(uuid())
-  affiliateId    String    @map("affiliate_id")
-  phoneCandidate String    @map("phone_candidate")
-  otpHash        String    @map("otp_hash")
-  attempts       Int       @default(0)
-  maxAttempts    Int       @default(5) @map("max_attempts")
-  verifiedAt     DateTime? @map("verified_at")
-  expiresAt      DateTime  @map("expires_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-
-  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
-
-  @@index([affiliateId])
-  @@map("affiliate_phone_verification_otps")
-}
+// Phase 27 (2026-05-21) — AffiliatePhoneVerificationOtp model removed.
+// The table was a Phase-1 design artifact (phoneCandidate atomic-swap
+// pattern was thoughtful) but no controller, service, or use case ever
+// consumed it — zero INSERTs in production. Phone verification is not
+// in scope for the MVP; the affiliate phone column stays as opaque
+// contact data. Migration 20260521120000_drop_phone_verification
+// drops the underlying table.
 
 // ── Platform settings (singleton — affiliate program tunables) ────
 // Single-row table holding the affiliate program's tunable knobs.
@@ -189,10 +269,24 @@ model AffiliatePhoneVerificationOtp {
 model AffiliateSettings {
   id                           String   @id @default("singleton")
   defaultCommissionPercentage  Decimal  @default(10) @map("default_commission_percentage") @db.Decimal(5, 2)
+  // Phase 159b — cap on coupon codes per affiliate (abuse / admin-error guard
+  // on the create-additional-coupon endpoint).
+  maxCodesPerAffiliate         Int      @default(10) @map("max_codes_per_affiliate")
   minimumPayoutAmount          Decimal  @default(500) @map("minimum_payout_amount") @db.Decimal(10, 2)
   returnWindowDays             Int      @default(7) @map("return_window_days")
+  // §194H (commission/brokerage) config — used only when tdsSection='194H'.
+  // tdsRate is read from here (was hardcoded 0.10 in the service — a bug).
   tdsRate                      Decimal  @default(10) @map("tds_rate") @db.Decimal(5, 2)
   tdsThresholdPerFY            Decimal  @default(15000) @map("tds_threshold_per_fy") @db.Decimal(12, 2)
+  // Phase 159e — which IT-Act section the affiliate TDS is deducted under.
+  // Default '194O' (e-commerce participant): PAN-aware, no threshold, quarterly.
+  // Switchable to '194H' (commission/brokerage) WITHOUT a code change — the
+  // §194H-vs-§194-O determination is a tax-law decision for finance, so it
+  // lives in config. Rates in bps (100 = 1%, 500 = 5%) mirror the seller
+  // §194-O ledger (Section194OTdsLedger).
+  tdsSection                   String   @default("194O") @map("tds_section")
+  tdsRateWithPanBps            Int      @default(100) @map("tds_rate_with_pan_bps")
+  tdsRateWithoutPanBps         Int      @default(500) @map("tds_rate_without_pan_bps")
   commissionReversalWindowDays Int      @default(30) @map("commission_reversal_window_days")
   updatedAt                    DateTime @updatedAt @map("updated_at")
   updatedById                  String?  @map("updated_by_id")
@@ -232,9 +326,16 @@ model AffiliateCouponCode {
   id          String  @id @default(uuid())
   affiliateId String  @map("affiliate_id")
   code        String  @unique
-  isPrimary   Boolean @default(true) @map("is_primary")
+  // Phase 157 — default FALSE so an accidental create() can't silently become
+  // a second "primary"; the approval flow sets isPrimary:true explicitly. A
+  // partial unique index (one primary per affiliate, WHERE is_primary=true) is
+  // created in the migration — Prisma can't express a partial @@unique inline.
+  isPrimary   Boolean @default(false) @map("is_primary")
 
   isActive      Boolean   @default(true) @map("is_active")
+  // Phase 158 — scheduled activation window. startsAt gates a future-dated
+  // campaign code (only expiresAt existed before).
+  startsAt      DateTime? @map("starts_at")
   expiresAt     DateTime? @map("expires_at")
   maxUses       Int?      @map("max_uses")
   usedCount     Int       @default(0) @map("used_count")
@@ -245,8 +346,12 @@ model AffiliateCouponCode {
   // Decoupled from commission — having a discount value here does
   // NOT affect commission base (per SRS §8.1, commission is on the
   // post-discount subtotal).
-  customerDiscountType  String?  @map("customer_discount_type") // PERCENT | FIXED
+  // Phase 158 — String? → enum (defence-in-depth) + FREE_SHIPPING.
+  customerDiscountType  AffiliateCustomerDiscountType? @map("customer_discount_type")
   customerDiscountValue Decimal? @map("customer_discount_value") @db.Decimal(10, 2)
+  // Phase 158 — cap for a PERCENT discount ("10% off, max ₹500"). Uncapped
+  // percentage on a high-value order was the headline production risk.
+  maxDiscountAmount     Decimal? @map("max_discount_amount") @db.Decimal(10, 2)
 
   // Phase F (P2.3) — discount-unification bridge. When NULL, this
   // affiliate coupon still flows through the legacy facade path;
@@ -255,14 +360,32 @@ model AffiliateCouponCode {
   // admin "Unify" endpoint creates the mirror Discount + sets this.
   discountId String? @map("discount_id")
 
+  // Phase 159b — provenance + actor for admin-created campaign codes.
+  // REGISTRATION_AUTO is the default (the primary code minted on approval);
+  // ADMIN_MANUAL is set by the create-additional-coupon endpoint so finance
+  // can distinguish system-generated from hand-added codes.
+  couponSource     AffiliateCouponSource @default(REGISTRATION_AUTO) @map("coupon_source")
+  createdByAdminId String?               @map("created_by_admin_id")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  // Phase 159c — attributions that referenced this coupon (FK back-relation).
+  referralAttributions ReferralAttribution[]
+  // Phase 159d — commissions linked to this coupon (FK back-relation).
+  commissions          AffiliateCommission[]
 
   @@index([affiliateId])
   @@index([isActive])
   @@map("affiliate_coupon_codes")
+}
+
+// Phase 159b — where a coupon row came from (audit/finance filtering).
+enum AffiliateCouponSource {
+  REGISTRATION_AUTO // primary code auto-minted on affiliate approval
+  ADMIN_MANUAL // added by an admin via the create-additional-coupon endpoint
+  CAMPAIGN // reserved for a future bulk campaign-code generator
 }
 
 // ── Referral click tracking (SRS §7.1, §7.8) ──────────────────
@@ -304,18 +427,56 @@ model Referral {
 // Created at order placement. UNIQUE on orderId — that's the
 // DB-level enforcement of SRS §9.4 ("exactly one commission per
 // order") and the basis for idempotent webhook handling.
+// Phase 159c — attribution lifecycle. ACTIVE on creation; flipped to
+// REVERSED when the order is cancelled/refunded (so reports/fraud see the
+// order no longer credits the affiliate); FRAUD_VOIDED reserved for a manual
+// fraud takedown. Commission state still lives on AffiliateCommission.
+enum ReferralAttributionStatus {
+  ACTIVE
+  REVERSED
+  FRAUD_VOIDED
+}
+
 model ReferralAttribution {
   id          String                    @id @default(uuid())
   orderId     String                    @unique @map("order_id")
   affiliateId String                    @map("affiliate_id")
   source      AffiliateCommissionSource
   code        String? // Coupon code if source=COUPON
+  // Phase 62 (2026-05-22) — customer-side identifier for the
+  // self-referral guard (audit Gap #1). Pre-Phase-62 the schema
+  // had no way to enforce "the customer placing this order isn't
+  // the affiliate themselves" at the DB level. With customerId
+  // populated we can:
+  //   1. assert customerId !== affiliate.userId server-side at
+  //      attribution time, and
+  //   2. count prior attributions for (code, affiliateId,
+  //      customerId) inside the FOR UPDATE lock to enforce
+  //      AffiliateCouponCode.perUserLimit (Gap #3).
+  customerId  String?                   @map("customer_id")
+  // Phase 159c — FK to the originating coupon row (audit: code was a bare
+  // string). Nullable: LINK-source rows and legacy rows have no coupon id.
+  couponCodeId String?                  @map("coupon_code_id")
+  // Phase 159c — attribution lifecycle (audit: no status / reversal).
+  status      ReferralAttributionStatus @default(ACTIVE)
   capturedAt  DateTime                  @default(now()) @map("captured_at")
+  updatedAt   DateTime                  @updatedAt @map("updated_at")
 
   affiliate Affiliate @relation(fields: [affiliateId], references: [id])
+  // Phase 159c — hard FK to the order (audit: orderId was a bare String).
+  // Cascade so a (currently non-existent) order hard-delete can't orphan a row.
+  order MasterOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  // Phase 159c — FK to the coupon; SetNull so deleting a coupon keeps the
+  // attribution (and its `code` string snapshot) intact.
+  couponCode AffiliateCouponCode? @relation(fields: [couponCodeId], references: [id], onDelete: SetNull)
+  // Phase 159d — the commission derived from this attribution (1:1).
+  commission AffiliateCommission?
 
   @@index([affiliateId])
   @@index([code])
+  @@index([customerId])
+  // Composite index for the perUserLimit query.
+  @@index([code, affiliateId, customerId])
   @@map("referral_attributions")
 }
 
@@ -348,6 +509,19 @@ model AffiliateCommission {
   reversedAt         DateTime? @map("reversed_at")
   holdReason         String?   @map("hold_reason") @db.Text
 
+  // Phase 159d — actor for manual transitions (null = SYSTEM/cron). Plain
+  // strings (no FK), matching the affiliate schema's other admin-actor columns
+  // (e.g. approvedById, commissionPercentageUpdatedById) which deliberately
+  // avoid cascading on admin deletion.
+  confirmedById String? @map("confirmed_by_id")
+  cancelledById String? @map("cancelled_by_id")
+  reversedById  String? @map("reversed_by_id")
+  heldById      String? @map("held_by_id")
+
+  // Phase 159d — explicit FKs (audit: linkage was implicit via shared orderId).
+  referralAttributionId String? @unique @map("referral_attribution_id")
+  couponCodeId          String? @map("coupon_code_id")
+
   // Payout linkage — null until commission is bundled into a payout request.
   // For PAID, points at the paying request. For REVERSED, stays pointing at
   // the original paying request (audit), and `reversalNettedInPayoutRequestId`
@@ -362,6 +536,12 @@ model AffiliateCommission {
   affiliate     Affiliate                       @relation(fields: [affiliateId], references: [id])
   payoutRequest AffiliatePayoutRequest?         @relation(fields: [payoutRequestId], references: [id])
   adjustments   AffiliateCommissionAdjustment[]
+  // Phase 159d — explicit FKs. order Cascade (audit: orderId was a bare
+  // String); attribution/coupon SetNull so deleting them keeps the commission
+  // (a money record) intact with its snapshotted code string.
+  order               MasterOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  referralAttribution ReferralAttribution? @relation(fields: [referralAttributionId], references: [id], onDelete: SetNull)
+  couponCode          AffiliateCouponCode? @relation(fields: [couponCodeId], references: [id], onDelete: SetNull)
 
   @@index([affiliateId, status])
   @@index([status, returnWindowEndsAt])
@@ -483,6 +663,16 @@ model AffiliatePayoutRequest {
   // e.g. "2026-27" for the FY starting Apr 2026.
   financialYear String @map("financial_year")
 
+  // Phase 159e — §194-O TDS snapshot, FROZEN at deduction time so a later PAN
+  // status change can't rewrite filed history (audit: no section/rate/PAN/
+  // quarter recorded). tdsSection records which IT-Act section was applied;
+  // tdsRateBps the exact rate (100 = 1%); panOnFileAtDeduction proves the
+  // rate choice; filingQuarter ("YYYY-Qn") drives Form 26Q aggregation.
+  tdsSection           String   @default("194O") @map("tds_section")
+  tdsRateBps           Int?     @map("tds_rate_bps")
+  panOnFileAtDeduction Boolean? @map("pan_on_file_at_deduction")
+  filingQuarter        String?  @map("filing_quarter")
+
   status AffiliatePayoutStatus @default(REQUESTED)
 
   requestedAt   DateTime  @default(now()) @map("requested_at")
@@ -490,25 +680,65 @@ model AffiliatePayoutRequest {
   approvedById  String?   @map("approved_by_id")
   processedAt   DateTime? @map("processed_at")
   paidAt        DateTime? @map("paid_at")
+  // Phase 155 — actor on the mark-paid / mark-failed transitions (approvedById
+  // already captured the approver; the audit could only answer "who approved").
+  paidById      String?   @map("paid_by_id")
+  failedById    String?   @map("failed_by_id")
   failedAt      DateTime? @map("failed_at")
   failureReason String?   @map("failure_reason") @db.Text
 
   // Bank-side reference set after the actual transfer.
   transactionRef String? @map("transaction_ref")
 
+  // Phase 154 — admin rejection (distinct from a bank-side FAILED).
+  rejectedAt      DateTime? @map("rejected_at")
+  rejectedById    String?   @map("rejected_by_id")
+  rejectionReason String?   @map("rejection_reason") @db.Text
+
+  // Phase 154 — IMMUTABLE snapshot of the payout method AS OF request time.
+  // payoutMethodId is a mutable FK; if the affiliate later edits/deletes the
+  // method, the bank file must still pay where the request was made. The
+  // builder reads the snapshot, never the live relation.
+  payoutMethodType     String? @map("payout_method_type")
+  payoutMethodSnapshot Json?   @map("payout_method_snapshot")
+
   notes String? @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  affiliate    Affiliate                   @relation(fields: [affiliateId], references: [id])
-  payoutMethod AffiliatePayoutMethodRecord @relation(fields: [payoutMethodId], references: [id])
-  commissions  AffiliateCommission[]
+  affiliate     Affiliate                   @relation(fields: [affiliateId], references: [id])
+  payoutMethod  AffiliatePayoutMethodRecord @relation(fields: [payoutMethodId], references: [id])
+  commissions   AffiliateCommission[]
+  statusHistory AffiliatePayoutRequestStatusHistory[]
+  // Phase 159e — §194-O TDS ledger entry (1:1 with the payout).
+  tds194oEntry  AffiliateTds194OLedger?
 
   @@index([affiliateId, status])
   @@index([status])
   @@index([financialYear])
+  // Phase 155 — paid-payout reporting / reconciliation by date.
+  @@index([paidAt])
   @@map("affiliate_payout_requests")
+}
+
+// Phase 154 — append-only status-transition log for a payout request, so the
+// full lifecycle (requested → approved → paid, or → rejected) is reconstructable
+// beyond the single-timestamp-per-type denorm columns.
+model AffiliatePayoutRequestStatusHistory {
+  id                 String   @id @default(uuid())
+  payoutRequestId    String   @map("payout_request_id")
+  fromStatus         String?  @map("from_status")
+  toStatus           String   @map("to_status")
+  changedByActorType String   @map("changed_by_actor_type")
+  changedByActorId   String?  @map("changed_by_actor_id")
+  reason             String?  @db.Text
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  payoutRequest AffiliatePayoutRequest @relation(fields: [payoutRequestId], references: [id], onDelete: Cascade)
+
+  @@index([payoutRequestId, createdAt])
+  @@map("affiliate_payout_request_status_history")
 }
 
 // ── TDS aggregation (SRS §15.4) ───────────────────────────────
@@ -532,4 +762,56 @@ model AffiliateTdsRecord {
   @@unique([affiliateId, financialYear])
   @@index([financialYear])
   @@map("affiliate_tds_records")
+}
+
+// Phase 159e — §194-O per-payout TDS ledger (audit: the §194-O e-commerce-
+// participant deduction needs a per-entry, quarter-tagged, PAN-snapshotted
+// trail for Form 26Q — the FY AffiliateTdsRecord above can't produce it).
+// One row per payout request; quarterly aggregation is GROUP BY filingPeriod
+// over status=WITHHELD rows. Mirrors the seller Section194OTdsLedger but kept
+// as a separate model to preserve affiliate/seller ledger isolation.
+model AffiliateTds194OLedger {
+  id              String @id @default(uuid())
+  affiliateId     String @map("affiliate_id")
+  payoutRequestId String @unique @map("payout_request_id")
+  // "YYYY-Qn": Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec, Q4=Jan-Mar (Indian FY).
+  filingPeriod    String @map("filing_period")
+
+  // Frozen PAN snapshot at deduction time.
+  panLast4     String? @map("pan_last4")
+  hadPanOnFile Boolean @default(false) @map("had_pan_on_file")
+
+  grossInPaise BigInt @map("gross_in_paise")
+  tdsInPaise   BigInt @map("tds_in_paise")
+  // 100 = 1%, 500 = 5%.
+  tdsRateBps   Int    @map("tds_rate_bps")
+
+  status Tds194OStatus @default(COMPUTED)
+
+  computedAt DateTime  @default(now()) @map("computed_at")
+  withheldAt DateTime? @map("withheld_at")
+  // Phase 159f — TDS deposit + Form 16A certificate lifecycle (mirrors the
+  // seller Section194OTdsLedger). WITHHELD → DEPOSITED (challan) →
+  // CERTIFICATE_ISSUED (Form 16A number). Actor columns are plain strings,
+  // consistent with the rest of the affiliate schema.
+  depositedAt         DateTime? @map("deposited_at")
+  depositedBy         String?   @map("deposited_by")
+  challanReference    String?   @map("challan_reference")
+  // Phase 159g — CBDT Form 26Q upload fields (NSDL RPU requires BSR code of
+  // the bank branch + the challan date, distinct from the deposit timestamp).
+  bsrCode             String?   @map("bsr_code")
+  challanDate         DateTime? @map("challan_date")
+  certificateIssuedAt DateTime? @map("certificate_issued_at")
+  certificateIssuedBy String?   @map("certificate_issued_by")
+  certificateNumber   String?   @map("certificate_number")
+  filedAt    DateTime? @map("filed_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  affiliate     Affiliate              @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  payoutRequest AffiliatePayoutRequest @relation(fields: [payoutRequestId], references: [id], onDelete: Cascade)
+
+  @@index([filingPeriod])
+  @@index([affiliateId, filingPeriod])
+  @@index([status, filingPeriod])
+  @@map("affiliate_tds_194o_ledger")
 }

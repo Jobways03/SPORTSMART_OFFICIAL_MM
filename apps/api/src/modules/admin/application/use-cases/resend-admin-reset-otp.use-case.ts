@@ -15,6 +15,10 @@ interface ResendAdminResetOtpInput {
 export class ResendAdminResetOtpUseCase {
   private static readonly OTP_EXPIRY_MINUTES = 10;
   private static readonly COOLDOWN_SECONDS = 60;
+  // Phase 26 (2026-05-20) — hourly cap parity with seller / franchise /
+  // affiliate. The admin email address is published in ADMIN_SEED_EMAIL
+  // env so a known-victim email-flood is the realistic threat model.
+  private static readonly MAX_RESENDS_PER_HOUR = 5;
 
   constructor(
     @Inject(ADMIN_REPOSITORY)
@@ -38,6 +42,14 @@ export class ResendAdminResetOtpUseCase {
       ),
     });
     if (recent) return;
+
+    // Phase 26 (2026-05-20) — hourly resend cap.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentCount = await this.adminRepo.countAdminOtpsSince(
+      admin.id,
+      oneHourAgo,
+    );
+    if (recentCount >= ResendAdminResetOtpUseCase.MAX_RESENDS_PER_HOUR) return;
 
     await this.adminRepo.invalidateActiveAdminOtps(admin.id);
 

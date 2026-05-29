@@ -1330,9 +1330,7 @@ export default function SellerProfilePage() {
               <span className="lock-icon">&#128274;</span>
               {profile.panLast4
                 ? `XXXXX${profile.panLast4}`
-                : profile.panNumber
-                  ? `XXXXX${profile.panNumber.slice(-4)}`
-                  : <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted — required to sell</span>}
+                : <span style={{ color: '#9ca3af', fontFamily: 'inherit' }}>Not submitted — required to sell</span>}
             </div>
           </div>
 

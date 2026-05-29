@@ -97,13 +97,19 @@ describe('RefundInstructionService', () => {
       }),
     };
 
+    // Phase 132 — splitCalculator (5th ctor arg, added 2026-05-16) was missing
+    // here, which made this whole suite fail to compile. createForDispute
+    // doesn't use it (single-instruction path), so a stub suffices.
+    const splitCalculator = { calculateSplit: jest.fn() };
+
     const service = new RefundInstructionService(
       prisma as never,
       env as never,
       wallet as never,
       saga as never,
+      splitCalculator as never,
     );
-    return { service, prisma, env, wallet, saga, updated };
+    return { service, prisma, env, wallet, saga, splitCalculator, updated };
   }
 
   const baseArgs = () => ({

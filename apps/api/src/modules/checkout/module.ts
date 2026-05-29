@@ -12,6 +12,9 @@ import { StockRestoreService } from '../orders/application/services/stock-restor
 import { CustomerAddressService } from './application/services/customer-address.service';
 import { CustomerOrdersService } from './application/services/customer-orders.service';
 
+// Application – jobs
+import { OrderFinalizationRecoveryCron } from './application/jobs/order-finalization-recovery.cron';
+
 // Application – facade
 import { CheckoutPublicFacade } from './application/facades/checkout-public.facade';
 
@@ -36,6 +39,15 @@ import { MoneyModule } from '../../core/money/money.module';
 import { TaxModule } from '../tax/module';
 import { forwardRef } from '@nestjs/common';
 import { CodModule } from '../cod/module';
+// Phase 67 (2026-05-22) — order.placed audit log (audit Gap #25).
+import { AuditModule } from '../audit/module';
+// Phase 69 (2026-05-22) — Phase 67 audit Gap #7. Per-seller
+// commission rate snapshot at place-order time.
+import { CommissionModule } from '../commission/module';
+// Phase 70 (2026-05-22) — Phase 66 audit Gap #3/#10, Phase 67
+// audit Gap #4. Payment entity scaffolding — populated alongside
+// the existing MasterOrder columns by the checkout flow.
+import { PaymentsModule } from '../payments/module';
 
 @Module({
   imports: [
@@ -51,6 +63,9 @@ import { CodModule } from '../cod/module';
     MoneyModule,
     forwardRef(() => TaxModule),
     CodModule,
+    AuditModule,
+    CommissionModule,
+    PaymentsModule,
   ],
   controllers: [
     CustomerAddressController,
@@ -80,6 +95,12 @@ import { CodModule } from '../cod/module';
     // import to avoid pulling the full orders surface into checkout
     // (which would introduce a transitive cycle risk).
     StockRestoreService,
+
+    // Phase 69 (2026-05-22) — Phase 67 audit Gaps #1 + #5. Cron
+    // that replays tax snapshot for orders whose post-tx work
+    // never completed (finalizedAt IS NULL). Leader-elected so
+    // a horizontally-scaled cluster only sweeps once per tick.
+    OrderFinalizationRecoveryCron,
 
     // Facade
     CheckoutPublicFacade,

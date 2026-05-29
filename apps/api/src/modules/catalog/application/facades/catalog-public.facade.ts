@@ -8,6 +8,11 @@ import {
   StockReservationResult,
   AllocateAndReserveResult,
 } from '../services/seller-allocation.service';
+import {
+  PricingResolutionService,
+  ResolveArgs,
+  ResolveResult,
+} from '../services/pricing-resolution.service';
 
 export {
   AllocationResult,
@@ -15,6 +20,7 @@ export {
   AllocatedSeller,
   AllocateAndReserveResult,
 } from '../services/seller-allocation.service';
+export type { ResolveArgs, ResolveResult } from '../services/pricing-resolution.service';
 
 @Injectable()
 export class CatalogPublicFacade {
@@ -23,7 +29,24 @@ export class CatalogPublicFacade {
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly allocationService: SellerAllocationService,
+    private readonly pricingResolution: PricingResolutionService,
   ) {}
+
+  /**
+   * Phase 44 (2026-05-21) — pricing-tier resolution. Exposed via the
+   * public facade so cart / checkout / orders modules can call it
+   * without importing catalog internals.
+   */
+  async resolveUnitPrice(args: ResolveArgs): Promise<ResolveResult> {
+    return this.pricingResolution.resolveUnitPrice(args);
+  }
+
+  async resolveBatchUnitPrices(
+    items: ReadonlyArray<ResolveArgs>,
+    at?: Date,
+  ): Promise<ResolveResult[]> {
+    return this.pricingResolution.resolveBatch(items, at);
+  }
 
   async getProductById(productId: string): Promise<unknown> {
     return this.productRepo.findByIdBasic(productId);
@@ -82,11 +105,31 @@ export class CatalogPublicFacade {
     return this.allocationService.allocate(input);
   }
 
+  /**
+   * Phase 64 (2026-05-22) — non-mutating allocator preview (audit
+   * Gaps #3 + #5). Same eligibility rules as `allocate` but skips
+   * the AllocationLog write. Used by the cart-level
+   * serviceability endpoint so a customer's cart-page polling
+   * doesn't pollute the forensic log.
+   */
+  async previewServiceability(input: {
+    productId: string;
+    variantId?: string;
+    customerPincode: string;
+    quantity: number;
+  }): Promise<AllocationResult> {
+    return this.allocationService.previewServiceability(input);
+  }
+
   async reserveStock(input: {
     mappingId: string;
     quantity: number;
     orderId?: string;
     expiresInMinutes?: number;
+    // Phase 52 polish (2026-05-21) — attribution passthrough.
+    customerId?: string | null;
+    sessionId?: string | null;
+    cartId?: string | null;
   }): Promise<StockReservationResult> {
     return this.allocationService.reserveStock(input);
   }
@@ -105,6 +148,10 @@ export class CatalogPublicFacade {
     orderId?: string;
     expiresInMinutes?: number;
     excludeMappingIds?: string[];
+    // Phase 77 — attribution passthrough (Phase 52 invariant).
+    customerId?: string | null;
+    sessionId?: string | null;
+    cartId?: string | null;
   }): Promise<AllocateAndReserveResult> {
     return this.allocationService.allocateAndReserve(input);
   }
@@ -115,6 +162,20 @@ export class CatalogPublicFacade {
 
   async confirmReservation(reservationId: string, orderId?: string): Promise<void> {
     return this.allocationService.confirmReservation(reservationId, orderId);
+  }
+
+  /**
+   * Phase 69 (2026-05-22) — Phase 68 audit Gap #8. Idempotent
+   * stock-reservation guarantor used by orders.service.verifyOrder.
+   * See seller-allocation.service.ts for the contract.
+   */
+  async ensureConfirmedReservationAtVerify(input: {
+    orderId: string;
+    mappingId: string;
+    quantity: number;
+    customerId?: string | null;
+  }): Promise<{ reservationId: string; reused: boolean }> {
+    return this.allocationService.ensureConfirmedReservationAtVerify(input);
   }
 
   async reallocate(input: {

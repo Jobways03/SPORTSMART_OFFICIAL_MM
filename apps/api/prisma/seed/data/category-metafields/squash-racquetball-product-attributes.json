@@ -1,0 +1,230 @@
+{
+  "squash-racquets": [
+    {
+      "key": "racquet_shape",
+      "name": "Racquet Shape",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Teardrop", "Open Throat", "Closed Throat", "Power Bridge"]
+    },
+    {
+      "key": "weight_g",
+      "name": "Weight (g)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Under 120", "120-130", "130-140", "140-150", "150-170", "170+"]
+    },
+    {
+      "key": "balance",
+      "name": "Balance",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Head Light", "Even Balance", "Head Heavy"]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Beginner", "Intermediate", "Advanced", "Professional"]
+    },
+    {
+      "key": "head_size_sq_cm",
+      "name": "Head Size (sq cm)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Under 470", "470-490", "490-500", "500+"]
+    }
+  ],
+  "racquetball-racquets": [
+    {
+      "key": "racquet_shape",
+      "name": "Racquet Shape",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Teardrop", "Quadriform", "Wide Body"]
+    },
+    {
+      "key": "weight_g",
+      "name": "Weight (g)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Under 150", "150-170", "170-185", "185-200", "200+"]
+    },
+    {
+      "key": "grip_size",
+      "name": "Grip Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["SS (3 5/8)", "S (3 3/4)", "M (3 7/8)", "L (4)"]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["Beginner", "Intermediate", "Advanced", "Professional"]
+    }
+  ],
+  "squash-balls": [
+    {
+      "key": "ball_speed",
+      "name": "Ball Speed (Dot)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Double Yellow Dot (Super Slow)", "Yellow Dot (Slow)", "White Dot / Green Dot (Medium)", "Red Dot (Fast)", "Blue Dot (Very Fast)"]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Single", "3 Pack", "6 Pack", "12 Pack"]
+    }
+  ],
+  "racquetball-balls": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Blue (Standard)", "Green (Fast)", "Red (Extra Fast)", "Purple (Super Fast)", "Black (Outdoor)"]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Single", "3 Pack", "6 Pack", "12 Pack"]
+    }
+  ],
+  "squash-racquetball-shoes": [
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Squash Shoes", "Racquetball Shoes", "Indoor Court Shoes"]
+    },
+    {
+      "key": "sole_type",
+      "name": "Sole Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Non-Marking Gum", "Non-Marking Rubber"]
+    },
+    {
+      "key": "target_gender",
+      "name": "Gender",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Men", "Women", "Unisex"]
+    },
+    {
+      "key": "size",
+      "name": "Size (UK)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"]
+    },
+    {
+      "key": "cushioning",
+      "name": "Cushioning",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": ["Standard", "Enhanced", "Gel", "Foam"]
+    }
+  ],
+  "squash-racquetball-strings": [
+    {
+      "key": "string_material",
+      "name": "String Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Multifilament", "Monofilament", "Natural Gut", "Synthetic Gut"]
+    },
+    {
+      "key": "gauge_mm",
+      "name": "Gauge (mm)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["1.10-1.15", "1.15-1.20", "1.20-1.25", "1.25-1.30"]
+    },
+    {
+      "key": "string_length_m",
+      "name": "String Length (m)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["10", "12", "110 (Reel)", "200 (Reel)"]
+    }
+  ],
+  "squash-racquetball-grips": [
+    {
+      "key": "grip_type",
+      "name": "Grip Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Replacement Grip", "Overgrip"]
+    },
+    {
+      "key": "texture",
+      "name": "Texture",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["Tacky", "Dry Feel", "Cushioned", "Perforated"]
+    },
+    {
+      "key": "quantity",
+      "name": "Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": ["Single", "3 Pack", "12 Pack"]
+    }
+  ],
+  "squash-racquetball-eyewear": [
+    {
+      "key": "lens_type",
+      "name": "Lens Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Clear", "Tinted", "Prescription Compatible"]
+    },
+    {
+      "key": "certification",
+      "name": "Certification",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": ["ASTM F803", "CSA", "WSF Approved"]
+    },
+    {
+      "key": "anti_fog",
+      "name": "Anti-Fog",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    }
+  ],
+  "squash-racquetball-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Single Racquet Cover", "2-3 Racquet Bag", "6 Racquet Bag", "Backpack", "Tote"]
+    },
+    {
+      "key": "thermal_lining",
+      "name": "Thermal Lining",
+      "type": "BOOLEAN",
+      "sortOrder": 2
+    }
+  ],
+  "squash-racquetball-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 1,
+      "choices": ["Wristband", "Headband", "Glove", "Vibration Dampener", "Ball Retriever"]
+    }
+  ]
+}

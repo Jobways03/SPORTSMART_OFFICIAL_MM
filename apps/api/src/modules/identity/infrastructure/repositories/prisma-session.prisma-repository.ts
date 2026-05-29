@@ -72,6 +72,10 @@ export class PrismaSessionRepository implements SessionRepository {
         previousRefreshTokenHash: current?.refreshToken ?? null,
         refreshToken: hashRefreshToken(newRefreshToken),
         expiresAt: newExpiresAt,
+        // Phase 17 (2026-05-20) — bump lastUsedAt on every rotate so
+        // the inactive-session sweep + the /account/sessions UI can
+        // tell active sessions from dormant ones.
+        lastUsedAt: new Date(),
       },
     }) as Promise<SessionRecord>;
   }
@@ -93,9 +97,22 @@ export class PrismaSessionRepository implements SessionRepository {
     userAgent: string | null;
     ipAddress: string | null;
     expiresAt: Date;
+    deviceLabel?: string | null;
   }): Promise<SessionRecord> {
     return this.prisma.session.create({
-      data: { ...data, refreshToken: hashRefreshToken(data.refreshToken) },
+      data: {
+        userId: data.userId,
+        refreshToken: hashRefreshToken(data.refreshToken),
+        userAgent: data.userAgent,
+        ipAddress: data.ipAddress,
+        expiresAt: data.expiresAt,
+        // Phase 17 (2026-05-20) — operator-friendly device label.
+        deviceLabel: data.deviceLabel ?? null,
+        // Stamp lastUsedAt at creation too, so a fresh session has
+        // a non-null value the moment it's minted (no UI dash on
+        // brand-new sessions).
+        lastUsedAt: new Date(),
+      },
     }) as Promise<SessionRecord>;
   }
 

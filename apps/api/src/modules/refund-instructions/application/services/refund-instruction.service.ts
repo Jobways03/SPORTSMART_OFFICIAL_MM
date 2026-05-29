@@ -7,6 +7,7 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { ConflictAppException } from '../../../../core/exceptions';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { RefundSagaService } from '../../../payments-saga/application/services/refund-saga.service';
 import type { SagaStep } from '../../../payments-saga/domain/saga-step.types';
@@ -364,6 +365,22 @@ export class RefundInstructionService {
    * instruction is in any other state (idempotent on already-approved:
    * if it's already SUCCESS, return as-is; if it's CANCELLED, throw).
    *
+   * Phase 125 — dual-approval (two-person rule). Refunds at/above
+   * REFUND_DUAL_APPROVAL_THRESHOLD_PAISE require TWO distinct finance
+   * approvers (separation of duties — the same control banks apply to
+   * high-value disbursements). The first approval is *recorded* but does
+   * NOT release money: firstApprovedBy is stamped and the instruction
+   * stays PENDING_APPROVAL. Only a second approval by a DIFFERENT admin
+   * flips it to PROCESSING and runs the saga. The same admin approving
+   * twice is rejected (409). The release flip is a compare-and-swap on
+   * status so two distinct second-approvers racing can't double-run the
+   * saga. Below the threshold the legacy single-approval path is intact.
+   *
+   * The boolean `pendingSecondApproval` on the returned object lets the
+   * controller word its response + audit row correctly ("first approval
+   * recorded" vs "approved — executing"). It's a transient annotation,
+   * not a persisted column.
+   *
    * Source-aware: dispute approvals don't touch the dispute row (the
    * decision was already final); return approvals additionally flip
    * the linked Return from REFUND_PROCESSING → REFUNDED on success so
@@ -372,7 +389,7 @@ export class RefundInstructionService {
   async approveByFinance(args: {
     instructionId: string;
     adminId: string;
-  }): Promise<RefundInstruction> {
+  }): Promise<RefundInstruction & { pendingSecondApproval?: boolean }> {
     const row = await this.prisma.refundInstruction.findUnique({
       where: { id: args.instructionId },
     });
@@ -381,7 +398,7 @@ export class RefundInstructionService {
     }
     if (row.status === 'SUCCESS') return row;
     if (row.status !== 'PENDING_APPROVAL') {
-      throw new Error(
+      throw new ConflictAppException(
         `RefundInstruction ${args.instructionId} is ${row.status}, not PENDING_APPROVAL — cannot approve`,
       );
     }
@@ -391,17 +408,92 @@ export class RefundInstructionService {
       );
     }
 
-    // Stamp approval + flip to PROCESSING, then run saga.
-    const claimed = await this.prisma.refundInstruction.update({
-      where: { id: args.instructionId },
+    // ── Phase 125 — dual-approval gate ─────────────────────────────────
+    const dualThreshold = this.env.getNumber(
+      'REFUND_DUAL_APPROVAL_THRESHOLD_PAISE',
+      10_000_000, // ₹1,00,000
+    );
+    const requiresDual = Number(row.amountInPaise) >= dualThreshold;
+
+    if (requiresDual) {
+      // Stage 1 — no first approver yet: record this admin as the first
+      // approver and HOLD. CAS on firstApprovedBy=null so two concurrent
+      // "first approvals" can't both win the slot.
+      if (!row.firstApprovedBy) {
+        const claim = await this.prisma.refundInstruction.updateMany({
+          where: {
+            id: args.instructionId,
+            status: 'PENDING_APPROVAL',
+            firstApprovedBy: null,
+          },
+          data: {
+            firstApprovedBy: args.adminId,
+            firstApprovedAt: new Date(),
+          },
+        });
+        if (claim.count === 1) {
+          const held = await this.prisma.refundInstruction.findUnique({
+            where: { id: args.instructionId },
+          });
+          this.logger.log(
+            `RefundInstruction ${args.instructionId}: first approval recorded by ` +
+              `admin ${args.adminId} (amount=₹${(Number(row.amountInPaise) / 100).toFixed(2)}) ` +
+              `— a second, distinct approver is required before the refund executes`,
+          );
+          return { ...(held as RefundInstruction), pendingSecondApproval: true };
+        }
+        // Lost the race for the first-approval slot — another admin became
+        // the first approver. Re-read and fall through to the SoD check so
+        // we treat this caller as the (potential) second approver.
+        const fresh = await this.prisma.refundInstruction.findUnique({
+          where: { id: args.instructionId },
+        });
+        if (!fresh || fresh.status !== 'PENDING_APPROVAL') {
+          throw new ConflictAppException(
+            `RefundInstruction ${args.instructionId} is no longer awaiting approval`,
+          );
+        }
+        row.firstApprovedBy = fresh.firstApprovedBy;
+      }
+
+      // Stage 2 — separation of duties: the second approver must differ
+      // from the first.
+      if (row.firstApprovedBy === args.adminId) {
+        throw new ConflictAppException(
+          'Separation of duties: this high-value refund needs a second, ' +
+            'distinct approver — you recorded the first approval.',
+        );
+      }
+    }
+
+    // Stamp approval + flip to PROCESSING via CAS, then run saga. The
+    // CAS (status: PENDING_APPROVAL in the WHERE) guarantees exactly one
+    // releaser even if two distinct admins approve concurrently.
+    const release = await this.prisma.refundInstruction.updateMany({
+      where: { id: args.instructionId, status: 'PENDING_APPROVAL' },
       data: {
         status: 'PROCESSING',
         approvedBy: args.adminId,
         approvedAt: new Date(),
       },
     });
+    if (release.count === 0) {
+      const fresh = await this.prisma.refundInstruction.findUnique({
+        where: { id: args.instructionId },
+      });
+      if (fresh && fresh.status === 'SUCCESS') return fresh;
+      throw new ConflictAppException(
+        `RefundInstruction ${args.instructionId} was already actioned by another approver`,
+      );
+    }
+    const claimed = (await this.prisma.refundInstruction.findUnique({
+      where: { id: args.instructionId },
+    })) as RefundInstruction;
     this.logger.log(
-      `RefundInstruction ${claimed.id} approved by admin ${args.adminId} — running saga`,
+      `RefundInstruction ${claimed.id} approved by admin ${args.adminId} — running saga` +
+        (requiresDual
+          ? ` (dual-approval: first=${claimed.firstApprovedBy}, second=${args.adminId})`
+          : ''),
     );
 
     const labelPrefix = claimed.sourceType === 'RETURN' ? 'return' : 'dispute';
@@ -628,6 +720,11 @@ export class RefundInstructionService {
       sourceId: src.sourceId,
       customerId: src.customerId,
       amountInPaise: src.amountInPaise,
+      // Phase 96 (2026-05-23) — Phase 99 audit Gap #11 / #15 closure.
+      // Thread idempotencyKey + instructionId so the saga executor
+      // can dedupe via @@unique([idempotencyKey]) at the DB layer.
+      idempotencyKey: idempotencyKey,
+      instructionId: instruction.id,
       context: {
         instructionId: instruction.id,
         customerId: src.customerId,

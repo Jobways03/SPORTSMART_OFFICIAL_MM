@@ -65,6 +65,21 @@ export class LoginFranchiseUseCase {
       throw new ForbiddenAppException('Account has been suspended or deactivated. Please contact support.');
     }
 
+    // Phase 20 (2026-05-20) — block login for franchises whose email
+    // has not been verified yet. The pre-Phase-20 use case allowed
+    // PENDING franchises to log in regardless of verification state,
+    // which contradicted the audit's "login should be blocked until
+    // verification" expectation. Now: verification first (via the
+    // public /franchise/auth/verify-email endpoint), login second.
+    // The frontend reads `code: EMAIL_NOT_VERIFIED` to route the
+    // user to /register/verify with their email pre-filled.
+    if (!franchise.isEmailVerified) {
+      throw new ForbiddenAppException(
+        'Your email is not verified. Please check your inbox or request a new verification code.',
+        'EMAIL_NOT_VERIFIED',
+      );
+    }
+
     // Check lockout
     if (franchise.lockUntil && franchise.lockUntil > new Date()) {
       const remainingMs = franchise.lockUntil.getTime() - Date.now();
@@ -189,6 +204,10 @@ export class LoginFranchiseUseCase {
         phoneNumber: franchise.phoneNumber,
         roles: ['FRANCHISE'],
         status: franchise.status,
+        // Phase 20 (2026-05-20) — surface verification state to the
+        // frontend so the dashboard can show "pending KYC" guidance.
+        // Login already enforces isEmailVerified === true above.
+        isEmailVerified: franchise.isEmailVerified,
       },
     };
   }

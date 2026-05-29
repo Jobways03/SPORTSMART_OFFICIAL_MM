@@ -64,21 +64,29 @@ export interface FranchiseInventoryRepository {
     },
   ): Promise<{ entries: any[]; total: number }>;
 
-  // Atomic stock + ledger transaction (the core operation)
-  adjustStockWithLedger(params: {
-    franchiseId: string;
-    productId: string;
-    variantId: string | null;
-    globalSku: string;
-    movementType: string;
-    quantityDelta: number;
-    referenceType: string;
-    referenceId?: string;
-    remarks?: string;
-    actorType: string;
-    actorId?: string;
-    updateField: 'onHandQty' | 'reservedQty' | 'damagedQty' | 'inTransitQty';
-  }): Promise<{ stock: any; ledgerEntry: any }>;
+  // Atomic stock + ledger transaction (the core operation).
+  //
+  // Phase 55 (2026-05-21) — optional `tx` so an outer transaction
+  // (e.g. procurement.confirmReceipt) can compose this call without
+  // opening a nested transaction. When `tx` is provided we use it
+  // directly; otherwise we open our own $transaction.
+  adjustStockWithLedger(
+    params: {
+      franchiseId: string;
+      productId: string;
+      variantId: string | null;
+      globalSku: string;
+      movementType: string;
+      quantityDelta: number;
+      referenceType: string;
+      referenceId?: string;
+      remarks?: string;
+      actorType: string;
+      actorId?: string;
+      updateField: 'onHandQty' | 'reservedQty' | 'damagedQty' | 'inTransitQty';
+    },
+    tx?: import('@prisma/client').Prisma.TransactionClient,
+  ): Promise<{ stock: any; ledgerEntry: any }>;
 
   // Bulk stock initialization (for procurement receipt)
   initializeStock(

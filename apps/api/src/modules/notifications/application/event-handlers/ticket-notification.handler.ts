@@ -4,6 +4,7 @@ import type { DomainEvent } from '../../../../bootstrap/events/domain-event.inte
 import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
 import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
 import { NotificationsPublicFacade } from '../facades/notifications-public.facade';
+import { safeHtml } from '../../../../core/util/escape-html';
 
 interface TicketReplyPayload {
   ticketId: string;
@@ -17,6 +18,37 @@ interface TicketReplyPayload {
   senderType: 'ADMIN';
   senderName: string;
   messagePreview: string;
+}
+
+interface TicketStatusChangedPayload {
+  ticketId: string;
+  ticketNumber: string;
+  ticketSubject: string;
+  fromStatus: string;
+  toStatus: string;
+  changedByAdminId?: string;
+  recipientType: 'CUSTOMER' | 'SELLER' | 'FRANCHISE' | 'AFFILIATE';
+  recipientEmail: string;
+  recipientName: string;
+}
+
+interface TicketAssignedPayload {
+  ticketId: string;
+  ticketNumber: string;
+  assigneeId: string;
+  assigneeEmail: string;
+  assigneeName: string;
+  assignedByAdminId?: string | null;
+}
+
+interface TicketPriorityChangedPayload {
+  ticketId: string;
+  ticketNumber: string;
+  fromPriority: string;
+  toPriority: string;
+  assigneeId: string;
+  assigneeEmail: string;
+  assigneeName: string;
 }
 
 @Injectable()
@@ -63,6 +95,95 @@ export class TicketNotificationHandler {
     } catch (err) {
       this.logger.error(
         `Failed ticket reply notification: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Fires on an explicit admin status transition. Emails the ticket creator
+   * when the ticket reaches a customer-relevant terminal state (RESOLVED /
+   * CLOSED), using the snapshotted creator email so no polymorphic-actor
+   * lookup is needed. Other transitions are internal workflow and don't email.
+   */
+  @OnEvent('tickets.status.changed')
+  @IdempotentHandler()
+  async onTicketStatusChanged(event: DomainEvent<TicketStatusChangedPayload>) {
+    const p = event.payload;
+    if (p.toStatus !== 'RESOLVED' && p.toStatus !== 'CLOSED') return;
+    if (!p.recipientEmail) return;
+
+    const verb = p.toStatus === 'RESOLVED' ? 'resolved' : 'closed';
+    const ticketUrl = this.deepLinkForActor(p.recipientType, p.ticketId);
+    try {
+      await this.notifications.notify({
+        channel: 'EMAIL',
+        to: p.recipientEmail,
+        subject: `Your support ticket ${p.ticketNumber} was ${verb}`,
+        body: safeHtml`<p>Hi ${p.recipientName},</p><p>Your support ticket <strong>${p.ticketNumber}</strong> (&ldquo;${p.ticketSubject}&rdquo;) has been ${verb}.</p><p><a href="${ticketUrl}">View your ticket</a></p>`,
+        eventType: 'tickets.status.notification',
+        eventId: p.ticketId,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed ticket status notification: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Fires when a ticket is assigned to an admin — emails the assignee so a
+   * newly-routed ticket doesn't sit unseen. Un-assign publishes no event.
+   */
+  @OnEvent('tickets.assigned')
+  @IdempotentHandler()
+  async onTicketAssigned(event: DomainEvent<TicketAssignedPayload>) {
+    const p = event.payload;
+    if (!p.assigneeEmail) return;
+    const adminBase = process.env.ADMIN_PORTAL_URL ?? '';
+    const ticketUrl = `${adminBase}/dashboard/support/${p.ticketId}`;
+    try {
+      await this.notifications.notify({
+        channel: 'EMAIL',
+        to: p.assigneeEmail,
+        subject: `Support ticket ${p.ticketNumber} assigned to you`,
+        body: safeHtml`<p>Hi ${p.assigneeName},</p><p>Support ticket <strong>${p.ticketNumber}</strong> has been assigned to you.</p><p><a href="${ticketUrl}">Open the ticket</a></p>`,
+        eventType: 'tickets.assigned.notification',
+        eventId: p.ticketId,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed ticket assignment notification: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Phase 131 — fires when a ticket is ESCALATED (priority raised). Only the
+   * current assignee is notified, and the service emits nothing on
+   * de-escalations or self-made changes — so any event here is a genuine
+   * heads-up that their ticket just got more urgent.
+   */
+  @OnEvent('tickets.priority.changed')
+  @IdempotentHandler()
+  async onTicketPriorityChanged(
+    event: DomainEvent<TicketPriorityChangedPayload>,
+  ) {
+    const p = event.payload;
+    if (!p.assigneeEmail) return;
+    const adminBase = process.env.ADMIN_PORTAL_URL ?? '';
+    const ticketUrl = `${adminBase}/dashboard/support/${p.ticketId}`;
+    try {
+      await this.notifications.notify({
+        channel: 'EMAIL',
+        to: p.assigneeEmail,
+        subject: `Support ticket ${p.ticketNumber} escalated to ${p.toPriority}`,
+        body: safeHtml`<p>Hi ${p.assigneeName},</p><p>Support ticket <strong>${p.ticketNumber}</strong> assigned to you has been escalated from <strong>${p.fromPriority}</strong> to <strong>${p.toPriority}</strong>.</p><p><a href="${ticketUrl}">Open the ticket</a></p>`,
+        eventType: 'tickets.priority.notification',
+        eventId: p.ticketId,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed ticket escalation notification: ${(err as Error).message}`,
       );
     }
   }

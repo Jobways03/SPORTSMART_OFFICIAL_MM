@@ -73,6 +73,10 @@ const [filters, setFilters] = useState<FilterConfig[]>([]);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [tab, setTab] = useState<'manual' | 'auto'>('auto');
+  // Phase 40 (2026-05-21) — Gap #16. "Show inactive" toggle. Default off
+  // so the manual list shows only active filters; admins toggle ON
+  // when they want to find a previously-disabled filter to re-enable.
+  const [showInactive, setShowInactive] = useState(false);
 
   const [form, setForm] = useState({
     source: 'built_in' as 'built_in' | 'metafield',
@@ -89,11 +93,15 @@ const [filters, setFilters] = useState<FilterConfig[]>([]);
   const loadFilters = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await adminMetafieldsService.listFilters();
+      // Phase 40 — when showInactive=false, ask the backend for only
+      // active rows. When ON, omit the filter so both active +
+      // inactive come back.
+      const params = showInactive ? undefined : { isActive: 'true' as const };
+      const res = await adminMetafieldsService.listFilters(params);
       if (res.data?.filters) setFilters(res.data.filters);
     } catch {}
     setLoading(false);
-  }, []);
+  }, [showInactive]);
 
   const loadDefinitions = useCallback(async () => {
     try {
@@ -304,6 +312,23 @@ const [filters, setFilters] = useState<FilterConfig[]>([]);
           </div>
         </div>
       </div>
+
+      {/* Phase 40 (2026-05-21) — Show Inactive toggle (Gap #16). Only
+          surfaces on the Manual tab so it doesn't muddle the auto-gen
+          preview. */}
+      {tab === 'manual' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              style={{ width: 14, height: 14, accentColor: '#2563eb' }}
+            />
+            Show inactive filters
+          </label>
+        </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 0, marginBottom: 0, borderBottom: '2px solid #e5e7eb' }}>

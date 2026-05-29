@@ -154,10 +154,10 @@ export default function EditProductPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Duplicate detection state
-  const [duplicateProduct, setDuplicateProduct] = useState<any>(null);
-  const [duplicateLoading, setDuplicateLoading] = useState(false);
-  const [merging, setMerging] = useState(false);
+  // Phase 32 (2026-05-21) — duplicate detection / merge state removed.
+  // Backend endpoints (POST /:id/merge-into/:targetId,
+  // GET /:id/duplicate-info) do not exist; the UI was hitting 404 in
+  // production. See admin-products.service.ts for the same removal.
 
   // ----- Toast helper -----
 
@@ -249,38 +249,9 @@ export default function EditProductPage() {
     }
   }, [productId, populateForm, router]);
 
-  const loadDuplicateInfo = useCallback(async () => {
-    setDuplicateLoading(true);
-    try {
-      const res = await adminProductsService.getDuplicateInfo(productId);
-      if (res.data) {
-        setDuplicateProduct(res.data);
-      }
-    } catch {
-      // Non-critical
-    } finally {
-      setDuplicateLoading(false);
-    }
-  }, [productId]);
-
-  const handleMerge = async (targetId: string) => {if (!(await confirmDialog('Are you sure you want to merge this product into the existing one? This will archive the current product and create seller mappings on the target product.'))) return;
-    setMerging(true);
-    try {
-      await adminProductsService.mergeProduct(productId, targetId);
-      showToast('success', 'Product merged successfully. The seller has been mapped to the existing product.');
-      await loadProduct();
-    } catch (err: any) {
-      showToast('error', err?.message || 'Failed to merge products.');
-    } finally {
-      setMerging(false);
-    }
-  };
-
-  useEffect(() => {
-    if (product && (product as any).potentialDuplicateOf) {
-      loadDuplicateInfo();
-    }
-  }, [product, loadDuplicateInfo]);
+  // Phase 32 (2026-05-21) — loadDuplicateInfo / handleMerge removed.
+  // The backend endpoints they called do not exist. See file header
+  // for full rationale.
 
   useEffect(() => {
     async function loadData() {
@@ -844,20 +815,23 @@ export default function EditProductPage() {
       );
     }
 
-    // Moderation status for seller-submitted products
+    // Moderation status for seller-submitted products.
+    // Phase 32 (2026-05-21) — prefer structured columns.
     if (moderation === 'REJECTED') {
+      const note = (product as any).rejectionReason ?? product.moderationNote;
       return (
         <div className="status-banner rejected">
           <strong>Rejected</strong>
-          {product.moderationNote && <> &mdash; {product.moderationNote}</>}
+          {note && <> &mdash; {note}</>}
         </div>
       );
     }
     if (moderation === 'CHANGES_REQUESTED') {
+      const note = (product as any).changeRequestNote ?? product.moderationNote;
       return (
         <div className="status-banner changes-requested">
           <strong>Changes Requested</strong>
-          {product.moderationNote && <> &mdash; {product.moderationNote}</>}
+          {note && <> &mdash; {note}</>}
         </div>
       );
     }
@@ -989,106 +963,12 @@ export default function EditProductPage() {
         </div>
       )}
 
-      {/* Duplicate Warning Card */}
-      {(product as any).potentialDuplicateOf && duplicateProduct && (
-        <div className="form-card" style={{ marginBottom: 16, border: '2px solid #f59e0b', background: '#fffbeb' }}>
-          <div className="form-card-title" style={{ color: '#92400e' }}>
-            &#9888; DUPLICATE WARNING
-          </div>
-          <p style={{ fontSize: 14, marginBottom: 16, color: '#78350f' }}>
-            This product may be a duplicate of an existing product in the catalog. Review the comparison below.
-          </p>
-
-          {duplicateLoading ? (
-            <p style={{ fontSize: 13, color: '#92400e' }}>Loading duplicate details...</p>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 16 }}>
-              {/* Submitted product */}
-              <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 8 }}>
-                  Submitted Product
-                </div>
-                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>{product.title}</div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                  Brand: {(product as any).brand?.name || 'N/A'}
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>
-                  Category: {(product as any).category?.name || 'N/A'}
-                </div>
-                {product.images && product.images.length > 0 && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {product.images.slice(0, 3).map((img: any) => (
-                      <img
-                        key={img.id}
-                        src={img.url}
-                        alt={product.title}
-                        style={{ width: 60, height: 60, objectFit: 'cover' as const, borderRadius: 6, border: '1px solid #e5e7eb' }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Existing product */}
-              <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fff' }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' as const, marginBottom: 8 }}>
-                  Existing Product
-                </div>
-                <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>{duplicateProduct.title}</div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                  Brand: {duplicateProduct.brandName || 'N/A'}
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 4 }}>
-                  Category: {duplicateProduct.categoryName || 'N/A'}
-                </div>
-                <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 8 }}>
-                  Status: {duplicateProduct.status} | Code: {duplicateProduct.productCode || 'N/A'}
-                </div>
-                {duplicateProduct.images && duplicateProduct.images.length > 0 && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {duplicateProduct.images.slice(0, 3).map((img: any) => (
-                      <img
-                        key={img.id}
-                        src={img.url}
-                        alt={duplicateProduct.title}
-                        style={{ width: 60, height: 60, objectFit: 'cover' as const, borderRadius: 6, border: '1px solid #e5e7eb' }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button
-              type="button"
-              className="form-btn primary"
-              style={{ background: '#16a34a' }}
-              onClick={handleApprove}
-            >
-              Approve as New Product
-            </button>
-            <button
-              type="button"
-              className="form-btn"
-              style={{ background: '#2563eb', color: '#fff', border: 'none' }}
-              onClick={() => handleMerge(duplicateProduct.id)}
-              disabled={merging}
-            >
-              {merging ? 'Merging...' : 'Merge into Existing'}
-            </button>
-            <button
-              type="button"
-              className="form-btn"
-              style={{ background: '#dc2626', color: '#fff', border: 'none' }}
-              onClick={() => setActiveModal('reject')}
-            >
-              Reject as Duplicate
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Phase 32 (2026-05-21) — duplicate-warning card + merge buttons
+          removed. The supporting backend endpoints (POST :id/merge-into
+          /:targetId, GET :id/duplicate-info) do not exist; admins
+          clicking the buttons received 404s in production. If a
+          merge-into-duplicate feature is reintroduced it needs the
+          schema additions sketched in the Phase 31 audit report §13. */}
 
       {/* Section 1: Basic Info */}
       <div className="form-card">

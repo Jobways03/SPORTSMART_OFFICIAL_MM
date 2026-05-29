@@ -174,3 +174,69 @@
   color: var(--color-primary);
   font-weight: 500;
 }
+
+/* OTP verification page — mirror forgot-password verify styles ──── */
+.auth-subtitle {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin: 4px 0 0 0;
+}
+
+.otp-inputs {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.otp-inputs input {
+  width: 48px;
+  height: 56px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 600;
+  padding: 0;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.15s;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.otp-inputs input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.otp-inputs input[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+
+.otp-inputs input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.resend-row {
+  text-align: center;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.resend-btn {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+}
+
+.resend-btn:disabled {
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+}

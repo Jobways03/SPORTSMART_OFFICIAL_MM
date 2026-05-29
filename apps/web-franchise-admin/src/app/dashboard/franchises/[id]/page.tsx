@@ -461,7 +461,7 @@ export default function AdminFranchiseDetailPage() {
           <span className={getVerificationBadgeClass(franchise.verificationStatus)}>
             {formatStatus(franchise.verificationStatus)}
           </span>
-          {/* Quick link to delivery-method entitlements (iThink / Self) */}
+          {/* Quick link to delivery-method entitlements (Self Delivery) */}
           <button
             type="button"
             onClick={() => router.push(`/dashboard/franchises/${franchise.id}/delivery-methods`)}

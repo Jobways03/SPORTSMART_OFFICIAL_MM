@@ -11,10 +11,7 @@ interface SubOrder {
   paymentStatus: string;
   fulfillmentStatus: string;
   acceptStatus: string;
-  deliveryMethod?: 'ITHINK_LOGISTICS' | 'SELF_DELIVERY' | null;
-  ithinkAwb?: string | null;
-  ithinkLogistic?: string | null;
-  ithinkTrackingUrl?: string | null;
+  deliveryMethod?: 'SELF_DELIVERY' | null;
   selfDeliveryStatus?: string | null;
   seller: { id: string; sellerName: string; sellerShopName: string; email: string } | null;
   items: { productTitle: string; quantity: number }[];
@@ -564,21 +561,10 @@ function OrderRow({
             const methods = new Set(relevantSubs.map((s) => s.deliveryMethod ?? null));
             if (methods.size === 1) {
               const so = relevantSubs[0];
-              return (
-                <DeliveryMethodBadge
-                  method={so?.deliveryMethod ?? null}
-                  awb={so?.ithinkAwb}
-                  courier={so?.ithinkLogistic}
-                />
-              );
+              return <DeliveryMethodBadge method={so?.deliveryMethod ?? null} />;
             }
             return relevantSubs.map((so) => (
-              <DeliveryMethodBadge
-                key={so.id}
-                method={so.deliveryMethod ?? null}
-                awb={so.ithinkAwb}
-                courier={so.ithinkLogistic}
-              />
+              <DeliveryMethodBadge key={so.id} method={so.deliveryMethod ?? null} />
             ));
           })()}
         </div>

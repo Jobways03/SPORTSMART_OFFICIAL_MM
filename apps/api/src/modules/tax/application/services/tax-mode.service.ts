@@ -29,12 +29,38 @@
 // All reads cache via TaxConfigService's 60-second TTL — the service
 // is hot-path safe.
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { TaxConfigService } from './tax-config.service';
 
 export type TaxMode = 'OFF' | 'AUDIT' | 'STRICT';
+
+// Phase 159w (audit B3/#9/#16) — centralised audit action + module for tax-mode
+// changes. The admin History UI queries
+// /admin/audit?module=tax-mode (action TAX_MODE_CHANGED); keep these in lockstep.
+export const TAX_MODE_AUDIT_ACTION = 'TAX_MODE_CHANGED';
+export const TAX_MODE_AUDIT_MODULE = 'tax-mode';
+
+export interface TaxModeInfo {
+  mode: TaxMode;
+  /**
+   * Phase 159w (audit #14) — 'db' when a tax_config row drives the mode; 'env'
+   * when only the boot-time env fallback is in effect (no rows seeded). Lets
+   * the admin UI warn "mode is coming from env, not the DB you're editing."
+   */
+  source: 'db' | 'env';
+}
+
+export interface SetTaxModeOptions {
+  reason?: string | null;
+  /** True when an admin overrode the AUDIT-readiness gate to enter STRICT. */
+  forced?: boolean;
+  /** TaxAuditReadinessService.totalBlockers at flip time (for the history row). */
+  blockerCount?: number;
+}
 
 export interface TaxModeViolation {
   /** Logical group — e.g. 'product.hsn', 'seller.gstin', 'invoice.rate'. */
@@ -60,13 +86,23 @@ export class TaxModeService {
     private readonly env: EnvService,
     private readonly taxConfig: TaxConfigService,
     private readonly prisma: PrismaService,
+    // @Optional so the many specs that construct this service directly keep
+    // compiling; both are @Global and always injected in the running app.
+    @Optional() private readonly eventBus?: EventBusService,
+    @Optional() private readonly audit?: AuditPublicFacade,
   ) {}
 
   /**
-   * Read the current mode. tax_config takes precedence; env is the
-   * boot-time fallback when the row is missing.
+   * Read the current mode. Phase 159w (audit #7): the authoritative single
+   * `tax_mode` key wins; we fall back to the legacy two-flag derivation (and
+   * its env boot-time defaults) only when the key isn't set — so pre-159w
+   * deployments and the place-of-supply flag reader keep working unchanged.
    */
   async getMode(): Promise<TaxMode> {
+    const explicit = await this.taxConfig.getString('tax_mode', '');
+    if (explicit === 'OFF' || explicit === 'AUDIT' || explicit === 'STRICT') {
+      return explicit;
+    }
     const strictDefault = this.env.getBoolean(
       'TAX_STRICT_MODE' as any,
       false,
@@ -85,6 +121,20 @@ export class TaxModeService {
   }
 
   /**
+   * Phase 159w (audit #14) — mode + where it came from. `source: 'env'` means
+   * no tax_config rows are seeded and the env defaults are in effect, which the
+   * admin UI surfaces so a "DB shows empty but API says STRICT" mismatch is
+   * explained rather than mysterious.
+   */
+  async getModeInfo(): Promise<TaxModeInfo> {
+    const mode = await this.getMode();
+    const rowCount = await this.prisma.taxConfig.count({
+      where: { key: { in: ['tax_mode', 'tax_strict_mode', 'tax_audit_mode'] } },
+    });
+    return { mode, source: rowCount > 0 ? 'db' : 'env' };
+  }
+
+  /**
    * Flip the mode. Writes both flags atomically (STRICT implies AUDIT
    * per the boot semantics) and invalidates the TaxConfigService cache
    * so the new mode is picked up immediately rather than after the 60s
@@ -98,13 +148,28 @@ export class TaxModeService {
    *   AUDIT  → audit=true,  strict=false
    *   STRICT → audit=true,  strict=true   (strict implies audit)
    */
-  async setMode(mode: TaxMode, actorId?: string | null): Promise<void> {
+  async setMode(
+    mode: TaxMode,
+    actorId?: string | null,
+    opts?: SetTaxModeOptions,
+  ): Promise<{ from: TaxMode; to: TaxMode }> {
+    const from = await this.getMode();
     const auditFlag = mode === 'AUDIT' || mode === 'STRICT';
     const strictFlag = mode === 'STRICT';
     const description = `Tax mode (managed via admin UI)`;
     const updatedBy = actorId ?? null;
 
+    // Phase 159w (audit #3/#7/#8) — the authoritative `tax_mode` key, both
+    // back-compat flags, and the append-only history row are written in ONE
+    // transaction. The single key is the source of truth, so two concurrent
+    // setMode calls can no longer interleave the two flags into an "invented"
+    // mixed mode (#7) — the last committed `tax_mode` wins, consistently.
     await this.prisma.$transaction([
+      this.prisma.taxConfig.upsert({
+        where: { key: 'tax_mode' },
+        update: { value: mode, description, updatedBy },
+        create: { key: 'tax_mode', value: mode, description, updatedBy },
+      }),
       this.prisma.taxConfig.upsert({
         where: { key: 'tax_audit_mode' },
         update: { value: auditFlag, description, updatedBy },
@@ -115,14 +180,74 @@ export class TaxModeService {
         update: { value: strictFlag, description, updatedBy },
         create: { key: 'tax_strict_mode', value: strictFlag, description, updatedBy },
       }),
+      this.prisma.gstModeHistory.create({
+        data: {
+          fromMode: from,
+          toMode: mode,
+          actorId: actorId ?? null,
+          reason: opts?.reason ?? null,
+          forced: opts?.forced ?? false,
+          blockerCount: opts?.blockerCount ?? 0,
+        },
+      }),
     ]);
 
+    this.taxConfig.invalidate('tax_mode');
     this.taxConfig.invalidate('tax_audit_mode');
     this.taxConfig.invalidate('tax_strict_mode');
 
     this.logger.log(
-      `Tax mode set to ${mode} (audit=${auditFlag}, strict=${strictFlag}) by ${actorId ?? 'unknown'}`,
+      `Tax mode ${from} → ${mode} (audit=${auditFlag}, strict=${strictFlag}) by ` +
+        `${actorId ?? 'system'}` +
+        (opts?.forced ? ` [FORCED over ${opts?.blockerCount ?? 0} blockers]` : ''),
     );
+
+    // Phase 159w (audit #8) — let downstream caches / consumers react.
+    try {
+      await this.eventBus?.publish({
+        eventName: 'tax.mode.changed',
+        aggregate: 'TaxConfig',
+        aggregateId: 'tax_mode',
+        occurredAt: new Date(),
+        payload: {
+          from,
+          to: mode,
+          actorId: actorId ?? null,
+          forced: opts?.forced ?? false,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `tax.mode.changed publish failed: ${(err as Error)?.message}`,
+      );
+    }
+
+    // Phase 159w (audit B3/#3/#16) — compliance audit row. GstModeHistory above
+    // is the durable record; this mirrors it into the cross-cutting audit log
+    // the admin History UI reads. Awaited, but an audit-write blip must not
+    // undo the already-committed mode flip — log and continue.
+    try {
+      await this.audit?.writeAuditLog({
+        actorId: actorId ?? 'system',
+        action: TAX_MODE_AUDIT_ACTION,
+        module: TAX_MODE_AUDIT_MODULE,
+        resource: 'tax_mode',
+        resourceId: 'tax_mode',
+        oldValue: { mode: from },
+        newValue: { mode },
+        metadata: {
+          reason: opts?.reason ?? null,
+          forced: opts?.forced ?? false,
+          blockerCount: opts?.blockerCount ?? 0,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `TAX_MODE_CHANGED audit write failed: ${(err as Error)?.message}`,
+      );
+    }
+
+    return { from, to: mode };
   }
 
   async isStrict(): Promise<boolean> {

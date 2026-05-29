@@ -62,10 +62,7 @@ export function DeliveryMethodPicker({
   if (loading) {
     return <div style={{ color: '#6b7280', fontSize: 13 }}>Loading delivery options…</div>;
   }
-  if (
-    !entitlements ||
-    (!entitlements.ithinkEnabled && !entitlements.selfDeliveryEnabled && !entitlements.ithinkPending)
-  ) {
+  if (!entitlements || !entitlements.selfDeliveryEnabled) {
     return (
       <div
         style={{
@@ -78,32 +75,18 @@ export function DeliveryMethodPicker({
         }}
       >
         Your franchise admin has not enabled any delivery method yet. Contact
-        them to enable iThink or Self Delivery.
+        them to enable Self Delivery.
       </div>
     );
   }
 
   const containerStyle: React.CSSProperties = compact
     ? { display: 'flex', gap: 10 }
-    : { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
+    : { display: 'grid', gridTemplateColumns: '1fr', gap: 12 };
 
   return (
     <div>
       <div style={containerStyle}>
-        <Option
-          label="iThink Logistics"
-          description="Book via iThink (Delhivery / Bluedart / etc.). AWB auto-generated."
-          icon="\u{1F69A}"
-          enabled={entitlements.ithinkEnabled}
-          pending={entitlements.ithinkPending}
-          disabledReason={
-            entitlements.ithinkPending
-              ? 'iThink approval is pending'
-              : 'iThink is not enabled for your franchise'
-          }
-          loading={submitting}
-          onClick={() => handleChoose('ITHINK_LOGISTICS')}
-        />
         <Option
           label="Self Delivery"
           description="You deliver yourself. Manual status updates from this dashboard."

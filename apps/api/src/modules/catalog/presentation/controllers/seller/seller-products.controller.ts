@@ -24,15 +24,24 @@ import {
 } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import { SellerAuthGuard } from '../../../../../core/guards';
+import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
+import { CurrentSeller } from '../../../../../core/decorators/current-actor.decorator';
 import { ProductSlugService } from '../../../application/services/product-slug.service';
 import { ProductCodeService } from '../../../application/services/product-code.service';
 import { ProductOwnershipService } from '../../../application/services/product-ownership.service';
 import { ReApprovalService } from '../../../application/services/re-approval.service';
-import { CreateProductDto } from '../../dtos/create-product.dto';
-import { UpdateProductDto } from '../../dtos/update-product.dto';
+// Phase 45 (2026-05-21) — write tax-attestation audit rows on
+// seller-driven tax-field edits so the CA chain captures the RESET.
+import { ProductTaxAttestationService } from '../../../application/services/product-tax-attestation.service';
+// Phase 39 (2026-05-21) — required-metafield gate on submit-for-review.
+import { MetafieldValidationService } from '../../../application/services/metafield-validation.service';
+import { SellerCreateProductDto } from '../../dtos/seller-create-product.dto';
+import { SellerUpdateProductDto } from '../../dtos/seller-update-product.dto';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
+import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
+import type { SellerMetafieldValueDto } from '../../dtos/seller-create-product.dto';
 
 @ApiTags('Seller Products')
 @Controller('seller/products')
@@ -42,20 +51,33 @@ export class SellerProductsController {
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
     @Inject(SELLER_MAPPING_REPOSITORY) private readonly sellerMappingRepo: ISellerMappingRepository,
+    @Inject(METAFIELD_REPOSITORY) private readonly metafieldRepo: IMetafieldRepository,
     private readonly logger: AppLoggerService,
     private readonly slugService: ProductSlugService,
     private readonly productCodeService: ProductCodeService,
     private readonly ownershipService: ProductOwnershipService,
     private readonly reApprovalService: ReApprovalService,
     private readonly eventBus: EventBusService,
+    private readonly metafieldValidation: MetafieldValidationService,
+    private readonly taxAttestation: ProductTaxAttestationService,
   ) {
     this.logger.setContext('SellerProductsController');
   }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async createProduct(@Req() req: Request, @Body() dto: CreateProductDto) {
-    const sellerId = (req as any).sellerId;
+  // Phase 32 (2026-05-21) — @Idempotent opts the create endpoint into
+  // the existing X-Idempotency-Key flow. The audit's "no idempotency on
+  // POST" claim was outdated — the interceptor + sweeper + decorator
+  // had been in place since Phase 1; this endpoint just wasn't opted
+  // in. Clients should send a UUID v4 in `X-Idempotency-Key` per intent
+  // (e.g. one per "Save & Submit" click); a duplicate with the same
+  // key replays the first response instead of creating a second product.
+  @Idempotent()
+  async createProduct(
+    @CurrentSeller() sellerId: string,
+    @Body() dto: SellerCreateProductDto,
+  ) {
 
     // Block product creation for non-ACTIVE or email-unverified sellers
     const seller = await this.productRepo.findSellerById(sellerId);
@@ -70,27 +92,12 @@ export class SellerProductsController {
       );
     }
 
-    // Sellers cannot set admin-internal pricing fields (procurementPrice
-    // is the platform's negotiated landed cost, not the seller's price).
-    delete (dto as any).platformPrice; // obsolete — safe to drop if present
-    delete (dto as any).procurementPrice;
+    // Phase 30 (2026-05-21) — admin-only field stripping moved into
+    // SellerCreateProductDto's allowlist. categoryName / brandName /
+    // procurementPrice are no longer accepted off the seller path.
 
     const slug = await this.slugService.generateUniqueSlug(dto.title);
     const productCode = await this.productCodeService.generateProductCode();
-
-    // Handle categoryName → find or create category
-    let resolvedCategoryId = dto.categoryId;
-    if (!resolvedCategoryId && dto.categoryName?.trim()) {
-      const category = await this.productRepo.findOrCreateCategory(dto.categoryName.trim());
-      resolvedCategoryId = category.id;
-    }
-
-    // Handle brandName → find or create brand
-    let resolvedBrandId = dto.brandId;
-    if (!resolvedBrandId && dto.brandName?.trim()) {
-      const brand = await this.productRepo.findOrCreateBrand(dto.brandName.trim());
-      resolvedBrandId = brand.id;
-    }
 
     // Tax columns supplied by the seller flow through unchanged. Admin
     // moderation (existing approval workflow) is the safety net if the
@@ -106,6 +113,15 @@ export class SellerProductsController {
       dto.defaultUqcCode !== undefined ||
       dto.taxCategory !== undefined;
 
+    // Phase 30 (2026-05-21) — atomic create + optional submit. The
+    // pre-Phase-30 flow required a separate POST .../submit call so a
+    // network failure between the two created an orphan DRAFT the
+    // admin queue never saw. When submitImmediately=true the controller
+    // runs the readiness check + status flip + event emission as part
+    // of the same request.
+    const wantsSubmit = dto.submitImmediately === true;
+    const initialStatus = 'DRAFT';
+
     const product = await this.productRepo.createInTransaction(
       {
         sellerId,
@@ -114,8 +130,8 @@ export class SellerProductsController {
         slug,
         shortDescription: dto.shortDescription,
         description: dto.description,
-        categoryId: resolvedCategoryId,
-        brandId: resolvedBrandId,
+        categoryId: dto.categoryId,
+        brandId: dto.brandId,
         hasVariants: dto.hasVariants,
         basePrice: dto.basePrice,
         compareAtPrice: dto.compareAtPrice,
@@ -146,7 +162,7 @@ export class SellerProductsController {
       dto.variants,
       {
         fromStatus: null,
-        toStatus: 'DRAFT',
+        toStatus: initialStatus,
         changedBy: sellerId,
         reason: 'Product created',
       },
@@ -203,12 +219,82 @@ export class SellerProductsController {
       );
     }
 
+    // Phase 39 (2026-05-21) — apply seller-supplied metafields right
+    // after the row exists. Runs before the wantsSubmit branch so the
+    // required-metafield gate sees the values the seller is about to
+    // post in this same call (otherwise atomic create+submit with
+    // metafields[] would always fail the gate).
+    if (dto.metafields && dto.metafields.length > 0) {
+      await this.applySellerMetafields(product.id, product.categoryId ?? null, dto.metafields);
+    }
+
+    // Phase 30 (2026-05-21) — atomic submit branch. Runs the same
+    // readiness check as the standalone /submit endpoint then flips
+    // the row to SUBMITTED / PENDING + emits the QC event. We re-fetch
+    // the product with full relations so the validation sees images +
+    // variants. A readiness failure throws BadRequestAppException —
+    // the seller sees the field list and the row stays DRAFT (still
+    // editable). The seller mapping created above stays PENDING_APPROVAL
+    // regardless, so this is purely about getting the row into the
+    // admin queue atomically.
+    if (wantsSubmit) {
+      const readinessProduct = await this.productRepo.findFullProduct(product.id);
+      if (readinessProduct) {
+        this.assertReadyForReview(readinessProduct);
+        // Phase 39 (2026-05-21) — required category metafields gate.
+        // Walks the category hierarchy, throws a 400 listing every
+        // missing required definition. Runs after the cheaper field
+        // checks so we don't issue DB calls for products that fail
+        // earlier validations.
+        const mfCheck = await this.metafieldValidation.validateRequiredOnSubmit(
+          product.id,
+          readinessProduct.categoryId ?? null,
+        );
+        if (mfCheck.missing.length > 0) {
+          throw new BadRequestAppException(
+            `Cannot submit for review — missing required metafields: ${mfCheck.missing
+              .map((m) => m.name || m.key)
+              .join(', ')}`,
+          );
+        }
+        await this.productRepo.submitForReviewInTransaction(
+          product.id,
+          { status: 'SUBMITTED', moderationStatus: 'PENDING' },
+          {
+            fromStatus: initialStatus,
+            toStatus: 'SUBMITTED',
+            changedBy: sellerId,
+            reason: 'Submitted for review (atomic create + submit)',
+          },
+        );
+        try {
+          await this.eventBus.publish({
+            eventName: 'catalog.listing.submitted_for_qc',
+            aggregate: 'Product',
+            aggregateId: product.id,
+            occurredAt: new Date(),
+            payload: {
+              productId: product.id,
+              productTitle: product.title,
+              sellerId,
+            },
+          });
+        } catch (err) {
+          this.logger.warn(
+            `Failed to emit catalog.listing.submitted_for_qc event: ${err}`,
+          );
+        }
+      }
+    }
+
     // Fetch full product
     const fullProduct = await this.productRepo.findFullProduct(product.id);
 
     return {
       success: true,
-      message: 'Product created successfully. You have been automatically mapped as a seller for this product.',
+      message: wantsSubmit
+        ? 'Product created and submitted for review.'
+        : 'Product created as draft. Use POST /seller/products/:id/submit to send it for review.',
       data: fullProduct,
     };
   }
@@ -216,14 +302,13 @@ export class SellerProductsController {
   @Get()
   @HttpCode(HttpStatus.OK)
   async listProducts(
-    @Req() req: Request,
+    @CurrentSeller() sellerId: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
     @Query('categoryId') categoryId?: string,
   ) {
-    const sellerId = (req as any).sellerId;
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '10', 10) || 10));
 
@@ -268,9 +353,7 @@ export class SellerProductsController {
 
   @Get(':productId')
   @HttpCode(HttpStatus.OK)
-  async getProduct(@Req() req: Request, @Param('productId') productId: string) {
-    const sellerId = (req as any).sellerId;
-
+  async getProduct(@CurrentSeller() sellerId: string, @Param('productId') productId: string) {
     const product = await this.productRepo.findByIdForSeller(productId, sellerId);
 
     if (!product) {
@@ -287,19 +370,16 @@ export class SellerProductsController {
   @Patch(':productId')
   @HttpCode(HttpStatus.OK)
   async updateProduct(
-    @Req() req: Request,
+    @CurrentSeller() sellerId: string,
     @Param('productId') productId: string,
-    @Body() dto: UpdateProductDto,
+    @Body() dto: SellerUpdateProductDto,
   ) {
-    const sellerId = (req as any).sellerId;
-
     // Validate ownership
     await this.ownershipService.validateOwnership(sellerId, productId);
 
-    // Build update data — sellers cannot set admin-internal pricing
-    // (procurementPrice is platform-side; platformPrice is obsolete).
-    delete (dto as any).platformPrice;
-    delete (dto as any).procurementPrice;
+    // Phase 30 (2026-05-21) — admin-only field stripping removed; the
+    // seller DTO no longer accepts procurementPrice / categoryName /
+    // brandName via its allowlist.
 
     // Fetch current product to compare values — only include fields that actually changed
     const current = await this.productRepo.findByIdBasic(productId);
@@ -309,19 +389,10 @@ export class SellerProductsController {
       updateData.title = dto.title;
       updateData.slug = await this.slugService.generateUniqueSlug(dto.title);
     }
-    // Handle categoryName → find or create category
-    if (dto.categoryName?.trim()) {
-      const category = await this.productRepo.findOrCreateCategory(dto.categoryName.trim());
-      if (category.id !== current?.categoryId) updateData.categoryId = category.id;
-    } else if (dto.categoryId !== undefined && dto.categoryId !== current?.categoryId) {
+    if (dto.categoryId !== undefined && dto.categoryId !== current?.categoryId) {
       updateData.categoryId = dto.categoryId;
     }
-
-    // Handle brandName → find or create brand
-    if (dto.brandName?.trim()) {
-      const brand = await this.productRepo.findOrCreateBrand(dto.brandName.trim());
-      if (brand.id !== current?.brandId) updateData.brandId = brand.id;
-    } else if (dto.brandId !== undefined && dto.brandId !== current?.brandId) {
+    if (dto.brandId !== undefined && dto.brandId !== current?.brandId) {
       updateData.brandId = dto.brandId;
     }
 
@@ -380,7 +451,23 @@ export class SellerProductsController {
       'defaultUqcCode',
       'taxCategory',
     ] as const;
-    if (TAX_KEYS.some((k) => k in updateData)) {
+    const taxChanged = TAX_KEYS.some((k) => k in updateData);
+    if (taxChanged) {
+      // Phase 30 (2026-05-21) — once an admin attests the tax config
+      // (taxConfigVerified=true), sellers can no longer edit tax
+      // fields via self-service. Tax-data mistakes have downstream
+      // consequences (GST invoices, GSTR-1/3B reports) so subsequent
+      // edits require admin intervention. Pre-Phase-30 a seller could
+      // ping-pong tax values, repeatedly resetting taxConfigVerified
+      // and bottlenecking the admin queue.
+      if ((current as any)?.taxConfigVerified === true) {
+        throw new ForbiddenAppException(
+          'Tax fields (HSN, GST rate, supply taxability, cess, UQC, tax category) ' +
+            'cannot be edited after admin attestation. Open a support ticket for ' +
+            'tax corrections.',
+        );
+      }
+
       updateData.taxConfigUpdatedBy = sellerId;
       updateData.taxConfigUpdatedAt = new Date();
       // Phase 37 — a seller edit to any tax field resets the
@@ -389,6 +476,25 @@ export class SellerProductsController {
       updateData.taxConfigVerified = false;
       updateData.taxConfigVerifiedAt = null;
       updateData.taxConfigVerifiedBy = null;
+      // Phase 45 (2026-05-21) — bump the monotonic version + queue
+      // an audit-log entry post-write (best-effort, doesn't block
+      // the update).
+      updateData.taxConfigVersion = { increment: 1 };
+      // Append-only audit row for the RESET transition. The seller
+      // can't attest, so this is the only audit trace we get for a
+      // seller-driven tax change.
+      this.taxAttestation
+        .recordReset({
+          productId,
+          actorId: sellerId,
+          actorRole: 'SELLER',
+          reason: 'Seller edited tax field',
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to write tax-attestation audit row for ${productId}: ${err}`,
+          ),
+        );
     }
 
     // Compare tags — only include if actually different
@@ -414,8 +520,14 @@ export class SellerProductsController {
       }
     }
 
+    // Phase 39 (2026-05-21) — metafield-only update is a valid no-op for
+    // the product columns; we apply the metafields, mark the request as
+    // touching content (for re-approval), then return without triggering
+    // a product-table write.
+    const hasMetafieldChanges = !!(dto.metafields && dto.metafields.length > 0);
+
     // If nothing actually changed, return early without triggering re-approval
-    if (Object.keys(updateData).length === 0 && !tagsChanged && !seoChanged) {
+    if (Object.keys(updateData).length === 0 && !tagsChanged && !seoChanged && !hasMetafieldChanges) {
       const fullProduct = await this.productRepo.findFullProduct(productId);
       return {
         success: true,
@@ -431,6 +543,17 @@ export class SellerProductsController {
       seoChanged ? dto.seo : undefined,
     );
 
+    // Phase 39 — apply metafield updates after the product row write so
+    // a category change in the same call has already landed. The
+    // metafield helper validates each entry against its definition;
+    // it throws BadRequestAppException on a failure, which leaves the
+    // product write committed but the metafield set partial — that
+    // matches the create path's behaviour.
+    if (hasMetafieldChanges) {
+      const effectiveCategoryId = updateData.categoryId ?? current?.categoryId ?? null;
+      await this.applySellerMetafields(productId, effectiveCategoryId, dto.metafields);
+    }
+
     // Trigger re-approval only if content fields actually changed. The
     // classifier treats price / inventory / physical / policy fields as
     // self-serve (stay LIVE); anything else forces a fresh admin review.
@@ -438,6 +561,8 @@ export class SellerProductsController {
     const changedFields = Object.keys(updateData).filter((k) => k !== 'slug');
     if (tagsChanged) changedFields.push('tags');
     if (seoChanged) changedFields.push('seo');
+    // Phase 39 — metafield changes are content; force a re-approval pass.
+    if (hasMetafieldChanges) changedFields.push('metafields');
     const reApproved = await this.reApprovalService.triggerIfNeeded(
       productId,
       sellerId,
@@ -459,11 +584,9 @@ export class SellerProductsController {
   @Delete(':productId')
   @HttpCode(HttpStatus.OK)
   async deleteProduct(
-    @Req() req: Request,
+    @CurrentSeller() sellerId: string,
     @Param('productId') productId: string,
   ) {
-    const sellerId = (req as any).sellerId;
-
     await this.ownershipService.validateOwnership(sellerId, productId);
 
     const existing = await this.productRepo.findByIdBasic(productId);
@@ -494,12 +617,10 @@ export class SellerProductsController {
   @Patch(':productId/self-status')
   @HttpCode(HttpStatus.OK)
   async updateSelfStatus(
-    @Req() req: Request,
+    @CurrentSeller() sellerId: string,
     @Param('productId') productId: string,
     @Body() body: { status: 'ACTIVE' | 'SUSPENDED'; reason?: string },
   ) {
-    const sellerId = (req as any).sellerId;
-
     await this.ownershipService.validateOwnership(sellerId, productId);
 
     const target = body?.status;
@@ -525,6 +646,24 @@ export class SellerProductsController {
         `Cannot transition from ${existing.status} to ${target}. Self-service only supports ACTIVE <-> SUSPENDED.`,
         'BAD_REQUEST',
       );
+    }
+
+    // Phase 30 (2026-05-21) — re-check seller status before allowing
+    // resume. Pause (ACTIVE → SUSPENDED) is always allowed: a seller
+    // whose own account has been suspended by an admin should still
+    // be able to stop sales — pausing limits damage. Resume
+    // (SUSPENDED → ACTIVE) is refused unless the seller account
+    // itself is ACTIVE: an admin-suspended seller cannot quietly
+    // un-pause a listing to keep selling. SellerAuthGuard may still
+    // let the JWT through (per canLogin policy) but this controller
+    // re-fetches the canonical status from the DB.
+    if (target === 'ACTIVE') {
+      const seller = await this.productRepo.findSellerById(sellerId);
+      if (!seller || seller.status !== 'ACTIVE') {
+        throw new ForbiddenAppException(
+          'Your account is not active. Resume the listing once your account status is restored.',
+        );
+      }
     }
 
     await this.productRepo.updateStatusInTransaction(
@@ -556,11 +695,9 @@ export class SellerProductsController {
   @Post(':productId/submit')
   @HttpCode(HttpStatus.OK)
   async submitForReview(
-    @Req() req: Request,
+    @CurrentSeller() sellerId: string,
     @Param('productId') productId: string,
   ) {
-    const sellerId = (req as any).sellerId;
-
     await this.ownershipService.validateOwnership(sellerId, productId);
 
     const product = await this.productRepo.findByIdForSeller(productId, sellerId);
@@ -577,44 +714,22 @@ export class SellerProductsController {
       );
     }
 
-    // Validation checks
-    if (!product.title) {
-      throw new BadRequestAppException('Product must have a title');
-    }
+    this.assertReadyForReview(product);
 
-    if (!product.categoryId) {
-      throw new BadRequestAppException('Product must have a category');
-    }
-
-    // For variant products, accept either product-level or variant-level images
-    const hasProductImages = product.images.length > 0;
-    const hasVariantImages = product.hasVariants &&
-      product.variants.some((v: any) => v.images.length > 0);
-
-    if (!hasProductImages && !hasVariantImages) {
-      throw new BadRequestAppException('Product must have at least 1 image');
-    }
-
-    if (product.hasVariants) {
-      if (product.variants.length === 0) {
-        throw new BadRequestAppException(
-          'Product with variants must have at least 1 variant',
-        );
-      }
-      const hasVariantWithPrice = product.variants.some(
-        (v: any) => v.price !== null && Number(v.price) > 0,
+    // Phase 39 (2026-05-21) — required category metafield gate. We
+    // run this after assertReadyForReview so a product missing a
+    // brand / category / image gets the cheaper message first
+    // instead of a "missing metafields" 400 they can't act on.
+    const mfCheck = await this.metafieldValidation.validateRequiredOnSubmit(
+      productId,
+      product.categoryId ?? null,
+    );
+    if (mfCheck.missing.length > 0) {
+      throw new BadRequestAppException(
+        `Cannot submit for review — missing required metafields: ${mfCheck.missing
+          .map((m) => m.name || m.key)
+          .join(', ')}`,
       );
-      if (!hasVariantWithPrice) {
-        throw new BadRequestAppException(
-          'At least 1 variant must have a price',
-        );
-      }
-    } else {
-      if (!product.basePrice || Number(product.basePrice) <= 0) {
-        throw new BadRequestAppException(
-          'Simple product must have a base price',
-        );
-      }
     }
 
     await this.productRepo.submitForReviewInTransaction(
@@ -655,5 +770,194 @@ export class SellerProductsController {
         product: { id: productId },
       },
     };
+  }
+
+  /**
+   * Phase 30 (2026-05-21) — shared readiness gate for the standalone
+   * `/submit` endpoint and the atomic create+submit path. Collects
+   * every missing requirement up front and throws a single
+   * BadRequestAppException listing all of them so the seller doesn't
+   * have to fix one error, re-submit, fix the next, re-submit, ad
+   * infinitum.
+   *
+   * Mirrors the Phase 29 publish-readiness check in
+   * `approveInTransaction` so a product that passes here will not be
+   * bounced back by the admin /approve endpoint. The admin check
+   * additionally enforces required category metafields + taxConfigVerified,
+   * which sellers cannot self-satisfy — those stay admin-only.
+   */
+  private assertReadyForReview(product: {
+    title?: string | null;
+    categoryId?: string | null;
+    brandId?: string | null;
+    basePrice?: unknown;
+    weight?: unknown;
+    hsnCode?: string | null;
+    gstRateBps?: number | null;
+    supplyTaxability?: string | null;
+    hasVariants: boolean;
+    images: Array<{ id: string }>;
+    variants: Array<{ price: unknown; images: Array<{ id: string }> }>;
+  }): void {
+    const missing: string[] = [];
+
+    if (!product.title?.trim()) missing.push('title');
+    if (!product.categoryId) missing.push('categoryId');
+    if (!product.brandId) missing.push('brandId');
+
+    const hasProductImages = product.images.length > 0;
+    const hasVariantImages =
+      product.hasVariants &&
+      product.variants.some((v) => v.images.length > 0);
+    if (!hasProductImages && !hasVariantImages) {
+      missing.push('at least 1 image');
+    }
+
+    if (product.hasVariants) {
+      if (product.variants.length === 0) {
+        missing.push('at least 1 variant');
+      } else if (
+        !product.variants.some(
+          (v) => v.price !== null && v.price !== undefined && Number(v.price) > 0,
+        )
+      ) {
+        missing.push('at least 1 variant with a price');
+      }
+    } else {
+      if (product.basePrice == null || Number(product.basePrice) <= 0) {
+        missing.push('basePrice');
+      }
+    }
+
+    // Shipping weight — required for rate-card lookup at checkout.
+    if (product.weight == null || Number(product.weight) <= 0) {
+      missing.push('weight');
+    }
+
+    // GST data — required for TAXABLE supply. EXEMPT / NIL_RATED /
+    // NON_GST products skip the HSN+rate check. Null supplyTaxability
+    // is treated as TAXABLE (the schema default) — sellers cannot opt
+    // out of GST identification by leaving the field blank.
+    const taxability = product.supplyTaxability ?? 'TAXABLE';
+    if (taxability === 'TAXABLE') {
+      if (!product.hsnCode) missing.push('hsnCode (TAXABLE supply requires HSN)');
+      if (
+        product.gstRateBps == null ||
+        Number.isNaN(Number(product.gstRateBps))
+      ) {
+        missing.push('gstRateBps (TAXABLE supply requires GST rate)');
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new BadRequestAppException(
+        `Cannot submit for review — missing: ${missing.join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Phase 39 (2026-05-21) — write the seller-supplied metafields for a
+   * product. Validates each entry against its definition (type + min /
+   * max / regex / choice membership) then upserts. Re-uses the
+   * existing ProductMetafield upsert path; this just wraps the
+   * resolution (definitionId OR namespace+key) + validation.
+   *
+   * Throws BadRequestAppException with the aggregated error list so
+   * the seller sees every problem in one round-trip, not one at a time.
+   */
+  private async applySellerMetafields(
+    productId: string,
+    categoryId: string | null,
+    entries: SellerMetafieldValueDto[] | undefined,
+  ): Promise<void> {
+    if (!entries || entries.length === 0) return;
+
+    const errors: string[] = [];
+    const resolved: Array<{ definitionId: string; valueData: Record<string, unknown> }> = [];
+
+    for (const entry of entries) {
+      let definition: any = null;
+      if (entry.definitionId) {
+        definition = await this.metafieldRepo.findDefinitionById(entry.definitionId);
+      } else if (entry.namespace && entry.key) {
+        definition = await this.metafieldRepo.findDefinitionByNamespaceKey(
+          entry.namespace,
+          entry.key,
+          categoryId,
+        );
+      }
+      if (!definition) {
+        errors.push(`Metafield not found: ${entry.namespace || ''}.${entry.key || entry.definitionId || ''}`);
+        continue;
+      }
+      if (!definition.isActive) {
+        errors.push(`${definition.name}: definition is inactive`);
+        continue;
+      }
+
+      // Phase 39 — runtime validation. Delegates per-type checks to
+      // MetafieldValidationService which is also wired into the
+      // admin-product-metafields path.
+      const check = this.metafieldValidation.validateValue(definition, entry.value);
+      if (!check.ok) {
+        errors.push(...check.errors);
+        continue;
+      }
+
+      // Map the value to the right column based on type. Mirrors the
+      // admin-product-metafields upsert mapping.
+      const valueData: Record<string, unknown> = {};
+      if (entry.value === null || entry.value === undefined || entry.value === '') {
+        // empty → unset all value columns (acts as a delete-value)
+        valueData.valueText = null;
+        valueData.valueNumber = null;
+        valueData.valueBoolean = null;
+        valueData.valueDate = null;
+        valueData.valueJson = null;
+      } else {
+        switch (definition.type) {
+          case 'SINGLE_LINE_TEXT':
+          case 'MULTI_LINE_TEXT':
+          case 'URL':
+          case 'COLOR':
+          case 'FILE_REFERENCE':
+          case 'SINGLE_SELECT':
+            valueData.valueText = String(entry.value);
+            break;
+          case 'NUMBER_INTEGER':
+          case 'NUMBER_DECIMAL':
+          case 'RATING':
+            valueData.valueNumber = Number(entry.value);
+            break;
+          case 'BOOLEAN':
+            valueData.valueBoolean = entry.value === true || entry.value === 'true';
+            break;
+          case 'DATE':
+            valueData.valueDate = new Date(entry.value as string | number);
+            break;
+          case 'MULTI_SELECT':
+          case 'DIMENSION':
+          case 'WEIGHT':
+          case 'VOLUME':
+          case 'JSON':
+            valueData.valueJson = typeof entry.value === 'string'
+              ? JSON.parse(entry.value)
+              : entry.value;
+            break;
+        }
+      }
+      resolved.push({ definitionId: definition.id, valueData });
+    }
+
+    if (errors.length > 0) {
+      throw new BadRequestAppException(
+        `Metafield validation failed: ${errors.join('; ')}`,
+      );
+    }
+
+    for (const { definitionId, valueData } of resolved) {
+      await this.metafieldRepo.upsertProductMetafield(productId, definitionId, valueData);
+    }
   }
 }

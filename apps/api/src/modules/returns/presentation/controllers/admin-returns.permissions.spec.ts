@@ -35,7 +35,10 @@ const ROUTE_PERMISSIONS: RouteAssertion[] = [
   { method: 'getReturnsTrend', permission: 'returns.read' },
   { method: 'getTopReasons', permission: 'returns.read' },
   { method: 'getCustomerHistory', permission: 'returns.read' },
-  { method: 'exportReturns', permission: 'returns.read' },
+  // Phase 107 (2026-05-25) — bulk PII export is gated by its own
+  // `returns.export` permission, NOT the single-return `returns.read` view
+  // (which tier-1 support holds). See permission-registry.
+  { method: 'exportReturns', permission: 'returns.export' },
   // Mutating paths — the high-risk surface from the spec.
   { method: 'approveReturn', permission: 'returns.approve' },
   { method: 'rejectReturn', permission: 'returns.reject' },
@@ -46,7 +49,10 @@ const ROUTE_PERMISSIONS: RouteAssertion[] = [
   { method: 'submitQc', permission: 'returns.qcDecide' },
   { method: 'initiateRefund', permission: 'refunds.initiate' },
   { method: 'confirmRefund', permission: 'refunds.confirm' },
-  { method: 'markRefundFailed', permission: 'refunds.retry' },
+  // Phase 105 (2026-05-23) — Phase 102 audit Gap #8 closure.
+  // markRefundFailed now uses the dedicated refunds.markFailed
+  // permission, not refunds.retry.
+  { method: 'markRefundFailed', permission: 'refunds.markFailed' },
   { method: 'retryRefund', permission: 'refunds.retry' },
   { method: 'closeReturn', permission: 'returns.close' },
   { method: 'bulkApprove', permission: 'returns.approve' },
@@ -88,6 +94,7 @@ describe('AdminReturnsController — authorization config', () => {
     'refunds.confirm',
     'refunds.retry',
     'returns.close',
+    'returns.export',
   ])(
     'permission slug %s is bound to at least one controller method',
     (slug) => {

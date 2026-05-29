@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, API_BASE } from '@/lib/api-client';
+import { usePermissions } from '@/lib/permissions';
 
 interface CommissionRecord {
   id: string;
@@ -19,7 +20,38 @@ interface CommissionRecord {
   adminEarning: number;
   productEarning: number;
   refundedAdminEarning: number;
+  // Phase 138 — adjust needs the platform-side total (the cap on a new earning)
+  // and a flag for the "adjusted" indicator. Money fields arrive as Decimal
+  // strings over JSON; Number() coerces them at the call sites.
+  totalPlatformAmount: number;
+  platformMargin: number;
+  isAdjusted: boolean;
+  status: string;
+  settlementId: string | null;
+  holdReason: string | null;
   createdAt: string;
+}
+
+interface HistoryEvent {
+  type: string;
+  at: string;
+  adminEarning?: number;
+  platformMargin?: number;
+  note?: string | null;
+  returnNumber?: string | null;
+  reversedQty?: number;
+  refundedAdminEarning?: number;
+  actorType?: string;
+  adminId?: string | null;
+  previousAdminEarning?: number | null;
+  newAdminEarning?: number;
+  reason?: string | null;
+  action?: string;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  settlementId?: string;
+  utrReference?: string | null;
+  settlementStatus?: string;
 }
 
 interface CommissionResponse {
@@ -37,6 +69,31 @@ export default function StorefrontCommissionPage() {
   const [search, setSearch] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+
+  const { hasPermission } = usePermissions();
+  const canHold = hasPermission('settlements.hold');
+  const canAdjust = hasPermission('settlements.adjustRecord');
+  const canViewHistory = hasPermission('settlements.history.read');
+
+  // Hold / resume / adjust modal
+  const [modal, setModal] = useState<{
+    record: CommissionRecord;
+    action: 'hold' | 'resume' | 'adjust';
+  } | null>(null);
+  const [reason, setReason] = useState('');
+  const [newEarning, setNewEarning] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState('');
+
+  // History viewer (read-only timeline)
+  const [historyFor, setHistoryFor] = useState<CommissionRecord | null>(null);
+  const [history, setHistory] = useState<HistoryEvent[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyGeneratedAt, setHistoryGeneratedAt] = useState<string | null>(null);
+
+  // CSV export
+  const [exporting, setExporting] = useState(false);
 
   const fetchData = useCallback((p: number) => {
     setLoading(true);
@@ -44,21 +101,159 @@ export default function StorefrontCommissionPage() {
     if (search.trim()) params.set('search', search.trim());
     if (dateFrom) params.set('dateFrom', dateFrom);
     if (dateTo) params.set('dateTo', dateTo);
+    if (statusFilter) params.set('status', statusFilter);
 
     apiClient<CommissionResponse>(`/admin/commission?${params}`)
       .then((res) => { if (res.data) setData(res.data); })
       .catch((err) => console.warn(err))
       .finally(() => setLoading(false));
-  }, [search, dateFrom, dateTo]);
+  }, [search, dateFrom, dateTo, statusFilter]);
 
   useEffect(() => { fetchData(page); }, [page, fetchData]);
 
   const handleApply = () => { setPage(1); fetchData(1); };
   const handleClear = () => {
-    setSearch(''); setDateFrom(''); setDateTo(''); setPage(1);
+    setSearch(''); setDateFrom(''); setDateTo(''); setStatusFilter(''); setPage(1);
   };
 
-  const hasFilters = Boolean(search || dateFrom || dateTo);
+  const openModal = (
+    record: CommissionRecord,
+    action: 'hold' | 'resume' | 'adjust',
+  ) => {
+    setModal({ record, action });
+    setReason('');
+    // Pre-fill the adjust input with the current platform earning.
+    setNewEarning(action === 'adjust' ? String(Number(record.adminEarning)) : '');
+    setActionError('');
+  };
+
+  const openHistory = (record: CommissionRecord) => {
+    setHistoryFor(record);
+    setHistory(null);
+    setHistoryGeneratedAt(null);
+    setHistoryLoading(true);
+    apiClient<{ timeline: HistoryEvent[]; generatedAt?: string }>(
+      `/admin/commission/${record.id}/history`,
+    )
+      .then((res) => {
+        setHistory(res.data?.timeline ?? []);
+        setHistoryGeneratedAt(res.data?.generatedAt ?? null);
+      })
+      .catch(() => setHistory([]))
+      .finally(() => setHistoryLoading(false));
+  };
+
+  const submitAction = async () => {
+    if (!modal) return;
+    setActionError('');
+
+    let body: Record<string, unknown>;
+    if (modal.action === 'hold') {
+      if (reason.trim().length < 5) {
+        setActionError('A reason (min 5 chars) is required to hold a commission.');
+        return;
+      }
+      body = { holdReason: reason.trim() };
+    } else if (modal.action === 'adjust') {
+      const value = Number(newEarning);
+      const cap = Number(modal.record.totalPlatformAmount);
+      if (!Number.isFinite(value) || value < 0) {
+        setActionError('Enter a valid non-negative platform earning.');
+        return;
+      }
+      if (value > cap) {
+        setActionError(
+          `Platform earning can't exceed the order's platform amount (${inr(cap)}).`,
+        );
+        return;
+      }
+      if (reason.trim().length < 3) {
+        setActionError('A reason (min 3 chars) is required for an adjustment.');
+        return;
+      }
+      body = { newAdminEarning: value, reason: reason.trim() };
+    } else {
+      body = { resumeReason: reason.trim() || undefined };
+    }
+
+    setBusy(true);
+    try {
+      await apiClient(`/admin/commission/${modal.record.id}/${modal.action}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      setModal(null);
+      setReason('');
+      setNewEarning('');
+      fetchData(page);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Action failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // CSV export — the endpoint is bearer-token-gated so a bare <a download>
+  // can't carry the Authorization header; fetch + blob + programmatic download.
+  // Reads X-Export-Truncated/Total to warn before handing over a capped file.
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('search', search.trim());
+      if (dateFrom) params.set('dateFrom', dateFrom);
+      if (dateTo) params.set('dateTo', dateTo);
+      if (statusFilter) params.set('status', statusFilter);
+      const token =
+        typeof window !== 'undefined'
+          ? window.sessionStorage.getItem('adminAccessToken')
+          : null;
+      const res = await fetch(
+        `${API_BASE}/api/v1/admin/commission/export?${params.toString()}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+      );
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.message)
+            msg = Array.isArray(j.message) ? j.message.join(', ') : String(j.message);
+        } catch {
+          /* not JSON */
+        }
+        throw new Error(msg);
+      }
+      const truncated = res.headers.get('X-Export-Truncated') === 'true';
+      const total = res.headers.get('X-Export-Total');
+      if (
+        truncated &&
+        !window.confirm(
+          `This export is capped at 50,000 rows but the filter matches ${total} total. ` +
+            'Download the first 50,000? Narrow the date range to get the rest.',
+        )
+      ) {
+        return;
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match = /filename="?([^"]+)"?/i.exec(disposition);
+      const filename = match?.[1] ?? 'commission_export.csv';
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const hasFilters = Boolean(search || dateFrom || dateTo || statusFilter);
 
   const totals = useMemo(() => {
     const records = data?.records ?? [];
@@ -103,17 +298,34 @@ export default function StorefrontCommissionPage() {
             style={input}
           />
         </Field>
-        <Field label="From" style={{ flex: '0 1 160px' }}>
+        <Field label="Confirmed from" style={{ flex: '0 1 160px' }}>
           <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={input} />
         </Field>
-        <Field label="To" style={{ flex: '0 1 160px' }}>
+        <Field label="Confirmed to" style={{ flex: '0 1 160px' }}>
           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={input} />
+        </Field>
+        <Field label="Status" style={{ flex: '0 1 150px' }}>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={input}>
+            <option value="">All</option>
+            <option value="PENDING">Pending</option>
+            <option value="ON_HOLD">On hold</option>
+            <option value="SETTLED">Settled</option>
+            <option value="REFUNDED">Refunded</option>
+          </select>
         </Field>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={handleApply} style={btnPrimary}>Apply</button>
           {hasFilters && (
             <button onClick={handleClear} style={btnGhost}>Clear</button>
           )}
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            style={exporting ? { ...btnGhost, opacity: 0.6, cursor: 'wait' } : btnGhost}
+            title="Download the current view as CSV (capped at 50,000 rows)"
+          >
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
         </div>
       </div>
 
@@ -140,10 +352,24 @@ export default function StorefrontCommissionPage() {
                   <th style={{ ...th, textAlign: 'right' }}>Commission</th>
                   <th style={{ ...th, textAlign: 'right' }}>Seller earning</th>
                   <th style={{ ...th, textAlign: 'right' }}>Refunded</th>
+                  <th style={th}>Status</th>
+                  <th style={th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {data.records.map((r) => <Row key={r.id} record={r} />)}
+                {data.records.map((r) => (
+                  <Row
+                    key={r.id}
+                    record={r}
+                    canHold={canHold}
+                    canAdjust={canAdjust}
+                    canViewHistory={canViewHistory}
+                    onHold={() => openModal(r, 'hold')}
+                    onResume={() => openModal(r, 'resume')}
+                    onAdjust={() => openModal(r, 'adjust')}
+                    onHistory={() => openHistory(r)}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -174,9 +400,226 @@ export default function StorefrontCommissionPage() {
           </div>
         </div>
       )}
+
+      {modal && (
+        <div
+          onClick={() => !busy && setModal(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 50, padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 14, padding: 24, width: 440, maxWidth: '100%' }}
+          >
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F1115' }}>
+              {modal.action === 'hold'
+                ? 'Hold commission'
+                : modal.action === 'adjust'
+                  ? 'Adjust commission'
+                  : 'Resume commission'}
+            </h3>
+            <p style={{ fontSize: 13, color: '#525A65', marginTop: 8, lineHeight: 1.5 }}>
+              {modal.action === 'hold'
+                ? 'Excludes this record from settlement until it is resumed. A reason (min 5 chars) is required.'
+                : modal.action === 'adjust'
+                  ? "Override the platform's earning for this record (dispute resolution). The seller's settlement absorbs the difference. A reason (min 3 chars) is required."
+                  : 'Restores the record to PENDING so it becomes eligible for settlement again.'}
+            </p>
+            {modal.action === 'resume' && modal.record.holdReason && (
+              <p style={{
+                fontSize: 12, color: '#92400e', background: '#fffbeb',
+                border: '1px solid #fcd34d', borderRadius: 8, padding: 8,
+              }}>
+                Current hold reason: {modal.record.holdReason}
+              </p>
+            )}
+            {modal.action === 'adjust' && (
+              <div style={{ marginTop: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#525A65' }}>
+                  New platform earning (₹)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={Number(modal.record.totalPlatformAmount)}
+                  step="0.01"
+                  value={newEarning}
+                  onChange={(e) => setNewEarning(e.target.value)}
+                  style={{ ...input, marginTop: 4 }}
+                />
+                {/* Before / after — mirrors the server recompute so there are no
+                    surprises: platform's loss = seller's gain. */}
+                <div style={{
+                  fontSize: 12, color: '#525A65', marginTop: 8, lineHeight: 1.7,
+                  background: '#F9FAFB', border: '1px solid #F3F4F6',
+                  borderRadius: 8, padding: '8px 10px',
+                }}>
+                  <div>Current platform earning: <strong style={{ color: '#0F1115' }}>{inr(Number(modal.record.adminEarning))}</strong></div>
+                  <div>Order platform amount (max): <strong style={{ color: '#0F1115' }}>{inr(Number(modal.record.totalPlatformAmount))}</strong></div>
+                  {newEarning !== '' && Number.isFinite(Number(newEarning)) && (
+                    <div style={{ marginTop: 4, paddingTop: 4, borderTop: '1px dashed #E5E7EB' }}>
+                      Seller earning becomes:{' '}
+                      <strong style={{ color: '#0F1115' }}>
+                        {inr(Math.max(0, Number(modal.record.totalPlatformAmount) - Number(newEarning)))}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={
+                modal.action === 'hold'
+                  ? 'Reason (min 5 chars)…'
+                  : modal.action === 'adjust'
+                    ? 'Reason (min 3 chars)…'
+                    : 'Reason (optional)…'
+              }
+              rows={3}
+              style={{ ...input, height: 'auto', padding: 10, resize: 'vertical', marginTop: 8 }}
+            />
+            {actionError && (
+              <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8 }}>{actionError}</div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+              <button onClick={() => setModal(null)} disabled={busy} style={btnGhost}>Cancel</button>
+              <button onClick={submitAction} disabled={busy} style={btnPrimary}>
+                {busy
+                  ? 'Working…'
+                  : modal.action === 'hold'
+                    ? 'Hold'
+                    : modal.action === 'adjust'
+                      ? 'Adjust'
+                      : 'Resume'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {historyFor && (
+        <div
+          onClick={() => setHistoryFor(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 50, padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 14, padding: 24,
+              width: 560, maxWidth: '100%', maxHeight: '80vh', overflowY: 'auto',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F1115' }}>
+                Commission history · {historyFor.orderNumber}
+              </h3>
+              <button onClick={() => setHistoryFor(null)} style={btnGhost}>Close</button>
+            </div>
+            <p style={{ fontSize: 12, color: '#525A65', marginTop: 4 }}>
+              {historyFor.sellerName} · {historyFor.productTitle}
+            </p>
+
+            {historyLoading && (
+              <div style={{ fontSize: 13, color: '#7A828F', padding: '24px 0' }}>Loading…</div>
+            )}
+            {!historyLoading && history && history.length === 0 && (
+              <div style={{ fontSize: 13, color: '#7A828F', padding: '24px 0' }}>
+                No history events.
+              </div>
+            )}
+            {!historyLoading && history && history.length > 0 && (
+              <ol style={{ listStyle: 'none', margin: '16px 0 0', padding: 0 }}>
+                {history.map((ev, i) => (
+                  <li
+                    key={i}
+                    style={{
+                      borderLeft: '2px solid #E5E7EB', paddingLeft: 12,
+                      paddingBottom: 14, marginLeft: 4, position: 'relative',
+                    }}
+                  >
+                    <span style={{
+                      position: 'absolute', left: -5, top: 4, width: 8, height: 8,
+                      borderRadius: 4, background: HISTORY_DOT[ev.type] ?? '#9CA3AF',
+                    }} />
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#0F1115' }}>
+                      {HISTORY_LABEL[ev.type] ?? ev.type}
+                      {ev.action ? ` · ${ev.action}` : ''}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#7A828F' }}>
+                      {new Date(ev.at).toLocaleString('en-IN')}
+                      {ev.actorType ? ` · ${ev.actorType}` : ''}
+                      {ev.adminId ? ` · ${ev.adminId}` : ''}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#525A65', marginTop: 2, lineHeight: 1.5 }}>
+                      {ev.type === 'COMMISSION_LOCKED' && (
+                        <>Platform earning {inr(Number(ev.adminEarning ?? 0))} · {ev.note}</>
+                      )}
+                      {ev.type === 'REVERSAL' && (
+                        <>
+                          Reversed {ev.reversedQty} unit(s){ev.returnNumber ? ` · ${ev.returnNumber}` : ''} ·
+                          refunded platform earning {inr(Number(ev.refundedAdminEarning ?? 0))}
+                          {ev.note ? ` · ${ev.note}` : ''}
+                        </>
+                      )}
+                      {ev.type === 'MANUAL_ADJUSTMENT' && (
+                        <>
+                          Platform earning{' '}
+                          {ev.previousAdminEarning != null ? inr(Number(ev.previousAdminEarning)) : '—'}
+                          {' → '}
+                          <strong style={{ color: '#0F1115' }}>{inr(Number(ev.newAdminEarning ?? 0))}</strong>
+                          {ev.reason ? ` · ${ev.reason}` : ''}
+                        </>
+                      )}
+                      {ev.type === 'HOLD_EVENT' && (
+                        <>{ev.reason ?? '—'}</>
+                      )}
+                      {ev.type === 'SETTLED' && (
+                        <>
+                          Paid out{ev.settlementStatus ? ` (${ev.settlementStatus})` : ''}
+                          {ev.utrReference ? ` · UTR ${ev.utrReference}` : ''}
+                        </>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {!historyLoading && historyGeneratedAt && (
+              <p style={{ fontSize: 11, color: '#9CA3AF', marginTop: 16 }}>
+                Snapshot at {new Date(historyGeneratedAt).toLocaleString('en-IN')} ·
+                assembled at read time, so a very recent change may take one refresh to appear.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const HISTORY_LABEL: Record<string, string> = {
+  COMMISSION_LOCKED: 'Locked',
+  REVERSAL: 'Reversal',
+  MANUAL_ADJUSTMENT: 'Manual adjustment',
+  HOLD_EVENT: 'Hold / freeze',
+  SETTLED: 'Settled',
+};
+const HISTORY_DOT: Record<string, string> = {
+  COMMISSION_LOCKED: '#1e40af',
+  REVERSAL: '#b91c1c',
+  MANUAL_ADJUSTMENT: '#7c3aed',
+  HOLD_EVENT: '#92400e',
+  SETTLED: '#15803d',
+};
 
 // ── KPI strip ─────────────────────────────────────────────────────
 
@@ -252,7 +695,25 @@ function Kpi({
 
 // ── Row ───────────────────────────────────────────────────────────
 
-function Row({ record: r }: { record: CommissionRecord }) {
+function Row({
+  record: r,
+  canHold,
+  canAdjust,
+  canViewHistory,
+  onHold,
+  onResume,
+  onAdjust,
+  onHistory,
+}: {
+  record: CommissionRecord;
+  canHold: boolean;
+  canAdjust: boolean;
+  canViewHistory: boolean;
+  onHold: () => void;
+  onResume: () => void;
+  onAdjust: () => void;
+  onHistory: () => void;
+}) {
   const refunded = Number(r.refundedAdminEarning);
   return (
     <tr style={{ borderTop: '1px solid #F3F4F6' }}>
@@ -286,7 +747,63 @@ function Row({ record: r }: { record: CommissionRecord }) {
       }}>
         {inr(refunded)}
       </td>
+      <td style={td}>
+        <StatusBadge status={r.status} />
+        {r.isAdjusted && (
+          <span
+            title="This record's platform earning was manually adjusted"
+            style={{
+              marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#7c3aed',
+              background: '#f5f3ff', border: '1px solid #ddd6fe',
+              borderRadius: 6, padding: '1px 5px',
+            }}
+          >
+            ✎ adj
+          </span>
+        )}
+      </td>
+      <td style={td}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {canViewHistory && (
+            <button onClick={onHistory} style={btnGhost}>History</button>
+          )}
+          {canAdjust && r.status === 'PENDING' && !r.settlementId && (
+            <button onClick={onAdjust} style={btnGhost}>Adjust</button>
+          )}
+          {canHold && r.status === 'PENDING' && !r.settlementId && (
+            <button onClick={onHold} style={btnGhost}>Hold</button>
+          )}
+          {canHold && r.status === 'ON_HOLD' && (
+            <button
+              onClick={onResume}
+              style={btnGhost}
+              title={r.holdReason ?? undefined}
+            >
+              Resume
+            </button>
+          )}
+        </div>
+      </td>
     </tr>
+  );
+}
+
+const STATUS_BADGE: Record<string, { bg: string; fg: string; label: string }> = {
+  PENDING: { bg: '#eff6ff', fg: '#1e40af', label: 'Pending' },
+  ON_HOLD: { bg: '#fffbeb', fg: '#92400e', label: 'On hold' },
+  SETTLED: { bg: '#f0fdf4', fg: '#15803d', label: 'Settled' },
+  REFUNDED: { bg: '#fef2f2', fg: '#b91c1c', label: 'Refunded' },
+};
+function StatusBadge({ status }: { status: string }) {
+  const s = STATUS_BADGE[status] ?? { bg: '#F3F4F6', fg: '#525A65', label: status };
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 9999,
+      background: s.bg, color: s.fg, textTransform: 'uppercase',
+      letterSpacing: '0.04em', whiteSpace: 'nowrap',
+    }}>
+      {s.label}
+    </span>
   );
 }
 

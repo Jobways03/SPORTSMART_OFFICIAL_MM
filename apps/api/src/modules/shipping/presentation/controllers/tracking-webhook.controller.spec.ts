@@ -42,6 +42,14 @@ function buildController(opts: {
       }
       return undefined;
     }),
+    // Phase 83 (2026-05-23) — controller checks NODE_ENV to gate
+    // the legacy bearer-token fallback (production fails closed).
+    // Tests default to development so the bearer mode tests still
+    // exercise their original path.
+    getString: jest.fn((key: string, fallback?: string) => {
+      if (key === 'NODE_ENV') return 'development';
+      return fallback;
+    }),
   } as any;
   const redis = {
     acquireLock: jest.fn().mockResolvedValue(true),
@@ -66,11 +74,22 @@ function buildController(opts: {
       .fn()
       .mockResolvedValue({ subOrderId: 'so-1', applied: true }),
   } as any;
+  // Phase 83 (2026-05-23) — controller injects PrismaService for the
+  // webhook_events audit log. Stub the upsert + update calls so the
+  // existing tests run unchanged; the new Phase 83 spec exercises
+  // the audit-log behaviour against real mock assertions.
+  const prismaStub = {
+    webhookEvent: {
+      upsert: jest.fn().mockResolvedValue({ id: 'wh-1' }),
+      update: jest.fn().mockResolvedValue({}),
+    },
+  } as any;
   const controller = new TrackingWebhookController(
     env,
     redis,
     ordersFacade,
     ingestTracking,
+    prismaStub,
   );
   return { controller, env, redis, ordersFacade };
 }
@@ -100,7 +119,10 @@ describe('TrackingWebhookController — Phase 1 PR 1.4 HMAC verification', () =>
     );
 
     expect(res).toEqual({ success: true, message: 'Delivery confirmed' });
-    expect(ordersFacade.markSubOrderDelivered).toHaveBeenCalledWith('so-1');
+    expect(ordersFacade.markSubOrderDelivered).toHaveBeenCalledWith(
+      'so-1',
+      expect.objectContaining({ source: 'WEBHOOK_SHIPROCKET' }),
+    );
   });
 
   it('HMAC mode: rejects a missing X-Shiprocket-Signature header', async () => {
@@ -247,6 +269,13 @@ describe('TrackingWebhookController — event-order guard (PR 4.4)', () => {
       getOptional: jest.fn((key: string) =>
         key === 'SHIPROCKET_WEBHOOK_TOKEN' ? BEARER_TOKEN : undefined,
       ),
+      // Phase 83 (2026-05-23) — controller checks NODE_ENV to gate
+      // the legacy bearer-token fallback. Dev environment so the
+      // bearer-mode tests still exercise their original path.
+      getString: jest.fn((key: string, fallback?: string) => {
+        if (key === 'NODE_ENV') return 'development';
+        return fallback;
+      }),
     } as any;
     const redis = { acquireLock: jest.fn().mockResolvedValue(true) } as any;
     const ordersFacade = {
@@ -261,12 +290,19 @@ describe('TrackingWebhookController — event-order guard (PR 4.4)', () => {
         .fn()
         .mockResolvedValue({ subOrderId: 'so-1', applied: true }),
     } as any;
+    const prismaStub = {
+      webhookEvent: {
+        upsert: jest.fn().mockResolvedValue({ id: 'wh-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    } as any;
     return {
       controller: new TrackingWebhookController(
         env,
         redis,
         ordersFacade,
         ingestTracking,
+        prismaStub,
       ),
       ordersFacade,
     };
@@ -298,7 +334,10 @@ describe('TrackingWebhookController — event-order guard (PR 4.4)', () => {
     );
     const claimedTs = ordersFacade.claimTrackingEvent.mock.calls[0][1] as Date;
     expect(claimedTs.toISOString()).toBe('2026-05-12T10:00:00.000Z');
-    expect(ordersFacade.markSubOrderDelivered).toHaveBeenCalledWith('so-1');
+    expect(ordersFacade.markSubOrderDelivered).toHaveBeenCalledWith(
+      'so-1',
+      expect.objectContaining({ source: 'WEBHOOK_SHIPROCKET' }),
+    );
   });
 
   it('out-of-order DELIVERED (older event timestamp): claim returns false, mark NOT called', async () => {
@@ -364,17 +403,21 @@ describe('parseEventTimestamp helper (PR 4.4)', () => {
   });
 
   it('parses Unix-milliseconds from current_timestamp', () => {
+    // Phase 86 — within the 30-day sanity window from the current
+    // wall clock so the clamp doesn't fall back to `new Date()`.
+    const recentMs = Date.now() - 5 * 60 * 1000;
     const ts = parseEventTimestamp({
-      current_timestamp: 1_747_044_000_000,
+      current_timestamp: recentMs,
     } as any);
-    expect(ts.getTime()).toBe(1_747_044_000_000);
+    expect(ts.getTime()).toBe(recentMs);
   });
 
   it('auto-detects Unix-seconds (value < 10^12 treated as seconds)', () => {
+    const recentSeconds = Math.floor((Date.now() - 5 * 60 * 1000) / 1000);
     const ts = parseEventTimestamp({
-      current_timestamp: 1_747_044_000, // seconds
+      current_timestamp: recentSeconds,
     } as any);
-    expect(ts.getTime()).toBe(1_747_044_000_000);
+    expect(ts.getTime()).toBe(recentSeconds * 1000);
   });
 
   it('falls back to nested data.current_timestamp', () => {

@@ -1,9 +1,24 @@
-import { IsEmail, IsNotEmpty } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class AffiliateForgotPasswordDto {
   @IsNotEmpty({ message: 'Email is required' })
   @IsEmail({}, { message: 'Please enter a valid email address' })
-  @Transform(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
   email!: string;
+
+  // Phase 22 (2026-05-20) — captcha gate before OTP send so a scripted
+  // attacker can't enumerate via cooldown timing.
+  @IsOptional()
+  @IsString()
+  @MaxLength(4096)
+  captchaToken?: string;
 }

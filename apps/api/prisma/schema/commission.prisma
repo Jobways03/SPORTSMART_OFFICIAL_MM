@@ -18,22 +18,22 @@ enum CommissionRecordStatus {
 }
 
 model CommissionSetting {
-  id                    String         @id @default("global")
-  commissionType        CommissionType @default(MARGIN_BASED) @map("commission_type")
-  commissionValue       Decimal        @default(20) @map("commission_value") @db.Decimal(10, 2)
-  secondCommissionValue Decimal        @default(0) @map("second_commission_value") @db.Decimal(10, 2)
-  fixedCommissionType   String         @default("Product") @map("fixed_commission_type")
-  enableMaxCommission   Boolean        @default(false) @map("enable_max_commission")
-  maxCommissionAmount   Decimal?       @map("max_commission_amount") @db.Decimal(10, 2)
+  id                           String         @id @default("global")
+  commissionType               CommissionType @default(MARGIN_BASED) @map("commission_type")
+  commissionValue              Decimal        @default(20) @map("commission_value") @db.Decimal(10, 2)
+  secondCommissionValue        Decimal        @default(0) @map("second_commission_value") @db.Decimal(10, 2)
+  fixedCommissionType          String         @default("Product") @map("fixed_commission_type")
+  enableMaxCommission          Boolean        @default(false) @map("enable_max_commission")
+  maxCommissionAmount          Decimal?       @map("max_commission_amount") @db.Decimal(10, 2)
   // Phase 1.4 paise siblings (ADR-007). Note: commission_value /
   // second_commission_value mean different things by commissionType
   // (PERCENTAGE → basis-points-style number, FLAT → rupees). Paise
   // representation only meaningful when type is FLAT; for PERCENTAGE
   // callers should continue using the Decimal column.
-  commissionValueInPaise       BigInt  @default(0) @map("commission_value_in_paise")
-  secondCommissionValueInPaise BigInt  @default(0) @map("second_commission_value_in_paise")
-  maxCommissionAmountInPaise   BigInt? @map("max_commission_amount_in_paise")
-  updatedAt             DateTime       @updatedAt @map("updated_at")
+  commissionValueInPaise       BigInt         @default(0) @map("commission_value_in_paise")
+  secondCommissionValueInPaise BigInt         @default(0) @map("second_commission_value_in_paise")
+  maxCommissionAmountInPaise   BigInt?        @map("max_commission_amount_in_paise")
+  updatedAt                    DateTime       @updatedAt @map("updated_at")
 
   @@map("commission_settings")
 }
@@ -51,43 +51,43 @@ model CommissionRecord {
   sellerName    String  @map("seller_name")
 
   // Model 1 pricing fields
-  platformPrice         Decimal @map("platform_price") @db.Decimal(10, 2)
-  settlementPrice       Decimal @map("settlement_price") @db.Decimal(10, 2)
-  quantity              Int
-  totalPlatformAmount   Decimal @map("total_platform_amount") @db.Decimal(10, 2)
-  totalSettlementAmount Decimal @map("total_settlement_amount") @db.Decimal(10, 2)
-  platformMargin        Decimal @map("platform_margin") @db.Decimal(10, 2)
+  platformPrice                Decimal @map("platform_price") @db.Decimal(10, 2)
+  settlementPrice              Decimal @map("settlement_price") @db.Decimal(10, 2)
+  quantity                     Int
+  totalPlatformAmount          Decimal @map("total_platform_amount") @db.Decimal(10, 2)
+  totalSettlementAmount        Decimal @map("total_settlement_amount") @db.Decimal(10, 2)
+  platformMargin               Decimal @map("platform_margin") @db.Decimal(10, 2)
   // Phase 1.4 paise siblings (ADR-007).
-  platformPriceInPaise         BigInt @default(0) @map("platform_price_in_paise")
-  settlementPriceInPaise       BigInt @default(0) @map("settlement_price_in_paise")
-  totalPlatformAmountInPaise   BigInt @default(0) @map("total_platform_amount_in_paise")
-  totalSettlementAmountInPaise BigInt @default(0) @map("total_settlement_amount_in_paise")
-  platformMarginInPaise        BigInt @default(0) @map("platform_margin_in_paise")
+  platformPriceInPaise         BigInt  @default(0) @map("platform_price_in_paise")
+  settlementPriceInPaise       BigInt  @default(0) @map("settlement_price_in_paise")
+  totalPlatformAmountInPaise   BigInt  @default(0) @map("total_platform_amount_in_paise")
+  totalSettlementAmountInPaise BigInt  @default(0) @map("total_settlement_amount_in_paise")
+  platformMarginInPaise        BigInt  @default(0) @map("platform_margin_in_paise")
 
   // Legacy fields (kept for backward compatibility, mapped from new logic)
-  unitPrice            Decimal        @map("unit_price") @db.Decimal(10, 2)
-  totalPrice           Decimal        @map("total_price") @db.Decimal(10, 2)
-  commissionType       CommissionType @map("commission_type")
-  commissionRate       String         @map("commission_rate")
-  unitCommission       Decimal        @map("unit_commission") @db.Decimal(10, 2)
-  totalCommission      Decimal        @map("total_commission") @db.Decimal(10, 2)
-  adminEarning         Decimal        @map("admin_earning") @db.Decimal(10, 2)
-  productEarning       Decimal        @map("product_earning") @db.Decimal(10, 2)
-  refundedAdminEarning Decimal        @default(0) @map("refunded_admin_earning") @db.Decimal(10, 2)
-  vatOnCommission      Decimal        @default(0) @map("vat_on_commission") @db.Decimal(10, 2)
-  taxCommission        Decimal        @default(0) @map("tax_commission") @db.Decimal(10, 2)
-  shippingCommission   Decimal        @default(0) @map("shipping_commission") @db.Decimal(10, 2)
+  unitPrice                   Decimal        @map("unit_price") @db.Decimal(10, 2)
+  totalPrice                  Decimal        @map("total_price") @db.Decimal(10, 2)
+  commissionType              CommissionType @map("commission_type")
+  commissionRate              String         @map("commission_rate")
+  unitCommission              Decimal        @map("unit_commission") @db.Decimal(10, 2)
+  totalCommission             Decimal        @map("total_commission") @db.Decimal(10, 2)
+  adminEarning                Decimal        @map("admin_earning") @db.Decimal(10, 2)
+  productEarning              Decimal        @map("product_earning") @db.Decimal(10, 2)
+  refundedAdminEarning        Decimal        @default(0) @map("refunded_admin_earning") @db.Decimal(10, 2)
+  vatOnCommission             Decimal        @default(0) @map("vat_on_commission") @db.Decimal(10, 2)
+  taxCommission               Decimal        @default(0) @map("tax_commission") @db.Decimal(10, 2)
+  shippingCommission          Decimal        @default(0) @map("shipping_commission") @db.Decimal(10, 2)
   // Phase 1.4 paise siblings (ADR-007).
-  unitPriceInPaise            BigInt @default(0) @map("unit_price_in_paise")
-  totalPriceInPaise           BigInt @default(0) @map("total_price_in_paise")
-  unitCommissionInPaise       BigInt @default(0) @map("unit_commission_in_paise")
-  totalCommissionInPaise      BigInt @default(0) @map("total_commission_in_paise")
-  adminEarningInPaise         BigInt @default(0) @map("admin_earning_in_paise")
-  productEarningInPaise       BigInt @default(0) @map("product_earning_in_paise")
-  refundedAdminEarningInPaise BigInt @default(0) @map("refunded_admin_earning_in_paise")
-  vatOnCommissionInPaise      BigInt @default(0) @map("vat_on_commission_in_paise")
-  taxCommissionInPaise        BigInt @default(0) @map("tax_commission_in_paise")
-  shippingCommissionInPaise   BigInt @default(0) @map("shipping_commission_in_paise")
+  unitPriceInPaise            BigInt         @default(0) @map("unit_price_in_paise")
+  totalPriceInPaise           BigInt         @default(0) @map("total_price_in_paise")
+  unitCommissionInPaise       BigInt         @default(0) @map("unit_commission_in_paise")
+  totalCommissionInPaise      BigInt         @default(0) @map("total_commission_in_paise")
+  adminEarningInPaise         BigInt         @default(0) @map("admin_earning_in_paise")
+  productEarningInPaise       BigInt         @default(0) @map("product_earning_in_paise")
+  refundedAdminEarningInPaise BigInt         @default(0) @map("refunded_admin_earning_in_paise")
+  vatOnCommissionInPaise      BigInt         @default(0) @map("vat_on_commission_in_paise")
+  taxCommissionInPaise        BigInt         @default(0) @map("tax_commission_in_paise")
+  shippingCommissionInPaise   BigInt         @default(0) @map("shipping_commission_in_paise")
 
   // Settlement status
   status       CommissionRecordStatus @default(PENDING) @map("status")
@@ -97,21 +97,61 @@ model CommissionRecord {
   // `adminEarning` on the row is always the *current* value (adjusted if set);
   // `originalAdminEarning` holds the processor's computed value pre-adjustment
   // so we never lose what the formula produced.
-  adjustedBy           String?   @map("adjusted_by")
-  adjustedAt           DateTime? @map("adjusted_at")
-  adjustmentReason     String?   @map("adjustment_reason")
-  originalAdminEarning Decimal?  @map("original_admin_earning") @db.Decimal(10, 2)
+  adjustedBy                  String?   @map("adjusted_by")
+  adjustedAt                  DateTime? @map("adjusted_at")
+  adjustmentReason            String?   @map("adjustment_reason")
+  originalAdminEarning        Decimal?  @map("original_admin_earning") @db.Decimal(10, 2)
   // Phase 1.4 paise sibling (ADR-007).
-  originalAdminEarningInPaise BigInt? @map("original_admin_earning_in_paise")
+  originalAdminEarningInPaise BigInt?   @map("original_admin_earning_in_paise")
+  // Phase 138 — isAdjusted is queryable without a null-check on adjustedAt;
+  // version is an optimistic-lock counter so two concurrent admin adjusts on
+  // the same record can't last-write-wins (the second 409s).
+  isAdjusted                  Boolean   @default(false) @map("is_adjusted")
+  version                     Int       @default(0)
 
   createdAt DateTime @default(now()) @map("created_at")
+
+  // Phase 135 — processing provenance. processedAt/processedBy disambiguate a
+  // cron-locked row from a return-rejection-triggered row (they'd otherwise
+  // share only createdAt). commissionRateBps is the numeric margin rate in
+  // basis points for analytics (the human-readable label is commissionRate).
+  processedAt       DateTime? @map("processed_at")
+  processedBy       String?   @map("processed_by")
+  commissionRateBps Int?      @map("commission_rate_bps")
+  // Phase 136 — settlableAt is the stable business date the record becomes
+  // eligible for payout (the sub-order's returnWindowEndsAt, or now for the
+  // immediate-trigger path). Settlement filters by THIS, not createdAt, so a
+  // backfill (cron paused then resumed) doesn't dump old deliveries into the
+  // current cycle. unfrozenAt records when an ON_HOLD record was restored to
+  // PENDING, so a once-frozen row is distinguishable from a never-frozen one.
+  settlableAt       DateTime? @map("settlable_at")
+  unfrozenAt        DateTime? @map("unfrozen_at")
+
+  // Phase 137 — admin Hold/Resume (fraud-suspicion / operational review).
+  // Distinct from the system return-driven freeze: an admin hold sets
+  // heldByAdminId (the system freeze leaves it null), which is how the return
+  // unfreeze + the admin resume tell the two apart. previousStatus is the
+  // state to restore on resume. holdReason is dedicated — it no longer
+  // overloads adjustmentReason (which the manual-adjust path owns).
+  heldByAdminId    String?                 @map("held_by_admin_id")
+  heldAt           DateTime?               @map("held_at")
+  holdReason       String?                 @map("hold_reason")
+  previousStatus   CommissionRecordStatus? @map("previous_status")
+  resumedByAdminId String?                 @map("resumed_by_admin_id")
+  resumedAt        DateTime?               @map("resumed_at")
+  resumeReason     String?                 @map("resume_reason")
 
   orderItem        OrderItem                  @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
   subOrder         SubOrder                   @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
   masterOrder      MasterOrder                @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
   seller           Seller                     @relation(fields: [sellerId], references: [id], onDelete: Cascade)
   sellerSettlement SellerSettlement?          @relation(fields: [settlementId], references: [id], onDelete: SetNull)
-  reversals        CommissionReversalRecord[]
+  reversals         CommissionReversalRecord[]
+  holdHistory       CommissionHoldHistory[]
+  adjustmentHistory CommissionAdjustmentHistory[]
+  // Phase 138 — FK to the adjusting admin (the UI joins the admin name). admins
+  // are soft-deleted (never hard-deleted), so onDelete: SetNull never fires.
+  adjustedByAdmin   Admin?                        @relation("CommissionAdjustedBy", fields: [adjustedBy], references: [id], onDelete: SetNull)
 
   @@index([sellerId])
   @@index([masterOrderId])
@@ -120,6 +160,10 @@ model CommissionRecord {
   @@index([status])
   @@index([settlementId])
   @@index([createdAt])
+  @@index([adjustedAt])
+  // Phase 140 — the common export/list filter combo (a seller's records over a
+  // date range) is served by one composite scan instead of two single-column ones.
+  @@index([sellerId, createdAt])
   @@map("commission_records")
 }
 
@@ -132,24 +176,26 @@ model CommissionRecord {
 enum CommissionReversalSource {
   RETURN_QC
   MANUAL
+  // Phase 108 (2026-05-25) — seller B2B/off-platform reversal.
+  SELLER_REVERSAL
 }
 
 model CommissionReversalRecord {
-  id                   String                   @id @default(uuid())
-  commissionRecordId   String                   @map("commission_record_id")
-  source               CommissionReversalSource @default(RETURN_QC)
-  returnId             String?                  @map("return_id")
-  returnNumber         String?                  @map("return_number")
-  reversedQty          Int                      @map("reversed_qty")
-  totalRefundAmount    Decimal                  @map("total_refund_amount") @db.Decimal(10, 2)
-  refundedAdminEarning Decimal                  @map("refunded_admin_earning") @db.Decimal(10, 2)
+  id                          String                   @id @default(uuid())
+  commissionRecordId          String                   @map("commission_record_id")
+  source                      CommissionReversalSource @default(RETURN_QC)
+  returnId                    String?                  @map("return_id")
+  returnNumber                String?                  @map("return_number")
+  reversedQty                 Int                      @map("reversed_qty")
+  totalRefundAmount           Decimal                  @map("total_refund_amount") @db.Decimal(10, 2)
+  refundedAdminEarning        Decimal                  @map("refunded_admin_earning") @db.Decimal(10, 2)
   // Phase 1.4 paise siblings (ADR-007).
-  totalRefundAmountInPaise    BigInt @default(0) @map("total_refund_amount_in_paise")
-  refundedAdminEarningInPaise BigInt @default(0) @map("refunded_admin_earning_in_paise")
-  actorType            String                   @map("actor_type") // SYSTEM | ADMIN
-  actorId              String?                  @map("actor_id")
-  note                 String?
-  createdAt            DateTime                 @default(now()) @map("created_at")
+  totalRefundAmountInPaise    BigInt                   @default(0) @map("total_refund_amount_in_paise")
+  refundedAdminEarningInPaise BigInt                   @default(0) @map("refunded_admin_earning_in_paise")
+  actorType                   String                   @map("actor_type") // SYSTEM | ADMIN
+  actorId                     String?                  @map("actor_id")
+  note                        String?
+  createdAt                   DateTime                 @default(now()) @map("created_at")
 
   commissionRecord CommissionRecord @relation(fields: [commissionRecordId], references: [id], onDelete: Cascade)
 
@@ -157,4 +203,81 @@ model CommissionReversalRecord {
   @@index([returnId])
   @@index([createdAt])
   @@map("commission_reversal_records")
+}
+
+// ── Hold / resume audit trail ──────────────────────────────
+//
+// Phase 137 — one row per hold/resume/freeze/unfreeze event on a
+// CommissionRecord, preserving the full timeline (who, when, why, the state
+// transition, and the linked return for system events). The per-record hold
+// columns carry the CURRENT state; this table is the history.
+enum CommissionHoldAction {
+  HOLD // admin placed on hold
+  RESUME // admin resumed
+  SYSTEM_FREEZE // return-driven freeze
+  SYSTEM_UNFREEZE // return-rejection-driven unfreeze
+}
+
+model CommissionHoldHistory {
+  id                 String                 @id @default(uuid())
+  commissionRecordId String                 @map("commission_record_id")
+  action             CommissionHoldAction
+  actorType          String                 @map("actor_type") // ADMIN | SYSTEM
+  actorId            String?                @map("actor_id")
+  fromStatus         CommissionRecordStatus @map("from_status")
+  toStatus           CommissionRecordStatus @map("to_status")
+  reason             String
+  relatedReturnId    String?                @map("related_return_id")
+  createdAt          DateTime               @default(now()) @map("created_at")
+
+  commissionRecord CommissionRecord @relation(fields: [commissionRecordId], references: [id], onDelete: Cascade)
+
+  @@index([commissionRecordId, createdAt])
+  @@map("commission_hold_history")
+}
+
+// ── Manual adjustment audit trail ──────────────────────────
+//
+// Phase 138 — one row per manual commission adjustment. The single
+// adjustedBy/adjustedAt/adjustmentReason columns on CommissionRecord only hold
+// the LATEST adjustment; this table preserves every from→to so a record
+// adjusted N times shows N events. adminId is a plain string (immutable audit;
+// no FK) — same convention as the hold-history actor.
+model CommissionAdjustmentHistory {
+  id                 String   @id @default(uuid())
+  commissionRecordId String   @map("commission_record_id")
+  fromAdminEarning   Decimal  @map("from_admin_earning") @db.Decimal(10, 2)
+  toAdminEarning     Decimal  @map("to_admin_earning") @db.Decimal(10, 2)
+  fromPlatformMargin Decimal  @map("from_platform_margin") @db.Decimal(10, 2)
+  toPlatformMargin   Decimal  @map("to_platform_margin") @db.Decimal(10, 2)
+  adminId            String   @map("admin_id")
+  reason             String
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  commissionRecord CommissionRecord @relation(fields: [commissionRecordId], references: [id], onDelete: Cascade)
+
+  @@index([commissionRecordId, createdAt])
+  @@map("commission_adjustment_history")
+}
+
+// ── Commission processing DLQ ──────────────────────────────
+//
+// Phase 135 — a sub-order whose commission computation throws is recorded here
+// (instead of throwing out of the tick + recurring forever). The sub-order is
+// left unprocessed (commissionProcessed stays false), so once the underlying
+// data is corrected a later tick retries it; `attempts` counts the retries and
+// `resolvedAt` is stamped when a retry finally succeeds. One row per sub-order.
+model CommissionFailure {
+  id         String    @id @default(uuid())
+  subOrderId String    @unique @map("sub_order_id")
+  trigger    String // cron | return-rejection:<reason>
+  error      String
+  attempts   Int       @default(1)
+  resolvedAt DateTime? @map("resolved_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@index([resolvedAt])
+  @@index([createdAt])
+  @@map("commission_failures")
 }

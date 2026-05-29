@@ -41,11 +41,14 @@ const envServiceStub = {
   getString: (k: string) => {
     const map: Record<string, string> = {
       JWT_REFRESH_TTL: '30d',
-      JWT_ACCESS_TTL: '1h',
+      JWT_ACCESS_TTL: '15m',
       JWT_CUSTOMER_SECRET: 'c'.repeat(32),
     };
     return map[k] ?? '';
   },
+  // Phase 17 (2026-05-20) — use-case consults these for issuer + cap.
+  getOptional: (_k: string) => undefined,
+  getNumber: (_k: string, fallback?: number) => fallback ?? 60,
 } as any;
 
 function buildRepo(overrides: Partial<SessionRepository> = {}): jest.Mocked<SessionRepository> {

@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  Logger,
   Param,
   Patch,
   Post,
@@ -14,11 +15,18 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import {
-  NotFoundAppException,
   BadRequestAppException,
+  NotFoundAppException,
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { Permissions } from '../../../../../core/decorators/permissions.decorator';
+import { CurrentAdmin } from '../../../../../core/decorators/current-actor.decorator';
+import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { RedisService } from '../../../../../bootstrap/cache/redis.service';
 import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/repositories/category.repository.interface';
+import { AdminCreateCategoryDto } from '../../dtos/admin-create-category.dto';
+import { AdminUpdateCategoryDto } from '../../dtos/admin-update-category.dto';
+import { AdminReorderCategoriesDto } from '../../dtos/admin-reorder-categories.dto';
 
 function toSlug(name: string): string {
   return name
@@ -28,16 +36,54 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+/**
+ * Phase 33 (2026-05-21) — try to extract a Cloudinary publicId from
+ * a URL. See category controller history for rationale.
+ */
+function extractCloudinaryPublicId(url: string | null): string | null {
+  if (!url) return null;
+  const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-zA-Z0-9]+$/);
+  return match ? match[1]! : null;
+}
+
+/**
+ * Phase 34 (2026-05-21) — Redis cache key for the storefront category
+ * tree. Invalidated by every admin mutation that affects tree shape
+ * (create/update/delete/deactivate/reorder).
+ */
+const STOREFRONT_TREE_CACHE_KEY = 'storefront:categories:tree';
+
 @ApiTags('Admin - Categories')
 @Controller({ path: 'admin/categories', version: '1' })
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+// Phase 33 (2026-05-21) — granular @Permissions per method.
 export class AdminCategoriesController {
+  private readonly logger = new Logger(AdminCategoriesController.name);
+
   constructor(
     @Inject(CATEGORY_REPOSITORY) private readonly categoryRepo: ICategoryRepository,
+    private readonly cloudinary: CloudinaryAdapter,
+    private readonly redis: RedisService,
   ) {}
+
+  /**
+   * Phase 34 (2026-05-21) — drop the cached storefront tree whenever
+   * the taxonomy mutates. Failures here log but never block — a
+   * Redis outage just means the cache misses for 60s.
+   */
+  private async invalidateTreeCache(): Promise<void> {
+    try {
+      await this.redis.del(STOREFRONT_TREE_CACHE_KEY);
+    } catch (err) {
+      this.logger.warn(
+        `Failed to invalidate storefront tree cache: ${(err as Error).message}`,
+      );
+    }
+  }
 
   @Get()
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.read')
   @ApiOperation({ summary: 'List all categories (flat list)' })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
@@ -71,6 +117,7 @@ export class AdminCategoriesController {
 
   @Get(':id')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.read')
   @ApiOperation({ summary: 'Get a single category' })
   async getOne(@Param('id') id: string) {
     const category = await this.categoryRepo.findById(id);
@@ -78,104 +125,297 @@ export class AdminCategoriesController {
     return { success: true, message: 'Category retrieved', data: { category } };
   }
 
+  @Get(':id/audit-log')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.read')
+  @ApiOperation({ summary: 'Audit log for a single category (Phase 34)' })
+  async getAuditLog(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    const parsedLimit = limit ? Number.parseInt(limit, 10) : undefined;
+    const parsedOffset = offset ? Number.parseInt(offset, 10) : undefined;
+    const entries = await this.categoryRepo.findAuditLogForCategory(id, {
+      limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
+      offset: Number.isFinite(parsedOffset) ? parsedOffset : undefined,
+    });
+    return { success: true, message: 'Audit log retrieved', data: entries };
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @Permissions('catalog.write')
   @ApiOperation({ summary: 'Create a category' })
-  async create(@Body() body: any) {
-    const {
-      name,
-      slug: customSlug,
-      description,
-      imageUrl,
-      bannerUrl,
-      metaTitle,
-      metaDescription,
-      parentId,
-      sortOrder,
-      isActive,
-    } = body;
-    if (!name || !name.trim()) throw new BadRequestAppException('name is required');
-
-    const slug = customSlug || toSlug(name);
-    const existing = await this.categoryRepo.findBySlug(slug);
-    if (existing) throw new BadRequestAppException(`A category with slug "${slug}" already exists`);
+  async create(
+    @CurrentAdmin() adminId: string,
+    @Body() dto: AdminCreateCategoryDto,
+  ) {
+    const slug = dto.slug || toSlug(dto.name);
 
     let level = 0;
-    if (parentId) {
-      const parent = await this.categoryRepo.findById(parentId);
+    if (dto.parentId) {
+      const parent = await this.categoryRepo.findById(dto.parentId);
       if (!parent) throw new NotFoundAppException('Parent category not found');
       level = parent.level + 1;
     }
 
-    const category = await this.categoryRepo.create({
-      name: name.trim(), slug, description: description || null,
-      imageUrl: imageUrl || null,
-      bannerUrl: bannerUrl || null,
-      metaTitle: metaTitle?.trim() || null,
-      metaDescription: metaDescription?.trim() || null,
-      parentId: parentId || null,
-      level, sortOrder: sortOrder ?? 0, isActive: isActive !== false,
+    let category;
+    try {
+      category = await this.categoryRepo.create({
+        name: dto.name,
+        slug,
+        description: dto.description ?? null,
+        imageUrl: dto.imageUrl ?? null,
+        bannerUrl: dto.bannerUrl ?? null,
+        metaTitle: dto.metaTitle ?? null,
+        metaDescription: dto.metaDescription ?? null,
+        parentId: dto.parentId ?? null,
+        level,
+        sortOrder: dto.sortOrder ?? 0,
+        isActive: dto.isActive !== false,
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new BadRequestAppException(`A category with slug "${slug}" already exists`);
+      }
+      throw err;
+    }
+
+    await this.categoryRepo.writeAuditLog({
+      categoryId: category.id,
+      action: 'CREATE',
+      adminId,
+      previousState: null,
+      newState: category,
     });
+    await this.invalidateTreeCache();
 
     return { success: true, message: 'Category created', data: { category } };
   }
 
+  @Patch('reorder')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.write')
+  @ApiOperation({ summary: 'Bulk reorder sibling categories (Phase 34)' })
+  async reorder(
+    @CurrentAdmin() adminId: string,
+    @Body() dto: AdminReorderCategoriesDto,
+  ) {
+    // Phase 34 (2026-05-21) — guard rails before the bulk update:
+    //   1. Every id must resolve to a real category.
+    //   2. Every id must share the same parentId. Reorder is a
+    //      sibling-only operation; promoting/demoting across parents
+    //      goes through the regular PATCH /:id endpoint (which runs
+    //      the cycle + level-cascade machinery).
+    const ids = dto.items.map((i) => i.id);
+    const found = await Promise.all(ids.map((id) => this.categoryRepo.findById(id)));
+    const missing: string[] = [];
+    found.forEach((cat, idx) => {
+      if (!cat) missing.push(ids[idx]!);
+    });
+    if (missing.length > 0) {
+      throw new BadRequestAppException(`Categories not found: ${missing.join(', ')}`);
+    }
+    const firstParent = found[0]?.parentId ?? null;
+    const mismatched = found.filter((c) => (c?.parentId ?? null) !== firstParent);
+    if (mismatched.length > 0) {
+      throw new BadRequestAppException(
+        'All categories in a reorder batch must share the same parent. ' +
+          'Use PATCH /admin/categories/:id to change parents.',
+      );
+    }
+
+    await this.categoryRepo.bulkReorder(dto.items);
+
+    // One REORDER audit row per affected category — simpler to query
+    // by categoryId in the per-category history view than to fold
+    // them into a single "bulk" entry.
+    await Promise.all(
+      dto.items.map((item, idx) =>
+        this.categoryRepo.writeAuditLog({
+          categoryId: item.id,
+          action: 'REORDER',
+          adminId,
+          previousState: { sortOrder: found[idx]?.sortOrder ?? null },
+          newState: { sortOrder: item.sortOrder },
+        }),
+      ),
+    );
+    await this.invalidateTreeCache();
+
+    return {
+      success: true,
+      message: `${dto.items.length} categor${dto.items.length === 1 ? 'y' : 'ies'} reordered`,
+    };
+  }
+
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.write')
   @ApiOperation({ summary: 'Update a category' })
-  async update(@Param('id') id: string, @Body() body: any) {
+  async update(
+    @CurrentAdmin() adminId: string,
+    @Param('id') id: string,
+    @Body() dto: AdminUpdateCategoryDto,
+  ) {
     const existing = await this.categoryRepo.findById(id);
     if (!existing) throw new NotFoundAppException('Category not found');
 
-    const data: any = {};
-    if (body.name !== undefined) data.name = body.name.trim();
-    if (body.slug !== undefined) {
-      if (body.slug !== existing.slug) {
-        const slugExists = await this.categoryRepo.findBySlugExcluding(body.slug, id);
-        if (slugExists) throw new BadRequestAppException(`Slug "${body.slug}" already taken`);
-      }
-      data.slug = body.slug;
+    const data: Record<string, unknown> = {};
+    if (dto.name !== undefined) data.name = dto.name;
+    if (dto.slug !== undefined && dto.slug !== existing.slug) {
+      const slugExists = await this.categoryRepo.findBySlugExcluding(dto.slug, id);
+      if (slugExists) throw new BadRequestAppException(`Slug "${dto.slug}" already taken`);
+      data.slug = dto.slug;
     }
-    if (body.description !== undefined) data.description = body.description;
-    if (body.imageUrl !== undefined) data.imageUrl = body.imageUrl;
-    if (body.bannerUrl !== undefined) data.bannerUrl = body.bannerUrl || null;
-    if (body.metaTitle !== undefined)
-      data.metaTitle = body.metaTitle?.trim() || null;
-    if (body.metaDescription !== undefined)
-      data.metaDescription = body.metaDescription?.trim() || null;
-    if (body.sortOrder !== undefined) data.sortOrder = body.sortOrder;
-    if (body.isActive !== undefined) data.isActive = body.isActive;
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.imageUrl !== undefined) data.imageUrl = dto.imageUrl;
+    if (dto.bannerUrl !== undefined) data.bannerUrl = dto.bannerUrl || null;
+    if (dto.metaTitle !== undefined) data.metaTitle = dto.metaTitle || null;
+    if (dto.metaDescription !== undefined) data.metaDescription = dto.metaDescription || null;
+    if (dto.sortOrder !== undefined) data.sortOrder = dto.sortOrder;
+    if (dto.isActive !== undefined) data.isActive = dto.isActive;
 
-    if (body.parentId !== undefined && body.parentId !== existing.parentId) {
-      if (body.parentId === id) throw new BadRequestAppException('Category cannot be its own parent');
-      if (body.parentId) {
-        const parent = await this.categoryRepo.findById(body.parentId);
+    // Detect "is this a deactivation" — different audit action than a
+    // regular update.
+    const isDeactivation = dto.isActive === false && existing.isActive === true;
+
+    const parentChanged = dto.parentId !== undefined && dto.parentId !== existing.parentId;
+    let category;
+    if (parentChanged) {
+      if (dto.parentId === id) {
+        throw new BadRequestAppException('Category cannot be its own parent');
+      }
+
+      let newLevel = 0;
+      if (dto.parentId) {
+        const parent = await this.categoryRepo.findById(dto.parentId);
         if (!parent) throw new NotFoundAppException('Parent category not found');
-        data.parentId = body.parentId;
-        data.level = parent.level + 1;
+
+        const newParentAncestors = await this.categoryRepo.findAncestorIds(dto.parentId);
+        if (newParentAncestors.includes(id)) {
+          throw new BadRequestAppException(
+            'Cannot move category — would create a cycle in the hierarchy',
+          );
+        }
+
+        data.parentId = dto.parentId;
+        newLevel = parent.level + 1;
       } else {
         data.parentId = null;
-        data.level = 0;
+        newLevel = 0;
+      }
+
+      try {
+        category = await this.categoryRepo.updateWithLevelCascade(id, data, newLevel);
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          throw new BadRequestAppException('Slug already in use');
+        }
+        throw err;
+      }
+    } else {
+      try {
+        category = await this.categoryRepo.update(id, data);
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          throw new BadRequestAppException('Slug already in use');
+        }
+        throw err;
       }
     }
 
-    const category = await this.categoryRepo.update(id, data);
+    await this.categoryRepo.writeAuditLog({
+      categoryId: id,
+      action: isDeactivation ? 'DEACTIVATE' : 'UPDATE',
+      adminId,
+      previousState: existing,
+      newState: category,
+    });
+    await this.invalidateTreeCache();
+
     return { success: true, message: 'Category updated', data: { category } };
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @Permissions('catalog.write')
   @ApiOperation({ summary: 'Delete or deactivate a category' })
-  async delete(@Param('id') id: string) {
+  async delete(
+    @CurrentAdmin() adminId: string,
+    @Param('id') id: string,
+  ) {
     const category = await this.categoryRepo.findWithCounts(id);
     if (!category) throw new NotFoundAppException('Category not found');
 
     if (category._count.products > 0 || category._count.children > 0) {
       await this.categoryRepo.deactivate(id);
+      await this.categoryRepo.writeAuditLog({
+        categoryId: id,
+        action: 'DEACTIVATE',
+        adminId,
+        previousState: { isActive: true },
+        newState: { isActive: false },
+        reason: 'Has products or children',
+      });
+      await this.invalidateTreeCache();
       return { success: true, message: 'Category deactivated (has associated products or children)' };
     }
 
-    await this.categoryRepo.delete(id);
+    let deleted: { imageUrl: string | null; bannerUrl: string | null } | null;
+    try {
+      deleted = await this.categoryRepo.deleteTransactional(id);
+    } catch (err: any) {
+      if (err?.message === 'CATEGORY_NOT_EMPTY') {
+        await this.categoryRepo.deactivate(id);
+        await this.categoryRepo.writeAuditLog({
+          categoryId: id,
+          action: 'DEACTIVATE',
+          adminId,
+          previousState: { isActive: true },
+          newState: { isActive: false },
+          reason: 'Children or products added during deletion (race)',
+        });
+        await this.invalidateTreeCache();
+        return {
+          success: true,
+          message: 'Category deactivated (children or products added during deletion)',
+        };
+      }
+      throw err;
+    }
+
+    // Note: the audit row writes BEFORE the cascade-delete clears the
+    // CategoryAuditLog rows for this category (CASCADE delete on the
+    // FK). It still ends up purged, but the rest of the system sees
+    // a brief window with the trail in place — acceptable for
+    // forensic dumps that snapshot the DB.
+    if (deleted) {
+      await this.categoryRepo.writeAuditLog({
+        categoryId: id,
+        action: 'DELETE',
+        adminId,
+        previousState: { ...category, ...deleted },
+        newState: null,
+      });
+    }
+    await this.invalidateTreeCache();
+
+    if (deleted) {
+      const ids = [
+        extractCloudinaryPublicId(deleted.imageUrl),
+        extractCloudinaryPublicId(deleted.bannerUrl),
+      ].filter((v): v is string => v !== null);
+      for (const publicId of ids) {
+        this.cloudinary.delete(publicId).catch((err) => {
+          this.logger.warn(
+            `Cloudinary cleanup failed for category asset ${publicId}: ${err?.message}`,
+          );
+        });
+      }
+    }
+
     return { success: true, message: 'Category deleted' };
   }
 }

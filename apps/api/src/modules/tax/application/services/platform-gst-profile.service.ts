@@ -58,6 +58,41 @@ export class PlatformGstProfileService {
     return rows.map(toItem);
   }
 
+  /**
+   * Phase 159z (GSTR-8 audit B3) — the platform's own GSTIN, fetched
+   * from the verified PlatformGstProfile row marked `isDefault=true`
+   * and `isActive=true`. This is the authoritative source of the
+   * operator GSTIN for GSTR-8 / GSTR-1 / GSTR-3B exports — the
+   * controllers MUST NOT accept a user-supplied operatorGstin.
+   *
+   * Returns null when no default exists; callers throw a typed error
+   * that the admin UI can render as "configure your platform GST
+   * profile before running this export".
+   */
+  async getDefault(): Promise<PlatformGstProfileItem | null> {
+    const row = await this.prisma.platformGstProfile.findFirst({
+      where: { isDefault: true, isActive: true },
+    });
+    return row ? toItem(row) : null;
+  }
+
+  /**
+   * Same as `getDefault()` but throws a typed exception instead of
+   * returning null. The exception carries an admin-facing remediation
+   * hint so the export error response can guide the admin straight to
+   * the Platform-GST settings page.
+   */
+  async requireDefault(): Promise<PlatformGstProfileItem> {
+    const row = await this.getDefault();
+    if (!row) {
+      throw new BadRequestAppException(
+        'No default Platform GST profile configured — set one via ' +
+          'Settings → Tax → Platform GSTINs before running GSTR-8 / GSTR-1 / GSTR-3B exports.',
+      );
+    }
+    return row;
+  }
+
   async create(input: CreatePlatformProfileInput): Promise<PlatformGstProfileItem> {
     const validation = validateGstin(input.gstin);
     if (!validation.isValid || !validation.stateCode) {

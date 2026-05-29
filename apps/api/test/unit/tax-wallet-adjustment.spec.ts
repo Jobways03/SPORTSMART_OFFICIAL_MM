@@ -25,6 +25,7 @@ interface MockPrisma {
   };
   admin: { findUnique: jest.Mock };
   adminRoleAssignment: { findFirst: jest.Mock };
+  platformExpense: { create: jest.Mock };
   $transaction: jest.Mock;
 }
 
@@ -44,7 +45,8 @@ function makeService(
   wallet: MockWallet;
 } {
   const prisma: MockPrisma = {
-    return: { findUnique: jest.fn(), update: jest.fn() },
+    return: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
+    platformExpense: { create: jest.fn().mockResolvedValue({}) },
     taxDocument: { findFirst: jest.fn() },
     orderItemTaxSnapshot: { findMany: jest.fn() },
     orderItem: { findUnique: jest.fn() },
@@ -385,6 +387,67 @@ describe('WalletAdjustmentService.approve', () => {
     expect(wallet.creditAdjustment).toHaveBeenCalledWith(
       expect.objectContaining({ bypassBlock: true }),
     );
+  });
+
+  it('on TIME_BARRED approval: flips the linked return to REFUNDED + books absorbed-GST PlatformExpense (Phase 109)', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-tb1',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 50_000n,
+      customerId: 'u-1',
+      kind: 'TIME_BARRED_CREDIT_NOTE',
+      reason: 'sec34',
+      returnId: 'ret-1',
+      requiresDualApproval: false,
+      wouldHaveBeenTotalTaxInPaise: 9_000n,
+    });
+    wallet.creditAdjustment.mockResolvedValue({ transaction: { id: 'tx-tb1' } });
+    prisma.walletAdjustment.update.mockResolvedValue({ id: 'adj-tb1', status: 'APPROVED' });
+
+    await service.approve({ adjustmentId: 'adj-tb1', approvedByAdminId: 'admin-1' });
+
+    // Lifecycle: the return that submitQcDecision left in QC_APPROVED now closes.
+    expect(prisma.return.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'ret-1' },
+        data: expect.objectContaining({ status: 'REFUNDED', refundMethod: 'WALLET' }),
+      }),
+    );
+    // Absorbed GST booked for GSTR reconciliation; sourceId namespaced to
+    // avoid colliding with a liability-ledger PlatformExpense(RETURN, ret-1).
+    expect(prisma.platformExpense.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          sourceType: 'RETURN',
+          sourceId: 'gst-timebar:ret-1',
+          expenseType: 'ABSORBED_GST',
+          amountInPaise: 9_000n,
+        }),
+      }),
+    );
+  });
+
+  it('skips the absorbed-GST PlatformExpense when there was no GST to absorb (legacy / no-invoice)', async () => {
+    const { service, prisma, wallet } = makeService();
+    prisma.walletAdjustment.findUnique.mockResolvedValue({
+      id: 'adj-leg',
+      status: 'PENDING_APPROVAL',
+      amountInPaise: 50_000n,
+      customerId: 'u-1',
+      kind: 'TIME_BARRED_CREDIT_NOTE',
+      reason: 'legacy',
+      returnId: 'ret-2',
+      requiresDualApproval: false,
+      wouldHaveBeenTotalTaxInPaise: null,
+    });
+    wallet.creditAdjustment.mockResolvedValue({ transaction: { id: 'tx-leg' } });
+    prisma.walletAdjustment.update.mockResolvedValue({ id: 'adj-leg', status: 'APPROVED' });
+
+    await service.approve({ adjustmentId: 'adj-leg', approvedByAdminId: 'admin-1' });
+
+    expect(prisma.return.update).toHaveBeenCalled(); // still flips to REFUNDED
+    expect(prisma.platformExpense.create).not.toHaveBeenCalled();
   });
 
   it('refuses to post zero-amount adjustments', async () => {

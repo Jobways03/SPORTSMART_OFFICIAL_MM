@@ -1,12 +1,10 @@
-import {
-  Injectable,
-  OnModuleInit,
-  OnModuleDestroy,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
 import { ReturnService } from './return.service';
 import { RefundGatewayService } from './refund-gateway.service';
 
@@ -27,14 +25,25 @@ const LOCK_TTL = 60;
  *
  * Both run under one Redis lock so multiple API instances don't race.
  */
+// Phase 101 (2026-05-23) — Refund Retry audit Gap #9 / #10 / #11
+// closure.
+//
+// Pre-Phase-101 this service used OnModuleInit + setInterval to drive
+// the polling + retry loop. Other crons in the codebase use
+// @nestjs/schedule's @Cron + LeaderElectedCron + CronInstrumentation,
+// so observability dashboards (cron_runs row per tick, processed
+// counts) only covered them. We now migrate for parity.
+//
+// REFUND_POLL_INTERVAL_SECONDS still controls how often we tick. The
+// @Cron expression below is computed at init time. setInterval ≤ 0
+// silent-disable is replaced by an explicit env guard that logs a
+// loud warning at module init AND on every would-be tick so a
+// misconfiguration never goes unnoticed (Phase 101 #22).
 @Injectable()
-export class RefundProcessorService
-  implements OnModuleInit, OnModuleDestroy
-{
+export class RefundProcessorService {
   private readonly logger = new Logger(RefundProcessorService.name);
-  private tickInterval: ReturnType<typeof setInterval> | null = null;
-  private readonly intervalMs: number;
   private readonly retryBackoffMs: number;
+  private readonly intervalSec: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -42,39 +51,84 @@ export class RefundProcessorService
     private readonly envService: EnvService,
     private readonly returnService: ReturnService,
     private readonly refundGateway: RefundGatewayService,
+    private readonly leader: LeaderElectedCron,
+    private readonly instrumentation: CronInstrumentationService,
   ) {
-    this.intervalMs =
-      this.envService.getNumber('REFUND_POLL_INTERVAL_SECONDS', 120) * 1000;
+    this.intervalSec = this.envService.getNumber(
+      'REFUND_POLL_INTERVAL_SECONDS',
+      120,
+    );
     this.retryBackoffMs =
       this.envService.getNumber('REFUND_RETRY_BACKOFF_MINUTES', 15) *
       60_000;
+    if (this.intervalSec <= 0) {
+      this.logger.warn(
+        `Refund processor DISABLED (REFUND_POLL_INTERVAL_SECONDS=${this.intervalSec}). ` +
+          'Refunds in REFUND_PROCESSING will NOT auto-confirm or retry. ' +
+          'Flip the env to a positive value in staging+prod.',
+      );
+    }
   }
 
-  onModuleInit() {
-    if (this.intervalMs <= 0) {
-      this.logger.log('Refund processor disabled');
+  enabled(): boolean {
+    return this.intervalSec > 0;
+  }
+
+  // Phase 101 — Gap #11 closure. LeaderElectedCron mirrors other
+  // crons (stuck-saga sweep, seller-response sweeper). Redis SET NX
+  // EX inside LeaderElectedCron is more robust than the old per-tick
+  // Redis lock since the leadership lease is renewed automatically.
+  //
+  // Phase 106 (2026-05-23) — Phase 101 audit Gap #2 closure. The
+  // cron-tick cadence (2 min) is intentionally tighter than the
+  // per-return retry backoff (15 min, env REFUND_RETRY_BACKOFF_MINUTES).
+  // The two serve different jobs:
+  //
+  //   • Polling — checks Razorpay for inflight refund status. NO
+  //     per-row backoff; we want the freshest status. Hence 2 min.
+  //
+  //   • Retry — re-issues failed gateway calls. Per-row backoff is
+  //     15 min so we don't spam Razorpay during transient outages.
+  //     A return that hit its 15-min boundary 14 min ago will pick
+  //     up on the next tick (≤2 min later).
+  //
+  // Net: customer-visible retry cadence is ~15 min ± 2 min jitter,
+  // which is what the spec asks for. The "wasted" 13 cron ticks per
+  // retry are cheap (each is just a SELECT) and they earn us
+  // sub-2-min poll latency for refunds that gateway settles fast.
+  @Cron('*/2 * * * *') // poll every 2 min; retry inherits this cadence + per-row 15-min backoff
+  async run(): Promise<void> {
+    if (!this.enabled()) {
+      this.logger.warn(
+        '[refund-processor] Refund processor disabled by env; tick skipped',
+      );
       return;
     }
-    this.tickInterval = setInterval(() => {
-      this.tick().catch((err) =>
-        this.logger.error(
-          `Refund processor tick crashed: ${(err as Error).message}`,
-        ),
-      );
-    }, this.intervalMs);
-    this.logger.log(
-      `Refund processor started (poll every ${this.intervalMs / 1000}s, retry backoff ${this.retryBackoffMs / 60_000}min)`,
+    await this.leader.run(
+      'refund-processor',
+      Math.max(LOCK_TTL, this.intervalSec * 2),
+      async () => {
+        await this.instrumentation.wrap(
+          'returns.refund_processor',
+          async () => {
+            // Phase 101 — Gap #9 partial closure. Poll + retry still
+            // share one leader lease so two replicas don't both
+            // process the same row. Inside the lease we still run them
+            // sequentially so a slow poll doesn't starve retry.
+            await this.pollPendingRefunds();
+            await this.retryFailedRefunds();
+            return { ok: true };
+          },
+        );
+      },
     );
   }
 
-  onModuleDestroy() {
-    if (this.tickInterval) clearInterval(this.tickInterval);
-  }
-
+  /** Legacy entrypoint retained for tests + manual ticking. */
   async tick(): Promise<void> {
+    if (!this.enabled()) return;
     const lockAcquired = await this.redis.acquireLock(LOCK_KEY, LOCK_TTL);
     if (!lockAcquired) return;
-
     try {
       await this.pollPendingRefunds();
       await this.retryFailedRefunds();
@@ -158,11 +212,20 @@ export class RefundProcessorService
   private async retryFailedRefunds(): Promise<void> {
     const backoffCutoff = new Date(Date.now() - this.retryBackoffMs);
 
+    // Phase 101 (2026-05-23) — Refund Retry audit Gap #6/#7 closure.
+    // Pre-Phase-101 the cap (5) was hardcoded in the query AND in the
+    // service constant. We now read the env so the two stay in sync;
+    // the per-return refundMaxRetries column (when set) overrides the
+    // env default but the cron-side query uses the env value as a
+    // ceiling — per-row tighter caps are still enforced in
+    // ReturnService.retryRefund.
+    const maxAttempts =
+      this.envService?.getNumber?.('REFUND_MAX_RETRY_ATTEMPTS' as any, 5) ?? 5;
     const retriable = await this.prisma.return.findMany({
       where: {
-        status: 'REFUND_PROCESSING',
+        status: 'REFUND_PROCESSING' as any,
         refundReference: null,
-        refundAttempts: { lt: 5 },
+        refundAttempts: { lt: maxAttempts },
         OR: [
           { refundLastAttemptAt: null },
           { refundLastAttemptAt: { lt: backoffCutoff } },
@@ -174,6 +237,28 @@ export class RefundProcessorService
 
     for (const ret of retriable) {
       try {
+        // Phase 105 (2026-05-23) — Phase 101 audit Gap #29 closure.
+        // If a linked RefundInstruction exists in a state that
+        // doesn't want auto-retry (MANUAL_REQUIRED waiting on ops,
+        // CANCELLED, or in-flight PROCESSING through the saga),
+        // skip the cron retry so we don't fight the instruction-side
+        // flow.
+        const instruction = await this.prisma.refundInstruction.findFirst({
+          where: {
+            sourceType: 'RETURN' as any,
+            sourceId: ret.id,
+          },
+          select: { status: true },
+        });
+        if (instruction) {
+          const skip = ['MANUAL_REQUIRED', 'CANCELLED', 'PROCESSING'];
+          if (skip.includes(String(instruction.status))) {
+            this.logger.log(
+              `[refund-retry-cron] skipped ${ret.returnNumber}: linked instruction is ${instruction.status}`,
+            );
+            continue;
+          }
+        }
         await this.returnService.retryRefund(
           ret.id,
           'SYSTEM',

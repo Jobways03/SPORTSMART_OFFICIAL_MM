@@ -80,7 +80,8 @@ export interface IProductRepository {
   findSellerByEmail(email: string): Promise<any | null>;
   findSellerById(sellerId: string): Promise<any | null>;
 
-  // ── Category/Brand resolution ──
-  findOrCreateCategory(name: string): Promise<any>;
-  findOrCreateBrand(name: string): Promise<any>;
+  // Phase 33 (2026-05-21) — findOrCreateCategory / findOrCreateBrand
+  // removed. Taxonomy mutation now lives only on
+  // AdminCategoriesController / AdminBrandsController, both gated by
+  // `catalog.write`. See prisma-product.repository.ts.
 }

@@ -33,11 +33,21 @@ export class StubEInvoiceProvider implements EInvoiceProvider {
       .digest('hex');
     const ackNo = `STUB-${Date.now()}-${randomBytes(3).toString('hex')}`;
     const ackDate = new Date();
-    // QR URL is a fake `data:` URL so callers exercise the rendering
-    // path without a real PNG. The NIC adapter returns a CDN URL.
-    const qrCodeUrl = `data:image/svg+xml;base64,${Buffer.from(
-      `<svg xmlns="http://www.w3.org/2000/svg"><text>${irn.slice(0, 12)}</text></svg>`,
-    ).toString('base64')}`;
+    // Phase 90 (2026-05-23) — Gap #13 stub QR clarity. Pre-Phase-90
+    // the SVG looked like a real QR (just IRN text inside <svg>) and
+    // could mislead operators reviewing PDFs. The new SVG is
+    // explicitly labelled "STUB - NOT A REAL QR" with a watermark
+    // pattern so screenshots are recognisable as test data.
+    const stubQrSvg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">` +
+      `<rect width="140" height="140" fill="#f3f4f6" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,4"/>` +
+      `<text x="70" y="32" text-anchor="middle" font-family="monospace" font-size="11" fill="#991b1b" font-weight="bold">STUB</text>` +
+      `<text x="70" y="52" text-anchor="middle" font-family="monospace" font-size="9" fill="#991b1b">NOT A REAL QR</text>` +
+      `<text x="70" y="84" text-anchor="middle" font-family="monospace" font-size="8" fill="#374151">IRN (first 16):</text>` +
+      `<text x="70" y="100" text-anchor="middle" font-family="monospace" font-size="9" fill="#1f2937">${irn.slice(0, 16)}</text>` +
+      `<text x="70" y="124" text-anchor="middle" font-family="monospace" font-size="7" fill="#6b7280">${input.documentNumber}</text>` +
+      `</svg>`;
+    const qrCodeUrl = `data:image/svg+xml;base64,${Buffer.from(stubQrSvg).toString('base64')}`;
     this.logger.log(
       `[stub] IRN minted: ${irn.slice(0, 12)}... for ${input.documentNumber}`,
     );
@@ -52,7 +62,10 @@ export class StubEInvoiceProvider implements EInvoiceProvider {
         ackDate: ackDate.toISOString(),
         // Synthetic JWS signature placeholder — NIC returns a real
         // JWS; the stub records a constant so the field is non-null.
-        signature: 'STUB-NOT-A-REAL-SIGNATURE',
+        // Phase 90 — Gap #14. No fake signature field; consumers
+        // checking `signedDocumentJson.signature` know real signatures
+        // are absent on stub responses.
+        signatureProvider: 'STUB_NONE',
         payload: input,
       }),
       qrCodeUrl,
@@ -72,7 +85,10 @@ export class StubEInvoiceProvider implements EInvoiceProvider {
         cancelledAt: cancelledAt.toISOString(),
         cancellationCode: input.cancellationCode,
         cancellationReason: input.cancellationReason,
-        signature: 'STUB-NOT-A-REAL-SIGNATURE',
+        // Phase 90 — Gap #14. No fake signature field; consumers
+        // checking `signedDocumentJson.signature` know real signatures
+        // are absent on stub responses.
+        signatureProvider: 'STUB_NONE',
       }),
     };
   }

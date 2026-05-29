@@ -13,6 +13,7 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { ProcurementService } from '../../application/services/procurement.service';
 import { ProcurementApproveDto } from '../dtos/procurement-approve.dto';
 import { ProcurementRejectDto } from '../dtos/procurement-reject.dto';
@@ -21,6 +22,7 @@ import { ProcurementDispatchDto } from '../dtos/procurement-dispatch.dto';
 @ApiTags('Admin Procurement')
 @Controller('admin/procurement')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+@Permissions('franchise.read')
 export class AdminProcurementController {
   constructor(private readonly procurementService: ProcurementService) {}
 
@@ -75,6 +77,10 @@ export class AdminProcurementController {
   }
 
   @Patch(':id/approve')
+  // Phase 159p (audit #5) — approving a procurement sets landed cost + the
+  // franchise payable; it must require a dedicated write permission, not the
+  // class-level franchise.read every admin inherits.
+  @Permissions('franchise.procurement.approve')
   @HttpCode(HttpStatus.OK)
   async approveRequest(
     @Req() req: Request,
@@ -96,6 +102,8 @@ export class AdminProcurementController {
   }
 
   @Patch(':id/reject')
+  // Reject is the other half of the approval decision — same write permission.
+  @Permissions('franchise.procurement.approve')
   @HttpCode(HttpStatus.OK)
   async rejectRequest(
     @Req() req: Request,
@@ -117,6 +125,7 @@ export class AdminProcurementController {
   }
 
   @Patch(':id/dispatch')
+  @Permissions('franchise.procurement.dispatch')
   @HttpCode(HttpStatus.OK)
   async markDispatched(
     @Req() req: Request,
@@ -124,13 +133,18 @@ export class AdminProcurementController {
     @Body() dto: ProcurementDispatchDto,
   ) {
     const adminId = (req as any).adminId;
-    const data = await this.procurementService.markDispatched(adminId, id, {
-      trackingNumber: dto.trackingNumber ?? null,
-      carrierName: dto.carrierName ?? null,
-      expectedDeliveryAt: dto.expectedDeliveryAt
-        ? new Date(dto.expectedDeliveryAt)
-        : null,
-    });
+    const data = await this.procurementService.markDispatched(
+      adminId,
+      id,
+      {
+        trackingNumber: dto.trackingNumber ?? null,
+        carrierName: dto.carrierName ?? null,
+        expectedDeliveryAt: dto.expectedDeliveryAt
+          ? new Date(dto.expectedDeliveryAt)
+          : null,
+      },
+      dto.items,
+    );
 
     return {
       success: true,
@@ -140,6 +154,7 @@ export class AdminProcurementController {
   }
 
   @Patch(':id/settle')
+  @Permissions('franchise.procurement.settle')
   @HttpCode(HttpStatus.OK)
   async settleRequest(
     @Req() req: Request,

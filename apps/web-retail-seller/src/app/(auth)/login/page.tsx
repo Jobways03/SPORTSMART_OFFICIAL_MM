@@ -64,13 +64,11 @@ export default function SellerLoginPage() {
       });
 
       if (result.data) {
-        try {
-          sessionStorage.setItem('accessToken', result.data.accessToken);
-          sessionStorage.setItem('refreshToken', result.data.refreshToken);
-          sessionStorage.setItem('seller', JSON.stringify(result.data.seller));
-        } catch {
-          // Storage unavailable
-        }
+        // Phase 21 (2026-05-20) — Tokens are NOT written to
+        // sessionStorage anymore. The login response also sets
+        // httpOnly cookies (sm_access_seller / sm_refresh_seller) and
+        // the dashboard fetches the seller profile via
+        // GET /seller/auth/me on mount.
         router.push('/dashboard');
       }
     } catch (err) {
@@ -80,10 +78,18 @@ export default function SellerLoginPage() {
           setServerError('Invalid email/phone number or password');
           setPassword('');
         } else if (err.status === 403) {
-          setServerErrorType('info');
-          setServerError(
-            'Your account is pending admin approval. You will be able to sign in once your account is approved.',
-          );
+          const code = (err.body && (err.body as { code?: string }).code) ?? '';
+          if (code === 'EMAIL_NOT_VERIFIED') {
+            setServerErrorType('warning');
+            setServerError(
+              'Please verify your email before signing in. Use the link in the verification email or visit /register/verify to enter the code.',
+            );
+          } else {
+            setServerErrorType('info');
+            setServerError(
+              'Your account is pending admin approval. You will be able to sign in once your account is approved.',
+            );
+          }
         } else if (err.status === 429) {
           setServerErrorType('warning');
           const msg = err.body.message || 'Too many failed attempts. Please try again later.';

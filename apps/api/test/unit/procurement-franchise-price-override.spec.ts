@@ -64,6 +64,7 @@ describe('ProcurementService.approveRequest — per-franchise price precedence',
         : null,
     );
 
+    const historyCreate = jest.fn().mockResolvedValue({});
     const prisma: any = {
       productVariant: { update: variantUpdate },
       product: { update: productUpdate },
@@ -71,7 +72,11 @@ describe('ProcurementService.approveRequest — per-franchise price precedence',
         findUnique: overrideFindUnique,
         update: overrideUpdate,
       },
+      franchiseProcurementPriceHistory: { create: historyCreate },
+      // Phase 159p — approveRequest now runs in a tx + writes a history row.
+      procurementRequestEvent: { create: jest.fn().mockResolvedValue({}) },
     };
+    prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
 
     const svc = new ProcurementService(
       procurementRepo,
@@ -82,6 +87,7 @@ describe('ProcurementService.approveRequest — per-franchise price precedence',
       { publish: jest.fn().mockResolvedValue(undefined) } as any,
       { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any,
       prisma,
+      { get: jest.fn(), getOptional: jest.fn() } as any, // env
     );
 
     return { svc, variantUpdate, productUpdate, overrideUpdate, overrideFindUnique };
@@ -104,10 +110,14 @@ describe('ProcurementService.approveRequest — per-franchise price precedence',
         },
       },
     });
-    expect(overrideUpdate).toHaveBeenCalledWith({
-      where: { id: 'override-1' },
-      data: { landedUnitCost: 10 },
-    });
+    // Phase 159l — the override update now also stamps updatedBy + bumps the
+    // OCC version, so match on the cost rather than an exact object.
+    expect(overrideUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'override-1' },
+        data: expect.objectContaining({ landedUnitCost: 10 }),
+      }),
+    );
     // Must NOT touch the variant default — that would broadcast the
     // per-franchise rate to every franchise on this SKU.
     expect(variantUpdate).not.toHaveBeenCalled();

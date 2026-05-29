@@ -1,4 +1,4 @@
-import { apiClient, ApiResponse, SELLER_TYPE } from '@/lib/api-client';
+import { apiClient, ApiResponse } from '@/lib/api-client';
 
 export interface SellerRegisterPayload {
   sellerName: string;
@@ -6,14 +6,49 @@ export interface SellerRegisterPayload {
   email: string;
   phoneNumber: string;
   password: string;
+  confirmPassword: string;
+  acceptTerms: boolean;
+  acceptPrivacy: boolean;
+  acceptMarketing?: boolean;
+  captchaToken?: string;
 }
 
+/**
+ * Phase 18 (2026-05-20) — uniform register response shape mirrors the
+ * backend `SellerRegisterResponseData`. Both fresh and duplicate
+ * paths land in this shape so the public API does not leak account
+ * existence. `verificationEmailSent: false` is the signal to show a
+ * "we couldn't send your code — try resending" banner on the verify
+ * page instead of pretending the OTP shipped.
+ */
 export interface SellerRegisterResponseData {
-  sellerId: string;
-  sellerName: string;
-  sellerShopName: string;
   email: string;
-  phoneNumber: string;
+  requiresVerification: true;
+  verificationEmailSent: boolean;
+  message: string;
+  sellerId?: string;
+}
+
+export interface SellerVerifyEmailPayload {
+  email: string;
+  otp: string;
+  captchaToken?: string;
+}
+
+export interface SellerVerifyEmailResponseData {
+  email: string;
+  verified: true;
+}
+
+export interface SellerResendVerificationOtpPayload {
+  email: string;
+  captchaToken?: string;
+}
+
+export interface SellerResendVerificationOtpResponseData {
+  email: string;
+  message: string;
+  retryAfterSeconds?: number;
 }
 
 export interface SellerLoginPayload {
@@ -40,14 +75,45 @@ export interface VerifyResetOtpResponseData {
 }
 
 export const sellerAuthService = {
+  /**
+   * Phase 18 (2026-05-20) — sellerType is NO LONGER sent in the body.
+   * The api-client bakes `X-Seller-Type: D2C` (or RETAIL on the
+   * retail portal) into every request via defaultHeaders, and the
+   * backend derives the persisted value from that header. A D2C
+   * portal can no longer impersonate a RETAIL seller (or vice
+   * versa) because the body field doesn't exist on the DTO anymore.
+   */
   register(payload: SellerRegisterPayload): Promise<ApiResponse<SellerRegisterResponseData>> {
     return apiClient<SellerRegisterResponseData>('/seller/auth/register', {
       method: 'POST',
-      // Phase 38 — bake the seller-type discriminator (RETAIL) into
-      // the body. See web-d2c-seller's auth.service for the parallel
-      // D2C version.
-      body: JSON.stringify({ ...payload, sellerType: SELLER_TYPE }),
+      body: JSON.stringify(payload),
     });
+  },
+
+  /**
+   * Phase 18 (2026-05-20) — public verify-email path. Unauthenticated:
+   * a brand-new seller can verify before logging in, which closes the
+   * "login allowed unverified" loophole the audit called CRITICAL.
+   */
+  verifyEmail(
+    payload: SellerVerifyEmailPayload,
+  ): Promise<ApiResponse<SellerVerifyEmailResponseData>> {
+    return apiClient<SellerVerifyEmailResponseData>('/seller/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  resendVerificationOtp(
+    payload: SellerResendVerificationOtpPayload,
+  ): Promise<ApiResponse<SellerResendVerificationOtpResponseData>> {
+    return apiClient<SellerResendVerificationOtpResponseData>(
+      '/seller/auth/resend-verification-otp',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
   },
 
   login(payload: SellerLoginPayload): Promise<ApiResponse<SellerLoginResponseData>> {
@@ -90,14 +156,36 @@ export const sellerAuthService = {
   },
 
   /**
-   * Server-side logout — revokes every active SellerSession server-side
-   * so a stolen refresh token can't be replayed after the click. The
-   * caller still needs to clear local sessionStorage afterwards (the
-   * shared logout helper does both).
+   * Phase 21 (2026-05-20) — cookie-validated session probe.
+   * Hits the SellerAuthGuard via GET /seller/auth/me. On 401 the
+   * caller knows the seller is not logged in.
    */
-  logout(): Promise<ApiResponse> {
-    return apiClient('/seller/auth/logout', {
+  me(): Promise<ApiResponse<SellerMeData>> {
+    return apiClient<SellerMeData>('/seller/auth/me');
+  },
+
+  /**
+   * Server-side logout — revokes the CURRENT SellerSession by default.
+   * Pass `{ all: true }` to revoke every active SellerSession for the
+   * seller. Always clears the sm_access_seller + sm_refresh_seller
+   * httpOnly cookies on the response.
+   */
+  logout(opts?: { all?: boolean }): Promise<ApiResponse> {
+    const qs = opts?.all ? '?all=true' : '';
+    return apiClient(`/seller/auth/logout${qs}`, {
       method: 'POST',
     });
   },
 };
+
+export interface SellerMeData {
+  sellerId: string;
+  email: string;
+  sellerName: string;
+  sellerShopName: string;
+  phoneNumber: string;
+  status: string;
+  verificationStatus: string;
+  isEmailVerified: boolean;
+  sellerType: string | null;
+}

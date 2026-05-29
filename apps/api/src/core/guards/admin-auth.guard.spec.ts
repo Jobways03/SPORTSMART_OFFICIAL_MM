@@ -3,6 +3,7 @@ import * as jwt from 'jsonwebtoken';
 import { AdminAuthGuard } from './admin-auth.guard';
 import { UnauthorizedAppException } from '../exceptions';
 import { ALL_PERMISSION_KEYS } from '../authorization/permission-registry';
+import { JWT_AUDIENCE_ADMIN } from '../auth/jwt-constants';
 
 /**
  * Phase 4 (PR 4.6) — guard-level wiring test. Asserts the exact bug
@@ -55,7 +56,14 @@ describe('AdminAuthGuard — permission wiring', () => {
   }
 
   function mintToken(sub: string, role: string, sessionId: string) {
-    return jwt.sign({ sub, email: 'a@x.com', role, sessionId }, SECRET);
+    // Phase 26 (2026-05-20) — AdminAuthGuard now pins `audience:
+    // JWT_AUDIENCE_ADMIN` via JWT_VERIFY_OPTIONS_ADMIN. Tokens minted
+    // without the audience fail jwt.verify with "jwt audience invalid",
+    // which surfaces as "Invalid or expired admin token". Mint with
+    // the audience so the test exercises the post-Phase-26 surface.
+    return jwt.sign({ sub, email: 'a@x.com', role, sessionId }, SECRET, {
+      audience: JWT_AUDIENCE_ADMIN,
+    });
   }
 
   it('populates req.user.permissions for SUPER_ADMIN (regression)', async () => {

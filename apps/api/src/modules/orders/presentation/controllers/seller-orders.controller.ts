@@ -5,14 +5,19 @@ import {
   Param,
   Query,
   Body,
-  Post,
   UseGuards,
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { SellerAuthGuard } from '../../../../core/guards';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { OrdersService } from '../../application/services/orders.service';
-import { BadRequestAppException } from '../../../../core/exceptions';
+import {
+  SellerAcceptOrderDto,
+  SellerRejectOrderDto,
+} from '../dtos/seller-actions.dto';
+import { UpdateFulfillmentStatusDto } from '../dtos/update-fulfillment-status.dto';
 
 @ApiTags('Seller Orders')
 @Controller('seller/orders')
@@ -45,11 +50,19 @@ export class SellerOrdersController {
     return { success: true, message: 'Order retrieved', data };
   }
 
+  // Phase 80 (2026-05-22) — acceptance audit Gaps #15/#16/#23.
+  //   • DTO validates expectedDispatchDate as ISO8601 (Gap #16).
+  //   • @Idempotent guards against double-tap (Gap #15) — the
+  //     underlying service is FSM-idempotent but the decorator
+  //     returns the same response shape on retry rather than 400.
+  //   • @Throttle caps a misbehaving seller bot (Gap #23).
   @Patch(':id/accept')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Idempotent()
   async acceptOrder(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { expectedDispatchDate?: string },
+    @Body() body: SellerAcceptOrderDto,
   ) {
     const data = await this.ordersService.sellerAcceptOrder(id, req.sellerId, {
       expectedDispatchDate: body?.expectedDispatchDate,
@@ -58,14 +71,12 @@ export class SellerOrdersController {
   }
 
   @Patch(':id/reject')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Idempotent()
   async rejectOrder(
     @Req() req: any,
     @Param('id') id: string,
-    @Body()
-    body: {
-      reason?: 'OUT_OF_STOCK' | 'CANNOT_SHIP' | 'LOCATION_ISSUE' | 'OTHER';
-      note?: string;
-    },
+    @Body() body: SellerRejectOrderDto,
   ) {
     const data = await this.ordersService.sellerRejectOrder(id, req.sellerId, {
       reason: body?.reason,
@@ -74,24 +85,25 @@ export class SellerOrdersController {
     return { success: true, message: data.message, data };
   }
 
+  // Phase 82 (2026-05-23) — pack/ship audit Gaps #11/#24.
+  //   • DTO validates status enum (PACKED/SHIPPED only), AWB
+  //     format (alphanumeric 8-30), courier (enum of mapped
+  //     couriers) at the pipe layer (Gap #11).
+  //   • @Throttle caps misbehaving seller bots.
+  //   • @Idempotent so a double-click retry returns the cached
+  //     response instead of a confusing FSM-rejection 400 (Gap #24).
   @Patch(':id/status')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Idempotent()
   async updateFulfillmentStatus(
     @Req() req: any,
     @Param('id') id: string,
-    @Body()
-    body: {
-      status: string;
-      trackingNumber?: string;
-      courierName?: string;
-    },
+    @Body() body: UpdateFulfillmentStatusDto,
   ) {
-    if (!body.status) {
-      throw new BadRequestAppException('status is required (PACKED, SHIPPED)');
-    }
     const data = await this.ordersService.sellerUpdateFulfillmentStatus(
       id,
       req.sellerId,
-      body.status.toUpperCase(),
+      body.status,
       {
         trackingNumber: body?.trackingNumber,
         courierName: body?.courierName,
@@ -99,33 +111,14 @@ export class SellerOrdersController {
     );
     return {
       success: true,
-      message: `Order status updated to ${body.status.toUpperCase()}`,
+      message: `Order status updated to ${body.status}`,
       data,
     };
   }
 
-  /**
-   * Seller-initiated return — mirrors the franchise `/return` endpoint.
-   * Used when the seller needs to reverse a delivered sub-order (e.g. the
-   * customer returned via a B2B channel or the goods came back damaged).
-   * Stock is returned to the seller's `stockQty` and the sub-order is
-   * marked CANCELLED. Does not create a Return row — that lifecycle stays
-   * customer-initiated.
-   */
-  @Post(':subOrderId/return')
-  async initiateReturn(
-    @Req() req: any,
-    @Param('subOrderId') subOrderId: string,
-    @Body()
-    body: {
-      items: Array<{ orderItemId: string; quantity: number; reason: string }>;
-    },
-  ) {
-    const data = await this.ordersService.sellerInitiateReturn(
-      subOrderId,
-      req.sellerId,
-      body.items,
-    );
-    return { success: true, message: 'Return initiated', data };
-  }
+  // Phase 108 (2026-05-25) — the old self-serve POST :subOrderId/return was
+  // removed. It executed immediately (stock credit + sub-order CANCELLED) with
+  // no record, approval, commission/settlement effect, or audit. Off-platform
+  // reversals now go through the admin-approved flow: POST /seller/reversals
+  // (SellerReversalsController in the returns module).
 }

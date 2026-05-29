@@ -62,10 +62,10 @@ model Section194OTdsLedger {
 
   // Business key. We never create rows for OWN_BRAND / SPORTSMART
   // suppliers (the platform doesn't deduct TDS on itself).
-  sellerId     String  @map("seller_id")
+  sellerId     String @map("seller_id")
   // Quarter string "YYYY-Qn": "2026-Q1" = Apr-Jun, Q2 = Jul-Sep,
   // Q3 = Oct-Dec, Q4 = Jan-Mar (Indian FY).
-  filingPeriod String  @map("filing_period")
+  filingPeriod String @map("filing_period")
 
   // Frozen snapshot at compute time so a later PAN status change
   // doesn't rewrite filed history.
@@ -76,16 +76,16 @@ model Section194OTdsLedger {
 
   // Gross sale aggregates (paise) at computation time. Distinct
   // from the TCS net-taxable base: this is GROSS including GST.
-  grossSaleInPaise        BigInt @default(0) @map("gross_sale_in_paise")
+  grossSaleInPaise                BigInt @default(0) @map("gross_sale_in_paise")
   // Refunds / cancellations that reduce the gross within the same
   // quarter. Carried-forward when negative (similar to TCS).
-  refundReversalInPaise   BigInt @default(0) @map("refund_reversal_in_paise")
-  netSaleInPaise          BigInt @default(0) @map("net_sale_in_paise")
+  refundReversalInPaise           BigInt @default(0) @map("refund_reversal_in_paise")
+  netSaleInPaise                  BigInt @default(0) @map("net_sale_in_paise")
   adjustmentCarriedForwardInPaise BigInt @default(0) @map("adjustment_carried_forward_in_paise")
 
   // Rate snapshot (100 = 1%, 500 = 5%).
-  tdsRateBps    Int    @default(100) @map("tds_rate_bps")
-  tdsInPaise    BigInt @default(0)   @map("tds_in_paise")
+  tdsRateBps Int    @default(100) @map("tds_rate_bps")
+  tdsInPaise BigInt @default(0) @map("tds_in_paise")
 
   status Tds194OStatus @default(COMPUTED)
 
@@ -107,7 +107,7 @@ model Section194OTdsLedger {
   correctionOfId String? @map("correction_of_id")
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt       @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   // Back-link to the settlement(s) that withheld this TDS row.

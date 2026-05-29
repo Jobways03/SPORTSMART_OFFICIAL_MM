@@ -1,14 +1,50 @@
-// Shipping options — v1 single-table design.
-// Zones, weight/price-based rates, and refund policy live in a follow-up.
+// Shipping options — Phase 91 (2026-05-23) augmentation of the
+// original v1 flat-fee model. Pre-Phase-91 the schema was a single
+// `ShippingOption` row with `rateType` + `priceInPaise` and no
+// zone/rate/surcharge concept; the audit's first 6 critical gaps
+// addressed that limitation. Phase 91 adds:
+//
+//   • ShippingZone — pincode/state/region grouping
+//   • ShippingRate — weight × value slab per (option, zone)
+//   • ShippingSurcharge — COD / FUEL / REMOTE / WEEKEND / etc.
+//   • ShippingZoneOption — m:n join between zones and options
+//   • ShippingQuoteAudit — every quote computation persisted for
+//     fraud / analytics / dispute reviews
+//
+// Legacy fallback: when no zones / rates exist, `ShippingPricingService`
+// degrades gracefully to the original `ShippingOption.priceInPaise`
+// flat fee. The strangler migration lets ops introduce zones one at
+// a time without forcing a cutover.
 
 enum ShippingRateType {
   FLAT
   FREE
+  // Phase 91 — Gap #2 slab pricing. Rates are looked up in the
+  // ShippingRate table keyed on (option, zone, weight, cart value).
+  SLAB
+}
+
+enum ShippingSurchargeKind {
+  COD
+  FUEL
+  REMOTE_AREA
+  WEEKEND
+  OVERSIZED
+  OVERWEIGHT
+  INSURANCE
+  RETURN
+}
+
+enum ShippingSurchargeValueType {
+  FLAT_PAISE
+  PERCENT_BPS
 }
 
 model ShippingOption {
   id                       String           @id @default(uuid())
-  name                     String
+  // Phase 91 — Gap #8 name uniqueness. Two "Standard Delivery" rows
+  // confused customers + analytics; UNIQUE makes the dedupe explicit.
+  name                     String           @unique
   deliveryDetails          String?          @map("delivery_details")
   rateType                 ShippingRateType @default(FLAT) @map("rate_type")
   priceInPaise             BigInt           @default(0) @map("price_in_paise")
@@ -19,13 +55,410 @@ model ShippingOption {
   freeShippingMinCartPaise BigInt?          @map("free_shipping_min_cart_paise")
   isActive                 Boolean          @default(true) @map("is_active")
   sortOrder                Int              @default(0) @map("sort_order")
+  // Phase 91 — Gap #18 active-window scheduling.
+  activeFrom               DateTime?        @map("active_from")
+  activeUntil              DateTime?        @map("active_until")
+  // Phase 91 — Gap #17 multi-tenant scoping. Null = platform-wide;
+  // populated = seller-specific row only visible to that seller's
+  // customers (resolver picks seller-specific first, falls back to
+  // platform default).
+  sellerId                 String?          @map("seller_id")
+  // Phase 91 — Gap #20 tax-inclusive flag + Gap #6 GST on shipping.
+  priceIsTaxInclusive      Boolean          @default(false) @map("price_is_tax_inclusive")
+  // HSN/SAC code for shipping services. CBIC's `996811` is the
+  // catch-all for transportation of goods; `996819` for other
+  // courier/parcel. Null defaults to 996819 at the tax-engine layer.
+  taxHsnCode               String?          @map("tax_hsn_code")
+  // GST rate in basis points (1800 = 18%). Null defers to platform
+  // default (`shipping_gst_rate_bps` tax-config row, already wired).
+  taxGstRateBps            Int?             @map("tax_gst_rate_bps")
   createdAt                DateTime         @default(now()) @map("created_at")
   updatedAt                DateTime         @updatedAt @map("updated_at")
 
   // Inverse relation so the FK on MasterOrder can resolve back.
-  orders MasterOrder[]
+  orders     MasterOrder[]
+  zones      ShippingZoneOption[]
+  rates      ShippingRate[]
+  surcharges ShippingSurcharge[]
 
-  @@index([isActive])
-  @@index([sortOrder])
+  @@index([isActive, sortOrder])
+  @@index([sellerId, isActive])
+  @@index([activeFrom, activeUntil])
   @@map("shipping_options")
+}
+
+// Phase 91 (2026-05-23) — Gap #1 / #4.
+//
+// Zone partitioning so per-pincode / per-region pricing lands. A
+// zone matches when the destination pincode appears in `pincodes`
+// OR the buyer state appears in `states` OR the macro region
+// (METRO / TIER1 / NE / JK / AN / etc.) matches `regions`. Higher
+// `priority` wins on overlap; the resolver picks the most specific
+// match (exact pincode → 100, state → 50, region → 10, default → 0).
+model ShippingZone {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  pincodes    String[]  @default([])
+  states      String[]  @default([])
+  regions     String[]  @default([])
+  priority    Int       @default(0)
+  isActive    Boolean   @default(true) @map("is_active")
+  activeFrom  DateTime? @map("active_from")
+  activeUntil DateTime? @map("active_until")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  rates       ShippingRate[]
+  options     ShippingZoneOption[]
+  surcharges  ShippingSurcharge[]
+  quoteAudits ShippingQuoteAudit[]
+
+  @@index([isActive, priority])
+  @@map("shipping_zones")
+}
+
+// Phase 91 — m:n join between zones and options.
+model ShippingZoneOption {
+  zoneId   String @map("zone_id")
+  optionId String @map("option_id")
+
+  zone   ShippingZone   @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  option ShippingOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@id([zoneId, optionId])
+  @@map("shipping_zone_options")
+}
+
+// Phase 91 (2026-05-23) — Gap #2 / #5. Weight × value slab table.
+//
+// Resolver picks the most specific (option, zone) row where the
+// cart's weight + value land in [min, max). A "weight" can be the
+// actual cart weight or the volumetric weight (whichever is higher)
+// — the caller passes the chosen value through.
+model ShippingRate {
+  id             String   @id @default(uuid())
+  optionId       String   @map("option_id")
+  zoneId         String?  @map("zone_id")
+  minWeightGrams Int      @default(0) @map("min_weight_grams")
+  maxWeightGrams Int?     @map("max_weight_grams")
+  minCartPaise   BigInt   @default(0) @map("min_cart_paise")
+  maxCartPaise   BigInt?  @map("max_cart_paise")
+  basePaise      BigInt   @default(0) @map("base_paise")
+  // Additional paise charged per `perKgStep` grams above the
+  // slab's min weight (Indian carriers charge per 500g typically).
+  perKgPaise     BigInt   @default(0) @map("per_kg_paise")
+  perKgStep      Int      @default(500) @map("per_kg_step")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  option ShippingOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  zone   ShippingZone?  @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+
+  @@index([optionId, zoneId, isActive])
+  @@index([zoneId])
+  @@map("shipping_rates")
+}
+
+// Phase 91 (2026-05-23) — Gap #3. Surcharges (COD / FUEL / REMOTE /
+// WEEKEND / OVERSIZED / OVERWEIGHT / INSURANCE / RETURN).
+//
+// `valueType=FLAT_PAISE` adds a fixed amount; `PERCENT_BPS` adds a
+// percentage of the running fee. `stackingOrder` controls the apply
+// sequence (lower applies first); `maxCapPaise` clamps the per-row
+// contribution. Surcharges with zoneId=null OR optionId=null apply
+// platform-wide (the most-specific match wins on tie).
+model ShippingSurcharge {
+  id            String                     @id @default(uuid())
+  name          String                     @unique
+  kind          ShippingSurchargeKind
+  zoneId        String?                    @map("zone_id")
+  optionId      String?                    @map("option_id")
+  valueType     ShippingSurchargeValueType @map("value_type")
+  value         BigInt
+  minCartPaise  BigInt?                    @map("min_cart_paise")
+  maxCapPaise   BigInt?                    @map("max_cap_paise")
+  stackingOrder Int                        @default(100) @map("stacking_order")
+  isActive      Boolean                    @default(true) @map("is_active")
+  createdAt     DateTime                   @default(now()) @map("created_at")
+  updatedAt     DateTime                   @updatedAt @map("updated_at")
+
+  zone   ShippingZone?   @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  option ShippingOption? @relation(fields: [optionId], references: [id], onDelete: SetNull)
+
+  @@index([kind, isActive, stackingOrder])
+  @@index([zoneId])
+  @@index([optionId])
+  @@map("shipping_surcharges")
+}
+
+// Phase 91 (2026-05-23) — Gap #7 quote audit.
+//
+// Every shipping quote computation (preview, place-order, admin
+// pincode-tester) writes one row. Catches frontend tampering attempts
+// (mismatched cart hash vs persisted total), surfaces fraud patterns
+// (same cart, repeated quotes with different options), feeds the
+// pricing-changes-affecting-customer analytics.
+model ShippingQuoteAudit {
+  id                    String   @id @default(uuid())
+  cartId                String?  @map("cart_id")
+  masterOrderId         String?  @map("master_order_id")
+  actorType             String   @map("actor_type")
+  actorId               String?  @map("actor_id")
+  netCartValueInPaise   BigInt   @map("net_cart_value_in_paise")
+  totalWeightGrams      Int?     @map("total_weight_grams")
+  destinationPincode    String?  @map("destination_pincode")
+  originPincode         String?  @map("origin_pincode")
+  buyerStateCode        String?  @map("buyer_state_code")
+  paymentMethod         String?  @map("payment_method")
+  matchedZoneId         String?  @map("matched_zone_id")
+  matchedRateId         String?  @map("matched_rate_id")
+  selectedOptionId      String?  @map("selected_option_id")
+  baseFeeInPaise        BigInt   @map("base_fee_in_paise")
+  surchargesAppliedJson Json?    @map("surcharges_applied_json")
+  feeInPaise            BigInt   @map("fee_in_paise")
+  taxableInPaise        BigInt   @default(0) @map("taxable_in_paise")
+  cgstInPaise           BigInt   @default(0) @map("cgst_in_paise")
+  sgstInPaise           BigInt   @default(0) @map("sgst_in_paise")
+  igstInPaise           BigInt   @default(0) @map("igst_in_paise")
+  computedAt            DateTime @default(now()) @map("computed_at")
+
+  zone ShippingZone? @relation(fields: [matchedZoneId], references: [id], onDelete: SetNull)
+
+  @@index([cartId, computedAt])
+  @@index([masterOrderId])
+  @@index([selectedOptionId, computedAt])
+  @@map("shipping_quote_audits")
+}
+
+// Phase 83 (2026-05-23) — delivery confirmation audit Gap #8.
+// Persistent record of every courier webhook hit. Pre-Phase-83 the
+// Redis idempotency lock was the only memory and it had a 24h TTL,
+// so any "did Shiprocket actually send this on date X?" investigation
+// past one day had to call the carrier. This table keeps raw payload
+// + signature outcome + processing outcome so disputes can be
+// answered from our own DB.
+//
+// Unique on (provider, eventKey) gives DB-level idempotency in
+// addition to the Redis lock — Redis is the fast path, the DB
+// constraint is the durable fallback. The eventKey matches what the
+// webhook controller uses for the Redis lock (AWB + status +
+// timestamp) so the two layers agree on what "same event" means.
+model WebhookEvent {
+  id             String    @id @default(uuid())
+  // 'shiprocket' | 'ithink' | future provider slug. Bare string so
+  // adding a new provider is a code-side enum, not a migration.
+  provider       String
+  // Idempotency key — same shape the controller uses for the Redis
+  // SET NX. Combined unique on (provider, eventKey).
+  eventKey       String    @map("event_key")
+  awb            String?
+  status         String?
+  rawPayload     Json      @map("raw_payload")
+  // True when the request signature passed verification. False
+  // entries are kept as forensic evidence of spoofing attempts.
+  signatureValid Boolean   @map("signature_valid")
+  receivedAt     DateTime  @default(now()) @map("received_at")
+  // Set after processing finishes (or stays null on signature-fail).
+  processedAt    DateTime? @map("processed_at")
+  // Outcome of the controller's decision tree:
+  //   APPLIED       — Sub-order state advanced as a result
+  //   DROPPED_OOO   — Out-of-order event; dropped by the ordering guard
+  //   NO_MATCH      — AWB had no matching sub-order
+  //   DUPLICATE     — Idempotency key already seen
+  //   FSM_REJECTED  — Sub-order in a non-cancelable state (e.g. cancelled)
+  //   UNKNOWN_STATUS — Status string didn't map to a known internal state
+  //   ERROR         — Processing threw; see errorMessage
+  processOutcome String?   @map("process_outcome")
+  errorMessage   String?   @map("error_message") @db.Text
+  // SubOrder the event was applied to (when known). Nullable for
+  // signature-fail / unknown-AWB cases.
+  subOrderId     String?   @map("sub_order_id")
+
+  @@unique([provider, eventKey])
+  @@index([awb, receivedAt(sort: Desc)])
+  @@index([subOrderId])
+  @@index([processOutcome, receivedAt])
+  @@map("webhook_events")
+}
+
+// Phase 86 follow-up (2026-05-23) — Gap #2/#18 closure.
+//
+// Promoted from the text-mode placeholder to a real Prisma enum so
+// invalid statuses can't reach the row layer. The set mirrors the
+// `ShipmentInternalStatus` TS union 1:1 — the use-case casts
+// scan strings into this enum and the FSM rejects unknown values
+// before this enum is ever written, but the column-level constraint
+// is the durable backstop.
+enum ShipmentInternalStatusEnum {
+  CREATED
+  PICKUP_PENDING
+  PICKED_UP
+  MANIFESTED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  UNDELIVERED
+  FAILED_DELIVERY
+  RTO_INITIATED
+  RTO_IN_TRANSIT
+  RTO_DELIVERED
+  LOST
+  DAMAGED
+  CANCELLED
+  // Phase 87 (2026-05-23) — NDR/RTO Gap #10. EXCEPTION is the iThink
+  // mapper's bucket for OUT_OF_DELIVERY_AREA / DELAYED / MISROUTED /
+  // SHORTAGE / RTO_SHORTAGE — non-terminal but indicative of a
+  // shipment that needs ops attention. Pre-Phase-87 these scans were
+  // dropped by `mapToFulfillmentStatus` and never persisted.
+  EXCEPTION
+
+  @@map("shipment_internal_status_enum")
+}
+
+// Phase 86 (2026-05-23) — tracking webhook audit Gap #1/#17.
+//
+// One row per accepted carrier scan. Pre-Phase-86 the SubOrder
+// carried only the most-recent timestamp (`lastTrackingEventAt`) so
+// the customer track-your-order page could only show a single state.
+// The history table keeps the scan-by-scan chronology — Picked up →
+// In Transit (city A) → Out for Delivery (city B) → Delivered —
+// queryable for the customer detail page AND for forensics.
+//
+// Idempotency at the DB level via `(sub_order_id, external_status,
+// scan_at)` UNIQUE so a webhook retry that beats the WebhookEvent
+// dedup (e.g. polling cron observing the same scan iThink already
+// pushed) doesn't double-insert.
+model ShipmentTrackingEvent {
+  id                 String                     @id @default(uuid())
+  subOrderId         String                     @map("sub_order_id")
+  // Phase 86 follow-up — Gap #2/#18. Promoted to enum so unknown
+  // statuses can't reach the row layer (the FSM gate rejects them
+  // earlier, but column-level enum is the durable backstop).
+  internalStatus     ShipmentInternalStatusEnum @map("internal_status")
+  // Raw carrier status string (e.g. 'Out for Delivery', 'Delivered
+  // (NDR Resolved)'). Useful when the carrier introduces a new
+  // status string we haven't mapped yet — we can backfill the
+  // mapping without re-pulling from the carrier.
+  externalStatus     String                     @map("external_status")
+  externalStatusCode String?                    @map("external_status_code")
+  scanLocation       String?                    @map("scan_location")
+  remarks            String?                    @db.Text
+  // Carrier-side timestamp of the scan. Used by the CAS ordering
+  // guard — an event with `scan_at < shipment.lastTrackingEventAt`
+  // is dropped before reaching this table.
+  scanAt             DateTime                   @map("scan_at")
+  receivedAt         DateTime                   @default(now()) @map("received_at")
+  // Source channel: 'WEBHOOK_SHIPROCKET' | 'WEBHOOK_ITHINK' |
+  // 'POLL_CRON' | 'MANUAL_ADMIN'. Bare string so new sources can be
+  // added without a migration.
+  source             String
+  // Optional raw payload (for the originating webhook). Larger than
+  // the WebhookEvent.rawPayload because that table stores the
+  // un-mapped envelope; this row stores the scan slice that drove
+  // the FSM transition.
+  rawPayload         Json?                      @map("raw_payload")
+
+  subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  // DB-level idempotency: at most one row per (sub-order, external
+  // status string, scan timestamp). A duplicate webhook re-delivery
+  // ends up at the same (subOrderId, status, scanAt) and gets
+  // rejected by this unique constraint — caller catches P2002 and
+  // returns 'DUPLICATE' outcome.
+  @@unique([subOrderId, externalStatus, scanAt])
+  @@index([subOrderId, scanAt(sort: Desc)])
+  @@index([internalStatus, scanAt])
+  @@map("shipment_tracking_events")
+}
+
+// Phase 87 (2026-05-23) — NDR/RTO audit Gaps #5/#11/#17.
+//
+// One row per NDR (Non-Delivery Report) attempt. Pre-Phase-87 a
+// multi-attempt failed-delivery sub-order looked identical to a
+// single failed attempt — `ndrAttemptCount` is the cheap rollup,
+// this table is the durable per-attempt record so customer support
+// can answer "what happened on each attempt? what reason did the
+// carrier give?".
+//
+// `carrierEventId` is the carrier-side scan id; UNIQUE constraint
+// gives DB-level idempotency for replayed UNDELIVERED webhooks.
+model NdrAttempt {
+  id             String   @id @default(uuid())
+  subOrderId     String   @map("sub_order_id")
+  attemptNumber  Int      @map("attempt_number")
+  attemptedAt    DateTime @map("attempted_at")
+  reasonCode     String?  @map("reason_code")
+  reason         String?  @db.Text
+  scanLocation   String?  @map("scan_location")
+  // Carrier-side event id when present (iThink supplies a scan_id;
+  // Shiprocket doesn't always). UNIQUE so a duplicate webhook
+  // delivery is absorbed by P2002 rather than double-counting.
+  carrierEventId String?  @unique @map("carrier_event_id")
+  rawPayload     Json?    @map("raw_payload")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  @@unique([subOrderId, attemptNumber])
+  @@index([subOrderId, attemptedAt(sort: Desc)])
+  @@map("ndr_attempts")
+}
+
+// Phase 87 (2026-05-23) — NDR/RTO audit Gaps #6/#11.
+//
+// One row per RTO milestone. RTO_INITIATED → RTO_IN_TRANSIT →
+// RTO_DELIVERED each persist here so the customer's "Returning to
+// seller" page can render the full reverse-leg timeline and
+// finance can reconstruct the RTO chain for credit-note issuance.
+model RtoEvent {
+  id             String                     @id @default(uuid())
+  subOrderId     String                     @map("sub_order_id")
+  status         ShipmentInternalStatusEnum
+  occurredAt     DateTime                   @map("occurred_at")
+  reason         String?                    @db.Text
+  scanLocation   String?                    @map("scan_location")
+  // Same idempotency contract as NdrAttempt.carrierEventId.
+  carrierEventId String?                    @unique @map("carrier_event_id")
+  rawPayload     Json?                      @map("raw_payload")
+  createdAt      DateTime                   @default(now()) @map("created_at")
+
+  subOrder SubOrder @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
+
+  @@index([subOrderId, occurredAt(sort: Desc)])
+  @@map("rto_events")
+}
+
+// Phase 87 (2026-05-23) — NDR/RTO audit Gap #19.
+//
+// One row per RTO_DELIVERED that produces a GST credit-note
+// obligation. Pre-Phase-87 a sub-order that came back via RTO had
+// its tax invoice still standing in GSTR-1 — overstating outward
+// supply. The Return module's credit-note machinery (Phase 12 GST,
+// `ReturnTaxReversalLine`) requires a Return record to anchor to;
+// RTO has no customer-initiated Return. This shadow table records
+// the obligation so the finance team's credit-note cron can issue
+// the reversal asynchronously without needing a synthetic Return.
+//
+// `status`: PENDING (queued) | ISSUED (credit note written) |
+// SKIPPED (finance overrode — e.g. zero-tax order).
+model RtoCreditNotePending {
+  id                   String    @id @default(uuid())
+  subOrderId           String    @unique @map("sub_order_id")
+  masterOrderId        String    @map("master_order_id")
+  // Amount eligible for tax reversal at the time of RTO_DELIVERED.
+  // Computed from SubOrderTaxSummary (or 0 if no tax invoice was
+  // issued — finance still gets the row so the obligation is
+  // observable). BigInt(paise) for currency precision.
+  taxableAmountInPaise BigInt    @default(0) @map("taxable_amount_in_paise")
+  totalTaxInPaise      BigInt    @default(0) @map("total_tax_in_paise")
+  status               String    @default("PENDING")
+  issuedAt             DateTime? @map("issued_at")
+  issuedBy             String?   @map("issued_by")
+  notes                String?   @db.Text
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("rto_credit_note_pending")
 }

@@ -1,0 +1,532 @@
+{
+  "swimwear": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "boys", "label": "Boys" },
+        { "value": "girls", "label": "Girls" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior_22", "label": "Junior 22" },
+        { "value": "junior_24", "label": "Junior 24" },
+        { "value": "junior_26", "label": "Junior 26" },
+        { "value": "junior_28", "label": "Junior 28" },
+        { "value": "junior_30", "label": "Junior 30" }
+      ]
+    },
+    {
+      "key": "swimwear_type",
+      "name": "Swimwear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "jammers", "label": "Jammers (Men)" },
+        { "value": "briefs", "label": "Briefs / Trunks (Men)" },
+        { "value": "swim_shorts", "label": "Swim Shorts (Men)" },
+        { "value": "one_piece", "label": "One-Piece (Women)" },
+        { "value": "two_piece", "label": "Two-Piece / Bikini (Women)" },
+        { "value": "kneeskin", "label": "Kneeskin (Women)" },
+        { "value": "bodysuit", "label": "Full Bodysuit / Tech Suit" },
+        { "value": "rash_guard", "label": "Rash Guard / Swim Top" },
+        { "value": "swim_nappy", "label": "Swim Nappy (Toddler)" }
+      ]
+    },
+    {
+      "key": "usage",
+      "name": "Usage",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "competition", "label": "Competition / Racing" },
+        { "value": "training", "label": "Training / Lap Swimming" },
+        { "value": "recreational", "label": "Recreational / Leisure" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Recreational" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / Squad" },
+        { "value": "professional", "label": "Professional / Elite" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "white", "label": "White" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-goggles": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "women", "label": "Women (Smaller Fit)" },
+        { "value": "youth", "label": "Youth / Junior" }
+      ]
+    },
+    {
+      "key": "goggle_type",
+      "name": "Goggle Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "racing", "label": "Racing (Low Profile)" },
+        { "value": "training", "label": "Training (Comfort)" },
+        { "value": "recreational", "label": "Recreational / Leisure" },
+        { "value": "open_water", "label": "Open Water (Wide Vision)" },
+        { "value": "mask_style", "label": "Mask Style (Kids / Snorkel)" }
+      ]
+    },
+    {
+      "key": "lens_type",
+      "name": "Lens Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "clear", "label": "Clear" },
+        { "value": "tinted", "label": "Tinted (Smoke / Blue)" },
+        { "value": "mirrored", "label": "Mirrored" },
+        { "value": "photochromic", "label": "Photochromic (Transition)" },
+        { "value": "prescription", "label": "Prescription" }
+      ]
+    },
+    {
+      "key": "anti_fog",
+      "name": "Anti-Fog",
+      "type": "BOOLEAN",
+      "sortOrder": 4,
+      "description": "Anti-fog coating on lenses"
+    },
+    {
+      "key": "uv_protection",
+      "name": "UV Protection",
+      "type": "BOOLEAN",
+      "sortOrder": 5,
+      "description": "UV protection for outdoor swimming"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "clear", "label": "Clear" },
+        { "value": "smoke", "label": "Smoke" },
+        { "value": "red", "label": "Red" },
+        { "value": "white", "label": "White" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "mirrored", "label": "Mirrored" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-caps": [
+    {
+      "key": "cap_material",
+      "name": "Cap Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "silicone", "label": "Silicone" },
+        { "value": "latex", "label": "Latex" },
+        { "value": "lycra", "label": "Lycra / Fabric" },
+        { "value": "neoprene", "label": "Neoprene (Open Water)" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "adult", "label": "Adult (One Size)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "long_hair", "label": "Long Hair / XL" }
+      ]
+    },
+    {
+      "key": "usage",
+      "name": "Usage",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "competition", "label": "Competition / Racing" },
+        { "value": "training", "label": "Training" },
+        { "value": "recreational", "label": "Recreational" },
+        { "value": "open_water", "label": "Open Water (Visibility)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "white", "label": "White" },
+        { "value": "red", "label": "Red" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "yellow", "label": "Yellow (Hi-Vis)" },
+        { "value": "orange", "label": "Orange (Hi-Vis)" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-fins": [
+    {
+      "key": "fin_type",
+      "name": "Fin Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "short_blade", "label": "Short Blade (Training)" },
+        { "value": "long_blade", "label": "Long Blade (Snorkelling / Power)" },
+        { "value": "monofin", "label": "Monofin" },
+        { "value": "split_fin", "label": "Split Fin" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xxs", "label": "XXS (UK 1–3)" },
+        { "value": "xs", "label": "XS (UK 3–5)" },
+        { "value": "small", "label": "S (UK 5–6)" },
+        { "value": "medium", "label": "M (UK 7–8)" },
+        { "value": "large", "label": "L (UK 9–10)" },
+        { "value": "xl", "label": "XL (UK 11–12)" },
+        { "value": "xxl", "label": "XXL (UK 13+)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-training-aids": [
+    {
+      "key": "aid_type",
+      "name": "Training Aid Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "kickboard", "label": "Kickboard" },
+        { "value": "pull_buoy", "label": "Pull Buoy" },
+        { "value": "hand_paddles", "label": "Hand Paddles" },
+        { "value": "finger_paddles", "label": "Finger Paddles" },
+        { "value": "snorkel", "label": "Swimmer's Snorkel (Centre Mount)" },
+        { "value": "resistance_band", "label": "Resistance Band / Cord" },
+        { "value": "ankle_band", "label": "Ankle Band / Strap" },
+        { "value": "drag_shorts", "label": "Drag Shorts" },
+        { "value": "tempo_trainer", "label": "Tempo Trainer / Pacer" },
+        { "value": "alignment_board", "label": "Alignment Kickboard" },
+        { "value": "swim_parachute", "label": "Swim Parachute / Drag" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small / Junior" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "large", "label": "Large" },
+        { "value": "one_size", "label": "One Size" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / Squad" },
+        { "value": "professional", "label": "Professional / Elite" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "black", "label": "Black" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "red", "label": "Red" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "mesh_bag", "label": "Mesh Bag (Wet Gear)" },
+        { "value": "backpack", "label": "Swim Backpack" },
+        { "value": "duffle", "label": "Duffle Bag" },
+        { "value": "dry_bag", "label": "Dry Bag (Waterproof)" },
+        { "value": "drawstring", "label": "Drawstring / Gym Sack" },
+        { "value": "deck_bag", "label": "Deck Bag (Poolside)" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Essentials)" },
+        { "value": "medium", "label": "Medium (Training Gear)" },
+        { "value": "large", "label": "Large (Full Kit + Towel)" },
+        { "value": "team", "label": "Team / XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-towels": [
+    {
+      "key": "towel_type",
+      "name": "Towel Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "chamois", "label": "Chamois / PVA (Sports Towel)" },
+        { "value": "microfibre", "label": "Microfibre (Quick Dry)" },
+        { "value": "cotton", "label": "Cotton (Standard)" },
+        { "value": "poncho", "label": "Changing Poncho / Robe" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Hand Towel)" },
+        { "value": "medium", "label": "Medium (Poolside)" },
+        { "value": "large", "label": "Large (Full Body)" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "black", "label": "Black" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "open-water-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "wetsuit", "label": "Wetsuit" },
+        { "value": "tow_float", "label": "Tow Float / Safety Buoy" },
+        { "value": "neoprene_gloves", "label": "Neoprene Gloves" },
+        { "value": "neoprene_socks", "label": "Neoprene Socks / Booties" },
+        { "value": "neoprene_cap", "label": "Neoprene Swim Cap" },
+        { "value": "ear_plugs", "label": "Ear Plugs (Open Water)" },
+        { "value": "lubricant", "label": "Anti-Chafe / Body Glide" }
+      ]
+    },
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "one_size", "label": "One Size" }
+      ]
+    },
+    {
+      "key": "thickness",
+      "name": "Thickness (Wetsuits)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "description": "Neoprene thickness – thicker = warmer",
+      "choices": [
+        { "value": "1mm", "label": "1mm (Warm Water)" },
+        { "value": "2mm", "label": "2mm" },
+        { "value": "3mm", "label": "3mm (Moderate)" },
+        { "value": "4mm", "label": "4mm" },
+        { "value": "5mm", "label": "5mm (Cold Water)" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "orange", "label": "Orange (Hi-Vis)" },
+        { "value": "yellow", "label": "Yellow (Hi-Vis)" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "swim-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "nose_clip", "label": "Nose Clip" },
+        { "value": "ear_plugs", "label": "Ear Plugs" },
+        { "value": "anti_fog_spray", "label": "Anti-Fog Spray" },
+        { "value": "goggle_case", "label": "Goggle Case" },
+        { "value": "swim_watch", "label": "Swim Watch / Lap Counter" },
+        { "value": "water_bottle", "label": "Water Bottle (Poolside)" },
+        { "value": "hair_care", "label": "Swimmer's Hair Care" },
+        { "value": "lane_rope", "label": "Lane Rope" },
+        { "value": "starting_block", "label": "Starting Block" },
+        { "value": "pool_timer", "label": "Pool Timer / Pace Clock" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "clear", "label": "Clear" },
+        { "value": "white", "label": "White" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ]
+}

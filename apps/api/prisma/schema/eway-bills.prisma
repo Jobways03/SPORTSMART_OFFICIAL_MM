@@ -32,6 +32,13 @@ enum EWayBillStatus {
   EXPIRED
   // All retries exhausted; AdminTask `EWAY_BILL_GENERATION_FAILED` raised.
   FAILED
+  // Phase 89 (2026-05-23) — Shipment Evidence audit Gap #8. Admin
+  // override active. Pre-Phase-89 the override path mutated only the
+  // `override_admin_id` columns and left `status` at REQUIRED/FAILED,
+  // misleading the admin queue. OVERRIDDEN makes the state explicit
+  // so the queue can filter / colour-code; canShip treats it as
+  // allowed-to-ship same as GENERATED.
+  OVERRIDDEN
 }
 
 enum EWayBillTransportMode {
@@ -61,10 +68,10 @@ model EWayBill {
   provider String @default("stub")
 
   // Transport metadata
-  transportMode    EWayBillTransportMode @default(ROAD) @map("transport_mode")
-  vehicleNumber    String?               @map("vehicle_number")
-  transporterId    String?               @map("transporter_id")
-  transporterName  String?               @map("transporter_name")
+  transportMode   EWayBillTransportMode @default(ROAD) @map("transport_mode")
+  vehicleNumber   String?               @map("vehicle_number")
+  transporterId   String?               @map("transporter_id")
+  transporterName String?               @map("transporter_name")
 
   // Origin + destination snapshot (frozen at EWB-generation time so
   // a later address edit doesn't silently change the EWB record).
@@ -94,20 +101,101 @@ model EWayBill {
 
   // Admin override — set when ship-allowed despite EWB being
   // REQUIRED/FAILED. Tied to permission `tax.ewayBill.override`.
-  overrideAdminId String?   @map("override_admin_id")
-  overrideAt      DateTime? @map("override_at")
-  overrideReason  String?   @map("override_reason")
+  overrideAdminId         String?    @map("override_admin_id")
+  overrideAt              DateTime?  @map("override_at")
+  overrideReason          String?    @map("override_reason")
+  // Phase 89 (2026-05-23) — Gap #7 / #26. Structured override reason
+  // category + revoke trail. Pre-Phase-89 the override was a one-way
+  // ratchet; once applied the row was "ship-allowed" forever with no
+  // path back. Revoke fields capture who / when / why the override
+  // was retracted; the canShip helper rejects when revoke is set.
+  overrideReasonCategory  String?    @map("override_reason_category")
+  overrideRevokedAt       DateTime?  @map("override_revoked_at")
+  overrideRevokedBy       String?    @map("override_revoked_by")
+  overrideRevokeReason    String?    @map("override_revoke_reason")
+  // Phase 89 — Gap #24 audit reproducibility. Captures the threshold
+  // value that drove the REQUIRED/NOT_REQUIRED decision at classify
+  // time. Without this, a later threshold change makes the original
+  // decision unreplayable from row data alone.
+  thresholdAppliedInPaise BigInt?    @map("threshold_applied_in_paise")
+  // Phase 89 — policy versioning for the rule book the classifier
+  // applied. Stored as a free-form string (e.g. 'cbic-2024-q3') so
+  // CBIC notifications can shift the rule set without schema churn.
+  policyVersion           String?    @map("policy_version")
+  // Phase 89 — Gap #22 chain across cancel + regenerate. Self-FK to
+  // the EWB this row replaced (the prior cancelled one). Null when
+  // this is the first EWB issued for the sub-order.
+  replacedEwayBillId      String?    @map("replaced_eway_bill_id")
+  replacedEwayBill        EWayBill?  @relation("EwbChain", fields: [replacedEwayBillId], references: [id])
+  replacedBy              EWayBill[] @relation("EwbChain")
+  // Phase 89 — Gap #25 PDF artifact. NIC issues the EWB as a PDF the
+  // transporter must physically carry. Path stays nullable for the
+  // stub provider; populated by the eway-bill-pdf renderer (follow-up).
+  pdfUrl                  String?    @map("pdf_url")
+  pdfRenderedAt           DateTime?  @map("pdf_rendered_at")
+  // Phase 89 — NIC reconciliation. NIC returns an ack number + date
+  // on every issuance; persist both for cross-check against NIC's
+  // own report dump.
+  nicAckNo                String?    @map("nic_ack_no")
+  nicAckDate              DateTime?  @map("nic_ack_date")
+
+  // Phase 89 — Gap #19 raw payload retention. retentionExpiresAt
+  // gates the nightly redaction cron — raw payloads are PII-heavy
+  // (vehicle number, transporter PAN, customer pincode) and CBIC
+  // requires retention only for 3 years post-EWB issuance.
+  retentionExpiresAt DateTime? @map("retention_expires_at")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  subOrder    SubOrder     @relation(fields: [subOrderId], references: [id], onDelete: Restrict)
-  taxDocument TaxDocument? @relation(fields: [taxDocumentId], references: [id], onDelete: Restrict)
+  subOrder    SubOrder           @relation(fields: [subOrderId], references: [id], onDelete: Restrict)
+  taxDocument TaxDocument?       @relation(fields: [taxDocumentId], references: [id], onDelete: Restrict)
+  // Phase 89 — Gap #5 audit log back-reference.
+  auditLogs   EWayBillAuditLog[]
 
   // Indexes for status/expiry/retry queues are PARTIAL — declared in
   // the migration SQL since Prisma can't express partial indexes
   // natively. See `20260513220000_eway_bills`.
   @@index([status])
   @@index([supplierGstin])
+  // Phase 89 — Gap #9 SIEM. "Find all overrides by admin X" is
+  // common during compliance review.
+  @@index([overrideAdminId])
+  // Phase 89 — Gap #3 inter-state queries.
+  @@index([fromStateCode, toStateCode])
+  // Phase 89 — Gap #10 expiry sweeper full-table candidate (the
+  // partial index in SQL targets the hot `GENERATED` slice; this
+  // composite supports admin filtering by status + expiry tail).
+  @@index([validUntil, status])
+  @@index([retentionExpiresAt])
   @@map("e_way_bills")
+}
+
+// Phase 89 (2026-05-23) — Gap #5 chain of custody.
+//
+// Append-only audit log for the EWB lifecycle. Pre-Phase-89 the EWB
+// row's own fields were the only audit artifact — cancel + override
+// were single-actor mutations with no trail. This table records
+// every action (CLASSIFY / GENERATE / CANCEL / OVERRIDE /
+// REVOKE_OVERRIDE / EXPIRE / FAIL / RETRY / REGENERATE) along with
+// before/after snapshots for tamper-evident replay.
+model EWayBillAuditLog {
+  id            String          @id @default(uuid())
+  ewayBillId    String          @map("eway_bill_id")
+  action        String
+  fromStatus    EWayBillStatus? @map("from_status")
+  toStatus      EWayBillStatus? @map("to_status")
+  actorId       String?         @map("actor_id")
+  actorRole     String?         @map("actor_role")
+  reason        String?         @db.Text
+  payloadBefore Json?           @map("payload_before")
+  payloadAfter  Json?           @map("payload_after")
+  ipAddress     String?         @map("ip_address")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  ewayBill EWayBill @relation(fields: [ewayBillId], references: [id], onDelete: Cascade)
+
+  @@index([ewayBillId, createdAt(sort: Desc)])
+  @@index([action, createdAt])
+  @@map("e_way_bill_audit_logs")
 }

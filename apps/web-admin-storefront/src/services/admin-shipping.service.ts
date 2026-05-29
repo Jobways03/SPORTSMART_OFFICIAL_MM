@@ -17,10 +17,9 @@ export interface ShipmentDetail {
 }
 
 export interface LabelInfo {
-  // The facade returns whatever the carrier API gives back. iThink
-  // returns a direct PDF URL; Shiprocket returns label_url + manifest_url
-  // + per-shipment AWB info. Keep this loose since both shapes are
-  // forwarded as-is.
+  // The facade returns whatever the carrier API gives back. Shiprocket
+  // returns label_url + manifest_url + per-shipment AWB info. Keep this
+  // loose since carrier shapes vary and are forwarded as-is.
   labelUrl?: string | null;
   manifestUrl?: string | null;
   awb?: string | null;

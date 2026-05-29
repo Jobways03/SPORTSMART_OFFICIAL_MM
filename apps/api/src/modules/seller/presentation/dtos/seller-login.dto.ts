@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class SellerLoginDto {
@@ -9,5 +9,13 @@ export class SellerLoginDto {
 
   @IsNotEmpty({ message: 'Password is required' })
   @IsString()
+  @MaxLength(128, { message: 'Password is too long' })
   password!: string;
+
+  // Phase 21 (2026-05-20) — captcha token from the seller-portal
+  // login form. Required when CAPTCHA_PROVIDER is set; ignored when
+  // the verifier service is in passthrough mode.
+  @IsOptional()
+  @IsString()
+  captchaToken?: string;
 }

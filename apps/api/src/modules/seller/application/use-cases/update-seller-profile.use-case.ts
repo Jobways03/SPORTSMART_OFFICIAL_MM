@@ -12,7 +12,6 @@ import {
   getPlainTextLength,
 } from '../../../../core/utils/rich-text-sanitizer';
 import { computeProfileCompletion } from '../../../../core/utils';
-import { ithinkAddressHash } from '../../../admin/application/services/admin-delivery-methods.service';
 import { UpdateSellerProfileDto } from '../../presentation/dtos/update-seller-profile.dto';
 import {
   SellerRepository,
@@ -143,26 +142,6 @@ export class UpdateSellerProfileUseCase {
     updateData.profileCompletionPercentage = profileCompletionPercentage;
     updateData.isProfileCompleted = isProfileCompleted;
     updateData.lastProfileUpdatedAt = new Date();
-
-    // iThink address-drift detection: if the seller has previously
-    // registered a pickup with iThink AND the new address differs from
-    // what was registered, flip the warehouse status to STALE so admin
-    // sees the banner and can re-register at the new address. We
-    // never auto-re-register here — that creates a fresh iThink
-    // warehouse_id which is a billable operation and ops decision.
-    const anyMerged = merged as any;
-    if (anyMerged.ithinkPickupAddressId && anyMerged.ithinkRegisteredAddressHash) {
-      const newHash = ithinkAddressHash({
-        address: anyMerged.storeAddress,
-        city: anyMerged.city,
-        state: anyMerged.state,
-        pincode: anyMerged.sellerZipCode,
-        mobile: anyMerged.sellerContactNumber ?? anyMerged.phoneNumber,
-      });
-      if (newHash !== anyMerged.ithinkRegisteredAddressHash) {
-        updateData.ithinkWarehouseStatus = 'STALE';
-      }
-    }
 
     // Persist
     const updated = await this.sellerRepo.updateSellerSelect(

@@ -1,9 +1,23 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { NotFoundAppException } from '../../../../core/exceptions';
+import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import {
+  BadRequestAppException,
+  NotFoundAppException,
+} from '../../../../core/exceptions';
 
 /**
  * Story 4.1 follow-up — operator visibility into RefundSaga rows.
@@ -28,7 +42,12 @@ export class AdminRefundSagasController {
   // operator eyes.
   private static readonly STUCK_AFTER_MS = 15 * 60 * 1000;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly logger: AppLoggerService,
+  ) {
+    this.logger.setContext('AdminRefundSagasController');
+  }
 
   @Get()
   @Permissions('refunds.read')
@@ -86,6 +105,71 @@ export class AdminRefundSagasController {
     const row = await this.prisma.refundSaga.findUnique({ where: { id } });
     if (!row) throw new NotFoundAppException('Saga not found');
     return { success: true, message: 'Saga', data: this.serialize(row) };
+  }
+
+  /**
+   * Phase 100 (2026-05-23) — Phase 99 audit Gap #18 closure.
+   *
+   * POST /admin/refund-sagas/:id/replay — admin manually re-runs a
+   * FAILED / COMPENSATED / COMPENSATION_FAILED saga. We don't try to
+   * resume from the last SUCCEEDED step (closures aren't persisted —
+   * see Gap #6 deferral); instead we reset the linked RefundInstruction
+   * to PROCESSING and let the standard approval / saga re-entry path
+   * run again. Auditable + Idempotent so accidental double-clicks are
+   * absorbed.
+   */
+  @Post(':id/replay')
+  @Permissions('refunds.approve')
+  @Idempotent()
+  async replay(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() _body: any,
+  ) {
+    const saga = await this.prisma.refundSaga.findUnique({ where: { id } });
+    if (!saga) throw new NotFoundAppException('Saga not found');
+    const terminalForReplay = [
+      'FAILED',
+      'COMPENSATED',
+      'COMPENSATION_FAILED',
+    ];
+    if (!terminalForReplay.includes(String(saga.status))) {
+      throw new BadRequestAppException(
+        `Saga ${id} is in state ${saga.status}; replay requires FAILED / COMPENSATED / COMPENSATION_FAILED.`,
+      );
+    }
+    if (!saga.instructionId) {
+      throw new BadRequestAppException(
+        `Saga ${id} has no linked RefundInstruction; manual reconciliation only.`,
+      );
+    }
+    // Flip the linked instruction back to PROCESSING so the existing
+    // approve-by-finance path re-runs the saga. Stamping a replay
+    // pointer on the saga row preserves the audit trail.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.refundInstruction.update({
+        where: { id: saga.instructionId! },
+        data: {
+          status: 'PENDING_APPROVAL' as any,
+          failureReason: `Replay requested by admin ${req.adminId} from saga ${id}`,
+        },
+      });
+      await tx.refundSaga.update({
+        where: { id },
+        data: {
+          failureReason: `${saga.failureReason ?? ''} | Replay requested by admin ${req.adminId} at ${new Date().toISOString()}`,
+        },
+      });
+    });
+    this.logger.log(
+      `Refund saga ${id} replay requested by admin ${req.adminId} (instruction=${saga.instructionId})`,
+    );
+    return {
+      success: true,
+      message:
+        'Replay queued — RefundInstruction reset to PENDING_APPROVAL. Finance must re-approve to re-run the saga.',
+      data: { sagaId: id, instructionId: saga.instructionId },
+    };
   }
 
   // BigInt isn't JSON-serialisable so we stringify amountInPaise; the

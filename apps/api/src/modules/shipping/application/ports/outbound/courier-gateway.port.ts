@@ -12,15 +12,74 @@ import type { DeliveryMethod } from '@prisma/client';
  * Shiprocket, etc.) drop in by implementing this port and registering
  * a strategy for a new DeliveryMethod enum value.
  *
- * Result shapes are deliberately small — adapters translate iThink's
- * verbose responses to these so callers don't have to know which
- * carrier they're talking to.
+ * Result shapes are deliberately small — adapters translate each
+ * carrier's verbose responses to these so callers don't have to know
+ * which carrier they're talking to.
  */
 
 /** Discriminator returned by adapters so callers know who answered. */
 export interface CourierAdapterMeta {
   readonly method: DeliveryMethod;
-  readonly carrier: string; // 'iThink:delhivery' | 'self-delivery' | ...
+  readonly carrier: string; // 'self-delivery' | <future-carrier> | ...
+}
+
+/** Courier-neutral address used in a shipment booking payload. */
+export interface DomainAddress {
+  name: string;
+  company?: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  state: string;
+  pincode: string;
+  country?: string;
+  phone: string;
+  email?: string;
+}
+
+/** Courier-neutral line item in a shipment booking payload. */
+export interface DomainProduct {
+  name: string;
+  sku?: string;
+  quantity: number;
+  /** Rupees as decimal string. */
+  unitPrice: string;
+  hsn?: string;
+}
+
+/**
+ * Courier-neutral shipment payload. Carrier adapters translate this into
+ * their own request shape. Was previously the iThink mapper's
+ * `DomainShipment`; decoupled from any specific carrier when iThink was
+ * removed so the port stays provider-agnostic for a future courier.
+ */
+export interface DomainShipment {
+  orderNumber: string;
+  subOrderNumber?: string;
+  orderDate: Date | string;
+  /** Rupees as decimal string. */
+  totalAmount: string;
+  shipping: DomainAddress;
+  billing?: DomainAddress;
+  products: DomainProduct[];
+  /** cm. */
+  dimensions: { length: number; width: number; height: number };
+  /** kg (decimal, not grams). */
+  weightKg: number;
+  /** 'cod' | 'prepaid'. */
+  paymentMode: string;
+  /** Rupees as decimal string. Required when paymentMode is 'cod'. */
+  codAmount?: string;
+  shippingCharges?: string;
+  totalDiscount?: string;
+  gstNumber?: string;
+  ewayBillNumber?: string;
+  direction?: 'forward' | 'reverse';
+  /** Optional carrier preference slug (free-form). */
+  logistics?: string;
+  serviceType?: string;
+  pickupAddressId: string;
+  returnAddressId: string;
 }
 
 /** Request to register a new pickup origin with the carrier. */
@@ -54,10 +113,9 @@ export interface CreateShipmentRequest {
   subOrderId: string;
   pickupAddressId: string;
   returnAddressId: string;
-  // The full domain shipment payload — see `DomainShipment` in the
-  // iThink mapper for field-by-field shape. Kept as a structural
-  // type to avoid coupling the port to the integration package.
-  shipment: import('../../../../../integrations/ithink/mappers/ithink-shipment.mapper').DomainShipment;
+  // The full domain shipment payload (courier-neutral; see DomainShipment
+  // above). Self-delivery ignores it; a future carrier adapter consumes it.
+  shipment: DomainShipment;
   direction?: 'forward' | 'reverse';
   carrierPreference?: string;
 }
@@ -97,6 +155,16 @@ export interface TrackingSnapshot {
   expectedDelivery?: Date;
   promiseDelivery?: Date;
   scans: NormalisedScanRecord[];
+  // Phase 88 (2026-05-23) — Shipment Evidence Gap #3. Carrier-side
+  // POD artifacts surfaced from the webhook payload when the
+  // current status normalises to DELIVERED (or RTO_DELIVERED).
+  // applySnapshot persists these as a ShipmentEvidence(kind=POD or
+  // RTO_PROOF) row so the customer order detail page + admin
+  // dispute panel have actual proof to render.
+  podUrl?: string | null;
+  signatureUrl?: string | null;
+  signedByName?: string | null;
+  customerOtpHash?: string | null;
 }
 
 export interface PrintLabelResult {

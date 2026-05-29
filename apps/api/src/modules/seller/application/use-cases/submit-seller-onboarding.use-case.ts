@@ -1,8 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   BadRequestAppException,
+  ConflictAppException,
   ForbiddenAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
@@ -14,9 +16,12 @@ import {
 interface SubmitSellerOnboardingInput {
   sellerId: string;
   legalBusinessName: string;
-  gstRegistrationType: 'REGULAR' | 'COMPOSITION' | 'CASUAL' | 'UNREGISTERED';
-  gstin?: string;
-  gstStateCode?: string;
+  // Phase 19 (2026-05-20) — UNREGISTERED removed from the DTO. The
+  // type stays as a union of the three legal values so a malformed
+  // client can't sneak through.
+  gstRegistrationType: 'REGULAR' | 'COMPOSITION' | 'CASUAL';
+  gstin: string;
+  gstStateCode: string;
   panNumber: string;
   registeredBusinessAddress: {
     line1: string;
@@ -37,14 +42,32 @@ interface SubmitSellerOnboardingInput {
   shortStoreDescription?: string;
   detailedStoreDescription?: string;
   confirmedAccurate: boolean;
+  /** Phase 19 (2026-05-20) — audit-trail context. Best-effort. */
+  ipAddress?: string;
+  userAgent?: string;
 }
 
+/**
+ * Phase 19 (2026-05-20) — Seller onboarding submission.
+ *
+ * Hardening vs prior version:
+ *   • GSTIN[0:2] === gstStateCode cross-check.
+ *   • Duplicate GSTIN/PAN pre-check against other sellers.
+ *   • Audit-log row (`SELLER_KYC_SUBMITTED`) capturing
+ *     confirmedAccurate, IP, user-agent.
+ *   • Stamps `kycConfirmedAccurateAt` on the seller row.
+ *   • Clears stale `kycRejectionReason` (and the legacy
+ *     `gstVerificationNotes`) on a fresh submit.
+ *   • The dead `UNREGISTERED` defensive branch is dropped; the DTO
+ *     no longer accepts the value.
+ */
 @Injectable()
 export class SubmitSellerOnboardingUseCase {
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
     private readonly eventBus: EventBusService,
+    private readonly audit: AuditPublicFacade,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('SubmitSellerOnboardingUseCase');
@@ -69,6 +92,10 @@ export class SubmitSellerOnboardingUseCase {
       isEmailVerified: true,
       verificationStatus: true,
       isDeleted: true,
+      // Phase 21 (2026-05-20) — read kycReviewedAt so we can enforce
+      // a post-reject cooldown (M9). The column is stamped by the
+      // admin reject use-case.
+      kycReviewedAt: true,
     });
 
     if (!seller || (seller as any).isDeleted) {
@@ -99,72 +126,157 @@ export class SubmitSellerOnboardingUseCase {
       );
     }
 
-    // Phase 26 GST — policy change (2026-05-18): GSTIN is mandatory for
-    // every seller, regardless of declared GstRegistrationType. The
-    // UNREGISTERED escape hatch is removed (frontend dropdown also
-    // dropped). Existing UNREGISTERED sellers in the DB are
-    // grandfathered until they next submit profile changes.
-    if (!input.gstin || input.gstin.trim().length === 0) {
-      throw new BadRequestAppException(
-        'GSTIN is required. Sub-threshold sellers must register for GSTIN before listing on SportSmart.',
-      );
-    }
-    if (input.gstRegistrationType === 'UNREGISTERED') {
-      throw new BadRequestAppException(
-        'UNREGISTERED is no longer an accepted GST registration type. Pick REGULAR or COMPOSITION.',
-      );
+    // Phase 21 (2026-05-20) — Post-reject resubmit cooldown. After an
+    // admin rejection, sellers must wait at least RESUBMIT_COOLDOWN
+    // before resubmitting so they (a) actually read the rejection
+    // reason and (b) cannot DoS the admin review queue by spamming
+    // resubmits. 5 minutes is short enough that a legitimate fix
+    // doesn't feel punished, long enough that an automated retry
+    // loop is throttled.
+    const RESUBMIT_COOLDOWN_MS = 5 * 60 * 1000;
+    if (
+      seller.verificationStatus === 'REJECTED' &&
+      (seller as any).kycReviewedAt
+    ) {
+      const reviewedAt = new Date((seller as any).kycReviewedAt).getTime();
+      const elapsedMs = Date.now() - reviewedAt;
+      if (elapsedMs < RESUBMIT_COOLDOWN_MS) {
+        const retryAfterSeconds = Math.ceil(
+          (RESUBMIT_COOLDOWN_MS - elapsedMs) / 1000,
+        );
+        throw new BadRequestAppException(
+          `Please wait ${retryAfterSeconds} second(s) before resubmitting. Review the rejection reason first.`,
+          'KYC_RESUBMIT_COOLDOWN',
+        );
+      }
     }
 
     // PAN ↔ GSTIN cross-check: GSTIN embeds the PAN at positions 3-12
-    // per CBIC spec. Catch data-entry errors before they reach admin
-    // review.
+    // per CBIC spec.
     if (input.gstin.substring(2, 12) !== input.panNumber) {
       throw new BadRequestAppException(
         'GSTIN does not embed the provided PAN. Check both fields — GSTIN positions 3-12 must equal the PAN.',
       );
     }
 
-    const panLast4 = input.panNumber.slice(-4);
+    // Phase 19 (2026-05-20) — GSTIN state-code cross-check. The first
+    // two digits of the GSTIN MUST match the declared gstStateCode.
+    if (input.gstin.substring(0, 2) !== input.gstStateCode) {
+      throw new BadRequestAppException(
+        'GSTIN state code mismatch. The first two digits of GSTIN must equal the declared GST state code.',
+      );
+    }
 
-    const updated = await this.sellerRepo.updateSellerSelect(
-      sellerId,
-      {
-        legalBusinessName: input.legalBusinessName,
-        gstRegistrationType: input.gstRegistrationType,
-        gstin: input.gstin ?? null,
-        gstStateCode: input.gstStateCode ?? null,
-        panNumber: input.panNumber,
-        panLast4,
-        registeredBusinessAddressJson: input.registeredBusinessAddress,
-        storeAddress: input.storeAddress,
-        city: input.city,
-        state: input.state,
-        country: input.country,
-        sellerZipCode: input.sellerZipCode,
-        locality: input.locality ?? null,
-        sellerContactCountryCode: input.sellerContactCountryCode ?? null,
-        sellerContactNumber: input.sellerContactNumber ?? null,
-        shortStoreDescription: input.shortStoreDescription ?? null,
-        detailedStoreDescription: input.detailedStoreDescription ?? null,
-        verificationStatus: 'UNDER_REVIEW',
-        isProfileCompleted: true,
-        profileCompletionPercentage: 100,
-        lastProfileUpdatedAt: new Date(),
-      },
-      { id: true, verificationStatus: true, isProfileCompleted: true },
-    );
+    // Phase 19 (2026-05-20) — duplicate-legal-identity pre-check.
+    // The Prisma @unique catches at the DB layer too (P2002), but
+    // pre-checking lets us return a clean 409 with the right field
+    // attribution.
+    const gstinOwner = await this.sellerRepo.findByGstin(input.gstin);
+    if (gstinOwner && gstinOwner.id !== sellerId) {
+      throw new ConflictAppException(
+        'This GSTIN is already registered to another seller account. Contact support if you believe this is an error.',
+      );
+    }
+    const panOwner = await this.sellerRepo.findByPanNumber(input.panNumber);
+    if (panOwner && panOwner.id !== sellerId) {
+      throw new ConflictAppException(
+        'This PAN is already registered to another seller account. Contact support if you believe this is an error.',
+      );
+    }
+
+    const panLast4 = input.panNumber.slice(-4);
+    const now = new Date();
+
+    let updated: { id: string; verificationStatus: string; isProfileCompleted: boolean };
+    try {
+      updated = await this.sellerRepo.updateSellerSelect(
+        sellerId,
+        {
+          legalBusinessName: input.legalBusinessName,
+          gstRegistrationType: input.gstRegistrationType,
+          gstin: input.gstin,
+          gstStateCode: input.gstStateCode,
+          panNumber: input.panNumber,
+          panLast4,
+          registeredBusinessAddressJson: input.registeredBusinessAddress,
+          storeAddress: input.storeAddress,
+          city: input.city,
+          state: input.state,
+          country: input.country,
+          sellerZipCode: input.sellerZipCode,
+          locality: input.locality ?? null,
+          sellerContactCountryCode: input.sellerContactCountryCode ?? null,
+          sellerContactNumber: input.sellerContactNumber ?? null,
+          shortStoreDescription: input.shortStoreDescription ?? null,
+          detailedStoreDescription: input.detailedStoreDescription ?? null,
+          verificationStatus: 'UNDER_REVIEW',
+          // Clear stale rejection state on resubmit.
+          kycRejectionReason: null,
+          gstVerificationNotes: null,
+          isProfileCompleted: true,
+          profileCompletionPercentage: 100,
+          lastProfileUpdatedAt: now,
+          kycConfirmedAccurateAt: now,
+        },
+        { id: true, verificationStatus: true, isProfileCompleted: true },
+      );
+    } catch (err: any) {
+      // Race window: another submit with the same GSTIN/PAN landed
+      // between our pre-check and our update. The DB @unique
+      // catches it; translate to the same 409 shape.
+      if (err?.code === 'P2002') {
+        const target = err?.meta?.target;
+        if (target?.includes?.('gstin')) {
+          throw new ConflictAppException(
+            'This GSTIN is already registered to another seller account.',
+          );
+        }
+        if (target?.includes?.('pan_number')) {
+          throw new ConflictAppException(
+            'This PAN is already registered to another seller account.',
+          );
+        }
+      }
+      throw err;
+    }
+
+    // Best-effort audit log. The seller row already carries
+    // kycConfirmedAccurateAt as the load-bearing consent record;
+    // this row captures the broader review context.
+    this.audit
+      .writeAuditLog({
+        actorId: sellerId,
+        actorRole: 'SELLER',
+        action: 'SELLER_KYC_SUBMITTED',
+        module: 'seller',
+        resource: 'Seller',
+        resourceId: sellerId,
+        newValue: {
+          verificationStatus: 'UNDER_REVIEW',
+          gstRegistrationType: input.gstRegistrationType,
+          hasGstin: true,
+          legalBusinessName: input.legalBusinessName,
+          panLast4,
+        },
+        metadata: { confirmedAccurate: true },
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+      })
+      .catch((err) => {
+        this.logger.error(`Failed to write audit log for KYC submit: ${err}`);
+      });
 
     this.eventBus
       .publish({
         eventName: 'seller.onboarding_submitted',
         aggregate: 'seller',
         aggregateId: sellerId,
-        occurredAt: new Date(),
+        occurredAt: now,
         payload: {
           sellerId,
           legalBusinessName: input.legalBusinessName,
           gstRegistrationType: input.gstRegistrationType,
-          hasGstin: !!input.gstin,
+          panLast4,
           previousVerificationStatus: seller.verificationStatus,
         },
       })

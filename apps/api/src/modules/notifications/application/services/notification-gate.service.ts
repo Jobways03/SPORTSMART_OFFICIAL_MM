@@ -1,11 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { NotificationChannel } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { ConsentService } from '../../../identity/application/services/consent.service';
 
 /**
  * Phase 8 (PR 8.2) — Notification gate.
  *
- * Single chokepoint applied before any send. Two checks, in order:
+ * Single chokepoint applied before any send. Three checks, in order:
  *
  *   1. **Suppression list** (hard block). A row in
  *      `notification_suppressions` for the (channel, destination)
@@ -13,7 +14,16 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
  *      This is for cases where we MUST stop (bounced, spam-complaint,
  *      compliance request).
  *
- *   2. **User preferences**. If the caller doesn't pass `transactional`,
+ *   2. **DPDP consent** (Phase 28, 2026-05-21). For non-transactional
+ *      sends classified as marketing (eventClass='marketing') we check
+ *      the customer's ConsentRecord projection for the matching
+ *      channel-specific purpose (EMAIL_MARKETING / SMS_MARKETING /
+ *      WHATSAPP_MARKETING). Missing or `granted=false` denies. Closes
+ *      the gap where toggling EMAIL_MARKETING=false at /account/privacy
+ *      did NOT actually stop marketing emails because the gate used
+ *      NotificationPreference, a parallel store from ConsentRecord.
+ *
+ *   3. **User preferences**. If the caller doesn't pass `transactional`,
  *      and the user has explicitly opted out of (eventClass, channel),
  *      deny. The default is to allow (no row = enabled).
  *
@@ -49,7 +59,10 @@ export type GateDecision =
 export class NotificationGateService {
   private readonly logger = new Logger(NotificationGateService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly consentService: ConsentService,
+  ) {}
 
   async check(input: GateInput): Promise<GateDecision> {
     // 1. Suppression list — always wins.
@@ -94,6 +107,32 @@ export class NotificationGateService {
 
     // 2. Transactional bypass for safety-critical sends.
     if (input.transactional) return { allowed: true };
+
+    // 2b. Phase 28 (2026-05-21) — DPDP consent enforcement for
+    // marketing sends. Restricted to eventClass='marketing' so
+    // operational events that route to the same channel (order
+    // updates, refund credited) aren't gated on a marketing toggle.
+    // No userId → no consent record to check, so we fall through (the
+    // suppression list above is the only defence for raw-destination
+    // marketing — rare but legitimate for ops blast tooling).
+    if (
+      input.recipientUserId &&
+      input.eventClass === 'marketing'
+    ) {
+      const purpose = ConsentService.marketingPurposeForChannel(input.channel);
+      if (purpose) {
+        const allowed = await this.consentService.isAllowed(
+          input.recipientUserId,
+          purpose,
+        );
+        if (!allowed) {
+          return {
+            allowed: false,
+            reason: `consent not granted for ${purpose}`,
+          };
+        }
+      }
+    }
 
     // 3. User preference. No user → no preference to check.
     if (!input.recipientUserId) return { allowed: true };

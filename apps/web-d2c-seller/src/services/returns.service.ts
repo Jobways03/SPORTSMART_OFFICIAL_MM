@@ -79,21 +79,13 @@ export const sellerReturnsService = {
     });
   },
 
-  submitQc(
-    returnId: string,
-    decisions: Array<{
-      returnItemId: string;
-      qcOutcome: string;
-      qcQuantityApproved: number;
-      qcNotes?: string;
-    }>,
-    overallNotes?: string,
-  ) {
-    return apiClient(`/seller/returns/${returnId}/qc-decision`, {
-      method: 'PATCH',
-      body: JSON.stringify({ decisions, overallNotes }),
-    });
-  },
+  // Phase 100 (2026-05-23) — Mark Received audit Gap #3 / QC audit
+  // Gap #1 closure. The `/seller/returns/:id/qc-decision` route does
+  // NOT exist on the backend; QC is admin-only by design (the
+  // ReturnService.submitQcDecision guard refuses non-ADMIN actorType
+  // for defense-in-depth). The previous submitQc method 404'd on
+  // every click. Removed entirely so callers fail at compile time
+  // instead of at runtime.
 
   uploadEvidence(returnId: string, file: File, description?: string) {
     const formData = new FormData();

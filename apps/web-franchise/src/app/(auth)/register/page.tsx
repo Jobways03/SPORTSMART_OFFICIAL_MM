@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useCallback, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { franchiseAuthService } from '@/services/auth.service';
@@ -11,8 +11,10 @@ import {
   validateEmail,
   validatePhoneNumber,
   validatePassword,
+  validateConfirmPassword,
   getPasswordStrength,
 } from '@/lib/validators';
+import { CaptchaWidget } from '@/components/CaptchaWidget';
 import '../auth.css';
 
 interface FormErrors {
@@ -21,7 +23,15 @@ interface FormErrors {
   email?: string;
   phoneNumber?: string;
   password?: string;
+  confirmPassword?: string;
+  acceptTerms?: string;
+  acceptPrivacy?: string;
+  captchaToken?: string;
 }
+
+const CAPTCHA_REQUIRED =
+  (process.env.NEXT_PUBLIC_CAPTCHA_PROVIDER ?? 'disabled').toLowerCase() !==
+  'disabled';
 
 export default function FranchiseRegisterPage() {
   const router = useRouter();
@@ -30,11 +40,22 @@ export default function FranchiseRegisterPage() {
   const [email, setEmail] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acceptPrivacy, setAcceptPrivacy] = useState(false);
+  const [acceptMarketing, setAcceptMarketing] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  const onCaptchaToken = useCallback((token: string) => {
+    setCaptchaToken(token);
+  }, []);
 
   const validateField = (field: string, value: string): string | null => {
     switch (field) {
@@ -59,12 +80,19 @@ export default function FranchiseRegisterPage() {
     const emErr = validateEmail(email);
     const phErr = validatePhoneNumber(phoneNumber);
     const pwErr = validatePassword(password);
+    const cpErr = validateConfirmPassword(password, confirmPassword);
 
     if (onErr) newErrors.ownerName = onErr;
     if (bnErr) newErrors.businessName = bnErr;
     if (emErr) newErrors.email = emErr;
     if (phErr) newErrors.phoneNumber = phErr;
     if (pwErr) newErrors.password = pwErr;
+    if (cpErr) newErrors.confirmPassword = cpErr;
+    if (!acceptTerms) newErrors.acceptTerms = 'You must agree to the Terms of Service';
+    if (!acceptPrivacy) newErrors.acceptPrivacy = 'You must agree to the Privacy Policy';
+    if (CAPTCHA_REQUIRED && !captchaToken) {
+      newErrors.captchaToken = 'Please complete the captcha';
+    }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -73,6 +101,7 @@ export default function FranchiseRegisterPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setServerError('');
+    setSubmitAttempted(true);
 
     if (!validateAll()) {
       const firstErrorField = document.querySelector('[aria-invalid="true"]') as HTMLElement;
@@ -83,44 +112,40 @@ export default function FranchiseRegisterPage() {
     setIsSubmitting(true);
 
     try {
+      const normalizedEmail = email.trim().toLowerCase();
       await franchiseAuthService.register({
         ownerName: ownerName.trim(),
         businessName: businessName.trim(),
-        email: email.trim().toLowerCase(),
+        email: normalizedEmail,
         phoneNumber: phoneNumber.trim().replace(/\D/g, ''),
         password,
+        confirmPassword,
+        acceptTerms,
+        acceptPrivacy,
+        acceptMarketing,
+        captchaToken: captchaToken || undefined,
       });
-
-      setIsSuccess(true);
-      setTimeout(() => router.push('/login?registered=1'), 2000);
+      router.replace(`/register/verify?email=${encodeURIComponent(normalizedEmail)}`);
     } catch (err) {
+      setCaptchaResetKey((k) => k + 1);
+      setCaptchaToken('');
       if (err instanceof ApiError) {
-        if (err.status === 409) {
-          const msg = err.body.message || '';
-          if (msg.toLowerCase().includes('phone')) {
-            setErrors((prev) => ({
-              ...prev,
-              phoneNumber: 'An account with this phone number already exists',
-            }));
-          } else {
-            setErrors((prev) => ({
-              ...prev,
-              email: 'An account with this email already exists',
-            }));
-          }
-        } else if (err.status === 422 && err.body.errors) {
+        if (err.status === 422 && err.body.errors) {
           const fieldErrors: FormErrors = {};
           for (const e of err.body.errors) {
             (fieldErrors as Record<string, string>)[e.field] = e.message;
           }
           setErrors(fieldErrors);
+        } else if (err.status === 429) {
+          setServerError('Too many registration attempts. Please try again in a moment.');
+        } else if (err.status === 400) {
+          setServerError(err.message || 'Please check the form and try again.');
         } else {
           setServerError(err.message || 'Something went wrong. Please try again.');
         }
       } else {
         setServerError('Something went wrong. Please try again.');
       }
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -141,16 +166,9 @@ export default function FranchiseRegisterPage() {
           <p className="auth-badge">Franchise Portal</p>
           <h2 className="auth-title">Create your franchise account</h2>
           <p className="auth-subtitle">
-            Register your business and start managing your franchise operations
+            We&apos;ll email you a 6-digit code to verify your address.
           </p>
         </div>
-
-        {isSuccess && (
-          <div className="alert alert-success" role="status">
-            Account created successfully! Your franchise is pending admin approval.
-            Redirecting to login...
-          </div>
-        )}
 
         {serverError && (
           <div className="alert alert-error" role="alert">
@@ -159,6 +177,7 @@ export default function FranchiseRegisterPage() {
         )}
 
         <form onSubmit={handleSubmit} noValidate>
+          <fieldset disabled={isSubmitting} style={{ border: 0, padding: 0 }}>
           <div className="form-group">
             <label htmlFor="ownerName">Owner Name *</label>
             <input
@@ -166,18 +185,15 @@ export default function FranchiseRegisterPage() {
               type="text"
               placeholder="Enter the owner's full name"
               value={ownerName}
+              maxLength={100}
               onChange={(e) => setOwnerName(e.target.value)}
               onBlur={() => handleBlur('ownerName', ownerName)}
               aria-invalid={!!errors.ownerName}
-              aria-describedby={errors.ownerName ? 'ownerName-error' : undefined}
-              disabled={isSubmitting || isSuccess}
               autoComplete="name"
               autoFocus
             />
             {errors.ownerName && (
-              <span id="ownerName-error" className="field-error" role="alert">
-                {errors.ownerName}
-              </span>
+              <span className="field-error" role="alert">{errors.ownerName}</span>
             )}
           </div>
 
@@ -188,17 +204,14 @@ export default function FranchiseRegisterPage() {
               type="text"
               placeholder="Enter your business or franchise name"
               value={businessName}
+              maxLength={150}
               onChange={(e) => setBusinessName(e.target.value)}
               onBlur={() => handleBlur('businessName', businessName)}
               aria-invalid={!!errors.businessName}
-              aria-describedby={errors.businessName ? 'businessName-error' : undefined}
-              disabled={isSubmitting || isSuccess}
               autoComplete="organization"
             />
             {errors.businessName && (
-              <span id="businessName-error" className="field-error" role="alert">
-                {errors.businessName}
-              </span>
+              <span className="field-error" role="alert">{errors.businessName}</span>
             )}
           </div>
 
@@ -209,17 +222,14 @@ export default function FranchiseRegisterPage() {
               type="email"
               placeholder="you@example.com"
               value={email}
+              maxLength={255}
               onChange={(e) => setEmail(e.target.value)}
               onBlur={() => handleBlur('email', email)}
               aria-invalid={!!errors.email}
-              aria-describedby={errors.email ? 'email-error' : undefined}
-              disabled={isSubmitting || isSuccess}
               autoComplete="email"
             />
             {errors.email && (
-              <span id="email-error" className="field-error" role="alert">
-                {errors.email}
-              </span>
+              <span className="field-error" role="alert">{errors.email}</span>
             )}
           </div>
 
@@ -231,18 +241,12 @@ export default function FranchiseRegisterPage() {
               placeholder="10-digit mobile starting with 6, 7, 8, or 9"
               value={phoneNumber}
               onChange={(e) => {
-                // Strip non-digits as the user types; reject any leading
-                // digit that isn't 6-9 (Indian mobile prefix). Hard-cap
-                // at 10 chars — backend rejects anything else anyway,
-                // catch it client-side for a snappier UX.
                 let next = e.target.value.replace(/\D/g, '');
                 next = next.replace(/^[0-5]+/, '');
                 next = next.slice(0, 10);
                 setPhoneNumber(next);
               }}
               onKeyDown={(e) => {
-                // Block 'e', '+', '-', '.' that <input type="tel"> would
-                // otherwise allow in some browsers.
                 if (['e', 'E', '+', '-', '.', ' '].includes(e.key)) {
                   e.preventDefault();
                 }
@@ -252,19 +256,10 @@ export default function FranchiseRegisterPage() {
               pattern="[6-9][0-9]{9}"
               maxLength={10}
               aria-invalid={!!errors.phoneNumber}
-              aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : 'phoneNumber-hint'}
-              disabled={isSubmitting || isSuccess}
               autoComplete="tel"
             />
-            {!errors.phoneNumber && (
-              <span id="phoneNumber-hint" style={{ fontSize: 12, color: '#64748b' }}>
-                {phoneNumber.length}/10 digits
-              </span>
-            )}
             {errors.phoneNumber && (
-              <span id="phoneNumber-error" className="field-error" role="alert">
-                {errors.phoneNumber}
-              </span>
+              <span className="field-error" role="alert">{errors.phoneNumber}</span>
             )}
           </div>
 
@@ -276,11 +271,10 @@ export default function FranchiseRegisterPage() {
                 type={showPassword ? 'text' : 'password'}
                 placeholder="Create a strong password"
                 value={password}
+                maxLength={128}
                 onChange={(e) => setPassword(e.target.value)}
                 onBlur={() => handleBlur('password', password)}
                 aria-invalid={!!errors.password}
-                aria-describedby="password-strength"
-                disabled={isSubmitting || isSuccess}
                 autoComplete="new-password"
               />
               <button
@@ -294,37 +288,121 @@ export default function FranchiseRegisterPage() {
               </button>
             </div>
             {errors.password && (
-              <span className="field-error" role="alert">
-                {errors.password}
-              </span>
+              <span className="field-error" role="alert">{errors.password}</span>
             )}
-            <div id="password-strength" className="password-strength" aria-live="polite">
+            <div className="password-strength" aria-live="polite">
               <div className={`rule ${strength.hasMinLength ? 'met' : ''}`}>
-                {strength.hasMinLength ? '\u2713' : '\u2717'} At least 8 characters
+                {strength.hasMinLength ? '✓' : '✗'} At least 8 characters
               </div>
               <div className={`rule ${strength.hasUppercase ? 'met' : ''}`}>
-                {strength.hasUppercase ? '\u2713' : '\u2717'} One uppercase letter
+                {strength.hasUppercase ? '✓' : '✗'} One uppercase letter
               </div>
               <div className={`rule ${strength.hasLowercase ? 'met' : ''}`}>
-                {strength.hasLowercase ? '\u2713' : '\u2717'} One lowercase letter
+                {strength.hasLowercase ? '✓' : '✗'} One lowercase letter
               </div>
               <div className={`rule ${strength.hasDigit ? 'met' : ''}`}>
-                {strength.hasDigit ? '\u2713' : '\u2717'} One number
+                {strength.hasDigit ? '✓' : '✗'} One number
               </div>
               <div className={`rule ${strength.hasSpecial ? 'met' : ''}`}>
-                {strength.hasSpecial ? '\u2713' : '\u2717'} One special character
+                {strength.hasSpecial ? '✓' : '✗'} One special character
               </div>
             </div>
           </div>
 
+          <div className="form-group">
+            <label htmlFor="confirmPassword">Confirm Password *</label>
+            <div className="password-wrapper">
+              <input
+                id="confirmPassword"
+                type={showConfirmPassword ? 'text' : 'password'}
+                placeholder="Re-enter your password"
+                value={confirmPassword}
+                maxLength={128}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                onBlur={() => handleBlur('confirmPassword', confirmPassword)}
+                aria-invalid={!!errors.confirmPassword}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
+              >
+                {showConfirmPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {errors.confirmPassword && (
+              <span className="field-error" role="alert">{errors.confirmPassword}</span>
+            )}
+          </div>
+
+          <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, fontWeight: 400 }}>
+              <input
+                type="checkbox"
+                checked={acceptTerms}
+                onChange={(e) => setAcceptTerms(e.target.checked)}
+                aria-invalid={!!errors.acceptTerms && submitAttempted}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I agree to the{' '}
+                <Link href="/legal/terms" target="_blank">Terms of Service</Link> *
+              </span>
+            </label>
+            {errors.acceptTerms && submitAttempted && (
+              <span className="field-error" role="alert">{errors.acceptTerms}</span>
+            )}
+
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, fontWeight: 400 }}>
+              <input
+                type="checkbox"
+                checked={acceptPrivacy}
+                onChange={(e) => setAcceptPrivacy(e.target.checked)}
+                aria-invalid={!!errors.acceptPrivacy && submitAttempted}
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I agree to the{' '}
+                <Link href="/legal/privacy" target="_blank">Privacy Policy</Link> *
+              </span>
+            </label>
+            {errors.acceptPrivacy && submitAttempted && (
+              <span className="field-error" role="alert">{errors.acceptPrivacy}</span>
+            )}
+
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, fontWeight: 400 }}>
+              <input
+                type="checkbox"
+                checked={acceptMarketing}
+                onChange={(e) => setAcceptMarketing(e.target.checked)}
+                style={{ marginTop: 3 }}
+              />
+              <span style={{ color: '#64748b' }}>
+                Send me product updates (optional).
+              </span>
+            </label>
+          </div>
+
+          {CAPTCHA_REQUIRED && (
+            <div className="form-group">
+              <CaptchaWidget onToken={onCaptchaToken} resetKey={captchaResetKey} />
+              {errors.captchaToken && submitAttempted && (
+                <span className="field-error" role="alert">{errors.captchaToken}</span>
+              )}
+            </div>
+          )}
+
           <button
             type="submit"
             className="btn-submit"
-            disabled={isSubmitting || isSuccess}
             aria-busy={isSubmitting}
           >
-            {isSubmitting ? 'Creating Account...' : 'Create Account'}
+            {isSubmitting ? 'Creating Account…' : 'Create Account'}
           </button>
+          </fieldset>
         </form>
 
         <p className="auth-footer">

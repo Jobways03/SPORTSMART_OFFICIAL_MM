@@ -13,6 +13,7 @@ import { FranchiseAuthGuard } from '../../../../core/guards';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { SupportService } from '../../application/services/support.service';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { CreateTicketDto, ReplyDto } from '../dtos/support.dtos';
 
 @ApiTags('Support — Franchise')
@@ -31,6 +32,7 @@ export class FranchiseSupportController {
   }
 
   @Post('tickets')
+  @Idempotent()
   async createTicket(@Req() req: any, @Body() body: CreateTicketDto) {
     const partner = await this.prisma.franchisePartner.findUnique({
       where: { id: req.franchiseId },
@@ -83,6 +85,7 @@ export class FranchiseSupportController {
   }
 
   @Post('tickets/:id/messages')
+  @Idempotent()
   async reply(
     @Req() req: any,
     @Param('id') id: string,

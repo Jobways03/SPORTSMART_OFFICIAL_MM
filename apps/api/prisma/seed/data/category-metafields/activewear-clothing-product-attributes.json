@@ -1,0 +1,680 @@
+{
+  "t-shirts-tops": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "top_type",
+      "name": "Top Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "t_shirt", "label": "T-Shirt" },
+        { "value": "tank_top", "label": "Tank Top / Vest" },
+        { "value": "long_sleeve", "label": "Long Sleeve" },
+        { "value": "polo", "label": "Polo Shirt" },
+        { "value": "muscle_tee", "label": "Muscle Tee / Stringer" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "fit_type",
+      "name": "Fit Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "slim", "label": "Slim Fit" },
+        { "value": "regular", "label": "Regular Fit" },
+        { "value": "loose", "label": "Loose / Relaxed" },
+        { "value": "compression", "label": "Compression" }
+      ]
+    },
+    {
+      "key": "fabric_type",
+      "name": "Fabric Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "polyester", "label": "Polyester / Dry-Fit" },
+        { "value": "cotton_blend", "label": "Cotton Blend" },
+        { "value": "nylon", "label": "Nylon" },
+        { "value": "merino", "label": "Merino Wool" },
+        { "value": "bamboo", "label": "Bamboo" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "shorts": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "shorts_type",
+      "name": "Shorts Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "running", "label": "Running Shorts" },
+        { "value": "gym", "label": "Gym / Training Shorts" },
+        { "value": "cycling", "label": "Cycling Shorts" },
+        { "value": "compression", "label": "Compression Shorts" },
+        { "value": "board", "label": "Board Shorts" },
+        { "value": "2_in_1", "label": "2-in-1 Shorts" },
+        { "value": "sweat", "label": "Sweat Shorts" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "inseam_length",
+      "name": "Inseam Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "3_inch", "label": "3\"" },
+        { "value": "5_inch", "label": "5\"" },
+        { "value": "7_inch", "label": "7\"" },
+        { "value": "9_inch", "label": "9\"" },
+        { "value": "above_knee", "label": "Above Knee" },
+        { "value": "knee_length", "label": "Knee Length" }
+      ]
+    },
+    {
+      "key": "has_pockets",
+      "name": "Has Pockets",
+      "type": "BOOLEAN",
+      "sortOrder": 5
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "leggings-tights": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "legging_type",
+      "name": "Legging Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "full_length", "label": "Full Length" },
+        { "value": "7_8", "label": "7/8 Length" },
+        { "value": "capri", "label": "Capri / 3/4" },
+        { "value": "compression", "label": "Compression Tights" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "has_pockets",
+      "name": "Has Pockets",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "track-pants-joggers": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "pant_type",
+      "name": "Pant Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "jogger", "label": "Jogger (Cuffed)" },
+        { "value": "track_pant", "label": "Track Pant (Straight)" },
+        { "value": "tapered", "label": "Tapered / Slim" },
+        { "value": "wide_leg", "label": "Wide Leg" },
+        { "value": "cargo", "label": "Cargo Jogger" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "fabric_type",
+      "name": "Fabric Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "fleece", "label": "Fleece" },
+        { "value": "polyester", "label": "Polyester / Woven" },
+        { "value": "cotton_blend", "label": "Cotton Blend / French Terry" },
+        { "value": "nylon", "label": "Nylon / Lightweight" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "charcoal", "label": "Charcoal" },
+        { "value": "olive", "label": "Olive" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "hoodies-sweatshirts": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "pullover_hoodie", "label": "Pullover Hoodie" },
+        { "value": "zip_hoodie", "label": "Zip-Up Hoodie" },
+        { "value": "sweatshirt", "label": "Sweatshirt (No Hood)" },
+        { "value": "quarter_zip", "label": "Quarter Zip" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "fabric_type",
+      "name": "Fabric Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "fleece", "label": "Fleece" },
+        { "value": "french_terry", "label": "French Terry" },
+        { "value": "tech_fleece", "label": "Tech Fleece" },
+        { "value": "cotton_blend", "label": "Cotton Blend" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "white", "label": "White" },
+        { "value": "charcoal", "label": "Charcoal" },
+        { "value": "olive", "label": "Olive" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "jackets-windbreakers": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "jacket_type",
+      "name": "Jacket Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "windbreaker", "label": "Windbreaker" },
+        { "value": "rain_jacket", "label": "Rain Jacket" },
+        { "value": "track_jacket", "label": "Track Jacket" },
+        { "value": "softshell", "label": "Softshell" },
+        { "value": "puffer", "label": "Puffer / Insulated" },
+        { "value": "running_vest", "label": "Running Vest / Gilet" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "waterproof",
+      "name": "Waterproof",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "green", "label": "Green" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "base-layers-compression": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "short_sleeve_top", "label": "Short Sleeve Top" },
+        { "value": "long_sleeve_top", "label": "Long Sleeve Top" },
+        { "value": "tights", "label": "Tights / Leggings" },
+        { "value": "shorts", "label": "Compression Shorts" },
+        { "value": "sleeves", "label": "Arm / Calf Sleeves" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" }
+      ]
+    },
+    {
+      "key": "thermal",
+      "name": "Thermal / Cold Weather",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "grey", "label": "Grey" }
+      ]
+    }
+  ],
+  "tracksuits": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "set_type",
+      "name": "Set Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "full_set", "label": "Full Set (Top + Bottom)" },
+        { "value": "jacket_only", "label": "Jacket Only" },
+        { "value": "pant_only", "label": "Pant Only" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "s", "label": "S" },
+        { "value": "m", "label": "M" },
+        { "value": "l", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "sports-socks": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "sock_type",
+      "name": "Sock Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "no_show", "label": "No-Show / Invisible" },
+        { "value": "ankle", "label": "Ankle" },
+        { "value": "quarter", "label": "Quarter" },
+        { "value": "crew", "label": "Crew" },
+        { "value": "knee_high", "label": "Knee-High" },
+        { "value": "compression", "label": "Compression" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "s", "label": "S (3-5)" },
+        { "value": "m", "label": "M (6-8)" },
+        { "value": "l", "label": "L (9-11)" },
+        { "value": "xl", "label": "XL (12-14)" }
+      ]
+    },
+    {
+      "key": "pack_quantity",
+      "name": "Pack Quantity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "single", "label": "Single Pair" },
+        { "value": "3_pack", "label": "3 Pack" },
+        { "value": "6_pack", "label": "6 Pack" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multi", "label": "Multi-Color / Assorted" }
+      ]
+    }
+  ],
+  "sports-caps-headwear": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "headwear_type",
+      "name": "Headwear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "baseball_cap", "label": "Baseball Cap" },
+        { "value": "running_cap", "label": "Running Cap" },
+        { "value": "visor", "label": "Visor" },
+        { "value": "beanie", "label": "Beanie" },
+        { "value": "headband", "label": "Headband" },
+        { "value": "bandana", "label": "Bandana / Buff" },
+        { "value": "bucket_hat", "label": "Bucket Hat" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "one_size", "label": "One Size" },
+        { "value": "s_m", "label": "S/M" },
+        { "value": "l_xl", "label": "L/XL" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ]
+}

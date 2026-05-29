@@ -329,35 +329,44 @@ export default function ProductsPage() {
                       </span>
                     </td>
                     <td>
-                      <span
-                        className={getModerationBadgeClass(product.moderationStatus)}
-                        title={product.moderationNote || undefined}
-                      >
-                        {formatStatus(product.moderationStatus)}
-                      </span>
-                      {/* Inline preview of moderation note so the seller can
-                          see rejection / change-request reasons without
-                          opening the detail page. */}
-                      {product.moderationNote &&
-                        (product.moderationStatus === 'REJECTED' ||
-                          product.moderationStatus === 'CHANGES_REQUESTED') && (
-                          <div
-                            style={{
-                              marginTop: 4,
-                              fontSize: 11,
-                              color:
-                                product.moderationStatus === 'REJECTED'
-                                  ? '#991b1b'
-                                  : '#92400e',
-                              maxWidth: 220,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {product.moderationNote}
-                          </div>
-                        )}
+                      {(() => {
+                        // Phase 32 (2026-05-21) — prefer structured columns,
+                        // fall back to legacy moderationNote.
+                        const note =
+                          product.moderationStatus === 'REJECTED'
+                            ? product.rejectionReason ?? product.moderationNote
+                            : product.moderationStatus === 'CHANGES_REQUESTED'
+                              ? product.changeRequestNote ?? product.moderationNote
+                              : null;
+                        return (
+                          <>
+                            <span
+                              className={getModerationBadgeClass(product.moderationStatus)}
+                              title={note || undefined}
+                            >
+                              {formatStatus(product.moderationStatus)}
+                            </span>
+                            {note && (
+                              <div
+                                style={{
+                                  marginTop: 4,
+                                  fontSize: 11,
+                                  color:
+                                    product.moderationStatus === 'REJECTED'
+                                      ? '#991b1b'
+                                      : '#92400e',
+                                  maxWidth: 220,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {note}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td>
                       <ProductActionMenu

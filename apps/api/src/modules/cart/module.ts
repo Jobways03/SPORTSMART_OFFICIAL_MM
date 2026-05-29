@@ -1,17 +1,30 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { CartController } from './presentation/controllers/cart.controller';
+import { CustomerReservationsController } from './presentation/controllers/customer-reservations.controller';
 import { CartService } from './application/services/cart.service';
 import { CartPublicFacade } from './application/facades/cart-public.facade';
+// Phase 61 (2026-05-22) — abandonment-sweep cron (audit Gap #12).
+import { CartAbandonmentSweepCron } from './application/jobs/cart-abandonment-sweep.cron';
 import { PrismaCartRepository } from './infrastructure/repositories/prisma-cart.repository';
 import { CART_REPOSITORY } from './domain/repositories/cart.repository.interface';
 import { UserAuthGuard } from '../../core/guards';
+// Phase 44 (2026-05-21) — Cart now resolves line prices through the
+// catalog facade's pricing-tier helpers. forwardRef breaks the
+// pre-existing Catalog → Cart import cycle.
+import { CatalogModule } from '../catalog/module';
+// Phase 52 polish (2026-05-21) — InventoryModule exports
+// InventoryPublicFacade, which the new customer reservation
+// controller uses for getReservation / extendReservation.
+import { InventoryModule } from '../inventory/module';
 
 @Module({
-  controllers: [CartController],
+  imports: [forwardRef(() => CatalogModule), InventoryModule],
+  controllers: [CartController, CustomerReservationsController],
   providers: [
     UserAuthGuard,
     CartService,
     CartPublicFacade,
+    CartAbandonmentSweepCron,
     {
       provide: CART_REPOSITORY,
       useClass: PrismaCartRepository,

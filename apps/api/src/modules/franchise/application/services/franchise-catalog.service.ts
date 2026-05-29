@@ -65,13 +65,22 @@ export class FranchiseCatalogService {
     // Validate product exists and is ACTIVE
     const product = await this.prisma.product.findFirst({
       where: { id: data.productId, isDeleted: false },
-      select: { id: true, status: true },
+      select: { id: true, status: true, hasVariants: true },
     });
     if (!product) {
       throw new NotFoundAppException('Product not found');
     }
     if (product.status !== 'ACTIVE') {
       throw new BadRequestAppException('Can only map products with ACTIVE status');
+    }
+    // Phase 159n (audit #6) — a varianted product must be mapped at the variant
+    // level. A product-level mapping (variantId=null) for a hasVariants product
+    // makes stock/POS resolution ambiguous (the lookup falls back variant→
+    // product, masking the gap).
+    if (product.hasVariants && !data.variantId) {
+      throw new BadRequestAppException(
+        'This product has variants — a variant must be selected for the mapping.',
+      );
     }
 
     // If a variant is specified, it must exist and belong to the same product
@@ -178,6 +187,11 @@ export class FranchiseCatalogService {
     const updateData: Record<string, unknown> = { ...data };
     if (mapping.approvalStatus !== 'PENDING_APPROVAL') {
       updateData.approvalStatus = 'PENDING_APPROVAL';
+      // Phase 159n (audit #13) — also deactivate while re-pending. Without
+      // this, an edited-but-not-yet-re-approved mapping stayed isActive=true,
+      // leaving a window where POS/procurement (the #1/#2 paths) could still
+      // transact against it. It re-activates only on admin re-approval.
+      updateData.isActive = false;
     }
 
     return this.catalogRepo.update(mappingId, updateData);
@@ -192,7 +206,41 @@ export class FranchiseCatalogService {
       throw new NotFoundAppException('Catalog mapping not found');
     }
 
-    await this.catalogRepo.delete(mappingId);
+    // Phase 159n (audit #8) — block removal while it would orphan live data:
+    // on-hand stock, or an in-flight (non-terminal) procurement request for
+    // this SKU. The franchise must drain/settle those first.
+    const stock = await this.prisma.franchiseStock.findFirst({
+      where: {
+        franchiseId,
+        productId: mapping.productId,
+        variantId: mapping.variantId ?? null,
+      },
+      select: { onHandQty: true },
+    });
+    if (stock && stock.onHandQty > 0) {
+      throw new BadRequestAppException(
+        `Cannot remove mapping: ${stock.onHandQty} unit(s) still on hand. Drain stock first.`,
+      );
+    }
+    const openProcurement = await this.prisma.procurementRequestItem.findFirst({
+      where: {
+        productId: mapping.productId,
+        variantId: mapping.variantId ?? null,
+        procurementRequest: {
+          franchiseId,
+          status: { notIn: ['SETTLED', 'REJECTED', 'CANCELLED'] },
+        },
+      },
+      select: { id: true },
+    });
+    if (openProcurement) {
+      throw new BadRequestAppException(
+        'Cannot remove mapping: an in-flight procurement request references this SKU. Settle or cancel it first.',
+      );
+    }
+
+    // Soft-remove (not hard delete) so history + references survive.
+    await this.catalogRepo.softRemove(mappingId, franchiseId);
   }
 
   async getMapping(franchiseId: string, mappingId: string) {

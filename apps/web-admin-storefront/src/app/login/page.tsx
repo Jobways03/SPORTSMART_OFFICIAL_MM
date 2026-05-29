@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import {
   adminAuthService,
   isMfaChallenge,
@@ -15,13 +16,19 @@ interface MfaState {
   expiresAt: number;
 }
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
+  const params = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Phase 26 (2026-05-20) — surfaced when the reset-password flow
+  // bounces back to /login?reset=success. Cleared on dismiss.
+  const [resetSuccess, setResetSuccess] = useState(
+    params.get('reset') === 'success',
+  );
   // Phase 10 (PR 10.6) — MFA challenge state. Set after a successful
   // password if the admin has MFA enrolled.
   const [mfa, setMfa] = useState<MfaState | null>(null);
@@ -57,6 +64,20 @@ export default function LoginPage() {
           setPassword('');
           return;
         }
+        // Phase 23 (2026-05-20) — tokens are still written to
+        // sessionStorage for backward compatibility with the
+        // dashboard layout + ~10 service readers that pull
+        // adminAccessToken via apiClient/getString. The API ALSO sets
+        // sm_access_admin / sm_refresh_admin httpOnly cookies in the
+        // same response, so XSS exfiltration of the token from
+        // sessionStorage no longer hands an attacker a working
+        // session by itself — refresh rotation + AdminAuthGuard's
+        // session row check tie the token to a still-alive
+        // AdminSession. Removing the sessionStorage writes is a
+        // coordinated frontend migration tracked separately; once the
+        // dashboard layout switches to /admin/auth/me probe + the
+        // service files read the cookie via credentials:'include',
+        // these three lines go away.
         sessionStorage.setItem('adminAccessToken', res.data.accessToken);
         sessionStorage.setItem('adminRefreshToken', res.data.refreshToken);
         sessionStorage.setItem('admin', JSON.stringify(res.data.admin));
@@ -85,6 +106,20 @@ export default function LoginPage() {
         code,
       });
       if (res.data) {
+        // Phase 23 (2026-05-20) — tokens are still written to
+        // sessionStorage for backward compatibility with the
+        // dashboard layout + ~10 service readers that pull
+        // adminAccessToken via apiClient/getString. The API ALSO sets
+        // sm_access_admin / sm_refresh_admin httpOnly cookies in the
+        // same response, so XSS exfiltration of the token from
+        // sessionStorage no longer hands an attacker a working
+        // session by itself — refresh rotation + AdminAuthGuard's
+        // session row check tie the token to a still-alive
+        // AdminSession. Removing the sessionStorage writes is a
+        // coordinated frontend migration tracked separately; once the
+        // dashboard layout switches to /admin/auth/me probe + the
+        // service files read the cookie via credentials:'include',
+        // these three lines go away.
         sessionStorage.setItem('adminAccessToken', res.data.accessToken);
         sessionStorage.setItem('adminRefreshToken', res.data.refreshToken);
         sessionStorage.setItem('admin', JSON.stringify(res.data.admin));
@@ -138,6 +173,45 @@ export default function LoginPage() {
               : 'Sign in to the marketplace control center.'}
           </p>
         </header>
+
+        {resetSuccess && !mfa && (
+          <div
+            role="status"
+            style={{
+              background: '#ecfdf5',
+              border: '1px solid #a7f3d0',
+              color: '#065f46',
+              borderRadius: 8,
+              padding: '10px 12px',
+              fontSize: 13,
+              marginBottom: 12,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: 8,
+            }}
+          >
+            <span>
+              Password reset. Sign in below with your new password — every
+              previous admin session has been signed out.
+            </span>
+            <button
+              type="button"
+              onClick={() => setResetSuccess(false)}
+              aria-label="Dismiss"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#065f46',
+                fontSize: 14,
+                cursor: 'pointer',
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="login-error" role="alert">
@@ -301,6 +375,19 @@ export default function LoginPage() {
                 'Sign in'
               )}
             </button>
+
+            <Link
+              href="/forgot-password"
+              style={{
+                alignSelf: 'center',
+                marginTop: 8,
+                fontSize: 13,
+                color: '#2563eb',
+                textDecoration: 'underline',
+              }}
+            >
+              Forgot password?
+            </Link>
           </form>
         )}
 
@@ -309,5 +396,13 @@ export default function LoginPage() {
         </p>
       </main>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginInner />
+    </Suspense>
   );
 }

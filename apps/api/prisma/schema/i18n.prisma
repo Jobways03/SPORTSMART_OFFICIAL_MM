@@ -37,7 +37,7 @@ model I18nMessage {
   updatedByActorId   String? @map("updated_by_actor_id")
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt      @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@id([locale, key])
   @@index([key])

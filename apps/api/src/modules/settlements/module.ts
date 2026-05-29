@@ -21,6 +21,9 @@ import { TaxModule } from '../tax/module';
     AdminAuthGuard,
     SellerAuthGuard,
   ],
-  exports: [SettlementsPublicFacade],
+  // Phase 146 — export SettlementService so the accounts batch-mark-paid path
+  // can DELEGATE to the single hardened markSettlementPaid (audit + TCS/TDS +
+  // version-CAS + UTR-unique + paise) instead of re-implementing it.
+  exports: [SettlementsPublicFacade, SettlementService],
 })
 export class SettlementsModule {}

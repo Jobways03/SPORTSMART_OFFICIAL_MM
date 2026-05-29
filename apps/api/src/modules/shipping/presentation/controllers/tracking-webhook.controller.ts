@@ -11,17 +11,28 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import {
   BadRequestAppException,
   UnauthorizedAppException,
 } from '../../../../core/exceptions';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import { verifyPayload } from '../../../../core/webhooks/webhook-signer';
-import * as crypto from 'crypto';
 import { IngestTrackingUpdateUseCase } from '../../application/use-cases/ingest-tracking-update.use-case';
 import type { TrackingSnapshot } from '../../application/ports/outbound/courier-gateway.port';
+// Phase 86 (2026-05-23) — Gap #16. class-validator DTO to reject
+// malformed payloads at the global ValidationPipe boundary instead
+// of trusting whatever shape the carrier posted.
+import { ShiprocketWebhookDto } from '../dtos/tracking-webhook.dto';
+// Phase 86 (2026-05-23) — Gap #15. IP allowlist primitive.
+import {
+  ipMatchesAllowlist,
+  parseAllowlist,
+  type IpAllowlistEntry,
+} from '../../../../core/webhooks/ip-allowlist';
 
 /**
  * Shiprocket sends tracking events as JSON POSTs. The relevant fields are
@@ -56,12 +67,35 @@ interface ShiprocketWebhookPayload {
   };
 }
 
+// Phase 86 (2026-05-23) — Gap #4. Sanity window for carrier
+// timestamps. Carrier clocks drift but should still land within a
+// few days of "now"; a payload that says the scan happened in 2030
+// or in 1999 is almost certainly malformed (or hostile — backdating
+// a "DELIVERED" event to bypass the FSM ordering guard). The window
+// is generous so legitimate post-dated estimates (ETD beyond
+// transit) and replays from out-of-date carrier mirrors still land,
+// while clearly-bogus values fall back to `new Date()`.
+const TIMESTAMP_PAST_TOLERANCE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days back
+const TIMESTAMP_FUTURE_TOLERANCE_MS = 24 * 60 * 60 * 1000; // 1 day forward
+
+function clampToSanityWindow(parsed: Date, now: Date = new Date()): Date {
+  const drift = parsed.getTime() - now.getTime();
+  if (drift > TIMESTAMP_FUTURE_TOLERANCE_MS) return now;
+  if (-drift > TIMESTAMP_PAST_TOLERANCE_MS) return now;
+  return parsed;
+}
+
 /**
  * Phase 4 (PR 4.4) — extract the carrier-side event timestamp from a
  * Shiprocket payload. Falls back to `new Date()` when no usable field
  * is present (treating the event as "happened now"); the monotonic-
  * order property is still defended by the CAS predicate on
  * `lastTrackingEventAt`.
+ *
+ * Phase 86 (2026-05-23) — Gap #4. Values outside the sanity window
+ * (±days from now) are clamped to `new Date()` so a malicious or
+ * malformed payload can't backdate a scan to bypass the FSM ordering
+ * guard.
  */
 export function parseEventTimestamp(payload: ShiprocketWebhookPayload): Date {
   const raw =
@@ -75,91 +109,226 @@ export function parseEventTimestamp(payload: ShiprocketWebhookPayload): Date {
     // Unix-seconds heuristic: values below 10^12 are seconds, above
     // are milliseconds. (Year 33658 ≈ 10^15 ms; anything below 10^12
     // ms is sub-year-1973, which we never see in production.)
-    return new Date(raw < 1_000_000_000_000 ? raw * 1000 : raw);
+    return clampToSanityWindow(
+      new Date(raw < 1_000_000_000_000 ? raw * 1000 : raw),
+    );
   }
   const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  return Number.isNaN(parsed.getTime())
+    ? new Date()
+    : clampToSanityWindow(parsed);
 }
 
 const WEBHOOK_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
-
-/**
- * iThink webhook payload — shape derived from their integration
- * documentation. Fields are all optional so a partial payload
- * doesn't crash the parser; the controller validates presence at
- * the boundary.
- */
-interface IThinkWebhookPayload {
-  awb_number?: string;
-  status?: string;
-  status_code?: number | string;
-  status_date?: string;
-  status_location?: string;
-  remarks?: string;
-  order_id?: string;
-}
-
-/**
- * Map iThink's status strings onto the carrier-neutral
- * ShipmentStatusInternal labels used by IngestTrackingUpdateUseCase.
- * Returns null for unknown values — the caller acknowledges + logs
- * rather than guessing.
- *
- * The list mirrors iThink's documented status codes; new ones get
- * added here as the integration evolves. The match is case-insensitive
- * + tolerant of underscores/spaces because iThink isn't consistent
- * between dashboard exports and webhook payloads.
- */
-function mapIThinkStatus(status: string): string | null {
-  const norm = status.toLowerCase().replace(/[_\s]+/g, ' ').trim();
-  if (!norm) return null;
-  if (norm.includes('delivered') && !norm.includes('rto')) return 'DELIVERED';
-  if (norm.includes('rto delivered') || norm === 'rto') return 'RTO_DELIVERED';
-  if (norm.includes('out for delivery')) return 'OUT_FOR_DELIVERY';
-  if (norm.includes('in transit')) return 'IN_TRANSIT';
-  if (norm.includes('picked up') || norm.includes('pickup done')) {
-    return 'PICKED_UP';
-  }
-  if (norm.includes('manifested') || norm.includes('shipment booked')) {
-    return 'MANIFESTED';
-  }
-  if (norm.includes('cancelled')) return 'CANCELLED';
-  if (norm.includes('undelivered') || norm.includes('ndr')) return 'UNDELIVERED';
-  return null;
-}
-
-/**
- * Parse iThink's status_date into a Date. Accepts ISO-8601 + a
- * fallback to `new Date()` so a malformed timestamp doesn't strand
- * the event — the application layer's CAS-style timestamp check
- * still defends ordering.
- */
-function parseIThinkTimestamp(raw: string | undefined): Date {
-  if (!raw) return new Date();
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-}
 
 // Statuses that map to a delivered sub-order. Shiprocket uses different
 // strings depending on integration; treat anything containing "deliver"
 // case-insensitively as a delivery confirmation.
 const DELIVERY_STATUS_PATTERNS = ['delivered'];
 
+/**
+ * Phase 86 (2026-05-23) — Gap #20. Map Shiprocket's free-form
+ * `current_status` / `shipment_status` strings onto the internal
+ * ShipmentStatusInternal labels. Case-insensitive + underscore/space
+ * normalised so adding a new carrier follows a known pattern.
+ *
+ * Pre-Phase-86 the Shiprocket controller only acted on the literal
+ * "delivered" substring and ack'd every other status with a 200.
+ * That left the FSM blind to OUT_FOR_DELIVERY, IN_TRANSIT, NDR, RTO
+ * — the customer track-your-order page had no way to show "out for
+ * delivery today" until the parcel was already in their hands.
+ */
+export function mapShiprocketStatus(status: string): string | null {
+  const norm = status.toLowerCase().replace(/[_\s]+/g, ' ').trim();
+  if (!norm) return null;
+  // Match "RTO Delivered" before bare "delivered" — both contain "delivered".
+  if (norm.includes('rto delivered')) return 'RTO_DELIVERED';
+  if (norm.includes('rto in transit') || norm.includes('rto initiated')) {
+    return 'RTO_IN_TRANSIT';
+  }
+  if (norm.includes('rto')) return 'RTO_INITIATED';
+  // Check "undelivered" / "ndr" BEFORE "delivered" — the substring
+  // match would otherwise misroute NDR events as deliveries.
+  if (norm.includes('undelivered') || norm.includes('ndr')) {
+    return 'UNDELIVERED';
+  }
+  if (norm.includes('delivered')) return 'DELIVERED';
+  if (norm.includes('out for delivery')) return 'OUT_FOR_DELIVERY';
+  if (norm.includes('in transit')) return 'IN_TRANSIT';
+  if (norm.includes('picked up') || norm.includes('pickup')) return 'PICKED_UP';
+  if (norm.includes('shipped') || norm.includes('manifested')) {
+    return 'IN_TRANSIT';
+  }
+  if (norm.includes('lost')) return 'LOST';
+  if (norm.includes('damaged')) return 'DAMAGED';
+  if (norm.includes('cancelled') || norm.includes('canceled')) {
+    return 'CANCELLED';
+  }
+  return null;
+}
+
 @ApiTags('Shipping Webhooks')
 @Controller('shipping/webhooks')
 export class TrackingWebhookController {
   private readonly logger = new Logger(TrackingWebhookController.name);
+  // Phase 86 (2026-05-23) — Gap #15. Per-carrier allowlists parsed
+  // once at construction. Empty array = pass-through (unset env in
+  // dev). Parse errors surface as construction failures so a
+  // typo in env doesn't silently fail-open.
+  private readonly shiprocketAllowlist: IpAllowlistEntry[];
 
   constructor(
     private readonly envService: EnvService,
     private readonly redis: RedisService,
     private readonly ordersFacade: OrdersPublicFacade,
-    // Phase 5 follow-up (2026-05-16) — iThink webhook needs to feed
-    // the same ingest path the polling cron uses, so we share the
-    // application use-case rather than re-implementing the
-    // snapshot→SubOrder mapping in the controller.
+    // Shared ingest path (same one the tracking pipeline uses) so a
+    // SubOrder ends up in the same state regardless of event source.
     private readonly ingestTracking: IngestTrackingUpdateUseCase,
-  ) {}
+    // Phase 83 (2026-05-23) — delivery audit Gap #8. Persistent
+    // webhook-event log. Every webhook hit (verified or not) lands
+    // here so disputes past the Redis 24h TTL are answerable from
+    // our own DB.
+    private readonly prisma: PrismaService,
+  ) {
+    this.shiprocketAllowlist = parseAllowlist(
+      this.envService.getOptional('SHIPROCKET_WEBHOOK_IP_ALLOWLIST'),
+    );
+  }
+
+  /**
+   * Phase 86 (2026-05-23) — Gap #15. IP allowlist guard. Behavior:
+   *
+   *   - Allowlist empty / env unset → pass-through (dev-mode, also
+   *     production until ops populates the env). The HMAC + idempotency
+   *     layers remain the primary defense.
+   *   - Allowlist populated → request source IP MUST match. Mismatch
+   *     throws Unauthorized before any signature verification or DB
+   *     write fires, so a probing attacker burns no cycles.
+   *
+   * The candidate IP comes from `req.ip`, which respects Nest's
+   * `trust proxy` setting (so a real client IP is surfaced when
+   * behind the load balancer rather than the LB's own IP). When
+   * tracing requires the unfiltered peer IP, `req.socket.remoteAddress`
+   * is the fallback — but for an allowlist policy you want the
+   * actual carrier-side IP, which is what trust-proxy resolves to.
+   */
+  private requireAllowlistedIp(args: {
+    req: Request;
+    allowlist: IpAllowlistEntry[];
+    provider: 'shiprocket';
+  }): void {
+    if (args.allowlist.length === 0) return;
+    const ip = (args.req.ip ?? args.req.socket?.remoteAddress ?? '').trim();
+    if (!ip) {
+      this.logger.warn(
+        `${args.provider} webhook rejected: no source IP available`,
+      );
+      throw new UnauthorizedAppException(
+        `${args.provider} webhook source IP not available`,
+      );
+    }
+    // Strip IPv4-mapped-in-IPv6 prefix (`::ffff:1.2.3.4`) so the
+    // candidate matches IPv4 allowlist entries.
+    const normalised = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+    if (!ipMatchesAllowlist(normalised, args.allowlist)) {
+      this.logger.warn(
+        `${args.provider} webhook rejected: source IP ${normalised} not in allowlist`,
+      );
+      throw new UnauthorizedAppException(
+        `${args.provider} webhook source IP not allowlisted`,
+      );
+    }
+  }
+
+  /**
+   * Phase 83 (2026-05-23) — delivery audit Gap #8. Append-only
+   * webhook event log. The unique constraint on (provider, eventKey)
+   * gives DB-level idempotency — if the same key has been seen, the
+   * upsert no-ops, and the returned row's `id` is the original
+   * insertion's id (so process-outcome updates land on the right
+   * row even after Redis lock TTL expires).
+   *
+   * `processedAt` and `processOutcome` are filled in by a
+   * follow-up `recordWebhookOutcome` call once the controller
+   * decides what to do with the event. Webhook signature failures
+   * record `signatureValid: false, processOutcome: 'SIGNATURE_FAIL'`
+   * directly so an attacker probing the endpoint is logged.
+   */
+  private async recordWebhookEvent(args: {
+    provider: string;
+    eventKey: string;
+    awb?: string | null;
+    status?: string | null;
+    rawPayload: unknown;
+    signatureValid: boolean;
+  }): Promise<string | null> {
+    try {
+      const created = await this.prisma.webhookEvent.upsert({
+        where: {
+          provider_eventKey: {
+            provider: args.provider,
+            eventKey: args.eventKey,
+          },
+        },
+        update: {},
+        create: {
+          provider: args.provider,
+          eventKey: args.eventKey,
+          awb: args.awb ?? null,
+          status: args.status ?? null,
+          rawPayload: args.rawPayload as any,
+          signatureValid: args.signatureValid,
+        },
+      });
+      return created.id;
+    } catch (err) {
+      // Webhook ingestion must not be blocked by an audit-log
+      // failure. Log loudly so ops sees the gap, return null so
+      // outcome recording is a no-op for this event.
+      this.logger.error(
+        `Failed to write webhook_events row: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Update the webhook_events row's `processedAt` + `processOutcome`
+   * + optional `subOrderId` after the controller finishes
+   * processing. Null `id` (audit-log write failed earlier) is a
+   * no-op so the controller doesn't have to guard.
+   */
+  private async recordWebhookOutcome(args: {
+    id: string | null;
+    outcome:
+      | 'APPLIED'
+      | 'DROPPED_OOO'
+      | 'NO_MATCH'
+      | 'DUPLICATE'
+      | 'FSM_REJECTED'
+      | 'UNKNOWN_STATUS'
+      | 'REVERSE_LEG_SKIPPED'
+      | 'ERROR';
+    subOrderId?: string | null;
+    errorMessage?: string | null;
+  }): Promise<void> {
+    if (!args.id) return;
+    await this.prisma.webhookEvent
+      .update({
+        where: { id: args.id },
+        data: {
+          processedAt: new Date(),
+          processOutcome: args.outcome,
+          subOrderId: args.subOrderId ?? null,
+          errorMessage: args.errorMessage ?? null,
+        },
+      })
+      .catch((err) => {
+        this.logger.error(
+          `Failed to update webhook_events row ${args.id}: ${(err as Error).message}`,
+        );
+      });
+  }
 
   /**
    * Phase 1 (PR 1.4) — verify the webhook request using one of two
@@ -213,9 +382,21 @@ export class TrackingWebhookController {
       return;
     }
 
+    // Phase 83 (2026-05-23) — delivery audit Gap #5. Fail-closed in
+    // production. The legacy bearer-token-in-body path is a known
+    // spoofing risk (any actor who learned the token via a log leak
+    // can post forged delivery events). It survived as a cutover
+    // safety net for dev/staging; production must run HMAC.
+    if (this.envService.getString('NODE_ENV', 'development') === 'production') {
+      throw new UnauthorizedAppException(
+        'Shiprocket webhook auth not configured for production — ' +
+          'SHIPROCKET_WEBHOOK_HMAC_SECRET must be set',
+      );
+    }
+
     // Legacy bearer-token path — deprecated. Logs a warning each
     // time so operators can see whether the HMAC cutover has
-    // actually rolled out.
+    // actually rolled out. Reachable only in non-production NODE_ENV.
     this.logger.warn(
       'Shiprocket webhook authenticated via legacy bearer-token path. ' +
         'Set SHIPROCKET_WEBHOOK_HMAC_SECRET and migrate the dashboard ' +
@@ -253,167 +434,61 @@ export class TrackingWebhookController {
     );
   }
 
-  /**
-   * Phase 5 follow-up (2026-05-16) — iThink webhook signature check.
-   *
-   * iThink signs the raw request body with HMAC-SHA256 and sends the
-   * hex digest in `X-Ithink-Signature`. We compute the same digest
-   * locally with the pre-shared `ITHINK_WEBHOOK_SECRET` and compare
-   * in constant time. The verification fails closed: a missing secret
-   * (configuration drift) AND a missing signature both 401.
-   *
-   * Replay protection: the per-event Redis idempotency key (AWB +
-   * status + carrier timestamp) blocks duplicate events even without
-   * a Stripe-style timestamp window. iThink's payload doesn't carry
-   * a stable signing timestamp today, so a separate replay-window
-   * gate is deferred to a future iteration if the integration
-   * exposes one.
-   */
-  private verifyIThinkRequest(args: {
-    rawBody: Buffer | undefined;
-    signatureHeader: string | undefined;
-  }): void {
-    const secret = this.envService.getOptional('ITHINK_WEBHOOK_SECRET');
-    if (!secret) {
-      // Fail closed — missing secret in production is a misconfiguration
-      // that should surface as 401, not as silent acceptance of unsigned
-      // webhooks. In dev the operator sets the env var.
-      throw new UnauthorizedAppException(
-        'iThink webhook auth not configured (ITHINK_WEBHOOK_SECRET unset)',
-      );
-    }
-    if (!args.rawBody) {
-      throw new BadRequestAppException('Missing raw request body');
-    }
-    if (!args.signatureHeader) {
-      throw new UnauthorizedAppException('Missing X-Ithink-Signature header');
-    }
-    const expected = crypto
-      .createHmac('sha256', secret)
-      .update(args.rawBody)
-      .digest('hex');
-    const sigBuf = Buffer.from(args.signatureHeader.trim().toLowerCase(), 'utf8');
-    const expectedBuf = Buffer.from(expected, 'utf8');
-    if (sigBuf.length !== expectedBuf.length) {
-      throw new UnauthorizedAppException('Invalid iThink webhook signature');
-    }
-    if (!crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-      throw new UnauthorizedAppException('Invalid iThink webhook signature');
-    }
-  }
-
-  /**
-   * Phase 5 follow-up (2026-05-16) — iThink webhook receiver.
-   *
-   * iThink (when their delivery dashboard pushes status events to us)
-   * POSTs a payload of the rough shape:
-   *
-   *   {
-   *     awb_number: "AWB123",
-   *     status: "Delivered" | "In Transit" | "Out for Delivery" | ...,
-   *     status_code: number,
-   *     status_date: "2026-05-16T10:30:00+05:30",
-   *     status_location: "Mumbai Hub",
-   *     remarks: "Free-form notes",
-   *     // optionally:
-   *     order_id: "<our_sub_order_ref>",
-   *   }
-   *
-   * We map status → carrier-neutral `ShipmentStatusInternal` and feed
-   * the standard `IngestTrackingUpdateUseCase.ingestSingleSnapshot`
-   * path — same logic the polling cron uses, so a SubOrder ends up in
-   * exactly the same state regardless of whether the event arrived
-   * via push or pull.
-   *
-   * Always returns HTTP 200 once the signature passes; iThink retries
-   * any non-2xx aggressively, and a malformed payload is more useful
-   * surfaced as a logged warning than as a retry storm.
-   */
-  @Post('ithink')
-  @HttpCode(HttpStatus.OK)
-  async handleIThinkWebhook(
-    @Headers('x-ithink-signature') signatureHeader: string | undefined,
-    @Req() req: RawBodyRequest<Request>,
-    @Body() payload: IThinkWebhookPayload,
-  ) {
-    this.verifyIThinkRequest({
-      rawBody: req.rawBody,
-      signatureHeader,
-    });
-
-    const awb = payload.awb_number?.trim();
-    const status = payload.status?.trim() ?? '';
-    if (!awb) {
-      this.logger.warn('iThink webhook received without awb_number');
-      return { success: true, message: 'Webhook acknowledged (no AWB)' };
-    }
-    this.logger.log(`iThink webhook: awb=${awb}, status=${status}`);
-
-    // Idempotency key: AWB + status + carrier timestamp. A duplicate
-    // delivery of the same event is dropped; a genuine status change
-    // (e.g. IN_TRANSIT → DELIVERED) gets its own key.
-    const eventKey = `${awb}:${status.toLowerCase()}:${payload.status_date ?? 'no-ts'}`;
-    const claimed = await this.redis.acquireLock(
-      `webhook:ithink:${eventKey}`,
-      WEBHOOK_IDEMPOTENCY_TTL_SECONDS,
-    );
-    if (!claimed) {
-      this.logger.log(`Duplicate iThink event ${eventKey} ignored`);
-      return { success: true, message: 'Duplicate event ignored' };
-    }
-
-    const carrierStatus = mapIThinkStatus(status);
-    if (!carrierStatus) {
-      // We acknowledge unknown statuses but don't try to map them —
-      // future iThink scan types should land in this branch first
-      // (log + ack) so engineering sees them surface in production.
-      this.logger.warn(`Unmapped iThink status "${status}" for awb=${awb}`);
-      return { success: true, message: `Status "${status}" acknowledged (unmapped)` };
-    }
-
-    const scanAt = parseIThinkTimestamp(payload.status_date);
-    const snapshot: TrackingSnapshot = {
-      awb,
-      carrier: 'iThink',
-      direction: 'forward',
-      currentStatus: carrierStatus,
-      rawCurrentStatus: status,
-      scans: [
-        {
-          status: carrierStatus,
-          rawStatus: status,
-          rawStatusCode: String(payload.status_code ?? ''),
-          scanLocation: payload.status_location ?? '',
-          remark: payload.remarks ?? '',
-          scanAt,
-        },
-      ],
-    };
-
-    const result = await this.ingestTracking.ingestSingleSnapshot(awb, snapshot);
-    if (!result.applied) {
-      // Orphan AWB — return 200 so iThink doesn't retry. The original
-      // log line already surfaced "unknown AWB".
-      return { success: false, message: 'No matching sub-order for AWB' };
-    }
-    return { success: true, message: 'Tracking update applied' };
-  }
-
   @Post('shiprocket')
   @HttpCode(HttpStatus.OK)
+  // Phase 83 (2026-05-23) — delivery audit Gap #17. Per-IP rate limit
+  // so a misbehaving carrier (or DDoS via the webhook URL) can't
+  // saturate the DB. Generous because legitimate Shiprocket traffic
+  // can burst on bulk-delivery days.
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
   async handleShiprocketWebhook(
     @Headers('x-shiprocket-signature') signatureHeader: string | undefined,
     @Req() req: RawBodyRequest<Request>,
-    @Body() payload: ShiprocketWebhookPayload,
+    @Body() payload: ShiprocketWebhookDto,
   ) {
-    // Phase 1 (PR 1.4) — verify via HMAC (preferred) or legacy
-    // bearer-token (deprecated). HMAC mode is gated on the env var
-    // being set, so operators control the cutover.
-    this.verifyRequest({
-      rawBody: req.rawBody,
-      signatureHeader,
-      bodyToken: (payload as any).x_token,
+    // Phase 86 — Gap #15. IP allowlist gate. Fires before signature
+    // verification + DB writes so probing scanners don't burn cycles.
+    this.requireAllowlistedIp({
+      req,
+      allowlist: this.shiprocketAllowlist,
+      provider: 'shiprocket',
     });
+
+    // Phase 83 — Gap #5 fail-closed. Phase 1 (PR 1.4) — verify via
+    // HMAC (preferred) or legacy bearer-token (deprecated; blocked
+    // in production env). Signature failure logs to webhook_events
+    // BEFORE throwing so spoofing attempts are persistently recorded.
+    let signatureValid = false;
+    try {
+      this.verifyRequest({
+        rawBody: req.rawBody,
+        signatureHeader,
+        bodyToken: (payload as any).x_token,
+      });
+      signatureValid = true;
+    } catch (err) {
+      // Record the failed-signature attempt before re-throwing.
+      await this.recordWebhookEvent({
+        provider: 'shiprocket',
+        eventKey: `signature-fail:${Date.now()}:${Math.random()}`,
+        awb: payload?.awb ?? payload?.data?.awb ?? null,
+        status:
+          payload?.current_status ??
+          payload?.shipment_status ??
+          payload?.data?.current_status ??
+          payload?.data?.shipment_status ??
+          null,
+        rawPayload: payload,
+        signatureValid: false,
+      }).then((id) =>
+        this.recordWebhookOutcome({
+          id,
+          outcome: 'ERROR',
+          errorMessage: (err as Error).message,
+        }),
+      );
+      throw err;
+    }
 
     // Resolve the AWB number — Shiprocket nests it inconsistently.
     const awb =
@@ -429,6 +504,14 @@ export class TrackingWebhookController {
 
     if (!awb) {
       this.logger.warn('Shiprocket webhook received without AWB');
+      await this.recordWebhookEvent({
+        provider: 'shiprocket',
+        eventKey: `no-awb:${Date.now()}:${Math.random()}`,
+        awb: null,
+        status,
+        rawPayload: payload,
+        signatureValid,
+      }).then((id) => this.recordWebhookOutcome({ id, outcome: 'NO_MATCH' }));
       return { success: true, message: 'Webhook acknowledged (no AWB)' };
     }
 
@@ -436,13 +519,32 @@ export class TrackingWebhookController {
       `Shiprocket webhook: awb=${awb}, status=${status}`,
     );
 
-    // Idempotency: same AWB + status combo is dropped on retry.
-    const eventKey = `${awb}:${status.toLowerCase()}`;
+    // Phase 83 — Gap #13. Include carrier timestamp in the idempotency
+    // key so a re-delivery after NDR ("Delivered" → "Delivered (NDR
+    // Resolved)") isn't dropped as a duplicate. iThink's webhook
+    // already keys on AWB+status+timestamp; this aligns Shiprocket's
+    // shape with that.
+    const eventTimestamp = parseEventTimestamp(payload);
+    const eventKey = `${awb}:${status.toLowerCase()}:${eventTimestamp.toISOString()}`;
+
+    // Phase 83 — Gap #8. Persistent webhook log keyed on
+    // (provider, eventKey). Same key the Redis lock uses for fast
+    // idempotency — the DB row is the durable fallback.
+    const webhookEventId = await this.recordWebhookEvent({
+      provider: 'shiprocket',
+      eventKey,
+      awb,
+      status,
+      rawPayload: payload,
+      signatureValid: true,
+    });
+
     const isFirstDelivery = await this.claimEvent(eventKey);
     if (!isFirstDelivery) {
       this.logger.log(
         `Duplicate Shiprocket event ${eventKey} ignored`,
       );
+      await this.recordWebhookOutcome({ id: webhookEventId, outcome: 'DUPLICATE' });
       return { success: true, message: 'Duplicate event ignored' };
     }
 
@@ -450,21 +552,92 @@ export class TrackingWebhookController {
       status.toLowerCase().includes(pattern),
     );
 
+    // Phase 86 (2026-05-23) — Gap #20. Non-DELIVERED scans
+    // (OUT_FOR_DELIVERY, IN_TRANSIT, NDR, RTO_*, etc.) now feed
+    // ingestSingleSnapshot so the FSM matrix + ShipmentTrackingEvent
+    // history table see them. Previously these were ack'd with 200
+    // and discarded, leaving the customer's track page stuck on the
+    // last persisted status.
+    //
+    // The DELIVERED branch keeps the existing markSubOrderDelivered
+    // path because it carries master-order rollup, invoice gen, and
+    // refund-flow side effects that aren't yet wired into the
+    // applySnapshot pipeline.
     if (!isDelivered) {
-      // Acknowledge non-terminal events without action. Future iterations
-      // can wire OUT_FOR_DELIVERY, NDR, RTO, etc. into the order timeline.
-      return {
-        success: true,
-        message: `Status "${status}" acknowledged`,
+      const mapped = mapShiprocketStatus(status);
+      if (!mapped) {
+        // Genuinely unknown status string — record + ack so ops can
+        // backfill the mapping later.
+        await this.recordWebhookOutcome({
+          id: webhookEventId,
+          outcome: 'UNKNOWN_STATUS',
+        });
+        return {
+          success: true,
+          message: `Status "${status}" acknowledged`,
+        };
+      }
+      const snapshot: TrackingSnapshot = {
+        awb,
+        carrier: 'Shiprocket',
+        direction: mapped.startsWith('RTO_') ? 'reverse' : 'forward',
+        currentStatus: mapped,
+        rawCurrentStatus: status,
+        scans: [
+          {
+            status: mapped,
+            rawStatus: status,
+            rawStatusCode: String(payload.current_status_code ?? ''),
+            scanLocation: '',
+            remark: '',
+            scanAt: eventTimestamp,
+          },
+        ],
       };
+      const result = await this.ingestTracking.ingestSingleSnapshot(
+        awb,
+        snapshot,
+        { source: 'WEBHOOK_SHIPROCKET', rawPayload: payload },
+      );
+      if (!result.applied) {
+        const outcome = !result.subOrderId
+          ? 'NO_MATCH'
+          : result.reason === 'FSM_REJECTED'
+            ? 'FSM_REJECTED'
+            : result.reason === 'DUPLICATE_SCAN'
+              ? 'DUPLICATE'
+              : result.reason === 'REVERSE_LEG_SKIPPED'
+                ? 'REVERSE_LEG_SKIPPED'
+                : 'DROPPED_OOO';
+        await this.recordWebhookOutcome({
+          id: webhookEventId,
+          outcome,
+          subOrderId: result.subOrderId,
+        });
+        return {
+          success: outcome === 'NO_MATCH' ? false : true,
+          message:
+            outcome === 'NO_MATCH'
+              ? 'No matching sub-order for AWB'
+              : `Event acknowledged (${outcome.toLowerCase()})`,
+        };
+      }
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'APPLIED',
+        subOrderId: result.subOrderId,
+      });
+      return { success: true, message: 'Tracking update applied' };
     }
 
-    // Look up the sub-order by AWB / tracking number and mark it delivered.
+    // Phase 83 — Gap #1. AWB lookup matches the sub-order's trackingNumber
+    // (see prisma-order.repository.findSubOrderByTrackingNumber).
     const subOrder = await this.ordersFacade.findSubOrderByTrackingNumber(awb);
     if (!subOrder) {
       this.logger.warn(
         `Shiprocket delivery for unknown AWB ${awb} — no matching sub-order`,
       );
+      await this.recordWebhookOutcome({ id: webhookEventId, outcome: 'NO_MATCH' });
       // Return 200 so Shiprocket doesn't retry. The event is logged for
       // manual investigation.
       return {
@@ -473,16 +646,7 @@ export class TrackingWebhookController {
       };
     }
 
-    // Phase 4 (PR 4.4) — ordering guard. Compare the incoming event's
-    // carrier-side timestamp against the sub-order's
-    // `lastTrackingEventAt`. The CAS-style updateMany inside
-    // `claimTrackingEvent` only succeeds if the new timestamp is
-    // strictly newer (or no prior event has been recorded). A
-    // false return means the event arrived out-of-order — typical
-    // cause is Shiprocket's at-least-once delivery reordering
-    // payloads under load. Drop the late event so the FSM never
-    // regresses (e.g. DELIVERED → IN_TRANSIT flapping).
-    const eventTimestamp = parseEventTimestamp(payload);
+    // Phase 4 (PR 4.4) — ordering guard via lastTrackingEventAt CAS.
     const claimed = await this.ordersFacade.claimTrackingEvent(
       subOrder.id,
       eventTimestamp,
@@ -492,6 +656,11 @@ export class TrackingWebhookController {
         `Shiprocket out-of-order event for AWB ${awb} ` +
           `(event_ts=${eventTimestamp.toISOString()}, status=${status}); dropped.`,
       );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'DROPPED_OOO',
+        subOrderId: subOrder.id,
+      });
       return {
         success: true,
         message: 'Out-of-order event dropped',
@@ -499,24 +668,50 @@ export class TrackingWebhookController {
     }
 
     try {
-      await this.ordersFacade.markSubOrderDelivered(subOrder.id);
+      // Phase 83 — Gap #3. Thread source + actor through so the
+      // SubOrder row records WEBHOOK_SHIPROCKET + the AWB as the
+      // delivered-by surrogate.
+      await this.ordersFacade.markSubOrderDelivered(subOrder.id, {
+        source: 'WEBHOOK_SHIPROCKET',
+        deliveredBy: `shiprocket:${awb}`,
+      });
       this.logger.log(
         `Sub-order ${subOrder.id} marked DELIVERED via Shiprocket webhook (awb=${awb})`,
       );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'APPLIED',
+        subOrderId: subOrder.id,
+      });
       return { success: true, message: 'Delivery confirmed' };
     } catch (err: any) {
-      // markSubOrderDelivered throws if the sub-order isn't in SHIPPED
-      // state — that's a legitimate idempotency block, not an error worth
-      // failing the webhook over. Return 200 to prevent Shiprocket retries.
+      // Phase 83 — Gap #7. FSM rejection (sub-order in non-SHIPPED
+      // state) used to silently 200 with no audit trail. We now log
+      // the outcome to webhook_events with FSM_REJECTED so ops can
+      // surface "carrier reports delivered for cancelled order"
+      // events in a dashboard. Still return 200 to Shiprocket so
+      // they don't retry forever.
       if (err instanceof BadRequestAppException) {
         this.logger.warn(
-          `Sub-order ${subOrder.id} delivery skipped: ${err.message}`,
+          `Sub-order ${subOrder.id} delivery skipped (FSM): ${err.message}`,
         );
+        await this.recordWebhookOutcome({
+          id: webhookEventId,
+          outcome: 'FSM_REJECTED',
+          subOrderId: subOrder.id,
+          errorMessage: err.message,
+        });
         return { success: true, message: err.message };
       }
       this.logger.error(
         `Failed to mark sub-order delivered: ${err.message}`,
       );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'ERROR',
+        subOrderId: subOrder.id,
+        errorMessage: err.message,
+      });
       return { success: false, message: err.message };
     }
   }

@@ -6,16 +6,28 @@ import {
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
 
+interface LogoutSellerInput {
+  sellerId: string;
+  sessionId?: string;
+  all?: boolean;
+}
+
 /**
  * Seller logout — server-side session revocation.
  *
- * Revokes every active session for the seller (matches the admin
- * logout pattern). The frontend separately clears its local
- * sessionStorage / cookie; if a stolen refresh token is replayed
- * after the user clicks logout, this revoke ensures it's rejected.
+ * Phase 21 (2026-05-20) — split into two modes:
  *
- * Idempotent: calling logout twice in quick succession just revokes
- * the (already-revoked) sessions a second time — no-op effect.
+ *   • default: revoke the SINGLE session identified by `sessionId`
+ *     (taken from the SellerAuthGuard's request decoration). This
+ *     mirrors the customer logout fix and means a seller signed in on
+ *     desktop + phone can log out of one without nuking the other.
+ *
+ *   • `all=true`: revoke every active session for the seller (the old
+ *     behaviour). Used by the "Log out of all devices" action and by
+ *     security-incident response paths.
+ *
+ * Idempotent in both modes: re-calling on an already-revoked row is
+ * a no-op.
  */
 @Injectable()
 export class LogoutSellerUseCase {
@@ -28,8 +40,15 @@ export class LogoutSellerUseCase {
     this.logger.setContext('LogoutSellerUseCase');
   }
 
-  async execute(sellerId: string): Promise<void> {
-    await this.sellerRepo.revokeAllSessions(sellerId);
+  async execute(input: LogoutSellerInput): Promise<{ revokedAll: boolean }> {
+    const { sellerId, sessionId, all } = input;
+    const revokeAll = all === true || !sessionId;
+
+    if (revokeAll) {
+      await this.sellerRepo.revokeAllSessions(sellerId);
+    } else {
+      await this.sellerRepo.revokeSession(sessionId!);
+    }
 
     this.eventBus
       .publish({
@@ -37,12 +56,16 @@ export class LogoutSellerUseCase {
         aggregate: 'seller',
         aggregateId: sellerId,
         occurredAt: new Date(),
-        payload: { sellerId },
+        payload: { sellerId, revokedAll: revokeAll, sessionId: sessionId ?? null },
       })
       .catch((err) => {
         this.logger.error(`Failed to publish seller.logged_out event: ${err}`);
       });
 
-    this.logger.log(`Seller logged out: ${sellerId}`);
+    this.logger.log(
+      `Seller logged out: ${sellerId} (${revokeAll ? 'all sessions' : `session ${sessionId}`})`,
+    );
+
+    return { revokedAll: revokeAll };
   }
 }

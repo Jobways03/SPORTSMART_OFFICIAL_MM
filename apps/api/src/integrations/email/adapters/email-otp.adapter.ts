@@ -12,7 +12,14 @@ export class EmailOtpAdapter implements OtpSenderPort {
     this.logger.setContext('EmailOtpAdapter');
   }
 
-  async sendOtp(destination: string, otp: string): Promise<void> {
+  /**
+   * Phase 18 (2026-05-20) — returns the boolean from EmailService.send
+   * so callers (notably the seller registration flow) can surface
+   * `verificationEmailSent: false` instead of silently lying about
+   * delivery. Existing callers that just `await` the return value
+   * keep working unchanged.
+   */
+  async sendOtp(destination: string, otp: string): Promise<boolean> {
     this.logger.log(`Sending OTP to ${destination}`);
 
     const html = `
@@ -33,7 +40,7 @@ export class EmailOtpAdapter implements OtpSenderPort {
       </div>
     `;
 
-    await this.emailService.send({
+    return this.emailService.send({
       to: destination,
       subject: 'Your SPORTSMART Verification Code',
       html,

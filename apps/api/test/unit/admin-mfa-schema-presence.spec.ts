@@ -37,7 +37,7 @@ function extractAdminModelBody(): string {
   const text = fs.readFileSync(SCHEMA_PATH, 'utf8');
   // Match `model Admin { ... }` — the body between the braces.
   const m = text.match(/model\s+Admin\s*\{([\s\S]*?)\n\}/);
-  if (!m) {
+  if (!m || !m[1]) {
     throw new Error(
       'Could not find `model Admin { ... }` in admin.prisma. ' +
         "The schema may have been refactored; update this spec's extraction logic.",

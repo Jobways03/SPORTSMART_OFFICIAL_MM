@@ -10,9 +10,6 @@ interface SubOrder {
   fulfillmentStatus: string;
   acceptStatus: string;
   deliveryMethod?: DeliveryMethod;
-  ithinkAwb?: string | null;
-  ithinkLogistic?: string | null;
-  ithinkTrackingUrl?: string | null;
   selfDeliveryStatus?: string | null;
   items: { productTitle: string; quantity: number }[];
   seller: { sellerShopName: string } | null;
@@ -538,19 +535,13 @@ export default function OrdersPage() {
                               if (methods.size === 1) {
                                 const so = relevantSubOrders[0];
                                 return (
-                                  <DeliveryMethodBadge
-                                    method={so?.deliveryMethod ?? null}
-                                    awb={so?.ithinkAwb}
-                                    courier={so?.ithinkLogistic}
-                                  />
+                                  <DeliveryMethodBadge method={so?.deliveryMethod ?? null} />
                                 );
                               }
                               return relevantSubOrders.map((so) => (
                                 <DeliveryMethodBadge
                                   key={so.id}
                                   method={so.deliveryMethod ?? null}
-                                  awb={so.ithinkAwb}
-                                  courier={so.ithinkLogistic}
                                 />
                               ));
                             })()}

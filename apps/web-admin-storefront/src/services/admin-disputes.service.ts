@@ -32,6 +32,8 @@ export interface Dispute {
   filedByName: string;
   summary: string;
   assignedAdminId: string | null;
+  assignedAt?: string | null;
+  assignedByAdminId?: string | null;
   decisionByAdminId: string | null;
   decisionAt: string | null;
   decisionRationale: string | null;
@@ -84,6 +86,12 @@ export interface DisputeListPage {
   total: number;
 }
 
+export interface AssignableAdmin {
+  id: string;
+  name: string;
+  email: string;
+}
+
 export const adminDisputesService = {
   list(filter: {
     page?: number;
@@ -105,9 +113,21 @@ export const adminDisputesService = {
   get(id: string): Promise<ApiResponse<DisputeDetail>> {
     return apiClient<DisputeDetail>(`/admin/disputes/${id}`);
   },
-  reply(id: string, body: string, isInternalNote = false): Promise<ApiResponse<DisputeMessage>> {
+  /** ACTIVE admins the current operator may assign a dispute to (disputes.assign scope). */
+  assignableAdmins(): Promise<ApiResponse<AssignableAdmin[]>> {
+    return apiClient<AssignableAdmin[]>('/admin/disputes/assignable-admins');
+  },
+  reply(
+    id: string,
+    body: string,
+    idempotencyKey: string,
+    isInternalNote = false,
+  ): Promise<ApiResponse<DisputeMessage>> {
+    // Endpoint is @Idempotent — a retried POST must not create a duplicate.
     return apiClient<DisputeMessage>(`/admin/disputes/${id}/messages`, {
-      method: 'POST', body: JSON.stringify({ body, isInternalNote }),
+      method: 'POST',
+      body: JSON.stringify({ body, isInternalNote }),
+      headers: { 'X-Idempotency-Key': idempotencyKey },
     });
   },
   assign(id: string, adminId: string | null): Promise<ApiResponse<Dispute>> {

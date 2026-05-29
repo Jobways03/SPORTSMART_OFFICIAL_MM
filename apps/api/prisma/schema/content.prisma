@@ -10,40 +10,86 @@ enum BannerSlot {
 }
 
 model Banner {
-  id          String     @id @default(uuid())
-  slot        BannerSlot
-  title       String
-  imageUrl    String     @map("image_url")
-  ctaUrl      String?    @map("cta_url")
+  id        String     @id @default(uuid())
+  slot      BannerSlot
+  title     String
+  imageUrl  String     @map("image_url")
+  ctaUrl    String?    @map("cta_url")
   // Optional scope id — when slot=CATEGORY_HEADER this is categoryId.
-  scopeId     String?    @map("scope_id")
-  position    Int        @default(0)
-  startsAt    DateTime?  @map("starts_at")
-  endsAt      DateTime?  @map("ends_at")
-  active      Boolean    @default(true)
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
+  scopeId   String?    @map("scope_id")
+  position  Int        @default(0)
+  startsAt  DateTime?  @map("starts_at")
+  endsAt    DateTime?  @map("ends_at")
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
 
   @@index([slot, active, position])
   @@index([scopeId])
   @@map("banners")
 }
 
+// Phase 49 (2026-05-21) — status enum for static pages. Pre-Phase-49
+// `published Boolean` was the only state; now SCHEDULED + ARCHIVED let
+// ops pre-stage seasonal pages and retire old ones without deleting.
+// `published` Boolean is kept in lockstep with status for backward
+// compat (status=PUBLISHED ⇔ published=true).
+enum PageStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
 model StaticPage {
-  id           String   @id @default(uuid())
-  slug         String   @unique
+  id           String     @id @default(uuid())
+  slug         String     @unique
   title        String
-  body         String   @db.Text
+  body         String     @db.Text
   // SEO
-  metaTitle    String?  @map("meta_title")
-  metaDesc     String?  @map("meta_desc")
-  published    Boolean  @default(false)
-  publishedAt  DateTime? @map("published_at")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  metaTitle    String?    @map("meta_title")
+  metaDesc     String?    @map("meta_desc")
+  // Phase 49 — SEO + indexability + open-graph
+  canonicalUrl String?    @map("canonical_url")
+  ogImage      String?    @map("og_image")
+  noIndex      Boolean    @default(false) @map("no_index")
+  published    Boolean    @default(false)
+  publishedAt  DateTime?  @map("published_at")
+  // Phase 49 — explicit lifecycle. Kept in lockstep with `published`
+  // for backward compat with existing reads.
+  status       PageStatus @default(DRAFT)
+  // Phase 49 — soft-delete + actor tracking
+  deletedAt    DateTime?  @map("deleted_at")
+  createdById  String?    @map("created_by_id")
+  updatedById  String?    @map("updated_by_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
 
   @@index([published])
+  @@index([status])
+  @@index([deletedAt])
   @@map("static_pages")
+}
+
+// Phase 49 (2026-05-21) — audit log for static-page + FAQ mutations.
+// DPDP compliance asks for "what was live at this date" answers; the
+// log captures full prev/new title+body so legal can replay.
+// Best-effort writes; a failure logs but does NOT block the mutation.
+model ContentPageAuditLog {
+  id           String   @id @default(uuid())
+  resourceType String   @map("resource_type") // 'PAGE' | 'FAQ'
+  resourceId   String   @map("resource_id") // slug for PAGE, id for FAQ
+  action       String // CREATE | UPDATE | DELETE | PUBLISH | UNPUBLISH | RESTORE
+  prevTitle    String?  @map("prev_title")
+  prevBody     String?  @map("prev_body") @db.Text
+  newTitle     String?  @map("new_title")
+  newBody      String?  @map("new_body") @db.Text
+  actorId      String?  @map("actor_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([resourceType, resourceId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("content_page_audit_logs")
 }
 
 // PR — Storefront content blocks.
@@ -56,25 +102,48 @@ model StaticPage {
 // When a row is absent (or row.active=false), the storefront's MediaTile
 // fallback renders the curated Unsplash placeholder for that slot.
 model StorefrontContentBlock {
-  id           String   @id @default(uuid())
-  slot         String   @unique
-  imageUrl     String?  @map("image_url")
-  eyebrow      String?
-  headline     String?
-  subhead      String?  @db.Text
-  ctaLabel     String?  @map("cta_label")
-  ctaHref      String?  @map("cta_href")
+  id            String    @id @default(uuid())
+  slot          String    @unique
+  imageUrl      String?   @map("image_url")
+  // Phase 47 (2026-05-21) — Cloudinary publicId stored alongside the
+  // URL so the upload/reset/delete paths can clean up the prior
+  // asset. Pre-Phase-47 every banner swap orphaned the previous
+  // upload — with seasonal campaigns the cost balloons fast.
+  imagePublicId String?   @map("image_public_id")
+  // Phase 47 — accessibility. WCAG requires an alt attribute on
+  // informational images; the storefront falls back to headline when
+  // null (still better than missing alt).
+  imageAlt      String?   @map("image_alt")
+  eyebrow       String?
+  headline      String?
+  subhead       String?   @db.Text
+  ctaLabel      String?   @map("cta_label")
+  ctaHref       String?   @map("cta_href")
   // Price treatment shown on the tile (e.g. "₹999" + "Onwards"). Optional
   // — when null, the storefront falls back to its hardcoded per-slot price
   // (for the seeded slots) or shows nothing (for admin-added slots).
-  price        String?
-  priceCaption String?  @map("price_caption")
-  active       Boolean  @default(true)
-  updatedById  String?  @map("updated_by_id")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  price         String?
+  priceCaption  String?   @map("price_caption")
+  active        Boolean   @default(true)
+  // Phase 47 (2026-05-21) — campaign schedule window. NULL on either
+  // bound means open-ended. Public listActiveAsMap filters out rows
+  // outside the window so marketing can pre-load Summer Sale on
+  // May 20 with startAt=June 1 instead of remembering to flip
+  // active=true at midnight.
+  startAt       DateTime? @map("start_at")
+  endAt         DateTime? @map("end_at")
+  // Phase 47 — soft-delete. Cascade from slot-definition delete now
+  // sets deletedAt instead of hard-removing the row, so an
+  // accidental admin delete can be restored with the audit log.
+  deletedAt     DateTime? @map("deleted_at")
+  updatedById   String?   @map("updated_by_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
   @@index([active])
+  // Phase 47 — composite index for the public read query
+  // (active=true AND startAt <= NOW AND endAt > NOW).
+  @@index([active, startAt, endAt])
   @@map("storefront_content_blocks")
 }
 
@@ -82,33 +151,67 @@ model StorefrontContentBlock {
 // homepage strip. Status is binary (visible / hidden) to match the
 // admin UI radio. publishedAt is set when status flips to VISIBLE so we
 // can order by it on the public list.
+// Phase 50 (2026-05-21) — extended lifecycle. VISIBLE and HIDDEN are
+// kept for back-compat with existing rows; SCHEDULED + ARCHIVED let
+// editorial pre-stage and retire posts without deletion.
 enum BlogPostStatus {
-  VISIBLE
   HIDDEN
+  VISIBLE
+  SCHEDULED
+  ARCHIVED
 }
 
 model BlogPost {
-  id           String         @id @default(uuid())
-  slug         String         @unique
-  title        String
-  excerpt      String?        @db.Text
-  contentHtml  String         @default("") @map("content_html") @db.Text
-  imageUrl     String?        @map("image_url")
-  author       String?
-  category     String         @default("News")
-  tags         String[]       @default([])
-  status       BlogPostStatus @default(HIDDEN)
-  publishedAt  DateTime?      @map("published_at")
-  metaTitle    String?        @map("meta_title")
-  metaDesc     String?        @map("meta_desc")
-  createdById  String?        @map("created_by_id")
-  updatedById  String?        @map("updated_by_id")
-  createdAt    DateTime       @default(now()) @map("created_at")
-  updatedAt    DateTime       @updatedAt @map("updated_at")
+  id            String         @id @default(uuid())
+  slug          String         @unique
+  title         String
+  excerpt       String?        @db.Text
+  contentHtml   String         @default("") @map("content_html") @db.Text
+  imageUrl      String?        @map("image_url")
+  // Phase 50 — persist Cloudinary publicId so replace/delete can
+  // clean up the prior asset (pre-Phase-50 every image swap orphaned
+  // the previous upload).
+  imagePublicId String?        @map("image_public_id")
+  imageAlt      String?        @map("image_alt")
+  author        String?
+  category      String         @default("News")
+  tags          String[]       @default([])
+  status        BlogPostStatus @default(HIDDEN)
+  publishedAt   DateTime?      @map("published_at")
+  metaTitle     String?        @map("meta_title")
+  metaDesc      String?        @map("meta_desc")
+  // Phase 50 — SEO + indexability
+  canonicalUrl  String?        @map("canonical_url")
+  ogImage       String?        @map("og_image")
+  noIndex       Boolean        @default(false) @map("no_index")
+  // Phase 50 — soft-delete; restore via audit log
+  deletedAt     DateTime?      @map("deleted_at")
+  createdById   String?        @map("created_by_id")
+  updatedById   String?        @map("updated_by_id")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
 
   @@index([status, publishedAt])
   @@index([category, status])
+  @@index([deletedAt])
   @@map("blog_posts")
+}
+
+// Phase 50 (2026-05-21) — audit log for blog mutations. Lets
+// editorial answer "who edited this post last week" without trawling
+// app logs. Best-effort writes.
+model BlogPostAuditLog {
+  id        String   @id @default(uuid())
+  postId    String   @map("post_id")
+  action    String // CREATE | UPDATE | DELETE | PUBLISH | UNPUBLISH | IMAGE_UPLOAD | RESTORE
+  prevState Json?    @map("prev_state")
+  newState  Json?    @map("new_state")
+  actorId   String?  @map("actor_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([postId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("blog_post_audit_logs")
 }
 
 // Admin-editable list of slots within each storefront section. Sections
@@ -127,30 +230,64 @@ model BlogPost {
 // same transaction so the storefront's public map doesn't keep serving
 // a slot the admin has retired.
 model StorefrontSlotDefinition {
-  id          String   @id @default(uuid())
-  sectionKey  String   @map("section_key")
-  slotKey     String   @unique @map("slot_key")
+  id          String    @id @default(uuid())
+  sectionKey  String    @map("section_key")
+  slotKey     String    @unique @map("slot_key")
   label       String
-  position    Int      @default(0)
-  defaultHref String?  @map("default_href")
-  isSystem    Boolean  @default(false) @map("is_system")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  position    Int       @default(0)
+  defaultHref String?   @map("default_href")
+  isSystem    Boolean   @default(false) @map("is_system")
+  // Phase 47 (2026-05-21) — soft-delete. Pre-Phase-47 the remove path
+  // hard-deleted the slot + cascade-deleted its content block; an
+  // accidental click was unrecoverable beyond re-uploading. Now we
+  // stamp deletedAt and let the audit log carry the rollback signal.
+  deletedAt   DateTime? @map("deleted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   @@index([sectionKey, position])
   @@map("storefront_slot_definitions")
 }
 
+/// Phase 47 (2026-05-21) — content-mutation audit trail.
+///
+/// Every admin write against StorefrontSlotDefinition /
+/// StorefrontContentBlock lands a row here so marketing /
+/// compliance can answer "who replaced the hero on July 4" without
+/// trawling server logs. Best-effort: failures here log but don't
+/// roll back the primary mutation.
+model ContentAuditLog {
+  id           String   @id @default(uuid())
+  resourceType String   @map("resource_type") // 'SLOT' | 'CONTENT_BLOCK'
+  resourceId   String   @map("resource_id") // slot id or slot key
+  action       String // 'CREATE' | 'UPDATE' | 'DELETE' | 'UPLOAD' | 'RESET'
+  prevState    Json?    @map("prev_state")
+  newState     Json?    @map("new_state")
+  actorId      String?  @map("actor_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([resourceType, resourceId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("content_audit_logs")
+}
+
 model FaqEntry {
-  id        String   @id @default(uuid())
-  category  String
-  question  String   @db.Text
-  answer    String   @db.Text
-  position  Int      @default(0)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id          String    @id @default(uuid())
+  category    String
+  // Phase 49 (2026-05-21) — optional per-question SEO landing slug.
+  slug        String?   @unique
+  question    String    @db.Text
+  answer      String    @db.Text
+  position    Int       @default(0)
+  active      Boolean   @default(true)
+  // Phase 49 — soft-delete + actor tracking
+  deletedAt   DateTime? @map("deleted_at")
+  createdById String?   @map("created_by_id")
+  updatedById String?   @map("updated_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   @@index([category, active, position])
+  @@index([deletedAt])
   @@map("faq_entries")
 }

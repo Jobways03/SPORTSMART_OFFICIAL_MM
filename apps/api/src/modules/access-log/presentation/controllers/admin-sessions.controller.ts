@@ -11,14 +11,30 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import { Throttle } from '@nestjs/throttler';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  RequiresStepUp,
+  StepUpGuard,
+} from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import {
   AdminSessionsService,
   ActorType,
 } from '../../application/services/admin-sessions.service';
 
-const ACTOR_TYPES: readonly ActorType[] = ['ADMIN', 'USER', 'SELLER', 'FRANCHISE'];
+// Phase 27 (2026-05-21) — AFFILIATE added. The affiliate session
+// table is fully populated (login + refresh + theft detection) and
+// AffiliateAuthGuard validates revokedAt (Phase 22) — but pre-Phase-27
+// the admin surface had no way to list or revoke affiliate sessions.
+const ACTOR_TYPES: readonly ActorType[] = [
+  'ADMIN',
+  'USER',
+  'SELLER',
+  'FRANCHISE',
+  'AFFILIATE',
+];
 
 function parseActorType(raw: string | undefined): ActorType | undefined {
   if (!raw) return undefined;
@@ -29,7 +45,7 @@ function parseActorType(raw: string | undefined): ActorType | undefined {
 
 @ApiTags('Admin Sessions')
 @Controller('admin/sessions')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, StepUpGuard)
 export class AdminSessionsController {
   constructor(private readonly service: AdminSessionsService) {}
 
@@ -63,6 +79,15 @@ export class AdminSessionsController {
    */
   @Delete(':sessionId')
   @Permissions('sessions.revoke')
+  // Phase 26 — revoking a session boots an actor mid-flight; 5-min
+  // window to balance bulk ops with security.
+  @RequiresStepUp()
+  // Phase 27 (2026-05-21) — per-IP throttle. With step-up already
+  // gating each revoke, the realistic burst is incident-response
+  // batch-revokes (~tens per minute, not hundreds). 50/60s leaves
+  // ops room without letting a compromised admin token mass-revoke
+  // every session in seconds.
+  @Throttle({ default: { limit: 50, ttl: 60_000 } })
   async revoke(
     @Param('sessionId') sessionId: string,
     @Body() body: { actorType: string; reason?: string },
@@ -72,11 +97,23 @@ export class AdminSessionsController {
     if (!actorType) {
       throw new BadRequestException('actorType is required in the request body');
     }
+    // Phase 27 (2026-05-21) — fail closed if the guard didn't populate
+    // adminId. Pre-Phase-27 the fallback was `req.userId ?? req.user?.id
+    // ?? 'unknown'`, which masked a misconfigured guard chain: a
+    // request reaching this handler with neither field set would
+    // silently audit-log "revoked by 'unknown'". AdminAuthGuard runs
+    // at the class level and sets req.adminId on every successful
+    // call; if that didn't happen, surface the error rather than
+    // poison the audit log.
+    const revokedByAdminId = req?.adminId ?? req?.user?.id;
+    if (!revokedByAdminId) {
+      throw new BadRequestException('Admin identity missing — guard chain misconfigured');
+    }
     const data = await this.service.revokeOne({
       sessionId,
       actorType,
-      revokedByAdminId: req?.userId ?? req?.user?.id ?? 'unknown',
-      revokedByAdminRole: req?.user?.role ?? req?.adminRole,
+      revokedByAdminId,
+      revokedByAdminRole: req?.adminRole ?? req?.user?.role,
       reason: body?.reason,
     });
     return { success: true, message: 'Session revoked', data };
@@ -89,6 +126,14 @@ export class AdminSessionsController {
    */
   @Post('revoke-all/:actorType/:actorId')
   @Permissions('sessions.revoke')
+  // Phase 26 — bulk revoke; higher blast radius, same 5-min window.
+  @RequiresStepUp()
+  // Phase 27 (2026-05-21) — tighter per-IP throttle on the bulk path.
+  // Bulk revoke is one call per target actor (not per session), so a
+  // legitimate operator pattern is "revoke a small number of
+  // compromised accounts." 10/60s is generous for that and tight
+  // against a compromised-admin-token mass-revoke.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async revokeAll(
     @Param('actorType') actorTypeRaw: string,
     @Param('actorId') actorId: string,
@@ -99,11 +144,15 @@ export class AdminSessionsController {
     if (!actorType) {
       throw new BadRequestException('actorType path segment is required');
     }
+    const revokedByAdminId = req?.adminId ?? req?.user?.id;
+    if (!revokedByAdminId) {
+      throw new BadRequestException('Admin identity missing — guard chain misconfigured');
+    }
     const data = await this.service.revokeAllForActor({
       actorType,
       actorId,
-      revokedByAdminId: req?.userId ?? req?.user?.id ?? 'unknown',
-      revokedByAdminRole: req?.user?.role ?? req?.adminRole,
+      revokedByAdminId,
+      revokedByAdminRole: req?.adminRole ?? req?.user?.role,
       reason: body?.reason,
     });
     return { success: true, message: `Revoked ${data.revoked} session(s)`, data };

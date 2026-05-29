@@ -15,7 +15,12 @@ export interface ProductListItem {
   slug: string;
   status: string;
   moderationStatus: string;
+  // Phase 32 (2026-05-21) — structured columns preferred over legacy
+  // moderationNote. isReSubmission flags re-reviews.
   moderationNote: string | null;
+  rejectionReason: string | null;
+  changeRequestNote: string | null;
+  isReSubmission: boolean;
   hasVariants: boolean;
   basePrice: string | null;
   baseStock: number | null;
@@ -193,16 +198,13 @@ export const adminProductsService = {
     });
   },
 
-  // Duplicate detection & merge
-  mergeProduct(sourceProductId: string, targetProductId: string): Promise<ApiResponse> {
-    return apiClient(`/admin/products/${sourceProductId}/merge-into/${targetProductId}`, {
-      method: 'POST',
-    });
-  },
-
-  getDuplicateInfo(productId: string): Promise<ApiResponse<any>> {
-    return apiClient<any>(`/admin/products/${productId}/duplicate-info`);
-  },
+  // Phase 32 (2026-05-21) — merge-into-duplicate UI removed. The
+  // backend endpoints (POST /:id/merge-into/:targetId, GET
+  // /:id/duplicate-info) do not exist; the buttons that called these
+  // would hit 404 in production. If a merge feature is reintroduced
+  // it needs a Product.mergedIntoProductId column + a new
+  // MERGED_DUPLICATE ModerationStatus value + atomic SellerProductMapping
+  // migration — see the Phase 31 audit report §13 for the design sketch.
 
   // Seller mapping approval endpoints
   getSellerMappings(productId: string): Promise<ApiResponse<any>> {

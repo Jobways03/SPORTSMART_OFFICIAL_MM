@@ -1,12 +1,22 @@
 import { apiClient, ApiResponse } from '@/lib/api-client';
 
+/**
+ * Phase 44 (2026-05-21) — extended tier shape. The backend now supports
+ * fixedUnitPrice / maxQuantity / start-end scheduling alongside the
+ * pre-existing discountPercent ladder. Exactly one of
+ * discountPercent / fixedUnitPrice is non-null on every row.
+ */
 export interface PricingTier {
   id: string;
   productId: string;
   variantId: string | null;
   minQuantity: number;
-  discountPercent: number;
+  maxQuantity: number | null;
+  discountPercent: number | null;
+  fixedUnitPrice: number | null;
   displayLabel: string;
+  startAt: string | null;
+  endAt: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -15,7 +25,11 @@ export interface PricingTier {
 export interface PricingTierWriteInput {
   variantId?: string | null;
   minQuantity: number;
-  discountPercent: number;
+  maxQuantity?: number | null;
+  discountPercent?: number | null;
+  fixedUnitPrice?: number | null;
+  startAt?: string | null;
+  endAt?: string | null;
   displayLabel?: string | null;
   isActive?: boolean;
 }

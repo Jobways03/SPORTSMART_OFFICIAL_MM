@@ -66,6 +66,21 @@ export class LoginSellerUseCase {
       throw new ForbiddenAppException('Account is not active. Please contact support.');
     }
 
+    // Phase 18 (2026-05-20) — block login for sellers whose email has
+    // not been verified yet. The pre-Phase-18 use case allowed
+    // PENDING_APPROVAL sellers to log in regardless of verification
+    // state, which contradicted the audit's "login should be blocked
+    // until verification" expectation. Verification first (via the
+    // public /seller/auth/verify-email endpoint), login second. The
+    // frontend reads `code: EMAIL_NOT_VERIFIED` to route the user to
+    // /register/verify with their email pre-filled.
+    if (!seller.isEmailVerified) {
+      throw new ForbiddenAppException(
+        'Your email is not verified. Please check your inbox or request a new verification code.',
+        'EMAIL_NOT_VERIFIED',
+      );
+    }
+
     // Check lockout
     if (seller.lockUntil && seller.lockUntil > new Date()) {
       const remainingMs = seller.lockUntil.getTime() - Date.now();

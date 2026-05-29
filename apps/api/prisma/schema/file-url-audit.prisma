@@ -16,10 +16,10 @@
 model FileUrlAudit {
   id String @id @default(uuid())
 
-  fileId       String   @map("file_id")
+  fileId        String  @map("file_id")
   /// The actor that asked for the URL. Whichever of the per-actor
   /// IDs is set on the request (userId / adminId / sellerId / …) wins.
-  requesterId  String   @map("requester_id")
+  requesterId   String  @map("requester_id")
   requesterRole String? @map("requester_role")
   /// Buckets: "USER" | "ADMIN" | "SELLER" | "FRANCHISE" | "AFFILIATE" | "PUBLIC".
   requesterType String  @map("requester_type")
@@ -29,13 +29,13 @@ model FileUrlAudit {
 
   /// Absolute deadline of the URL we minted. Reads "this URL was
   /// good until this timestamp". Null = same as createdAt + 0.
-  expiresAt   DateTime? @map("expires_at")
-  ttlSeconds  Int       @map("ttl_seconds")
+  expiresAt  DateTime? @map("expires_at")
+  ttlSeconds Int       @map("ttl_seconds")
 
   /// Flag for "rate-limit exceeded — we returned a 429 instead of a URL".
   /// Counted in the same table so a flooding attack still leaves a trail.
-  denied      Boolean   @default(false)
-  denyReason  String?   @map("deny_reason")
+  denied     Boolean @default(false)
+  denyReason String? @map("deny_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
 

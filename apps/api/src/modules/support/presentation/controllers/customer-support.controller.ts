@@ -12,6 +12,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { UserAuthGuard } from '../../../../core/guards';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { SupportService } from '../../application/services/support.service';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { CreateTicketDto, ReplyDto } from '../dtos/support.dtos';
 
 @ApiTags('Support — Customer')
@@ -34,6 +35,7 @@ export class CustomerSupportController {
   // ── Tickets ───────────────────────────────────────────────────────
 
   @Post('tickets')
+  @Idempotent()
   async createTicket(@Req() req: any, @Body() body: CreateTicketDto) {
     const user = await this.prisma.user.findUnique({
       where: { id: req.userId },
@@ -90,6 +92,7 @@ export class CustomerSupportController {
   }
 
   @Post('tickets/:id/messages')
+  @Idempotent()
   async reply(
     @Req() req: any,
     @Param('id') id: string,

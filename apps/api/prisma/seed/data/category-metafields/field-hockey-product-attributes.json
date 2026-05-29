@@ -1,0 +1,589 @@
+{
+  "hockey-sticks": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "stick_length",
+      "name": "Stick Length",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "28", "label": "28\" (Junior)" },
+        { "value": "30", "label": "30\"" },
+        { "value": "32", "label": "32\"" },
+        { "value": "34", "label": "34\"" },
+        { "value": "35", "label": "35\"" },
+        { "value": "36_5", "label": "36.5\" (Standard)" },
+        { "value": "37_5", "label": "37.5\" (Tall)" },
+        { "value": "38_5", "label": "38.5\" (Extra Tall)" }
+      ]
+    },
+    {
+      "key": "bow_type",
+      "name": "Bow Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "low_bow", "label": "Low Bow (Drag Flick / 3D Skills)" },
+        { "value": "mid_bow", "label": "Mid Bow (All-Round)" },
+        { "value": "classic_bow", "label": "Classic / Regular Bow" },
+        { "value": "extra_low_bow", "label": "Extra Low Bow (Extreme)" }
+      ]
+    },
+    {
+      "key": "carbon_percentage",
+      "name": "Carbon Percentage",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "description": "Higher carbon = more power and stiffness",
+      "choices": [
+        { "value": "0_20", "label": "0–20% (Beginner – Control)" },
+        { "value": "20_50", "label": "20–50% (Intermediate)" },
+        { "value": "50_80", "label": "50–80% (Advanced)" },
+        { "value": "80_100", "label": "80–100% (Elite – Max Power)" }
+      ]
+    },
+    {
+      "key": "playing_position",
+      "name": "Playing Position",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "forward", "label": "Forward (Attack)" },
+        { "value": "midfield", "label": "Midfield (All-Round)" },
+        { "value": "defender", "label": "Defender" },
+        { "value": "drag_flicker", "label": "Drag Flicker / Specialist" },
+        { "value": "all_round", "label": "All-Round" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / School" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / County" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-balls": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "match", "label": "Match Ball (Dimpled)" },
+        { "value": "training", "label": "Training Ball" },
+        { "value": "indoor", "label": "Indoor Ball (Smooth)" },
+        { "value": "practice_dimpled", "label": "Practice Dimpled" },
+        { "value": "soft", "label": "Soft / Safety Ball (Kids)" }
+      ]
+    },
+    {
+      "key": "surface",
+      "name": "Surface",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "outdoor", "label": "Outdoor (Turf / Grass)" },
+        { "value": "indoor", "label": "Indoor" },
+        { "value": "all_surface", "label": "All Surface" }
+      ]
+    },
+    {
+      "key": "fih_approved",
+      "name": "FIH Approved",
+      "type": "BOOLEAN",
+      "sortOrder": 3,
+      "description": "Approved for official FIH-sanctioned matches"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "dimpled_white", "label": "Dimpled White" }
+      ]
+    }
+  ],
+
+  "hockey-shin-guards": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "guard_type",
+      "name": "Guard Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "slip_in", "label": "Slip-In" },
+        { "value": "with_ankle", "label": "With Ankle Protection" },
+        { "value": "sock_style", "label": "Sock Style / Sleeve" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / School" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / County" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" }
+      ]
+    },
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "left_hand", "label": "Left Hand (Field Player)" },
+        { "value": "right_hand", "label": "Right Hand (Field Player)" },
+        { "value": "pair", "label": "Pair (Both Hands)" },
+        { "value": "knuckle_guard", "label": "Knuckle Guard Only" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / School" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / County" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-goalkeeping-gear": [
+    {
+      "key": "gear_type",
+      "name": "Gear Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "helmet", "label": "GK Helmet" },
+        { "value": "chest_guard", "label": "GK Chest Guard" },
+        { "value": "leg_guards", "label": "GK Leg Guards (Pads)" },
+        { "value": "kickers", "label": "GK Kickers (Foot Protectors)" },
+        { "value": "gloves", "label": "GK Gloves (Left Hand)" },
+        { "value": "gloves_right", "label": "GK Gloves (Right Hand)" },
+        { "value": "gloves_pair", "label": "GK Gloves (Pair)" },
+        { "value": "padded_shorts", "label": "GK Padded Shorts" },
+        { "value": "arm_guards", "label": "GK Arm Guards" },
+        { "value": "throat_guard", "label": "Throat Guard" },
+        { "value": "gk_full_set", "label": "GK Full Set" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / School" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / County" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "surface_type",
+      "name": "Surface Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "astro", "label": "Astro / Artificial Turf" },
+        { "value": "grass", "label": "Grass" },
+        { "value": "indoor", "label": "Indoor" },
+        { "value": "all_surface", "label": "All Surface" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / School" },
+        { "value": "intermediate", "label": "Intermediate / Club" },
+        { "value": "advanced", "label": "Advanced / County" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "match_shirt", "label": "Match Shirt" },
+        { "value": "training_shirt", "label": "Training Shirt" },
+        { "value": "skort", "label": "Skort" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "track_jacket", "label": "Track Jacket" },
+        { "value": "track_pants", "label": "Track Pants" },
+        { "value": "base_layer", "label": "Base Layer / Compression" },
+        { "value": "socks", "label": "Hockey Socks" },
+        { "value": "gk_jersey", "label": "GK Jersey (Padded)" },
+        { "value": "gk_pants", "label": "GK Pants (Padded)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "green", "label": "Green" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "stick_bag", "label": "Stick Bag (1–2 Sticks)" },
+        { "value": "stick_bag_large", "label": "Stick Bag (3+ Sticks)" },
+        { "value": "kit_bag", "label": "Kit Bag / Holdall" },
+        { "value": "backpack", "label": "Backpack" },
+        { "value": "gk_bag", "label": "GK Bag (Large / Wheelie)" },
+        { "value": "ball_bag", "label": "Ball Bag / Carrier" }
+      ]
+    },
+    {
+      "key": "wheels",
+      "name": "Wheels",
+      "type": "BOOLEAN",
+      "sortOrder": 2,
+      "description": "Wheeled base for easy transport"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-stick-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "grip_tape", "label": "Grip Tape / Chamois" },
+        { "value": "overgrip", "label": "Overgrip" },
+        { "value": "stick_tape", "label": "Stick Tape (Head)" },
+        { "value": "edge_tape", "label": "Edge Tape" },
+        { "value": "mouthguard", "label": "Mouthguard" },
+        { "value": "water_bottle", "label": "Water Bottle" },
+        { "value": "face_mask", "label": "Face Mask (Short Corner)" },
+        { "value": "hand_protector", "label": "Hand Protector (Short Corner)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "hockey-goals-nets": [
+    {
+      "key": "goal_type",
+      "name": "Goal Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "full_size", "label": "Full Size (3.66m × 2.14m)" },
+        { "value": "mini", "label": "Mini / Pop-Up" },
+        { "value": "practice", "label": "Practice Goal" },
+        { "value": "rebound_board", "label": "Rebound Board" },
+        { "value": "target_sheet", "label": "Target Sheet" },
+        { "value": "net_only", "label": "Net Only (Replacement)" }
+      ]
+    },
+    {
+      "key": "portability",
+      "name": "Portability",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "portable", "label": "Portable / Foldable" },
+        { "value": "semi_permanent", "label": "Semi-Permanent" },
+        { "value": "permanent", "label": "Permanent / Fixed" }
+      ]
+    }
+  ]
+}

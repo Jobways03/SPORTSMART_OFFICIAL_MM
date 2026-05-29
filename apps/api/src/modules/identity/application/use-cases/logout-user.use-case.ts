@@ -5,15 +5,34 @@ import {
   SessionRepository,
 } from '../../domain/repositories/session.repository';
 
+interface LogoutInput {
+  userId: string;
+  sessionId: string;
+  /**
+   * Phase 17 (2026-05-20) — when true, revoke every active session
+   * for this user ("sign out everywhere"). Default (false) revokes
+   * only the calling session, leaving the user signed in on other
+   * devices.
+   */
+  all?: boolean;
+}
+
 /**
- * Customer logout — server-side session revocation.
+ * Phase 17 (2026-05-20) — Customer logout.
  *
- * Revokes every active session for the user. The frontend separately
- * clears its locally-stored access/refresh tokens; the server-side
- * revoke ensures that if a refresh token is later replayed (cookie
- * exfiltrated, server log leak), it's rejected.
+ * Behaviour change vs prior implementation:
  *
- * Idempotent: re-calling has no effect beyond a second revoke pass.
+ *   • Default: revoke ONLY the calling session (single-device sign-out).
+ *     The previous version revoked every session on every logout —
+ *     friendly to "I lost my phone" recovery but hostile to the
+ *     normal "sign out on this laptop, stay signed in on my phone"
+ *     UX. The "sign out everywhere" path moves behind an opt-in
+ *     `?all=true` query param.
+ *
+ *   • Idempotent: re-calling for an already-revoked session is a
+ *     silent no-op (the SessionRepository.revoke `update` writes
+ *     `revokedAt = now()` regardless of prior state — replaying
+ *     just stamps a fresher timestamp).
  */
 @Injectable()
 export class LogoutUserUseCase {
@@ -25,8 +44,18 @@ export class LogoutUserUseCase {
     this.logger.setContext('LogoutUserUseCase');
   }
 
-  async execute(userId: string): Promise<void> {
-    await this.sessionRepo.revokeAllUserSessions(userId);
-    this.logger.log(`Customer logged out: ${userId}`);
+  async execute(input: LogoutInput): Promise<{ revokedAll: boolean }> {
+    if (input.all === true) {
+      await this.sessionRepo.revokeAllUserSessions(input.userId);
+      this.logger.log(
+        `Customer logged out (all sessions): ${input.userId}`,
+      );
+      return { revokedAll: true };
+    }
+    await this.sessionRepo.revoke(input.sessionId);
+    this.logger.log(
+      `Customer logged out (single session): user=${input.userId} session=${input.sessionId}`,
+    );
+    return { revokedAll: false };
   }
 }

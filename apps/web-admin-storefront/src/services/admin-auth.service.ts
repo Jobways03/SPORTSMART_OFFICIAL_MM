@@ -64,6 +64,48 @@ export const adminAuthService = {
   getMe(): Promise<ApiResponse<any>> {
     return apiClient('/admin/auth/me');
   },
+
+  // Phase 26 (2026-05-20) — password recovery flow. Backend has had
+  // these endpoints since Phase 23; the admin frontend just never
+  // surfaced a UI for them. Each step mirrors the customer / seller
+  // recovery surface in shape.
+
+  forgotPassword(
+    email: string,
+    captchaToken?: string,
+  ): Promise<ApiResponse<null>> {
+    return apiClient<null>('/admin/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email, captchaToken }),
+    });
+  },
+
+  verifyResetOtp(
+    email: string,
+    otp: string,
+  ): Promise<ApiResponse<{ resetToken: string }>> {
+    return apiClient<{ resetToken: string }>('/admin/auth/verify-reset-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    });
+  },
+
+  resendResetOtp(email: string): Promise<ApiResponse<null>> {
+    return apiClient<null>('/admin/auth/resend-reset-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  resetPassword(
+    resetToken: string,
+    newPassword: string,
+  ): Promise<ApiResponse<null>> {
+    return apiClient<null>('/admin/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ resetToken, newPassword }),
+    });
+  },
 };
 
 // ── MFA enrolment ────────────────────────────────────────────────────────
@@ -75,6 +117,22 @@ export interface MfaBeginEnrollmentResponse {
 
 export interface MfaCompleteEnrollmentResponse {
   backupCodes: string[];
+}
+
+// Phase 26 (2026-05-20) — /step-up now echoes the elevation window
+// so the UI can render a countdown without a follow-up /status call.
+export interface MfaStepUpResponse {
+  stepUpVerifiedAt: string;
+  stepUpExpiresAt: string;
+  usedBackupCode: boolean;
+}
+
+// Phase 25 — /status surfaces MFA + backup-code state.
+export interface MfaStatusResponse {
+  enabled: boolean;
+  enrolledAt: string | null;
+  backupCodesRemaining: number;
+  pendingEnrolment: boolean;
 }
 
 export const adminMfaService = {
@@ -93,10 +151,25 @@ export const adminMfaService = {
     );
   },
 
-  stepUp(code: string): Promise<ApiResponse<null>> {
-    return apiClient<null>('/admin/mfa/step-up', {
+  stepUp(code: string): Promise<ApiResponse<MfaStepUpResponse>> {
+    return apiClient<MfaStepUpResponse>('/admin/mfa/step-up', {
       method: 'POST',
       body: JSON.stringify({ code }),
     });
+  },
+
+  status(): Promise<ApiResponse<MfaStatusResponse>> {
+    return apiClient<MfaStatusResponse>('/admin/mfa/status');
+  },
+
+  disable(): Promise<ApiResponse<null>> {
+    return apiClient<null>('/admin/mfa/disable', { method: 'POST' });
+  },
+
+  regenerateBackupCodes(): Promise<ApiResponse<MfaCompleteEnrollmentResponse>> {
+    return apiClient<MfaCompleteEnrollmentResponse>(
+      '/admin/mfa/backup-codes/regenerate',
+      { method: 'POST' },
+    );
   },
 };

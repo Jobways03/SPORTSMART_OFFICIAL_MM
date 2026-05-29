@@ -19,6 +19,12 @@ import { DiscountsModule } from '../discounts/discounts.module';
 // (already imported above) and NotificationsModule (independent), so
 // no cycle.
 import { TaxModule } from '../tax/module';
+// Phase 92 follow-up (2026-05-23) — Gap #16 facade refactor. OrdersModule
+// provides OrdersPublicFacade.getMasterOrderWithDeliveredSubOrders so the
+// eligibility service no longer reaches across module boundaries to
+// Prisma directly. forwardRef breaks the Orders → Returns reverse
+// dependency at module-construction time.
+import { OrdersModule } from '../orders/module';
 import { RETURN_REPOSITORY } from './domain/repositories/return.repository.interface';
 import { PrismaReturnRepository } from './infrastructure/repositories/prisma-return.repository';
 import { ReturnService } from './application/services/return.service';
@@ -40,6 +46,12 @@ import { CustomerReturnsController } from './presentation/controllers/customer-r
 import { AdminReturnsController } from './presentation/controllers/admin-returns.controller';
 import { SellerReturnsController } from './presentation/controllers/seller-returns.controller';
 import { FranchiseReturnsController } from './presentation/controllers/franchise-returns.controller';
+import { RazorpayRefundWebhookController } from './presentation/controllers/razorpay-refund-webhook.controller';
+import { RazorpayRefundWebhookService } from './application/services/razorpay-refund-webhook.service';
+import { RefundStatusPollerCron } from './application/jobs/refund-status-poller.cron';
+import { SellerReversalService } from './application/services/seller-reversal.service';
+import { SellerReversalsController } from './presentation/controllers/seller-reversals.controller';
+import { AdminSellerReversalsController } from './presentation/controllers/admin-seller-reversals.controller';
 import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
@@ -53,12 +65,16 @@ import { MoneyModule } from '../../core/money/money.module';
     MoneyModule,
     // Break Tax-centric cycles (Tax → Checkout → Returns and similar).
     forwardRef(() => TaxModule),
+    forwardRef(() => OrdersModule),
   ],
   controllers: [
     CustomerReturnsController,
     AdminReturnsController,
     SellerReturnsController,
     FranchiseReturnsController,
+    RazorpayRefundWebhookController,
+    SellerReversalsController,
+    AdminSellerReversalsController,
   ],
   providers: [
     { provide: RETURN_REPOSITORY, useClass: PrismaReturnRepository },
@@ -78,6 +94,9 @@ import { MoneyModule } from '../../core/money/money.module';
     ReturnsPublicFacade,
     ReturnNotificationHandler,
     CloudinaryAdapter,
+    RazorpayRefundWebhookService,
+    RefundStatusPollerCron,
+    SellerReversalService,
     UserAuthGuard,
     AdminAuthGuard,
     SellerAuthGuard,

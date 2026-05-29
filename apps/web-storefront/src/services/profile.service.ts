@@ -7,7 +7,6 @@ export interface CustomerProfile {
   email: string;
   phone: string | null;
   emailVerified: boolean;
-  phoneVerified: boolean;
   status: string;
   createdAt: string;
   updatedAt: string;

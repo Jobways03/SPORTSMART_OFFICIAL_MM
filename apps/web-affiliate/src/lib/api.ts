@@ -1,20 +1,27 @@
 /**
- * Affiliate-portal API helper. Pulls the JWT from sessionStorage
- * (where login.tsx puts it under `affiliateToken`), attaches it to
- * every request, and on 401 wipes the session and redirects to
- * /login. Every page in this app talks to the API through here.
+ * Affiliate-portal API helper.
  *
- * Single-token model: unlike seller/franchise/customer portals (which
- * use access + refresh-token rotation), affiliate JWTs are issued for
- * the full session and are not refreshed. A 401 always means re-auth.
+ * Phase 22 (2026-05-20) — Rewritten per the affiliate registration
+ * audit:
+ *
+ *   • `credentials: 'include'` so httpOnly cookies
+ *     (sm_access_affiliate / sm_refresh_affiliate) ride every request.
+ *     The login response also sets these cookies; the access JWT and
+ *     refresh token in cookie form are the source of truth.
+ *   • Single-flight refresh on 401: a parallel burst of 401s now
+ *     dedupes onto one refresh call, the original requests retry
+ *     once on success. Prior code did a hard redirect to /login on
+ *     the first 401, so a 1-hour access TTL meant the affiliate had
+ *     to re-login hourly.
+ *   • Refresh token is captured at login (Phase 22) so the legacy
+ *     "single-JWT, no rotation" comment no longer applies.
+ *   • Tokens still kept in sessionStorage as a fallback for envs
+ *     where the cookie path is broken (different domain / dev split);
+ *     fetch attaches the Bearer header iff the cookie path isn't
+ *     working. New deployments rely on the cookies and can drop the
+ *     sessionStorage layer once cross-origin is stable.
  */
-/**
- * Resolve the API base. In dev a `localhost:8000` fallback is fine; in
- * production a missing env is a hard error — a Next.js build with the
- * fallback would issue every API call against the user's own browser
- * (localhost), so traffic never leaves the device. Throw at module load
- * instead of silently breaking auth + payments.
- */
+
 function resolveApiBase(): string {
   const v = process.env.NEXT_PUBLIC_API_URL;
   if (v) return v;
@@ -39,31 +46,106 @@ export function getToken(): string | null {
   return sessionStorage.getItem('affiliateToken');
 }
 
+function getRefreshToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return sessionStorage.getItem('affiliateRefreshToken');
+}
+
+export function storeTokens(input: {
+  accessToken: string;
+  refreshToken?: string;
+}) {
+  if (typeof window === 'undefined') return;
+  sessionStorage.setItem('affiliateToken', input.accessToken);
+  if (input.refreshToken) {
+    sessionStorage.setItem('affiliateRefreshToken', input.refreshToken);
+  }
+}
+
 export function clearSession() {
   if (typeof window === 'undefined') return;
   sessionStorage.removeItem('affiliateToken');
+  sessionStorage.removeItem('affiliateRefreshToken');
   sessionStorage.removeItem('affiliateProfile');
+}
+
+/**
+ * Single-flight refresh. `inFlightRefresh` ensures multiple parallel
+ * 401s share one refresh call rather than each kicking off their own.
+ * Resolves to true if the refresh succeeded (and new tokens are
+ * stored), false otherwise.
+ */
+let inFlightRefresh: Promise<boolean> | null = null;
+
+async function tryRefresh(): Promise<boolean> {
+  if (inFlightRefresh) return inFlightRefresh;
+  const refreshToken = getRefreshToken();
+  inFlightRefresh = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/affiliate/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(refreshToken ? { refreshToken } : {}),
+      });
+      if (!res.ok) return false;
+      const body = await res.json();
+      const data = body?.data ?? {};
+      if (data.accessToken) {
+        storeTokens({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+        });
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      inFlightRefresh = null;
+    }
+  })();
+  return inFlightRefresh;
+}
+
+async function rawFetch(path: string, init: RequestInit): Promise<Response> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...((init.headers as Record<string, string>) || {}),
+  };
+  const isFormData =
+    typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (init.body && !headers['Content-Type'] && !isFormData) {
+    headers['Content-Type'] = 'application/json';
+  }
+  // Bearer is a fallback for envs where the cookie path is broken.
+  // When the cookie + bearer both arrive, the API guard prefers the
+  // cookie.
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+    credentials: 'include',
+  });
 }
 
 export async function apiFetch<T = any>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const token = getToken();
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    ...((init.headers as Record<string, string>) || {}),
-  };
-  // Don't force JSON Content-Type for FormData — the browser must set
-  // multipart/form-data with its own boundary or the request body
-  // becomes unparseable on the server.
-  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
-  if (init.body && !headers['Content-Type'] && !isFormData) {
-    headers['Content-Type'] = 'application/json';
-  }
-  if (token) headers.Authorization = `Bearer ${token}`;
+  let res = await rawFetch(path, init);
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  // 401 → try refresh once. If the refresh succeeds, retry the
+  // original request with the new access token. If it fails, fall
+  // through to the existing clearSession + redirect.
+  if (res.status === 401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      res = await rawFetch(path, init);
+    }
+  }
+
   const text = await res.text();
   let body: any = null;
   try {
@@ -83,9 +165,29 @@ export async function apiFetch<T = any>(
       `Request failed (${res.status})`;
     throw new ApiError(res.status, msg, body);
   }
-  // Standard SportsMart envelope is `{ success, data }` — unwrap when present
-  // so callers work with the payload directly.
-  return (body && typeof body === 'object' && 'data' in body ? body.data : body) as T;
+  return (body && typeof body === 'object' && 'data' in body
+    ? body.data
+    : body) as T;
+}
+
+/**
+ * Phase 22 (2026-05-20) — server-side logout.
+ *
+ * POST /affiliate/auth/logout revokes the current AffiliateSession
+ * and clears the httpOnly cookies. Pass `{ all: true }` to revoke
+ * every active session ("log out of all devices"). Always clears
+ * the local sessionStorage afterwards — a 401 here just means the
+ * access token expired in-flight; we still want the UI to go to
+ * /login.
+ */
+export async function logout(opts?: { all?: boolean }): Promise<void> {
+  try {
+    const qs = opts?.all ? '?all=true' : '';
+    await apiFetch(`/affiliate/auth/logout${qs}`, { method: 'POST' });
+  } catch {
+    // ignore — local clear runs either way.
+  }
+  clearSession();
 }
 
 export function formatINR(value: string | number | null | undefined): string {

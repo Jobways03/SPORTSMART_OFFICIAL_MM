@@ -138,6 +138,13 @@ export interface ReturnDetail extends ReturnListItem {
   items: ReturnItem[];
   evidence: ReturnEvidence[];
   statusHistory: ReturnStatusHistoryEntry[];
+  // GST Section 34 routing — set at QC time / by the timebar cron. When
+  // TIME_BARRED or REQUIRES_FINANCE_REVIEW, the refund is handled via a
+  // finance-approved wallet adjustment, not the direct refund flow.
+  creditNoteEligibilityStatus?: string | null;
+  // Pre-QC preview computed live from the source invoice date (ELIGIBLE /
+  // TIME_BARRED / NO_INVOICE) so the QC modal can warn before submission.
+  creditNoteEligibilityPreview?: string | null;
   subOrder?: ReturnSubOrderRef & Record<string, unknown>;
   masterOrder?: {
     id: string;

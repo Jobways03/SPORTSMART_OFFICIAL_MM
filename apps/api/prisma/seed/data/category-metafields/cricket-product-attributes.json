@@ -1,0 +1,1310 @@
+{
+  "cricket-bats": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "bat_type",
+      "name": "Bat Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "english_willow", "label": "English Willow" },
+        { "value": "kashmir_willow", "label": "Kashmir Willow" },
+        { "value": "tennis_ball", "label": "Tennis Ball" },
+        { "value": "plastic", "label": "Plastic / PVC" }
+      ]
+    },
+    {
+      "key": "bat_size",
+      "name": "Bat Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "sh", "label": "SH – Short Handle" },
+        { "value": "lh", "label": "LH – Long Handle" },
+        { "value": "lbs", "label": "LBS – Long Blade Short Handle" },
+        { "value": "harrow", "label": "Harrow" },
+        { "value": "size_6", "label": "Size 6 (Youth)" },
+        { "value": "size_5", "label": "Size 5 (Junior)" },
+        { "value": "size_4", "label": "Size 4" },
+        { "value": "size_3", "label": "Size 3" }
+      ]
+    },
+    {
+      "key": "willow_grade",
+      "name": "Willow Grade",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "description": "Higher grades have fewer blemishes and better performance",
+      "choices": [
+        { "value": "grade_1", "label": "Grade 1 (Premium)" },
+        { "value": "grade_2", "label": "Grade 2" },
+        { "value": "grade_3", "label": "Grade 3" },
+        { "value": "grade_4", "label": "Grade 4 (Practice)" },
+        { "value": "grade_a", "label": "Grade A" }
+      ]
+    },
+    {
+      "key": "weight_oz",
+      "name": "Weight (oz)",
+      "type": "NUMBER_INTEGER",
+      "sortOrder": 5,
+      "description": "Approximate bat weight in ounces (typical range: 27–33 oz)"
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "natural", "label": "Natural / Unbleached" },
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "batting-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "harrow", "label": "Harrow" }
+      ]
+    },
+    {
+      "key": "batting_orientation",
+      "name": "Batting Orientation",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "description": "A right-hand batsman wears the main glove on the left hand",
+      "choices": [
+        { "value": "right_hand_batsman", "label": "Right-Hand Batsman" },
+        { "value": "left_hand_batsman", "label": "Left-Hand Batsman" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "batting-pads": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "harrow", "label": "Harrow" }
+      ]
+    },
+    {
+      "key": "batting_orientation",
+      "name": "Batting Orientation",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "right_hand_batsman", "label": "Right-Hand Batsman" },
+        { "value": "left_hand_batsman", "label": "Left-Hand Batsman" }
+      ]
+    },
+    {
+      "key": "pad_type",
+      "name": "Pad Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "lightweight", "label": "Lightweight" },
+        { "value": "professional", "label": "Professional" },
+        { "value": "training", "label": "Training / Practice" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "wicket-keeping-pads": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "harrow", "label": "Harrow" }
+      ]
+    },
+    {
+      "key": "pad_type",
+      "name": "Pad Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "lightweight", "label": "Lightweight" },
+        { "value": "professional", "label": "Professional" },
+        { "value": "training", "label": "Training / Practice" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "thigh-guards": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "harrow", "label": "Harrow" }
+      ]
+    },
+    {
+      "key": "batting_orientation",
+      "name": "Batting Orientation",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "right_hand_batsman", "label": "Right-Hand Batsman" },
+        { "value": "left_hand_batsman", "label": "Left-Hand Batsman" },
+        { "value": "ambidextrous", "label": "Ambidextrous / Universal" }
+      ]
+    },
+    {
+      "key": "guard_type",
+      "name": "Guard Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "inner_thigh_guard", "label": "Inner Thigh Guard" },
+        { "value": "outer_thigh_guard", "label": "Outer Thigh Guard" },
+        { "value": "combo_thigh_guard", "label": "Combo Set (Inner + Outer)" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "cricket-helmets": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "helmet_type",
+      "name": "Helmet Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "batting", "label": "Batting" },
+        { "value": "wicket_keeping", "label": "Wicket Keeping" }
+      ]
+    },
+    {
+      "key": "shell_material",
+      "name": "Shell Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "abs", "label": "ABS Plastic" },
+        { "value": "polycarbonate", "label": "Polycarbonate" },
+        { "value": "fiberglass", "label": "Fiberglass" },
+        { "value": "carbon_fiber", "label": "Carbon Fiber" }
+      ]
+    },
+    {
+      "key": "grille_material",
+      "name": "Grille Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 5,
+      "choices": [
+        { "value": "mild_steel", "label": "Mild Steel" },
+        { "value": "stainless_steel", "label": "Stainless Steel" },
+        { "value": "titanium", "label": "Titanium" }
+      ]
+    },
+    {
+      "key": "safety_certification",
+      "name": "Safety Certification",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 6,
+      "choices": [
+        { "value": "bsi_7928", "label": "BSI 7928:2013" },
+        { "value": "icc_compliant", "label": "ICC Compliant" },
+        { "value": "as_nzs_4499", "label": "AS/NZS 4499.1" },
+        { "value": "non_certified", "label": "Non-Certified" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 7,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 8,
+      "choices": [
+        { "value": "navy_blue", "label": "Navy Blue" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "maroon", "label": "Maroon" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "white", "label": "White" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "arm-guards": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "harrow", "label": "Harrow" }
+      ]
+    },
+    {
+      "key": "batting_orientation",
+      "name": "Batting Orientation",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "right_hand_batsman", "label": "Right-Hand Batsman" },
+        { "value": "left_hand_batsman", "label": "Left-Hand Batsman" },
+        { "value": "ambidextrous", "label": "Ambidextrous / Universal" }
+      ]
+    },
+    {
+      "key": "guard_type",
+      "name": "Guard Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "arm_guard", "label": "Arm Guard" },
+        { "value": "forearm_guard", "label": "Forearm Guard" },
+        { "value": "elbow_arm_combo", "label": "Elbow + Arm Combo" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "chest-guards": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "batting_orientation",
+      "name": "Batting Orientation",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "right_hand_batsman", "label": "Right-Hand Batsman" },
+        { "value": "left_hand_batsman", "label": "Left-Hand Batsman" },
+        { "value": "ambidextrous", "label": "Ambidextrous / Universal" }
+      ]
+    },
+    {
+      "key": "guard_type",
+      "name": "Guard Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "chest_guard", "label": "Chest Guard" },
+        { "value": "chest_abdomen_guard", "label": "Chest + Abdomen Guard" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "abdominal-guards": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "guard_type",
+      "name": "Guard Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "abdominal_guard", "label": "Abdominal Guard (Box)" },
+        { "value": "brief_style_guard", "label": "Brief Style Guard" },
+        { "value": "jockstrap_style_guard", "label": "Jockstrap Style Guard" },
+        { "value": "compression_short_guard", "label": "Compression Shorts with Guard" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" }
+      ]
+    }
+  ],
+
+  "wicket-keeping-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" },
+        { "value": "harrow", "label": "Harrow" }
+      ]
+    },
+    {
+      "key": "glove_type",
+      "name": "Glove Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "standard", "label": "Standard" },
+        { "value": "lightweight", "label": "Lightweight" },
+        { "value": "professional", "label": "Professional" },
+        { "value": "training", "label": "Training / Practice" }
+      ]
+    },
+    {
+      "key": "palm_material",
+      "name": "Palm Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "leather", "label": "Leather (Premium)" },
+        { "value": "rubber", "label": "Rubber Grip" },
+        { "value": "latex", "label": "Latex" },
+        { "value": "synthetic", "label": "Synthetic" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "cricket-balls": [
+    {
+      "key": "ball_type",
+      "name": "Ball Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "leather_match", "label": "Leather Match Ball" },
+        { "value": "practice", "label": "Practice / Training Ball" },
+        { "value": "tennis_ball", "label": "Tennis Ball Cricket" },
+        { "value": "indoor", "label": "Indoor Ball" },
+        { "value": "incrediball", "label": "Incrediball / Soft Ball" }
+      ]
+    },
+    {
+      "key": "weight",
+      "name": "Weight",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "5_5oz", "label": "5.5 oz (Senior Men)" },
+        { "value": "5oz", "label": "5 oz (Women's)" },
+        { "value": "4_75oz", "label": "4.75 oz (Youth)" },
+        { "value": "4oz", "label": "4 oz (Junior)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "red", "label": "Red" },
+        { "value": "white", "label": "White" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "yellow", "label": "Yellow" }
+      ]
+    },
+    {
+      "key": "match_format",
+      "name": "Match Format",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "test", "label": "Test / First Class" },
+        { "value": "odi", "label": "ODI / List A" },
+        { "value": "t20", "label": "T20" },
+        { "value": "club", "label": "Club / League" },
+        { "value": "practice", "label": "Practice" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    }
+  ],
+
+  "cricket-shoes": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "uk_1_3", "label": "UK 1–3" },
+        { "value": "uk_3_5_5", "label": "UK 3.5–5" },
+        { "value": "uk_5_5_7", "label": "UK 5.5–7" },
+        { "value": "uk_7_5_9", "label": "UK 7.5–9" },
+        { "value": "uk_9_5_11", "label": "UK 9.5–11" },
+        { "value": "uk_11_5_13", "label": "UK 11.5–13" }
+      ]
+    },
+    {
+      "key": "shoe_type",
+      "name": "Shoe Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "batting", "label": "Batting Shoes" },
+        { "value": "bowling", "label": "Bowling Shoes" },
+        { "value": "all_rounder", "label": "All-Rounder Shoes" },
+        { "value": "rubber_studs", "label": "Rubber Studs / Training" }
+      ]
+    },
+    {
+      "key": "sole_type",
+      "name": "Sole Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 4,
+      "choices": [
+        { "value": "metal_spikes", "label": "Metal Spikes" },
+        { "value": "rubber_studs", "label": "Rubber Studs" },
+        { "value": "all_terrain", "label": "All-Terrain" },
+        { "value": "indoor_flat", "label": "Indoor / Flat" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 6,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "cricket-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "kit_bag", "label": "Kit Bag / Coffin" },
+        { "value": "wheelie", "label": "Wheelie Kit Bag" },
+        { "value": "duffle", "label": "Duffle Bag" },
+        { "value": "backpack", "label": "Backpack" },
+        { "value": "bat_cover", "label": "Bat Cover" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small – Up to Junior Kit" },
+        { "value": "medium", "label": "Medium – Personal Kit" },
+        { "value": "large", "label": "Large – Full Senior Kit" },
+        { "value": "xl", "label": "Extra Large – Full Kit + Extras" }
+      ]
+    },
+    {
+      "key": "wheels",
+      "name": "Wheels",
+      "type": "BOOLEAN",
+      "sortOrder": 3,
+      "description": "Wheeled base for easy transport"
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "cricket-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "whites_shirt", "label": "Playing Whites – Shirt" },
+        { "value": "whites_trousers", "label": "Playing Whites – Trousers" },
+        { "value": "coloured_jersey", "label": "Coloured Jersey" },
+        { "value": "training_tshirt", "label": "Training T-Shirt" },
+        { "value": "polo", "label": "Polo Shirt" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "track_pants", "label": "Track Pants" },
+        { "value": "base_layer", "label": "Base Layer / Compression" },
+        { "value": "socks", "label": "Socks" },
+        { "value": "cap", "label": "Cricket Cap" },
+        { "value": "sun_hat", "label": "Sun Hat" },
+        { "value": "sweater", "label": "Sweater / Vest" }
+      ]
+    },
+    {
+      "key": "playing_format",
+      "name": "Playing Format",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "test", "label": "Test / First Class (Whites)" },
+        { "value": "limited_overs", "label": "Limited Overs (Coloured)" },
+        { "value": "training", "label": "Training / Practice" },
+        { "value": "all_formats", "label": "All Formats" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "cream", "label": "Cream" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "stumps-and-bails": [
+    {
+      "key": "stump_type",
+      "name": "Stump Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "match", "label": "Match Stumps" },
+        { "value": "practice", "label": "Practice Stumps" },
+        { "value": "garden", "label": "Garden / Backyard Stumps" },
+        { "value": "spring_loaded", "label": "Spring-Loaded Stumps" },
+        { "value": "led", "label": "LED / Light-Up Stumps" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "ash_wood", "label": "Ash Wood" },
+        { "value": "pine_wood", "label": "Pine Wood" },
+        { "value": "plastic", "label": "Plastic" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "senior", "label": "Senior (28 inches)" },
+        { "value": "youth", "label": "Youth (25 inches)" },
+        { "value": "junior", "label": "Junior (22 inches)" }
+      ]
+    },
+    {
+      "key": "bails_included",
+      "name": "Bails Included",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "base_included",
+      "name": "Base Included",
+      "type": "BOOLEAN",
+      "sortOrder": 5,
+      "description": "Metal or rubber base for standalone use"
+    }
+  ],
+
+  "inner-gloves": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "youth", "label": "Youth" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS (Extra Small)" },
+        { "value": "small", "label": "S (Small)" },
+        { "value": "medium", "label": "M (Medium)" },
+        { "value": "large", "label": "L (Large)" },
+        { "value": "xl", "label": "XL (Extra Large)" },
+        { "value": "junior", "label": "Junior" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "cotton", "label": "Cotton" },
+        { "value": "chamois", "label": "Chamois Leather" },
+        { "value": "padded_cotton", "label": "Padded Cotton" },
+        { "value": "moisture_wicking", "label": "Moisture Wicking" }
+      ]
+    },
+    {
+      "key": "finger_coverage",
+      "name": "Finger Coverage",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "full", "label": "Full Finger" },
+        { "value": "half", "label": "Half Finger / Fingerless" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" }
+      ]
+    }
+  ],
+
+  "bat-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "grip", "label": "Bat Grip" },
+        { "value": "anti_scuff", "label": "Anti-Scuff Sheet" },
+        { "value": "toe_guard", "label": "Toe Guard" },
+        { "value": "bat_tape", "label": "Bat Tape / Fibre Tape" },
+        { "value": "bat_oil", "label": "Bat Oil / Wax" },
+        { "value": "bat_mallet", "label": "Bat Mallet / Knocker" },
+        { "value": "grip_cone", "label": "Grip Cone" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "white", "label": "White" },
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "green", "label": "Green" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "cricket-training-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "bowling_machine", "label": "Bowling Machine" },
+        { "value": "side_arm", "label": "Side-Arm Thrower" },
+        { "value": "catching_cradle", "label": "Catching Cradle" },
+        { "value": "rebound_net", "label": "Rebound Net" },
+        { "value": "batting_tee", "label": "Batting Tee" },
+        { "value": "stump_target", "label": "Stump Target" },
+        { "value": "throwdown_balls", "label": "Throwdown Ball Set" },
+        { "value": "fielding_trainer", "label": "Fielding Trainer" },
+        { "value": "cricket_net", "label": "Cricket Net / Cage" }
+      ]
+    },
+    {
+      "key": "age_group",
+      "name": "Age Group",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "adult", "label": "Adult" },
+        { "value": "youth", "label": "Youth" },
+        { "value": "all_ages", "label": "All Ages" }
+      ]
+    },
+    {
+      "key": "skill_level",
+      "name": "Skill Level",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "beginner", "label": "Beginner / Club" },
+        { "value": "intermediate", "label": "Intermediate / District" },
+        { "value": "advanced", "label": "Advanced / State" },
+        { "value": "professional", "label": "Professional / International" }
+      ]
+    },
+    {
+      "key": "portability",
+      "name": "Portability",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "portable", "label": "Portable / Foldable" },
+        { "value": "semi_portable", "label": "Semi-Portable" },
+        { "value": "fixed", "label": "Fixed / Permanent" }
+      ]
+    }
+  ]
+}

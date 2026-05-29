@@ -540,9 +540,8 @@ export default function AdminSellerDetailPage() {
         <ActionBtn label="Change Status" onClick={() => setActiveModal('status')} />
         <ActionBtn label="Send Message" onClick={() => setActiveModal('message')} />
         <ActionBtn label="Change Password" onClick={() => setActiveModal('password')} />
-        {/* Delivery method entitlements (iThink / Self Delivery). Opens a
-            dedicated screen because the toggles cascade into iThink
-            warehouse registration and merit their own surface. */}
+        {/* Delivery method entitlements (Self Delivery). Opens a
+            dedicated screen for the toggle + service-area pincodes. */}
         <ActionBtn
           label="🚚 Delivery Methods"
           onClick={() =>

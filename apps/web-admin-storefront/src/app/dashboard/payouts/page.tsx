@@ -8,6 +8,7 @@ import {
   adminPayoutsService,
   PayoutBatchDetail,
   PayoutBatchSummary,
+  SkippedSettlement,
   PAYOUT_STATUS_COLOR,
 } from '@/services/admin-payouts.service';
 
@@ -268,6 +269,10 @@ function CreateBatchModal({
   const [cycleId, setCycleId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState('');
+  // Phase 151 — surface settlements skipped at creation (KYC / dispute / bank
+  // details) so ops can fix + retry instead of silently under-paying.
+  const [skipped, setSkipped] = useState<SkippedSettlement[]>([]);
+  const [createdBatch, setCreatedBatch] = useState<PayoutBatchDetail | null>(null);
 
   const submit = async () => {
     setErr('');
@@ -275,7 +280,14 @@ function CreateBatchModal({
     setSubmitting(true);
     try {
       const res = await adminPayoutsService.createBatch(cycleId.trim());
-      onSaved(res.data ?? null);
+      const result = res.data;
+      if (result?.skipped && result.skipped.length > 0) {
+        // Hold the modal open to show what was skipped before navigating.
+        setSkipped(result.skipped);
+        setCreatedBatch(result.batch ?? null);
+      } else {
+        onSaved(result?.batch ?? null);
+      }
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to create batch');
     } finally { setSubmitting(false); }
@@ -326,15 +338,45 @@ function CreateBatchModal({
           }}>{err}</div>
         )}
 
+        {skipped.length > 0 && (
+          <div style={{
+            marginTop: 14, padding: '10px 12px', borderRadius: 10, fontSize: 13,
+            border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e',
+          }}>
+            <strong>{skipped.length} settlement(s) skipped</strong> — not paid this batch
+            (resolve and re-run):
+            <ul style={{ margin: '8px 0 0', paddingLeft: 18, maxHeight: 180, overflowY: 'auto' }}>
+              {skipped.map((s) => (
+                <li key={s.settlementId} style={{ marginBottom: 4 }}>
+                  <code style={{ fontFamily: 'ui-monospace, monospace' }}>
+                    {s.sellerId.slice(0, 8)}
+                  </code>{' '}— {s.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onClose} disabled={submitting} style={btnGhost}>Cancel</button>
-          <button
-            onClick={submit}
-            disabled={submitting || !cycleId.trim()}
-            style={submitting || !cycleId.trim() ? { ...btnPrimary, ...busyStyle } : btnPrimary}
-          >
-            {submitting ? 'Creating…' : 'Create batch'}
-          </button>
+          {skipped.length > 0 ? (
+            <>
+              <button onClick={onClose} style={btnGhost}>Close</button>
+              <button onClick={() => onSaved(createdBatch)} style={btnPrimary}>
+                View batch →
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={onClose} disabled={submitting} style={btnGhost}>Cancel</button>
+              <button
+                onClick={submit}
+                disabled={submitting || !cycleId.trim()}
+                style={submitting || !cycleId.trim() ? { ...btnPrimary, ...busyStyle } : btnPrimary}
+              >
+                {submitting ? 'Creating…' : 'Create batch'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

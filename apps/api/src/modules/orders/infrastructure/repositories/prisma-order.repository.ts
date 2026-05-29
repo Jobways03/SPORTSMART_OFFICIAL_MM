@@ -1,7 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { OrderRepository } from '../../domain/repositories/order.repository.interface';
+import {
+  OrderRepository,
+  ReassignmentLogEntity,
+  ReassignmentLogQueryOptions,
+  ReassignmentEventType,
+  ReassignmentNodeType,
+} from '../../domain/repositories/order.repository.interface';
 import { Prisma } from '@prisma/client';
+
+// Phase 79 (2026-05-22) — page-size cap so a misbehaving client can't
+// demand 50 000 rows in one shot and DoS the order-detail endpoint.
+const MAX_REASSIGNMENT_PAGE_SIZE = 100;
+const DEFAULT_REASSIGNMENT_PAGE_SIZE = 50;
 
 @Injectable()
 export class PrismaOrderRepository implements OrderRepository {
@@ -174,8 +185,10 @@ export class PrismaOrderRepository implements OrderRepository {
   async findSubOrderByTrackingNumber(
     trackingNumber: string,
   ): Promise<any | null> {
-    // Tracking numbers should be unique across active sub-orders, but we
-    // use findFirst defensively in case of historical reuse.
+    // Match the carrier AWB against the sub-order's tracking number.
+    // findFirst stays defensive against historical reuse. Phase 82
+    // added a partial unique index on tracking_number so collisions
+    // are now blocked at the DB layer.
     return this.prisma.subOrder.findFirst({
       where: { trackingNumber },
       include: {
@@ -342,15 +355,89 @@ export class PrismaOrderRepository implements OrderRepository {
 
   // ── Reassignment logs ──────────────────────────────────────────────────
 
-  async findReassignmentLogs(masterOrderId: string): Promise<any[]> {
-    return this.prisma.orderReassignmentLog.findMany({
-      where: { masterOrderId },
-      orderBy: { createdAt: 'desc' },
+  /**
+   * Phase 79 (2026-05-22) — history audit Gaps #7/#10/#15/#20.
+   *   • Typed `ReassignmentLogEntity` return shape (Gap #7)
+   *   • Cursor pagination via `before` (Gap #10)
+   *   • Optional `from` / `to` time-range filter (Gap #15)
+   *   • Optional `eventType` filter (Gap #6)
+   *   • Deterministic ordering: `createdAt DESC, id ASC` — millisecond
+   *     ties never flap between page loads (Gap #20)
+   */
+  async findReassignmentLogs(
+    masterOrderId: string,
+    opts: ReassignmentLogQueryOptions = {},
+  ): Promise<ReassignmentLogEntity[]> {
+    const limit = Math.min(
+      Math.max(1, opts.limit ?? DEFAULT_REASSIGNMENT_PAGE_SIZE),
+      MAX_REASSIGNMENT_PAGE_SIZE,
+    );
+    const where: Prisma.OrderReassignmentLogWhereInput = { masterOrderId };
+    if (opts.from || opts.to || opts.before) {
+      where.createdAt = {
+        ...(opts.from ? { gte: opts.from } : {}),
+        ...(opts.to ? { lte: opts.to } : {}),
+        ...(opts.before ? { lt: opts.before } : {}),
+      };
+    }
+    if (opts.eventType) {
+      where.eventType = opts.eventType as any;
+    }
+    const rows = await this.prisma.orderReassignmentLog.findMany({
+      where,
+      // Deterministic tiebreak — see Gap #20. The composite
+      // (master_order_id, created_at DESC, id) index in the
+      // 20260522220000 migration serves both keys.
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      take: limit,
     });
+    return rows.map((r) => this.toReassignmentLogEntity(r));
+  }
+
+  async countReassignmentLogs(
+    masterOrderId: string,
+    opts: Pick<ReassignmentLogQueryOptions, 'from' | 'to' | 'eventType'> = {},
+  ): Promise<number> {
+    const where: Prisma.OrderReassignmentLogWhereInput = { masterOrderId };
+    if (opts.from || opts.to) {
+      where.createdAt = {
+        ...(opts.from ? { gte: opts.from } : {}),
+        ...(opts.to ? { lte: opts.to } : {}),
+      };
+    }
+    if (opts.eventType) {
+      where.eventType = opts.eventType as any;
+    }
+    return this.prisma.orderReassignmentLog.count({ where });
   }
 
   async createReassignmentLog(data: any): Promise<any> {
     return this.prisma.orderReassignmentLog.create({ data });
+  }
+
+  // Convert the Prisma row (which has `Date` createdAt + the enum) into
+  // the repo-level entity shape. The narrowing is exactly the typed
+  // contract the controller / UI consume.
+  private toReassignmentLogEntity(r: any): ReassignmentLogEntity {
+    return {
+      id: r.id,
+      subOrderId: r.subOrderId,
+      masterOrderId: r.masterOrderId,
+      fromNodeType: r.fromNodeType as ReassignmentNodeType,
+      fromNodeId: r.fromNodeId ?? null,
+      toNodeType: r.toNodeType as ReassignmentNodeType,
+      toNodeId: r.toNodeId ?? null,
+      fromSellerId: r.fromSellerId,
+      toSellerId: r.toSellerId ?? null,
+      reason: r.reason,
+      failureReason: r.failureReason ?? null,
+      successful: r.successful,
+      newSubOrderId: r.newSubOrderId ?? null,
+      reassignedBy: r.reassignedBy ?? null,
+      reassignmentSequence: r.reassignmentSequence,
+      eventType: r.eventType as ReassignmentEventType,
+      createdAt: r.createdAt,
+    };
   }
 
   // ── Stock & reservation helpers ────────────────────────────────────────
@@ -491,30 +578,19 @@ export class PrismaOrderRepository implements OrderRepository {
     await this.prisma.allocationLog.create({ data });
   }
 
-  // ── Expired sub-orders ─────────────────────────────────────────────────
-
-  async findExpiredSubOrders(
-    now: Date,
-  ): Promise<{ id: string; sellerId: string | null }[]> {
-    return this.prisma.subOrder.findMany({
-      where: {
-        acceptStatus: 'OPEN',
-        acceptDeadlineAt: {
-          not: null,
-          lt: now,
-        },
-      },
-      select: { id: true, sellerId: true },
-    });
-  }
+  // Phase 80 (2026-05-22) — acceptance audit Gap #2. The legacy
+  // findExpiredSubOrders method was deleted with OrderTimeoutService.
+  // The unified OrderAcceptanceSlaProcessor queries SubOrder directly
+  // with the (acceptStatus, fulfillmentNodeType, acceptDeadlineAt)
+  // composite index added in the 20260522230000 migration.
 
   // ── Transaction support ────────────────────────────────────────────────
 
-  async executeTransaction(
-    fn: (tx: any) => Promise<void>,
-  ): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      await fn(tx);
+  async executeTransaction<T = void>(
+    fn: (tx: any) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(async (tx) => {
+      return fn(tx);
     });
   }
 }

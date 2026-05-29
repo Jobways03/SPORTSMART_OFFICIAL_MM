@@ -18,10 +18,6 @@ import {
 export class AdminUpdateDeliveryMethodsDto {
   @IsOptional()
   @IsBoolean()
-  ithinkEnabled?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
   selfDeliveryEnabled?: boolean;
 
   @IsOptional()

@@ -1,0 +1,394 @@
+{
+  "tents": [
+    {
+      "key": "tent_type",
+      "name": "Tent Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "dome", "label": "Dome Tent" },
+        { "value": "tunnel", "label": "Tunnel Tent" },
+        { "value": "pop_up", "label": "Pop-Up / Instant" },
+        { "value": "backpacking", "label": "Backpacking / Ultralight" },
+        { "value": "cabin", "label": "Cabin / Family" },
+        { "value": "tipi", "label": "Tipi / Bell Tent" },
+        { "value": "bivvy", "label": "Bivvy / Bivy" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity (Persons)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "1", "label": "1 Person" },
+        { "value": "2", "label": "2 Person" },
+        { "value": "3", "label": "3 Person" },
+        { "value": "4", "label": "4 Person" },
+        { "value": "6", "label": "6 Person" },
+        { "value": "8_plus", "label": "8+ Person" }
+      ]
+    },
+    {
+      "key": "season_rating",
+      "name": "Season Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "2_season", "label": "2-Season (Summer)" },
+        { "value": "3_season", "label": "3-Season (Spring-Autumn)" },
+        { "value": "4_season", "label": "4-Season (All Year)" }
+      ]
+    },
+    {
+      "key": "waterproof_rating",
+      "name": "Waterproof Rating",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "2000mm", "label": "2,000mm (Light Rain)" },
+        { "value": "3000mm", "label": "3,000mm (Moderate)" },
+        { "value": "5000mm", "label": "5,000mm (Heavy)" },
+        { "value": "10000mm_plus", "label": "10,000mm+ (Extreme)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "green", "label": "Green" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "khaki", "label": "Khaki / Sand" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "sleeping-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "mummy", "label": "Mummy" },
+        { "value": "rectangular", "label": "Rectangular" },
+        { "value": "semi_rectangular", "label": "Semi-Rectangular" },
+        { "value": "double", "label": "Double" },
+        { "value": "quilt", "label": "Quilt / Blanket" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "temperature_rating",
+      "name": "Temperature Rating",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "plus_10", "label": "+10°C and above (Summer)" },
+        { "value": "0_to_10", "label": "0°C to +10°C (3-Season)" },
+        { "value": "minus_5_to_0", "label": "-5°C to 0°C (Cold)" },
+        { "value": "minus_10_to_5", "label": "-10°C to -5°C (Winter)" },
+        { "value": "minus_10_below", "label": "-10°C and below (Extreme)" }
+      ]
+    },
+    {
+      "key": "fill_type",
+      "name": "Fill Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "synthetic", "label": "Synthetic" },
+        { "value": "down", "label": "Down" },
+        { "value": "hybrid", "label": "Hybrid (Down + Synthetic)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "red", "label": "Red" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "black", "label": "Black" }
+      ]
+    }
+  ],
+  "sleeping-mats-pads": [
+    {
+      "key": "mat_type",
+      "name": "Mat Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "self_inflating", "label": "Self-Inflating" },
+        { "value": "air_pad", "label": "Air Pad / Inflatable" },
+        { "value": "foam", "label": "Closed-Cell Foam" },
+        { "value": "insulated", "label": "Insulated (Cold Weather)" },
+        { "value": "camp_bed", "label": "Camp Bed / Cot" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "regular", "label": "Regular" },
+        { "value": "large", "label": "Large / Wide" },
+        { "value": "double", "label": "Double" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "green", "label": "Green" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "orange", "label": "Orange" }
+      ]
+    }
+  ],
+  "backpacks-rucksacks": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" },
+        { "value": "kids", "label": "Kids" }
+      ]
+    },
+    {
+      "key": "pack_type",
+      "name": "Pack Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "daypack", "label": "Daypack (15-30L)" },
+        { "value": "hiking", "label": "Hiking Pack (30-50L)" },
+        { "value": "trekking", "label": "Trekking / Multi-Day (50-70L)" },
+        { "value": "expedition", "label": "Expedition (70L+)" },
+        { "value": "trail_running", "label": "Trail Running Vest" },
+        { "value": "hydration", "label": "Hydration Pack" }
+      ]
+    },
+    {
+      "key": "volume",
+      "name": "Volume (Litres)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "10_20", "label": "10-20L" },
+        { "value": "20_30", "label": "20-30L" },
+        { "value": "30_40", "label": "30-40L" },
+        { "value": "40_50", "label": "40-50L" },
+        { "value": "50_65", "label": "50-65L" },
+        { "value": "65_plus", "label": "65L+" }
+      ]
+    },
+    {
+      "key": "rain_cover",
+      "name": "Rain Cover Included",
+      "type": "BOOLEAN",
+      "sortOrder": 4
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "green", "label": "Green" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "red", "label": "Red" },
+        { "value": "multi", "label": "Multi-Color" }
+      ]
+    }
+  ],
+  "camping-furniture": [
+    {
+      "key": "furniture_type",
+      "name": "Furniture Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "camp_chair", "label": "Camp Chair" },
+        { "value": "camp_table", "label": "Camp Table" },
+        { "value": "hammock", "label": "Hammock" },
+        { "value": "camp_bed", "label": "Camp Bed / Cot" },
+        { "value": "stool", "label": "Stool" },
+        { "value": "set", "label": "Table + Chair Set" }
+      ]
+    },
+    {
+      "key": "weight_capacity",
+      "name": "Weight Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "up_to_100kg", "label": "Up to 100 kg" },
+        { "value": "100_120kg", "label": "100-120 kg" },
+        { "value": "120_150kg", "label": "120-150 kg" },
+        { "value": "150kg_plus", "label": "150 kg+" }
+      ]
+    }
+  ],
+  "camping-cooking": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "stove", "label": "Camp Stove / Burner" },
+        { "value": "cookware_set", "label": "Cookware Set" },
+        { "value": "pot_pan", "label": "Pot / Pan" },
+        { "value": "kettle", "label": "Camping Kettle" },
+        { "value": "cutlery_set", "label": "Cutlery / Utensil Set" },
+        { "value": "cool_box", "label": "Cool Box / Cooler" },
+        { "value": "water_filter", "label": "Water Filter / Purifier" },
+        { "value": "gas_canister", "label": "Gas Canister / Fuel" },
+        { "value": "bbq_grill", "label": "Portable BBQ / Grill" }
+      ]
+    },
+    {
+      "key": "fuel_type",
+      "name": "Fuel Type",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "description": "Applicable for stoves/burners",
+      "choices": [
+        { "value": "gas", "label": "Gas Canister" },
+        { "value": "liquid_fuel", "label": "Liquid Fuel" },
+        { "value": "wood", "label": "Wood / Solid Fuel" },
+        { "value": "alcohol", "label": "Alcohol" },
+        { "value": "electric", "label": "Electric" }
+      ]
+    }
+  ],
+  "torches-lanterns": [
+    {
+      "key": "light_type",
+      "name": "Light Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "headlamp", "label": "Headlamp" },
+        { "value": "handheld_torch", "label": "Handheld Torch" },
+        { "value": "lantern", "label": "Camping Lantern" },
+        { "value": "tent_light", "label": "Tent Light / String Lights" },
+        { "value": "solar", "label": "Solar Lantern" }
+      ]
+    },
+    {
+      "key": "lumens",
+      "name": "Brightness (Lumens)",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "under_100", "label": "Under 100 lm" },
+        { "value": "100_300", "label": "100-300 lm" },
+        { "value": "300_600", "label": "300-600 lm" },
+        { "value": "600_1000", "label": "600-1000 lm" },
+        { "value": "1000_plus", "label": "1000+ lm" }
+      ]
+    },
+    {
+      "key": "rechargeable",
+      "name": "Rechargeable (USB)",
+      "type": "BOOLEAN",
+      "sortOrder": 3
+    }
+  ],
+  "navigation-tools": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "compass", "label": "Compass" },
+        { "value": "gps_device", "label": "GPS Device / Handheld" },
+        { "value": "map_case", "label": "Map Case / Holder" },
+        { "value": "altimeter", "label": "Altimeter / Barometer" },
+        { "value": "binoculars", "label": "Binoculars" },
+        { "value": "rangefinder", "label": "Rangefinder" }
+      ]
+    }
+  ],
+  "knives-multi-tools": [
+    {
+      "key": "product_type",
+      "name": "Product Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "multi_tool", "label": "Multi-Tool" },
+        { "value": "folding_knife", "label": "Folding Knife" },
+        { "value": "fixed_blade", "label": "Fixed Blade Knife" },
+        { "value": "survival_knife", "label": "Survival Knife" },
+        { "value": "axe_hatchet", "label": "Axe / Hatchet" },
+        { "value": "saw", "label": "Folding Saw" }
+      ]
+    },
+    {
+      "key": "blade_length",
+      "name": "Blade Length",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "under_3", "label": "Under 3\"" },
+        { "value": "3_4", "label": "3-4\"" },
+        { "value": "4_6", "label": "4-6\"" },
+        { "value": "6_plus", "label": "6\"+" }
+      ]
+    }
+  ],
+  "camping-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "tarp", "label": "Tarp / Shelter" },
+        { "value": "tent_pegs", "label": "Tent Pegs / Stakes" },
+        { "value": "guy_ropes", "label": "Guy Ropes / Cord" },
+        { "value": "groundsheet", "label": "Groundsheet / Footprint" },
+        { "value": "repair_kit", "label": "Tent Repair Kit" },
+        { "value": "mallet", "label": "Tent Mallet / Hammer" },
+        { "value": "power_bank", "label": "Power Bank / Solar Charger" },
+        { "value": "fire_starter", "label": "Fire Starter / Matches" },
+        { "value": "insect_repellent", "label": "Insect Repellent / Net" }
+      ]
+    }
+  ]
+}

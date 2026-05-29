@@ -1,15 +1,40 @@
 import { Injectable, Inject } from '@nestjs/common';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
 
+/**
+ * Phase 19 (2026-05-20) — Seller profile read.
+ *
+ * Changes from the prior version:
+ *
+ *   1. Full `panNumber` is NO LONGER returned. The audit flagged that
+ *      anyone holding the seller's access token could read the full
+ *      PAN from the API response — a XSS / log-leak risk for what is
+ *      effectively a tax-ID. Only `panLast4` is returned; if the
+ *      seller needs to copy-paste the full PAN, a separate
+ *      step-up-protected endpoint is the right path (not built in
+ *      this PR — left as a known follow-up).
+ *
+ *   2. `gstVerificationNotes` is no longer returned — it was the
+ *      semantically-overloaded legacy column. The new
+ *      `kycRejectionReason` and `kycApprovalNotes` are returned
+ *      instead.
+ *
+ *   3. First-listing wizard flags (`hasBankDetails`,
+ *      `hasFirstProduct`, `hasDeliveryMethod`) are returned so the
+ *      wizard can show real "done / to-do" state instead of always
+ *      showing all three as incomplete.
+ */
 @Injectable()
 export class GetSellerProfileUseCase {
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(sellerId: string) {
@@ -38,32 +63,46 @@ export class GetSellerProfileUseCase {
       isProfileCompleted: true,
       lastProfileUpdatedAt: true,
       createdAt: true,
-      // Phase 26 GST (2026-05-18) — surface tax identity to the seller
-      // profile screen. Read-only on the seller side; admin owns
-      // verification. Without this the seller could never see their
-      // own GSTIN after onboarding.
       gstin: true,
       gstStateCode: true,
       gstRegistrationType: true,
       legalBusinessName: true,
-      panNumber: true,
       panLast4: true,
       isGstVerified: true,
       gstVerifiedAt: true,
       panVerified: true,
-      // Phase 26 GST — onboarding stepper on the seller portal reads
-      // these to decide which step to show next (Submit KYC vs.
-      // Awaiting approval). Without them the page falls through with
-      // no card rendered. gstVerificationNotes carries the admin's
-      // rejection reason so the form can prefill the "fix and resubmit"
-      // banner.
       verificationStatus: true,
-      gstVerificationNotes: true,
+      // Phase 19 (2026-05-20) — replace the overloaded
+      // gstVerificationNotes with the dedicated kyc columns. We keep
+      // the legacy column out of the response to avoid frontend code
+      // reading both during the soak window.
+      kycApprovalNotes: true,
+      kycRejectionReason: true,
+      kycReviewedAt: true,
+      isGstinManuallyVerified: true,
     });
 
     if (!seller) {
       throw new NotFoundAppException('Seller profile not found');
     }
+
+    // First-listing wizard support: parallel cheap counts so the
+    // wizard's three CTAs (bank details, first product, delivery
+    // method) reflect real state. Each query is bounded to a
+    // single-row predicate so the cost is essentially free.
+    const [hasBankDetails, hasFirstProduct, hasDeliveryMethod] = await Promise.all([
+      this.prisma.sellerBankDetails
+        .findUnique({ where: { sellerId }, select: { id: true } })
+        .then((r: { id: string } | null) => !!r)
+        .catch(() => false),
+      this.prisma.product
+        .findFirst({ where: { sellerId }, select: { id: true } })
+        .then((r: { id: string } | null) => !!r)
+        .catch(() => false),
+      // Delivery method "configured" means self-delivery is enabled.
+      // Same source of truth as the seller shipping admin page.
+      Promise.resolve((seller as any).selfDeliveryEnabled ?? false),
+    ]);
 
     return {
       sellerId: seller.id,
@@ -90,21 +129,27 @@ export class GetSellerProfileUseCase {
       isProfileCompleted: seller.isProfileCompleted,
       lastProfileUpdatedAt: seller.lastProfileUpdatedAt,
       createdAt: seller.createdAt,
-      // Phase 26 GST — read-only tax identity block. PAN is masked
-      // (panLast4) for display; the full panNumber stays in the
-      // response so power-users can copy-paste for filing, but the
-      // UI defaults to masked rendering.
       gstin: (seller as any).gstin ?? null,
       gstStateCode: (seller as any).gstStateCode ?? null,
       gstRegistrationType: (seller as any).gstRegistrationType ?? null,
       legalBusinessName: (seller as any).legalBusinessName ?? null,
-      panNumber: (seller as any).panNumber ?? null,
+      // Phase 19 (2026-05-20) — full PAN deliberately omitted from
+      // the response. Only the last 4 digits are returned for masked
+      // display in the seller portal.
       panLast4: (seller as any).panLast4 ?? null,
       isGstVerified: (seller as any).isGstVerified ?? false,
+      isGstinManuallyVerified:
+        (seller as any).isGstinManuallyVerified ?? false,
       gstVerifiedAt: (seller as any).gstVerifiedAt ?? null,
       panVerified: (seller as any).panVerified ?? false,
       verificationStatus: (seller as any).verificationStatus ?? 'NOT_VERIFIED',
-      gstVerificationNotes: (seller as any).gstVerificationNotes ?? null,
+      kycApprovalNotes: (seller as any).kycApprovalNotes ?? null,
+      kycRejectionReason: (seller as any).kycRejectionReason ?? null,
+      kycReviewedAt: (seller as any).kycReviewedAt ?? null,
+      // First-listing wizard CTAs gate on these.
+      hasBankDetails,
+      hasFirstProduct,
+      hasDeliveryMethod,
     };
   }
 }

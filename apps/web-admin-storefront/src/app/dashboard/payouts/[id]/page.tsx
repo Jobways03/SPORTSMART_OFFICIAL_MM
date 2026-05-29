@@ -18,12 +18,14 @@ export default function PayoutBatchDetailPage() {
   const { hasPermission } = usePermissions();
   const canExport = hasPermission('payouts.export');
   const canIngest = hasPermission('payouts.ingestResponse');
+  const canCancel = hasPermission('payouts.cancel');
 
   const [batch, setBatch] = useState<PayoutBatchDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showIngest, setShowIngest] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   // Story 4.2 — mismatch-only filter. When on, the table only shows
   // FAILED rows whose failureReason starts with `BANK_AMOUNT_MISMATCH:`
   // so finance ops can triage rows that need a re-upload separately
@@ -46,6 +48,25 @@ export default function PayoutBatchDetailPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Phase 151 — abort a DRAFT/EXPORTED batch created in error; the backend
+  // releases the settlements' payout lock back to APPROVED.
+  const handleCancel = async () => {
+    if (!batch) return;
+    const reason = window.prompt(
+      'Cancel this batch? Its settlements are released back to APPROVED (re-batchable). Enter a reason:',
+    );
+    if (!reason || reason.trim().length < 3) return;
+    setCancelling(true);
+    try {
+      await adminPayoutsService.cancelBatch(batch.id, reason.trim());
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Cancel failed');
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const handleExport = async () => {
     if (!batch) return;
@@ -131,14 +152,31 @@ export default function PayoutBatchDetailPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {canExport && batch.status === 'DRAFT' && (
-            <button onClick={handleExport} disabled={exporting} style={btnPrimary}>
-              {exporting ? 'Generating…' : 'Export CSV'}
+          {canExport && (batch.status === 'DRAFT' || batch.status === 'EXPORTED') && (
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              style={batch.status === 'EXPORTED' ? btnGhost : btnPrimary}
+            >
+              {exporting
+                ? 'Generating…'
+                : batch.status === 'DRAFT'
+                  ? 'Export CSV'
+                  : 'Re-download CSV'}
             </button>
           )}
           {canIngest && (batch.status === 'EXPORTED' || batch.status === 'PARTIALLY_PAID') && (
             <button onClick={() => setShowIngest(true)} style={btnPrimary}>
               Upload bank response
+            </button>
+          )}
+          {canCancel && (batch.status === 'DRAFT' || batch.status === 'EXPORTED') && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              style={{ ...btnGhost, borderColor: '#b91c1c', color: '#b91c1c' }}
+            >
+              {cancelling ? 'Cancelling…' : 'Cancel batch'}
             </button>
           )}
         </div>
@@ -311,6 +349,7 @@ function IngestResponseModal({
     })),
   );
   const [submitting, setSubmitting] = useState(false);
+  const [fileBusy, setFileBusy] = useState(false);
   const [err, setErr] = useState('');
 
   const updateRow = (i: number, patch: Partial<Row>) => {
@@ -333,10 +372,32 @@ function IngestResponseModal({
     try {
       const ingestRows: IngestRow[] = rows.map((r) =>
         r.status === 'PAID'
-          ? { settlementId: r.payout.settlementId, status: 'PAID', utrReference: r.utrReference.trim() }
+          ? {
+              settlementId: r.payout.settlementId,
+              status: 'PAID',
+              utrReference: r.utrReference.trim(),
+              // Phase 152 — the operator is confirming the bank paid this exact
+              // amount. Without it the server auto-demotes the row to FAILED
+              // (BANK_AMOUNT_MISMATCH/MISSING) — the headline bug this fixes.
+              paidAmountInPaise: r.payout.amountInPaise,
+            }
           : { settlementId: r.payout.settlementId, status: 'FAILED', failureReason: r.failureReason.trim() },
       );
-      await adminPayoutsService.ingestResponse(batch.id, ingestRows);
+      const res = await adminPayoutsService.ingestResponse(batch.id, ingestRows);
+      // Surface auto-demotions / skips so a silent demotion can't masquerade as
+      // success (the modal previously closed even when every row FAILED).
+      const data: any = res?.data;
+      const mismatchN = data?.mismatches?.length ?? 0;
+      const skipN = data?.skipped?.length ?? 0;
+      if (mismatchN > 0 || skipN > 0) {
+        setErr(
+          `Ingest completed with ${mismatchN} amount mismatch(es) and ${skipN} skipped row(s). ` +
+            'Those rows were NOT marked paid — review and re-submit.',
+        );
+        // Keep the modal open so the operator sees the warning; refresh parent.
+        onSaved();
+        return;
+      }
       onSaved();
     } catch (e: any) {
       setErr(e?.message ?? 'Failed to ingest response');
@@ -345,16 +406,57 @@ function IngestResponseModal({
     }
   };
 
+  // Phase 152 — upload the bank's annotated CSV (parsed + amount-checked
+  // server-side via the same hardened ingest path as manual entry).
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file after a fix
+    if (!f) return;
+    setErr('');
+    setFileBusy(true);
+    try {
+      const res = await adminPayoutsService.ingestResponseFile(batch.id, f);
+      const data: any = res?.data;
+      const mm = data?.mismatches?.length ?? 0;
+      const sk = data?.skipped?.length ?? 0;
+      if (mm > 0 || sk > 0) {
+        setErr(
+          `File ingested: ${mm} amount mismatch(es), ${sk} skipped — those rows were NOT marked paid. Review and re-upload a corrected file.`,
+        );
+        onSaved();
+        return;
+      }
+      onSaved();
+    } catch (e: any) {
+      setErr(e?.message ?? 'File upload failed');
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
   return (
     <div style={modalBackdrop} onClick={onClose}>
       <div style={{ ...modalBody, maxWidth: 920 }} onClick={(e) => e.stopPropagation()}>
         <div style={modalHeader}>
-          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Upload bank response</h2>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Confirm bank response</h2>
           <button onClick={onClose} style={btnClose}>×</button>
         </div>
         <div style={{ padding: '14px 20px' }}>
+          <div style={{ border: '1px dashed #cbd5e1', borderRadius: 10, padding: 12, marginBottom: 14, background: '#f8fafc' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a' }}>Upload bank response CSV</div>
+            <p style={{ fontSize: 11, color: '#64748b', margin: '4px 0 8px' }}>
+              The exported payout CSV, annotated by the bank with <code>status</code> /{' '}
+              <code>paid_amount_in_paise</code> (or <code>amount</code>) / <code>utr</code> columns.
+              Parsed + amount-checked server-side; the same file can&apos;t be ingested twice.
+            </p>
+            <input type="file" accept=".csv,text/csv" disabled={fileBusy} onChange={onFile} />
+            {fileBusy && (
+              <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>Uploading…</span>
+            )}
+          </div>
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-            Mark each pending payout as PAID (with UTR) or FAILED (with reason). Already-completed payouts are not shown.
+            — or confirm manually — mark each pending payout PAID (with UTR) or FAILED (with reason).
+            Already-completed payouts are not shown.
           </p>
           <div style={{ ...tableWrap, maxHeight: 460, overflowY: 'auto' }}>
             <table style={tableStyle}>

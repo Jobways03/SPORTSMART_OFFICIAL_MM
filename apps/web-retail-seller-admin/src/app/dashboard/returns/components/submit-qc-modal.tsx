@@ -14,6 +14,7 @@ interface Props {
   returnId: string;
   returnNumber: string;
   items: ReturnItem[];
+  creditNoteEligibilityPreview?: string | null;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -30,6 +31,7 @@ export default function SubmitQcModal({
   returnId,
   returnNumber,
   items,
+  creditNoteEligibilityPreview,
   onClose,
   onSuccess,
 }: Props) {
@@ -125,6 +127,30 @@ export default function SubmitQcModal({
           </button>
         </div>
         <div className="modal-body">
+          {(creditNoteEligibilityPreview === 'TIME_BARRED' ||
+            creditNoteEligibilityPreview === 'NO_INVOICE' ||
+            creditNoteEligibilityPreview === 'REQUIRES_FINANCE_REVIEW') && (
+            <div
+              style={{
+                padding: '10px 14px',
+                marginBottom: 14,
+                background: '#fffbeb',
+                border: '1px solid #fde68a',
+                color: '#92400e',
+                borderRadius: 8,
+                fontSize: 13,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>Heads up:</strong>{' '}
+              {creditNoteEligibilityPreview === 'NO_INVOICE'
+                ? 'this return has no source tax invoice'
+                : 'this return is past the GST credit-note window (Section 34)'}
+              . On approval the refund routes to the customer&apos;s wallet via a
+              finance-approved adjustment (not the original payment method), and
+              no credit note is issued.
+            </div>
+          )}
           <div
             style={{
               fontSize: 13,

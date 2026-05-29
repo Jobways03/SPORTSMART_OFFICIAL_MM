@@ -388,6 +388,20 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       GATEWAY_PAYMENT_NOT_CAPTURED: HttpStatus.BAD_REQUEST,
       GATEWAY_ORDER_ID_MISMATCH: HttpStatus.BAD_REQUEST,
       GATEWAY_AMOUNT_MISMATCH: HttpStatus.BAD_REQUEST,
+      // Phase 16 (2026-05-20) — register flow.
+      CAPTCHA_REQUIRED: HttpStatus.BAD_REQUEST,
+      CAPTCHA_FAILED: HttpStatus.BAD_REQUEST,
+      CAPTCHA_MISCONFIGURED: HttpStatus.BAD_REQUEST,
+      TERMS_NOT_ACCEPTED: HttpStatus.BAD_REQUEST,
+      PRIVACY_NOT_ACCEPTED: HttpStatus.BAD_REQUEST,
+      PASSWORDS_DO_NOT_MATCH: HttpStatus.BAD_REQUEST,
+      ALREADY_VERIFIED: HttpStatus.BAD_REQUEST,
+      // Phase 17 (2026-05-20) — login flow.
+      // Surfaces as HTTP 403 (the standard "authenticated identity is
+      // refused this resource" status); the body's `code` lets the
+      // frontend show the "verify your email" CTA without parsing the
+      // message string.
+      EMAIL_NOT_VERIFIED: HttpStatus.FORBIDDEN,
     };
     return map[code] || HttpStatus.INTERNAL_SERVER_ERROR;
   }

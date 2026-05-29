@@ -11,6 +11,16 @@ export class PrismaCartRepository implements CartRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findByCustomerId(customerId: string): Promise<CartWithItems | null> {
+    // Phase 61 (2026-05-22) — enriched projection (audit Gaps #2 +
+    // #9 + #22).
+    //   - product.seller threaded through so the storefront cart
+    //     can group line items by seller (Gap #2).
+    //   - product.isDeleted / variant.isDeleted exposed so the
+    //     cart service can flag archived/deleted lines instead of
+    //     silently re-pricing them (Gap #9).
+    //   - unitPriceAtAddInPaise included via the default scalar
+    //     select — picked up automatically since we don't pin
+    //     specific cart-item columns.
     return this.prisma.cart.findUnique({
       where: { customerId },
       include: {
@@ -26,10 +36,18 @@ export class PrismaCartRepository implements CartRepository {
                 baseSku: true,
                 hasVariants: true,
                 status: true,
+                isDeleted: true,
                 images: {
                   where: { isPrimary: true },
                   select: { url: true },
                   take: 1,
+                },
+                seller: {
+                  select: {
+                    id: true,
+                    sellerName: true,
+                    sellerShopName: true,
+                  },
                 },
               },
             },
@@ -41,6 +59,7 @@ export class PrismaCartRepository implements CartRepository {
                 stock: true,
                 sku: true,
                 status: true,
+                isDeleted: true,
                 images: {
                   select: { url: true },
                   take: 1,
@@ -50,7 +69,7 @@ export class PrismaCartRepository implements CartRepository {
           },
         },
       },
-    });
+    }) as unknown as Promise<CartWithItems | null>;
   }
 
   async findItemsForTaxPreview(
@@ -71,11 +90,30 @@ export class PrismaCartRepository implements CartRepository {
       },
     });
     if (!cart) return [];
+    // Phase 44 (2026-05-21) — use tier-adjusted unit price for the
+    // tax preview. Pre-Phase-44 this computed GST against the raw
+    // variant.price / basePrice, which over-charged GST on every
+    // cart line where a pricing tier applied. The cart service now
+    // writes the resolved effective price as `appliedListUnitPrice`
+    // when no tier qualified, and the discount/fixed columns when a
+    // tier did qualify. We reconstruct the effective price the same
+    // way the resolver does.
     return cart.items.map((it) => {
-      const unitPriceRupees = it.variant?.price ?? it.product.basePrice;
-      const unitPriceInPaise = BigInt(
-        Math.round(Number(unitPriceRupees) * 100),
-      );
+      const listPrice = it.variant?.price ?? it.product.basePrice;
+      let effectivePrice = Number(listPrice ?? 0);
+
+      if (it.appliedFixedUnitPrice !== null) {
+        effectivePrice = Number(it.appliedFixedUnitPrice);
+      } else if (it.appliedDiscountPercent !== null) {
+        const pct = Number(it.appliedDiscountPercent);
+        const baseList =
+          it.appliedListUnitPrice !== null
+            ? Number(it.appliedListUnitPrice)
+            : effectivePrice;
+        effectivePrice = Math.round(baseList * (1 - pct / 100) * 100) / 100;
+      }
+
+      const unitPriceInPaise = BigInt(Math.round(effectivePrice * 100));
       return {
         productId: it.productId,
         variantId: it.variantId,
@@ -104,16 +142,10 @@ export class PrismaCartRepository implements CartRepository {
     });
   }
 
-  async addCartItem(
-    cartId: string,
-    productId: string,
-    variantId: string | null,
-    quantity: number,
-  ): Promise<void> {
-    await this.prisma.cartItem.create({
-      data: { cartId, productId, variantId, quantity },
-    });
-  }
+  // Phase 61 (2026-05-22) — `addCartItem` removed (audit Gap #16).
+  // The atomic primitive `incrementOrCreateCartItem` is the only
+  // public write path; the legacy method was dead code that
+  // bypassed the FOR UPDATE lock.
 
   async updateCartItemQuantity(itemId: string, quantity: number): Promise<void> {
     await this.prisma.cartItem.update({
@@ -165,8 +197,18 @@ export class PrismaCartRepository implements CartRepository {
   }
 
   async validateVariant(variantId: string, productId: string): Promise<boolean> {
+    // Phase 41 (2026-05-21) — Gap #12 fix. Only ACTIVE / OUT_OF_STOCK
+    // variants are addable to a cart. DISABLED, ARCHIVED, DRAFT remain
+    // hidden from purchase paths even when their stock > 0. Without
+    // this filter an admin could disable a variant and customers with
+    // a stale PDP tab would still be able to checkout.
     const variant = await this.prisma.productVariant.findFirst({
-      where: { id: variantId, productId, isDeleted: false },
+      where: {
+        id: variantId,
+        productId,
+        isDeleted: false,
+        status: { in: ['ACTIVE', 'OUT_OF_STOCK'] },
+      },
     });
     return !!variant;
   }
@@ -213,6 +255,11 @@ export class PrismaCartRepository implements CartRepository {
     productId: string,
     variantId: string | null,
     quantityDelta: number,
+    args: {
+      availableStock: number;
+      unitPriceInPaiseSnapshot: bigint;
+      cartLineCap: number;
+    },
   ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       // Row lock on the cart — serialises addItem for this customer.
@@ -227,12 +274,35 @@ export class PrismaCartRepository implements CartRepository {
         where: { cartId, productId, variantId },
       });
 
+      // Phase 61 (2026-05-22) — stock floor check INSIDE the lock
+      // (audit Gap #7). Pre-Phase-61 the service computed
+      // `existingQty + availableStock` before entering the
+      // transaction; two parallel adds for stock=10 each requesting
+      // qty=8 could both pass that check before either incremented
+      // the row, over-committing the seller's inventory. With the
+      // check inside the FOR UPDATE the second add sees the first's
+      // increment and rejects cleanly.
+      const existingQty = existing?.quantity ?? 0;
+      if (args.availableStock < existingQty + quantityDelta) {
+        throw Object.assign(
+          new Error(
+            `Insufficient stock. Available: ${args.availableStock}, In cart: ${existingQty}, Requested: ${quantityDelta}`,
+          ),
+          { code: 'INSUFFICIENT_STOCK', availableStock: args.availableStock, existingQty },
+        );
+      }
+
       if (existing) {
         // Sprint 3 Story 2.3 — snap-back: if the existing row was
         // saved-for-later, re-adding flips it back into the active
         // cart with the new quantity added. Matches typical e-commerce
         // UX (user re-finds an item and adds it; they expect it to
         // appear in the active cart, not stay parked).
+        //
+        // Phase 61 — refresh the price snapshot when re-adding to a
+        // previously-cleared row, but preserve the snapshot when an
+        // ACTIVE row is incremented. The drift-detection semantics
+        // are "first add wins" for the snapshot.
         await tx.cartItem.update({
           where: { id: existing.id },
           data: {
@@ -241,6 +311,19 @@ export class PrismaCartRepository implements CartRepository {
           },
         });
       } else {
+        // Phase 61 — cart-line cap (audit Gap #23). Enforced inside
+        // the lock so two parallel adds that would both create a
+        // new line serialise here. Existing-row increments don't
+        // hit the cap.
+        const lineCount = await tx.cartItem.count({ where: { cartId } });
+        if (lineCount >= args.cartLineCap) {
+          throw Object.assign(
+            new Error(
+              `Cart has reached the ${args.cartLineCap}-line limit. Remove an item to add a new one.`,
+            ),
+            { code: 'CART_LINE_CAP', lineCount, cartLineCap: args.cartLineCap },
+          );
+        }
         await tx.cartItem.create({
           data: {
             cartId,
@@ -248,10 +331,41 @@ export class PrismaCartRepository implements CartRepository {
             variantId,
             quantity: quantityDelta,
             savedForLater: false,
+            // Phase 61 — add-time price snapshot in paise (audit Gap #22).
+            unitPriceAtAddInPaise: args.unitPriceInPaiseSnapshot,
           },
         });
       }
     });
+  }
+
+  async countCartItemsForCustomer(customerId: string): Promise<number> {
+    // Phase 61 (2026-05-22) — backs the per-cart line cap (audit
+    // Gap #23). Cheap count via the cartId index.
+    const cart = await this.prisma.cart.findUnique({
+      where: { customerId },
+      select: { id: true },
+    });
+    if (!cart) return 0;
+    return this.prisma.cartItem.count({ where: { cartId: cart.id } });
+  }
+
+  async deleteAbandonedCartsOlderThan(cutoff: Date): Promise<number> {
+    // Phase 61 (2026-05-22) — abandonment cleanup (audit Gap #12).
+    // Deletes carts whose updatedAt is older than the cutoff. The
+    // FK on cart_items is ON DELETE CASCADE, so child rows go with
+    // the parent. Two-pass: read ids first so we can return an
+    // accurate count even when deleteMany returns 0 in a no-op
+    // case.
+    const stale = await this.prisma.cart.findMany({
+      where: { updatedAt: { lt: cutoff } },
+      select: { id: true },
+    });
+    if (stale.length === 0) return 0;
+    const result = await this.prisma.cart.deleteMany({
+      where: { id: { in: stale.map((c) => c.id) } },
+    });
+    return result.count;
   }
 
   /**
@@ -263,6 +377,32 @@ export class PrismaCartRepository implements CartRepository {
     await this.prisma.cartItem.update({
       where: { id: itemId },
       data: { savedForLater: value },
+    });
+  }
+
+  /**
+   * Phase 44 (2026-05-21) — persist the resolved pricing-tier snapshot.
+   * Called by CartService whenever the resolved tier drifts from what's
+   * already on the row (qty change, tier activated/deactivated, etc).
+   * NULL clears the snapshot when no tier qualifies.
+   */
+  async updateCartItemPricingSnapshot(
+    itemId: string,
+    snapshot: {
+      appliedPricingTierId: string | null;
+      appliedDiscountPercent: number | null;
+      appliedFixedUnitPrice: number | null;
+      appliedListUnitPrice: number | null;
+    },
+  ): Promise<void> {
+    await this.prisma.cartItem.update({
+      where: { id: itemId },
+      data: {
+        appliedPricingTierId: snapshot.appliedPricingTierId,
+        appliedDiscountPercent: snapshot.appliedDiscountPercent,
+        appliedFixedUnitPrice: snapshot.appliedFixedUnitPrice,
+        appliedListUnitPrice: snapshot.appliedListUnitPrice,
+      },
     });
   }
 

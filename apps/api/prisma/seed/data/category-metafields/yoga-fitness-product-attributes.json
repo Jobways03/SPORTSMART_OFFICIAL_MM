@@ -1,0 +1,561 @@
+{
+  "yoga-mats": [
+    {
+      "key": "mat_thickness",
+      "name": "Mat Thickness",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "thin", "label": "Thin (1–2mm – Travel)" },
+        { "value": "standard", "label": "Standard (3–4mm)" },
+        { "value": "thick", "label": "Thick (5–6mm – Comfort)" },
+        { "value": "extra_thick", "label": "Extra Thick (8mm+ – Joint Support)" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "pvc", "label": "PVC" },
+        { "value": "tpe", "label": "TPE (Eco-Friendly)" },
+        { "value": "natural_rubber", "label": "Natural Rubber" },
+        { "value": "cork", "label": "Cork" },
+        { "value": "jute", "label": "Jute" },
+        { "value": "nbr", "label": "NBR (Foam)" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "standard", "label": "Standard (173×61cm)" },
+        { "value": "long", "label": "Long (183×61cm)" },
+        { "value": "extra_long", "label": "Extra Long (200×66cm)" },
+        { "value": "wide", "label": "Wide (183×80cm)" },
+        { "value": "travel", "label": "Travel (Foldable)" }
+      ]
+    },
+    {
+      "key": "yoga_style",
+      "name": "Best For",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "hot_yoga", "label": "Hot Yoga / Bikram (Non-Slip)" },
+        { "value": "vinyasa", "label": "Vinyasa / Flow" },
+        { "value": "restorative", "label": "Restorative / Yin (Cushioned)" },
+        { "value": "all_round", "label": "All-Round" },
+        { "value": "pilates", "label": "Pilates" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "teal", "label": "Teal" },
+        { "value": "multicolor", "label": "Multicolor / Patterned" }
+      ]
+    }
+  ],
+
+  "yoga-accessories": [
+    {
+      "key": "accessory_type",
+      "name": "Accessory Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "yoga_block", "label": "Yoga Block" },
+        { "value": "yoga_strap", "label": "Yoga Strap / Belt" },
+        { "value": "yoga_wheel", "label": "Yoga Wheel" },
+        { "value": "bolster", "label": "Bolster" },
+        { "value": "meditation_cushion", "label": "Meditation Cushion / Zafu" },
+        { "value": "yoga_towel", "label": "Yoga Towel (Mat-Sized)" },
+        { "value": "mat_bag", "label": "Mat Bag / Carrier" },
+        { "value": "mat_spray", "label": "Mat Cleaner / Spray" },
+        { "value": "eye_pillow", "label": "Eye Pillow" },
+        { "value": "yoga_blanket", "label": "Yoga Blanket" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "cork", "label": "Cork (Natural)" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "dumbbells-weights": [
+    {
+      "key": "weight_type",
+      "name": "Weight Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "dumbbell_fixed", "label": "Dumbbell – Fixed" },
+        { "value": "dumbbell_adjustable", "label": "Dumbbell – Adjustable" },
+        { "value": "dumbbell_set", "label": "Dumbbell Set (Rack Included)" },
+        { "value": "kettlebell", "label": "Kettlebell" },
+        { "value": "barbell", "label": "Barbell" },
+        { "value": "weight_plate", "label": "Weight Plate" },
+        { "value": "medicine_ball", "label": "Medicine Ball" },
+        { "value": "slam_ball", "label": "Slam Ball" },
+        { "value": "ankle_wrist_weight", "label": "Ankle / Wrist Weight" }
+      ]
+    },
+    {
+      "key": "weight_kg",
+      "name": "Weight (kg)",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "0_5_1", "label": "0.5–1 kg" },
+        { "value": "1_5_3", "label": "1.5–3 kg" },
+        { "value": "4_6", "label": "4–6 kg" },
+        { "value": "7_10", "label": "7–10 kg" },
+        { "value": "12_16", "label": "12–16 kg" },
+        { "value": "18_24", "label": "18–24 kg" },
+        { "value": "25_32", "label": "25–32 kg" },
+        { "value": "35_plus", "label": "35 kg+" },
+        { "value": "adjustable", "label": "Adjustable (Variable)" }
+      ]
+    },
+    {
+      "key": "material",
+      "name": "Material",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "cast_iron", "label": "Cast Iron" },
+        { "value": "rubber_coated", "label": "Rubber Coated" },
+        { "value": "neoprene", "label": "Neoprene" },
+        { "value": "vinyl", "label": "Vinyl" },
+        { "value": "chrome", "label": "Chrome" },
+        { "value": "competition_steel", "label": "Competition Steel" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "resistance-bands": [
+    {
+      "key": "band_type",
+      "name": "Band Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "loop_mini", "label": "Mini Loop Band (Booty Band)" },
+        { "value": "loop_long", "label": "Long Loop Band (Pull-Up Assist)" },
+        { "value": "tube_handle", "label": "Tube with Handles" },
+        { "value": "flat_band", "label": "Flat / Therapy Band" },
+        { "value": "fabric", "label": "Fabric Band (Non-Slip)" },
+        { "value": "set", "label": "Band Set (Multiple Resistances)" }
+      ]
+    },
+    {
+      "key": "resistance_level",
+      "name": "Resistance Level",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "extra_light", "label": "Extra Light" },
+        { "value": "light", "label": "Light" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "heavy", "label": "Heavy" },
+        { "value": "extra_heavy", "label": "Extra Heavy" },
+        { "value": "multi_pack", "label": "Multi-Pack (Mixed)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "green", "label": "Green" },
+        { "value": "yellow", "label": "Yellow" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "multicolor", "label": "Multicolor / Set" }
+      ]
+    }
+  ],
+
+  "fitness-clothing": [
+    {
+      "key": "target_gender",
+      "name": "Target Gender",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "men", "label": "Men" },
+        { "value": "women", "label": "Women" },
+        { "value": "unisex", "label": "Unisex" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "xxl", "label": "XXL" },
+        { "value": "3xl", "label": "3XL" }
+      ]
+    },
+    {
+      "key": "garment_type",
+      "name": "Garment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 3,
+      "choices": [
+        { "value": "tank_top", "label": "Tank Top / Vest" },
+        { "value": "t_shirt", "label": "T-Shirt" },
+        { "value": "long_sleeve", "label": "Long Sleeve Top" },
+        { "value": "hoodie", "label": "Hoodie / Sweatshirt" },
+        { "value": "sports_bra", "label": "Sports Bra" },
+        { "value": "leggings", "label": "Leggings / Tights" },
+        { "value": "shorts", "label": "Shorts" },
+        { "value": "joggers", "label": "Joggers / Sweatpants" },
+        { "value": "compression_top", "label": "Compression Top" },
+        { "value": "compression_tights", "label": "Compression Tights" },
+        { "value": "crop_top", "label": "Crop Top" }
+      ]
+    },
+    {
+      "key": "activity",
+      "name": "Activity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 4,
+      "choices": [
+        { "value": "yoga", "label": "Yoga / Pilates" },
+        { "value": "gym", "label": "Gym / Weightlifting" },
+        { "value": "hiit", "label": "HIIT / CrossFit" },
+        { "value": "running", "label": "Running / Cardio" },
+        { "value": "all_purpose", "label": "All-Purpose" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 5,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "green", "label": "Green" },
+        { "value": "red", "label": "Red" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "foam-rollers-recovery": [
+    {
+      "key": "recovery_type",
+      "name": "Recovery Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "foam_roller_smooth", "label": "Foam Roller – Smooth" },
+        { "value": "foam_roller_textured", "label": "Foam Roller – Textured / Grid" },
+        { "value": "foam_roller_vibrating", "label": "Foam Roller – Vibrating" },
+        { "value": "massage_ball", "label": "Massage Ball" },
+        { "value": "lacrosse_ball", "label": "Lacrosse Ball (Trigger Point)" },
+        { "value": "peanut_ball", "label": "Peanut / Double Ball" },
+        { "value": "massage_gun", "label": "Massage Gun / Percussion" },
+        { "value": "massage_stick", "label": "Massage Stick / Roller" },
+        { "value": "stretching_strap", "label": "Stretching Strap" },
+        { "value": "ice_pack", "label": "Ice Pack / Cold Therapy" },
+        { "value": "compression_sleeve", "label": "Compression Sleeve / Wrap" }
+      ]
+    },
+    {
+      "key": "firmness",
+      "name": "Firmness",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "soft", "label": "Soft (Beginner)" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "firm", "label": "Firm (Deep Tissue)" },
+        { "value": "extra_firm", "label": "Extra Firm" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "orange", "label": "Orange" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "exercise-mats": [
+    {
+      "key": "mat_type",
+      "name": "Mat Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "exercise_mat", "label": "Exercise / Gym Mat" },
+        { "value": "pilates_mat", "label": "Pilates Mat (Thicker)" },
+        { "value": "folding_mat", "label": "Folding Mat (Gymnastics)" },
+        { "value": "interlocking_tiles", "label": "Interlocking Floor Tiles" },
+        { "value": "balance_pad", "label": "Balance Pad" }
+      ]
+    },
+    {
+      "key": "thickness",
+      "name": "Thickness",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "6mm", "label": "6mm" },
+        { "value": "10mm", "label": "10mm" },
+        { "value": "15mm", "label": "15mm" },
+        { "value": "20mm", "label": "20mm" },
+        { "value": "25mm_plus", "label": "25mm+" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "purple", "label": "Purple" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "red", "label": "Red" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "fitness-equipment": [
+    {
+      "key": "equipment_type",
+      "name": "Equipment Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "skipping_rope", "label": "Skipping Rope / Jump Rope" },
+        { "value": "pull_up_bar", "label": "Pull-Up Bar" },
+        { "value": "push_up_bars", "label": "Push-Up Bars / Stands" },
+        { "value": "ab_roller", "label": "Ab Roller / Wheel" },
+        { "value": "gym_rings", "label": "Gymnastic Rings" },
+        { "value": "suspension_trainer", "label": "Suspension Trainer (TRX Style)" },
+        { "value": "plyo_box", "label": "Plyo Box / Step" },
+        { "value": "stability_ball", "label": "Stability Ball / Swiss Ball" },
+        { "value": "battle_rope", "label": "Battle Rope" },
+        { "value": "parallettes", "label": "Parallettes" },
+        { "value": "hand_gripper", "label": "Hand Gripper / Grip Trainer" },
+        { "value": "gloves", "label": "Gym Gloves" },
+        { "value": "lifting_belt", "label": "Lifting Belt" },
+        { "value": "wrist_wraps", "label": "Wrist Wraps" },
+        { "value": "lifting_straps", "label": "Lifting Straps" },
+        { "value": "chalk", "label": "Chalk / Liquid Chalk" }
+      ]
+    },
+    {
+      "key": "size",
+      "name": "Size",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "xs", "label": "XS" },
+        { "value": "small", "label": "S" },
+        { "value": "medium", "label": "M" },
+        { "value": "large", "label": "L" },
+        { "value": "xl", "label": "XL" },
+        { "value": "one_size", "label": "One Size" },
+        { "value": "na", "label": "N/A" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "red", "label": "Red" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "fitness-bags": [
+    {
+      "key": "bag_type",
+      "name": "Bag Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "gym_duffle", "label": "Gym Duffle Bag" },
+        { "value": "gym_backpack", "label": "Gym Backpack" },
+        { "value": "drawstring", "label": "Drawstring / Gym Sack" },
+        { "value": "tote", "label": "Gym Tote" },
+        { "value": "barrel", "label": "Barrel Bag" },
+        { "value": "shoe_bag", "label": "Shoe Bag" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "sortOrder": 2,
+      "choices": [
+        { "value": "small", "label": "Small (Under 25L)" },
+        { "value": "medium", "label": "Medium (25–40L)" },
+        { "value": "large", "label": "Large (40L+)" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "navy", "label": "Navy" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "red", "label": "Red" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ],
+
+  "water-bottles-shakers": [
+    {
+      "key": "bottle_type",
+      "name": "Bottle Type",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 1,
+      "choices": [
+        { "value": "water_bottle", "label": "Water Bottle" },
+        { "value": "protein_shaker", "label": "Protein Shaker" },
+        { "value": "insulated", "label": "Insulated / Thermal" },
+        { "value": "collapsible", "label": "Collapsible / Foldable" },
+        { "value": "gallon_jug", "label": "Gallon Jug (Motivational)" }
+      ]
+    },
+    {
+      "key": "capacity",
+      "name": "Capacity",
+      "type": "SINGLE_SELECT",
+      "isRequired": true,
+      "sortOrder": 2,
+      "choices": [
+        { "value": "400ml", "label": "400ml" },
+        { "value": "500ml", "label": "500ml" },
+        { "value": "700ml", "label": "700ml" },
+        { "value": "1l", "label": "1L" },
+        { "value": "1_5l", "label": "1.5L" },
+        { "value": "2l_plus", "label": "2L+" }
+      ]
+    },
+    {
+      "key": "color",
+      "name": "Color",
+      "type": "MULTI_SELECT",
+      "sortOrder": 3,
+      "choices": [
+        { "value": "black", "label": "Black" },
+        { "value": "white", "label": "White" },
+        { "value": "blue", "label": "Blue" },
+        { "value": "pink", "label": "Pink" },
+        { "value": "green", "label": "Green" },
+        { "value": "grey", "label": "Grey" },
+        { "value": "clear", "label": "Clear" },
+        { "value": "multicolor", "label": "Multicolor" }
+      ]
+    }
+  ]
+}

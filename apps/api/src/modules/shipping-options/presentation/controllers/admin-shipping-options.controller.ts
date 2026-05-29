@@ -9,6 +9,7 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
@@ -19,6 +20,7 @@ import {
 } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Roles } from '../../../../core/decorators/roles.decorator';
+import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { ShippingOptionsService } from '../../application/services/shipping-options.service';
 
 // Cast BigInt → string for JSON serialization (NestJS doesn't handle
@@ -66,10 +68,18 @@ export class AdminShippingOptionsController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  // Phase 91 (2026-05-23) — Gap #11 multi-tenant isolation. The
+  // SELLER_ADMIN role was removed from platform-wide shipping write
+  // endpoints because seller admins could edit options affecting all
+  // sellers. Seller-scoped shipping options (Phase 91 schema's
+  // `sellerId` column) get their own forthcoming endpoint guarded by
+  // a SELLER_ADMIN role.
+  @Roles('SUPER_ADMIN')
   @Permissions('shipping.write')
-  async create(@Body() body: any) {
-    const data = await this.service.create(body);
+  // Phase 91 — Gap #10 idempotency. Double-click POST creates one row.
+  @Idempotent()
+  async create(@Req() req: any, @Body() body: any) {
+    const data = await this.service.create(body, req?.adminId ?? null);
     return {
       success: true,
       message: 'Shipping option created',
@@ -79,10 +89,15 @@ export class AdminShippingOptionsController {
 
   @Put(':id')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Roles('SUPER_ADMIN')
   @Permissions('shipping.write')
-  async update(@Param('id') id: string, @Body() body: any) {
-    const data = await this.service.update(id, body);
+  @Idempotent()
+  async update(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    const data = await this.service.update(id, body, req?.adminId ?? null);
     return {
       success: true,
       message: 'Shipping option updated',
@@ -92,10 +107,11 @@ export class AdminShippingOptionsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Roles('SUPER_ADMIN')
   @Permissions('shipping.write')
-  async delete(@Param('id') id: string) {
-    const result = await this.service.delete(id);
+  @Idempotent()
+  async delete(@Req() req: any, @Param('id') id: string) {
+    const result = await this.service.delete(id, req?.adminId ?? null);
     return {
       success: true,
       message: result.hardDeleted

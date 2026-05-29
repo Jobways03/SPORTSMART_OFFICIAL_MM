@@ -54,6 +54,9 @@ export interface ListTicketsFilter {
   priority?: TicketPriority;
   assignedAdminId?: string | null; // explicit `null` = unassigned
   search?: string; // matches ticketNumber / subject / creator email/name
+  // Admin queue only: sort URGENT→LOW first, then recency. Per-actor "my
+  // tickets" lists leave this unset so a customer's view isn't reordered.
+  sortByPriority?: boolean;
 }
 
 export interface ListTicketsPage {

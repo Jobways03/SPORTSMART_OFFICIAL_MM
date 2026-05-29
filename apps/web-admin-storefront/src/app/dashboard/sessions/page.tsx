@@ -25,7 +25,16 @@ export default function SessionsPage() {
   );
 }
 
-const ACTOR_TYPES: ActorType[] = ['ADMIN', 'USER', 'SELLER', 'FRANCHISE'];
+// Phase 27 (2026-05-21) — AFFILIATE added in lockstep with the
+// backend admin-sessions surface. Affiliates handle commission
+// payouts so admin-side revoke is needed for incident response.
+const ACTOR_TYPES: ActorType[] = [
+  'ADMIN',
+  'USER',
+  'SELLER',
+  'FRANCHISE',
+  'AFFILIATE',
+];
 
 function Inner() {
   const { hasAnyPermission } = usePermissions();
@@ -368,6 +377,7 @@ function actorTypeBadge(t: ActorType): React.CSSProperties {
     USER: { bg: '#dcfce7', fg: '#166534' },
     SELLER: { bg: '#fef3c7', fg: '#92400e' },
     FRANCHISE: { bg: '#f3e8ff', fg: '#6b21a8' },
+    AFFILIATE: { bg: '#fce7f3', fg: '#9d174d' },
   };
   const c = palette[t];
   return {

@@ -58,13 +58,23 @@ model GstTcsSettlementLedger {
   intraStateTaxableInPaise BigInt @default(0) @map("intra_state_taxable_in_paise")
   interStateTaxableInPaise BigInt @default(0) @map("inter_state_taxable_in_paise")
 
+  // Phase 159z (GSTR-8 audit #4) — per-place-of-supply breakdown. CBIC
+  // GSTR-8 §3 emits one row per (supplier, place-of-supply); the rolled
+  // aggregates above stay the master totals while this JSON drives the
+  // export's row-level decomposition. Shape:
+  //   [{ pos, posName, taxableInPaise, cgstTcsInPaise, sgstTcsInPaise,
+  //      igstTcsInPaise, totalTcsInPaise }, ...]
+  // `pos` is the 2-digit state code; `posName` is the resolved name so
+  // CSV consumers don't need a separate lookup.
+  placeOfSupplyBreakdownJson Json @default("[]") @map("place_of_supply_breakdown_json")
+
   // Historical TCS rate snapshot so a rate change doesn't rewrite
   // the past. Stored as basis points (100 = 1%).
-  tcsRateBps        Int    @default(100) @map("tcs_rate_bps")
-  cgstTcsInPaise    BigInt @default(0)   @map("cgst_tcs_in_paise")
-  sgstTcsInPaise    BigInt @default(0)   @map("sgst_tcs_in_paise")
-  igstTcsInPaise    BigInt @default(0)   @map("igst_tcs_in_paise")
-  totalTcsInPaise   BigInt @default(0)   @map("total_tcs_in_paise")
+  tcsRateBps      Int    @default(100) @map("tcs_rate_bps")
+  cgstTcsInPaise  BigInt @default(0) @map("cgst_tcs_in_paise")
+  sgstTcsInPaise  BigInt @default(0) @map("sgst_tcs_in_paise")
+  igstTcsInPaise  BigInt @default(0) @map("igst_tcs_in_paise")
+  totalTcsInPaise BigInt @default(0) @map("total_tcs_in_paise")
 
   // Carry-forward of negative net-supply situations (credit notes in
   // the period exceed invoices). Captured here for the NEXT period's
@@ -81,6 +91,10 @@ model GstTcsSettlementLedger {
   settlementId     String?   @map("settlement_id")
   filedAt          DateTime? @map("filed_at")
   filedBy          String?   @map("filed_by")
+  // Phase 159z (GSTR-8 audit #6) — GSTN ARN captured at mark-filed time.
+  // Required to prove the GSTR-8 was actually filed at NIC and to make a
+  // FILED status auditable. UI prompts for the ARN before flipping rows.
+  nicArn           String?   @map("nic_arn")
   paidToGovtAt     DateTime? @map("paid_to_govt_at")
   paidBy           String?   @map("paid_by")
   paymentReference String?   @map("payment_reference")
@@ -90,7 +104,7 @@ model GstTcsSettlementLedger {
   correctionOfId String? @map("correction_of_id")
 
   createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt       @map("updated_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   // Phase 17 GST — back-link to the settlement(s) that collected this
@@ -100,6 +114,11 @@ model GstTcsSettlementLedger {
   sellerSettlements SellerSettlement[]
 
   @@index([filingPeriod])
+  // Phase 159z (GSTR-8 audit #5) — supports the "active row" lookup in
+  // computeForSeller (sellerId + filingPeriod). A partial-unique index
+  // EXCLUDING REVERSED rows is created in the migration via raw SQL
+  // (Prisma's @@unique doesn't support WHERE clauses).
+  @@index([sellerId, filingPeriod])
   @@index([status])
   @@index([supplierGstin])
   @@map("gst_tcs_settlement_ledger")
