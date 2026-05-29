@@ -1,0 +1,114 @@
+name: Mobile CI
+
+# Scope: runs on PRs and pushes that touch the mobile app, the shared
+# packages it consumes, or this workflow file. Same trigger pattern as
+# api-ci.yml and frontend-ci.yml so a pure-API or pure-web PR doesn't
+# consume mobile CI minutes.
+#
+# What CI validates without a Mac runner: lint + typecheck + the full
+# Metro bundle compile for both platforms (catches every import-time
+# error in the JS graph — the same signal we use locally as the gate
+# at the end of every build phase). Native Pod / Gradle builds are
+# deferred to a separate macOS workflow once we have one.
+on:
+  pull_request:
+    paths:
+      - "apps/mobile-storefront/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/mobile-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/mobile-storefront/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/mobile-ci.yml"
+
+concurrency:
+  group: mobile-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependency review (PR diff)
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+      - name: SCA scan (osv-scanner)
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        with:
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
+            --fail-on-vuln-severity=HIGH
+
+  build:
+    name: Lint / Typecheck / Bundle compile
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    env:
+      NODE_VERSION: "22"
+      PNPM_VERSION: "10.0.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@sportsmart/mobile-storefront..."
+
+      - name: Lint
+        run: pnpm --filter "@sportsmart/mobile-storefront" run lint
+
+      - name: Typecheck
+        working-directory: apps/mobile-storefront
+        run: pnpm exec tsc --noEmit
+
+      # Both-platform bundle compile. Catches missing imports, broken
+      # exports, transformer errors — everything that would white-screen
+      # on first launch. Native Pod / Gradle builds need a Mac runner;
+      # those will run in a separate workflow when we add one.
+      - name: Bundle compile (iOS)
+        working-directory: apps/mobile-storefront
+        run: |
+          pnpm exec react-native bundle \
+            --platform ios \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output /tmp/sportsmart-ios-bundle.js \
+            --assets-dest /tmp/sportsmart-ios-assets
+
+      - name: Bundle compile (Android)
+        working-directory: apps/mobile-storefront
+        run: |
+          pnpm exec react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output /tmp/sportsmart-android-bundle.js \
+            --assets-dest /tmp/sportsmart-android-assets

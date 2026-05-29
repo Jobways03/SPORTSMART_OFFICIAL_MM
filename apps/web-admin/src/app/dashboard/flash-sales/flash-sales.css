@@ -1,0 +1,284 @@
+/* Flash sales admin — list + side drawer for create/edit.
+   Mirrors the layout grammar used by other dashboard pages: same
+   page header, same table look, same primary button colour. The
+   drawer is hand-rolled (no library) since this app uses CSS-only
+   styling everywhere else. */
+
+.fs-page {
+  padding: 24px 32px;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.fs-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  gap: 16px;
+}
+
+.fs-header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-text, #111827);
+  margin: 0 0 4px;
+  letter-spacing: -0.3px;
+}
+
+.fs-header .sub {
+  font-size: 13px;
+  color: var(--color-text-secondary, #6b7280);
+  margin: 0;
+}
+
+.fs-new-btn {
+  background: #111827;
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fs-new-btn:hover { background: #1f2937; }
+
+.fs-table-wrap {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.fs-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.fs-table th,
+.fs-table td {
+  padding: 12px 16px;
+  text-align: left;
+  font-size: 13px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.fs-table th {
+  background: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.fs-table tr:last-child td { border-bottom: none; }
+.fs-table tr:hover td { background: #fafafa; }
+
+.fs-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.fs-badge.active { background: #d1fae5; color: #065f46; }
+.fs-badge.inactive { background: #fee2e2; color: #991b1b; }
+.fs-badge.member { background: #fef3c7; color: #92400e; }
+.fs-badge.expired { background: #f3f4f6; color: #6b7280; }
+.fs-badge.live { background: #dbeafe; color: #1e40af; }
+.fs-badge.upcoming { background: #ede9fe; color: #5b21b6; }
+
+.fs-row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.fs-icon-btn {
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.fs-icon-btn:hover { background: #f9fafb; }
+.fs-icon-btn.danger { color: #b91c1c; border-color: #fecaca; }
+.fs-icon-btn.danger:hover { background: #fef2f2; }
+
+.fs-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+/* ── Drawer ─────────────────────────────────────────────────────── */
+
+.fs-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 50;
+  animation: fs-fade 150ms ease-out;
+}
+
+.fs-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 480px;
+  max-width: 100vw;
+  background: #fff;
+  z-index: 51;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  animation: fs-slide 200ms ease-out;
+}
+
+@keyframes fs-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fs-slide { from { transform: translateX(100%) } to { transform: translateX(0) } }
+
+.fs-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.fs-drawer-header h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  color: #111827;
+  letter-spacing: -0.2px;
+}
+
+.fs-drawer-close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.fs-drawer-close:hover { background: #f3f4f6; color: #111827; }
+
+.fs-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.fs-field { margin-bottom: 16px; }
+.fs-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 6px;
+  letter-spacing: 0.2px;
+}
+.fs-field .hint {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+.fs-field input[type='text'],
+.fs-field input[type='number'],
+.fs-field input[type='datetime-local'],
+.fs-field textarea {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #111827;
+  background: #fff;
+}
+.fs-field textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+.fs-field input:focus,
+.fs-field textarea:focus {
+  outline: none;
+  border-color: #111827;
+  box-shadow: 0 0 0 3px rgba(17, 24, 39, 0.08);
+}
+
+.fs-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.fs-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fafafa;
+  margin-bottom: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #374151;
+}
+.fs-checkbox input { margin: 0; }
+.fs-checkbox.on { background: #ecfdf5; border-color: #6ee7b7; color: #065f46; }
+
+.fs-drawer-footer {
+  display: flex;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+
+.fs-drawer-footer button {
+  flex: 1;
+  padding: 11px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.fs-cancel {
+  background: #fff;
+  border-color: #d1d5db;
+  color: #374151;
+}
+.fs-cancel:hover { background: #f9fafb; }
+
+.fs-submit {
+  background: #111827;
+  color: #fff;
+}
+.fs-submit:hover { background: #1f2937; }
+.fs-submit:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.fs-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}

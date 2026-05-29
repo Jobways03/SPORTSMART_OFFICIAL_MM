@@ -7,6 +7,7 @@ export type {
   ApiResponse,
   ApiClientConfig,
   ApiClient,
+  TokenStorage,
   StepUpHandler,
 } from './api-client';
 

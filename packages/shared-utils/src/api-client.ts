@@ -1,13 +1,15 @@
 /**
- * Shared API client factory for the six Next.js apps. Each app owns its own
- * `src/lib/api-client.ts` that calls `createApiClient({...})` with its
- * actor-specific token keys and refresh endpoint, then re-exports the
- * resulting `apiClient` function. The 64+ consumers per app import from
- * `@/lib/api-client` as before — only the implementation moved.
+ * Shared API client factory. Originally written for the six Next.js apps
+ * (each owns its own `src/lib/api-client.ts` that calls `createApiClient`
+ * with actor-specific token keys + refresh endpoint). Now also consumed by
+ * `apps/mobile-storefront` via a Keychain-backed `TokenStorage` adapter.
  *
  * The client handles: single-flight refresh on 401 (so a burst of parallel
  * 401s share one refresh call), an automatic retry after successful refresh,
- * and a fallback "clear session + redirect to login" when refresh fails.
+ * and a fallback "clear session + escalate" when refresh fails. Token
+ * storage and the post-failure escalation are pluggable so the same code
+ * works in a browser (sessionStorage + window.location redirect) and in
+ * React Native (Keychain + navigation.reset).
  */
 
 export interface ApiResponse<T = unknown> {
@@ -27,17 +29,42 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Pluggable token storage. Methods may be sync or async — the client
+ * always awaits them. Web injects a sessionStorage adapter; React Native
+ * injects a Keychain/SecureStore adapter.
+ */
+export interface TokenStorage {
+  getItem(key: string): string | null | Promise<string | null>;
+  setItem(key: string, value: string): void | Promise<void>;
+  removeItem(key: string): void | Promise<void>;
+}
+
 export interface ApiClientConfig {
-  /** sessionStorage key for the short-lived access token. */
+  /** Storage key for the short-lived access token. */
   accessTokenKey: string;
-  /** sessionStorage key for the refresh token. */
+  /** Storage key for the refresh token. */
   refreshTokenKey: string;
-  /** sessionStorage key for the actor profile payload (cleared on logout). */
+  /** Storage key for the actor profile payload (cleared on logout). */
   userKey: string;
   /** Path (relative to `/api/v1`) of the refresh endpoint for this actor. */
   refreshPath: string;
-  /** Where to redirect after session expiry. Defaults to `/login`. */
+  /** Where to redirect after session expiry. Defaults to `/login`. Web only. */
   loginPath?: string;
+  /**
+   * Storage adapter. Defaults to a sessionStorage-backed adapter that
+   * preserves the original web behavior exactly. Pass a Keychain adapter
+   * on mobile.
+   */
+  storage?: TokenStorage;
+  /**
+   * Called after tokens are cleared when auth fails irrecoverably (refresh
+   * failed or returned 401). Defaults to `window.location.href = loginPath`
+   * in a browser. Mobile passes a navigation reset.
+   */
+  onAuthFailure?: () => void;
+  /** Override the API base URL. Default reads NEXT_PUBLIC_API_URL or falls back. */
+  apiBaseUrl?: string;
   /**
    * Phase 38 — default request headers baked into every call (e.g.
    * `X-Seller-Type: D2C` for the D2C seller portal and admin, `RETAIL`
@@ -102,10 +129,22 @@ export interface ApiClient {
   API_BASE: string;
 }
 
-function resolveApiBase(): string {
-  const v = process.env.NEXT_PUBLIC_API_URL;
+function resolveApiBase(override?: string): string {
+  // Honour empty-string explicitly — `''` means "use relative URLs"
+  // (caller wants requests to stay same-origin, e.g. the mobile-
+  // storefront web build that routes through Vite's /api proxy).
+  // `undefined` falls through to env / default lookup.
+  if (override !== undefined) return override;
+  const v =
+    typeof process !== 'undefined' && process.env
+      ? process.env.NEXT_PUBLIC_API_URL
+      : undefined;
   if (v) return v;
-  if (process.env.NODE_ENV === 'production') {
+  if (
+    typeof process !== 'undefined' &&
+    process.env &&
+    process.env.NODE_ENV === 'production'
+  ) {
     throw new Error(
       'NEXT_PUBLIC_API_URL must be set in production — refusing to default to localhost.',
     );
@@ -113,44 +152,83 @@ function resolveApiBase(): string {
   return 'http://localhost:8000';
 }
 
-export function createApiClient(config: ApiClientConfig): ApiClient {
-  const API_BASE = resolveApiBase();
-  const loginPath = config.loginPath ?? '/login';
+/**
+ * Default storage adapter — sessionStorage on web, no-op on SSR / RN.
+ * Preserves the original behavior of the client before storage was pluggable.
+ */
+function createSessionStorageAdapter(): TokenStorage {
+  return {
+    getItem(key) {
+      if (typeof window === 'undefined') return null;
+      try {
+        return sessionStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem(key, value) {
+      if (typeof window === 'undefined') return;
+      try {
+        sessionStorage.setItem(key, value);
+      } catch {
+        // ignore quota / privacy-mode errors
+      }
+    },
+    removeItem(key) {
+      if (typeof window === 'undefined') return;
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        // ignore
+      }
+    },
+  };
+}
 
-  const getAccessToken = (): string | null => {
-    if (typeof window === 'undefined') return null;
+export function createApiClient(config: ApiClientConfig): ApiClient {
+  const API_BASE = resolveApiBase(config.apiBaseUrl);
+  const loginPath = config.loginPath ?? '/login';
+  const storage = config.storage ?? createSessionStorageAdapter();
+
+  const defaultAuthFailure = (): void => {
+    if (typeof window === 'undefined') return;
+    if (window.location.pathname !== loginPath) {
+      window.location.href = loginPath;
+    }
+  };
+  const onAuthFailure = config.onAuthFailure ?? defaultAuthFailure;
+
+  const getAccessToken = async (): Promise<string | null> => {
     try {
-      return sessionStorage.getItem(config.accessTokenKey);
+      return await storage.getItem(config.accessTokenKey);
     } catch {
       return null;
     }
   };
 
-  const clearTokensAndRedirect = (): void => {
-    if (typeof window === 'undefined') return;
+  const clearTokensAndNotify = async (): Promise<void> => {
     try {
-      sessionStorage.removeItem(config.accessTokenKey);
-      sessionStorage.removeItem(config.refreshTokenKey);
-      sessionStorage.removeItem(config.userKey);
+      await Promise.all([
+        storage.removeItem(config.accessTokenKey),
+        storage.removeItem(config.refreshTokenKey),
+        storage.removeItem(config.userKey),
+      ]);
     } catch {
-      // ignore
+      // ignore — escalate anyway
     }
-    if (window.location.pathname !== loginPath) {
-      window.location.href = loginPath;
-    }
+    onAuthFailure();
   };
 
   // Single in-flight refresh promise so concurrent 401s share the same attempt.
   let refreshPromise: Promise<boolean> | null = null;
 
   const tryRefreshToken = async (): Promise<boolean> => {
-    if (typeof window === 'undefined') return false;
     if (refreshPromise) return refreshPromise;
 
     refreshPromise = (async () => {
       let refreshToken: string | null = null;
       try {
-        refreshToken = sessionStorage.getItem(config.refreshTokenKey);
+        refreshToken = await storage.getItem(config.refreshTokenKey);
       } catch {
         return false;
       }
@@ -171,8 +249,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         const body = await res.json();
         const data = body?.data;
         if (!data?.accessToken || !data?.refreshToken) return false;
-        sessionStorage.setItem(config.accessTokenKey, data.accessToken);
-        sessionStorage.setItem(config.refreshTokenKey, data.refreshToken);
+        await storage.setItem(config.accessTokenKey, data.accessToken);
+        await storage.setItem(config.refreshTokenKey, data.refreshToken);
         return true;
       } catch {
         return false;
@@ -219,7 +297,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   ): Promise<{ ok: boolean; status: number; body: ApiResponse<T> }> => {
     const { headers: optionHeaders, body: requestBody, signal: userSignal, ...restOptions } =
       options;
-    const token = getAccessToken();
+    const token = await getAccessToken();
 
     // Only force JSON content-type when the body isn't a FormData payload —
     // browsers must set their own multipart boundary for FormData uploads.
@@ -290,7 +368,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         attempt = await makeRequest<T>(url, options);
       }
       if (attempt.status === 401) {
-        clearTokensAndRedirect();
+        await clearTokensAndNotify();
         throw new ApiError(attempt.status, attempt.body);
       }
     }

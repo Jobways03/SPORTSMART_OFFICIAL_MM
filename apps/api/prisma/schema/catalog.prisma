@@ -356,6 +356,8 @@ model Product {
   // Story 3.5 — quantity-based pricing tiers for upsell hints on PDP.
   // Display-only at v1; cart-time application is a separate story.
   pricingTiers             ProductPricingTier[]
+  // User-generated reviews (see product-reviews.prisma).
+  reviews                  ProductReview[]
   // Phase 45 (2026-05-21) — append-only audit trail of tax-config
   // attestation transitions (ATTESTED / RESET / EDITED / BULK_EDITED).
   // CA-compliance audits demand the historical chain, not just the

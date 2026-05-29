@@ -10,6 +10,10 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import {
+  STOREFRONT_REPOSITORY,
+  IStorefrontRepository,
+} from '../../../catalog/domain/repositories/storefront.repository.interface';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 // Sprint 3 Story 2.4 — format validation that runs BEFORE we hit the
@@ -93,6 +97,10 @@ export class CustomerAddressService {
     @Inject(CHECKOUT_REPOSITORY)
     private readonly repo: ICheckoutRepository,
     private readonly prisma: PrismaService,
+    // Routed through the storefront repo so unknown pincodes trigger the
+    // India Post fallback + auto-seed the post_offices table.
+    @Inject(STOREFRONT_REPOSITORY)
+    private readonly storefrontRepo: IStorefrontRepository,
     // Phase 63 (2026-05-22) — audit log on every address mutation
     // (audit Gap #14). AuditModule is @Global() so no module wiring.
     private readonly audit: AuditPublicFacade,
@@ -154,16 +162,11 @@ export class CustomerAddressService {
     }
 
     // Validate pincode against PostOffice database and auto-populate
-    // city / state / locality when available.
-    const postOffice = await this.prisma.postOffice.findFirst({
-      where: { pincode: postalCode },
-      select: {
-        pincode: true,
-        officeName: true,
-        district: true,
-        state: true,
-      },
-    });
+    // city / state / locality when available. The storefront repo runs
+    // an India Post fallback if the master table is unseeded, so we
+    // don't reject valid pincodes just because nobody loaded the dump.
+    const entries = await this.storefrontRepo.findPostOfficeByPincode(postalCode);
+    const postOffice = entries[0];
 
     // Phase 63 (audit Gap #9) — PostOffice miss is no longer a hard
     // reject when the customer has supplied a city + state. India
@@ -284,10 +287,13 @@ export class CustomerAddressService {
     }
 
     if (input.postalCode && input.postalCode !== existing.postalCode) {
-      const postOffice = await this.prisma.postOffice.findFirst({
-        where: { pincode: input.postalCode },
-        select: { pincode: true, district: true, state: true, officeName: true },
-      });
+      // Routed through storefrontRepo so an unknown pincode triggers the
+      // India Post fallback + auto-seed into post_offices (HEAD path).
+      // We still apply main's defensive accept-with-caller-supplied
+      // city/state so a temporarily-unseedable pincode + complete
+      // address payload doesn't block the update.
+      const entries = await this.storefrontRepo.findPostOfficeByPincode(input.postalCode);
+      const postOffice = entries[0];
       if (!postOffice && (!input.city || !input.state)) {
         throw new BadRequestAppException(
           `Invalid pincode: ${input.postalCode} — not found. Please check, or provide city and state explicitly.`,

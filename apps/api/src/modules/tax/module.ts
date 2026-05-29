@@ -77,6 +77,7 @@ import { SellerTaxDocumentsController } from './presentation/controllers/seller-
 import { FranchiseTaxDocumentsController } from './presentation/controllers/franchise-tax-documents.controller';
 import { AdminTaxReportsController } from './presentation/controllers/admin-tax-reports.controller';
 import { AdminTaxOperationsController } from './presentation/controllers/admin-tax-operations.controller';
+import { TaxPdfFileController } from './presentation/controllers/tax-pdf-file.controller';
 import { PublicTaxReferenceController } from './presentation/controllers/public-tax-reference.controller';
 import { CustomerCartTaxPreviewController } from './presentation/controllers/customer-cart-tax-preview.controller';
 import { AdminHsnMasterController } from './presentation/controllers/admin-hsn-master.controller';
@@ -244,6 +245,9 @@ const taxPdfStorageProvider = {
     FranchiseTaxDocumentsController,
     AdminTaxReportsController,
     AdminTaxOperationsController,
+    // Dev-only: serves stub-stored invoice files over HTTP so the
+    // download link isn't an unopenable file:// path.
+    TaxPdfFileController,
     PublicTaxReferenceController,
     CustomerCartTaxPreviewController,
     AdminHsnMasterController,

@@ -57,6 +57,9 @@ export class StubTaxPdfStorageProvider implements TaxPdfStorageProvider {
   readonly name = 'stub';
   /** Override-able for tests + ops who want a non-default storage dir. */
   private readonly rootDir: string;
+  /** Base URL the API is reachable at, so download links are HTTP (a
+   *  browser can't open the `file://` path the stub stores to). */
+  private readonly publicBaseUrl: string;
 
   constructor(
     rootDir?: string,
@@ -64,6 +67,15 @@ export class StubTaxPdfStorageProvider implements TaxPdfStorageProvider {
   ) {
     this.rootDir =
       rootDir ?? resolve(process.cwd(), 'storage', 'tax-pdfs');
+    this.publicBaseUrl =
+      process.env.TAX_PDF_PUBLIC_BASE_URL ||
+      `http://localhost:${process.env.PORT || '8000'}`;
+  }
+
+  /** HTTP URL served by TaxPdfFileController (base64url-encoded path). */
+  private fileUrl(storagePath: string): string {
+    const token = Buffer.from(storagePath, 'utf-8').toString('base64url');
+    return `${this.publicBaseUrl}/api/v1/tax-pdfs/file/${token}`;
   }
 
   async upload(input: PdfUploadInput): Promise<PdfUploadResult> {
@@ -76,20 +88,19 @@ export class StubTaxPdfStorageProvider implements TaxPdfStorageProvider {
     );
     return {
       storagePath: input.storagePath,
-      publicUrl: `file://${absPath}`,
+      publicUrl: this.fileUrl(input.storagePath),
       sha256,
       provider: this.name,
     };
   }
 
   async createSignedUrl(input: PdfSignedUrlInput): Promise<string> {
-    const absPath = join(this.rootDir, input.storagePath);
-    // The stub doesn't sign — it just returns the file:// URL. The
-    // signed-URL semantics (expiry, query-string auth) only matter
-    // for a real cloud adapter. We append a synthetic ?expires=...
-    // query so callers don't accidentally cache it forever.
+    // The stub doesn't truly sign — it serves the file over HTTP via
+    // TaxPdfFileController. The signed-URL semantics (expiry,
+    // query-string auth) only matter for a real cloud adapter. We append
+    // a synthetic ?expires=... query so callers don't cache it forever.
     const expiresInSeconds = input.expiresInSeconds ?? 300;
     const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
-    return `file://${absPath}?expires=${expiresAt}`;
+    return `${this.fileUrl(input.storagePath)}?expires=${expiresAt}`;
   }
 }

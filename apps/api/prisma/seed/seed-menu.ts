@@ -208,35 +208,22 @@ const genderGroups = (gender: 'men' | 'women' | 'kids'): SeedItem[] => [
   },
 ];
 
-const BRANDS_GROUPS: SeedItem[] = [
-  {
-    label: 'International',
-    children: [
-      { label: 'Nike',        linkType: MenuLinkType.URL, linkRef: '/products?brand=nike' },
-      { label: 'Adidas',      linkType: MenuLinkType.URL, linkRef: '/products?brand=adidas' },
-      { label: 'Puma',        linkType: MenuLinkType.URL, linkRef: '/products?brand=puma' },
-      { label: 'Asics',       linkType: MenuLinkType.URL, linkRef: '/products?brand=asics' },
-      { label: 'Reebok',      linkType: MenuLinkType.URL, linkRef: '/products?brand=reebok' },
-      { label: 'New Balance', linkType: MenuLinkType.URL, linkRef: '/products?brand=new-balance' },
-    ],
-  },
-  {
-    label: 'India',
-    children: [
-      { label: 'SM (Sportsmart)', linkType: MenuLinkType.URL, linkRef: '/products?brand=sm' },
-      { label: 'SG',              linkType: MenuLinkType.URL, linkRef: '/products?brand=sg' },
-      { label: 'Yonex',           linkType: MenuLinkType.URL, linkRef: '/products?brand=yonex' },
-      { label: 'Cosco',           linkType: MenuLinkType.URL, linkRef: '/products?brand=cosco' },
-    ],
-  },
-  {
-    label: 'Featured',
-    children: [
-      { label: 'New brand drops',    linkType: MenuLinkType.URL, linkRef: '/products?view=new-brands' },
-      { label: 'Bestselling brands', linkType: MenuLinkType.URL, linkRef: '/products?view=top-brands' },
-      { label: 'Sale by brand',      linkType: MenuLinkType.URL, linkRef: '/products?view=brand-sale' },
-    ],
-  },
+// Flat, alphabetical brand list. Previously split into
+// International / India / Featured, but at ~10 brands a single list
+// scans faster on mobile and removes two taps of depth. "Featured"
+// wasn't a brand at all — those merchandising views (new drops /
+// bestsellers / sale) are served by the Home screen rails instead.
+const BRANDS: SeedItem[] = [
+  { label: 'Adidas',          linkType: MenuLinkType.URL, linkRef: '/products?brand=adidas' },
+  { label: 'Asics',           linkType: MenuLinkType.URL, linkRef: '/products?brand=asics' },
+  { label: 'Cosco',           linkType: MenuLinkType.URL, linkRef: '/products?brand=cosco' },
+  { label: 'New Balance',     linkType: MenuLinkType.URL, linkRef: '/products?brand=new-balance' },
+  { label: 'Nike',            linkType: MenuLinkType.URL, linkRef: '/products?brand=nike' },
+  { label: 'Puma',            linkType: MenuLinkType.URL, linkRef: '/products?brand=puma' },
+  { label: 'Reebok',          linkType: MenuLinkType.URL, linkRef: '/products?brand=reebok' },
+  { label: 'SG',              linkType: MenuLinkType.URL, linkRef: '/products?brand=sg' },
+  { label: 'SM (Sportsmart)', linkType: MenuLinkType.URL, linkRef: '/products?brand=sm' },
+  { label: 'Yonex',           linkType: MenuLinkType.URL, linkRef: '/products?brand=yonex' },
 ];
 
 const TOP_LEVEL: SeedItem[] = [
@@ -245,7 +232,7 @@ const TOP_LEVEL: SeedItem[] = [
   { label: 'Men',                children: genderGroups('men') },
   { label: 'Women',              children: genderGroups('women') },
   { label: 'Kids',               children: genderGroups('kids') },
-  { label: 'Brand',              children: BRANDS_GROUPS },
+  { label: 'Brand',              children: BRANDS },
 ];
 
 async function insertItems(

@@ -77,7 +77,14 @@ function buildService(over: {
   const audit: any = {
     writeAuditLog: over.auditWrite ?? jest.fn().mockResolvedValue(undefined),
   };
-  const svc = new CustomerAddressService(repo, prisma, audit);
+  // Mobile-branch addition — CustomerAddressService now takes a
+  // storefrontRepo (3rd constructor arg) so unknown pincodes route
+  // through the India Post fallback + auto-seed. Tests that don't
+  // exercise pincode flow pass a no-op stub.
+  const storefrontRepo: any = {
+    findPostOfficeByPincode: jest.fn().mockResolvedValue([]),
+  };
+  const svc = new CustomerAddressService(repo, prisma, storefrontRepo, audit);
   if (noopLogger !== undefined) (svc as any).logger = noopLogger;
   return { svc, repo, prisma, audit };
 }

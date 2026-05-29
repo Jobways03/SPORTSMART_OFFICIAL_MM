@@ -1,0 +1,68 @@
+// Marketing surfaces — time-boxed campaigns + the sport-events calendar.
+// Both are admin-managed editorial data that the storefront homepage
+// surfaces directly. Kept in one file because the two models share a
+// theme (curated, time-bound) and the marketing team owns both.
+
+// One-off promotional campaign: "Today's deals 30% off", "Spring drop
+// preview for members". Surfaced on the home flash strip when active
+// and on the members-only card when membersOnly=true.
+model FlashSale {
+  id            String   @id @default(uuid())
+  title         String
+  // Short marketing line under the headline ("Up to 40% off cricket gear").
+  subtitle      String?  @db.Text
+  // Window in which the campaign is active. The countdown UI on
+  // mobile uses endsAt minus now() — when endsAt has passed, the
+  // public endpoint stops returning the row.
+  startsAt      DateTime @map("starts_at")
+  endsAt        DateTime @map("ends_at")
+  // When true, the home flash strip stays hidden and the campaign
+  // surfaces on the "Members only" gold card instead.
+  membersOnly   Boolean  @default(false) @map("members_only")
+  // Optional deep-link target for "Shop the sale" → collection slug.
+  collectionSlug String? @map("collection_slug")
+  // Display-only — admin types in the rolling waitlist count. Could
+  // be wired to a real waitlist table later; for MVP it's an editorial
+  // number ("1,200+ waiting" → 1200).
+  waitlistCount Int      @default(0) @map("waitlist_count")
+  // Soft-disable flag so the marketing team can pull a campaign
+  // without deleting the historical row.
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Hot-path index: the storefront query is "active campaigns
+  // overlapping now()", so (isActive, startsAt, endsAt).
+  @@index([isActive, startsAt, endsAt])
+  @@map("flash_sales")
+}
+
+// Sport / community event surfaced on the home "Events near you" rail.
+// Marathons, tournaments, store-openings — anything with a date and a
+// location that we want customers to see ahead of time.
+model SportEvent {
+  id            String   @id @default(uuid())
+  title         String
+  // Category tag rendered as the eyebrow ("RUNNING", "PADEL").
+  // Free-form so the marketing team can introduce new categories
+  // without a migration — we just uppercase it on the way out.
+  category      String
+  startsAt      DateTime @map("starts_at")
+  // Optional end of multi-day events. Not surfaced on the card yet,
+  // captured for future expansion ("21-23 Sep").
+  endsAt        DateTime? @map("ends_at")
+  city          String?
+  description   String?  @db.Text
+  // External URL — venue site, registration link, sponsor page.
+  url           String?
+  // Members get free entry / priority access. Surfaces as the
+  // "Free entry for members" callout on the event tile.
+  isMemberFree  Boolean  @default(false) @map("is_member_free")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Storefront query is "upcoming + active", ordered by startsAt.
+  @@index([isActive, startsAt])
+  @@map("sport_events")
+}

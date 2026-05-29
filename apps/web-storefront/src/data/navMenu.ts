@@ -193,33 +193,24 @@ const buildGenderGroups = (gender: 'men' | 'women' | 'kids'): NavGroup[] => [
   },
 ];
 
+// Flat, alphabetical brand list (mirrors apps/api/prisma/seed/seed-menu.ts).
+// The old International / India / Featured split was dropped — at ~10 brands
+// a single list is simpler, and "Featured" wasn't a brand (those views live
+// on the Home rails).
 const brandGroups: NavGroup[] = [
   {
-    heading: 'International',
+    heading: 'Brands',
     items: [
-      { label: 'Nike',         href: '/products?brand=nike' },
-      { label: 'Adidas',       href: '/products?brand=adidas' },
-      { label: 'Puma',         href: '/products?brand=puma' },
-      { label: 'Asics',        href: '/products?brand=asics' },
-      { label: 'Reebok',       href: '/products?brand=reebok' },
-      { label: 'New Balance',  href: '/products?brand=new-balance' },
-    ],
-  },
-  {
-    heading: 'India',
-    items: [
-      { label: 'SM (Sportsmart)', href: '/products?brand=sm' },
-      { label: 'SG',              href: '/products?brand=sg' },
-      { label: 'Yonex',           href: '/products?brand=yonex' },
+      { label: 'Adidas',          href: '/products?brand=adidas' },
+      { label: 'Asics',           href: '/products?brand=asics' },
       { label: 'Cosco',           href: '/products?brand=cosco' },
-    ],
-  },
-  {
-    heading: 'Featured',
-    items: [
-      { label: 'New brand drops',     href: '/products?view=new-brands' },
-      { label: 'Bestselling brands',  href: '/products?view=top-brands' },
-      { label: 'Sale by brand',       href: '/products?view=brand-sale' },
+      { label: 'New Balance',     href: '/products?brand=new-balance' },
+      { label: 'Nike',            href: '/products?brand=nike' },
+      { label: 'Puma',            href: '/products?brand=puma' },
+      { label: 'Reebok',          href: '/products?brand=reebok' },
+      { label: 'SG',              href: '/products?brand=sg' },
+      { label: 'SM (Sportsmart)', href: '/products?brand=sm' },
+      { label: 'Yonex',           href: '/products?brand=yonex' },
     ],
   },
 ];

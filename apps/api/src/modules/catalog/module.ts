@@ -186,6 +186,9 @@ import { AuditModule } from '../audit/module';
   // admin-control-tower bulk suspend/activate path can invalidate
   // the storefront product-list cache without going through an
   // event subscriber indirection (audit Gap #11).
-  exports: [CatalogPublicFacade, CatalogCacheService],
+  // STOREFRONT_REPOSITORY exported so checkout's CustomerAddressService
+  // can route pincode lookups through the storefront repo (India Post
+  // fallback + auto-seed).
+  exports: [CatalogPublicFacade, STOREFRONT_REPOSITORY, CatalogCacheService],
 })
 export class CatalogModule {}

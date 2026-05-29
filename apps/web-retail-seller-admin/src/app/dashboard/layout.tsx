@@ -131,6 +131,15 @@ export default function DashboardLayout({
     { href: '/dashboard/accounts', label: 'Accounts', icon: '&#128202;' },
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
     { href: '/dashboard/storefront', label: 'Storefront', icon: '&#128722;' },
+    // Marketing — drive the storefront home rails. Permissions reuse
+    // the existing content.* set (same as blog-posts admin). Services
+    // backing these links live in src/services/admin-*.service.ts.
+    { href: '/dashboard/flash-sales', label: 'Flash sales', icon: '&#128293;' },
+    { href: '/dashboard/events', label: 'Events', icon: '&#128197;' },
+    { href: '/dashboard/storefront-content', label: 'Storefront content', icon: '&#127912;' },
+    { href: '/dashboard/storefront-slots', label: 'Storefront slots', icon: '&#128279;' },
+    { href: '/dashboard/blog-posts', label: 'Blog posts', icon: '&#9999;' },
+    { href: '/dashboard/product-reviews', label: 'Reviews', icon: '&#11088;' },
     { href: '/dashboard/settings', label: 'Settings', icon: '&#9881;' },
   ];
 

@@ -51,6 +51,9 @@ import { DiscountsModule } from './modules/discounts/discounts.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AccountsModule } from './modules/accounts/module';
 import { StorefrontMenuModule } from './modules/storefront-menu/storefront-menu.module';
+import { StorefrontMetaModule } from './modules/storefront-meta/storefront-meta.module';
+import { MarketingModule } from './modules/marketing/marketing.module';
+import { ProductReviewsModule } from './modules/product-reviews/product-reviews.module';
 import { AccessLogModule } from './modules/access-log/module';
 import { PayoutsModule } from './modules/payouts/module';
 import { ContentModule } from './modules/content/module';
@@ -148,6 +151,9 @@ import { TaxModule } from './modules/tax/module';
     AiModule,
     AccountsModule,
     StorefrontMenuModule,
+    StorefrontMetaModule,
+    MarketingModule,
+    ProductReviewsModule,
     AccessLogModule,
     PayoutsModule,
     ContentModule,

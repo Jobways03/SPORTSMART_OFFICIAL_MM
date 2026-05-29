@@ -1,9 +1,10 @@
 # Sportsmart Marketplace
 
 A multi-seller sports marketplace for India. Turborepo monorepo with a NestJS
-backend, 8 Next.js frontends (storefront + admin + seller/franchise/affiliate
-portals), and a 47-file modular Prisma schema. See
-[`docs/SYSTEM_DESIGN.md`](./docs/SYSTEM_DESIGN.md) for the full architecture.
+backend, 10 Next.js frontends (storefront + admin + seller/franchise/affiliate
+portals), a React Native customer app (iOS + Android), and a 47-file modular
+Prisma schema. See [`docs/SYSTEM_DESIGN.md`](./docs/SYSTEM_DESIGN.md) for the
+full architecture.
 
 ---
 
@@ -74,6 +75,12 @@ services come up in parallel:
 | `web-retail-seller-admin`  | 4008 | **RETAIL** seller-side admin (Retail sellers, products, returns) |
 | `web-retail-seller`        | 4009 | **RETAIL** seller dashboard              |
 
+The React Native mobile app (`apps/mobile-storefront`) is run separately
+because Metro owns port 8081 alone and Xcode / Android Studio aren't on
+every dev machine. See
+[`apps/mobile-storefront/README.md`](./apps/mobile-storefront/README.md)
+for the iOS + Android bring-up.
+
 ---
 
 ## Common commands
@@ -107,6 +114,7 @@ pnpm --filter @sportsmart/web-storefront build
 | [`docs/decisions/`](./docs/decisions/) | 20 ADRs — modular monolith, idempotency, money/paise, ABAC, outbox, etc. |
 | [`docs/runbooks/`](./docs/runbooks/) | 14 operational runbooks (phased cutovers + MFA + incident response) |
 | [`docs/flows/commerce-lifecycle.md`](./docs/flows/commerce-lifecycle.md) | 8 end-to-end commerce flows (cart → settlement) |
+| [`apps/mobile-storefront/README.md`](./apps/mobile-storefront/README.md) | React Native customer app — bring-up, env, deep links, native config |
 
 ---
 

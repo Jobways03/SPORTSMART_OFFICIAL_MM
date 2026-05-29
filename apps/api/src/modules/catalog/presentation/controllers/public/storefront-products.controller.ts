@@ -4,6 +4,7 @@ import {
   HttpCode,
   HttpStatus,
   Inject,
+  Logger,
   Param,
   Query,
   Req,
@@ -19,6 +20,8 @@ import { PrismaService } from '../../../../../bootstrap/database/prisma.service'
 @ApiTags('Storefront')
 @Controller('storefront/products')
 export class StorefrontProductsController {
+  private readonly logger = new Logger(StorefrontProductsController.name);
+
   constructor(
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly cache: CatalogCacheService,
@@ -34,7 +37,7 @@ export class StorefrontProductsController {
   @ApiQuery({ name: 'search', required: false })
   @ApiQuery({ name: 'categoryId', required: false })
   @ApiQuery({ name: 'brandId', required: false })
-  @ApiQuery({ name: 'sortBy', required: false, enum: ['price_asc', 'price_desc', 'newest'] })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['price_asc', 'price_desc', 'newest', 'popular'] })
   @ApiQuery({ name: 'minPrice', required: false })
   @ApiQuery({ name: 'maxPrice', required: false })
   @ApiQuery({ name: 'collectionId', required: false })
@@ -116,20 +119,45 @@ export class StorefrontProductsController {
           sortBy, minPrice, maxPrice, filterObj,
         });
 
-        const mapped = products.map((p: any) => ({
-          id: p.id, productCode: p.productCode, title: p.title, slug: p.slug,
-          shortDescription: p.shortDescription, categoryName: p.categoryName,
-          brandName: p.brandName,
-          // Customer-facing price is the seller's price (basePrice at
-          // the product level, variant.price at variant level). The
-          // old separate platformPrice column is gone.
-          price: p.basePrice ? Number(p.basePrice) : null,
-          compareAtPrice: p.compareAtPrice ? Number(p.compareAtPrice) : null,
-          primaryImageUrl: p.primaryImageUrl,
-          imageUrls: Array.isArray(p.imageUrls) ? p.imageUrls : [],
-          totalAvailableStock: p.totalAvailableStock, sellerCount: p.sellerCount,
-          hasVariants: p.hasVariants, variantCount: p.variantCount,
-        }));
+        // Enrich the page with two batch queries: distinct COLOR
+        // option values per product (for the swatch row) and the
+        // approved review aggregate (rating + count). Both are bounded
+        // by the page size, so the extra round trips cost ~ms.
+        const productIds = products.map((p: any) => p.id);
+        const [swatchesByProduct, reviewsByProduct] = await Promise.all([
+          this.fetchSwatchesByProduct(productIds),
+          this.fetchReviewAggregatesByProduct(productIds),
+        ]);
+
+        const mapped = products.map((p: any) => {
+          const swatches = swatchesByProduct.get(p.id) ?? [];
+          const reviews = reviewsByProduct.get(p.id);
+          return {
+            id: p.id, productCode: p.productCode, title: p.title, slug: p.slug,
+            shortDescription: p.shortDescription, categoryName: p.categoryName,
+            brandName: p.brandName,
+            // Customer-facing price is the seller's price (basePrice at
+            // the product level, variant.price at variant level). The
+            // old separate platformPrice column is gone.
+            price: p.basePrice ? Number(p.basePrice) : null,
+            compareAtPrice: p.compareAtPrice ? Number(p.compareAtPrice) : null,
+            primaryImageUrl: p.primaryImageUrl,
+            imageUrls: Array.isArray(p.imageUrls) ? p.imageUrls : [],
+            totalAvailableStock: p.totalAvailableStock, sellerCount: p.sellerCount,
+            hasVariants: p.hasVariants, variantCount: p.variantCount,
+            // Up to 6 unique color hexes so the card swatch row stays
+            // visually balanced; swatchCount is the *total* distinct
+            // count (admin may have more than 6 variants of a color
+            // option). Empty array when the product has no COLOR
+            // option type — the mobile card hides the row entirely.
+            swatches: swatches.slice(0, 6),
+            swatchCount: swatches.length,
+            // Review aggregate. Both null when the product has no
+            // approved reviews yet — mobile hides the rating row.
+            averageRating: reviews ? reviews.average : null,
+            reviewCount: reviews ? reviews.count : 0,
+          };
+        });
 
         return {
           products: mapped,
@@ -139,6 +167,96 @@ export class StorefrontProductsController {
     );
 
     return { success: true, message: 'Products retrieved successfully', data: result };
+  }
+
+  // ── Batch enrichment helpers ───────────────────────────────────────
+  // Both methods are page-bounded — the caller passes the product IDs
+  // currently being returned. Empty input returns an empty map.
+
+  /**
+   * For each product in the page, the distinct list of color hex values
+   * found on its variants. OptionDefinition.type='COLOR' identifies the
+   * "color" option; OptionValue.value carries the raw hex (matches the
+   * convention used by storefront-filters.controller.ts:452).
+   */
+  private async fetchSwatchesByProduct(
+    productIds: string[],
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    if (productIds.length === 0) return out;
+    try {
+      const rows = await this.prisma.productVariantOptionValue.findMany({
+        where: {
+          variant: { productId: { in: productIds } },
+          optionValue: { optionDefinition: { type: 'COLOR' } },
+        },
+        select: {
+          variant: { select: { productId: true } },
+          optionValue: { select: { value: true } },
+        },
+      });
+      for (const r of rows) {
+        const pid = r.variant.productId;
+        const hex = r.optionValue.value;
+        if (!hex) continue;
+        let arr = out.get(pid);
+        if (!arr) {
+          arr = [];
+          out.set(pid, arr);
+        }
+        // Dedupe within the product. Same color shared across multiple
+        // variants (different sizes of the same colour) only shows once.
+        if (!arr.includes(hex)) arr.push(hex);
+      }
+    } catch (err) {
+      // Swatches are a non-essential card embellishment. A failure here
+      // must never take down the whole product listing — degrade to
+      // "no swatches" and keep serving products.
+      this.logger.warn(
+        `Swatch enrichment failed; returning empty swatches: ${(err as Error).message}`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * Aggregate approved-review count + average rating per product. Reads
+   * ProductReview with status=APPROVED so pending / rejected don't
+   * leak into the public rating.
+   */
+  private async fetchReviewAggregatesByProduct(
+    productIds: string[],
+  ): Promise<Map<string, { average: number; count: number }>> {
+    const out = new Map<string, { average: number; count: number }>();
+    if (productIds.length === 0) return out;
+    try {
+      const rows = await this.prisma.productReview.groupBy({
+        by: ['productId'],
+        where: { productId: { in: productIds }, status: 'APPROVED' },
+        _count: { rating: true },
+        _avg: { rating: true },
+      });
+      for (const r of rows) {
+        const avg = r._avg.rating ?? 0;
+        out.set(r.productId, {
+          // Round to one decimal so the wire payload stays compact
+          // and the mobile card displays a clean "4.6" rather than
+          // "4.5999999...".
+          average: Math.round(avg * 10) / 10,
+          count: r._count.rating ?? 0,
+        });
+      }
+    } catch (err) {
+      // Review aggregates are supplementary. If the product_reviews
+      // table is unavailable (e.g. not yet migrated) or the query
+      // fails, the listing must still render — degrade to "no rating".
+      // This is the guard that prevents the storefront 500 seen when
+      // product_reviews is missing on a migrate-provisioned database.
+      this.logger.warn(
+        `Review aggregate enrichment failed; returning no ratings: ${(err as Error).message}`,
+      );
+    }
+    return out;
   }
 
   @Get('search-suggestions')
@@ -239,8 +357,12 @@ export class StorefrontProductsController {
 
     const sellerMappings = await this.storefrontRepo.findSellerMappingsForProduct(product.id);
 
-    // Aggregate product-level stock
-    const productLevelMappings = sellerMappings.filter((m: any) => !m.variantId);
+    // Stock for a no-variant product. Its offer may be recorded at the
+    // product level (variantId null) OR against a single "default" variant,
+    // so count every approved mapping — matching how the storefront list
+    // query aggregates stock. Filtering to variantId-null only made such
+    // products show "Out of stock" on the PDP while the list showed stock.
+    const productLevelMappings = sellerMappings;
     const totalProductStock = productLevelMappings.reduce((sum: number, m: any) => sum + Math.max(m.stockQty - m.reservedQty, 0), 0);
     const productSellerCount = new Set(productLevelMappings.filter((m: any) => m.stockQty - m.reservedQty > 0).map((m: any) => m.sellerId)).size;
 
