@@ -9,6 +9,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUrl,
   IsUUID,
   MaxLength,
   Min,
@@ -103,8 +104,22 @@ export class CreateReturnDto {
   @IsString({ each: true })
   // Phase 93 (2026-05-23) — Gap #5/#24. Format validation runs at the
   // DTO boundary; allowlist validation lives in the service so the
-  // env-driven allowlist (Cloudinary cloud name) can shift without
+  // env-driven allowlist (media cloud name) can shift without
   // re-deploying the DTO.
   @MaxLength(2048, { each: true })
+  // Phase 199 (2026-06-02) — Returns audit #7. DTO-level https format
+  // check as defence-in-depth on top of the service's validateEvidenceUrls
+  // (which carries the authoritative R2-derived host allowlist + the SSRF /
+  // metadata-host guards). require_protocol + require_tld reject
+  // bare/relative strings; the host allowlist is enforced service-side
+  // because the trusted media host is env-derived (R2_PUBLIC_BASE_URL).
+  @IsUrl(
+    {
+      protocols: ['https'],
+      require_protocol: true,
+      require_tld: true,
+    },
+    { each: true },
+  )
   evidenceFileUrls?: string[];
 }

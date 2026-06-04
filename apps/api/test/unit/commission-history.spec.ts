@@ -65,6 +65,7 @@ function build(opts: {
     {} as any,
     {} as any,
     {} as any,
+    { wrap: jest.fn((_n: string, fn: () => unknown) => fn()) } as any, // instr (Phase 174 @Cron migration)
   );
   return { svc, prisma };
 }

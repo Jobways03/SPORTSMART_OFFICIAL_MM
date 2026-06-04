@@ -11,6 +11,7 @@ import {
   SlaState,
 } from '@/services/admin-queues.service';
 import { ApiError } from '@/lib/api-client';
+import { useSseStream } from '@sportsmart/ui';
 
 const RESOURCES: QueueResource[] = ['dispute', 'return', 'ticket'];
 
@@ -112,14 +113,39 @@ export default function QueuesConsolePage() {
     setPage(1);
   }, [active, onlyBreaching, minTier]);
 
+  // Live updates: the admin SSE stream pushes a redacted "something
+  // changed" signal; refetch the summary + current list instead of
+  // polling. EventSource handles reconnect + replay natively.
+  const { connected: liveConnected } = useSseStream('/portal/streams/admin-queue', {
+    onMessage: () => {
+      fetchSummary();
+      fetchList();
+    },
+  });
+
   const pageCount = Math.max(1, Math.ceil(total / limit));
 
   return (
     <div style={{ padding: '24px 32px', maxWidth: 1320, margin: '0 auto' }}>
       <header style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#0f172a' }}>
-          Queues
-        </h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#0f172a' }}>
+            Queues
+          </h1>
+          <span
+            title={liveConnected ? 'Live updates connected' : 'Reconnecting…'}
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '2px 8px',
+              borderRadius: 999,
+              color: liveConnected ? '#166534' : '#92400e',
+              background: liveConnected ? '#dcfce7' : '#fef3c7',
+            }}
+          >
+            {liveConnected ? '● Live' : '○ Reconnecting'}
+          </span>
+        </div>
         <p style={{ margin: '6px 0 0', fontSize: 13, color: '#64748b' }}>
           Live SLA + risk view across disputes, returns, and tickets.
           Click any row to jump to its detail page.

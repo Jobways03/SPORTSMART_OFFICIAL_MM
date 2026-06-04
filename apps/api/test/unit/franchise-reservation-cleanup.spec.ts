@@ -35,11 +35,12 @@ function build(opts: {
   const logger: any = { setContext: jest.fn(), warn: jest.fn(), log: jest.fn(), error: jest.fn() };
   const svc = new FranchiseReservationCleanupService(
     prisma,
-    {} as any,
+    { getNumber: (_k: string, d: number) => d } as any, // env (Phase 174 batch cap reads getNumber)
     inventoryService,
     logger,
     {} as any,
     {} as any,
+    { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any, // audit (Phase 174)
   );
   return { svc, inventoryService, prisma, logger };
 }

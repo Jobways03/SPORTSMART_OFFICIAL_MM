@@ -7,7 +7,22 @@ import {
   AuditLogRow,
   AuditLogFilters,
   VerifyChainFastResponse,
+  VerificationRun,
 } from '@/services/admin-audit.service';
+
+// Phase 205 (#6) — enum dropdowns instead of free-text so filters match the
+// canonical vocabulary the backend records. Open-ended values are still
+// reachable via the "Resource ID" / "Actor ID" text fields.
+const MODULE_OPTIONS = [
+  'orders', 'payments', 'refunds', 'returns', 'disputes', 'wallet',
+  'settlements', 'reconciliation', 'catalog', 'discounts', 'sellers',
+  'franchise', 'affiliate', 'identity', 'consent', 'tax', 'access',
+  'audit', 'notifications', 'support', 'logistics',
+];
+const ACTOR_TYPE_OPTIONS = [
+  'CUSTOMER', 'ADMIN', 'SELLER', 'FRANCHISE', 'AFFILIATE',
+  'SYSTEM', 'CRON', 'WEBHOOK', 'PAYMENT_PROVIDER', 'LOGISTICS_PROVIDER',
+];
 
 /**
  * Story 6.4 — Audit Logs viewer. Reads from /admin/audit/logs which
@@ -41,6 +56,8 @@ function Inner() {
   const [downloading, setDownloading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyChainFastResponse | null>(null);
+  const [runs, setRuns] = useState<VerificationRun[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -66,10 +83,22 @@ function Inner() {
   }, [fetchRows]);
 
   const handleDownload = async () => {
+    // Phase 206 (#4/#13) — the export now REQUIRES a date range and the server
+    // caps the span/row-count. Guard + confirm before firing.
+    if (!filters.fromDate || !filters.toDate) {
+      setErr('Pick a From and To date in the filters before exporting.');
+      return;
+    }
+    const ok = window.confirm(
+      `Export audit rows from ${filters.fromDate} to ${filters.toDate}?\n\n` +
+        'The file is REDACTED (IP truncated, raw JSON stripped). ' +
+        'Full (PII) export requires elevated permission and is itself audited.',
+    );
+    if (!ok) return;
     setDownloading(true);
     setErr(null);
     try {
-      await adminAuditService.downloadCsv(filters);
+      await adminAuditService.downloadCsv({ ...filters, mode: 'redacted' });
     } catch (e: any) {
       setErr(e?.message || 'CSV export failed');
     } finally {
@@ -77,17 +106,33 @@ function Inner() {
     }
   };
 
-  const handleVerify = async () => {
+  const handleVerify = async (mode: 'fast' | 'full') => {
     setVerifying(true);
     setVerifyResult(null);
     setErr(null);
     try {
-      const res = await adminAuditService.verifyChainFast();
+      const res =
+        mode === 'full'
+          ? await adminAuditService.verifyChainFull()
+          : await adminAuditService.verifyChainFast();
       if (res.data) setVerifyResult(res.data);
     } catch (e: any) {
       setErr(e?.message || 'Chain verification failed');
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const handleToggleHistory = async () => {
+    const next = !showHistory;
+    setShowHistory(next);
+    if (next) {
+      try {
+        const res = await adminAuditService.listVerificationRuns();
+        if (res.data) setRuns(res.data.items);
+      } catch (e: any) {
+        setErr(e?.message || 'Failed to load verification history');
+      }
     }
   };
 
@@ -106,17 +151,34 @@ function Inner() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
-            onClick={handleVerify}
+            onClick={() => handleVerify('fast')}
             disabled={verifying}
             style={btnSecondary(verifying)}
           >
-            {verifying ? 'Verifying…' : 'Verify chain'}
+            {verifying ? 'Verifying…' : 'Verify chain (fast)'}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleVerify('full')}
+            disabled={verifying}
+            style={btnSecondary(verifying)}
+            title="Walks the entire chain. Slower on a large log."
+          >
+            Verify full
+          </button>
+          <button
+            type="button"
+            onClick={handleToggleHistory}
+            style={btnSecondary(false)}
+          >
+            {showHistory ? 'Hide history' : 'Verify history'}
           </button>
           <button
             type="button"
             onClick={handleDownload}
             disabled={downloading}
             style={btnPrimary(downloading)}
+            title="Requires a From + To date. Exports a redacted CSV."
           >
             {downloading ? 'Exporting…' : 'Download CSV'}
           </button>
@@ -133,19 +195,59 @@ function Inner() {
             {verifyResult.fromAnchorAt && ` from anchor pinned at ${formatWhen(verifyResult.fromAnchorAt)}`}.
           </span>
           {verifyResult.breaks.length > 0 && (
-            <details style={{ marginTop: 6 }}>
+            <details style={{ marginTop: 6 }} open>
               <summary style={{ cursor: 'pointer', fontSize: 12 }}>
-                Show {verifyResult.breaks.length} broken row{verifyResult.breaks.length === 1 ? '' : 's'}
+                Show {verifyResult.breaks.length} issue{verifyResult.breaks.length === 1 ? '' : 's'}
               </summary>
-              <ul style={{ fontSize: 12, marginTop: 6 }}>
-                {verifyResult.breaks.slice(0, 50).map((b) => (
-                  <li key={b.id}>
-                    <code>{b.id}</code> · {formatWhen(b.createdAt)}
+              <ul style={{ fontSize: 12, marginTop: 6, listStyle: 'none', paddingLeft: 0 }}>
+                {verifyResult.breaks.slice(0, 50).map((b, i) => (
+                  <li key={`${b.id ?? 'na'}-${i}`} style={{ marginBottom: 4 }}>
+                    <span style={severityPill(b.severity)}>{b.severity}</span>{' '}
+                    <strong>{b.issueType}</strong>
+                    {b.id ? <> · <code>{b.id}</code></> : null}
+                    {b.createdAt ? <> · {formatWhen(b.createdAt)}</> : null}
+                    <div style={{ color: '#7f1d1d', marginTop: 2 }}>{b.reason}</div>
                   </li>
                 ))}
               </ul>
             </details>
           )}
+        </div>
+      )}
+
+      {showHistory && (
+        <div style={{ marginTop: 12, border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ padding: '8px 12px', background: '#f9fafb', fontSize: 12, fontWeight: 600, color: '#374151' }}>
+            Verification history (most recent {runs.length})
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead style={{ background: '#fff' }}>
+              <tr>
+                <th style={thStyle}>Started</th>
+                <th style={thStyle}>Type</th>
+                <th style={thStyle}>Status</th>
+                <th style={thStyle}>Rows</th>
+                <th style={thStyle}>Issues</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.length === 0 ? (
+                <tr><td colSpan={5} style={tdEmpty}>No verification runs yet.</td></tr>
+              ) : (
+                runs.map((r) => (
+                  <tr key={r.id} style={{ borderTop: '1px solid #f3f4f6' }}>
+                    <td style={tdStyle}>{formatWhen(r.startedAt)}</td>
+                    <td style={tdStyle}>{r.runType}</td>
+                    <td style={tdStyle}>{r.status}</td>
+                    <td style={tdStyle}>{r.rowsChecked.toLocaleString()}</td>
+                    <td style={{ ...tdStyle, color: r.issuesFound > 0 ? '#991b1b' : '#166534', fontWeight: 600 }}>
+                      {r.issuesFound}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -220,10 +322,10 @@ function FiltersBar({
 }) {
   return (
     <div style={{ marginTop: 12, padding: 12, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-      <Input
+      <Select
         label="Module"
         value={filters.module ?? ''}
-        placeholder="e.g. orders"
+        options={MODULE_OPTIONS}
         onChange={(v) => onChange({ ...filters, module: v || undefined })}
       />
       <Input
@@ -243,6 +345,12 @@ function FiltersBar({
         value={filters.actorId ?? ''}
         placeholder="admin / user ID"
         onChange={(v) => onChange({ ...filters, actorId: v || undefined })}
+      />
+      <Select
+        label="Actor type"
+        value={filters.actorType ?? ''}
+        options={ACTOR_TYPE_OPTIONS}
+        onChange={(v) => onChange({ ...filters, actorType: v || undefined })}
       />
       <Input
         label="Action"
@@ -374,6 +482,54 @@ function Input({
       />
     </label>
   );
+}
+
+function Select({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <span style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          height: 32,
+          padding: '0 8px',
+          fontSize: 13,
+          border: '1px solid #d1d5db',
+          borderRadius: 6,
+          background: '#fff',
+        }}
+      >
+        <option value="">All</option>
+        {options.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function severityPill(severity: string): React.CSSProperties {
+  const crit = severity === 'CRITICAL';
+  return {
+    display: 'inline-block',
+    fontSize: 10,
+    fontWeight: 700,
+    padding: '1px 6px',
+    borderRadius: 4,
+    background: crit ? '#fee2e2' : '#fef3c7',
+    color: crit ? '#991b1b' : '#92400e',
+  };
 }
 
 // ── Styles (kept inline to match access-logs / admin-activity page

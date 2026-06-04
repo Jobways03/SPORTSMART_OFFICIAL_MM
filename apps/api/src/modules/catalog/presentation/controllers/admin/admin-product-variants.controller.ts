@@ -28,7 +28,7 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
 import { StockSyncService } from '../../../application/services/stock-sync.service';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
 import { VARIANT_REPOSITORY, IVariantRepository } from '../../../domain/repositories/variant.repository.interface';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
 import { SELLER_MAPPING_REPOSITORY, ISellerMappingRepository } from '../../../domain/repositories/seller-mapping.repository.interface';
@@ -58,7 +58,7 @@ export class AdminProductVariantsController {
     private readonly stockSyncService: StockSyncService,
     private readonly cartFacade: CartPublicFacade,
     private readonly eventBus: EventBusService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly prisma: PrismaService,
   ) {
     this.logger.setContext('AdminProductVariantsController');
@@ -118,10 +118,10 @@ export class AdminProductVariantsController {
     return { publicIds: await this.variantRepo.collectVariantImagePublicIds(productId) };
   }
 
-  private async cleanupCloudinaryAssets(publicIds: string[]): Promise<void> {
+  private async cleanupmediaAssets(publicIds: string[]): Promise<void> {
     for (const id of publicIds) {
-      this.cloudinary.delete(id).catch((err) =>
-        this.logger.warn(`Cloudinary delete failed for ${id}: ${(err as Error).message}`),
+      this.media.delete(id).catch((err) =>
+        this.logger.warn(`media delete failed for ${id}: ${(err as Error).message}`),
       );
     }
   }
@@ -198,7 +198,7 @@ export class AdminProductVariantsController {
       allValueIds,
       optionValueGroups: optionValueIdGroups,
     });
-    this.cleanupCloudinaryAssets(publicIds);
+    this.cleanupmediaAssets(publicIds);
 
     this.logger.log(`Generated ${variants.length} variants (manual options) for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };
@@ -261,7 +261,7 @@ export class AdminProductVariantsController {
       allValueIds,
       optionValueGroups: dto.optionValueIds,
     });
-    this.cleanupCloudinaryAssets(publicIds);
+    this.cleanupmediaAssets(publicIds);
 
     this.logger.log(`Generated ${variants.length} variants for product ${productId} by admin ${adminId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };

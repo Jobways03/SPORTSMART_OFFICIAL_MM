@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
+import { RequirePermission } from '@/lib/permissions';
 import ShippingOptionForm from './_components/ShippingOptionForm';
 
 interface ShippingOption {
@@ -19,6 +20,17 @@ interface ShippingOption {
 }
 
 export default function ShippingSettingsPage() {
+  return (
+    <RequirePermission
+      anyOf={['shipping.read', 'shipping.write']}
+      fallback={<div style={{ padding: 24 }}>Loading…</div>}
+    >
+      <ShippingSettingsInner />
+    </RequirePermission>
+  );
+}
+
+function ShippingSettingsInner() {
   const { confirmDialog, notify } = useModal();
   const [items, setItems] = useState<ShippingOption[]>([]);
   const [loading, setLoading] = useState(true);

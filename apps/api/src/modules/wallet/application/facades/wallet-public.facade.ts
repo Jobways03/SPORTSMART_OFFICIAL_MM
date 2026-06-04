@@ -48,6 +48,20 @@ export class WalletPublicFacade {
   }
 
   /**
+   * Phase 172 (#9) — spendable balance (total minus expired-but-not-yet-swept
+   * goodwill). Checkout uses this instead of getBalance so expired goodwill is
+   * unspendable even before the sweep cron lapses it.
+   */
+  getSpendableBalance(userId: string) {
+    return this.wallet.getSpendableBalance(userId);
+  }
+
+  /** Phase 172 (#9) — lapse a user's expired goodwill (driven by the cron). */
+  sweepExpiredGoodwillForUser(userId: string, now?: Date) {
+    return this.wallet.sweepExpiredGoodwillForUser(userId, now);
+  }
+
+  /**
    * Credit a refund payout into the user's wallet. Wired from the
    * returns/refunds module when refundMethod === 'WALLET'.
    *
@@ -62,6 +76,15 @@ export class WalletPublicFacade {
     amountInPaise: number;
     refundId: string;
     description?: string;
+    // Phase 172 (#8/#9) — reconciliation discriminator + optional expiry.
+    // GOODWILL = platform expense; REFUND_ORIGINAL = liability reversal.
+    creditType?:
+      | 'REFUND_ORIGINAL'
+      | 'GOODWILL'
+      | 'TIME_BARRED'
+      | 'PROMO'
+      | 'MANUAL';
+    expiresAt?: Date;
   }) {
     const result = await this.wallet.credit({
       userId: args.userId,
@@ -72,6 +95,9 @@ export class WalletPublicFacade {
       description:
         args.description ??
         `Refund credit — ₹${(args.amountInPaise / 100).toFixed(2)}`,
+      // Phase 172 (#8/#9) — thread the discriminator + expiry to the ledger row.
+      creditType: args.creditType ?? 'REFUND_ORIGINAL',
+      expiresAt: args.expiresAt,
       // Refunds are regulatory and must land even on blocked wallets;
       // an admin can still set a manual debit later if a chargeback
       // ends up reversing this credit.
@@ -110,22 +136,46 @@ export class WalletPublicFacade {
    * Deduct a wallet portion of a checkout total. Called from the checkout
    * service when the buyer opts in to "Use wallet balance".
    */
-  debitForCheckout(args: {
+  async debitForCheckout(args: {
     userId: string;
     amountInPaise: number;
     orderId: string;
+    orderNumber?: string;
     description?: string;
   }) {
-    return this.wallet.debit({
+    // Phase 184 (#4) — distinct ORDER_REDEMPTION type (was generic DEBIT) so
+    // reporting separates checkout spend from admin manual debits. (#case) —
+    // referenceType normalised to 'ORDER' (was 'order') so it matches the orders
+    // convention + the refund-split-calculator's lookup.
+    const result = await this.wallet.debit({
       userId: args.userId,
       amountInPaise: args.amountInPaise,
-      type: 'DEBIT',
-      referenceType: 'order',
+      type: 'ORDER_REDEMPTION',
+      referenceType: 'ORDER',
       referenceId: args.orderId,
+      referenceNumber: args.orderNumber,
       description:
-        args.description ??
-        `Checkout — ₹${(args.amountInPaise / 100).toFixed(2)}`,
+        args.description ?? `Checkout — ₹${(args.amountInPaise / 100).toFixed(2)}`,
     });
+    // Phase 184 (#13) — audit-grade trail for the checkout wallet spend (the
+    // service-level audit only fires for admin-initiated debits).
+    void this.audit
+      .writeAuditLog({
+        actorId: args.userId,
+        actorRole: 'CUSTOMER',
+        action: 'wallet.checkout.debited',
+        module: 'wallet',
+        resource: 'Wallet',
+        resourceId: args.userId,
+        newValue: {
+          orderId: args.orderId,
+          amountInPaise: args.amountInPaise,
+          walletTransactionId: result.transaction.id,
+          balanceAfterInPaise: String(result.wallet.balanceInPaise),
+        },
+      })
+      .catch(() => undefined);
+    return result;
   }
 
   /**
@@ -151,10 +201,71 @@ export class WalletPublicFacade {
     });
   }
 
+  /**
+   * Phase 182 (#2/#3) — post a loyalty/cashback rebate. Idempotent on
+   * (LOYALTY, orderId); expires per the loyalty config so unused rebate lapses
+   * via the existing expiry sweep.
+   */
+  creditLoyalty(args: {
+    userId: string;
+    amountInPaise: number;
+    orderId: string;
+    orderNumber?: string;
+    description: string;
+    expiresAt?: Date;
+  }) {
+    return this.wallet.credit({
+      userId: args.userId,
+      amountInPaise: args.amountInPaise,
+      type: 'LOYALTY_REBATE',
+      creditType: 'LOYALTY',
+      referenceType: 'LOYALTY',
+      referenceId: args.orderId,
+      referenceNumber: args.orderNumber,
+      description: args.description,
+      expiresAt: args.expiresAt,
+    });
+  }
+
+  /**
+   * Phase 182 (make-it-100%) — claw back a loyalty rebate when the earning order
+   * is refunded. Clamped to the live balance (the cashback may be partly spent —
+   * never drives the wallet negative) and idempotent on (LOYALTY_CLAWBACK,
+   * orderId). Returns how much was actually clawed back.
+   */
+  async debitLoyaltyClawback(args: {
+    userId: string;
+    orderId: string;
+    amountInPaise: number;
+  }): Promise<{ clawedBackInPaise: number }> {
+    const { balanceInPaise } = await this.wallet.getBalance(args.userId);
+    const clawback = Math.min(args.amountInPaise, Math.max(0, balanceInPaise));
+    if (clawback <= 0) return { clawedBackInPaise: 0 };
+    try {
+      await this.wallet.debit({
+        userId: args.userId,
+        amountInPaise: clawback,
+        type: 'DEBIT_ADJUSTMENT',
+        referenceType: 'LOYALTY_CLAWBACK',
+        referenceId: args.orderId,
+        description: `Loyalty cashback clawback — order ${args.orderId} refunded`,
+      });
+      return { clawedBackInPaise: clawback };
+    } catch (err: any) {
+      // Already clawed back (the wallet unique index won) — idempotent.
+      if (err?.code === 'P2002') return { clawedBackInPaise: 0 };
+      throw err;
+    }
+  }
+
   /** Read-only check used by checkout to fail-fast before order creation. */
   async hasSufficientBalance(userId: string, amountInPaise: number): Promise<boolean> {
-    const { balanceInPaise } = await this.wallet.getBalance(userId);
-    return balanceInPaise >= amountInPaise;
+    // Phase 172 (#9) — checkout's wallet-spend gate uses SPENDABLE balance
+    // (total minus goodwill that has expired but not yet been swept off the
+    // ledger) so a customer can never pay with lapsed goodwill credit, even in
+    // the window before the daily expiry cron lapses it.
+    const { spendableInPaise } = await this.wallet.getSpendableBalance(userId);
+    return spendableInPaise >= amountInPaise;
   }
 
   /**

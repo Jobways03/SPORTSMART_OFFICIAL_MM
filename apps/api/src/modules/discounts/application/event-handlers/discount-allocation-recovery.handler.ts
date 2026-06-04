@@ -62,7 +62,21 @@ export class DiscountAllocationRecoveryHandler {
     // event payload (we'd need to extend the schema for that).
     const discount = await this.prisma.discount.findUnique({
       where: { id: discountId },
-      select: { type: true, method: true, fundingType: true },
+      // Phase 247-FB — load the full funding split (not just fundingType) so
+      // a recovered allocation books the SAME funding the checkout would
+      // have, instead of degrading a SHARED/FRANCHISE/SELLER discount to a
+      // bare type (which would also break splitFundingShares for SHARED).
+      select: {
+        type: true,
+        method: true,
+        fundingType: true,
+        platformFundingPercent: true,
+        sellerFundingPercent: true,
+        brandFundingPercent: true,
+        franchiseFundingPercent: true,
+        franchiseId: true,
+        brandId: true,
+      },
     });
     if (!discount) {
       this.logger.error(
@@ -82,7 +96,15 @@ export class DiscountAllocationRecoveryHandler {
         discountType: discount.type as any,
         discountMethod: discount.method as any,
         source: 'CODE',
-        funding: { fundingType: discount.fundingType as any },
+        funding: {
+          fundingType: discount.fundingType as any,
+          platformFundingPercent: Number(discount.platformFundingPercent ?? 100),
+          sellerFundingPercent: Number(discount.sellerFundingPercent ?? 0),
+          brandFundingPercent: Number(discount.brandFundingPercent ?? 0),
+          franchiseFundingPercent: Number(discount.franchiseFundingPercent ?? 0),
+          franchiseId: discount.franchiseId ?? null,
+          brandId: discount.brandId ?? null,
+        },
       } as any);
       this.logger.log(
         `Allocation recovery succeeded for order ${masterOrderId} (discount=${discountId})`,

@@ -137,6 +137,10 @@ model SellerProductMapping {
   // Phase 60 — forensic lookup "show me every mapping migrated
   // from stale X".
   @@index([migratedFromMappingId])
+  // Phase 193 (#16) — the storefront PDP / related / facet queries scan
+  // active+approved+in-stock mappings for a product; this composite serves
+  // that exact predicate without re-scanning the productId index + filter.
+  @@index([productId, isActive, approvalStatus])
   @@map("seller_product_mappings")
 }
 

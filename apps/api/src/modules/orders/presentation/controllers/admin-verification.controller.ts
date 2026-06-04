@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -32,10 +33,15 @@ import {
 import { UpdateRiskRuleDto } from '../dtos/risk-rule.dto';
 import {
   ApproveOrderDto,
+  BackfillScoresDto,
   BulkApproveGreenDto,
+  ClaimNextDto,
   ForceReleaseDto,
+  ListVerificationOrdersDto,
   RejectOrderDto,
+  RescoreOrderDto,
 } from '../dtos/verification.dto';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 @ApiTags('Admin Verification Queue')
 @Controller('admin/verification')
@@ -69,6 +75,8 @@ export class AdminVerificationController {
     private readonly riskScoring: RiskScoringService,
     // Phase 72 — risk-rule tune surface.
     private readonly ruleConfig: RiskRuleConfigService,
+    // Phase 174 (audit #225) — hash-chained audit log for the backfill action.
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   @Post('claim-next')
@@ -77,8 +85,10 @@ export class AdminVerificationController {
   // (stamps claim_holder + claim_expires_at). orders.verify gate.
   @Permissions('orders.verify')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  async claimNext(@Req() req: any) {
-    const claim = await this.queue.claimNext(req.adminId);
+  async claimNext(@Req() req: any, @Body() dto: ClaimNextDto) {
+    // Phase 174 (audit #227) — optional band so a verifier can claim the
+    // next RED/CRITICAL first. `dto?.band` tolerates a bodyless POST.
+    const claim = await this.queue.claimNext(req.adminId, dto?.band);
     if (!claim) {
       return {
         success: true,
@@ -94,6 +104,7 @@ export class AdminVerificationController {
   }
 
   @Get('my-tray')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async myTray(@Req() req: any) {
     const orders = await this.queue.myTray(req.adminId);
     return {
@@ -104,6 +115,7 @@ export class AdminVerificationController {
   }
 
   @Get('queue-stats')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async queueStats(@Req() req: any) {
     const stats = await this.queue.queueStats(req.adminId);
     return {
@@ -111,6 +123,24 @@ export class AdminVerificationController {
       message: 'Queue stats',
       data: stats,
     };
+  }
+
+  /**
+   * Phase 174 (audit #227) — band-filtered, paginated list of PLACED orders
+   * awaiting verification. Closes the "show me only RED" gap: there was no
+   * list endpoint, only claim-next (band-agnostic) + bulk-approve (GREEN).
+   * Read-only (never lazy-computes a score). Class-level orders.read floor.
+   */
+  @Get('orders')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async listOrders(@Query() dto: ListVerificationOrdersDto) {
+    const data = await this.queue.listOrdersByBand({
+      band: dto.band,
+      onlyUnclaimed: dto.onlyUnclaimed,
+      page: dto.page,
+      limit: dto.limit,
+    });
+    return { success: true, message: 'Verification orders', data };
   }
 
   @Post('orders/:id/release')
@@ -174,6 +204,7 @@ export class AdminVerificationController {
   /* ── Team-lead view ─────────────────────────────────────────────── */
 
   @Get('team-status')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async teamStatus() {
     const data = await this.queue.getTeamStatus();
     return { success: true, message: 'Team status', data };
@@ -225,14 +256,41 @@ export class AdminVerificationController {
   @Post('backfill-scores')
   @HttpCode(200)
   @Roles('SUPER_ADMIN')
+  // Phase 174 (audit #225) — throttle the heavy scan + accept a DTO
+  // (dryRun preview + bounded limit). @Idempotent already dedups a
+  // double-click; the throttle bounds repeated heavy sweeps.
+  @Throttle({ default: { limit: 2, ttl: 60_000 } })
   @Idempotent()
-  async backfillScores() {
-    const result = await this.riskScoring.backfillUnscored();
-    return {
-      success: true,
-      message: `Scored ${result.scored} new order${result.scored === 1 ? '' : 's'}; rescored ${result.staleRescored} stale order${result.staleRescored === 1 ? '' : 's'}`,
-      data: result,
-    };
+  async backfillScores(@Req() req: any, @Body() dto: BackfillScoresDto) {
+    const result = await this.riskScoring.backfillUnscored({
+      dryRun: dto?.dryRun === true,
+      limit: dto?.limit,
+    });
+    // Phase 174 (audit #225) — audit the SUPER_ADMIN backfill (the sibling
+    // bulk-approve / force-release already audit; this previously didn't).
+    if (!result.dryRun) {
+      await this.audit
+        .writeAuditLog({
+          actorId: req.adminId,
+          actorRole: 'SUPER_ADMIN',
+          action: 'ADMIN_BACKFILL_RISK_SCORES',
+          module: 'orders',
+          resource: 'master_order',
+          metadata: {
+            scored: result.scored,
+            staleRescored: result.staleRescored,
+            failed: result.failed,
+            candidateCount: result.candidateCount,
+            limit: dto?.limit ?? 500,
+            failedIdsSample: result.failedIds.slice(0, 50),
+          },
+        })
+        .catch(() => undefined);
+    }
+    const message = result.dryRun
+      ? `Dry run — ${result.candidateCount} order${result.candidateCount === 1 ? '' : 's'} would be scored`
+      : `Scored ${result.scored} new + rescored ${result.staleRescored} stale order(s); ${result.failed} failed`;
+    return { success: true, message, data: result };
   }
 
   @Post('orders/:id/rescore')
@@ -245,12 +303,19 @@ export class AdminVerificationController {
   // and source=MANUAL.
   @Permissions('orders.verify.rescore')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  async rescore(@Param('id') id: string, @Req() req: any) {
-    const data = await this.riskScoring.rescore(id, req.adminId);
+  async rescore(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Body() dto: RescoreOrderDto,
+  ) {
+    // Phase 174 (audit #226) — route through the queue wrapper so the manual
+    // rescore lands in audit_logs (old->new band + optional reason).
+    const data = await this.queue.rescore(id, req.adminId, dto?.reason);
     return { success: true, message: 'Order re-scored', data };
   }
 
   @Get('orders/:id/risk')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async getRisk(@Param('id') id: string) {
     const data = await this.queue.getRiskInfo(id);
     return { success: true, message: 'Risk info', data };

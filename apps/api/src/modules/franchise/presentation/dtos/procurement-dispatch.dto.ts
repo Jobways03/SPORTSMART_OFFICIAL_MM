@@ -1,4 +1,5 @@
 import {
+  ArrayMaxSize,
   IsArray,
   IsInt,
   IsNotEmpty,
@@ -6,12 +7,44 @@ import {
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
   Min,
   IsDateString,
   ValidateNested,
+  registerDecorator,
+  ValidationOptions,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+/**
+ * Phase 236 — reject an expected-delivery date set clearly in the past (e.g. a
+ * fat-fingered "1990"). Allows today onward (date-only granularity). @IsDateString
+ * alone accepted any well-formed ISO date including historical ones.
+ */
+function ExpectedDeliveryNotInPast(validationOptions?: ValidationOptions) {
+  return (object: object, propertyName: string) => {
+    registerDecorator({
+      name: 'expectedDeliveryNotInPast',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown) {
+          if (value == null || value === '') return true;
+          const d = new Date(value as string);
+          if (Number.isNaN(d.getTime())) return true; // @IsDateString handles shape
+          const startOfToday = new Date();
+          startOfToday.setHours(0, 0, 0, 0);
+          return d.getTime() >= startOfToday.getTime();
+        },
+        defaultMessage() {
+          return 'expectedDeliveryAt cannot be in the past';
+        },
+      },
+    });
+  };
+}
 
 /**
  * Phase 159p (audit #10) — optional per-item dispatched quantity so admin can
@@ -26,6 +59,7 @@ export class ProcurementDispatchItemDto {
 
   @IsInt({ message: 'Dispatched quantity must be a whole number' })
   @Min(1, { message: 'Dispatched quantity must be at least 1' })
+  @Max(1000000, { message: 'Dispatched quantity is implausibly large' })
   dispatchedQty!: number;
 }
 
@@ -55,6 +89,7 @@ export class ProcurementDispatchDto {
    */
   @IsOptional()
   @IsDateString()
+  @ExpectedDeliveryNotInPast()
   expectedDeliveryAt?: string;
 
   /**
@@ -63,6 +98,7 @@ export class ProcurementDispatchDto {
    */
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(100, { message: 'At most 100 items per dispatch' })
   @ValidateNested({ each: true })
   @Type(() => ProcurementDispatchItemDto)
   items?: ProcurementDispatchItemDto[];

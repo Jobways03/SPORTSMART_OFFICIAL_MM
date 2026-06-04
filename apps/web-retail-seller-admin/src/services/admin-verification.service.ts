@@ -11,12 +11,48 @@ export interface QueueStats {
   unclaimedGreen: number;
   unclaimedYellow: number;
   unclaimedRed: number;
+  unclaimedCritical: number;
+  unclaimedUnscored: number;
   mine: number;
   breachedSla: number;
   totalToday: number;
 }
 
-export type RiskBand = 'GREEN' | 'YELLOW' | 'RED';
+export type RiskBand = 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL';
+
+/** A row in the read-only band-filtered orders list (GET …/orders). */
+export interface VerificationOrderRow {
+  id: string;
+  orderNumber: string;
+  /** Decimal money — kept as a string; only Number() at the format edge. */
+  totalAmount: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  itemCount: number;
+  createdAt: string;
+  claimed: boolean;
+  riskScore: number | null;
+  riskBand: RiskBand | null;
+  scoredAt: string | null;
+}
+
+export interface VerificationOrdersPage {
+  items: VerificationOrderRow[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/** Band filters accepted by GET …/orders. */
+export type VerificationBandFilter =
+  | 'RED'
+  | 'YELLOW'
+  | 'GREEN'
+  | 'CRITICAL'
+  | 'HIGH'
+  | 'RED_YELLOW'
+  | 'UNSCORED'
+  | 'ALL';
 
 export interface MyTrayItem {
   id: string;
@@ -35,11 +71,51 @@ export interface MyTrayItem {
 
 // ── API ──────────────────────────────────────────────────────────────────
 
-/** POST /admin/verification/claim-next — atomically claim the next PLACED order. */
-export function claimNext(): Promise<ApiResponse<ClaimResponse | null>> {
+/**
+ * POST /admin/verification/claim-next — atomically claim the next PLACED order.
+ * With no `band`, claims the oldest unclaimed order (original behaviour). Pass a
+ * band to claim the next order of that band ("claim next RED").
+ */
+export function claimNext(
+  band?: 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL',
+): Promise<ApiResponse<ClaimResponse | null>> {
   return apiClient<ClaimResponse | null>('/admin/verification/claim-next', {
     method: 'POST',
+    ...(band ? { body: JSON.stringify({ band }) } : {}),
   });
+}
+
+function buildQuery(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
+  const q = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      q.set(key, String(value));
+    }
+  });
+  const qs = q.toString();
+  return qs ? `?${qs}` : '';
+}
+
+/**
+ * GET /admin/verification/orders — read-only, band-filtered, paginated list of
+ * orders in the queue (highest risk first). `band` accepts the composite
+ * filters too (HIGH = RED+CRITICAL, RED_YELLOW = YELLOW+RED+CRITICAL).
+ */
+export function listVerificationOrders(params: {
+  band?: VerificationBandFilter;
+  onlyUnclaimed?: boolean;
+  page?: number;
+  limit?: number;
+}): Promise<ApiResponse<VerificationOrdersPage>> {
+  const qs = buildQuery({
+    band: params.band,
+    onlyUnclaimed: params.onlyUnclaimed,
+    page: params.page,
+    limit: params.limit,
+  });
+  return apiClient<VerificationOrdersPage>(`/admin/verification/orders${qs}`);
 }
 
 /** GET /admin/verification/my-tray — orders this admin has currently claimed. */
@@ -153,12 +229,19 @@ export function getTeamStatus(): Promise<ApiResponse<TeamStatus>> {
  * POST /admin/verification/orders/:id/rescore — recompute the risk
  * score for one order. Useful when external data (e.g. AVS, fraud feed)
  * has been refreshed and the verifier wants the latest band before
- * acting. Returns the new RiskInfo.
+ * acting. An optional `reason` (3..500 chars) is audited. Returns the
+ * new RiskInfo.
  */
-export function rescoreOrder(orderId: string): Promise<ApiResponse<RiskInfo>> {
+export function rescoreOrder(
+  orderId: string,
+  reason?: string,
+): Promise<ApiResponse<RiskInfo>> {
   return apiClient<RiskInfo>(
     `/admin/verification/orders/${orderId}/rescore`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      ...(reason ? { body: JSON.stringify({ reason }) } : {}),
+    },
   );
 }
 

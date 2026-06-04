@@ -95,9 +95,70 @@ export class EWayBillRetryCron {
         }
       }
 
+      // Phase 160 (cancel/override audit B1/#18) — reconcile stuck cancels.
+      // A row in CANCELLATION_PENDING (the two-phase marker was written but
+      // the provider call / settle didn't complete) or CANCELLATION_FAILED
+      // is re-driven via the idempotent EWayBillService.cancel path: NIC's
+      // cancel is idempotent, so a retry settles the row to CANCELLED (or
+      // leaves it FAILED for the next sweep / an AdminTask).
+      const reconcile = await this.reconcileStuckCancellations();
+
       this.logger.log(
-        `EWB retry sweep: ${succeeded} succeeded, ${stillFailing} still failing, ${exhausted.length} task(s) raised`,
+        `EWB retry sweep: ${succeeded} succeeded, ${stillFailing} still failing, ` +
+          `${exhausted.length} task(s) raised; cancel-reconcile: ${reconcile.healed} healed, ${reconcile.stuck} stuck`,
       );
     });
+  }
+
+  /**
+   * Phase 160 (audit B1/#18) — heal two-phase-cancel drift. Re-drives
+   * CANCELLATION_PENDING / CANCELLATION_FAILED rows through the idempotent
+   * cancel path; raises an AdminTask for rows that stay stuck.
+   */
+  private async reconcileStuckCancellations(): Promise<{ healed: number; stuck: number }> {
+    const stuck = await this.prisma.eWayBill.findMany({
+      where: { status: { in: ['CANCELLATION_PENDING', 'CANCELLATION_FAILED'] } },
+      select: {
+        id: true,
+        cancelInitiatedBy: true,
+        cancellationReason: true,
+      },
+      take: EWayBillRetryCron.BATCH,
+      orderBy: { updatedAt: 'asc' },
+    });
+    let healed = 0;
+    let stillStuck = 0;
+    for (const row of stuck) {
+      try {
+        await this.eway.cancel({
+          ewbId: row.id,
+          cancelledBy: row.cancelInitiatedBy ?? 'system-reconcile',
+          reason: row.cancellationReason ?? 'Reconcile stuck cancellation',
+        });
+        healed += 1;
+      } catch (err) {
+        stillStuck += 1;
+        // Surface a persistently-stuck cancel for ops (idempotent task).
+        try {
+          await (this.prisma as any).adminTask.upsert({
+            where: { uniqueKey: `eway-bill-cancel-stuck:${row.id}` },
+            update: {},
+            create: {
+              kind: 'EWAY_BILL_GENERATION_FAILED',
+              uniqueKey: `eway-bill-cancel-stuck:${row.id}`,
+              severity: 'HIGH',
+              status: 'OPEN',
+              title: `EWB cancellation stuck — local says cancelling, NIC state unconfirmed (${row.id})`,
+              details: (err as Error).message ?? 'See e_way_bill row',
+              relatedResource: 'eway_bill',
+              relatedResourceId: row.id,
+            },
+          });
+        } catch {
+          /* task-raise failure must not abort the sweep */
+        }
+      }
+    }
+    return { healed, stuck: stillStuck };
   }
 }

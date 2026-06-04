@@ -11,7 +11,10 @@ export class CommissionPublicFacade {
 
   /** Trigger commission processing on demand (e.g. from a cron or event). */
   async processCommissions(): Promise<void> {
-    return this.commissionService.processCommissions();
+    // Cluster-B — the service now returns per-tick counts (consumed by the
+    // cron's instrumentation); this on-demand façade keeps its void contract,
+    // so await + discard rather than return the summary.
+    await this.commissionService.processCommissions();
   }
 
   /**

@@ -13,6 +13,10 @@ interface RefundRejectedPayload {
   customerId: string;
   amountInPaise: string;
   reason: string;
+  // Phase 171 (#5/#6) — a SAFE, finance-picked customer message (optional) +
+  // whether the case bounced back to the dispute team (tunes the copy).
+  customerVisibleReason?: string | null;
+  routedBackToDispute?: boolean;
 }
 
 /**
@@ -45,12 +49,18 @@ export class RefundInstructionNotificationHandler {
     const p = event.payload;
     if (!p.customerId) return;
     const amount = `₹${(Number(p.amountInPaise) / 100).toFixed(2)}`;
+    // Phase 171 (#6) — if finance supplied a SAFE customer-visible message, use
+    // it; otherwise fall back to the standard honest "on hold" copy. We NEVER
+    // echo the internal `reason` (it can contain "fraud signals" etc).
+    const safeExtra = (p.customerVisibleReason ?? '').trim();
     try {
       await this.notifications.notify({
         channel: 'EMAIL',
         recipientId: p.customerId,
         subject: `Update on your ${amount} refund`,
-        body: safeHtml`<p>We're carrying out an additional review of the ${amount} refund linked to your recent case, and it has been placed on hold.</p><p>Our team will follow up with the outcome — you don't need to take any action right now.</p>`,
+        body: safeExtra
+          ? safeHtml`<p>We have an update on the ${amount} refund linked to your recent case: ${safeExtra}</p><p>Our team will follow up with the outcome — you don't need to take any action right now.</p>`
+          : safeHtml`<p>We're carrying out an additional review of the ${amount} refund linked to your recent case, and it has been placed on hold.</p><p>Our team will follow up with the outcome — you don't need to take any action right now.</p>`,
         eventType: 'refunds.notification',
         eventId: p.instructionId,
       });

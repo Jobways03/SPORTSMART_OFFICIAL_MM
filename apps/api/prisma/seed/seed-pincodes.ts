@@ -5,7 +5,10 @@ import * as path from 'path';
 const prisma = new PrismaClient();
 
 const BATCH_SIZE = 1000;
-const CSV_PATH = path.join(__dirname, 'pincodes.csv');
+// Resolve the India-Post directory CSV. The committed prisma/seed/pincodes.csv is
+// a broken symlink to a single developer's local machine, so honour an explicit
+// PINCODE_CSV_PATH override first and fall back to the in-tree path otherwise.
+const CSV_PATH = process.env.PINCODE_CSV_PATH || path.join(__dirname, 'pincodes.csv');
 
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];
@@ -15,7 +18,13 @@ function parseCSVLine(line: string): string[] {
   for (let i = 0; i < line.length; i++) {
     const char = line[i];
     if (char === '"') {
-      inQuotes = !inQuotes;
+      // Inside a quoted field, a doubled quote ("") is an escaped literal quote.
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++; // consume the second quote of the pair
+      } else {
+        inQuotes = !inQuotes;
+      }
     } else if (char === ',' && !inQuotes) {
       result.push(current.trim());
       current = '';
@@ -31,14 +40,51 @@ async function main() {
   console.log('=== Pincode Import Script ===');
   console.log(`Reading CSV from: ${CSV_PATH}`);
 
-  const content = fs.readFileSync(CSV_PATH, 'utf-8');
-  const lines = content.split('\n').filter(l => l.trim());
+  // Fail fast with an actionable message instead of a raw ENOENT. The in-tree
+  // prisma/seed/pincodes.csv is a broken symlink, so a clean checkout has no file.
+  let readable = fs.existsSync(CSV_PATH);
+  if (readable) {
+    try {
+      fs.accessSync(CSV_PATH, fs.constants.R_OK);
+    } catch {
+      readable = false;
+    }
+  }
+  if (!readable) {
+    console.error(
+      `\n[ERROR] pincodes CSV not found or unreadable at: ${CSV_PATH}\n` +
+        `The committed prisma/seed/pincodes.csv is a broken symlink to a developer's ` +
+        `local machine. Set PINCODE_CSV_PATH=/abs/path/to/pincodes.csv ` +
+        `(the 165,627-row India Post directory) and re-run, e.g.:\n` +
+        `  PINCODE_CSV_PATH=/abs/path/to/pincodes.csv npx ts-node prisma/seed/seed-pincodes.ts\n`,
+    );
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+
+  // Strip a leading UTF-8 BOM and split on either LF or CRLF line endings so the
+  // header/first-record parse is not corrupted by a BOM or Windows-authored CSV.
+  let content = fs.readFileSync(CSV_PATH, 'utf-8');
+  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+  const lines = content.split(/\r?\n/).filter(l => l.trim());
 
   const header = lines[0];
   console.log(`Header: ${header}`);
   console.log(`Total rows: ${lines.length - 1}`);
 
   const dataLines = lines.slice(1);
+
+  // Load the canonical state-name -> 2-digit GST/CBIC code map so each PostOffice
+  // row can carry a resolved stateCode (place-of-supply) without a second lookup.
+  console.log('\n[Phase 0] Loading IndiaState GST code map...');
+  const indiaStates = await prisma.indiaState.findMany({
+    select: { stateName: true, gstStateCode: true },
+  });
+  const stateCodeMap = new Map<string, string>();
+  for (const s of indiaStates) {
+    stateCodeMap.set(s.stateName.trim().toUpperCase(), s.gstStateCode);
+  }
+  console.log(`  Loaded ${stateCodeMap.size} state -> GST-code entries`);
 
   // Phase 1: Parse all rows and build pincode → coordinates map
   console.log('\n[Phase 1] Parsing CSV and building coordinate map...');
@@ -112,12 +158,13 @@ async function main() {
       delivery: row.delivery,
       district: row.district,
       state: row.state,
+      stateCode: stateCodeMap.get(row.state.trim().toUpperCase()) ?? null,
       latitude: lat,
       longitude: lng,
     });
 
     if (batched.length >= BATCH_SIZE) {
-      await prisma.postOffice.createMany({ data: batched });
+      await prisma.postOffice.createMany({ data: batched, skipDuplicates: true });
       inserted += batched.length;
       batched = [];
 
@@ -128,7 +175,7 @@ async function main() {
   }
 
   if (batched.length > 0) {
-    await prisma.postOffice.createMany({ data: batched });
+    await prisma.postOffice.createMany({ data: batched, skipDuplicates: true });
     inserted += batched.length;
   }
 

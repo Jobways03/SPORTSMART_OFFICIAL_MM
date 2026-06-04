@@ -89,6 +89,7 @@ export default function DashboardLayout({
     { href: '/dashboard/catalog', label: 'Catalog', icon: '&#128230;' },
     { href: '/dashboard/procurement', label: 'Procurement', icon: '&#128188;' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
+    { href: '/dashboard/verification', label: 'Verification', icon: '&#128269;' },
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
     { href: '/dashboard/settlements', label: 'Settlements', icon: '&#128202;' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },

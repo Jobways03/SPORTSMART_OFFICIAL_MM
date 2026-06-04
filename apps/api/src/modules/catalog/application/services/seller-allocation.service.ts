@@ -35,7 +35,26 @@ export interface AllocatedSeller {
   // priority-100 franchise outranks a priority-50 one for the same pincode.
   pincodeMappingId?: string;
   mappingPriority?: number;
+  // Phase 231/232 (Eligible-node + Allocation-preview audit) — human-readable
+  // explainability for WHY this candidate is eligible + how it scored. The
+  // routing-preview + eligible-node frontends already declare a `reasons:
+  // string[]` field and render it; pre-231 the backend never populated it, so
+  // the UI branch was always empty (dead). Lightweight, derived at build time.
+  reasons?: string[];
 }
+
+// Phase 233 (Allocation Analytics audit) — provenance tag threaded into every
+// allocation_logs write so analytics can tell a real checkout decision (LIVE)
+// from an admin browse (LISTING), a dry-run (PREVIEW), an authenticated cart
+// serviceability check (STOREFRONT), or a system/admin re-route. Defaults to
+// LIVE so existing callers (real checkout) are counted unchanged.
+export type AllocationEventSourceTag =
+  | 'LIVE'
+  | 'REALLOCATION'
+  | 'MANUAL_REASSIGNMENT'
+  | 'LISTING'
+  | 'PREVIEW'
+  | 'STOREFRONT';
 
 /**
  * Phase 64 (2026-05-22) — typed reason enum for unserviceable
@@ -157,8 +176,23 @@ export class SellerAllocationService {
     customerPincode: string;
     quantity: number;
     excludeMappingIds?: string[];
+    // Phase 231 (Eligible-node audit) — when 'COD', exclude nodes that don't
+    // accept cash-on-delivery for this pincode (seller SellerServiceArea.codEligible
+    // / franchise FranchisePartner.codEnabled). Omitted/ONLINE => no COD filter
+    // (pre-231 behaviour). Routing a COD order to a non-COD node otherwise
+    // guarantees a downstream rejection cascade.
+    paymentMethod?: 'COD' | 'ONLINE';
+    // Phase 233 (Analytics audit) — provenance for the allocation_logs row.
+    // Defaults to LIVE; admin listing/preview + storefront cart checks pass a
+    // non-LIVE tag so they don't inflate real-checkout analytics.
+    eventSource?: AllocationEventSourceTag;
+    // Phase 233 — suppress the allocation_logs write entirely. Used by
+    // reallocate(), which re-runs allocate() internally and writes itself one
+    // canonical REALLOCATION row — without this the reallocation would
+    // double-write (one LIVE-ish row from the inner allocate + one explicit).
+    skipLog?: boolean;
   }): Promise<AllocationResult> {
-    const { productId, variantId, customerPincode, quantity, excludeMappingIds } = input;
+    const { productId, variantId, customerPincode, quantity, excludeMappingIds, paymentMethod } = input;
 
     if (!productId) throw new BadRequestAppException('productId is required');
     if (!customerPincode) throw new BadRequestAppException('customerPincode is required');
@@ -264,6 +298,8 @@ export class SellerAllocationService {
             sellerName: true,
             sellerShopName: true,
             status: true,
+            // Phase 230 — manual fulfillment hold; held sellers are excluded.
+            fulfillmentHold: true,
           },
         },
       },
@@ -285,9 +321,12 @@ export class SellerAllocationService {
       return true;
     });
 
-    // Keep only ACTIVE sellers with enough available stock
+    // Keep only ACTIVE, not-on-hold sellers with enough available stock.
+    // Phase 230 — a seller on a manual fulfillment hold (fraud / compliance
+    // review) is excluded from eligibility entirely, not merely down-ranked.
     const stockEligible = dedupedMappings.filter((m) => {
       if (m.seller.status !== 'ACTIVE') return false;
+      if (m.seller.fulfillmentHold) return false;
       const available = m.stockQty - m.reservedQty;
       return available >= quantity;
     });
@@ -299,6 +338,8 @@ export class SellerAllocationService {
     const candidateSellerIds = stockEligible.map((m) => m.sellerId);
     let optedInSellers = new Set<string>();
     let servingThisPincode = new Set<string>();
+    // Phase 231 — sellers whose service-area row for this pincode accepts COD.
+    let codServingThisPincode = new Set<string>();
     if (candidateSellerIds.length > 0) {
       const [optedIn, serving] = await Promise.all([
         this.prisma.sellerServiceArea.findMany({
@@ -315,16 +356,32 @@ export class SellerAllocationService {
             pincode: customerPincode,
             isActive: true,
           },
-          select: { sellerId: true },
+          select: { sellerId: true, codEligible: true },
         }),
       ]);
       optedInSellers = new Set(optedIn.map((r) => r.sellerId));
       servingThisPincode = new Set(serving.map((r) => r.sellerId));
+      codServingThisPincode = new Set(
+        serving.filter((r) => r.codEligible).map((r) => r.sellerId),
+      );
     }
-    const eligible = stockEligible.filter(
-      (m) =>
-        !optedInSellers.has(m.sellerId) || servingThisPincode.has(m.sellerId),
-    );
+    const eligible = stockEligible.filter((m) => {
+      // Service-area opt-in: an opted-in seller must serve this pincode.
+      if (optedInSellers.has(m.sellerId) && !servingThisPincode.has(m.sellerId)) {
+        return false;
+      }
+      // Phase 231 — COD: an opted-in seller serving this pincode via a
+      // codEligible=false row can't take a COD order. Non-opted-in sellers
+      // (no service areas) are implicitly COD-capable — unchanged.
+      if (
+        paymentMethod === 'COD' &&
+        optedInSellers.has(m.sellerId) &&
+        !codServingThisPincode.has(m.sellerId)
+      ) {
+        return false;
+      }
+      return true;
+    });
 
     // 3. Filter by distance — seller must be within serviceable range
     // Phase 64 — distance is nullable for no-coords mappings
@@ -388,21 +445,44 @@ export class SellerAllocationService {
     }
 
     // 4. Build seller candidates with nodeType
-    const sellerCandidates: AllocatedSeller[] = serviceable.map((s) => ({
-      nodeType: 'SELLER' as const,
-      sellerId: s.mapping.seller.id,
-      sellerName: s.mapping.seller.sellerShopName || s.mapping.seller.sellerName,
-      mappingId: s.mapping.id,
-      distanceKm: s.distance !== null ? Math.round(s.distance * 100) / 100 : null,
-      dispatchSla: s.mapping.dispatchSla,
-      availableStock: s.mapping.stockQty - s.mapping.reservedQty,
-      // Phase 64 — unknown distance falls back to "0 km transit" so
-      // the SLA-only estimate is the floor. This was effectively
-      // the pre-Phase-64 behaviour for the 999-placeholder case;
-      // we preserve it for the null-distance case.
-      estimatedDeliveryDays: this.estimateDeliveryDays(s.distance ?? 0, s.mapping.dispatchSla),
-      score: 0, // will be scored below
-    }));
+    const sellerCandidates: AllocatedSeller[] = serviceable.map((s) => {
+      const avail = s.mapping.stockQty - s.mapping.reservedQty;
+      // Phase 230 — wire operationalPriority (the "manual preferred seller"
+      // lever) into ranking. It was a dead column pre-230: declared on the
+      // mapping but never read by scoring. >0 only (default 0 => undefined =>
+      // no score effect => no regression for sellers that never set it).
+      const priority =
+        s.mapping.operationalPriority > 0
+          ? s.mapping.operationalPriority
+          : undefined;
+      return {
+        nodeType: 'SELLER' as const,
+        sellerId: s.mapping.seller.id,
+        sellerName: s.mapping.seller.sellerShopName || s.mapping.seller.sellerName,
+        mappingId: s.mapping.id,
+        distanceKm: s.distance !== null ? Math.round(s.distance * 100) / 100 : null,
+        dispatchSla: s.mapping.dispatchSla,
+        availableStock: avail,
+        // Phase 64 — unknown distance falls back to "0 km transit" so
+        // the SLA-only estimate is the floor. This was effectively
+        // the pre-Phase-64 behaviour for the 999-placeholder case;
+        // we preserve it for the null-distance case.
+        estimatedDeliveryDays: this.estimateDeliveryDays(s.distance ?? 0, s.mapping.dispatchSla),
+        score: 0, // will be scored below
+        mappingPriority: priority,
+        // Phase 231/232 — explainability (rendered by routing-preview UI).
+        reasons: [
+          optedInSellers.has(s.mapping.seller.id)
+            ? 'within-service-area'
+            : 'distance-coverage',
+          `stock-ok (${avail} avail)`,
+          s.distance !== null
+            ? `distance ${Math.round(s.distance * 100) / 100}km`
+            : 'distance-unknown',
+          ...(priority !== undefined ? [`priority ${priority}`] : []),
+        ],
+      };
+    });
 
     // 5. Find franchise candidates — same distance-based logic as sellers
     const franchiseCandidates = await this.findEligibleFranchises({
@@ -412,6 +492,7 @@ export class SellerAllocationService {
       quantity,
       customerLat,
       customerLon,
+      paymentMethod,
     });
 
     // 6. Merge all candidates (sellers + franchises compete equally)
@@ -517,8 +598,11 @@ export class SellerAllocationService {
       allEligible: scored,
     };
 
-    // 8. Log allocation decision (T7)
-    await this.logAllocation(input, result);
+    // 8. Log allocation decision (T7). Phase 233 — skipLog lets reallocate()
+    // suppress this inner write so it isn't double-counted.
+    if (!input.skipLog) {
+      await this.logAllocation(input, result);
+    }
 
     return result;
   }
@@ -1020,13 +1104,16 @@ export class SellerAllocationService {
       await this.releaseReservation(reservation.id);
     }
 
-    // Re-run allocation excluding the failed seller
+    // Re-run allocation excluding the failed seller. Phase 233 — skipLog so the
+    // inner allocate() doesn't write a (LIVE) row; reallocate() writes the one
+    // canonical REALLOCATION row below (no double-count).
     const result = await this.allocate({
       productId,
       variantId,
       customerPincode,
       quantity,
       excludeMappingIds: [failedMappingId],
+      skipLog: true,
     });
 
     // Log re-allocation
@@ -1042,8 +1129,32 @@ export class SellerAllocationService {
           allocatedMappingId: result.primary.mappingId,
           allocatedPincodeMappingId: result.primary.pincodeMappingId ?? null,
           allocationReason: `Re-allocated from failed mapping ${failedMappingId} (${result.primary.nodeType})`,
+          // Phase 233 — fallback outcome: a node was found after the original
+          // mapping failed. Tagged REALLOCATION so analytics counts it as a
+          // fallback, not a fresh primary.
+          eventSource: 'REALLOCATION',
+          outcome: 'FALLBACK_SERVICEABLE',
+          reasonCode: 'REALLOCATED_FROM_FAILED',
           distanceKm: result.primary.distanceKm,
           score: result.primary.score,
+          isReallocated: true,
+          orderId,
+        },
+      });
+    } else {
+      // Phase 233 — a failed re-allocation (no alternative node) is still a
+      // routing event worth recording; pre-233 the inner allocate() logged this
+      // as UNSERVICEABLE, so keep that coverage now that the inner write is
+      // suppressed.
+      await this.prisma.allocationLog.create({
+        data: {
+          productId,
+          variantId: variantId ?? null,
+          customerPincode,
+          allocationReason: `Re-allocation failed — no alternative to mapping ${failedMappingId}`,
+          eventSource: 'REALLOCATION',
+          outcome: 'UNSERVICEABLE',
+          reasonCode: 'NO_SERVICEABLE_NODE',
           isReallocated: true,
           orderId,
         },
@@ -1056,9 +1167,17 @@ export class SellerAllocationService {
   // ── T7  Allocation audit logging ───────────────────────────────────────
 
   private async logAllocation(
-    input: { productId: string; variantId?: string; customerPincode: string },
+    input: {
+      productId: string;
+      variantId?: string;
+      customerPincode: string;
+      // Phase 233 — provenance tag (LIVE default; LISTING/PREVIEW/STOREFRONT
+      // from admin/cart callers so they're excluded from checkout analytics).
+      eventSource?: AllocationEventSourceTag;
+    },
     result: AllocationResult,
   ): Promise<void> {
+    const eventSource = input.eventSource ?? 'LIVE';
     try {
       // Phase 77 (2026-05-22) — Phase 76 audit Gap #7. Persist the
       // full ranked candidate list as AllocationCandidate child
@@ -1078,6 +1197,12 @@ export class SellerAllocationService {
             allocatedMappingId: result.primary.mappingId,
             allocatedPincodeMappingId: result.primary.pincodeMappingId ?? null,
             allocationReason: `Primary allocation — highest score (${result.primary.nodeType})`,
+            // Phase 233 — provenance + outcome + structured reason. eventSource
+            // gates analytics (LIVE/REALLOCATION/MANUAL_REASSIGNMENT count;
+            // LISTING/PREVIEW/STOREFRONT don't).
+            eventSource,
+            outcome: 'PRIMARY_SERVICEABLE',
+            reasonCode: 'PRIMARY_HIGHEST_SCORE',
             distanceKm: result.primary.distanceKm,
             score: result.primary.score,
             isReallocated: false,
@@ -1105,6 +1230,9 @@ export class SellerAllocationService {
             variantId: input.variantId ?? null,
             customerPincode: input.customerPincode,
             allocationReason: 'No serviceable sellers or franchises found',
+            eventSource,
+            outcome: 'UNSERVICEABLE',
+            reasonCode: 'NO_SERVICEABLE_NODE',
             isReallocated: false,
           },
         });
@@ -1135,9 +1263,18 @@ export class SellerAllocationService {
     quantity: number;
     customerLat: number | null;
     customerLon: number | null;
+    // Phase 231 — when 'COD', exclude franchises with codEnabled=false.
+    paymentMethod?: 'COD' | 'ONLINE';
   }): Promise<AllocatedSeller[]> {
-    const { productId, variantId, quantity, customerLat, customerLon, customerPincode } =
-      input;
+    const {
+      productId,
+      variantId,
+      quantity,
+      customerLat,
+      customerLon,
+      customerPincode,
+      paymentMethod,
+    } = input;
 
     // Phase 159m — admin pincode→franchise territory map (supplement mode).
     // If the customer pincode has ≥1 ACTIVE mapping, ONLY those franchises are
@@ -1187,6 +1324,11 @@ export class SellerAllocationService {
             status: true,
             warehousePincode: true,
             isDeleted: true,
+            // Phase 230/231 — fulfillment hold, COD capability, and per-franchise
+            // dispatch SLA (replaces the hard-coded `dispatchSla = 1`).
+            fulfillmentHold: true,
+            codEnabled: true,
+            dispatchSlaDays: true,
           },
         },
       },
@@ -1211,6 +1353,10 @@ export class SellerAllocationService {
       return (
         (f.status === 'ACTIVE' || f.status === 'APPROVED') &&
         !f.isDeleted &&
+        // Phase 230 — exclude franchises on a manual fulfillment hold.
+        !f.fulfillmentHold &&
+        // Phase 231 — exclude franchises that don't accept COD for a COD order.
+        (paymentMethod !== 'COD' || f.codEnabled) &&
         // Phase 159m — territory enforcement: when the pincode has mappings,
         // only mapped franchises are eligible. Unmapped pincode → all pass.
         (!territoryMode || mappingByFranchise.has(f.id)) &&
@@ -1297,7 +1443,10 @@ export class SellerAllocationService {
         continue;
       }
 
-      const dispatchSla = 1; // franchise default dispatch SLA
+      // Phase 231 — per-franchise dispatch SLA (was hard-coded 1, which made
+      // the SLA score term meaningless for franchises). Default 1 preserves the
+      // exact pre-231 ranking for franchises that never set it.
+      const dispatchSla = franchise.dispatchSlaDays ?? 1;
       const territory = mappingByFranchise.get(franchise.id);
 
       candidates.push({
@@ -1315,6 +1464,17 @@ export class SellerAllocationService {
         // pincode had an active mapping for this franchise).
         pincodeMappingId: territory?.id,
         mappingPriority: territory?.priority,
+        // Phase 231/232 — explainability for the routing-preview UI.
+        reasons: [
+          territory
+            ? `territory-mapped (priority ${territory.priority})`
+            : 'distance-coverage',
+          `stock-ok (${stock.availableQty} avail)`,
+          distance !== null
+            ? `distance ${Math.round(distance * 100) / 100}km`
+            : 'distance-unknown',
+          `dispatch-sla ${dispatchSla}d`,
+        ],
       });
     }
 

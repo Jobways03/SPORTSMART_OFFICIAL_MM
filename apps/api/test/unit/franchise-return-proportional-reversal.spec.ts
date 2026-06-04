@@ -67,14 +67,19 @@ describe('FranchiseOrdersService.initiateReturn — proportional commission reve
     };
 
     // Constructor: (prisma, inventoryService, commissionService,
-    // catalogFacade, eventBus, logger, moneyDualWrite). initiateReturn
-    // doesn't touch catalogFacade or the dual-write helper, so empty
-    // / pass-through stubs are fine.
+    // catalogFacade, eventBus, logger, moneyDualWrite, env, ordersService).
+    // initiateReturn doesn't touch catalogFacade, the dual-write helper, or
+    // ordersService, so empty / pass-through stubs are fine. `env.getNumber`
+    // is read once in the constructor for the return window.
     const moneyDualWrite = {
       applyPaise: (_m: string, d: any) => d,
       applyPaiseMany: (_m: string, rs: any[]) => rs,
       isApplicable: () => false,
     };
+    const env: any = {
+      getNumber: jest.fn((_key: string, fallback: number) => fallback),
+    };
+    const ordersService: any = {};
     const svc = new FranchiseOrdersService(
       prisma as any,
       inventoryService as any,
@@ -83,6 +88,8 @@ describe('FranchiseOrdersService.initiateReturn — proportional commission reve
       eventBus,
       logger,
       moneyDualWrite as any,
+      env,
+      ordersService,
     );
 
     return { svc, recordReturnReversal };

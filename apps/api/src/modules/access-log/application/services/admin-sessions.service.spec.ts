@@ -59,8 +59,14 @@ describe('AdminSessionsService', () => {
       writeAuditLog: jest.fn().mockResolvedValue(undefined),
     };
 
-    const service = new AdminSessionsService(prisma, audit);
-    return { service, prisma, audit };
+    // Phase 209 (#8) — the service now publishes
+    // security.session_revoked_by_admin on a successful revoke.
+    const eventBus: any = {
+      publish: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const service = new AdminSessionsService(prisma, audit, eventBus);
+    return { service, prisma, audit, eventBus };
   }
 
   describe('revokeOne', () => {

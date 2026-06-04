@@ -136,7 +136,7 @@ describe('Seed-list ↔ instrumented-cron registry parity (PR 5.5)', () => {
   // the seeder's TARGETS array. The instrumentation-coverage spec
   // catches the source-file side; this spec catches the seed side.
   const CANONICAL_JOB_NAMES = [
-    'hourly-low-stock-sweep',
+    'low-stock-sweep',
     'ticket-sla-breach',
     'daily-reconciliation',
     'cleanup-stale-pending-files',

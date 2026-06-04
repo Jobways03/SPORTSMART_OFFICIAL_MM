@@ -11,6 +11,7 @@ import {
   Min,
   Max,
   Matches,
+  MaxLength,
   ValidateNested,
   IsEnum,
 } from 'class-validator';
@@ -222,4 +223,14 @@ export class UpdateProductDto {
   @ValidateNested({ each: true })
   @Type(() => CreateVariantInlineDto)
   variants?: CreateVariantInlineDto[];
+
+  // Phase 249 (#4) — AI-content provenance on the admin update path.
+  // Same semantics as CreateProductDto.aiGenerationLogId: when present
+  // the controller stamps the product's AI provenance and CAS-flips the
+  // log GENERATED → ACCEPTED. Optional; allowlisted for
+  // forbidNonWhitelisted.
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  aiGenerationLogId?: string;
 }

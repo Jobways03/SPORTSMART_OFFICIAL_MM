@@ -8,7 +8,7 @@ import { AuditPublicFacade } from '../../../audit/application/facades/audit-publ
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { OrdersService } from './orders.service';
-import { RiskScoringService } from './risk-scoring.service';
+import { RiskScoringService, RiskBand } from './risk-scoring.service';
 
 // Phase 68 (2026-05-22) — claim TTL is now env-driven (audit Gap
 // #16). The SQL still needs an interval literal — we read the env
@@ -151,7 +151,10 @@ export class VerificationQueueService {
    * drift by the offset between server-local time and UTC — every
    * fresh claim looks expired the instant it's written.
    */
-  async claimNext(adminId: string): Promise<{ id: string } | null> {
+  async claimNext(
+    adminId: string,
+    band?: RiskBand,
+  ): Promise<{ id: string } | null> {
     // Phase 73 (audit Gap #7) — enforce per-verifier max claims.
     // Pre-Phase-73 a buggy / malicious verifier could repeatedly
     // call claim-next and lock the entire PLACED queue. The cap
@@ -171,14 +174,27 @@ export class VerificationQueueService {
     }
 
     const claimed = await this.prisma.$transaction(async (tx) => {
-      const candidates = await tx.$queryRaw<{ id: string; order_number: string }[]>`
-        SELECT id, order_number FROM master_orders
-        WHERE order_status = 'PLACED'::"OrderStatus"
-          AND (claimed_by_admin_id IS NULL OR claim_expires_at < NOW())
-        ORDER BY created_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1
-      `;
+      // Phase 174 (audit #227) — optional band filter so a verifier can
+      // "claim next RED" / "claim next CRITICAL" instead of always getting
+      // the oldest unclaimed regardless of risk. `band` is a controlled
+      // enum (validated at the controller); whitelist it here too before
+      // it ever reaches SQL.
+      const ALLOWED_BANDS = ['GREEN', 'YELLOW', 'RED', 'CRITICAL'];
+      const bandFilter =
+        band && ALLOWED_BANDS.includes(band)
+          ? `AND verification_risk_band = '${band}'::"OrderRiskBand"`
+          : '';
+      const candidates = await tx.$queryRawUnsafe<
+        { id: string; order_number: string }[]
+      >(
+        `SELECT id, order_number FROM master_orders
+          WHERE order_status = 'PLACED'::"OrderStatus"
+            AND (claimed_by_admin_id IS NULL OR claim_expires_at < NOW())
+            ${bandFilter}
+          ORDER BY created_at ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1`,
+      );
       if (candidates.length === 0) return null;
       const id = candidates[0]!.id;
       const orderNumber = candidates[0]!.order_number;
@@ -271,15 +287,12 @@ export class VerificationQueueService {
       },
     });
     if (!row) throw new NotFoundAppException('Order not found');
-    if (!row.verificationRiskBand) {
-      const computed = await this.riskScoring.scoreOrder(orderId);
-      return {
-        score: computed.score,
-        band: computed.band,
-        reasons: computed.reasons,
-        scoredAt: new Date(),
-      };
-    }
+    // Phase 174 (audit #224/#226/#227) — STRICTLY READ-ONLY. This used to
+    // lazy-compute + PERSIST a score when the band was null, turning a GET
+    // into a DB write (and racing two concurrent viewers into two writes).
+    // Scoring now happens at placement (order.master.created handler) and on
+    // claim (claimNext -> ensureScored, a mutation); an unscored order here
+    // returns a null band and the verifier can trigger an explicit rescore.
     return {
       score: row.verificationRiskScore,
       band: row.verificationRiskBand,
@@ -420,8 +433,23 @@ export class VerificationQueueService {
       select: {
         orderNumber: true,
         claimedAt: true,
+        verificationRiskBand: true,
       },
     });
+    // Phase 174 (bounded enforcement, user-approved) — approving a
+    // RED/CRITICAL order requires a written reason (min 10 chars). The queue
+    // already gates every order through manual review; this adds friction
+    // proportional to risk without auto-blocking the customer. RED/CRITICAL
+    // are already excluded from bulk-approve (GREEN-only), so the only way
+    // through for a high-risk order is this deliberate, reasoned approval.
+    const highBand =
+      claimSnapshot?.verificationRiskBand === 'RED' ||
+      claimSnapshot?.verificationRiskBand === 'CRITICAL';
+    if (highBand && (!remarks || remarks.trim().length < 10)) {
+      throw new BadRequestAppException(
+        `Approving a ${claimSnapshot?.verificationRiskBand} order requires a reason (min 10 characters)`,
+      );
+    }
     const data = await this.ordersService.verifyOrder(
       orderId,
       adminId,
@@ -562,6 +590,8 @@ export class VerificationQueueService {
         unclaimed_green: bigint;
         unclaimed_yellow: bigint;
         unclaimed_red: bigint;
+        unclaimed_critical: bigint;
+        unclaimed_unscored: bigint;
         mine: bigint;
         breached_sla: bigint;
         total_today: bigint;
@@ -588,6 +618,16 @@ export class VerificationQueueService {
             AND verification_risk_band = 'RED'
         ) AS unclaimed_red,
         COUNT(*) FILTER (
+          WHERE order_status = 'PLACED'::"OrderStatus"
+            AND (claimed_by_admin_id IS NULL OR claim_expires_at < NOW())
+            AND verification_risk_band = 'CRITICAL'
+        ) AS unclaimed_critical,
+        COUNT(*) FILTER (
+          WHERE order_status = 'PLACED'::"OrderStatus"
+            AND (claimed_by_admin_id IS NULL OR claim_expires_at < NOW())
+            AND verification_risk_band IS NULL
+        ) AS unclaimed_unscored,
+        COUNT(*) FILTER (
           WHERE claimed_by_admin_id = ${adminId}
             AND claim_expires_at    > NOW()
         ) AS mine,
@@ -606,6 +646,10 @@ export class VerificationQueueService {
       unclaimedGreen: Number(r?.unclaimed_green ?? 0),
       unclaimedYellow: Number(r?.unclaimed_yellow ?? 0),
       unclaimedRed: Number(r?.unclaimed_red ?? 0),
+      // Phase 174 (audit #227) — surface the CRITICAL cohort + the unscored
+      // gap (green+yellow+red+critical no longer silently < unclaimed).
+      unclaimedCritical: Number(r?.unclaimed_critical ?? 0),
+      unclaimedUnscored: Number(r?.unclaimed_unscored ?? 0),
       mine: Number(r?.mine ?? 0),
       breachedSla: Number(r?.breached_sla ?? 0),
       totalToday: Number(r?.total_today ?? 0),
@@ -741,6 +785,30 @@ export class VerificationQueueService {
         const idx = cursor++;
         const c = claimed[idx];
         if (!c) continue;
+        // Phase 174 (audit #226/#227) — re-check the band right before
+        // verify. A manual rescore could have flipped this order
+        // GREEN->RED/CRITICAL between the claim SELECT and now; bulk-approve
+        // must NEVER auto-verify a non-GREEN order. Release it + record skip.
+        const fresh = await this.prisma.masterOrder.findUnique({
+          where: { id: c.id },
+          select: { verificationRiskBand: true },
+        });
+        if (fresh?.verificationRiskBand !== 'GREEN') {
+          await this.prisma.$executeRaw`
+            UPDATE master_orders
+               SET claimed_by_admin_id = NULL, claimed_at = NULL, claim_expires_at = NULL
+             WHERE id = ${c.id} AND claimed_by_admin_id = ${adminId}
+          `;
+          failed.push({
+            orderId: c.id,
+            orderNumber: c.order_number,
+            reasonCode: 'BAND_CHANGED',
+          });
+          this.logger.warn(
+            `Bulk-approve skipped ${c.order_number} (${c.id}) — band is now ${fresh?.verificationRiskBand ?? 'NULL'} (changed after claim)`,
+          );
+          continue;
+        }
         try {
           const data: any = await this.ordersService.verifyOrder(c.id, adminId);
           // Phase 76 (audit Gap #19) — admin-scoped claim clear
@@ -1126,6 +1194,178 @@ export class VerificationQueueService {
         },
       })
       .catch(() => undefined);
+  }
+
+  /* ── Phase 174 — band-filtered list + audited rescore ────────────────── */
+
+  /**
+   * Paginated, band-filtered list of PLACED orders in the verification queue
+   * (audit #227 headline). Pre-Phase-174 there was no way to "show me the RED
+   * orders" — only claim-next (band-agnostic) + bulk-approve (GREEN-only).
+   * STRICTLY read-only (never lazy-computes). `band`:
+   *   RED | YELLOW | GREEN | CRITICAL — exact band
+   *   HIGH       — RED + CRITICAL (triage-first cohort)
+   *   RED_YELLOW — YELLOW + RED + CRITICAL (everything non-green/non-null)
+   *   UNSCORED   — band IS NULL
+   *   ALL/undef  — every PLACED order
+   * Highest risk first (CRITICAL→RED→YELLOW→GREEN, nulls last), oldest first
+   * within a band.
+   */
+  async listOrdersByBand(input: {
+    band?:
+      | 'RED'
+      | 'YELLOW'
+      | 'GREEN'
+      | 'CRITICAL'
+      | 'HIGH'
+      | 'RED_YELLOW'
+      | 'UNSCORED'
+      | 'ALL';
+    onlyUnclaimed?: boolean;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      orderNumber: string;
+      totalAmount: string;
+      paymentMethod: string;
+      paymentStatus: string;
+      itemCount: number;
+      createdAt: Date;
+      claimed: boolean;
+      riskScore: number | null;
+      riskBand: string | null;
+      scoredAt: Date | null;
+    }>;
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const page = Math.max(1, Math.floor(input.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Math.floor(input.limit ?? 20)));
+    const offset = (page - 1) * limit;
+
+    const where: any = { orderStatus: 'PLACED' };
+    switch (input.band) {
+      case 'UNSCORED':
+        where.verificationRiskBand = null;
+        break;
+      case 'HIGH':
+        where.verificationRiskBand = { in: ['RED', 'CRITICAL'] };
+        break;
+      case 'RED_YELLOW':
+        where.verificationRiskBand = { in: ['YELLOW', 'RED', 'CRITICAL'] };
+        break;
+      case 'RED':
+      case 'YELLOW':
+      case 'GREEN':
+      case 'CRITICAL':
+        where.verificationRiskBand = input.band;
+        break;
+      // ALL / undefined → no band filter.
+    }
+    if (input.onlyUnclaimed) {
+      where.OR = [
+        { claimedByAdminId: null },
+        { claimExpiresAt: { lt: new Date() } },
+      ];
+    }
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.masterOrder.findMany({
+        where,
+        select: {
+          id: true,
+          orderNumber: true,
+          totalAmount: true,
+          paymentMethod: true,
+          paymentStatus: true,
+          itemCount: true,
+          createdAt: true,
+          claimedByAdminId: true,
+          claimExpiresAt: true,
+          verificationRiskScore: true,
+          verificationRiskBand: true,
+          verificationScoredAt: true,
+        },
+        orderBy: [
+          { verificationRiskScore: { sort: 'desc', nulls: 'last' } },
+          { createdAt: 'asc' },
+        ],
+        skip: offset,
+        take: limit,
+      }),
+      this.prisma.masterOrder.count({ where }),
+    ]);
+
+    const now = new Date();
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        orderNumber: r.orderNumber,
+        totalAmount: r.totalAmount.toString(),
+        paymentMethod: r.paymentMethod,
+        paymentStatus: r.paymentStatus,
+        itemCount: r.itemCount,
+        createdAt: r.createdAt,
+        claimed:
+          !!r.claimedByAdminId &&
+          !!r.claimExpiresAt &&
+          r.claimExpiresAt > now,
+        riskScore: r.verificationRiskScore,
+        riskBand: r.verificationRiskBand,
+        scoredAt: r.verificationScoredAt,
+      })),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  /**
+   * Manual rescore wrapper (audit #226). The OrderRiskScoreHistory row that
+   * scoreOrder writes is the domain trail; this additionally lands the admin
+   * action in the hash-chained audit_logs (canonical compliance trail) with
+   * old→new band + the admin's optional reason — matching how approve /
+   * reject / bulk-approve / force-release already audit.
+   */
+  async rescore(orderId: string, adminId: string, reason?: string) {
+    const before = await this.prisma.masterOrder.findUnique({
+      where: { id: orderId },
+      select: {
+        verificationRiskBand: true,
+        verificationRiskScore: true,
+        orderNumber: true,
+      },
+    });
+    const result = await this.riskScoring.rescore(orderId, adminId);
+    this.audit
+      .writeAuditLog({
+        actorId: adminId,
+        actorRole: 'ADMIN',
+        action: 'ORDER_RISK_RESCORED',
+        module: 'orders',
+        resource: 'master_order',
+        resourceId: orderId,
+        oldValue: before
+          ? {
+              band: before.verificationRiskBand,
+              score: before.verificationRiskScore,
+            }
+          : undefined,
+        newValue: { band: result.band, score: result.score },
+        metadata: {
+          orderNumber: before?.orderNumber ?? null,
+          reason: reason ?? null,
+        },
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Audit write for ORDER_RISK_RESCORED failed (order ${orderId}): ${(err as Error).message}`,
+        ),
+      );
+    return result;
   }
 
   /* ── Private ───────────────────────────────────────────────────────── */

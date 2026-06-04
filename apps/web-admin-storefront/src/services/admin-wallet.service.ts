@@ -105,7 +105,8 @@ export const adminWalletService = {
 
   credit(
     userId: string,
-    payload: { amountInPaise: number; description: string; internalNotes?: string },
+    // Phase 183 — reason (audit-grade, required) + optional referenceNumber.
+    payload: { amountInPaise: number; reason: string; description: string; internalNotes?: string; referenceNumber?: string },
   ): Promise<ApiResponse<AdminMutateResult>> {
     return apiClient<AdminMutateResult>(`/admin/wallets/${userId}/credit`, {
       method: 'POST',
@@ -115,7 +116,7 @@ export const adminWalletService = {
 
   debit(
     userId: string,
-    payload: { amountInPaise: number; description: string; internalNotes?: string },
+    payload: { amountInPaise: number; reason: string; description: string; internalNotes?: string; referenceNumber?: string },
   ): Promise<ApiResponse<AdminMutateResult>> {
     return apiClient<AdminMutateResult>(`/admin/wallets/${userId}/debit`, {
       method: 'POST',
@@ -147,7 +148,7 @@ export function signedAmount(tx: AdminWalletTransaction): string {
   const v = tx.amountInPaise;
   // Coerce to BigInt for the sign check + abs without losing precision.
   const bi = typeof v === 'bigint' ? v : BigInt(v);
-  const negative = bi < 0n;
+  const negative = bi < BigInt(0); // BigInt(0) — the literal 0n needs ES2020 target
   const abs = negative ? -bi : bi;
   const sign = negative ? '−' : '+';
   return `${sign} ${paiseToRupeesString(abs)}`;

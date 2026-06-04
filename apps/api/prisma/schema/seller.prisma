@@ -18,6 +18,10 @@ model Seller {
   failedLoginAttempts Int          @default(0) @map("failed_login_attempts")
   lockUntil           DateTime?    @map("lock_until")
   lastLoginAt         DateTime?    @map("last_login_at")
+  // Phase 179 (Top Performers audit #16) — internal/demo/test seller, excluded
+  // from public leaderboards & rankings. Default false; ops flips it for seed
+  // and QA accounts so they never surface in performance reports.
+  isInternal          Boolean      @default(false) @map("is_internal")
 
   // Profile fields
   sellerContactCountryCode    String?                  @map("seller_contact_country_code")
@@ -130,6 +134,21 @@ model Seller {
   exempt194OReason     String?   @map("exempt_194o_reason")
   exempt194OAttestedBy String?   @map("exempt_194o_attested_by")
   exempt194OAttestedAt DateTime? @map("exempt_194o_attested_at")
+  // Phase 161 (TDS 194-O exempt audit B1) — effective-dating. The TDS
+  // compute treats a seller as exempt for a filing period only when the
+  // period START falls within [effectiveFrom, effectiveTo). This makes the
+  // decision deterministic per-period (resolves the mid-cycle toggle race)
+  // and enables annual revalidation: effectiveTo lets an exemption expire,
+  // and the revalidation cron flags / revokes stale ones. NULL effectiveFrom
+  // = no lower bound (legacy exempt rows backfilled this way stay exempt).
+  exempt194OEffectiveFrom DateTime? @map("exempt_194o_effective_from")
+  exempt194OEffectiveTo   DateTime? @map("exempt_194o_effective_to")
+  // Phase 161 (audit B4) — revocation trail. Un-exempting NO LONGER nulls the
+  // attestation fields (history loss); it stamps these instead, preserving
+  // "this seller was exempt … attested by X for reason Y" as last-known-good.
+  exempt194ORevokedBy     String?   @map("exempt_194o_revoked_by")
+  exempt194ORevokedAt     DateTime? @map("exempt_194o_revoked_at")
+  exempt194ORevokeReason  String?   @map("exempt_194o_revoke_reason")
 
   // ─── Logistics entitlements (admin-controlled) ────────────────
   // Toggled by marketplace admin in web-admin-storefront. Self-delivery
@@ -147,6 +166,18 @@ model Seller {
   // falls back to the platform default (24h). Range 1..168 (1h to
   // 7d) — service-layer guard.
   acceptSlaHours Int? @map("accept_sla_hours")
+
+  // Phase 230/232 (Eligible-node + Allocation-preview audit) — manual
+  // fulfillment hold. A seller under fraud investigation / compliance review is
+  // flipped to true; the allocator then excludes them from eligibility entirely
+  // (not just down-ranked), so a flagged seller cannot be auto-routed or
+  // manually reassigned new orders. Independent of `status` (a seller can be
+  // ACTIVE for login/catalog but on a fulfillment hold). Default false = no
+  // regression. The reason is surfaced to ops + stamped in the audit trail.
+  fulfillmentHold       Boolean   @default(false) @map("fulfillment_hold")
+  fulfillmentHoldReason String?   @map("fulfillment_hold_reason") @db.Text
+  fulfillmentHoldAt     DateTime? @map("fulfillment_hold_at")
+  fulfillmentHoldBy     String?   @map("fulfillment_hold_by")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -178,7 +209,36 @@ model Seller {
   @@index([isDeleted])
   @@index([verificationStatus])
   @@index([sellerType])
+  // Phase 161 (TDS 194-O exempt audit #1/B1) — revalidation cron scans the
+  // active-exempt set + the expiry tail.
+  @@index([is194OExempt, exempt194OEffectiveTo])
+  // Phase 230 — ops "sellers on fulfillment hold" queue + the allocator's
+  // exclusion filter both scan by this flag.
+  @@index([fulfillmentHold])
   @@map("sellers")
+}
+
+// Phase 161 (TDS 194-O exempt audit #6) — append-only history of every
+// §194-O exemption / revocation. The Seller row holds only the current
+// state + last-known-good attestation; this answers "was seller X exempt
+// during FY26-27, attested by whom, for what reason". No FK to Seller so
+// the trail survives an (unlikely) seller deletion — same design as the
+// other tax history tables.
+model SellerTdsExemptionHistory {
+  id           String    @id @default(uuid())
+  sellerId     String    @map("seller_id")
+  // EXEMPT (granted) | REVOKE (cleared) | REVALIDATE (cron auto-action)
+  action       String
+  isExempt     Boolean   @map("is_exempt")
+  reason       String?   @db.Text
+  effectiveFrom DateTime? @map("effective_from")
+  effectiveTo  DateTime? @map("effective_to")
+  changedBy    String?   @map("changed_by")
+  changeReason String?   @db.Text @map("change_reason")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([sellerId, createdAt(sort: Desc)])
+  @@map("seller_tds_exemption_history")
 }
 
 model SellerSession {

@@ -9,6 +9,7 @@ import {
   IsUUID,
   Matches,
   Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -184,6 +185,20 @@ export class SellerCreateProductDto {
   @IsOptional()
   @IsBoolean()
   submitImmediately?: boolean;
+
+  /**
+   * Phase 249 (#4) — AI-content provenance. When the seller kept the
+   * AI-generated draft, the FE echoes back the `meta.generationLogId`
+   * the generate endpoint returned. The controller stamps the product's
+   * AI provenance columns and flips the matching AiGenerationLog row
+   * GENERATED → ACCEPTED. Optional: a hand-written product omits it.
+   * Must be allowlisted here because the global ValidationPipe runs
+   * forbidNonWhitelisted — an unlisted field would 400 the save.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  aiGenerationLogId?: string;
 
   /**
    * Phase 39 (2026-05-21) — seller-supplied metafield values. The

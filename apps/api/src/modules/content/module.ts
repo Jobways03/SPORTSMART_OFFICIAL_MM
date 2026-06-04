@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthGuard } from '../../core/guards';
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
 import { ContentService } from './content.service';
 import {
   AdminContentController,
@@ -41,7 +41,7 @@ import { PublicStorefrontSlotsController } from './storefront-slots/public-store
     BlogPostsService,
     BlogPostAuditService,
     StorefrontSlotsService,
-    CloudinaryAdapter,
+    MediaStorageAdapter,
   ],
   exports: [
     ContentService,

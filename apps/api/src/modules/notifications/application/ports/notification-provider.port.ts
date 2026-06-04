@@ -7,6 +7,11 @@ export interface SendArgs {
   subject?: string;      // email-only; ignored by sms/whatsapp
   body: string;          // plain text or HTML depending on channel
   templateKey?: string;  // for logging / vendor template lookup
+  // Phase 185 (#4) — TRAI DLT registration ids, resolved from the template
+  // at enqueue time. SMS-only; the SMS provider refuses to send a
+  // transactional SMS without a DLT template id when enforcement is on.
+  dltTemplateId?: string | null;
+  dltHeaderId?: string | null;
 }
 
 export interface SendResult {
@@ -17,6 +22,13 @@ export interface SendResult {
   failureReason?: string;
   /** True when the failure is transient (network, 5xx, throttle). */
   retryable?: boolean;
+  // Phase 190 — richer capture for the notification log.
+  /** Canonical failure code (maps to NotificationFailureCode). */
+  failureCode?: string;
+  /** Which provider handled the send (e.g. 'sendgrid', 'twilio', 'msg91'). */
+  provider?: string;
+  /** Sanitized, normalized provider response — NO secrets / internal IPs. */
+  providerResponse?: Record<string, unknown>;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   AdminControlTowerRepository,
@@ -11,7 +12,13 @@ import {
   SellerRevenueResult,
   SellerMappingStats,
   TopAllocatedSellerRow,
+  TopAllocatedFranchiseRow,
   SellerNameEntry,
+  AllocationAnalyticsFilters,
+  AllocationOutcomeCountRow,
+  AllocationEventsFilters,
+  AllocationEventRow,
+  AllocationEventsPage,
   ProductBasic,
   VariantBasic,
   SubOrderWithItems,
@@ -205,37 +212,142 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
 
   /* ─────────────────────────────────────────────────────────────────
    *  Dashboard (allocation analytics)
+   *
+   *  Phase 233 (audit #233). Pre-233 these aggregates counted EVERY
+   *  allocation_logs row, so admin-browse (LISTING), routing dry-runs
+   *  (PREVIEW) and cart serviceability checks (STOREFRONT) inflated the
+   *  totals — a "real routing decision" is only LIVE / REALLOCATION /
+   *  MANUAL_REASSIGNMENT. That exclusion is now applied to every
+   *  aggregate via `realRoutingFilters()`, on top of the operator's
+   *  optional createdAt-range + node-type filters. The Prisma.Sql
+   *  fragments are parameterised (no string interpolation), so the
+   *  filters are injection-safe.
    * ───────────────────────────────────────────────────────────────── */
 
-  async countAllocations(): Promise<number> {
-    return this.prisma.allocationLog.count();
+  /**
+   * The always-on real-routing exclusion plus any operator filters,
+   * as an array of AND-able SQL fragments. `al` is the alias the raw
+   * queries below bind `allocation_logs` to.
+   */
+  private realRoutingFilters(
+    filters?: AllocationAnalyticsFilters,
+  ): Prisma.Sql[] {
+    const conds: Prisma.Sql[] = [
+      // Real routing decisions only — preview/listing/storefront noise
+      // is kept for forensics but never counts in business metrics.
+      Prisma.sql`al.event_source IN ('LIVE', 'REALLOCATION', 'MANUAL_REASSIGNMENT')`,
+    ];
+    if (filters?.fromDate) {
+      conds.push(Prisma.sql`al.created_at >= ${filters.fromDate}`);
+    }
+    if (filters?.toDate) {
+      conds.push(Prisma.sql`al.created_at <= ${filters.toDate}`);
+    }
+    if (filters?.nodeType) {
+      conds.push(Prisma.sql`al.allocated_node_type = ${filters.nodeType}`);
+    }
+    return conds;
   }
 
-  async countReallocations(): Promise<number> {
-    return this.prisma.allocationLog.count({ where: { isReallocated: true } });
+  async countAllocations(filters?: AllocationAnalyticsFilters): Promise<number> {
+    const where = Prisma.join(this.realRoutingFilters(filters), ' AND ');
+    const rows = await this.prisma.$queryRaw<{ count: number }[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM allocation_logs al
+      WHERE ${where}
+    `);
+    return rows[0]?.count ?? 0;
   }
 
-  async getAvgAllocationMetrics(): Promise<{ avgDistanceKm: number; avgScore: number }> {
-    const result = await this.prisma.allocationLog.aggregate({
-      _avg: { distanceKm: true, score: true },
-    });
+  async countReallocations(
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<number> {
+    const conds = this.realRoutingFilters(filters);
+    conds.push(Prisma.sql`al.is_reallocated = true`);
+    const where = Prisma.join(conds, ' AND ');
+    const rows = await this.prisma.$queryRaw<{ count: number }[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM allocation_logs al
+      WHERE ${where}
+    `);
+    return rows[0]?.count ?? 0;
+  }
+
+  async getAvgAllocationMetrics(
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<{ avgDistanceKm: number; avgScore: number }> {
+    const where = Prisma.join(this.realRoutingFilters(filters), ' AND ');
+    const rows = await this.prisma.$queryRaw<
+      { avgDistanceKm: number | null; avgScore: number | null }[]
+    >(Prisma.sql`
+      SELECT
+        AVG(al.distance_km)::float AS "avgDistanceKm",
+        AVG(al.score)::float       AS "avgScore"
+      FROM allocation_logs al
+      WHERE ${where}
+    `);
     return {
-      avgDistanceKm: Number(result._avg.distanceKm || 0),
-      avgScore: Number(result._avg.score || 0),
+      avgDistanceKm: Number(rows[0]?.avgDistanceKm || 0),
+      avgScore: Number(rows[0]?.avgScore || 0),
     };
   }
 
-  async getTopAllocatedSellers(limit: number): Promise<TopAllocatedSellerRow[]> {
-    return this.prisma.$queryRaw<TopAllocatedSellerRow[]>`
+  async getOutcomeCounts(
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<AllocationOutcomeCountRow[]> {
+    const where = Prisma.join(this.realRoutingFilters(filters), ' AND ');
+    return this.prisma.$queryRaw<AllocationOutcomeCountRow[]>(Prisma.sql`
+      SELECT
+        al.outcome::text AS "outcome",
+        COUNT(*)::int    AS "count"
+      FROM allocation_logs al
+      WHERE ${where}
+      GROUP BY al.outcome
+    `);
+  }
+
+  async getTopAllocatedSellers(
+    limit: number,
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<TopAllocatedSellerRow[]> {
+    const conds = this.realRoutingFilters(filters);
+    conds.push(Prisma.sql`al.allocated_seller_id IS NOT NULL`);
+    const where = Prisma.join(conds, ' AND ');
+    return this.prisma.$queryRaw<TopAllocatedSellerRow[]>(Prisma.sql`
       SELECT
         al.allocated_seller_id AS "sellerId",
         COUNT(*)::int AS "allocationCount"
       FROM allocation_logs al
-      WHERE al.allocated_seller_id IS NOT NULL
+      WHERE ${where}
       GROUP BY al.allocated_seller_id
       ORDER BY "allocationCount" DESC
       LIMIT ${limit}
-    `;
+    `);
+  }
+
+  async getTopAllocatedFranchises(
+    limit: number,
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<TopAllocatedFranchiseRow[]> {
+    // Symmetric to getTopAllocatedSellers but on allocated_franchise_id.
+    // Franchise display name comes from franchise_partners.business_name
+    // (falling back to owner_name), resolved in the same query so the
+    // service doesn't need a second round-trip the way sellers do.
+    const conds = this.realRoutingFilters(filters);
+    conds.push(Prisma.sql`al.allocated_franchise_id IS NOT NULL`);
+    const where = Prisma.join(conds, ' AND ');
+    return this.prisma.$queryRaw<TopAllocatedFranchiseRow[]>(Prisma.sql`
+      SELECT
+        al.allocated_franchise_id AS "franchiseId",
+        COALESCE(fp.business_name, fp.owner_name, 'Unknown') AS "franchiseName",
+        COUNT(*)::int AS "allocationCount"
+      FROM allocation_logs al
+      LEFT JOIN franchise_partners fp ON fp.id = al.allocated_franchise_id
+      WHERE ${where}
+      GROUP BY al.allocated_franchise_id, fp.business_name, fp.owner_name
+      ORDER BY "allocationCount" DESC
+      LIMIT ${limit}
+    `);
   }
 
   async findSellersByIds(ids: string[]): Promise<SellerNameEntry[]> {
@@ -244,6 +356,84 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
       where: { id: { in: ids } },
       select: { id: true, sellerName: true, sellerShopName: true },
     });
+  }
+
+  async countExceptionQueueOrders(): Promise<number> {
+    return this.prisma.masterOrder.count({
+      where: { orderStatus: 'EXCEPTION_QUEUE' },
+    });
+  }
+
+  async getAllocationEvents(
+    filters: AllocationEventsFilters,
+  ): Promise<AllocationEventsPage> {
+    // Drill-down behind the dashboard counters. Defaults to the real-
+    // routing subset (so it lines up with the totals) but lets the
+    // operator pin a specific eventSource — including the excluded
+    // PREVIEW/LISTING/STOREFRONT rows — for forensic inspection.
+    const conds: Prisma.Sql[] = [];
+    if (filters.eventSource) {
+      conds.push(Prisma.sql`al.event_source = ${filters.eventSource}::"AllocationEventSource"`);
+    } else {
+      conds.push(
+        Prisma.sql`al.event_source IN ('LIVE', 'REALLOCATION', 'MANUAL_REASSIGNMENT')`,
+      );
+    }
+    if (filters.outcome) {
+      conds.push(Prisma.sql`al.outcome = ${filters.outcome}::"AllocationOutcome"`);
+    }
+    if (filters.fromDate) {
+      conds.push(Prisma.sql`al.created_at >= ${filters.fromDate}`);
+    }
+    if (filters.toDate) {
+      conds.push(Prisma.sql`al.created_at <= ${filters.toDate}`);
+    }
+    if (filters.nodeType) {
+      conds.push(Prisma.sql`al.allocated_node_type = ${filters.nodeType}`);
+    }
+    const where = Prisma.join(conds, ' AND ');
+
+    const page = Math.max(1, filters.page);
+    const limit = Math.min(100, Math.max(1, filters.limit));
+    const offset = (page - 1) * limit;
+
+    const [rows, totalRows] = await Promise.all([
+      this.prisma.$queryRaw<AllocationEventRow[]>(Prisma.sql`
+        SELECT
+          al.id                       AS "id",
+          al.product_id               AS "productId",
+          al.variant_id               AS "variantId",
+          al.customer_pincode         AS "customerPincode",
+          al.allocated_node_type      AS "allocatedNodeType",
+          al.allocated_seller_id      AS "allocatedSellerId",
+          al.allocated_franchise_id   AS "allocatedFranchiseId",
+          al.allocation_reason        AS "allocationReason",
+          al.event_source::text       AS "eventSource",
+          al.outcome::text            AS "outcome",
+          al.reason_code::text        AS "reasonCode",
+          al.distance_km::float       AS "distanceKm",
+          al.score::float             AS "score",
+          al.is_reallocated           AS "isReallocated",
+          al.order_id                 AS "orderId",
+          al.created_at               AS "createdAt"
+        FROM allocation_logs al
+        WHERE ${where}
+        ORDER BY al.created_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `),
+      this.prisma.$queryRaw<{ count: number }[]>(Prisma.sql`
+        SELECT COUNT(*)::int AS count
+        FROM allocation_logs al
+        WHERE ${where}
+      `),
+    ]);
+
+    return {
+      rows,
+      total: totalRows[0]?.count ?? 0,
+      page,
+      limit,
+    };
   }
 
   /* ─────────────────────────────────────────────────────────────────

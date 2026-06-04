@@ -58,6 +58,143 @@ export class PrismaReturnRepository implements ReturnRepository {
     });
   }
 
+  // Phase 199 (2026-06-02) — Returns Flow PII audit #1/#3/#4/#20/#23.
+  //
+  // Customer-facing detail read. `findByIdWithItems` returns the FULL
+  // Return row (it is also the admin/QC read), which leaks QC internals
+  // (qcInternalNotes, qcRationale, qcCourierName, qcAwbNumber), risk
+  // scoring (riskScore/riskFlags), liability attribution
+  // (liabilityParty), the raw gateway failure reason + history, finance
+  // pointers, internal actor ids (approvedBy/rejectedBy/receivedBy/
+  // closedBy), seller snapshots, and the optimistic-lock `version`.
+  //
+  // This method is a strict whitelist `select` — only customer-safe
+  // columns ship. Evidence is filtered to CUSTOMER + ADMIN uploads
+  // (warehouse QC photos are deliberately shown under the forfeit
+  // policy; SELLER/FRANCHISE evidence is internal) and drops
+  // uploaderId. Status history drops `changedById` (internal actor id);
+  // note sanitization happens at the service boundary. RefundTransaction
+  // history (#23) is side-loaded WITHOUT gatewayRefundId.
+  async findByIdForCustomer(id: string): Promise<any | null> {
+    return this.prisma.return.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        returnNumber: true,
+        status: true,
+        customerId: true,
+        customerNotes: true,
+        // Refund — customer-safe fields only. refundFailureReason +
+        // refundFailureHistory are admin-only; the customer-safe mirror
+        // is refundFailureMessageCustomer.
+        refundMethod: true,
+        refundAmount: true,
+        refundAmountInPaise: true,
+        refundProcessedAt: true,
+        refundReference: true,
+        refundFailureMessageCustomer: true,
+        // Pickup
+        pickupScheduledAt: true,
+        pickupCourier: true,
+        pickupTrackingNumber: true,
+        // Receipt / QC outcome (customer-facing summary only)
+        receivedAt: true,
+        qcCompletedAt: true,
+        qcDecision: true,
+        qcNotes: true,
+        // Decision / lifecycle
+        rejectionReason: true,
+        customerRemedy: true,
+        replacementStatus: true,
+        replacementOrderId: true,
+        exchangePriceDiffPaise: true,
+        exchangeRazorpayOrderId: true,
+        exchangePaymentCompletedAt: true,
+        closedAt: true,
+        createdAt: true,
+        updatedAt: true,
+        // #24 (disputeId for the "Open dispute" CTA) is side-loaded in
+        // the service via prisma.dispute.findFirst — Dispute.returnId is
+        // a bare scalar FK (no Prisma relation, by design) so it cannot
+        // be selected here.
+        items: {
+          select: {
+            id: true,
+            orderItemId: true,
+            quantity: true,
+            reasonCategory: true,
+            reasonDetail: true,
+            qcOutcome: true,
+            qcQuantityApproved: true,
+            qcNotes: true,
+            refundAmount: true,
+            refundAmountInPaise: true,
+            orderItem: {
+              select: {
+                id: true,
+                productTitle: true,
+                variantTitle: true,
+                sku: true,
+                imageUrl: true,
+                unitPrice: true,
+              },
+            },
+          },
+        },
+        // #4 — only CUSTOMER + ADMIN (warehouse QC) evidence. Drop
+        // uploaderId (internal actor). SELLER/FRANCHISE evidence stays
+        // internal.
+        evidence: {
+          where: { uploadedBy: { in: ['CUSTOMER', 'ADMIN'] } },
+          select: {
+            id: true,
+            uploadedBy: true,
+            fileUrl: true,
+            description: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        // #3 — drop changedById; notes sanitized at the service layer.
+        statusHistory: {
+          select: {
+            id: true,
+            fromStatus: true,
+            toStatus: true,
+            changedBy: true,
+            notes: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+        // #23 — refund transaction history, customer-safe shape only.
+        // gatewayRefundId AND the raw per-attempt failureReason are
+        // deliberately omitted (the raw reason can carry gateway
+        // internals like "Razorpay: card declined CVV mismatch"). The
+        // customer-friendly explanation rides the parent's
+        // refundFailureMessageCustomer instead; here we expose only the
+        // attempt number + status + timestamp so the UI can show
+        // "attempt N failed / retrying".
+        refundTransactions: {
+          select: {
+            id: true,
+            attemptNumber: true,
+            status: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        },
+        subOrder: {
+          select: { id: true, fulfillmentNodeType: true },
+        },
+        masterOrder: {
+          select: { id: true, orderNumber: true },
+        },
+      },
+    });
+  }
+
   async findByReturnNumber(returnNumber: string): Promise<any | null> {
     return this.prisma.return.findUnique({
       where: { returnNumber },
@@ -125,6 +262,73 @@ export class PrismaReturnRepository implements ReturnRepository {
     return { returns, total };
   }
 
+  // Phase 199 (2026-06-02) — Returns Flow PII audit #2 / #21.
+  //
+  // Customer list read. The existing findByCustomerId uses `include`,
+  // which (Prisma semantics) returns EVERY top-level Return scalar —
+  // leaking riskScore, qcInternalNotes, liabilityParty, the raw
+  // failure reason, internal actor ids, etc. into the customer list.
+  // This is a strict whitelist `select` carrying only what the
+  // storefront list renders, plus the refund summary (#21).
+  async findByCustomerIdSafe(
+    customerId: string,
+    params: FindByCustomerParams,
+  ): Promise<{ returns: any[]; total: number }> {
+    const { page, limit, status } = params;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.ReturnWhereInput = { customerId };
+    if (status) {
+      where.status = status as any;
+    }
+
+    const [returns, total] = await this.prisma.$transaction([
+      this.prisma.return.findMany({
+        where,
+        select: {
+          id: true,
+          returnNumber: true,
+          status: true,
+          createdAt: true,
+          customerNotes: true,
+          // #21 — refund summary on the list row.
+          refundAmount: true,
+          refundAmountInPaise: true,
+          refundMethod: true,
+          refundProcessedAt: true,
+          items: {
+            select: {
+              id: true,
+              orderItemId: true,
+              quantity: true,
+              reasonCategory: true,
+              reasonDetail: true,
+              orderItem: {
+                select: {
+                  id: true,
+                  productTitle: true,
+                  variantTitle: true,
+                  sku: true,
+                  imageUrl: true,
+                  unitPrice: true,
+                },
+              },
+            },
+          },
+          masterOrder: {
+            select: { id: true, orderNumber: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.return.count({ where }),
+    ]);
+
+    return { returns, total };
+  }
+
   async findBySubOrderId(subOrderId: string): Promise<any[]> {
     return this.prisma.return.findMany({
       where: { subOrderId },
@@ -148,6 +352,9 @@ export class PrismaReturnRepository implements ReturnRepository {
       fromDate,
       toDate,
       search,
+      riskScoreMin,
+      riskScoreMax,
+      hasRiskScore,
     } = params;
     const skip = (page - 1) * limit;
 
@@ -183,6 +390,20 @@ export class PrismaReturnRepository implements ReturnRepository {
           },
         },
       ];
+    }
+    // Phase 174 (audit #228) — server-side risk-score filter. A range
+    // (min/max) implies scored (not-null); hasRiskScore alone toggles
+    // scored vs unscored. Lets the risk-review dashboard request
+    // "?riskScoreMin=60&page=1" instead of pulling 200 + filtering 100.
+    if (riskScoreMin !== undefined || riskScoreMax !== undefined) {
+      const rs: { gte?: number; lte?: number } = {};
+      if (riskScoreMin !== undefined) rs.gte = riskScoreMin;
+      if (riskScoreMax !== undefined) rs.lte = riskScoreMax;
+      where.riskScore = rs;
+    } else if (hasRiskScore === true) {
+      where.riskScore = { not: null };
+    } else if (hasRiskScore === false) {
+      where.riskScore = null;
     }
 
     const [returns, total] = await this.prisma.$transaction([

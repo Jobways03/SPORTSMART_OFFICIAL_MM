@@ -44,7 +44,13 @@ function build(opts: {
   };
   const eventBus = { publish: jest.fn().mockResolvedValue(undefined) };
   const env = {
-    getBoolean: jest.fn().mockReturnValue(true),
+    // Phase 174 — the COD cash-in-hand gate (COMMISSION_REQUIRE_COD_PAID)
+    // defaults OFF in prod; keep it OFF here (these hardening tests don't
+    // exercise it) while leaving COMMISSION_PROCESSOR_ENABLED true. The COD
+    // gate itself is covered by commission-processor.service.spec.ts.
+    getBoolean: jest.fn((key: string) =>
+      key === 'COMMISSION_REQUIRE_COD_PAID' ? false : true,
+    ),
     getNumber: jest.fn((_k: string, d: number) => d),
   };
   const moneyDualWrite = {
@@ -61,6 +67,7 @@ function build(opts: {
     moneyDualWrite as any,
     env as any,
     audit as any,
+    { wrap: jest.fn((_n: string, fn: () => unknown) => fn()) } as any, // instr (Phase 174 @Cron migration)
   );
   return {
     svc,

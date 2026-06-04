@@ -52,7 +52,12 @@ export type TaxConfigKey =
   | 'einvoice_enabled'
   | 'legacy_order_cutoff_date'
   | 'b2b_place_of_supply_source'
-  | 'section_34_window_cutoff_month';
+  | 'section_34_window_cutoff_month'
+  // Phase 159aa (Marketplace Commission GSTR-1 audit #17) — SAC + rate
+  // for the marketplace's own commission supply (SAC 9985 / 18% today).
+  // Snapshotted onto SellerSettlement at commission-invoice issue time.
+  | 'commission_sac_code'
+  | 'commission_gst_rate_bps';
 
 const CACHE_TTL_MS = 60_000;
 

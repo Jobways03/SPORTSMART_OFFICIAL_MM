@@ -7,14 +7,38 @@ import {
   NotificationTemplate,
   NotificationChannel,
   NotificationStatus,
-  DispatchPayload,
+  AdminDispatchAlertType,
+  DispatchResult,
+  PreviewResult,
   STATUS_COLOR,
   CHANNEL_LABEL,
 } from '@/services/admin-notifications.service';
+import { RequirePermission } from '@/lib/permissions';
+
+// Phase 187 — registered customer-facing classes (template path respects
+// opt-out by these) + the raw-path alert types.
+const EVENT_CLASSES = ['order', 'refund', 'ticket', 'wallet', 'marketing'] as const;
+const ALERT_TYPES: AdminDispatchAlertType[] = [
+  'ACCOUNT_SECURITY',
+  'FRAUD_ALERT',
+  'COMPLIANCE_NOTICE',
+  'CRITICAL_SERVICE',
+];
 
 type Tab = 'logs' | 'templates' | 'dispatch';
 
 export default function NotificationsAdminPage() {
+  return (
+    <RequirePermission
+      anyOf={['notifications.read']}
+      fallback={<div style={{ padding: 24 }}>Loading…</div>}
+    >
+      <NotificationsAdminInner />
+    </RequirePermission>
+  );
+}
+
+function NotificationsAdminInner() {
   const [tab, setTab] = useState<Tab>('logs');
 
   return (
@@ -326,7 +350,7 @@ function TemplatesTab() {
 function TemplateEditor({ templateKey, onClose }: { templateKey: string; onClose: () => void }) {
   const [tpl, setTpl] = useState<NotificationTemplate | null>(null);
   const [previewVars, setPreviewVars] = useState<string>('{}');
-  const [previewOut, setPreviewOut] = useState<{ subject: string | null; body: string } | null>(null);
+  const [previewOut, setPreviewOut] = useState<PreviewResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -444,11 +468,46 @@ function TemplateEditor({ templateKey, onClose }: { templateKey: string; onClose
                   </div>
                 </>
               )}
+              {/* Phase 188 (#16) — surface unfilled / missing-required vars. */}
+              {(previewOut.missingVars?.length > 0 || previewOut.missingRequiredVars?.length > 0) && (
+                <div style={{ marginBottom: 8, fontSize: 12, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px' }}>
+                  {previewOut.missingRequiredVars?.length > 0 && (
+                    <div>Missing REQUIRED vars: {previewOut.missingRequiredVars.join(', ')}</div>
+                  )}
+                  {previewOut.missingVars?.length > 0 && (
+                    <div>Unfilled vars (render empty): {previewOut.missingVars.join(', ')}</div>
+                  )}
+                </div>
+              )}
+              {/* Phase 188 (#1) — unsupported-syntax warnings. */}
+              {previewOut.warnings?.length > 0 && (
+                <div style={{ marginBottom: 8, fontSize: 12, color: '#991b1b', background: '#fee2e2', border: '1px solid #fecaca', borderRadius: 6, padding: '6px 10px' }}>
+                  {previewOut.warnings.map((w, i) => <div key={i}>{w}</div>)}
+                </div>
+              )}
+              {/* Phase 188 (#14) — channel hints. */}
+              {previewOut.channelHints && (
+                <div style={{ marginBottom: 8, fontSize: 12, color: '#475569' }}>
+                  {String((previewOut.channelHints as { note?: string }).note ?? '')}
+                </div>
+              )}
               <div style={{ fontSize: 11, color: '#7A828F', textTransform: 'uppercase', letterSpacing: 0.5 }}>Body</div>
-              <div
-                style={{ marginTop: 4, fontSize: 13 }}
-                dangerouslySetInnerHTML={{ __html: previewOut.body }}
-              />
+              {/* Phase 188 (#15) — render EMAIL HTML inside a SANDBOXED iframe
+                  (no scripts, no same-origin) so a {{{rawVar}}} XSS payload
+                  can never execute in the admin's browser. Plain-text channels
+                  render as text (never innerHTML). */}
+              {previewOut.channel === 'EMAIL' ? (
+                <iframe
+                  title="email-preview"
+                  sandbox=""
+                  srcDoc={previewOut.body}
+                  style={{ marginTop: 4, width: '100%', minHeight: 240, border: '1px solid #E5E7EB', borderRadius: 6, background: '#fff' }}
+                />
+              ) : (
+                <pre style={{ marginTop: 4, fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit' }}>
+                  {previewOut.body}
+                </pre>
+              )}
             </div>
           )}
         </div>
@@ -508,14 +567,12 @@ function DispatchTab() {
   const [mode, setMode] = useState<DispatchMode>('template');
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<{ jobId: string; eventId: string } | null>(
-    null,
-  );
+  const [result, setResult] = useState<DispatchResult | null>(null);
 
   // Template-mode fields
   const [templateKey, setTemplateKey] = useState('');
   const [recipientId, setRecipientId] = useState('');
-  const [eventClass, setEventClass] = useState('admin.manual');
+  const [eventClass, setEventClass] = useState<string>('order');
   const [varsText, setVarsText] = useState('{}');
 
   // Raw-mode fields
@@ -523,14 +580,19 @@ function DispatchTab() {
   const [rawTo, setRawTo] = useState('');
   const [rawSubject, setRawSubject] = useState('');
   const [rawBody, setRawBody] = useState('');
-  const [rawEventType, setRawEventType] = useState('admin.manual');
+  // Phase 187 — raw path now requires a justification + confirmation.
+  const [rawAlertType, setRawAlertType] = useState<AdminDispatchAlertType>('ACCOUNT_SECURITY');
+  const [rawBypassReason, setRawBypassReason] = useState('');
+  const [rawConfirmed, setRawConfirmed] = useState(false);
 
   async function submit() {
     setErr(null);
     setResult(null);
     setSubmitting(true);
     try {
-      let payload: DispatchPayload;
+      // Phase 187 — fresh idempotency key per submit attempt so a
+      // double-click can't fan out into two sends.
+      const idempotencyKey = crypto.randomUUID();
       if (mode === 'template') {
         if (!templateKey.trim()) throw new Error('templateKey is required');
         if (!recipientId.trim()) throw new Error('recipientId is required');
@@ -540,28 +602,38 @@ function DispatchTab() {
         } catch {
           throw new Error('Vars must be valid JSON');
         }
-        payload = {
+        const res = await adminNotificationsService.dispatchTemplate({
           templateKey: templateKey.trim(),
           recipientId: recipientId.trim(),
           vars,
-          eventClass: eventClass.trim() || undefined,
-        };
+          eventClass: eventClass.trim(),
+          idempotencyKey,
+        });
+        if (res.data) setResult(res.data);
       } else {
         if (!rawBody.trim()) throw new Error('Body is required');
         if (!recipientId.trim() && !rawTo.trim()) {
           throw new Error('Either recipientId or "to" is required');
         }
-        payload = {
+        if (rawBypassReason.trim().length < 10) {
+          throw new Error('A bypass reason (≥10 chars) is required for raw dispatch');
+        }
+        if (!rawConfirmed) {
+          throw new Error('You must confirm this opt-out-bypassing dispatch');
+        }
+        const res = await adminNotificationsService.dispatchRaw({
           channel: rawChannel,
           recipientId: recipientId.trim() || undefined,
           to: rawTo.trim() || undefined,
           subject: rawSubject.trim() || undefined,
           body: rawBody,
-          eventType: rawEventType.trim() || undefined,
-        };
+          alertType: rawAlertType,
+          bypassReason: rawBypassReason.trim(),
+          confirmed: rawConfirmed,
+          idempotencyKey,
+        });
+        if (res.data) setResult(res.data);
       }
-      const res = await adminNotificationsService.dispatch(payload);
-      if (res.data) setResult(res.data);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Dispatch failed');
     } finally {
@@ -642,14 +714,18 @@ function DispatchTab() {
             style={inp}
           />
 
-          <label style={lbl}>Event class (optional)</label>
-          <input
-            type="text"
+          <label style={lbl}>Event class (opt-out applies)</label>
+          <select
             value={eventClass}
             onChange={(e) => setEventClass(e.target.value)}
-            placeholder="admin.manual"
             style={inp}
-          />
+          >
+            {EVENT_CLASSES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
 
           <label style={lbl}>Vars (JSON)</label>
           <textarea
@@ -722,13 +798,39 @@ function DispatchTab() {
             style={{ ...inp, resize: 'vertical' }}
           />
 
-          <label style={lbl}>Event type (for audit)</label>
-          <input
-            type="text"
-            value={rawEventType}
-            onChange={(e) => setRawEventType(e.target.value)}
+          <label style={lbl}>Alert type (raw bypasses opt-out — required)</label>
+          <select
+            value={rawAlertType}
+            onChange={(e) => setRawAlertType(e.target.value as AdminDispatchAlertType)}
             style={inp}
+          >
+            {ALERT_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+
+          <label style={lbl}>Bypass reason (≥10 chars — audited)</label>
+          <textarea
+            value={rawBypassReason}
+            onChange={(e) => setRawBypassReason(e.target.value)}
+            rows={2}
+            placeholder="Why this message must bypass the customer's opt-out"
+            style={{ ...inp, resize: 'vertical' }}
           />
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={rawConfirmed}
+              onChange={(e) => setRawConfirmed(e.target.checked)}
+            />
+            <span>
+              I confirm this is a security / fraud / compliance / critical-service
+              message and may be sent despite the recipient&apos;s opt-out.
+            </span>
+          </label>
         </div>
       )}
 
@@ -760,10 +862,11 @@ function DispatchTab() {
             marginBottom: 12,
           }}
         >
-          Enqueued — jobId{' '}
-          <code style={{ fontFamily: 'ui-monospace, monospace' }}>{result.jobId}</code>{' '}
+          {result.status} — jobId{' '}
+          <code style={{ fontFamily: 'ui-monospace, monospace' }}>{result.jobId ?? '—'}</code>{' '}
           (eventId{' '}
-          <code style={{ fontFamily: 'ui-monospace, monospace' }}>{result.eventId}</code>)
+          <code style={{ fontFamily: 'ui-monospace, monospace' }}>{result.eventId}</code>
+          {result.deduped ? ', duplicate' : ''})
         </div>
       )}
 

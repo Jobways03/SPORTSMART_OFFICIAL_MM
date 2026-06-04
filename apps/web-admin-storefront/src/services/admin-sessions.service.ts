@@ -14,6 +14,10 @@ export interface ActiveSessionRow {
   userAgent: string | null;
   createdAt: string;
   expiresAt: string;
+  // Phase 209 (#4) — last refresh-rotation timestamp + device label.
+  // Lets the operator tell a live session from a stale one at a glance.
+  lastUsedAt: string | null;
+  deviceLabel: string | null;
 }
 
 export interface ListResponse {
@@ -46,7 +50,7 @@ export const adminSessionsService = {
     sessionId: string;
     actorType: ActorType;
     reason?: string;
-  }): Promise<ApiResponse<{ revoked: true; sessionId: string; actorType: ActorType; actorId: string }>> {
+  }): Promise<ApiResponse<{ revoked: true; sessionId: string; actorType: ActorType; actorId: string; alreadyRevoked: boolean }>> {
     return apiClient(`/admin/sessions/${args.sessionId}`, {
       method: 'DELETE',
       body: JSON.stringify({ actorType: args.actorType, reason: args.reason }),

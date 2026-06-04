@@ -51,6 +51,66 @@ export interface EWayBillCancelInput {
 export interface EWayBillCancelResult {
   cancelledAt: Date;
   rawResponseJson: unknown;
+  // Phase 160 (cancel/override audit #7) — NIC's cancellation reference,
+  // surfaced so the service can persist it in a queryable column.
+  providerCancelReference?: string | null;
+}
+
+/**
+ * Phase 160 (e-way-bill audit #18) — NIC Part-B (transport details) update.
+ * Part-B can be revised after issuance WITHOUT cancelling the EWB (e.g. a
+ * vehicle breakdown / trans-shipment). NIC re-issues the validity on a
+ * Part-B update; the provider returns the (possibly refreshed) validUntil.
+ */
+export interface EWayBillUpdatePartBInput {
+  ewbNumber: string;
+  transportMode: EWayBillTransportMode;
+  vehicleNumber: string | null;
+  transporterId: string | null;
+  transporterName: string | null;
+  distanceKm: number | null;
+  /** Free-text reason captured in the audit trail. */
+  reason: string;
+}
+
+export interface EWayBillUpdatePartBResult {
+  validUntil: Date;
+  rawResponseJson: unknown;
+}
+
+/**
+ * Phase 160 (e-way-bill audit #11) — typed provider error so the service +
+ * controller map NIC's failure modes to the right HTTP status / retry
+ * behaviour instead of collapsing every error to 500. Mirrors the
+ * e-invoice EInvoiceProviderError taxonomy:
+ *   - AUTH      (NIC token expired / HTTP 401): refresh + retry
+ *   - RATE_LIMIT(HTTP 429): back off + retry
+ *   - PERMANENT (HTTP 400 / NIC data error e.g. invalid GSTIN, bad
+ *               vehicle format): do NOT retry
+ *   - TRANSIENT (HTTP 5xx / network): retryable
+ */
+export type EWayBillProviderErrorCategory =
+  | 'AUTH'
+  | 'RATE_LIMIT'
+  | 'PERMANENT'
+  | 'TRANSIENT';
+
+export class EWayBillProviderError extends Error {
+  constructor(
+    message: string,
+    public readonly category: EWayBillProviderErrorCategory,
+    public readonly opts: {
+      nicErrorCode?: string | null;
+      httpStatus?: number | null;
+    } = {},
+  ) {
+    super(message);
+    this.name = 'EWayBillProviderError';
+  }
+
+  get retryable(): boolean {
+    return this.category === 'AUTH' || this.category === 'RATE_LIMIT' || this.category === 'TRANSIENT';
+  }
 }
 
 export const EWAY_BILL_PROVIDER = Symbol.for('EWayBillProvider');
@@ -61,4 +121,8 @@ export interface EWayBillProvider {
   readonly name: string;
   generate(input: EWayBillGenerateInput): Promise<EWayBillGenerateResult>;
   cancel(input: EWayBillCancelInput): Promise<EWayBillCancelResult>;
+  // Phase 160 (audit #18) — update Part-B (transport) without cancelling.
+  updatePartB(
+    input: EWayBillUpdatePartBInput,
+  ): Promise<EWayBillUpdatePartBResult>;
 }

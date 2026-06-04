@@ -14,6 +14,8 @@ function buildDeps(overrides: any = {}) {
         update: jest.fn().mockResolvedValue({}),
       },
       returnStatusHistory: { create: jest.fn().mockResolvedValue({}) },
+      // Phase 167 (#2/#3) — flipInstruction looks up the linked instruction.
+      refundInstruction: { findFirst: jest.fn().mockResolvedValue(null) },
     },
     logger: {
       setContext: jest.fn(),
@@ -22,6 +24,8 @@ function buildDeps(overrides: any = {}) {
       error: jest.fn(),
     },
     eventBus: { publish: jest.fn().mockResolvedValue(undefined) },
+    // Phase 167 — RefundInstructionService.markGatewayOutcome (4th ctor arg).
+    instructionService: { markGatewayOutcome: jest.fn().mockResolvedValue({ flipped: true }) },
     ...overrides,
   };
 }
@@ -55,6 +59,7 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(makePayload());
     expect(out.outcome).toBe('DUPLICATE');
@@ -75,6 +80,7 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(makePayload());
     expect(out.outcome).toBe('NO_MATCH');
@@ -101,6 +107,7 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(makePayload());
     expect(out.outcome).toBe('PROCESSED');
@@ -134,6 +141,7 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(makePayload());
     expect(out.outcome).toBe('NO_OP');
@@ -160,6 +168,7 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(
       makePayload({ refundStatus: 'failed', eventType: 'refund.failed' }),
@@ -192,6 +201,7 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(
       makePayload({ refundStatus: 'failed', eventType: 'refund.failed' }),
@@ -222,11 +232,61 @@ describe('RazorpayRefundWebhookService (Phase 100)', () => {
       deps.prisma as any,
       deps.logger as any,
       deps.eventBus as any,
+      deps.instructionService as any,
     );
     const out = await svc.handleEvent(
       makePayload({ refundStatus: 'pending' }),
     );
     expect(out.outcome).toBe('NO_OP');
     expect(deps.prisma.return.update).not.toHaveBeenCalled();
+  });
+
+  // Phase 167 review (L2#1/L2#2) — refund.settled must not silently ack a
+  // settlement for a refund we don't track.
+  it('refund.settled → NO_MATCH when neither a Return nor an instruction matches', async () => {
+    const deps = buildDeps({
+      prisma: {
+        ...buildDeps().prisma,
+        return: { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn() },
+        // findFirst already resolves null → flipInstruction returns false.
+        refundInstruction: { findFirst: jest.fn().mockResolvedValue(null) },
+      },
+    });
+    const svc = new RazorpayRefundWebhookService(
+      deps.prisma as any,
+      deps.logger as any,
+      deps.eventBus as any,
+      deps.instructionService as any,
+    );
+    const out = await svc.handleEvent(
+      makePayload({ eventType: 'refund.settled', refundStatus: 'processed' }),
+    );
+    expect(out.outcome).toBe('NO_MATCH');
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/untracked settlement/),
+    );
+  });
+
+  it('refund.settled → PROCESSED (SETTLED) when an instruction matches even with no Return', async () => {
+    const deps = buildDeps({
+      prisma: {
+        ...buildDeps().prisma,
+        return: { findFirst: jest.fn().mockResolvedValue(null), update: jest.fn() },
+        refundInstruction: { findFirst: jest.fn().mockResolvedValue({ id: 'inst-9' }) },
+      },
+    });
+    const svc = new RazorpayRefundWebhookService(
+      deps.prisma as any,
+      deps.logger as any,
+      deps.eventBus as any,
+      deps.instructionService as any,
+    );
+    const out = await svc.handleEvent(
+      makePayload({ eventType: 'refund.settled', refundStatus: 'processed' }),
+    );
+    expect(out.outcome).toBe('PROCESSED');
+    expect(deps.instructionService.markGatewayOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ instructionId: 'inst-9', outcome: 'SETTLED' }),
+    );
   });
 });

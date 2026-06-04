@@ -172,6 +172,20 @@ export interface FranchiseOrderItem {
   createdAt: string;
 }
 
+// Shape of a row from GET /admin/franchises/:id/pos-sales (FranchisePosSale +
+// _count.items). netAmount is a Prisma Decimal, serialised over JSON as a string.
+export interface FranchisePosSale {
+  id: string;
+  saleNumber: string;
+  saleType: string;
+  status: string;
+  netAmount: string;
+  paymentMethod: string;
+  soldAt: string;
+  createdAt: string;
+  _count?: { items: number };
+}
+
 export const adminFranchisesService = {
   listFranchises(params: ListFranchisesParams = {}): Promise<ApiResponse<FranchiseListResponse>> {
     const query = new URLSearchParams();
@@ -334,7 +348,7 @@ export const adminFranchisesService = {
   getPosSales(
     franchiseId: string,
     params: { page?: number; limit?: number; status?: string } = {},
-  ): Promise<ApiResponse> {
+  ): Promise<ApiResponse<{ sales: FranchisePosSale[]; total: number }>> {
     const query = new URLSearchParams();
     if (params.page) query.set('page', String(params.page));
     if (params.limit) query.set('limit', String(params.limit));

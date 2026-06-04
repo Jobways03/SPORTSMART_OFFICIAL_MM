@@ -35,17 +35,24 @@ const COMMON_PRESETS: Array<{ code: string; description: string }> = [
 export default function UqcMasterPage() {
   const { confirmDialog, notify } = useModal();
   const [rows, setRows] = useState<UqcMasterItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<Tab>('ACTIVE');
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  // Phase 161 #11 — deactivation now requires a reason; modal collects it.
+  const [deactivateRow, setDeactivateRow] = useState<UqcMasterItem | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await adminTaxService.listUqc({ search: search || undefined });
-      setRows(res.data ?? []);
+      // Phase 161 #8 — the endpoint paginates (cap 200).
+      const res = await adminTaxService.listUqc({ search: search || undefined, limit: 200 });
+      setRows(res.data?.items ?? []);
+      setTotal(res.data?.total ?? res.data?.items?.length ?? 0);
+      setHasMore(res.data?.hasMore ?? false);
     } finally {
       setLoading(false);
     }
@@ -54,20 +61,22 @@ export default function UqcMasterPage() {
   useEffect(() => { void refresh(); }, [refresh]);
 
   const toggleActive = async (row: UqcMasterItem) => {
-    const next = !row.isActive;
+    // Phase 161 #11/#5 — deactivation routes through the reason modal.
+    if (row.isActive) {
+      setDeactivateRow(row);
+      return;
+    }
     const ok = await confirmDialog({
-      title: `${next ? 'Reactivate' : 'Deactivate'} UQC ${row.code}?`,
-      message: next
-        ? 'Reactivating lets new invoices declare this UQC again.'
-        : 'New invoices won\'t be able to pick this UQC. Existing line snapshots that reference this code are unaffected.',
-      confirmText: next ? 'Reactivate' : 'Deactivate',
+      title: `Reactivate UQC ${row.code}?`,
+      message: 'Reactivating lets new invoices declare this UQC again.',
+      confirmText: 'Reactivate',
       cancelText: 'Cancel',
-      danger: !next,
+      danger: false,
     });
     if (!ok) return;
     setBusyId(row.id);
     try {
-      await adminTaxService.updateUqc(row.id, { isActive: next });
+      await adminTaxService.updateUqc(row.id, { isActive: true, expectedVersion: row.version });
       await refresh();
     } catch (err: any) {
       void notify({ kind: 'error', message: err?.message ?? 'Update failed' });
@@ -175,7 +184,8 @@ export default function UqcMasterPage() {
       </div>
 
       <p style={{ marginTop: 8, fontSize: 11, color: '#7A828F' }}>
-        {filtered.length} of {rows.length} loaded
+        {filtered.length} shown · {rows.length} loaded of {total.toLocaleString('en-IN')} total
+        {hasMore ? ' · refine your search to narrow the list' : ''}
       </p>
 
       {showCreate && (
@@ -185,6 +195,110 @@ export default function UqcMasterPage() {
           onCreated={async () => { setShowCreate(false); await refresh(); }}
         />
       )}
+
+      {deactivateRow && (
+        <DeactivateModal
+          row={deactivateRow}
+          onClose={() => setDeactivateRow(null)}
+          onDone={async () => { setDeactivateRow(null); await refresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Deactivate modal (Phase 161 #5/#11) ───────────────────────────
+
+function DeactivateModal({
+  row, onClose, onDone,
+}: { row: UqcMasterItem; onClose: () => void; onDone: () => Promise<void> }) {
+  const [reason, setReason] = useState('');
+  const [force, setForce] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (reason.trim().length < 5) {
+      setErr('A reason of at least 5 characters is required.');
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      await adminTaxService.updateUqc(row.id, {
+        isActive: false,
+        deactivationReason: reason.trim(),
+        force,
+        expectedVersion: row.version,
+      });
+      await onDone();
+    } catch (e: any) {
+      // A reference guard (409) surfaces here — tick "force" + retry.
+      setErr(e?.message ?? 'Deactivate failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={() => !busy && onClose()}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15, 17, 21, 0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 260, padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 16, padding: 24,
+          maxWidth: 520, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+        }}
+      >
+        <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: '#0F1115' }}>
+          Deactivate UQC {row.code}?
+        </h2>
+        <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', lineHeight: 1.5 }}>
+          New invoices won&apos;t be able to pick this UQC. Existing line snapshots are unaffected.
+          A reason is recorded on the audit trail.
+        </p>
+
+        <div style={{ marginTop: 16 }}>
+          <Field label="Reason *" hint="min 5 characters">
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Replaced by PCS per the 2026 UQC consolidation"
+              rows={3}
+              style={{ ...input, height: 'auto', padding: '8px 12px', resize: 'vertical' }}
+            />
+          </Field>
+          <label style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#0F1115' }}>
+            <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+            Force — deactivate even if HSN rows / products still reference this code
+          </label>
+        </div>
+
+        {err && (
+          <div style={{
+            marginTop: 12, padding: '8px 12px', borderRadius: 10, fontSize: 13,
+            border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c',
+          }}>{err}</div>
+        )}
+
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
+          <button
+            onClick={() => void submit()}
+            disabled={busy || reason.trim().length < 5}
+            style={busy || reason.trim().length < 5
+              ? { ...btnPrimary, ...busyStyle, background: '#b91c1c', border: '1px solid #b91c1c' }
+              : { ...btnPrimary, background: '#b91c1c', border: '1px solid #b91c1c' }}
+          >
+            {busy ? 'Deactivating…' : 'Deactivate'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

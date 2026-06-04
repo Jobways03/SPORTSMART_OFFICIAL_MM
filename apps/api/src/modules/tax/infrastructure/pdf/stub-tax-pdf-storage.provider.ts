@@ -4,14 +4,11 @@
 // `apps/api/storage/tax-pdfs/...`. Returns a `file://` URL for
 // `publicUrl` so dev tooling can open the file directly.
 //
-// Why the stub instead of wiring S3 / Cloudinary today:
-//   1. S3Adapter is itself a stub (no PUT support yet — see
-//      apps/api/src/integrations/s3/clients/s3.client.ts).
-//   2. CloudinaryAdapter only accepts images (`allowed_formats:
-//      ['jpg', 'jpeg', 'png', 'webp']`).
-//   3. The contract on this provider is the same regardless; flipping
-//      `TAX_PDF_STORAGE_PROVIDER=s3` in a later phase only swaps the
-//      adapter, not the service-layer code.
+// The stub stays the dev/test default. The real path is now Cloudflare R2
+// (R2TaxPdfStorageProvider, TAX_PDF_STORAGE_PROVIDER=r2) — R2 speaks the S3
+// API and supports PUT. MediaStorageAdapter is image-only (`allowed_formats:
+// ['jpg','jpeg','png','webp']`) so it can't hold PDFs. The provider contract
+// is identical regardless; flipping the env only swaps the adapter.
 //
 // In dev the URL renders as `file:///abs/path/...pdf`. Tests
 // configure an in-memory FS via the StubTaxPdfStorageProvider's

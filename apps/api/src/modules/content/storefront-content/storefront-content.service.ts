@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../bootstrap/database/prisma.service';
 import { RedisService } from '../../../bootstrap/cache/redis.service';
-import { CloudinaryAdapter } from '../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../integrations/media/media-storage.adapter';
 import { ContentAuditService } from './content-audit.service';
+import { ConflictAppException } from '../../../core/exceptions';
 
 /**
  * Phase 47 (2026-05-21) — public-read cache.
@@ -27,7 +28,7 @@ export const STOREFRONT_CONTENT_ACTIVE_MAP_TTL_SECONDS = 30;
  * the values into MediaTile.
  *
  * Phase 47 changes:
- *   - imagePublicId persisted alongside imageUrl so Cloudinary
+ *   - imagePublicId persisted alongside imageUrl so media
  *     orphans are cleaned up on replace / reset / delete.
  *   - listActiveAsMap filters by [startAt, endAt) schedule window
  *     so admin can pre-load campaign banners.
@@ -39,6 +40,11 @@ export const STOREFRONT_CONTENT_ACTIVE_MAP_TTL_SECONDS = 30;
 export interface StorefrontContentBlockDto {
   slot: string;
   imageUrl: string | null;
+  // Phase 48 (Finding #3) — device-targeted artwork + visibility. The
+  // storefront picks imageUrlMobile on small viewports and honours
+  // deviceVisibility (ALL / DESKTOP_ONLY / MOBILE_ONLY) client-side.
+  imageUrlMobile: string | null;
+  deviceVisibility: string;
   imageAlt: string | null;
   eyebrow: string | null;
   headline: string | null;
@@ -50,11 +56,16 @@ export interface StorefrontContentBlockDto {
   active: boolean;
   startAt: string | null;
   endAt: string | null;
+  // Phase 48 (Finding #21) — optimistic-concurrency token surfaced so
+  // the admin UI can echo it back on the next write.
+  version: number;
   updatedAt: Date;
 }
 
 export interface UpsertStorefrontContentInput {
   imageUrl?: string | null;
+  imageUrlMobile?: string | null;
+  deviceVisibility?: string;
   imageAlt?: string | null;
   eyebrow?: string | null;
   headline?: string | null;
@@ -66,6 +77,10 @@ export interface UpsertStorefrontContentInput {
   active?: boolean;
   startAt?: string | Date | null;
   endAt?: string | Date | null;
+  // Phase 48 (Finding #21) — when provided on an UPDATE, the service
+  // 409s if the row's current version has moved past it. Optional so
+  // existing callers (and the upload path) are unaffected.
+  expectedVersion?: number;
 }
 
 @Injectable()
@@ -74,7 +89,7 @@ export class StorefrontContentService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly audit: ContentAuditService,
     private readonly redis: RedisService,
   ) {}
@@ -161,27 +176,32 @@ export class StorefrontContentService {
       where: { slot },
     });
 
-    const row = await this.prisma.storefrontContentBlock.upsert({
-      where: { slot },
-      create: {
-        slot,
-        imageUrl: input.imageUrl ?? null,
-        imageAlt: input.imageAlt ?? null,
-        eyebrow: input.eyebrow ?? null,
-        headline: input.headline ?? null,
-        subhead: input.subhead ?? null,
-        ctaLabel: input.ctaLabel ?? null,
-        ctaHref: input.ctaHref ?? null,
-        price: input.price ?? null,
-        priceCaption: input.priceCaption ?? null,
-        active: input.active ?? true,
-        startAt: input.startAt ? new Date(input.startAt) : null,
-        endAt: input.endAt ? new Date(input.endAt) : null,
-        updatedById: updatedById ?? null,
-      },
-      update: {
-        // `undefined` leaves a field untouched; explicit null clears it.
+    // Phase 48 (Finding #21) — optimistic concurrency. When the caller
+    // sends the version it last read and the row has since moved on,
+    // reject so the second admin's blind overwrite doesn't clobber the
+    // first's edit. Pre-read guard gives a clean message; the CAS in
+    // the UPDATE where-clause below closes the read→write race window.
+    if (
+      before &&
+      input.expectedVersion !== undefined &&
+      before.version !== input.expectedVersion
+    ) {
+      throw new ConflictAppException(
+        'another admin updated this slot; reload and retry',
+      );
+    }
+
+    let row;
+    if (before) {
+      // `undefined` leaves a field untouched; explicit null clears it.
+      const data = {
         imageUrl: input.imageUrl === undefined ? undefined : input.imageUrl,
+        imageUrlMobile:
+          input.imageUrlMobile === undefined ? undefined : input.imageUrlMobile,
+        deviceVisibility:
+          input.deviceVisibility === undefined
+            ? undefined
+            : (input.deviceVisibility as any),
         imageAlt: input.imageAlt === undefined ? undefined : input.imageAlt,
         eyebrow: input.eyebrow === undefined ? undefined : input.eyebrow,
         headline: input.headline === undefined ? undefined : input.headline,
@@ -189,7 +209,8 @@ export class StorefrontContentService {
         ctaLabel: input.ctaLabel === undefined ? undefined : input.ctaLabel,
         ctaHref: input.ctaHref === undefined ? undefined : input.ctaHref,
         price: input.price === undefined ? undefined : input.price,
-        priceCaption: input.priceCaption === undefined ? undefined : input.priceCaption,
+        priceCaption:
+          input.priceCaption === undefined ? undefined : input.priceCaption,
         active: input.active === undefined ? undefined : input.active,
         startAt:
           input.startAt === undefined
@@ -206,9 +227,51 @@ export class StorefrontContentService {
         // Phase 47 — clearing deletedAt undoes a soft-delete by
         // re-upserting (admins can recover via the audit log).
         deletedAt: null,
+        // Phase 48 (Finding #21) — every update advances the version.
+        version: { increment: 1 },
         updatedById: updatedById ?? null,
-      },
-    });
+      };
+      try {
+        row = await this.prisma.storefrontContentBlock.update({
+          // CAS: when expectedVersion was supplied, pin the update to
+          // that exact version so a concurrent bump between our read and
+          // write fails the match (P2025) rather than silently winning.
+          where:
+            input.expectedVersion === undefined
+              ? { slot }
+              : { slot, version: input.expectedVersion },
+          data,
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2025') {
+          throw new ConflictAppException(
+            'another admin updated this slot; reload and retry',
+          );
+        }
+        throw err;
+      }
+    } else {
+      row = await this.prisma.storefrontContentBlock.create({
+        data: {
+          slot,
+          imageUrl: input.imageUrl ?? null,
+          imageUrlMobile: input.imageUrlMobile ?? null,
+          deviceVisibility: (input.deviceVisibility ?? undefined) as any,
+          imageAlt: input.imageAlt ?? null,
+          eyebrow: input.eyebrow ?? null,
+          headline: input.headline ?? null,
+          subhead: input.subhead ?? null,
+          ctaLabel: input.ctaLabel ?? null,
+          ctaHref: input.ctaHref ?? null,
+          price: input.price ?? null,
+          priceCaption: input.priceCaption ?? null,
+          active: input.active ?? true,
+          startAt: input.startAt ? new Date(input.startAt) : null,
+          endAt: input.endAt ? new Date(input.endAt) : null,
+          updatedById: updatedById ?? null,
+        },
+      });
+    }
 
     await this.audit.record({
       resourceType: 'CONTENT_BLOCK',
@@ -223,10 +286,10 @@ export class StorefrontContentService {
   }
 
   /**
-   * Phase 47 — reset = soft-delete + Cloudinary asset cleanup.
-   * Pre-Phase-47 the row was hard-deleted and the Cloudinary asset
+   * Phase 47 — reset = soft-delete + media asset cleanup.
+   * Pre-Phase-47 the row was hard-deleted and the media asset
    * orphaned. Now the row stays (deletedAt stamped) so the audit log
-   * can show the rollback target; Cloudinary delete is fire-and-
+   * can show the rollback target; media delete is fire-and-
    * forget post-flush.
    */
   async resetSlot(slot: string, actorId?: string): Promise<void> {
@@ -241,11 +304,11 @@ export class StorefrontContentService {
     });
 
     if (existing.imagePublicId) {
-      this.cloudinary
+      this.media
         .delete(existing.imagePublicId)
         .catch((err) =>
           this.logger.warn(
-            `Cloudinary delete failed for ${existing.imagePublicId}: ${(err as Error).message}`,
+            `media delete failed for ${existing.imagePublicId}: ${(err as Error).message}`,
           ),
         );
     }
@@ -263,7 +326,7 @@ export class StorefrontContentService {
 
   /**
    * Phase 47 — upload + persist publicId. On replace (existing
-   * publicId differs from new), the prior Cloudinary asset is
+   * publicId differs from new), the prior media asset is
    * deleted fire-and-forget.
    */
   async uploadImage(
@@ -275,11 +338,11 @@ export class StorefrontContentService {
       where: { slot },
     });
 
-    const result = await this.cloudinary.upload(file.buffer, {
+    const result = await this.media.upload(file.buffer, {
       folder: `storefront-content/${slot}`,
       resourceType: 'image',
       // Phase 47 — cap dimensions so a 5000×3000 upload doesn't ship to
-      // every storefront client. Cloudinary's `limit` only scales down.
+      // every storefront client. media's `limit` only scales down.
       transformation: [{ width: 1600, height: 900, crop: 'limit' }],
     });
     this.logger.log(
@@ -307,11 +370,11 @@ export class StorefrontContentService {
     } catch (err) {
       // DB write failed — clean up the freshly-uploaded asset so it
       // doesn't orphan.
-      this.cloudinary
+      this.media
         .delete(result.publicId)
         .catch((e) =>
           this.logger.warn(
-            `Cloudinary cleanup failed for orphan ${result.publicId}: ${(e as Error).message}`,
+            `media cleanup failed for orphan ${result.publicId}: ${(e as Error).message}`,
           ),
         );
       throw err;
@@ -320,11 +383,11 @@ export class StorefrontContentService {
     // Replace-path: a prior asset existed, now superseded. Delete it
     // fire-and-forget so the next read doesn't keep paying for it.
     if (before?.imagePublicId && before.imagePublicId !== result.publicId) {
-      this.cloudinary
+      this.media
         .delete(before.imagePublicId)
         .catch((err) =>
           this.logger.warn(
-            `Cloudinary cleanup failed for prior asset ${before.imagePublicId}: ${(err as Error).message}`,
+            `media cleanup failed for prior asset ${before.imagePublicId}: ${(err as Error).message}`,
           ),
         );
     }
@@ -346,6 +409,8 @@ export class StorefrontContentService {
   private toDto(row: {
     slot: string;
     imageUrl: string | null;
+    imageUrlMobile?: string | null;
+    deviceVisibility?: string | null;
     imageAlt: string | null;
     eyebrow: string | null;
     headline: string | null;
@@ -357,11 +422,16 @@ export class StorefrontContentService {
     active: boolean;
     startAt: Date | null;
     endAt: Date | null;
+    version?: number;
     updatedAt: Date;
   }): StorefrontContentBlockDto {
     return {
       slot: row.slot,
       imageUrl: row.imageUrl,
+      imageUrlMobile: row.imageUrlMobile ?? null,
+      // Default to ALL so a row written before the column existed (or a
+      // partial test fixture) still presents a valid visibility.
+      deviceVisibility: row.deviceVisibility ?? 'ALL',
       imageAlt: row.imageAlt,
       eyebrow: row.eyebrow,
       headline: row.headline,
@@ -373,6 +443,7 @@ export class StorefrontContentService {
       active: row.active,
       startAt: row.startAt ? row.startAt.toISOString() : null,
       endAt: row.endAt ? row.endAt.toISOString() : null,
+      version: row.version ?? 1,
       updatedAt: row.updatedAt,
     };
   }
@@ -380,6 +451,8 @@ export class StorefrontContentService {
   private toAuditSnapshot(row: {
     slot: string;
     imageUrl: string | null;
+    imageUrlMobile?: string | null;
+    deviceVisibility?: string | null;
     imagePublicId?: string | null;
     imageAlt?: string | null;
     eyebrow: string | null;
@@ -392,10 +465,13 @@ export class StorefrontContentService {
     active: boolean;
     startAt?: Date | null;
     endAt?: Date | null;
+    version?: number;
   }): Record<string, unknown> {
     return {
       slot: row.slot,
       imageUrl: row.imageUrl,
+      imageUrlMobile: row.imageUrlMobile ?? null,
+      deviceVisibility: row.deviceVisibility ?? 'ALL',
       imagePublicId: row.imagePublicId ?? null,
       imageAlt: row.imageAlt ?? null,
       eyebrow: row.eyebrow,
@@ -408,6 +484,7 @@ export class StorefrontContentService {
       active: row.active,
       startAt: row.startAt ? row.startAt.toISOString() : null,
       endAt: row.endAt ? row.endAt.toISOString() : null,
+      version: row.version ?? 1,
     };
   }
 }

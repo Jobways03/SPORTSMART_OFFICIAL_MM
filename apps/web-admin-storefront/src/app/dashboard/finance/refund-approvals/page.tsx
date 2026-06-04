@@ -15,6 +15,7 @@ import {
   adminRefundApprovalsService,
   RefundInstructionRow,
   RefundInstructionStatus,
+  RefundSourceType,
   STATUS_COLOR,
   STATUS_LABEL,
 } from '@/services/admin-refund-approvals.service';
@@ -23,11 +24,27 @@ type Tab = RefundInstructionStatus | 'ALL';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'PENDING_APPROVAL', label: 'Pending approval' },
+  { key: 'NEEDS_CLARIFICATION', label: 'Needs clarification' },
   { key: 'SUCCESS', label: 'Approved + paid' },
   { key: 'CANCELLED', label: 'Rejected' },
   { key: 'FAILED', label: 'Failed' },
   { key: 'ALL', label: 'All' },
 ];
+
+const SOURCE_OPTIONS: { value: RefundSourceType | ''; label: string }[] = [
+  { value: '', label: 'All sources' },
+  { value: 'RETURN', label: 'Return' },
+  { value: 'DISPUTE', label: 'Dispute' },
+  { value: 'GOODWILL', label: 'Goodwill' },
+];
+
+function isOverdue(r: RefundInstructionRow): boolean {
+  return (
+    (r.status === 'PENDING_APPROVAL' || r.status === 'NEEDS_CLARIFICATION') &&
+    !!r.approvalDueBy &&
+    new Date(r.approvalDueBy).getTime() < Date.now()
+  );
+}
 
 export default function RefundApprovalsPage() {
   const [tab, setTab] = useState<Tab>('PENDING_APPROVAL');
@@ -36,6 +53,14 @@ export default function RefundApprovalsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Phase 170 (#8/#6) — source filter + overdue-only toggle.
+  const [sourceFilter, setSourceFilter] = useState<RefundSourceType | ''>('');
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  // Phase 172 (#17) — goodwill-only toggle.
+  const [goodwillOnly, setGoodwillOnly] = useState(false);
+  // Phase 170 (#9) — bulk-approve selection.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Reject modal state — single in-flight at a time.
   const [rejectingId, setRejectingId] = useState<string | null>(null);
@@ -44,11 +69,15 @@ export default function RefundApprovalsPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError('');
+    setSelected(new Set());
     try {
       const res = await adminRefundApprovalsService.list({
         status: tab === 'ALL' ? undefined : tab,
         page: 1,
         limit: 50,
+        sourceType: sourceFilter || undefined,
+        overdue: overdueOnly || undefined,
+        goodwill: goodwillOnly || undefined,
       });
       if (res.data) {
         setRows(res.data.items);
@@ -59,7 +88,7 @@ export default function RefundApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, sourceFilter, overdueOnly, goodwillOnly]);
 
   useEffect(() => {
     refresh();
@@ -94,6 +123,33 @@ export default function RefundApprovalsPage() {
     } finally {
       setBusyId(null);
     }
+  };
+
+  // Phase 170 (#9) — bulk approve the selected pending instructions.
+  const onBulkApprove = async () => {
+    if (selected.size === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    setError('');
+    try {
+      const res = await adminRefundApprovalsService.bulkApprove(Array.from(selected));
+      if (res.data && res.data.failed > 0) {
+        setError(`Bulk approve: ${res.data.approved} approved, ${res.data.failed} skipped (some may need a second approver or were already actioned).`);
+      }
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Bulk approve failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   return (
@@ -131,6 +187,42 @@ export default function RefundApprovalsPage() {
         ))}
       </div>
 
+      {/* Phase 170 (#8/#6) — source filter + overdue toggle. */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value as RefundSourceType | '')}
+          style={{ height: 32, padding: '0 10px', border: '1px solid #D2D6DC', background: '#fff', borderRadius: 9999, fontSize: 13 }}
+        >
+          {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#525A65', cursor: 'pointer' }}>
+          <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
+          Overdue only (past SLA)
+        </label>
+        {/* Phase 172 (#17) — goodwill-only filter. */}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#525A65', cursor: 'pointer' }}>
+          <input type="checkbox" checked={goodwillOnly} onChange={(e) => setGoodwillOnly(e.target.checked)} />
+          Goodwill only
+        </label>
+      </div>
+
+      {/* Phase 170 (#9) — bulk-approve bar (pending/clarification tabs only). */}
+      {(tab === 'PENDING_APPROVAL' || tab === 'NEEDS_CLARIFICATION') && selected.size > 0 && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, padding: '8px 12px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12 }}>
+          <span style={{ fontSize: 13, color: '#15803d', fontWeight: 600 }}>{selected.size} selected</span>
+          <button
+            type="button"
+            onClick={onBulkApprove}
+            disabled={bulkBusy}
+            style={{ height: 30, padding: '0 14px', border: 'none', background: '#15803d', color: '#fff', borderRadius: 9999, fontSize: 12, fontWeight: 600, cursor: bulkBusy ? 'wait' : 'pointer', opacity: bulkBusy ? 0.6 : 1 }}
+          >
+            {bulkBusy ? 'Approving…' : `Approve ${selected.size}`}
+          </button>
+          <button type="button" onClick={() => setSelected(new Set())} style={{ height: 30, padding: '0 12px', border: '1px solid #D2D6DC', background: '#fff', color: '#0F1115', borderRadius: 9999, fontSize: 12, cursor: 'pointer' }}>Clear</button>
+        </div>
+      )}
+
       {error && (
         <div style={{ padding: 10, marginBottom: 12, border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c', borderRadius: 12, fontSize: 13 }}>
           {error}
@@ -148,6 +240,7 @@ export default function RefundApprovalsPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB', textAlign: 'left' }}>
+                <Th> </Th>
                 <Th>Source</Th>
                 <Th>Method</Th>
                 <Th>Amount</Th>
@@ -162,9 +255,21 @@ export default function RefundApprovalsPage() {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 });
-                const isPending = r.status === 'PENDING_APPROVAL';
+                const isPending = r.status === 'PENDING_APPROVAL' || r.status === 'NEEDS_CLARIFICATION';
+                const overdue = isOverdue(r);
+                const selectable = r.status === 'PENDING_APPROVAL';
                 return (
-                  <tr key={r.id} style={{ borderBottom: '1px solid #F3F4F6' }}>
+                  <tr key={r.id} style={{ borderBottom: '1px solid #F3F4F6', background: overdue ? '#fffbeb' : undefined }}>
+                    <Td>
+                      {selectable && (
+                        <input
+                          type="checkbox"
+                          checked={selected.has(r.id)}
+                          onChange={() => toggleSelected(r.id)}
+                          aria-label="select for bulk approve"
+                        />
+                      )}
+                    </Td>
                     <Td>
                       {/* Stays inside Finance Approvals — the detail page
                           renders the dispute/return context inline using
@@ -177,6 +282,24 @@ export default function RefundApprovalsPage() {
                       >
                         {r.sourceType} — {r.sourceId.slice(0, 8)}…
                       </Link>
+                      {/* Phase 172 (#17) — goodwill badge (non-recoverable platform expense). */}
+                      {r.isGoodwill && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 10,
+                            padding: '2px 7px',
+                            borderRadius: 9999,
+                            background: '#f3e8ff',
+                            color: '#7c3aed',
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.05em',
+                          }}
+                        >
+                          Goodwill
+                        </span>
+                      )}
                     </Td>
                     <Td>{r.refundMethod}</Td>
                     <Td><strong>₹{rupees}</strong></Td>
@@ -188,6 +311,17 @@ export default function RefundApprovalsPage() {
                       }}>
                         {STATUS_LABEL[r.status]}
                       </span>
+                      {overdue && (
+                        <span style={{
+                          marginLeft: 6, fontSize: 11, padding: '3px 9px', borderRadius: 9999,
+                          background: '#fef3c7', color: '#b45309', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                        }}>Overdue</span>
+                      )}
+                      {r.status === 'NEEDS_CLARIFICATION' && r.clarificationNote && (
+                        <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 4 }}>
+                          Q: {r.clarificationNote}
+                        </div>
+                      )}
                       {r.rejectionReason && (
                         <div style={{ fontSize: 11, color: '#7A828F', marginTop: 4 }}>
                           {r.rejectionReason}

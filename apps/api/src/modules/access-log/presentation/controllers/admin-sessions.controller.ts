@@ -19,10 +19,16 @@ import {
   StepUpGuard,
 } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   AdminSessionsService,
   ActorType,
 } from '../../application/services/admin-sessions.service';
+import {
+  RevokeAllSessionsDto,
+  RevokeSessionDto,
+  SessionsListQueryDto,
+} from '../dtos/admin-sessions.dto';
 
 // Phase 27 (2026-05-21) — AFFILIATE added. The affiliate session
 // table is fully populated (login + refresh + theft detection) and
@@ -47,50 +53,74 @@ function parseActorType(raw: string | undefined): ActorType | undefined {
 @Controller('admin/sessions')
 @UseGuards(AdminAuthGuard, PermissionsGuard, StepUpGuard)
 export class AdminSessionsController {
-  constructor(private readonly service: AdminSessionsService) {}
+  constructor(
+    private readonly service: AdminSessionsService,
+    private readonly audit: AuditPublicFacade,
+  ) {}
 
   /**
    * List currently-active sessions across admins, users, sellers,
-   * and franchises. Filters: actorType (one of the four), actorId
-   * (scope to one user), ipAddress (find a specific device). Results
-   * are merged + sorted newest-first.
+   * franchises, and affiliates. Filters: actorType, actorId, ipAddress.
+   * Results are merged + sorted newest-first.
+   *
+   * Phase 209 (#7) — @Throttle (30/min/IP). The list joins five tables;
+   * the cap blunts scripted enumeration of who's logged in.
+   * Phase 209 (#14) — the active-session list is a surveillance surface;
+   * each view writes a SESSIONS_VIEWED audit row.
    */
   @Get()
   @Permissions('sessions.read')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async list(
-    @Query('actorType') actorType?: string,
-    @Query('actorId') actorId?: string,
-    @Query('ipAddress') ipAddress?: string,
-    @Query('limit') limit?: string,
+    @Query() query: SessionsListQueryDto,
+    @Req() req: any,
   ) {
     const data = await this.service.list({
-      actorType: parseActorType(actorType),
-      actorId: actorId || undefined,
-      ipAddress: ipAddress || undefined,
-      limit: limit ? parseInt(limit, 10) : 200,
+      actorType: parseActorType(query.actorType),
+      actorId: query.actorId || undefined,
+      ipAddress: query.ipAddress || undefined,
+      limit: query.limit ?? 200,
     });
+
+    // Phase 209 (#14) — audit the read. Best-effort; never blocks the view.
+    this.audit
+      .writeAuditLog({
+        actorId: req?.adminId ?? req?.user?.id,
+        actorRole: req?.adminRole ?? req?.user?.role,
+        action: 'SESSIONS_VIEWED',
+        module: 'security',
+        resource: 'session',
+        metadata: {
+          filterActorType: query.actorType ?? null,
+          filterActorId: query.actorId ?? null,
+          filterIp: query.ipAddress ?? null,
+          resultCount: data.items.length,
+          total: data.total,
+        },
+        ipAddress: req?.ip,
+        userAgent: req?.headers?.['user-agent'],
+      })
+      .catch(() => undefined);
+
     return { success: true, message: 'Active sessions', data };
   }
 
   /**
    * Force-logout a single session. Caller must specify `actorType`
    * via body so the service knows which table to update — session
-   * ids are not globally unique across the four tables.
+   * ids are not globally unique across the five tables.
    */
   @Delete(':sessionId')
   @Permissions('sessions.revoke')
   // Phase 26 — revoking a session boots an actor mid-flight; 5-min
   // window to balance bulk ops with security.
   @RequiresStepUp()
-  // Phase 27 (2026-05-21) — per-IP throttle. With step-up already
-  // gating each revoke, the realistic burst is incident-response
-  // batch-revokes (~tens per minute, not hundreds). 50/60s leaves
-  // ops room without letting a compromised admin token mass-revoke
-  // every session in seconds.
+  // Phase 27 (2026-05-21) — per-IP throttle. 50/60s leaves ops room
+  // without letting a compromised admin token mass-revoke in seconds.
   @Throttle({ default: { limit: 50, ttl: 60_000 } })
   async revoke(
     @Param('sessionId') sessionId: string,
-    @Body() body: { actorType: string; reason?: string },
+    @Body() body: RevokeSessionDto,
     @Req() req: any,
   ) {
     const actorType = parseActorType(body?.actorType);
@@ -98,13 +128,9 @@ export class AdminSessionsController {
       throw new BadRequestException('actorType is required in the request body');
     }
     // Phase 27 (2026-05-21) — fail closed if the guard didn't populate
-    // adminId. Pre-Phase-27 the fallback was `req.userId ?? req.user?.id
-    // ?? 'unknown'`, which masked a misconfigured guard chain: a
-    // request reaching this handler with neither field set would
-    // silently audit-log "revoked by 'unknown'". AdminAuthGuard runs
-    // at the class level and sets req.adminId on every successful
-    // call; if that didn't happen, surface the error rather than
-    // poison the audit log.
+    // adminId rather than poison the audit log with 'unknown'. (The
+    // service ALSO rejects a missing/'unknown' revoker — Phase 209 #13 —
+    // as a defence-in-depth backstop.)
     const revokedByAdminId = req?.adminId ?? req?.user?.id;
     if (!revokedByAdminId) {
       throw new BadRequestException('Admin identity missing — guard chain misconfigured');
@@ -116,7 +142,13 @@ export class AdminSessionsController {
       revokedByAdminRole: req?.adminRole ?? req?.user?.role,
       reason: body?.reason,
     });
-    return { success: true, message: 'Session revoked', data };
+    return {
+      success: true,
+      message: data.alreadyRevoked
+        ? 'Session was already revoked'
+        : 'Session revoked',
+      data,
+    };
   }
 
   /**
@@ -129,15 +161,11 @@ export class AdminSessionsController {
   // Phase 26 — bulk revoke; higher blast radius, same 5-min window.
   @RequiresStepUp()
   // Phase 27 (2026-05-21) — tighter per-IP throttle on the bulk path.
-  // Bulk revoke is one call per target actor (not per session), so a
-  // legitimate operator pattern is "revoke a small number of
-  // compromised accounts." 10/60s is generous for that and tight
-  // against a compromised-admin-token mass-revoke.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async revokeAll(
     @Param('actorType') actorTypeRaw: string,
     @Param('actorId') actorId: string,
-    @Body() body: { reason?: string } = {},
+    @Body() body: RevokeAllSessionsDto = {},
     @Req() req: any,
   ) {
     const actorType = parseActorType(actorTypeRaw);

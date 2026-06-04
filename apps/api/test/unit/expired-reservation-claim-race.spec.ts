@@ -39,7 +39,18 @@ describe('SellerAllocationService.releaseExpiredReservations — atomic claim', 
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const env: any = { getNumber: (_k: string, d: number) => d };
-    const svc = new SellerAllocationService(prisma, env);
+    // SellerAllocationService ctor order: prisma, envService,
+    // postOfficeCache, stockLedger. releaseExpiredReservations only
+    // touches prisma (findMany + $transaction), so the last two deps
+    // are unused no-op stubs on this path.
+    const postOfficeCache: any = {};
+    const stockLedger: any = {};
+    const svc = new SellerAllocationService(
+      prisma,
+      env,
+      postOfficeCache,
+      stockLedger,
+    );
     return { svc, tx };
   };
 

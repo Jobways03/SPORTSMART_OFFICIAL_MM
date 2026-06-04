@@ -387,11 +387,27 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     fetchOrder();
   }, [authStatus, fetchOrder]);
 
-  // Pull existing returns for this order. Independent of the eligibility
-  // check — returns live forever after creation, even after the return
-  // window closes, so this fetch must succeed regardless of window state.
+  // Existing returns for this order. Phase 197 (My-Orders audit #10) —
+  // the detail endpoint now EMBEDS the returns scoped to this order, so
+  // prefer that (no N+1, no `?limit=50` over-fetch that could miss a
+  // return on a heavy account). Fall back to the legacy listing endpoint
+  // only when an older API didn't include `order.returns`.
   useEffect(() => {
     if (!order) return;
+    if (Array.isArray(order.returns)) {
+      const mine: ActiveReturn[] = order.returns
+        .filter((r) => ACTIVE_RETURN_STATUSES.has(r.status))
+        .map((r) => ({
+          id: r.id,
+          returnNumber: r.returnNumber ?? '',
+          status: r.status,
+          masterOrderId: order.id,
+          createdAt: r.createdAt,
+        }));
+      setActiveReturns(mine);
+      return;
+    }
+    // Legacy fallback (server didn't embed returns).
     apiClient<{ returns: ActiveReturn[] }>(`/customer/returns?limit=50`)
       .then((res) => {
         const all = res.data?.returns ?? [];
@@ -555,14 +571,27 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   // PENDING_VERIFICATION. The /customer/checkout/payment/retry
   // endpoint creates a fresh Razorpay order keyed to this MasterOrder
   // so the customer can re-pay without losing the order shell.
+  // Phase 197 (My-Orders audit #16) — once the Razorpay payment window
+  // (paymentExpiresAt) has elapsed the gateway order is dead and the
+  // backend sweep will cancel the order shortly; the Retry CTA must
+  // hide so the customer doesn't open a Razorpay modal that 400s.
+  const paymentWindowOpen =
+    !order.paymentExpiresAt || new Date(order.paymentExpiresAt).getTime() > Date.now();
   const canRetryPayment =
     order.paymentMethod !== 'COD' &&
     order.paymentStatus !== 'PAID' &&
     order.paymentStatus !== 'CANCELLED' &&
-    order.orderStatus !== 'CANCELLED';
+    order.orderStatus !== 'CANCELLED' &&
+    paymentWindowOpen;
 
-  // Use clean customer-friendly status labels
-  const displayStatusLabel = customerStatusLabel(order.orderStatus || 'PLACED', order.paymentStatus);
+  // Phase 197 (My-Orders audit #12) — prefer the server-computed,
+  // derived `orderStatusLabel` so the storefront and the API never
+  // disagree (the backend already rolls sub-order fulfillment into the
+  // headline status). Fall back to the local map only for a legacy
+  // response that didn't carry the label.
+  const displayStatusLabel =
+    order.orderStatusLabel ||
+    customerStatusLabel(order.orderStatus || 'PLACED', order.paymentStatus);
   const displayStatusColor = orderStatusColor(order.orderStatus || 'PLACED', order.paymentStatus);
 
   return (

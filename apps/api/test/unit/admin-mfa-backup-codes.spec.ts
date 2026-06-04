@@ -128,8 +128,15 @@ describe('BackupCodesService (PR 10.9)', () => {
 
   function build() {
     const repo = new FakeRepo();
-    const svc = new BackupCodesService(repo as any);
-    return { svc, repo };
+    // Phase 1 / H2 — consume() now serialises behind a per-admin Redis
+    // lock. These tests drive the single-interactive-request happy path,
+    // so the lock always grants; release is a no-op.
+    const redis: any = {
+      acquireLock: jest.fn().mockResolvedValue(true),
+      releaseLock: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new BackupCodesService(repo as any, redis);
+    return { svc, repo, redis };
   }
 
   describe('generateAndHashForAdmin', () => {

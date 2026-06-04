@@ -56,6 +56,16 @@ describe('PaymentWebhookController — Phase 0 amount-mismatch routing', () => {
       { markOrderPaid: markOrderPaidMock } as any,
       envServiceMock as any,
       redisMock as any,
+      // Phase 165 — durable webhook ledger + gateway-truth order lookup.
+      {
+        paymentWebhookEvent: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({}),
+          update: jest.fn().mockResolvedValue({}),
+          delete: jest.fn().mockResolvedValue({}),
+        },
+        masterOrder: { findFirst: jest.fn().mockResolvedValue(null) },
+      } as any,
     );
   });
 

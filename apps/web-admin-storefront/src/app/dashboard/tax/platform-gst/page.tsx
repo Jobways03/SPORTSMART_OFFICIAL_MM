@@ -29,6 +29,14 @@ export default function PlatformGstPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  // Phase 161 #10/#11 — set-default + deactivate now capture a reason.
+  const [reasonModal, setReasonModal] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger?: boolean;
+    run: (reason: string) => Promise<void>;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -42,22 +50,23 @@ export default function PlatformGstPage() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const setDefault = async (row: PlatformGstProfileItem) => {
+  // Phase 161 #11 — switching the default platform GSTIN now requires a
+  // reason (it drives every subsequent invoice/export). Collected via modal.
+  const setDefault = (row: PlatformGstProfileItem) => {
     if (row.isDefault) return;
-    const ok = await confirmDialog({
+    setReasonModal({
       title: `Set ${row.gstin} as default platform GST?`,
-      message: 'OWN_BRAND / SPORTSMART supplies will be issued under this profile. The previous default is demoted but stays active.',
-      confirmText: 'Set default',
-      cancelText: 'Cancel',
+      message:
+        'OWN_BRAND / SPORTSMART supplies will be issued under this profile. The previous default is demoted but stays active. This is recorded on the audit trail.',
+      confirmLabel: 'Set default',
+      run: async (reason) => {
+        setBusyId(row.id);
+        try {
+          await adminTaxService.setDefaultPlatformGst(row.id, reason);
+          await refresh();
+        } finally { setBusyId(null); }
+      },
     });
-    if (!ok) return;
-    setBusyId(row.id);
-    try {
-      await adminTaxService.setDefaultPlatformGst(row.id);
-      await refresh();
-    } catch (err: any) {
-      void notify({ kind: 'error', message: err?.message ?? 'Set default failed' });
-    } finally { setBusyId(null); }
   };
 
   const toggleActive = async (row: PlatformGstProfileItem) => {
@@ -68,24 +77,43 @@ export default function PlatformGstPage() {
       });
       return;
     }
-    const next = !row.isActive;
-    const ok = await confirmDialog({
-      title: `${next ? 'Reactivate' : 'Deactivate'} ${row.gstin}?`,
-      message: next
-        ? 'Reactivating allows the tax engine to use this profile again.'
-        : 'Deactivating stops the engine from picking this profile for new supplies. Existing snapshots are unaffected.',
-      confirmText: next ? 'Reactivate' : 'Deactivate',
-      cancelText: 'Cancel',
-      danger: !next,
+    if (!row.isActive) {
+      // Reactivation needs no reason.
+      const ok = await confirmDialog({
+        title: `Reactivate ${row.gstin}?`,
+        message: 'Reactivating allows the tax engine to use this profile again.',
+        confirmText: 'Reactivate',
+        cancelText: 'Cancel',
+      });
+      if (!ok) return;
+      setBusyId(row.id);
+      try {
+        await adminTaxService.updatePlatformGst(row.id, { isActive: true, expectedVersion: row.version });
+        await refresh();
+      } catch (err: any) {
+        void notify({ kind: 'error', message: err?.message ?? 'Update failed' });
+      } finally { setBusyId(null); }
+      return;
+    }
+    // Phase 161 #10/#11 — deactivation requires a reason.
+    setReasonModal({
+      title: `Deactivate ${row.gstin}?`,
+      message:
+        'The tax engine stops picking this profile for new supplies. Existing invoice snapshots are unaffected. A reason is recorded on the audit trail.',
+      confirmLabel: 'Deactivate',
+      danger: true,
+      run: async (reason) => {
+        setBusyId(row.id);
+        try {
+          await adminTaxService.updatePlatformGst(row.id, {
+            isActive: false,
+            deactivationReason: reason,
+            expectedVersion: row.version,
+          });
+          await refresh();
+        } finally { setBusyId(null); }
+      },
     });
-    if (!ok) return;
-    setBusyId(row.id);
-    try {
-      await adminTaxService.updatePlatformGst(row.id, { isActive: next });
-      await refresh();
-    } catch (err: any) {
-      void notify({ kind: 'error', message: err?.message ?? 'Update failed' });
-    } finally { setBusyId(null); }
   };
 
   // ── Derivations ────────────────────────────────────────
@@ -109,7 +137,7 @@ export default function PlatformGstPage() {
         || r.legalBusinessName.toLowerCase().includes(q)
         || r.gstStateCode.toLowerCase().includes(q)
         || (STATE_NAMES[r.gstStateCode] ?? '').toLowerCase().includes(q)
-        || (r.panNumber ?? '').toLowerCase().includes(q)
+        || (r.panLast4 ?? '').toLowerCase().includes(q)
       );
     }
     // Sort: default first, then active, then by state code.
@@ -234,6 +262,115 @@ export default function PlatformGstPage() {
           onCreated={async () => { setShowCreate(false); await refresh(); }}
         />
       )}
+
+      {reasonModal && (
+        <ReasonModal
+          title={reasonModal.title}
+          message={reasonModal.message}
+          confirmLabel={reasonModal.confirmLabel}
+          danger={reasonModal.danger}
+          onClose={() => setReasonModal(null)}
+          onConfirm={async (reason) => {
+            try {
+              await reasonModal.run(reason);
+              setReasonModal(null);
+            } catch (err: any) {
+              void notify({ kind: 'error', message: err?.message ?? 'Action failed' });
+              throw err;
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Reason modal (Phase 161 #10/#11) ──────────────────────────────
+
+function ReasonModal({
+  title, message, confirmLabel, danger, onClose, onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (reason.trim().length < 5) {
+      setErr('A reason of at least 5 characters is required.');
+      return;
+    }
+    setBusy(true); setErr(null);
+    try {
+      await onConfirm(reason.trim());
+    } catch (e: any) {
+      setErr(e?.message ?? 'Action failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={() => !busy && onClose()}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15, 17, 21, 0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 260, padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 16, padding: 24,
+          maxWidth: 520, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+        }}
+      >
+        <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: '#0F1115' }}>{title}</h2>
+        <p style={{ marginTop: 6, fontSize: 13, color: '#525A65', lineHeight: 1.5 }}>{message}</p>
+        <div style={{ marginTop: 16 }}>
+          <Field label="Reason *" hint="min 5 characters">
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={3}
+              placeholder="Why are you making this change?"
+              style={{ ...input, height: 'auto', padding: '8px 12px', resize: 'vertical' }}
+            />
+          </Field>
+        </div>
+        {err && (
+          <div style={{
+            marginTop: 12, padding: '8px 12px', borderRadius: 10, fontSize: 13,
+            border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c',
+          }}>{err}</div>
+        )}
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
+          <button
+            onClick={() => void submit()}
+            disabled={busy || reason.trim().length < 5}
+            style={
+              busy || reason.trim().length < 5
+                ? {
+                    ...btnPrimary, ...busyStyle,
+                    ...(danger ? { background: '#b91c1c', border: '1px solid #b91c1c' } : {}),
+                  }
+                : danger
+                  ? { ...btnPrimary, background: '#b91c1c', border: '1px solid #b91c1c' }
+                  : btnPrimary
+            }
+          >
+            {busy ? 'Working…' : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

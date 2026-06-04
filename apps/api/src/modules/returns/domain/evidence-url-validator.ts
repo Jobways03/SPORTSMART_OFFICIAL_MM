@@ -1,24 +1,25 @@
 // Phase 93 (2026-05-23) — Customer Return Request audit Gap #5 / #24.
 //
 // Pre-Phase-93 `evidenceFileUrls` was `IsString({ each: true })` with
-// no URL validation. A hostile client could substitute Cloudinary's
+// no URL validation. A hostile client could substitute media's
 // returned URL with any third-party URL — QC would open it and hit
 // SSRF / phishing / cross-tenant leak vectors. This validator does
 // two things:
 //
 //   1. Format check — must be `https://` (no `http://`, no
 //      `javascript:`, no `data:`, no `file:` etc).
-//   2. Host allowlist — origin must be in the platform's known set
-//      (Cloudinary CDN by default, env-tunable so prod can lock to a
-//      specific account-cloud-name subdomain).
+//   2. Host allowlist — origin must be in the platform's known set.
+//      Media lives at the Cloudflare R2 public delivery base
+//      (R2_PUBLIC_BASE_URL); callers derive the trusted host from it via
+//      resolveTrustedMediaHosts(). The default below is only the dev-stub
+//      host used when R2 isn't configured (local/dev).
 //
 // Returns `{ valid, reason }` so the caller can include the rejection
 // reason in the BadRequest response.
 
-export const DEFAULT_ALLOWED_HOSTS = [
-  'res.cloudinary.com',
-  'cloudinary.com',
-] as const;
+import { DEV_STUB_MEDIA_HOST } from '../../../core/util/trusted-media-hosts';
+
+export const DEFAULT_ALLOWED_HOSTS = [DEV_STUB_MEDIA_HOST] as const;
 
 export interface EvidenceUrlValidationOptions {
   allowedHosts?: ReadonlyArray<string>;

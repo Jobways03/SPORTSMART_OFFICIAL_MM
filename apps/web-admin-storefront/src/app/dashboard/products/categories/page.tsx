@@ -93,7 +93,7 @@ const [categories, setCategories] = useState<Category[]>([]);
       const res = await adminProductsService.listAdminCategories({ page: 1, limit: 500 });
       const rows = res.data?.categories ?? [];
       setParentOptions(
-        rows.map((c) => ({
+        rows.map((c: { id: string; name: string; level?: number; isActive?: boolean }) => ({
           id: c.id,
           name: c.name,
           level: c.level ?? 0,
@@ -176,10 +176,19 @@ const [categories, setCategories] = useState<Category[]>([]);
     if (form.slug.trim()) payload.slug = form.slug.trim();
     try {
       if (editingCat) {
-        await adminProductsService.updateCategory(editingCat.id, payload);
+        // payload carries every Phase-33 category field (incl. SEO/image
+        // fields the API accepts but the service signature predates); cast
+        // to the method's declared param type rather than widen the shared
+        // service here.
+        await adminProductsService.updateCategory(
+          editingCat.id,
+          payload as Parameters<typeof adminProductsService.updateCategory>[1],
+        );
         setSuccessMsg('Category updated');
       } else {
-        await adminProductsService.createCategory(payload);
+        await adminProductsService.createCategory(
+          payload as Parameters<typeof adminProductsService.createCategory>[0],
+        );
         setSuccessMsg('Category created');
       }
       setShowModal(false);

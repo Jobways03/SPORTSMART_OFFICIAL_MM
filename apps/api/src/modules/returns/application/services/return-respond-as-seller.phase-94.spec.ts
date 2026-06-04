@@ -78,7 +78,7 @@ function buildService(deps: any = {}) {
     deps.stockRestorationService ?? {},
     deps.commissionReversalService ?? {},
     deps.refundGateway ?? {},
-    deps.cloudinaryAdapter ?? {},
+    deps.media ?? {},
     deps.eventBus ?? {
       publish: jest.fn().mockResolvedValue(undefined),
     },
@@ -199,7 +199,7 @@ describe('ReturnService.respondAsSeller (Phase 94)', () => {
     expect(tx.return.update).not.toHaveBeenCalled();
   });
 
-  it('Gap #9 — Cloudinary URL is accepted', async () => {
+  it('Gap #9 — media URL is accepted', async () => {
     const { tx } = buildTxMock();
     const service = buildService({
       tx,
@@ -210,7 +210,7 @@ describe('ReturnService.respondAsSeller (Phase 94)', () => {
       sellerId: 'seller-a',
       decision: 'CONTESTED',
       notes: 'see attached',
-      evidenceFileUrls: ['https://res.cloudinary.com/x/image/upload/p.jpg'],
+      evidenceFileUrls: ['https://placehold.co/x/image/upload/p.jpg'],
     });
     expect(tx.returnEvidence.createMany).toHaveBeenCalledTimes(1);
     const data = tx.returnEvidence.createMany.mock.calls[0][0].data;

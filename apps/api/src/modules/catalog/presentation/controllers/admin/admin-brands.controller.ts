@@ -18,7 +18,8 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../../files/application/services/file.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
@@ -51,7 +52,7 @@ const STOREFRONT_BRANDS_CACHE_PATTERN = 'storefront:brands:list:*';
  * Phase 35 (2026-05-21) — Multer config for the logo upload route.
  *   - 2 MB hard cap so a 500 MB upload can't OOM the API server.
  *   - MIME allow-list of jpeg/png/webp; SVG is intentionally blocked
- *     at this layer too (defence in depth — Cloudinary's
+ *     at this layer too (defence in depth — media's
  *     allowed_formats also blocks it).
  */
 const LOGO_MAX_BYTES = 2 * 1024 * 1024;
@@ -87,9 +88,10 @@ export class AdminBrandsController {
 
   constructor(
     @Inject(BRAND_REPOSITORY) private readonly brandRepo: IBrandRepository,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly reApprovalService: ReApprovalService,
     private readonly redis: RedisService,
+    private readonly fileService: FileService,
   ) {}
 
   /**
@@ -168,10 +170,10 @@ export class AdminBrandsController {
   // working without change. On a multipart create with a file, we:
   //   1. Validate the brand row.
   //   2. Insert the brand row (the row needs to exist before we
-  //      know the Cloudinary folder name).
+  //      know the media folder name).
   //   3. Upload the logo to brands/<id>/.
   //   4. Save url+publicId in a second tx — on failure, both the
-  //      Cloudinary asset AND the brand row roll back so we don't
+  //      media asset AND the brand row roll back so we don't
   //      leak orphans.
   @UseInterceptors(FileInterceptor('logo', LOGO_MULTER_OPTIONS))
   @ApiOperation({ summary: 'Create a brand (optional multipart logo)' })
@@ -212,16 +214,32 @@ export class AdminBrandsController {
     }
 
     // Phase 36 (2026-05-21) — if multipart logo present, push it to
-    // Cloudinary and stamp url+publicId. Failure path deletes the
+    // media and stamp url+publicId. Failure path deletes the
     // brand row so the caller doesn't end up with a logo-less brand
     // they didn't intend to keep.
     if (logoFile && logoFile.buffer) {
       try {
-        const result = await this.cloudinary.upload(logoFile.buffer, {
+        const result = await this.media.upload(logoFile.buffer, {
           folder: `brands/${brand.id}`,
           resourceType: 'image',
           transformation: [{ width: 400, height: 400, crop: 'limit' }],
         });
+        // Additively register the media asset in the central
+        // FileMetadata table so the integrity-verifier, audit, and
+        // orphan sweep can see it. Best-effort — never breaks upload.
+        void this.fileService
+          .registerExternalAsset({
+            publicId: result.publicId,
+            url: result.secureUrl,
+            mimeType: logoFile.mimetype,
+            sizeBytes: logoFile.size,
+            purpose: 'BANNER',
+            uploadedBy: adminId,
+            uploadedByType: 'ADMIN',
+            fileName: logoFile.originalname,
+            buffer: logoFile.buffer,
+          })
+          .catch(() => undefined);
         try {
           brand = await this.brandRepo.updateLogoFields(
             brand.id,
@@ -229,8 +247,8 @@ export class AdminBrandsController {
             result.publicId,
           );
         } catch (err) {
-          // DB write failed after Cloudinary succeeded — clean both up.
-          await this.cloudinary.delete(result.publicId).catch(() => undefined);
+          // DB write failed after media succeeded — clean both up.
+          await this.media.delete(result.publicId).catch(() => undefined);
           throw err;
         }
       } catch (err) {
@@ -410,35 +428,52 @@ export class AdminBrandsController {
     //
     // 1. Capture the previous publicId so we can clean it up after a
     //    successful replace.
-    // 2. Push the new asset to Cloudinary.
+    // 2. Push the new asset to media.
     // 3. Persist URL + publicId together in a try/catch — on DB
-    //    failure we MUST roll back the new Cloudinary asset so we
+    //    failure we MUST roll back the new media asset so we
     //    don't accumulate orphans on every failed replace.
     // 4. On success, fire-and-forget delete of the prior asset.
     const previousPublicId = (brand as { logoPublicId?: string | null }).logoPublicId ?? null;
 
-    const result = await this.cloudinary.upload(file.buffer, {
+    const result = await this.media.upload(file.buffer, {
       folder: `brands/${id}`,
       resourceType: 'image',
       transformation: [{ width: 400, height: 400, crop: 'limit' }],
     });
+
+    // Additively register the media asset in the central
+    // FileMetadata table so the integrity-verifier, audit, and orphan
+    // sweep can see it. Best-effort — must never break the upload.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: result.publicId,
+        url: result.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'BANNER',
+        uploadedBy: adminId,
+        uploadedByType: 'ADMIN',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
 
     let updated;
     try {
       updated = await this.brandRepo.updateLogoFields(id, result.secureUrl, result.publicId);
     } catch (err) {
       // Clean up the asset we just pushed — better an orphan-free
-      // failure than dragging the Cloudinary bill with us.
-      await this.cloudinary.delete(result.publicId).catch((cleanupErr) =>
+      // failure than dragging the media bill with us.
+      await this.media.delete(result.publicId).catch((cleanupErr) =>
         this.logger.warn(
-          `Cloudinary cleanup after DB failure missed asset ${result.publicId}: ${cleanupErr?.message}`,
+          `media cleanup after DB failure missed asset ${result.publicId}: ${cleanupErr?.message}`,
         ),
       );
       throw err;
     }
 
     if (previousPublicId && previousPublicId !== result.publicId) {
-      this.cloudinary.delete(previousPublicId).catch((err) => {
+      this.media.delete(previousPublicId).catch((err) => {
         this.logger.warn(
           `Failed to delete previous brand logo ${previousPublicId}: ${err?.message}`,
         );
@@ -473,7 +508,7 @@ export class AdminBrandsController {
     await this.brandRepo.updateLogoFields(id, null, null);
 
     if (previousPublicId) {
-      this.cloudinary.delete(previousPublicId).catch((err) => {
+      this.media.delete(previousPublicId).catch((err) => {
         this.logger.warn(
           `Failed to delete brand logo asset ${previousPublicId}: ${err?.message}`,
         );
@@ -543,9 +578,9 @@ export class AdminBrandsController {
     }
 
     if (deleted?.logoPublicId) {
-      this.cloudinary.delete(deleted.logoPublicId).catch((err) => {
+      this.media.delete(deleted.logoPublicId).catch((err) => {
         this.logger.warn(
-          `Cloudinary cleanup failed for brand logo ${deleted!.logoPublicId}: ${err?.message}`,
+          `media cleanup failed for brand logo ${deleted!.logoPublicId}: ${err?.message}`,
         );
       });
     }

@@ -1,29 +1,80 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   bulkApproveGreen,
   claimNext,
   getMyTray,
   getQueueStats,
+  listVerificationOrders,
   releaseClaim,
   BulkApproveResult,
   MyTrayItem,
   QueueStats,
+  VerificationBandFilter,
+  VerificationOrderRow,
 } from '@/services/admin-verification.service';
 import { RiskBadge } from '@/components/RiskBadge';
 
 const REFRESH_INTERVAL_MS = 30_000;
+const LIST_PAGE_SIZE = 20;
 
+// Tabs for the band-filtered list. `claimBand` is the concrete band a
+// "Claim next" shortcut should target (only set where claim-next supports it).
+const BAND_TABS: Array<{
+  key: VerificationBandFilter;
+  label: string;
+  claimBand?: 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL';
+}> = [
+  { key: 'ALL', label: 'All' },
+  { key: 'HIGH', label: 'High (Red + Critical)', claimBand: 'RED' },
+  { key: 'RED', label: 'Red', claimBand: 'RED' },
+  { key: 'CRITICAL', label: 'Critical', claimBand: 'CRITICAL' },
+  { key: 'YELLOW', label: 'Yellow', claimBand: 'YELLOW' },
+  { key: 'GREEN', label: 'Green', claimBand: 'GREEN' },
+  { key: 'UNSCORED', label: 'Unscored' },
+];
+
+const BAND_KEYS = BAND_TABS.map(t => t.key);
+
+function parseBand(raw: string | null): VerificationBandFilter {
+  return raw && (BAND_KEYS as string[]).includes(raw)
+    ? (raw as VerificationBandFilter)
+    : 'ALL';
+}
+
+// useSearchParams() must sit under a Suspense boundary so a prerender pass
+// doesn't bail the whole page out of static optimisation.
 export default function VerificationQueuePage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 32 }}>Loading…</div>}>
+      <VerificationQueueInner />
+    </Suspense>
+  );
+}
+
+function VerificationQueueInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const band = parseBand(searchParams.get('band'));
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [tray, setTray] = useState<MyTrayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState(false);
+  // Tracks which "Claim next <band>" shortcut is in flight, so only that
+  // button shows a spinner.
+  const [claimingBand, setClaimingBand] = useState<
+    'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL' | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
+  const [listPage, setListPage] = useState(1);
+  const [list, setList] = useState<{
+    items: VerificationOrderRow[];
+    total: number;
+  } | null>(null);
+  const [listLoading, setListLoading] = useState(false);
   const [sweepState, setSweepState] = useState<
     | { kind: 'idle' }
     | { kind: 'previewing' }
@@ -58,6 +109,65 @@ export default function VerificationQueuePage() {
     return () => clearInterval(i);
   }, []);
 
+  // Read-only band-filtered list. Only unclaimed orders are shown, since a
+  // claimed order is already in someone's tray.
+  const refreshList = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const res = await listVerificationOrders({
+        band,
+        onlyUnclaimed: true,
+        page: listPage,
+        limit: LIST_PAGE_SIZE,
+      });
+      if (res.data) {
+        setList({ items: res.data.items, total: res.data.total });
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load orders');
+    } finally {
+      setListLoading(false);
+    }
+  }, [band, listPage]);
+
+  useEffect(() => {
+    refreshList();
+  }, [refreshList]);
+
+  // Reset to page 1 whenever the band filter changes.
+  useEffect(() => {
+    setListPage(1);
+  }, [band]);
+
+  const selectBand = (next: VerificationBandFilter) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === 'ALL') params.delete('band');
+    else params.set('band', next);
+    const qs = params.toString();
+    router.replace(qs ? `/dashboard/verification?${qs}` : '/dashboard/verification');
+  };
+
+  const handleClaimBand = async (
+    targetBand: 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL',
+  ) => {
+    if (claimingBand) return;
+    setClaimingBand(targetBand);
+    setError(null);
+    try {
+      const res = await claimNext(targetBand);
+      if (res.data?.id) {
+        router.push(`/dashboard/verification/${res.data.id}`);
+      } else {
+        setError(`No unclaimed ${targetBand.toLowerCase()} orders to claim`);
+        await Promise.all([refresh(), refreshList()]);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to claim');
+    } finally {
+      setClaimingBand(null);
+    }
+  };
+
   const handleClaim = async () => {
     setClaiming(true);
     setError(null);
@@ -66,7 +176,7 @@ export default function VerificationQueuePage() {
       if (res.data?.id) {
         router.push(`/dashboard/verification/${res.data.id}`);
       } else {
-        await refresh();
+        await Promise.all([refresh(), refreshList()]);
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to claim');
@@ -78,7 +188,7 @@ export default function VerificationQueuePage() {
   const handleRelease = async (orderId: string) => {
     try {
       await releaseClaim(orderId);
-      await refresh();
+      await Promise.all([refresh(), refreshList()]);
     } catch (err: any) {
       setError(err?.message || 'Failed to release');
     }
@@ -109,7 +219,7 @@ export default function VerificationQueuePage() {
       const res = await bulkApproveGreen(25, false);
       if (res.data) {
         setSweepState({ kind: 'done', result: res.data });
-        await refresh();
+        await Promise.all([refresh(), refreshList()]);
       } else {
         setSweepState({ kind: 'idle' });
       }
@@ -288,6 +398,18 @@ export default function VerificationQueuePage() {
         </div>
       </div>
 
+      <BandQueueList
+        band={band}
+        list={list}
+        loading={listLoading}
+        page={listPage}
+        claimingBand={claimingBand}
+        onSelectBand={selectBand}
+        onClaimBand={handleClaimBand}
+        onOpen={orderId => router.push(`/dashboard/verification/${orderId}`)}
+        onPageChange={setListPage}
+      />
+
       {sweepState.kind === 'preview' && (
         <SweepConfirmModal
           ids={sweepState.ids}
@@ -334,34 +456,326 @@ function StatsBanner({ stats, loading }: { stats: QueueStats | null; loading: bo
         ? 'var(--color-success)'
         : 'var(--color-text)';
 
+  // Per-band breakdown of the *unclaimed* queue. Colours echo the RiskBadge.
+  const tiers: Array<{ label: string; value: number | string; color: string }> = [
+    { label: 'Green', value: loading ? '—' : stats?.unclaimedGreen ?? 0, color: 'var(--color-success)' },
+    { label: 'Yellow', value: loading ? '—' : stats?.unclaimedYellow ?? 0, color: 'var(--color-warning)' },
+    { label: 'Red', value: loading ? '—' : stats?.unclaimedRed ?? 0, color: 'var(--color-error)' },
+    { label: 'Critical', value: loading ? '—' : stats?.unclaimedCritical ?? 0, color: '#7f1d1d' },
+    { label: 'Unscored', value: loading ? '—' : stats?.unclaimedUnscored ?? 0, color: 'var(--color-text-secondary)' },
+  ];
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        {cards.map(c => (
+          <div
+            key={c.label}
+            style={{
+              background: 'var(--color-bg)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 8,
+              padding: 16,
+            }}
+          >
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+              {c.label}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: toneColor(c.tone) }}>
+              {c.value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(5, 1fr)',
+          gap: 12,
+        }}
+      >
+        {tiers.map(t => (
+          <div
+            key={t.label}
+            style={{
+              background: 'var(--color-bg)',
+              border: '1px solid var(--color-border)',
+              borderLeft: `3px solid ${t.color}`,
+              borderRadius: 8,
+              padding: '12px 16px',
+            }}
+          >
+            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+              {t.label} unclaimed
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: t.color }}>
+              {t.value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BandQueueList({
+  band,
+  list,
+  loading,
+  page,
+  claimingBand,
+  onSelectBand,
+  onClaimBand,
+  onOpen,
+  onPageChange,
+}: {
+  band: VerificationBandFilter;
+  list: { items: VerificationOrderRow[]; total: number } | null;
+  loading: boolean;
+  page: number;
+  claimingBand: 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL' | null;
+  onSelectBand: (band: VerificationBandFilter) => void;
+  onClaimBand: (band: 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL') => void;
+  onOpen: (orderId: string) => void;
+  onPageChange: (page: number) => void;
+}) {
+  const activeTab = BAND_TABS.find(t => t.key === band) ?? BAND_TABS[0];
+  const items = list?.items ?? [];
+  const total = list?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / LIST_PAGE_SIZE));
+
   return (
     <div
       style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: 12,
-        marginBottom: 24,
+        marginTop: 24,
+        background: 'var(--color-bg)',
+        border: '1px solid var(--color-border)',
+        borderRadius: 12,
+        overflow: 'hidden',
       }}
     >
-      {cards.map(c => (
+      {/* Tab strip + claim-next shortcut */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+          padding: '12px 16px',
+          borderBottom: '1px solid var(--color-border)',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} role="tablist">
+          {BAND_TABS.map(tab => {
+            const active = tab.key === band;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => onSelectBand(tab.key)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  border: `1px solid ${active ? 'var(--color-primary)' : 'var(--color-border)'}`,
+                  background: active ? 'var(--color-primary)' : '#fff',
+                  color: active ? '#fff' : 'var(--color-text)',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {activeTab.claimBand && (
+          <button
+            type="button"
+            onClick={() => onClaimBand(activeTab.claimBand!)}
+            disabled={claimingBand !== null}
+            style={{
+              padding: '8px 16px',
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#fff',
+              background:
+                claimingBand !== null ? '#9ca3af' : 'var(--color-primary)',
+              border: 'none',
+              borderRadius: 8,
+              cursor: claimingBand !== null ? 'not-allowed' : 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {claimingBand === activeTab.claimBand
+              ? 'Claiming…'
+              : `Claim next ${activeTab.claimBand.toLowerCase()}`}
+          </button>
+        )}
+      </div>
+
+      {loading && items.length === 0 ? (
+        <div style={{ padding: 24, color: 'var(--color-text-secondary)' }}>
+          Loading…
+        </div>
+      ) : items.length === 0 ? (
+        <div style={{ padding: 24, color: 'var(--color-text-secondary)', fontSize: 14 }}>
+          No unclaimed orders in this band.
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr
+              style={{
+                background: 'var(--color-bg-page)',
+                borderBottom: '1px solid var(--color-border)',
+              }}
+            >
+              <ListTh>Order</ListTh>
+              <ListTh>Risk</ListTh>
+              <ListTh>Payment</ListTh>
+              <ListTh>Placed</ListTh>
+              <ListTh>Total</ListTh>
+              <ListTh> </ListTh>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(row => (
+              <tr
+                key={row.id}
+                style={{ borderBottom: '1px solid var(--color-border)' }}
+              >
+                <ListTd>
+                  <div style={{ fontWeight: 600 }}>{row.orderNumber}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                    {row.itemCount} item{row.itemCount === 1 ? '' : 's'}
+                  </div>
+                </ListTd>
+                <ListTd>
+                  <RiskBadge band={row.riskBand} score={row.riskScore} />
+                </ListTd>
+                <ListTd>
+                  <div>{row.paymentMethod}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                    {row.paymentStatus}
+                  </div>
+                </ListTd>
+                <ListTd>{new Date(row.createdAt).toLocaleString()}</ListTd>
+                <ListTd>
+                  <strong>₹{row.totalAmount}</strong>
+                </ListTd>
+                <ListTd>
+                  <button
+                    type="button"
+                    onClick={() => onOpen(row.id)}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: 'var(--color-text)',
+                      background: '#fff',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Open
+                  </button>
+                </ListTd>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {total > 0 && (
         <div
-          key={c.label}
           style={{
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border)',
-            borderRadius: 8,
-            padding: 16,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 16px',
+            borderTop: '1px solid var(--color-border)',
+            fontSize: 13,
+            color: 'var(--color-text-secondary)',
           }}
         >
-          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginBottom: 4 }}>
-            {c.label}
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: toneColor(c.tone) }}>
-            {c.value}
+          <span>
+            {total} order{total === 1 ? '' : 's'} · page {page} of {totalPages}
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => onPageChange(Math.max(1, page - 1))}
+              disabled={page <= 1 || loading}
+              style={pagerStyle(page <= 1 || loading)}
+            >
+              ← Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+              disabled={page >= totalPages || loading}
+              style={pagerStyle(page >= totalPages || loading)}
+            >
+              Next →
+            </button>
           </div>
         </div>
-      ))}
+      )}
     </div>
+  );
+}
+
+function pagerStyle(disabled: boolean): React.CSSProperties {
+  return {
+    padding: '6px 12px',
+    fontSize: 13,
+    fontWeight: 500,
+    color: disabled ? 'var(--color-text-secondary)' : 'var(--color-text)',
+    background: '#fff',
+    border: '1px solid var(--color-border)',
+    borderRadius: 6,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  };
+}
+
+function ListTh({ children }: { children: React.ReactNode }) {
+  return (
+    <th
+      style={{
+        padding: '10px 16px',
+        textAlign: 'left',
+        fontSize: 12,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+        color: 'var(--color-text-secondary)',
+      }}
+    >
+      {children}
+    </th>
+  );
+}
+
+function ListTd({ children }: { children: React.ReactNode }) {
+  return (
+    <td style={{ padding: '12px 16px', fontSize: 14, verticalAlign: 'middle' }}>
+      {children}
+    </td>
   );
 }
 

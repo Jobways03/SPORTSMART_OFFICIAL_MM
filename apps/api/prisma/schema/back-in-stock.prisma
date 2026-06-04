@@ -1,0 +1,23 @@
+// Phase 193 (#15) — "notify me when back in stock" requests.
+//
+// Captured from the PDP when a product is out of stock. A daily cron
+// re-checks stock and emails the requester once (notifiedAt set), giving
+// the out-of-stock visitor a conversion path instead of a dead end.
+model BackInStockRequest {
+  id         String    @id @default(uuid())
+  productId  String    @map("product_id")
+  product    Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  /// Email to notify (always captured, even for logged-in users).
+  email      String
+  /// Optional platform customer link (set when a logged-in user asks).
+  customerId String?   @map("customer_id")
+  /// Set when the back-in-stock email has been sent — prevents repeats.
+  notifiedAt DateTime? @map("notified_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  /// One open request per (product, email) — re-asks are idempotent.
+  @@unique([productId, email])
+  /// Cron scan: open (un-notified) requests per product.
+  @@index([productId, notifiedAt])
+  @@map("back_in_stock_requests")
+}

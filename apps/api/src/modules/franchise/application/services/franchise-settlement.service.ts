@@ -30,6 +30,54 @@ export class FranchiseSettlementService {
     this.logger.setContext('FranchiseSettlementService');
   }
 
+  // ── FRANCHISE-funded discount deduction (Phase 247-FB) ──────
+  //
+  // Mirrors the seller-funded discount deduction on settlement.service.ts
+  // (SELLER side). Sums the SIGNED amount_in_paise of the FRANCHISE
+  // discount-liability rows for one franchise inside a cycle window:
+  //   APPLIED  → positive (franchise absorbs the discount it funded)
+  //   REVERSED → negative (a return credits part/all of it back)
+  //   SETTLED  → positive (an already-finalised prior absorb; included so a
+  //              re-run / read is stable — the gross stays counted).
+  // Summing the signed column nets returns out EXACTLY ONCE — never abs().
+  // Returns 0n when the window is unknown or the franchise has no rows.
+  private async sumFranchiseDiscountDeduction(
+    db: Prisma.TransactionClient | PrismaService,
+    franchiseId: string,
+    periodStart: Date | null | undefined,
+    periodEnd: Date | null | undefined,
+  ): Promise<bigint> {
+    if (!franchiseId || !periodStart || !periodEnd) return 0n;
+    const agg = await db.discountLiabilityLedger.aggregate({
+      where: {
+        liabilityParty: 'FRANCHISE',
+        franchiseId,
+        status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] },
+        createdAt: { gte: periodStart, lte: periodEnd },
+      },
+      _sum: { amountInPaise: true },
+    });
+    return agg._sum.amountInPaise ?? 0n;
+  }
+
+  // Phase 247-FB — attach the franchise-funded discount deduction to a loaded
+  // settlement (read path). The deduction is NOT a persisted column, so it is
+  // re-derived from the ledger against the settlement's franchise + the cycle's
+  // window. No-ops (string "0") cleanly when the cycle window is unknown.
+  private async attachDiscountDeduction(settlement: any): Promise<any> {
+    if (!settlement) return settlement;
+    const deduction = await this.sumFranchiseDiscountDeduction(
+      this.prisma,
+      settlement.franchiseId,
+      settlement.cycle?.periodStart ?? null,
+      settlement.cycle?.periodEnd ?? null,
+    );
+    return {
+      ...settlement,
+      discountFundedDeductionInPaise: deduction.toString(),
+    };
+  }
+
   // ── Create settlement cycle ─────────────────────────────────
 
   async createSettlementCycle(periodStart: Date, periodEnd: Date) {
@@ -216,11 +264,36 @@ export class FranchiseSettlementService {
           }
         }
 
+        // Phase 247-FB — FRANCHISE-funded discount cost. The franchise bears
+        // the discount it funded, so it is a DEDUCTION from the payout (the
+        // mirror of the seller-funded discount on the seller settlement). We
+        // sum the SIGNED amount_in_paise of the FRANCHISE discount-liability
+        // rows for THIS franchise inside the cycle window: APPLIED is positive,
+        // a return's REVERSED row is negative, so the sum nets the credit-back
+        // exactly once (no abs() — the Phase 247 #17 discipline). Surfaced as a
+        // distinct line (discountFundedDeductionInPaise) so it is visible, not
+        // silently folded into another sourceType bucket.
+        const discountFundedDeductionInPaise =
+          await this.sumFranchiseDiscountDeduction(
+            tx,
+            franchiseId,
+            periodStart,
+            periodEnd,
+          );
+        // paise (BigInt) → rupees (Decimal) at the money boundary, then subtract
+        // from the net. A POSITIVE deduction reduces the payout; a net-negative
+        // (over-credited returns) would add back — the signed sum handles both.
+        const discountDeductionRupees = new Prisma.Decimal(
+          discountFundedDeductionInPaise.toString(),
+        ).div(100);
+
         // Phase 159v (audit #4/#5) — gross holds sales earnings only; a return
         // clawback subtracts once; an adjustment adds with its sign.
+        // Phase 247-FB — the franchise-funded discount cost subtracts too.
         const netPayableToFranchise = grossFranchiseEarning
           .minus(reversalAmount)
           .plus(adjustmentAmount)
+          .minus(discountDeductionRupees)
           .toDecimalPlaces(2);
 
         // Create settlement within transaction
@@ -257,7 +330,16 @@ export class FranchiseSettlementService {
           },
         });
 
-        settlements.push(settlement);
+        // Phase 247-FB — surface the franchise-funded discount cost as a
+        // response-only field (BigInt → string, the codebase serialises paise
+        // as strings). It is NOT a persisted column (already netted into
+        // netPayableToFranchise above); attaching it here lets the UI show a
+        // distinct "Discount funded" deduction line on the per-franchise row.
+        settlements.push({
+          ...settlement,
+          discountFundedDeductionInPaise:
+            discountFundedDeductionInPaise.toString(),
+        });
       }
 
       return { cycle, settlements, empty: false };
@@ -307,10 +389,48 @@ export class FranchiseSettlementService {
     // FAILED settlement is re-approved, clear any stale payment reference and
     // paidAt from the failed attempt so they can't be mistaken for the new
     // payout or carried into the next pay. A PENDING→APPROVED has none anyway.
-    const updated = await this.financeRepo.updateSettlement(settlementId, {
-      status: 'APPROVED',
-      paymentReference: null,
-      paidAt: null,
+    //
+    // Phase 247-FB — finalise the FRANCHISE-funded discount ledger in the SAME
+    // transaction that approves the settlement (mirrors the seller approveCycle
+    // flip on settlement.service.ts, but per-franchise since the franchise flow
+    // approves one settlement at a time). The DiscountLiabilityLedger FRANCHISE
+    // rows are written APPLIED at order allocation and otherwise never advance;
+    // here we flip the consumed rows APPLIED→SETTLED and stamp settlementCycleId
+    // so each row is linked to the cycle that netted it. Atomic with the status
+    // flip so "approved" and "discount settled" can never diverge.
+    //
+    // Scope = this settlement's franchise + the cycle window on createdAt +
+    // liabilityParty=FRANCHISE + status=APPLIED. REVERSED / already-SETTLED rows
+    // are untouched (REVERSED carries the negative return credit-back and must
+    // stay distinct from the gross). Guarded for a null window / missing
+    // franchise so it no-ops cleanly.
+    const ledgerFranchiseId: string | undefined = settlement.franchiseId;
+    const windowStart: Date | null = settlement.cycle?.periodStart ?? null;
+    const windowEnd: Date | null = settlement.cycle?.periodEnd ?? null;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.franchiseSettlement.update({
+        where: { id: settlementId },
+        data: {
+          status: 'APPROVED',
+          paymentReference: null,
+          paidAt: null,
+        },
+      });
+      if (ledgerFranchiseId && windowStart && windowEnd) {
+        await tx.discountLiabilityLedger.updateMany({
+          where: {
+            liabilityParty: 'FRANCHISE',
+            franchiseId: ledgerFranchiseId,
+            status: 'APPLIED',
+            createdAt: { gte: windowStart, lte: windowEnd },
+          },
+          data: {
+            status: 'SETTLED',
+            settlementCycleId: settlement.cycle?.id ?? null,
+          },
+        });
+      }
+      return u;
     });
 
     await this.eventBus.publish({
@@ -449,7 +569,16 @@ export class FranchiseSettlementService {
     franchiseId?: string;
     status?: string;
   }) {
-    return this.financeRepo.findAllSettlementsPaginated(params);
+    const { settlements, total } =
+      await this.financeRepo.findAllSettlementsPaginated(params);
+    // Phase 247-FB — attach the per-franchise franchise-funded discount
+    // deduction so the list/KPI surfaces the deduction line. Each row already
+    // carries its cycle window (the repo eager-loads cycle.periodStart/End), so
+    // the deductions resolve in parallel without an N+1 cycle re-fetch.
+    const withDeductions = await Promise.all(
+      settlements.map((s: any) => this.attachDiscountDeduction(s)),
+    );
+    return { settlements: withDeductions, total };
   }
 
   // ── Export settlements (CSV / Tally) ────────────────────────
@@ -480,6 +609,9 @@ export class FranchiseSettlementService {
     if (!settlement) {
       throw new NotFoundAppException('Franchise settlement not found');
     }
-    return settlement;
+    // Phase 247-FB — re-derive the franchise-funded discount deduction for the
+    // detail view (not a persisted column). findSettlementById eager-loads the
+    // cycle (periodStart/periodEnd), so the window is available here.
+    return this.attachDiscountDeduction(settlement);
   }
 }

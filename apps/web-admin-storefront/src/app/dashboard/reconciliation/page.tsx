@@ -13,7 +13,12 @@ import {
 
 const KIND_OPTIONS: ReconciliationKind[] = [
   'PAYMENT', 'COD', 'SETTLEMENT', 'REFUND', 'WALLET',
+  // Phase 173 (#5) — expanded coverage.
+  'AFFILIATE_PAYOUT', 'COMMISSION', 'TDS', 'TCS',
 ];
+
+// Phase 173 (#1/#14) — async lifecycle states a run can be "live" in.
+const LIVE_STATUSES: ReconciliationStatus[] = ['QUEUED', 'RUNNING'];
 
 export default function ReconciliationPage() {
   const router = useRouter();
@@ -47,6 +52,21 @@ export default function ReconciliationPage() {
     void fetch();
   }, [fetch]);
 
+  // Phase 173 (#1/#16) — while any run is QUEUED/RUNNING, poll so the async
+  // run's status + the per-kind "in progress" lock stay live without a manual
+  // refresh.
+  const hasLiveRun = items.some((r) => LIVE_STATUSES.includes(r.status));
+  useEffect(() => {
+    if (!hasLiveRun) return;
+    const t = setInterval(() => void fetch(), 4000);
+    return () => clearInterval(t);
+  }, [hasLiveRun, fetch]);
+
+  // Phase 173 (#16) — kinds with a live run, so the Start form can disable them.
+  const liveKinds = new Set<ReconciliationKind>(
+    items.filter((r) => LIVE_STATUSES.includes(r.status)).map((r) => r.kind),
+  );
+
   const totalPages = Math.max(1, Math.ceil(total / 50));
 
   return (
@@ -68,6 +88,7 @@ export default function ReconciliationPage() {
 
       {showStartForm && (
         <StartRunForm
+          liveKinds={liveKinds}
           onDone={() => {
             setShowStartForm(false);
             void fetch();
@@ -92,8 +113,10 @@ export default function ReconciliationPage() {
           style={selectStyle}
         >
           <option value="">All statuses</option>
+          <option value="QUEUED">Queued</option>
           <option value="RUNNING">Running</option>
           <option value="COMPLETED">Completed</option>
+          <option value="PARTIAL">Partial</option>
           <option value="FAILED">Failed</option>
         </select>
       </div>
@@ -178,7 +201,13 @@ export default function ReconciliationPage() {
   );
 }
 
-function StartRunForm({ onDone }: { onDone: () => void }) {
+function StartRunForm({
+  onDone,
+  liveKinds,
+}: {
+  onDone: () => void;
+  liveKinds: Set<ReconciliationKind>;
+}) {
   const today = new Date();
   const yesterday = new Date(today.getTime() - 86_400_000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
@@ -189,8 +218,16 @@ function StartRunForm({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Phase 173 (#16) — a run of this kind is already in progress; block the
+  // launch client-side (the backend also returns 409, but this is clearer UX).
+  const kindLocked = liveKinds.has(kind);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (kindLocked) {
+      setErr(`A ${KIND_LABEL[kind]} run is already in progress. Wait for it to finish.`);
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -228,7 +265,11 @@ function StartRunForm({ onDone }: { onDone: () => void }) {
       <div>
         <label style={lbl}>Kind</label>
         <select value={kind} onChange={(e) => setKind(e.target.value as ReconciliationKind)} style={selectStyle}>
-          {KIND_OPTIONS.map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
+          {KIND_OPTIONS.map((k) => (
+            <option key={k} value={k}>
+              {KIND_LABEL[k]}{liveKinds.has(k) ? ' (in progress)' : ''}
+            </option>
+          ))}
         </select>
       </div>
       <div>
@@ -239,8 +280,8 @@ function StartRunForm({ onDone }: { onDone: () => void }) {
         <label style={lbl}>Period end</label>
         <input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} style={inputStyle} />
       </div>
-      <button type="submit" disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }}>
-        {busy ? 'Running…' : 'Start run'}
+      <button type="submit" disabled={busy || kindLocked} style={{ ...primaryBtn, opacity: busy || kindLocked ? 0.6 : 1 }}>
+        {busy ? 'Queuing…' : kindLocked ? 'In progress…' : 'Start run'}
       </button>
       {err && <div style={{ color: '#dc2626', fontSize: 13, width: '100%' }}>{err}</div>}
     </form>

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, BlogPostStatus } from '@prisma/client';
 import { PrismaService } from '../../../bootstrap/database/prisma.service';
 import { RedisService } from '../../../bootstrap/cache/redis.service';
-import { CloudinaryAdapter } from '../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../integrations/media/media-storage.adapter';
 import {
   BadRequestAppException,
   ConflictAppException,
@@ -19,7 +19,7 @@ import { BlogPostAuditService } from './blog-post-audit.service';
  *
  * Pre-Phase-50 the service was clean but had:
  *   - no HTML sanitization on contentHtml (XSS via blog body)
- *   - no Cloudinary publicId tracking (orphan on replace + delete)
+ *   - no media publicId tracking (orphan on replace + delete)
  *   - hard delete (no recovery)
  *   - no audit log
  *   - non-atomic slug uniqueness (P2002 → 500 on race)
@@ -110,7 +110,7 @@ export class BlogPostsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly audit: BlogPostAuditService,
     private readonly redis: RedisService,
   ) {}
@@ -292,8 +292,8 @@ export class BlogPostsService {
 
   /**
    * Phase 50 — soft-delete. Pre-Phase-50 this was a hard delete +
-   * Cloudinary asset orphan. Now we stamp deletedAt and fire-and-
-   * forget Cloudinary cleanup so storage doesn't leak.
+   * media asset orphan. Now we stamp deletedAt and fire-and-
+   * forget media cleanup so storage doesn't leak.
    */
   async delete(id: string, actorId?: string): Promise<void> {
     const existing = await this.prisma.blogPost.findUnique({ where: { id } });
@@ -311,11 +311,11 @@ export class BlogPostsService {
     });
 
     if (existing.imagePublicId) {
-      this.cloudinary
+      this.media
         .delete(existing.imagePublicId)
         .catch((err) =>
           this.logger.warn(
-            `Cloudinary cleanup failed for ${existing.imagePublicId}: ${(err as Error).message}`,
+            `media cleanup failed for ${existing.imagePublicId}: ${(err as Error).message}`,
           ),
         );
     }
@@ -361,11 +361,11 @@ export class BlogPostsService {
     const existing = await this.prisma.blogPost.findUnique({ where: { id } });
     if (!existing || existing.deletedAt) throw new NotFoundAppException('Blog post not found');
 
-    const uploaded = await this.cloudinary.upload(file.buffer, {
+    const uploaded = await this.media.upload(file.buffer, {
       folder: `blog-posts/${existing.slug}`,
       resourceType: 'image',
       // Phase 50 — cap dimensions so a multi-megabyte hero image
-      // doesn't ship to every storefront client. Cloudinary's
+      // doesn't ship to every storefront client. media's
       // `limit` only scales down.
       transformation: [{ width: 1600, height: 900, crop: 'limit' }],
     });
@@ -384,11 +384,11 @@ export class BlogPostsService {
     } catch (err) {
       // DB write failed — clean up the freshly-uploaded asset so it
       // doesn't orphan.
-      this.cloudinary
+      this.media
         .delete(uploaded.publicId)
         .catch((e) =>
           this.logger.warn(
-            `Cloudinary cleanup failed for orphan ${uploaded.publicId}: ${(e as Error).message}`,
+            `media cleanup failed for orphan ${uploaded.publicId}: ${(e as Error).message}`,
           ),
         );
       throw err;
@@ -401,11 +401,11 @@ export class BlogPostsService {
       existing.imagePublicId &&
       existing.imagePublicId !== uploaded.publicId
     ) {
-      this.cloudinary
+      this.media
         .delete(existing.imagePublicId)
         .catch((err) =>
           this.logger.warn(
-            `Cloudinary cleanup failed for prior asset ${existing.imagePublicId}: ${(err as Error).message}`,
+            `media cleanup failed for prior asset ${existing.imagePublicId}: ${(err as Error).message}`,
           ),
         );
     }

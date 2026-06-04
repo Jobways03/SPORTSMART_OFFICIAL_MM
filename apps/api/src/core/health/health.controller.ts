@@ -29,8 +29,8 @@ export class HealthController {
    * Phase 11 (2026-05-16) — External-dependency probes are optional
    * and OFF by default for the LB-facing /health route to keep the
    * happy path under a few ms. Set `?external=1` (or the env flag
-   * `HEALTH_EXTERNAL_PROBES_DEFAULT=true`) to include Razorpay / S3 /
-   * Cloudinary. The full probe lives at `/health/deps` so dashboards
+   * `HEALTH_EXTERNAL_PROBES_DEFAULT=true`) to include Razorpay / R2.
+   * The full probe lives at `/health/deps` so dashboards
    * and dedicated alerts can call it on their own cadence without
    * tying it to LB readiness.
    */
@@ -87,7 +87,7 @@ export class HealthController {
   /**
    * Phase 11 (2026-05-16) — dedicated external-deps probe.
    *
-   * Returns Razorpay / S3 / Cloudinary status without touching DB or
+   * Returns Razorpay / R2 status without touching DB or
    * Redis. Use for dashboards + dedicated alerts ("Razorpay degraded
    * for 5 minutes") on a cadence independent of LB readiness.
    */

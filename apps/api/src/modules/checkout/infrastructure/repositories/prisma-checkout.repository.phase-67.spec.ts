@@ -46,7 +46,15 @@ function makeRepo(opts: {
   }));
   const cartFindUnique = jest.fn(async () => opts.cart ?? null);
   const cartItemDeleteMany = jest.fn(async () => ({ count: 0 }));
-  const productFindMany = jest.fn(async () => (opts.product === undefined ? [] : [opts.product]));
+  const productFindMany = jest.fn(async () =>
+    opts.product === undefined
+      ? []
+      : // Phase 197 (Checkout audit #1) — the in-tx product re-fetch now
+        // also reads moderationStatus and rejects anything not APPROVED.
+        // These Phase-67 fixtures predate that gate, so default to
+        // APPROVED unless a test deliberately overrides it.
+        [{ moderationStatus: 'APPROVED', ...opts.product }],
+  );
   const variantFindMany = jest.fn(async () =>
     'variant' in opts ? (opts.variant ? [opts.variant] : []) : [],
   );
@@ -239,7 +247,9 @@ describe('PrismaCheckoutRepository.placeOrderTransaction (Phase 67)', () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ message: expect.stringContaining('Price for') });
+    // Phase 197 (#21) — drift error is now a generic customer-facing message
+    // (exact was/now figures are logged server-side only).
+    ).rejects.toMatchObject({ message: expect.stringContaining('prices in your cart have changed') });
   });
 
   it('Gap #20 — rejects tax profile owned by another customer (re-checked inside tx)', async () => {
@@ -325,7 +335,8 @@ describe('PrismaCheckoutRepository.placeOrderTransaction (Phase 67)', () => {
     });
     const out = await repo.placeOrderTransaction(baseInput());
     expect(out.reusedExistingOrder).toBe(false);
-    expect(out.orderNumber).toMatch(/^SM\d{4}0007$/);
+    // Phase 197 (#3) — sequence pad widened 4→7 digits (SM<year><7-pad>).
+    expect(out.orderNumber).toMatch(/^SM\d{4}0000007$/);
   });
 });
 

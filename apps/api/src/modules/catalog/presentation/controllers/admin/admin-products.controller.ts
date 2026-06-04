@@ -389,6 +389,10 @@ export class AdminProductsController {
       `Product created by admin ${adminId}: ${product.id}${seller ? ` for seller ${seller.id}` : ' (platform product)'}`,
     );
 
+    // Phase 249 (#4) — stamp AI provenance + flip the log to ACCEPTED
+    // now the product row exists. Best-effort; never blocks the create.
+    await this.stampAiProvenance(product.id, dto.aiGenerationLogId);
+
     // Auto-create SellerProductMapping for the assigned seller.
     //
     // Phase 29 (2026-05-21) — mappings start PENDING + isActive=false.
@@ -462,6 +466,12 @@ export class AdminProductsController {
   ) {
     const existing = await this.productRepo.findByIdBasic(productId);
     if (!existing) throw new NotFoundAppException('Product not found');
+
+    // Phase 249 (#4) — stamp AI provenance + flip the log to ACCEPTED.
+    // Independent of the field-diff below so it records even on an
+    // otherwise no-op PATCH that only re-asserts the AI draft. CAS on
+    // the log makes a repeat save a no-op on the log row. Best-effort.
+    await this.stampAiProvenance(productId, dto.aiGenerationLogId);
 
     const updateData: any = {};
     if (dto.title !== undefined) {
@@ -1331,6 +1341,64 @@ export class AdminProductsController {
       message: `Changes requested on ${ok.length} of ${ids.length} (${alreadyDone.length} already in CHANGES_REQUESTED, ${failed.length} failed)`,
       data: { ok, alreadyDone, failed },
     };
+  }
+
+  /**
+   * Phase 249 (#4) — stamp AI-content provenance onto a product and
+   * flip its AiGenerationLog row GENERATED → ACCEPTED. Mirrors the
+   * seller controller's helper (an admin can also save a product that
+   * kept an AI draft). Called with the product id once it's known
+   * (after create, or from the route param on update) when the request
+   * carried `aiGenerationLogId`.
+   *
+   * Best-effort: a bad / missing / already-resolved log id never fails
+   * the product save. Uses `prisma.aiGenerationLog` directly (same DB)
+   * rather than cross-module DI into the AI module.
+   *
+   *   • Product stamp — idempotent (always set when the log resolves).
+   *   • Log flip — CAS on `status='GENERATED'` so a re-save doesn't
+   *     clobber the first acceptance's productId / acceptedAt.
+   */
+  private async stampAiProvenance(
+    productId: string,
+    aiGenerationLogId: string | undefined,
+  ): Promise<void> {
+    if (!aiGenerationLogId) return;
+    try {
+      const log = await this.prisma.aiGenerationLog.findUnique({
+        where: { id: aiGenerationLogId },
+        select: { id: true, promptVersion: true },
+      });
+      if (!log) {
+        this.logger.warn(
+          `aiGenerationLogId ${aiGenerationLogId} not found — skipping AI provenance for product ${productId}`,
+        );
+        return;
+      }
+
+      await this.prisma.product.update({
+        where: { id: productId },
+        data: {
+          aiGenerated: true,
+          aiGeneratedAt: new Date(),
+          aiPromptVersion: log.promptVersion,
+        },
+      });
+
+      const res = await this.prisma.aiGenerationLog.updateMany({
+        where: { id: aiGenerationLogId, status: 'GENERATED' },
+        data: { status: 'ACCEPTED', productId, acceptedAt: new Date() },
+      });
+      if (res.count === 0) {
+        this.logger.log(
+          `AiGenerationLog ${aiGenerationLogId} was not in GENERATED state (already resolved) — product ${productId} stamped, log left as-is`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to stamp AI provenance for product ${productId} (log ${aiGenerationLogId}): ${err}`,
+      );
+    }
   }
 
   /**

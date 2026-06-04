@@ -23,7 +23,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { FranchiseAuthGuard, AdminAuthGuard, FranchiseActiveGuard } from '../../core/guards';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
 import { PrismaFranchiseRepository } from './infrastructure/repositories/prisma-franchise.repository';
 import { FRANCHISE_PARTNER_REPOSITORY } from './domain/repositories/franchise.repository.interface';
 import { FranchisePublicFacade } from './application/facades/franchise-public.facade';
@@ -35,6 +35,7 @@ import { TaxModule } from '../tax/module';
 import { OrdersModule } from '../orders/module';
 // Phase 28 (2026-05-21) — for the shared AdminEndImpersonationUseCase.
 import { AdminModule } from '../admin/module';
+import { AuditModule } from '../audit/module';
 import { FranchiseOrdersService } from './application/services/franchise-orders.service';
 import { FranchiseOrdersController } from './presentation/controllers/franchise-orders.controller';
 import { AdminFranchiseOrdersController } from './presentation/controllers/admin-franchise-orders.controller';
@@ -94,6 +95,8 @@ import { AdminFranchisePosController } from './presentation/controllers/admin-fr
 import { FranchiseEarningsController } from './presentation/controllers/franchise-earnings.controller';
 import { AdminFranchiseSettlementsController } from './presentation/controllers/admin-franchise-settlements.controller';
 import { AdminFranchiseFinanceController } from './presentation/controllers/admin-franchise-finance.controller';
+// Phase 181 (Franchise Ledger audit #9) — franchise self-view of own ledger + balance.
+import { FranchiseLedgerSelfController } from './presentation/controllers/franchise-ledger-self.controller';
 import { FranchiseEmailVerificationController } from './presentation/controllers/franchise-email-verification.controller';
 import { FranchiseMediaController } from './presentation/controllers/franchise-media.controller';
 import { FranchiseStaffController } from './presentation/controllers/franchise-staff.controller';
@@ -138,6 +141,7 @@ import { FranchiseStaffAuthService } from './application/auth/franchise-staff-au
 import { AdminListFranchisesUseCase } from './application/use-cases/admin-list-franchises.use-case';
 import { AdminGetFranchiseUseCase } from './application/use-cases/admin-get-franchise.use-case';
 import { AdminUpdateFranchiseStatusUseCase } from './application/use-cases/admin-update-franchise-status.use-case';
+import { AdminFranchiseFulfillmentHoldUseCase } from './application/use-cases/admin-franchise-fulfillment-hold.use-case';
 import { AdminUpdateFranchiseVerificationUseCase } from './application/use-cases/admin-update-franchise-verification.use-case';
 import { AdminUpdateFranchiseCommissionUseCase } from './application/use-cases/admin-update-franchise-commission.use-case';
 import { AdminEditFranchiseProfileUseCase } from './application/use-cases/admin-edit-franchise-profile.use-case';
@@ -158,6 +162,8 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     MoneyModule,
     forwardRef(() => TaxModule),
     AdminModule,
+    // Phase 181 (Franchise Ledger audit #13) — audit-log CRITICAL ledger writes.
+    AuditModule,
     // Phase 82 (2026-05-23) — pack/ship audit. Franchise fulfillment
     // delegates to the unified OrdersService writer. forwardRef
     // because OrdersModule already imports FranchiseModule (for
@@ -184,6 +190,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     FranchiseEarningsController,
     AdminFranchiseSettlementsController,
     AdminFranchiseFinanceController,
+    FranchiseLedgerSelfController,
     FranchiseEmailVerificationController,
     FranchiseMediaController,
     FranchiseStaffController,
@@ -244,6 +251,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     AdminListFranchisesUseCase,
     AdminGetFranchiseUseCase,
     AdminUpdateFranchiseStatusUseCase,
+    AdminFranchiseFulfillmentHoldUseCase,
     AdminUpdateFranchiseVerificationUseCase,
     AdminUpdateFranchiseCommissionUseCase,
     AdminEditFranchiseProfileUseCase,
@@ -265,7 +273,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     FranchiseActiveGuard,
     AdminAuthGuard,
     EmailOtpAdapter,
-    CloudinaryAdapter,
+    MediaStorageAdapter,
   ],
   exports: [FranchisePublicFacade],
 })

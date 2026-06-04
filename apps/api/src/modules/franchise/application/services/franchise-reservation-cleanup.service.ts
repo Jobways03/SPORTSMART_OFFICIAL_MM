@@ -6,6 +6,7 @@ import { FranchiseInventoryService } from './franchise-inventory.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 /**
  * Phase 1 (PR 1.8) — Franchise reservation sweeper.
@@ -65,6 +66,11 @@ export class FranchiseReservationCleanupService {
     // `{ released, contractsSuspended }` shape the heartbeat
     // dashboard charts.
     private readonly instr: CronInstrumentationService,
+    // Cluster C — best-effort tamper-evident summary row per tick so
+    // a forensic review can see WHEN the sweeper last released stale
+    // holds (and how many) without rebuilding from the ledger. @Global
+    // AuditModule, no module import needed.
+    private readonly audit: AuditPublicFacade,
   ) {
     this.logger.setContext('FranchiseReservationCleanupService');
   }
@@ -88,6 +94,30 @@ export class FranchiseReservationCleanupService {
             contractsSuspended = await this.checkExpiredContracts();
             this.lastContractCheck = Date.now();
           }
+
+          // Cluster C — one best-effort audit summary row per tick when
+          // anything was actually released/suspended. Written here at the
+          // tick boundary (OUTSIDE cleanup()'s per-reservation work) so a
+          // logging failure never aborts the sweep; `.catch` keeps it
+          // non-fatal.
+          if (released > 0 || contractsSuspended > 0) {
+            await this.audit
+              .writeAuditLog({
+                actorId: 'system',
+                actorRole: 'SYSTEM',
+                action: 'FRANCHISE_RESERVATION_CLEANUP',
+                module: 'franchise',
+                resource: 'franchise_inventory_ledger',
+                resourceId: 'sweep',
+                newValue: { released, contractsSuspended },
+              })
+              .catch((err) =>
+                this.logger.warn(
+                  `Failed to write franchise-reservation cleanup audit row: ${(err as Error)?.message ?? 'unknown error'}`,
+                ),
+              );
+          }
+
           return { released, contractsSuspended };
         });
       } catch (err) {
@@ -100,6 +130,16 @@ export class FranchiseReservationCleanupService {
 
   async cleanup(): Promise<number> {
     const cutoff = new Date(Date.now() - this.RESERVATION_TTL_MINUTES * 60 * 1000);
+
+    // Cluster C — bound the scan. Pre-fix this was an unbounded findMany:
+    // a large backlog (or a bug leaving rows un-released) would pull every
+    // stale ORDER_RESERVE row into memory in one tick. Cap it; the leftover
+    // rows are picked up on the next EVERY_MINUTE tick (ordered oldest-first
+    // so the oldest holds clear first).
+    const batchSize = this.env.getNumber(
+      'FRANCHISE_RESERVATION_CLEANUP_BATCH_SIZE',
+      500,
+    );
 
     // Find ORDER_RESERVE entries older than TTL that may not have been released
     const expiredReservations = await this.prisma.franchiseInventoryLedger.findMany({
@@ -116,6 +156,8 @@ export class FranchiseReservationCleanupService {
         quantityDelta: true,
         referenceId: true,
       },
+      take: batchSize,
+      orderBy: { createdAt: 'asc' },
     });
 
     let releasedCount = 0;

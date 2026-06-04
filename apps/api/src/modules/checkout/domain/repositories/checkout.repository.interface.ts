@@ -162,7 +162,7 @@ export interface CreateOrderItemInput {
   appliedDiscountPercent?: number | null;
   appliedFixedUnitPrice?: number | null;
   appliedListUnitPrice?: number | null;
-  // Phase 67 (2026-05-22) — Cloudinary public id snapshot (audit
+  // Phase 67 (2026-05-22) — media public id snapshot (audit
   // Gap #23). Forward-compat: passed through to OrderItem if the
   // checkout session resolved it from the product images; null
   // otherwise (no UI regression today).

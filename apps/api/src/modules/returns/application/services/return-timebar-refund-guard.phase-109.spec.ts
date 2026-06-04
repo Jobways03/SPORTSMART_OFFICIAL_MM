@@ -23,7 +23,7 @@ function buildDeps(overrides: any = {}) {
     stockRestorationService: {},
     commissionReversalService: {},
     refundGateway: { processRefund: jest.fn() },
-    cloudinaryAdapter: {},
+    media: {},
     eventBus: { publish: jest.fn().mockResolvedValue(undefined) },
     caseDuplicates: {},
     env: {
@@ -58,7 +58,7 @@ function build(deps: any) {
     deps.stockRestorationService,
     deps.commissionReversalService,
     deps.refundGateway,
-    deps.cloudinaryAdapter,
+    deps.media,
     deps.eventBus,
     deps.caseDuplicates,
     deps.env,

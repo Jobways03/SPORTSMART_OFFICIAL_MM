@@ -1,13 +1,19 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { NotFoundAppException } from '../../../../core/exceptions';
+import {
+  NotFoundAppException,
+  BadRequestAppException,
+} from '../../../../core/exceptions';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import {
   RiskRuleConfigService,
   OrderRiskReasonCodeKey,
 } from './risk-rule-config.service';
 
-export type RiskBand = 'GREEN' | 'YELLOW' | 'RED';
+// Phase 174 (audit #224/#227) — CRITICAL is the 4th band above RED so the
+// highest-risk cohort can be triaged first and held to the bounded
+// enforcement gate (mandatory reason on approve, excluded from bulk-approve).
+export type RiskBand = 'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL';
 
 /**
  * Phase 69 (2026-05-22) — Phase 68 audit Gap #20. Structured reason
@@ -110,7 +116,19 @@ const HIGH_RTO_PINCODES = new Set<string>([
 const BAND_THRESHOLDS = {
   GREEN_MAX: 0,
   YELLOW_MAX: 14,
+  // Phase 174 — RED spans 15..30; above 30 escalates to CRITICAL.
+  RED_MAX: 30,
 };
+
+// Phase 174 (audit #224-#13) — risk scoring is only meaningful (and only
+// writable) while an order is in a pre-verification state. Re-scoring a
+// VERIFIED / ROUTED / CANCELLED / REJECTED order would overwrite a
+// finalized band, so scoreOrder refuses + CAS-guards the write.
+const SCORABLE_STATUSES = [
+  'PENDING_PAYMENT',
+  'PLACED',
+  'PENDING_VERIFICATION',
+] as const;
 
 @Injectable()
 export class RiskScoringService {
@@ -158,6 +176,7 @@ export class RiskScoringService {
       where: { id: orderId },
       select: {
         id: true,
+        orderStatus: true,
         customerId: true,
         totalAmount: true,
         itemCount: true,
@@ -184,12 +203,26 @@ export class RiskScoringService {
     });
     if (!order) throw new NotFoundAppException('Order not found');
 
-    // Count prior orders this customer has had (any status — including
-    // delivered, cancelled, etc.) excluding this one.
+    // Phase 174 (audit #224-#13) — refuse to score an order that has left
+    // the pre-verification lifecycle. The placement handler + lazy paths
+    // only ever hit PLACED/PENDING_PAYMENT; a manual rescore on a
+    // CANCELLED/VERIFIED order would otherwise stomp a finalized score.
+    if (!(SCORABLE_STATUSES as readonly string[]).includes(order.orderStatus)) {
+      throw new BadRequestAppException(
+        `Cannot score order in status ${order.orderStatus} — only pre-verification orders are scorable`,
+      );
+    }
+
+    // Count prior orders this customer has had, EXCLUDING cancelled /
+    // rejected ones (audit #224-#14). Pre-fix a customer with 10 cancelled
+    // orders earned the -10 "repeat customer" trust bonus — rewarding
+    // exactly the behaviour the verification queue exists to catch. Only
+    // orders that actually progressed count toward trust history.
     const priorOrderCount = await this.prisma.masterOrder.count({
       where: {
         customerId: order.customerId,
         id: { not: order.id },
+        orderStatus: { notIn: ['CANCELLED', 'REJECTED'] as any },
       },
     });
 
@@ -298,8 +331,17 @@ export class RiskScoringService {
     // Phase 69 is replaced on every rescore (current-state denorm);
     // OrderRiskScoreHistory is append-only (temporal record).
     await this.prisma.$transaction(async (tx) => {
-      await tx.masterOrder.update({
-        where: { id: orderId },
+      // Phase 174 (audit #224-#13) — CAS the write to the scorable statuses
+      // so a verify/cancel that landed between our read above and this write
+      // is not clobbered by a now-stale band. count===0 → the order left the
+      // lifecycle under us; throw to roll the whole tx back (history +
+      // reasons included). Note: applyPaise is the documented money-dual-write
+      // coverage invariant (no-op for masterOrder), retained intentionally.
+      const written = await tx.masterOrder.updateMany({
+        where: {
+          id: orderId,
+          orderStatus: { in: SCORABLE_STATUSES as any },
+        },
         data: this.moneyDualWrite.applyPaise('masterOrder', {
           verificationRiskScore: result.score,
           verificationRiskBand: result.band,
@@ -310,6 +352,11 @@ export class RiskScoringService {
           verificationScoreVersion: SCORER_VERSION,
         }),
       });
+      if (written.count === 0) {
+        throw new BadRequestAppException(
+          'Order is no longer in a scorable state (changed concurrently)',
+        );
+      }
       // OrderRiskReason: replace per-rule denormalisation.
       await tx.orderRiskReason.deleteMany({ where: { masterOrderId: orderId } });
       if (result.reasonRows.length > 0) {
@@ -354,47 +401,92 @@ export class RiskScoringService {
    * (rule-set bump). The endpoint is idempotent on the version check
    * — re-running after a successful pass is a no-op.
    */
-  async backfillUnscored(): Promise<{ scored: number; staleRescored: number }> {
-    const unscored = await this.prisma.masterOrder.findMany({
-      where: {
-        orderStatus: 'PLACED',
-        verificationRiskBand: null,
-      },
-      select: { id: true },
-    });
+  async backfillUnscored(
+    opts: { dryRun?: boolean; limit?: number } = {},
+  ): Promise<{
+    scored: number;
+    staleRescored: number;
+    failed: number;
+    failedIds: string[];
+    candidateCount: number;
+    dryRun: boolean;
+  }> {
+    // Phase 174 (audit #225) — bound the scan so a 100k-order backlog can't
+    // load every row into memory + block the request for minutes. The work
+    // drains across repeated calls (idempotent on the band/version filter).
+    const cap = Math.min(Math.max(1, Math.floor(opts.limit ?? 500)), 5000);
 
-    const stale = await this.prisma.masterOrder.findMany({
-      where: {
-        orderStatus: 'PLACED',
-        verificationRiskBand: { not: null },
-        verificationScoreVersion: { lt: SCORER_VERSION },
-      },
+    const unscored = await this.prisma.masterOrder.findMany({
+      where: { orderStatus: 'PLACED', verificationRiskBand: null },
       select: { id: true },
+      orderBy: { createdAt: 'asc' },
+      take: cap,
     });
+    const remaining = Math.max(0, cap - unscored.length);
+    const stale =
+      remaining > 0
+        ? await this.prisma.masterOrder.findMany({
+            where: {
+              orderStatus: 'PLACED',
+              verificationRiskBand: { not: null },
+              verificationScoreVersion: { lt: SCORER_VERSION },
+            },
+            select: { id: true },
+            orderBy: { createdAt: 'asc' },
+            take: remaining,
+          })
+        : [];
+
+    const candidateCount = unscored.length + stale.length;
+
+    // Phase 174 (audit #225) — dry-run preview: report what WOULD be scored
+    // without touching anything, so a SUPER_ADMIN can size the run first.
+    if (opts.dryRun) {
+      return {
+        scored: 0,
+        staleRescored: 0,
+        failed: 0,
+        failedIds: [],
+        candidateCount,
+        dryRun: true,
+      };
+    }
 
     let scored = 0;
+    let staleRescored = 0;
+    const failedIds: string[] = [];
     for (const c of unscored) {
       try {
         await this.scoreOrder(c.id);
         scored++;
       } catch (err) {
+        failedIds.push(c.id);
         this.logger.error(
           `Backfill failed for order ${c.id}: ${(err as Error).message}`,
         );
       }
     }
-    let staleRescored = 0;
     for (const c of stale) {
       try {
         await this.scoreOrder(c.id);
         staleRescored++;
       } catch (err) {
+        failedIds.push(c.id);
         this.logger.error(
           `Stale-rescore failed for order ${c.id}: ${(err as Error).message}`,
         );
       }
     }
-    return { scored, staleRescored };
+    // Phase 174 (audit #225) — return the failed count + ids so the
+    // SUPER_ADMIN sees what didn't score instead of a bare success count.
+    return {
+      scored,
+      staleRescored,
+      failed: failedIds.length,
+      failedIds,
+      candidateCount,
+      dryRun: false,
+    };
   }
 
   /**
@@ -653,7 +745,9 @@ function computeScore(
       ? 'GREEN'
       : score <= BAND_THRESHOLDS.YELLOW_MAX
         ? 'YELLOW'
-        : 'RED';
+        : score <= BAND_THRESHOLDS.RED_MAX
+          ? 'RED'
+          : 'CRITICAL';
 
   return {
     score,

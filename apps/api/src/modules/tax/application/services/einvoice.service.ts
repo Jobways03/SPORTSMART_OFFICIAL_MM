@@ -36,6 +36,7 @@ import {
 } from '../../domain/einvoice-applicability';
 import {
   EINVOICE_PROVIDER,
+  EInvoiceProviderError,
   type EInvoiceProvider,
 } from '../../infrastructure/einvoice/einvoice-provider';
 // Phase 90 (2026-05-23) — Gap #12 / #21 events catalog + category resolver.
@@ -63,6 +64,22 @@ export class EInvoiceNotApplicableError extends Error {
       `TaxDocument ${documentId} is not eligible for IRP: ${reason}`,
     );
     this.name = 'EInvoiceNotApplicableError';
+  }
+}
+
+/**
+ * Phase 160 (e-invoice audit #2) — thrown when IRN minting is globally
+ * disabled via the `einvoice_enabled` tax-config kill switch. The retry
+ * cron treats this as a skip (no FAILED churn); the admin controller maps
+ * it to 409 with a clear "disabled" message.
+ */
+export class EInvoiceDisabledError extends Error {
+  constructor(public readonly documentId: string) {
+    super(
+      `E-invoicing is disabled (tax_config.einvoice_enabled = false). ` +
+        `Enable it once the CA confirms turnover applicability before minting IRNs.`,
+    );
+    this.name = 'EInvoiceDisabledError';
   }
 }
 
@@ -119,6 +136,24 @@ export class EInvoiceService {
     return override > 0
       ? BigInt(override)
       : DEFAULT_EINVOICE_TURNOVER_THRESHOLD_PAISE;
+  }
+
+  /**
+   * Phase 160 (e-invoice audit #2) — the `einvoice_enabled` kill switch.
+   * Returns true (allow) when no TaxConfigService is wired (unit-test /
+   * legacy construction); when it IS wired, the DB flag is authoritative
+   * and defaults to FALSE (safe — the seed ships it false "until the CA
+   * confirms turnover applicability"). This makes the previously-decorative
+   * kill switch actually gate provider calls at runtime.
+   */
+  async isEnabled(): Promise<boolean> {
+    if (!this.taxConfig) return true;
+    try {
+      return await this.taxConfig.getBoolean('einvoice_enabled' as any, false);
+    } catch {
+      // Config read failure must not silently enable minting.
+      return false;
+    }
   }
 
   /**
@@ -296,7 +331,18 @@ export class EInvoiceService {
    *   • Gap #20 : audit log entry per attempt.
    *   • Gap #21 : event emission on success/failure.
    */
-  async generateForDocument(documentId: string): Promise<TaxDocument> {
+  async generateForDocument(
+    documentId: string,
+    opts: { actorId?: string; actorRole?: string; ipAddress?: string } = {},
+  ): Promise<TaxDocument> {
+    // Phase 160 (audit #2) — the kill switch gates provider calls. Checked
+    // BEFORE classification so a disabled platform never touches the IRP.
+    // The retry cron catches this specifically (skip, not FAILED).
+    if (!(await this.isEnabled())) {
+      throw new EInvoiceDisabledError(documentId);
+    }
+    const actorId = opts.actorId ?? 'system';
+    const actorRole = opts.actorRole ?? 'SYSTEM';
     const { applicable, reason, document } =
       await this.classifyForDocument(documentId);
     if (!applicable) {
@@ -417,6 +463,10 @@ export class EInvoiceService {
           einvoiceProvider: this.provider.name,
           einvoiceLastAttemptedAt: new Date(),
           einvoiceFailureReason: null,
+          einvoiceErrorCode: null,
+          // Phase 160 — who/when minted (distinct from ackDate + lastAttempted).
+          einvoiceGeneratedBy: actorId,
+          einvoiceGeneratedAt: new Date(),
           // PDF re-render trigger.
           status: 'PDF_PENDING',
           pdfUrl: null,
@@ -432,8 +482,9 @@ export class EInvoiceService {
         action: 'MINT',
         fromStatus: document.einvoiceStatus,
         toStatus: 'GENERATED',
-        actorId: 'system',
-        actorRole: 'SYSTEM',
+        actorId,
+        actorRole,
+        ipAddress: opts.ipAddress ?? null,
         providerName: this.provider.name,
         providerLatencyMs: latencyMs,
         payloadAfter: { ackNo: result.ackNo, transactionCategory },
@@ -451,12 +502,20 @@ export class EInvoiceService {
       return updated;
     } catch (err) {
       const reasonText = (err as Error).message ?? String(err);
+      // Phase 160 (#8) — capture the NIC business error code when the
+      // provider surfaced a typed error, so admin queries can filter by
+      // code (e.g. all 2253 mandatory-field failures) without regex.
+      const nicErrorCode =
+        err instanceof EInvoiceProviderError
+          ? err.opts.nicErrorCode ?? err.category
+          : null;
       const latencyMs = Date.now() - t0;
       const failed = await this.prisma.taxDocument.update({
         where: { id: document.id },
         data: {
           einvoiceStatus: 'FAILED',
           einvoiceFailureReason: reasonText,
+          einvoiceErrorCode: nicErrorCode,
           einvoiceLastAttemptedAt: new Date(),
           einvoiceRetryCount: { increment: 1 },
           einvoiceProvider: this.provider.name,
@@ -467,8 +526,9 @@ export class EInvoiceService {
         action: 'MINT_FAILED',
         fromStatus: document.einvoiceStatus,
         toStatus: 'FAILED',
-        actorId: 'system',
-        actorRole: 'SYSTEM',
+        actorId,
+        actorRole,
+        ipAddress: opts.ipAddress ?? null,
         reason: reasonText,
         providerName: this.provider.name,
         providerLatencyMs: latencyMs,

@@ -48,14 +48,21 @@ model FileMetadata {
   status         FileStatus         @default(PENDING)
 
   storageKey     String  @unique @map("storage_key")
-  // Storage provider name ("s3" / "cloudinary" / "local").
-  provider       String  @default("s3")
+  // Storage provider name ("r2" / "cloudinary" / "local"). R2 (Cloudflare,
+  // S3-compatible) replaces the former "s3" default.
+  provider       String  @default("r2")
   // Provider-specific identifier (S3 key, Cloudinary publicId).
   providerFileId String? @map("provider_file_id")
   // Optional public URL when classification=PUBLIC.
   providerUrl    String? @map("provider_url")
 
   uploadedBy String    @map("uploaded_by")
+  // Phase 250 — actor persona (CUSTOMER/SELLER/FRANCHISE/ADMIN/AFFILIATE)
+  // so an uploadedBy id is unambiguous across the five id-spaces. Was
+  // previously absent, and the controller's requesterId() collapsed every
+  // upload to the literal 'unknown' (it read req.userId/adminId/... which
+  // AnyAuthGuard never sets); both are fixed together.
+  uploadedByType String? @map("uploaded_by_type")
   // Pre-signed upload URL expiry — PENDING rows past this can be GC'd.
   expiresAt  DateTime? @map("expires_at")
   deletedAt  DateTime? @map("deleted_at")
@@ -104,6 +111,11 @@ model FileAttachment {
 
   file FileMetadata @relation(fields: [fileId], references: [id], onDelete: Cascade)
 
+  // Phase 252 (#12) — attach idempotency. The same file attached to the
+  // same (resource, resourceId) twice was creating duplicate rows
+  // (double-click → gallery shows the image twice). The service now
+  // catches P2002 on this and returns the existing row.
+  @@unique([fileId, resource, resourceId])
   @@index([resource, resourceId])
   @@index([fileId])
   // Phase 88 (2026-05-23) — Gap #17. Polymorphic-table scans of

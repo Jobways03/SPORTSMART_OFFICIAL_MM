@@ -23,6 +23,7 @@ interface MockOpts {
 function makeSvc(opts: MockOpts = {}) {
   const order = {
     id: 'mo-1',
+    orderStatus: 'PLACED',
     customerId: 'c-1',
     totalAmount: opts.totalAmount ?? 12_000,
     itemCount: opts.itemCount ?? 1,
@@ -60,13 +61,14 @@ function makeSvc(opts: MockOpts = {}) {
       findUnique: masterOrderFindUnique,
       count: masterOrderCount,
       update: masterOrderUpdate,
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findMany: jest.fn().mockResolvedValue([]),
     },
     orderRiskReason: { deleteMany: riskReasonDeleteMany, createMany: riskReasonCreateMany },
     orderRiskScoreHistory: { create: riskScoreHistoryCreate },
     $transaction: jest.fn(async (cb: any) =>
       cb({
-        masterOrder: { update: masterOrderUpdate },
+        masterOrder: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
         orderRiskReason: { deleteMany: riskReasonDeleteMany, createMany: riskReasonCreateMany },
         orderRiskScoreHistory: { create: riskScoreHistoryCreate },
       }),

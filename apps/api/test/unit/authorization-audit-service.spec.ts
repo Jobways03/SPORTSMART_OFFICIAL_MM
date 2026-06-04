@@ -38,7 +38,19 @@ describe('AuthorizationAuditService', () => {
     const fakeMetrics: any = {
       counter: jest.fn(() => counterHandle),
     };
-    const svc = new AuthorizationAuditService(fakePrisma, fakeEnv, fakeMetrics);
+    // PR 12.x — record() now gates on AuthzModeService.isAuditEnabled()
+    // (the effective env-OR-runtime-override flag), not env directly.
+    // Drive it from the same `enabled` option so the AUTHZ_AUDIT_ENABLED
+    // =false case still records nothing.
+    const fakeAuthzMode: any = {
+      isAuditEnabled: () => opts.enabled !== false,
+    };
+    const svc = new AuthorizationAuditService(
+      fakePrisma,
+      fakeEnv,
+      fakeMetrics,
+      fakeAuthzMode,
+    );
     return { svc, writes, fakePrisma };
   }
 

@@ -32,7 +32,12 @@ export class NotificationPreferenceRepository {
     return this.prisma.notificationPreference.findMany({ where: { userId } });
   }
 
-  /** Bulk upsert — accepts an array of (eventClass, channel, enabled) tuples. */
+  /**
+   * Bulk upsert with a consent-history trail. Phase 189 (#7/#8/#9/#12) —
+   * every entry's upsert AND its history row are written inside ONE
+   * transaction (atomic: all-or-nothing). The prior `enabled` value is read
+   * first so the history captures the real before/after.
+   */
   async setMany(
     userId: string,
     entries: Array<{
@@ -40,21 +45,75 @@ export class NotificationPreferenceRepository {
       channel: NotificationChannel;
       enabled: boolean;
     }>,
+    ctx: {
+      source: string;
+      updatedByAdminId?: string | null;
+      bypassReason?: string | null;
+      ipAddress?: string | null;
+      userAgent?: string | null;
+    },
   ): Promise<NotificationPreference[]> {
-    return this.prisma.$transaction(
-      entries.map((e) =>
-        this.prisma.notificationPreference.upsert({
+    if (entries.length === 0) return [];
+
+    // Read prior state for the affected keys (for the history before-value).
+    const existing = await this.prisma.notificationPreference.findMany({
+      where: { userId, OR: entries.map((e) => ({ eventClass: e.eventClass, channel: e.channel })) },
+    });
+    const priorMap = new Map(
+      existing.map((r) => [`${r.eventClass}::${r.channel}`, r.enabled]),
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      const saved: NotificationPreference[] = [];
+      for (const e of entries) {
+        const oldEnabled = priorMap.get(`${e.eventClass}::${e.channel}`);
+        const row = await tx.notificationPreference.upsert({
           where: {
-            userId_eventClass_channel: {
+            userId_eventClass_channel: { userId, eventClass: e.eventClass, channel: e.channel },
+          },
+          create: {
+            userId,
+            eventClass: e.eventClass,
+            channel: e.channel,
+            enabled: e.enabled,
+            source: ctx.source,
+            updatedByAdminId: ctx.updatedByAdminId ?? null,
+          },
+          update: {
+            enabled: e.enabled,
+            source: ctx.source,
+            updatedByAdminId: ctx.updatedByAdminId ?? null,
+          },
+        });
+        // Only record a history row when the value actually changed (or is new).
+        if (oldEnabled === undefined || oldEnabled !== e.enabled) {
+          await tx.notificationPreferenceHistory.create({
+            data: {
               userId,
               eventClass: e.eventClass,
               channel: e.channel,
+              oldEnabled: oldEnabled ?? null,
+              newEnabled: e.enabled,
+              source: ctx.source,
+              updatedByAdminId: ctx.updatedByAdminId ?? null,
+              bypassReason: ctx.bypassReason ?? null,
+              ipAddress: ctx.ipAddress ?? null,
+              userAgent: ctx.userAgent ?? null,
             },
-          },
-          create: { userId, eventClass: e.eventClass, channel: e.channel, enabled: e.enabled },
-          update: { enabled: e.enabled },
-        }),
-      ),
-    );
+          });
+        }
+        saved.push(row);
+      }
+      return saved;
+    });
+  }
+
+  /** Phase 189 (#9) — consent-change history for a user (newest first). */
+  async historyForUser(userId: string, limit = 200) {
+    return this.prisma.notificationPreferenceHistory.findMany({
+      where: { userId },
+      orderBy: { occurredAt: 'desc' },
+      take: limit,
+    });
   }
 }

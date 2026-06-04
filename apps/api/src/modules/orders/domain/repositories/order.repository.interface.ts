@@ -68,9 +68,22 @@ export interface OrderRepository {
     customerId: string,
     skip: number,
     take: number,
+    // Phase 197 (My-Orders audit #7) — optional server-side bucket.
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
   ): Promise<any[]>;
 
-  countCustomerOrders(customerId: string): Promise<number>;
+  countCustomerOrders(
+    customerId: string,
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+  ): Promise<number>;
+
+  // Phase 197 (My-Orders audit #7) — per-bucket counts for tab badges.
+  countCustomerOrdersByBucket(customerId: string): Promise<{
+    all: number;
+    active: number;
+    delivered: number;
+    cancelled: number;
+  }>;
 
   updateMasterOrder(id: string, data: any): Promise<any>;
 

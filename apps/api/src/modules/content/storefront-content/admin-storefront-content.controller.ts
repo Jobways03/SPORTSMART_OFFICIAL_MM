@@ -99,7 +99,7 @@ export class AdminStorefrontContentController {
   }
 
   /**
-   * Reset the slot — soft-delete the row + clean up the Cloudinary
+   * Reset the slot — soft-delete the row + clean up the media
    * asset. Idempotent: deleting a non-existent / already-soft-deleted
    * slot returns 200.
    */

@@ -63,6 +63,9 @@ export const PERMISSIONS = {
   'refunds.reject':         'Reject a refund (halts disbursement; reverses liability)',
   'refunds.confirm':        'Confirm a manual refund (UTR / bank reference)',
   'refunds.retry':          'Retry a failed gateway refund',
+  // Phase 172 (Goodwill Credit audit #7) — approving a goodwill wallet credit
+  // (a non-recoverable platform expense) requires this on TOP of refunds.approve.
+  'wallet.goodwill.approve': 'Approve a goodwill wallet credit (non-recoverable platform expense)',
   'refunds.manualConfirm':  'Mark a manual / COD refund as paid',
   // Phase 105 (2026-05-23) — Phase 102 audit Gap #8 closure. Granular
   // separation from refunds.retry: marking a refund failed manually
@@ -142,10 +145,35 @@ export const PERMISSIONS = {
   'recon.read':             'View reconciliation runs',
   'recon.run':              'Trigger a manual reconciliation run',
   'recon.transition':       'Resolve / ignore discrepancies',
+  // Phase 174 (Discrepancy Resolution audit) — dedicated gates for the
+  // higher-blast-radius resolution actions.
+  'recon.discrepancy.assign': 'Assign a discrepancy to an investigator',
+  'recon.discrepancy.reopen': 'Reopen a resolved/ignored discrepancy',
+  'recon.discrepancy.bulk':   'Bulk-transition many discrepancies at once',
+
+  // Phase 175 (Accounts Overview Dashboard audit #2/#5) — dedicated gate for the
+  // platform-wide finance dashboard (was reusing settlements.read).
+  'accounts.read':            'View the accounts overview dashboard (platform-wide finance)',
+  // Phase 177 (#4) — record an itemized adjustment against a franchise settlement.
+  'accounts.franchise.adjust': 'Record an adjustment against a franchise settlement',
+  // Phase 178 (#4/#11) — freeze / release a settlement from payout.
+  'accounts.payable.hold':     'Freeze or release a settlement from payout (ON_HOLD)',
+  // Phase 178 (#12) — record a partial / full bank disbursement.
+  'accounts.payable.recordPayment': 'Record a partial / full settlement payment',
 
   // Payment ops
   'paymentOps.read':        'View alerts + attempts',
   'paymentOps.transition':  'Resolve / ignore alerts',
+  // Phase 169 (Payment Ops audit #8) — contesting a chargeback uploads evidence
+  // to the gateway + moves a real money-at-risk decision; HIGH-tier, distinct
+  // from the read/triage perms.
+  'paymentOps.chargeback.respond': 'Submit chargeback contest evidence to the gateway',
+  // Phase 168 (COD Mark-Paid audit #6) — dedicated CRITICAL-tier permission for
+  // the COD cash-collection mark-paid action. Replaces the historical,
+  // semantically-wrong `orders.cancel` gate. This MOVES MONEY-STATE (flips an
+  // order to PAID → commission/affiliate settlement), so it belongs in the same
+  // tier as settlements.markPaid.
+  'payments.cod.markPaid':  'Mark a COD order as paid (cash collected on delivery)',
 
   // Products
   'products.read':          'View catalog',
@@ -251,8 +279,25 @@ export const PERMISSIONS = {
   'roles.read':             'View roles + permissions',
   'roles.write':            'Create / edit roles + assign permissions',
 
+  // Portal realtime streams — the admin SSE queue is a live firehose of
+  // returns/disputes/tickets/SLA across ALL tenants, so it carries a
+  // dedicated CRITICAL permission rather than riding the broad audit.read.
+  'portal.streams.admin.read': 'Subscribe to the admin realtime SSE queue (live cross-tenant ops feed)',
+
+  // Authz readiness — `roles.read` opens the dashboard (counts + summary);
+  // the full permission/role key lists + denial PII (ip/user-agent) are a
+  // privilege-escalation recon surface, so they need this higher key.
+  'authz.readiness.full':   'View full authz readiness detail (permission lists, denial PII, route inventory)',
+
   // Audit
-  'audit.read':             'View + export audit log',
+  'audit.read':             'View audit log + event log',
+  // Phase 204 (#10) — chain verification is a distinct, heavier capability
+  // (it persists runs + can emit break alerts) than read-only browsing.
+  'audit.chain.verify':     'Run audit hash-chain integrity verification',
+  // Phase 206 (#7) — exporting the audit log is separated from reading it.
+  'audit.export':           'Export audit log to CSV (redacted)',
+  // Phase 206 (#6/#7) — the un-redacted (PII-bearing) export is a higher tier.
+  'audit.export.full':      'Export audit log to CSV including PII (IP, UA, raw JSON)',
 
   // Sessions — Story 6.3 admin session-revocation surface. Read lists
   // active refresh-token sessions across actor tables; revoke flips
@@ -260,9 +305,47 @@ export const PERMISSIONS = {
   'sessions.read':          'View active sessions across actors',
   'sessions.revoke':        'Force-logout any session',
 
+  // Security — Phase 207 (#1). The admin access-log / brute-force surface
+  // (failed-login spike, per-actor login history, raw failure stream)
+  // exposes attack telemetry that doubles as an enumeration oracle (which
+  // emails are being targeted, which IPs, which accounts are locked). It
+  // was previously gated by the broad 'audit.read'; split into a dedicated
+  // key so only the security tier sees it, not every audit reader.
+  'security.read':          'View access logs + brute-force / login-spike telemetry',
+
+  // Admin activity timeline — Phase 208 (#3). The unified activity stream
+  // (auth + admin business actions + impersonations) was gated by the
+  // coarse 'roles.read'. Split into a dedicated key so RBAC-page viewers
+  // don't automatically get the cross-actor activity feed.
+  'admin.activity.read':    'View the unified admin activity timeline',
+
   // Notifications
   'notifications.read':     'View notification logs + templates',
   'notifications.write':    'Edit templates + retry notifications',
+  // Phase 185 (#2/#10) — dedicated keys split out of the broad write.
+  // dispatch sends a brand-new message to an arbitrary recipient (abuse /
+  // mis-send surface); dlq.manage replays/discards dead-lettered jobs and
+  // marks delivery receipts. Both HIGH (blast radius, not money).
+  'notifications.dispatch': 'Manually dispatch a one-off notification (legacy/template)',
+  // Phase 187 (#2) — split the dispatch surface by blast radius: a template
+  // dispatch respects opt-out (MEDIUM); a RAW dispatch bypasses opt-out and
+  // must carry an alertType + reason → CRITICAL.
+  'notifications.dispatch.template': 'Dispatch a template notification (respects opt-out)',
+  'notifications.dispatch.raw': 'Dispatch a raw notification bypassing opt-out (security/critical only)',
+  'notifications.dlq.manage': 'View/replay/discard dead-lettered notifications',
+
+  // Outbox — Phase 186 (#8). Domain-event outbox DLQ ops.
+  'outbox.dlq.read':        'View outbox dead-letters + queue stats',
+  'outbox.dlq.manage':      'Replay outbox dead-letters',
+
+  // Notification preferences — Phase 189 (#10/#11).
+  'notifications.preferences.read':     "View a customer's notification preferences",
+  'notifications.preferences.override': "Override a customer's preferences (legal/compliance only)",
+
+  // Notification logs — Phase 190 (#1/#9).
+  'notifications.logs.read':          'View notification delivery logs (PII masked)',
+  'notifications.logs.read.unmasked': 'View notification logs with unmasked PII + bodies',
+  'notifications.logs.retry':         'Re-enqueue a notification from its log',
 
   // Files
   'files.read':             'View file metadata across actors',
@@ -285,6 +368,8 @@ export const PERMISSIONS = {
   // Phase 159f — TDS deposit + Form 16A issuance lifecycle ops.
   'affiliates.tax.deposit': 'Mark affiliate §194-O TDS deposited (challan)',
   'affiliates.tax.issue_certificate': 'Issue affiliate Form 16A certificates',
+  // Phase 160 (§194-O affiliate audit #16) — correction flow.
+  'affiliates.tax.reverse': 'Reverse an affiliate §194-O TDS ledger row (correction)',
   'affiliates.payouts':     'Approve / mark-paid affiliate payouts',
   // Phase 155 — granular split so the 4-eyes principle is enforceable by role
   // (approver ≠ payer). A holder of the broad affiliates.payouts keeps access.
@@ -298,6 +383,8 @@ export const PERMISSIONS = {
   'franchise.approve':      'Approve franchise onboarding + verification',
   'franchise.suspend':      'Suspend / reactivate franchises',
   'franchise.finance':      'Adjustments + penalties on franchise ledger',
+  // Phase 181 (#11) — approve/reject a high-value franchise penalty (2-person).
+  'franchise.penalty.approve': 'Approve or reject a high-value franchise penalty',
   'franchise.inventory':    'View franchise inventory + ledger',
   'franchise.orders':       'Manage franchise sub-orders',
   'franchise.procurement_pricing': 'Set per-franchise procurement cost overrides',
@@ -309,6 +396,16 @@ export const PERMISSIONS = {
   'franchise.procurement.settle': 'Settle a received franchise procurement request (posts the finance ledger)',
   'franchise.pos.report.read': "Read a franchise's daily POS sales report (revenue)",
 
+  // Files / media moderation
+  // Phase 250 — the cross-platform file moderation surface (reads other
+  // users' KYC/evidence) + the admin-override delete were previously gated
+  // only by AdminAuthGuard with no @Permissions (any admin saw everything).
+  'files.read.any':         'View / moderate any user\'s files (incl. KYC)',
+  'files.delete.any':       'Delete any user\'s file (admin override)',
+  // Phase 249 — AI product-content generation (author tier). The endpoint
+  // also enforces a SELLER/ADMIN actor-type gate at runtime.
+  'ai.generate.product':    'Generate AI product content',
+
   // Content (banners, FAQ, CMS pages)
   'content.read':           'View banners, FAQ, CMS pages',
   'content.write':          'Edit banners, FAQ, CMS pages',
@@ -317,6 +414,24 @@ export const PERMISSIONS = {
   // Discounts / coupons
   'discounts.read':         'View discounts + coupons',
   'discounts.write':        'Create / edit discounts + coupons',
+  // Phase 243/247 — funding-type changes shift who absorbs the discount
+  // cost (platform → seller settlement), a finance decision distinct
+  // from ordinary campaign edits.
+  'discounts.write.funding': 'Set discount funding type / split (finance)',
+  // Phase 243 #19 — internal P&L (fundingNotes, funding split, liability)
+  // gated above plain read.
+  'discounts.read.finance': 'View discount funding/P&L detail',
+  // Phase 243 #17 — discount audit-history surface (was falling back to
+  // discounts.read).
+  'discounts.audit':        'View discount change history',
+  // Phase 246 #14 — analytics export tier (P&L exposure → CSV).
+  'discounts.analytics.export': 'Export discount analytics CSV',
+  // Phase 245 #12 — abuse/risk surface. read = the attempt/concentration
+  // telemetry (PII); review = open/triage alerts; action = suspend a
+  // coupon / block a customer for abuse.
+  'discounts.abuse.read':   'View coupon-abuse telemetry (risk)',
+  'discounts.abuse.review': 'Triage coupon-abuse signals (risk)',
+  'discounts.abuse.action': 'Suspend coupon / block customer for abuse (risk)',
 
   // Shipping options (v1)
   'shipping.read':          'View shipping options',
@@ -394,11 +509,23 @@ export const PERMISSIONS = {
   'tax.debitNote.create':           'Create debit note (upward price correction, admin only)',
   'tax.reports.read':               'View tax reports (invoice register, HSN summary, etc.)',
   'tax.reports.export':             'Export GSTR-1 / 3B / 8 / TCS / HSN CSV',
+  // Phase 163 (Tax Audit Readiness audit #20) — the platform-wide
+  // compliance-posture rollup reveals the org's entire readiness state.
+  // Split from the per-seller `tax.reports.read` so it can be granted
+  // (and tier-classified) independently.
+  'tax.readiness.read':             'View the platform tax audit-readiness dashboard (org-wide posture)',
+  // Phase 163 (Tax Audit Readiness audit #3) — knowingly export a GSTR
+  // file in STRICT mode while readiness blockers remain. Every use is a
+  // 409-override that is audit-logged with the blocker count + actor.
+  'tax.reports.overrideBlockers':   'Export GSTR files in STRICT mode despite unresolved readiness blockers',
   'tax.tcs.read':                   'View TCS ledger + GSTR-8 status',
   'tax.tcs.compute':                'Manually trigger TCS computation',
   'tax.tcs.export':                 'Generate GSTR-8 CSV/JSON',
   'tax.tcs.markFiled':              'Mark TCS rows as FILED post-GSTR-8 submission',
   'tax.tcs.markPaidToGovt':         'Mark TCS rows as PAID_TO_GOVT post remittance',
+  // Phase 160 (§52 lifecycle audit B1) — terminal stage: furnish the
+  // §52(5) TCS certificate to the supplier. Separate gate from mark-paid.
+  'tax.tcs.markCertificateIssued':  'Mark TCS rows CERTIFICATE_ISSUED (furnish §52(5) certificate)',
   // Phase 159z (GSTR-8 audit #10) — separate permission for the
   // correction flow (REVERSED transition). Highest gating tier
   // because reversal undoes a filed return.
@@ -407,8 +534,23 @@ export const PERMISSIONS = {
   'tax.ewayBill.generate':          'Trigger e-way bill generation',
   'tax.ewayBill.cancel':            'Cancel e-way bill (within 24h)',
   'tax.ewayBill.override':          'Allow ship without e-way bill (audited)',
+  // Phase 160 (cancel/override audit #17) — elevated gate for HIGH-VALUE
+  // overrides (consignment > EWayBillService.OVERRIDE_HIGH_VALUE_PAISE,
+  // ₹2,00,000). The base `tax.ewayBill.override` permits low-value
+  // overrides; a high-value ship-without-EWB additionally requires THIS
+  // key. Deliberately NOT granted to the Tax & Compliance Manager role —
+  // only SUPER_ADMIN holds it (via ALL_PERMISSION_KEYS) — so a high-value
+  // bypass cannot be done unilaterally by the routine override-holder and
+  // must be escalated. Pairs with the service-layer separation-of-duty
+  // (override actor must differ from the EWB's classifier/generator).
+  'tax.ewayBill.override.superAdmin': 'Override ship-without-EWB for HIGH-VALUE consignments (>₹2L)',
   'tax.einvoice.manage':            'Manage e-invoice / IRN settings',
   'tax.einvoice.cancelWithinWindow': 'Cancel IRN via IRP within 24h',
+  // Phase 161 (TDS 194-O exempt audit B2) — dedicated permission for the
+  // financially-consequential §194-O exemption decision (skipping TDS
+  // deduction). Separated from the read-only tax.gstn.verify it used to
+  // reuse — a verification right must not also grant the exemption right.
+  'tax.tds194o.exempt':             'Grant / revoke a seller Section 194-O TDS exemption',
   'tax.override':                   'Approve product / invoice with missing tax data',
   // Phase 46 (2026-05-21) — bulk tax-config gates. These are
   // intentionally NOT included in any role-specific set in
@@ -438,6 +580,10 @@ export const PERMISSIONS = {
   'wallet.adjustment.create':       'Create wallet adjustment (small amounts)',
   'wallet.adjustment.approve':      'Approve high-value wallet adjustments (above threshold)',
   'wallet.adjustment.reject':       'Reject a pending wallet adjustment',
+  // Phase 162 (Wallet Adjustments audit #12) — reverse a POSTED adjustment
+  // (compensating inverse ledger entry). Highest-impact action: undoes money
+  // already moved, so its own CRITICAL-gated permission.
+  'wallet.adjustment.reverse':      'Reverse a posted wallet adjustment (compensating entry)',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -457,6 +603,14 @@ export const ALL_PERMISSION_KEYS = Object.keys(PERMISSIONS) as PermissionKey[];
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
+  // Phase 206 (#6) — a full export hands an admin a file of customer PII (IPs,
+  // user-agents, raw before/after JSON). HIGH so it requires step-up + is
+  // itself audited. The redacted export + chain-verify are read-shaped (LOW).
+  'audit.export.full':      'HIGH',
+  // Full authz detail = the platform's permission map + denial PII → HIGH.
+  'authz.readiness.full':   'HIGH',
+  // Live cross-tenant ops feed (PII-bearing if mis-scoped) → CRITICAL.
+  'portal.streams.admin.read': 'CRITICAL',
   'wallets.adjust':         'CRITICAL',
   'wallets.block':          'HIGH',
   'refunds.initiate':       'CRITICAL',
@@ -464,6 +618,8 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'refunds.reject':         'CRITICAL',
   'refunds.confirm':        'CRITICAL',
   'refunds.manualConfirm':  'CRITICAL',
+  // Phase 172 (#7) — goodwill approval moves non-recoverable money; CRITICAL.
+  'wallet.goodwill.approve': 'CRITICAL',
   'refunds.retry':          'HIGH',
   'refunds.markFailed':     'CRITICAL',
   'disputes.decide':        'CRITICAL',
@@ -481,6 +637,16 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'returns.reject':         'MEDIUM',
   'settlements.approve':    'CRITICAL',
   'settlements.markPaid':   'CRITICAL',
+  // Phase 168 (COD Mark-Paid audit #6) — COD mark-paid moves money-state
+  // (PAID flip → commission/affiliate settlement). Same tier as
+  // settlements.markPaid; was historically gated by orders.cancel (untiered).
+  'payments.cod.markPaid':  'CRITICAL',
+  // Phase 169 (Payment Ops audit #8) — resolving an AMOUNT_MISMATCH alert is a
+  // money-impact decision (it can close out a real loss); promoted from
+  // untiered to HIGH. Responding to a chargeback (uploads evidence, decides a
+  // contest) is likewise HIGH.
+  'paymentOps.transition':         'HIGH',
+  'paymentOps.chargeback.respond': 'HIGH',
   'settlements.hold':       'HIGH',
   'settlements.adjustRecord': 'HIGH',
   // Locks 100s/1000s of commission records into a payout cycle → CRITICAL.
@@ -536,6 +702,7 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'customers.impersonate':  'CRITICAL',
   'franchise.suspend':      'HIGH',
   'franchise.finance':      'CRITICAL',
+  'franchise.penalty.approve': 'CRITICAL',
   'franchise.procurement_pricing': 'CRITICAL',
   'franchise.pincodes.write': 'HIGH',
   'franchise.catalog.approve': 'HIGH',
@@ -543,12 +710,37 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'franchise.procurement.dispatch': 'HIGH',
   'franchise.procurement.settle': 'CRITICAL',
   'franchise.pos.report.read': 'MEDIUM',
+  // Phase 185 — notification template edits drive customer-facing comms and
+  // are a content-fraud / XSS surface → HIGH; dispatch + DLQ ops are HIGH
+  // (mis-send / replay blast radius). Read is LOW.
+  'notifications.read':     'LOW',
+  'notifications.write':    'HIGH',
+  'notifications.dispatch': 'HIGH',
+  // Phase 187 — template dispatch respects opt-out (MEDIUM); raw bypasses
+  // opt-out + reaches any recipient → CRITICAL.
+  'notifications.dispatch.template': 'MEDIUM',
+  'notifications.dispatch.raw': 'CRITICAL',
+  'notifications.dlq.manage': 'HIGH',
+  // Phase 186 — outbox DLQ read is MEDIUM (exposes event payloads); replay
+  // re-fires real domain events (downstream side effects) → HIGH.
+  'outbox.dlq.read':        'MEDIUM',
+  'outbox.dlq.manage':      'HIGH',
+  // Phase 189 — reading a customer's comms prefs is mild PII (MEDIUM);
+  // overriding consent is a legal-impact action → CRITICAL.
+  'notifications.preferences.read':     'MEDIUM',
+  'notifications.preferences.override': 'CRITICAL',
+  // Phase 190 — masked log read is MEDIUM; unmasked (OTPs/PII) + retry
+  // (re-sends content to a customer) are HIGH.
+  'notifications.logs.read':          'MEDIUM',
+  'notifications.logs.read.unmasked': 'HIGH',
+  'notifications.logs.retry':         'HIGH',
   'affiliates.commission':  'HIGH',
   'affiliates.coupons.configure': 'HIGH',
   'affiliates.coupons.create': 'HIGH',
   'affiliates.tax_report.read': 'MEDIUM',
   'affiliates.tax.deposit': 'HIGH',
   'affiliates.tax.issue_certificate': 'HIGH',
+  'affiliates.tax.reverse': 'CRITICAL',
   'affiliates.payouts':     'CRITICAL',
   // Phase 155 — mark_paid moves real money → CRITICAL; the rest are HIGH.
   'affiliates.payouts.mark_paid':  'CRITICAL',
@@ -556,8 +748,16 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'affiliates.payouts.reject':     'HIGH',
   'affiliates.payouts.mark_failed':'HIGH',
   'discounts.write':        'MEDIUM',
+  // Phase 243/247 — funding reassignment moves settlement money; abuse
+  // actions kill live coupons / block customers → HIGH.
+  'discounts.write.funding': 'HIGH',
+  'discounts.abuse.action': 'HIGH',
   'roles.write':            'CRITICAL',
   'files.delete':           'MEDIUM',
+  // Phase 250 — deleting another user's KYC/evidence is a compliance-grade
+  // action; viewing any user's private files is PII access.
+  'files.delete.any':       'HIGH',
+  'files.read.any':         'HIGH',
   'content.publish':        'MEDIUM',
   'support.promoteToDispute': 'HIGH',
   'nova.stock':             'MEDIUM',
@@ -565,22 +765,72 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'payouts.export':         'HIGH',
   'payouts.ingestResponse': 'HIGH',
   'payouts.cancel':         'HIGH',
-  'recon.transition':       'MEDIUM',
+  // Phase 173 (Recon audit #4) — recon.read exposes payment/order/settlement
+  // amounts in bulk (MEDIUM); recon.run triggers a platform-wide money-state
+  // scan (HIGH); recon.transition irreversibly closes a financial investigation
+  // (HIGH). (Was: read unset, transition MEDIUM.)
+  'recon.read':             'MEDIUM',
+  'recon.run':              'HIGH',
+  'recon.transition':       'HIGH',
+  // Phase 174 — assign is operational (MEDIUM); bulk amplifies blast radius so
+  // HIGH; reopen un-closes a financial investigation (irreversible-trust action)
+  // so CRITICAL — it demands a fresh MFA step-up like other money-reopen gates.
+  'recon.discrepancy.assign': 'MEDIUM',
+  'recon.discrepancy.bulk':   'HIGH',
+  'recon.discrepancy.reopen': 'CRITICAL',
+  // Phase 175 — platform-wide GMV / margin / payables is sensitive aggregate
+  // finance data; HIGH (read) so it can't be seen by low-tier support roles.
+  'accounts.read':            'HIGH',
+  // Phase 177 (#4) — an adjustment shifts a franchise's net payable (moves
+  // money); CRITICAL, same tier as the settlement money actions.
+  'accounts.franchise.adjust': 'CRITICAL',
+  // Phase 178 — freezing/releasing a payout holds real money; CRITICAL.
+  'accounts.payable.hold':     'CRITICAL',
+  // Phase 178 — recording a disbursement moves money; CRITICAL.
+  'accounts.payable.recordPayment': 'CRITICAL',
 
   // Tax / GST / Invoice — high-risk classifications
   'tax.invoice.regeneratePdf':      'HIGH',
+  // Phase 164 (Credit Note Generation audit #13) — a credit note exposes
+  // buyer GSTIN, taxable amounts, and reason text. Reading the register is
+  // MEDIUM; downloading the PII-bearing PDF is HIGH.
+  'tax.creditNote.read':            'MEDIUM',
+  'tax.creditNote.download':        'HIGH',
   'tax.creditNote.create':          'CRITICAL',
   'tax.creditNote.timebarOverride': 'CRITICAL',
   'tax.debitNote.create':           'CRITICAL',
   'tax.ewayBill.override':          'HIGH',
+  // Phase 160 (cancel/override audit #17) — high-value override is the
+  // highest-blast-radius EWB action (ships a >₹2L consignment with no
+  // valid e-way bill); CRITICAL so any future `@Permissions(...)`-gated
+  // route demands a fresh MFA step-up.
+  'tax.ewayBill.override.superAdmin': 'CRITICAL',
   'tax.tcs.markFiled':              'HIGH',
   'tax.tcs.markPaidToGovt':         'HIGH',
+  'tax.tcs.markCertificateIssued':  'HIGH',
   'tax.tcs.reverse':                'CRITICAL',
+  // Phase 161 (TDS 194-O exempt audit B2) — exempting a seller skips their
+  // TDS deduction (no Form 16A, GSTR impact); CRITICAL gate.
+  'tax.tds194o.exempt':             'CRITICAL',
   'tax.override':                   'CRITICAL',
   'tax.configure':                  'HIGH',
+  // Phase 163 (Tax Audit Readiness audit #20) — org-wide posture read is
+  // MEDIUM (sensitive aggregate, but read-only). #3 — knowingly filing
+  // past blockers in STRICT mode is HIGH (it can let a non-compliant
+  // return out the door, so it deserves the elevated gate + the audit row).
+  'tax.readiness.read':             'MEDIUM',
+  'tax.reports.overrideBlockers':   'HIGH',
   'wallet.adjustment.create':       'MEDIUM',
   'wallet.adjustment.approve':      'HIGH',
+  // Phase 162 — reversing a posted adjustment moves money; CRITICAL (step-up).
+  'wallet.adjustment.reverse':      'CRITICAL',
   'sessions.revoke':        'HIGH',
+  // Phase 207 (#1) / Phase 208 (#3) — read-only but sensitive: access-log
+  // brute-force telemetry is an enumeration oracle and the activity feed
+  // exposes cross-actor admin behaviour. MEDIUM so the readiness dashboard
+  // flags them for tighter assignment review.
+  'security.read':          'MEDIUM',
+  'admin.activity.read':    'MEDIUM',
 };
 
 /**
@@ -603,7 +853,22 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'liability_ledger.read', 'liability_ledger.write', 'liability_ledger.cancel',
     'payouts.read', 'payouts.export', 'payouts.ingestResponse', 'payouts.cancel',
     'recon.read', 'recon.run', 'recon.transition',
+    // Phase 174 — discrepancy resolution-workflow actions live with money-ops.
+    'recon.discrepancy.assign', 'recon.discrepancy.reopen', 'recon.discrepancy.bulk',
+    // Phase 175 — accounts overview dashboard (platform-wide finance read).
+    'accounts.read',
+    // Phase 177 — franchise settlement adjustment (money-ops).
+    'accounts.franchise.adjust',
+    // Phase 178 — settlement payout hold/release + partial-pay (money-ops).
+    'accounts.payable.hold',
+    'accounts.payable.recordPayment',
     'paymentOps.read', 'paymentOps.transition',
+    // Phase 169 (Payment Ops audit #8) — chargeback contest lives with the
+    // money-ops tier.
+    'paymentOps.chargeback.respond',
+    // Phase 168 (COD Mark-Paid audit #6) — COD cash-collection mark-paid lives
+    // with the money-ops tier (same one that holds settlements.markPaid).
+    'payments.cod.markPaid',
     'orders.read', 'orders.cancel',
     // Phase 68 (2026-05-22) — verifier permissions in the
     // SELLER_OPERATIONS tier (audit Gap #6). orders.verify covers
@@ -635,17 +900,36 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'returns.export',
     'sellerReversals.read', 'sellerReversals.approve',
     'refunds.read', 'refunds.initiate', 'refunds.confirm', 'refunds.retry',
+    // Phase 172 (#7) — finance tier can sign off goodwill credits.
+    'wallet.goodwill.approve',
     // Phase 105 (2026-05-23) — Phase 102 audit Gap #8 closure. The
     // SELLER_OPERATIONS role includes mark-failed because it's the
     // tier that owns refund recovery; granular separation from retry
     // protects against accidental promotion.
     'refunds.markFailed',
-    'cod.read', 'cod.write', 'audit.read', 'files.read',
+    'cod.read', 'cod.write',
+    // Phase 204/206 — audit read + chain verify + redacted export. The
+    // PII-bearing audit.export.full stays SUPER_ADMIN-only (via
+    // ALL_PERMISSION_KEYS).
+    'audit.read', 'audit.chain.verify', 'audit.export',
+    'files.read',
+    // Phase 207 (#1) / Phase 208 (#3) — SELLER_OPERATIONS is the
+    // incident-response tier that already holds sessions.* + audit.read,
+    // so it carries the access-log brute-force surface and the admin
+    // activity timeline too.
+    'security.read', 'admin.activity.read',
+    // Full authz readiness detail (permission lists, route inventory).
+    'authz.readiness.full',
+    // Live ops queue (returns/disputes/tickets/SLA realtime feed).
+    'portal.streams.admin.read',
     'support.read', 'support.assign', 'support.setStatus', 'support.setPriority',
     'support.categoriesManage', 'support.reply', 'support.promoteToDispute',
     'internalNotes.read', 'internalNotes.write',
     'logistics.claim',
     'customers.read', 'analytics.read',
+    // Phase 250 — file moderation surface (cross-user KYC/evidence) + the
+    // admin-override delete belong to the ops/incident-response tier.
+    'files.read.any', 'files.delete.any',
   ],
   SELLER_ADMIN: [
     'sellers.read', 'sellers.approve', 'sellers.suspend', 'sellers.penalize',
@@ -662,11 +946,12 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'customers.read',
   ],
   AFFILIATE_ADMIN: [
-    'sellers.read', 'orders.read', 'audit.read',
+    'sellers.read', 'orders.read',
+    'audit.read', 'audit.chain.verify', 'audit.export',
     'affiliates.read', 'affiliates.approve', 'affiliates.suspend',
     'affiliates.commission', 'affiliates.coupons.configure', 'affiliates.coupons.create',
     'affiliates.tax_report.read', 'affiliates.tax.deposit',
-    'affiliates.tax.issue_certificate', 'affiliates.payouts',
+    'affiliates.tax.issue_certificate', 'affiliates.tax.reverse', 'affiliates.payouts',
     // Phase 155 — granular payout permissions (this tier holds the broad one).
     'affiliates.payouts.approve', 'affiliates.payouts.reject',
     'affiliates.payouts.mark_paid', 'affiliates.payouts.mark_failed',

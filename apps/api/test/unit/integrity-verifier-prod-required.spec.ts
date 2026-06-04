@@ -7,7 +7,7 @@ import { envSchema } from '../../src/bootstrap/env/env.schema';
  * The `IntegrityVerifierCron` (instrumented in PR 5.3) is the only
  * mechanism in the codebase that catches silent file tampering. Every
  * hour it walks `fileMetadata` rows in `READY` status, re-downloads
- * each object from its provider (Cloudinary / S3), recomputes the
+ * each object from its provider (media / S3), recomputes the
  * SHA-256, and compares it with `contentSha256`. Mismatch ⇒
  * `file.integrity.violation` event ⇒ ops alert.
  *
@@ -52,10 +52,10 @@ const baseProdEnv = {
   RAZORPAY_KEY_ID: 'x',
   RAZORPAY_KEY_SECRET: 'x',
   RAZORPAY_WEBHOOK_SECRET: 'x',
-  S3_BUCKET: 'x',
-  S3_REGION: 'ap-south-1',
-  S3_ACCESS_KEY: 'x',
-  S3_SECRET_KEY: 'x',
+  R2_ACCOUNT_ID: 'x',
+  R2_BUCKET: 'media',
+  R2_ACCESS_KEY_ID: 'x',
+  R2_SECRET_ACCESS_KEY: 'x',
   ADMIN_MFA_ENCRYPTION_KEY: 'k'.repeat(32),
   APP_URL: 'https://api.example.com',
   CORS_ORIGINS: 'https://app.example.com',

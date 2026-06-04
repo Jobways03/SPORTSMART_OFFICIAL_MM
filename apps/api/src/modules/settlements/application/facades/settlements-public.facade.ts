@@ -199,4 +199,110 @@ export class SettlementsPublicFacade {
       seller: s.seller ?? null,
     }));
   }
+
+  /**
+   * Phase 159aa (Marketplace Commission GSTR-1 audit B1 + B3 + #10) —
+   * filing-period-keyed listing that includes the per-settlement
+   * commission-invoice snapshot. The GSTR-1 exporter consumes this to
+   * emit one row per invoice (§4 B2B for GSTIN-registered recipients,
+   * §7 B2C for unregistered sellers) instead of the pre-Phase-159aa
+   * per-(seller, period) rollup.
+   *
+   * Legacy rows that predate the invoice-issuance hook (no
+   * commissionInvoiceFilingPeriod set) are picked up via the
+   * cycle.periodEnd ∈ IST month fallback so a historical re-export
+   * still surfaces them — they just lack the invoice number column.
+   */
+  async listCommissionInvoicesForFilingPeriod(args: {
+    filingPeriod: string;
+    startUtc: Date;
+    endUtc: Date;
+  }): Promise<
+    Array<{
+      settlementId: string;
+      sellerId: string;
+      cycleId: string;
+      commissionInvoiceNumber: string | null;
+      commissionInvoiceDate: Date | null;
+      commissionInvoiceFilingPeriod: string | null;
+      commissionPlaceOfSupplyStateCode: string | null;
+      commissionInvoiceSupplierGstin: string | null;
+      commissionInvoiceRecipientGstin: string | null;
+      commissionRecipientIsB2c: boolean;
+      commissionInvoiceSacCode: string | null;
+      commissionInvoiceIrn: string | null;
+      commissionInvoiceCreditNoteForId: string | null;
+      totalPlatformMargin: number;
+      totalPlatformMarginInPaise: bigint | null;
+      cgstOnCommissionInPaise: bigint | null;
+      sgstOnCommissionInPaise: bigint | null;
+      igstOnCommissionInPaise: bigint | null;
+      totalCommissionGstInPaise: bigint | null;
+      commissionGstRateBps: number | null;
+      commissionGstSplitType: 'CGST_SGST' | 'IGST' | null;
+      cycle: { periodEnd: Date; approvedAt: Date | null } | null;
+      seller: {
+        gstin: string | null;
+        legalBusinessName: string | null;
+        sellerShopName: string | null;
+        gstStateCode: string | null;
+      } | null;
+    }>
+  > {
+    const rows = await (this.prisma as any).sellerSettlement.findMany({
+      where: {
+        OR: [
+          { commissionInvoiceFilingPeriod: args.filingPeriod },
+          {
+            commissionInvoiceFilingPeriod: null,
+            cycle: { periodEnd: { gte: args.startUtc, lt: args.endUtc } },
+          },
+        ],
+      },
+      include: {
+        cycle: { select: { periodEnd: true, approvedAt: true } },
+        seller: {
+          select: {
+            gstin: true,
+            legalBusinessName: true,
+            sellerShopName: true,
+            gstStateCode: true,
+          },
+        },
+      },
+      orderBy: [
+        { commissionInvoiceDate: 'asc' },
+        { createdAt: 'asc' },
+      ],
+    });
+    return rows.map((s: any) => ({
+      settlementId: s.id,
+      sellerId: s.sellerId,
+      cycleId: s.cycleId,
+      commissionInvoiceNumber: s.commissionInvoiceNumber ?? null,
+      commissionInvoiceDate: s.commissionInvoiceDate ?? null,
+      commissionInvoiceFilingPeriod: s.commissionInvoiceFilingPeriod ?? null,
+      commissionPlaceOfSupplyStateCode:
+        s.commissionPlaceOfSupplyStateCode ?? null,
+      commissionInvoiceSupplierGstin:
+        s.commissionInvoiceSupplierGstin ?? null,
+      commissionInvoiceRecipientGstin:
+        s.commissionInvoiceRecipientGstin ?? null,
+      commissionRecipientIsB2c: !!s.commissionRecipientIsB2c,
+      commissionInvoiceSacCode: s.commissionInvoiceSacCode ?? null,
+      commissionInvoiceIrn: s.commissionInvoiceIrn ?? null,
+      commissionInvoiceCreditNoteForId:
+        s.commissionInvoiceCreditNoteForId ?? null,
+      totalPlatformMargin: Number(s.totalPlatformMargin ?? 0),
+      totalPlatformMarginInPaise: s.totalPlatformMarginInPaise ?? null,
+      cgstOnCommissionInPaise: s.cgstOnCommissionInPaise ?? null,
+      sgstOnCommissionInPaise: s.sgstOnCommissionInPaise ?? null,
+      igstOnCommissionInPaise: s.igstOnCommissionInPaise ?? null,
+      totalCommissionGstInPaise: s.totalCommissionGstInPaise ?? null,
+      commissionGstRateBps: s.commissionGstRateBps ?? null,
+      commissionGstSplitType: s.commissionGstSplitType ?? null,
+      cycle: s.cycle ?? null,
+      seller: s.seller ?? null,
+    }));
+  }
 }

@@ -22,8 +22,12 @@ describe('CodPublicFacade env-driven guardrails', () => {
       sellerServiceArea: {
         findFirst: jest.fn().mockResolvedValue({ id: 'sa-1' }),
       },
+      // Phase 3.4 — the abuse check moved from a flat `count` of cancelled
+      // COD orders to a weighted `findMany` over the recent cancellation
+      // rows (refused-delivery weights 3, customer-cancel 1, seller/system 0).
+      // Default to no recent cancellations.
       masterOrder: {
-        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
     const ruleEngine: any = {
@@ -98,14 +102,19 @@ describe('CodPublicFacade env-driven guardrails', () => {
   });
 
   it('blocks customer who hit the env-tuned cancellation limit', async () => {
-    const prismaCount = jest.fn().mockResolvedValue(2);
+    // Two plain customer cancellations → weighted score 2 (weight 1 each),
+    // which meets the env-tuned limit of 2.
+    const prismaFindMany = jest.fn().mockResolvedValue([
+      { id: 'o1', orderStatus: 'CANCELLED', verificationRemarks: null },
+      { id: 'o2', orderStatus: 'CANCELLED', verificationRemarks: null },
+    ]);
     const { facade } = buildFacade({
       COD_ABUSE_RECENT_CANCEL_LIMIT: 2,
       COD_ABUSE_LOOKBACK_DAYS: 30,
     });
-    // Patch prisma.masterOrder.count via the constructor's prisma ref —
+    // Patch prisma.masterOrder.findMany via the constructor's prisma ref —
     // grab the facade's reference and override.
-    (facade as any).prisma.masterOrder.count = prismaCount;
+    (facade as any).prisma.masterOrder.findMany = prismaFindMany;
     const res = await facade.evaluateCodEligibility(baseParams);
     expect(res.allowed).toBe(false);
     expect(res.reasons.some((r) => r.includes('30 days'))).toBe(true);
@@ -116,7 +125,13 @@ describe('CodPublicFacade env-driven guardrails', () => {
       COD_ABUSE_RECENT_CANCEL_LIMIT: 1,
       COD_ABUSE_LOOKBACK_DAYS: 7,
     });
-    (facade as any).prisma.masterOrder.count = jest.fn().mockResolvedValue(5);
+    (facade as any).prisma.masterOrder.findMany = jest.fn().mockResolvedValue([
+      { id: 'o1', orderStatus: 'CANCELLED', verificationRemarks: null },
+      { id: 'o2', orderStatus: 'CANCELLED', verificationRemarks: null },
+      { id: 'o3', orderStatus: 'CANCELLED', verificationRemarks: null },
+      { id: 'o4', orderStatus: 'CANCELLED', verificationRemarks: null },
+      { id: 'o5', orderStatus: 'CANCELLED', verificationRemarks: null },
+    ]);
     const res = await facade.evaluateCodEligibility(baseParams);
     expect(res.allowed).toBe(false);
     expect(res.reasons.some((r) => r.includes('7 days'))).toBe(true);

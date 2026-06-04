@@ -6,6 +6,26 @@ import {
   ConflictAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { sanitizeRichText } from '../../../../core/utils/rich-text-sanitizer';
+
+/**
+ * #249.7 (stored-XSS) — `description` is rich HTML (the AI generator emits
+ * markup, and sellers can paste it) that is later rendered raw on the
+ * storefront product page. Both the seller and admin create/update paths
+ * funnel through this repository's createInTransaction / updateInTransaction,
+ * so sanitising the `description` here (rather than in each controller) covers
+ * every write path with a single choke point. Only a non-empty string is
+ * sanitised; `undefined` is left untouched so a partial update that does not
+ * touch `description` never blanks the stored value.
+ */
+function sanitizeProductDescription<T extends { description?: unknown }>(
+  data: T,
+): T {
+  if (typeof data.description === 'string' && data.description.length > 0) {
+    return { ...data, description: sanitizeRichText(data.description) };
+  }
+  return data;
+}
 
 /**
  * Phase 31 (2026-05-21) — shared moderation-review state set the three
@@ -205,7 +225,11 @@ export class PrismaProductRepository implements IProductRepository {
     statusHistoryEntry?: any,
   ): Promise<any> {
     return this.prisma.$transaction(async (tx) => {
-      const newProduct = await tx.product.create({ data });
+      // #249.7 — sanitise rich-text `description` before persisting (covers
+      // both the seller and admin create paths, which both land here).
+      const newProduct = await tx.product.create({
+        data: sanitizeProductDescription(data),
+      });
 
       if (tags && tags.length > 0) {
         await tx.productTag.createMany({
@@ -254,7 +278,13 @@ export class PrismaProductRepository implements IProductRepository {
 
   async updateInTransaction(productId: string, updateData: any, tags?: string[], seo?: any): Promise<any> {
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.product.update({ where: { id: productId }, data: updateData });
+      // #249.7 — sanitise rich-text `description` before persisting (covers
+      // both the seller and admin update paths, which both land here). A
+      // partial update with no `description` key is left untouched.
+      const updated = await tx.product.update({
+        where: { id: productId },
+        data: sanitizeProductDescription(updateData),
+      });
 
       if (tags !== undefined) {
         await tx.productTag.deleteMany({ where: { productId } });

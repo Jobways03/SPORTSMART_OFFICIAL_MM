@@ -22,6 +22,8 @@ import type {
   EWayBillGenerateInput,
   EWayBillGenerateResult,
   EWayBillProvider,
+  EWayBillUpdatePartBInput,
+  EWayBillUpdatePartBResult,
 } from './eway-bill-provider';
 
 @Injectable()
@@ -69,10 +71,34 @@ export class StubEWayBillProvider implements EWayBillProvider {
     );
     return {
       cancelledAt,
+      providerCancelReference: `STUB-CXL-${input.ewbNumber}`,
       rawResponseJson: {
         provider: 'stub',
         ewbNumber: input.ewbNumber,
         cancelledAt: cancelledAt.toISOString(),
+        reason: input.reason,
+        cancelReference: `STUB-CXL-${input.ewbNumber}`,
+      },
+    };
+  }
+
+  // Phase 160 (audit #18) — Part-B update. NIC re-issues validity on a
+  // Part-B change; the stub recomputes it from "now" + the (new) distance.
+  async updatePartB(
+    input: EWayBillUpdatePartBInput,
+  ): Promise<EWayBillUpdatePartBResult> {
+    const validUntil = computeValidUntil(new Date(), input.distanceKm ?? 50);
+    this.logger.log(
+      `[stub] EWB ${input.ewbNumber} Part-B updated (vehicle ${input.vehicleNumber ?? '—'}, reason: ${input.reason})`,
+    );
+    return {
+      validUntil,
+      rawResponseJson: {
+        provider: 'stub',
+        ewbNumber: input.ewbNumber,
+        vehicleNumber: input.vehicleNumber,
+        transportMode: input.transportMode,
+        validUntil: validUntil.toISOString(),
         reason: input.reason,
       },
     };

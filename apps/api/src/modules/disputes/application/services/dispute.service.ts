@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
   Dispute,
@@ -14,6 +14,7 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { CaseDuplicateService } from '../../../../core/case-duplicate/case-duplicate.service';
@@ -133,6 +134,10 @@ export class DisputeService {
     // who pays (seller / courier / platform). Idempotent — saga
     // replays don't duplicate.
     private readonly ledger: LiabilityLedgerPublicFacade,
+    // Phase 172 (Goodwill Credit audit #16) — @Optional so existing specs
+    // that construct DisputeService with 6 args keep working; the goodwill
+    // cap falls back to a safe default when env is absent.
+    @Optional() private readonly env?: EnvService,
   ) {}
 
   // ── Numbering ────────────────────────────────────────────────────
@@ -1047,6 +1052,127 @@ export class DisputeService {
     return message;
   }
 
+  /**
+   * Phase 171 (Refund Approve/Reject audit #1/#10/#14) — re-open a decided
+   * dispute when finance REJECTS its refund. The dispute is RESOLVED_BUYER/SPLIT
+   * with a money decision finance has now vetoed; without this the customer is
+   * in limbo and the dispute team has no signal.
+   *
+   * CAS-flips RESOLVED_* → UNDER_REVIEW (the FSM already allows this reopen),
+   * snapshots the overruled decision into previousDecision* AND clears the live
+   * decision columns (so a stale RESOLVED decision can't mask the re-open or
+   * mislead the re-decider), stamps the finance reason + reroute SLA, appends a
+   * thread-visible message, then (best-effort) emits an event + audits.
+   * Idempotent: a no-op if the dispute isn't in a RESOLVED_* state (already
+   * reopened) or doesn't exist.
+   */
+  async routeBackFromFinanceRejection(args: {
+    disputeId: string;
+    adminId: string;
+    reason: string;
+    rerouteSlaHours?: number;
+  }): Promise<{ reopened: boolean }> {
+    const dispute = await this.prisma.dispute.findUnique({
+      where: { id: args.disputeId },
+    });
+    if (!dispute) {
+      this.logger.warn(
+        `routeBackFromFinanceRejection: dispute ${args.disputeId} not found — skipping`,
+      );
+      return { reopened: false };
+    }
+    const reopenable = ['RESOLVED_BUYER', 'RESOLVED_SPLIT', 'RESOLVED_SELLER'];
+    if (!reopenable.includes(String(dispute.status))) {
+      this.logger.log(
+        `routeBackFromFinanceRejection: dispute ${args.disputeId} is ${dispute.status} ` +
+          `(not a resolved state) — already reopened or never decided; no-op`,
+      );
+      return { reopened: false };
+    }
+
+    const slaHours = args.rerouteSlaHours ?? 48;
+    // CAS on status (still in a resolved state) so two deliveries can't both
+    // reopen + double-append the message. Snapshot the overruled decision, then
+    // CLEAR the live decision columns (review L1#2 — stale decisionAmountInPaise
+    // / remedy on a re-opened dispute is misleading; the re-decider sets fresh
+    // values via decide()).
+    const flip = await this.prisma.dispute.updateMany({
+      where: { id: args.disputeId, status: dispute.status },
+      data: {
+        status: 'UNDER_REVIEW',
+        previousDecisionAt: dispute.decisionAt,
+        previousDecisionRationale: dispute.decisionRationale,
+        financeRejectionReason: args.reason,
+        financeRejectedAt: new Date(),
+        rerouteDueBy: new Date(Date.now() + Math.max(1, slaHours) * 3_600_000),
+        decisionAt: null,
+        decisionRationale: null,
+        decisionAmountInPaise: null,
+        decisionByAdminId: null,
+        liabilityParty: null,
+        customerRemedy: null,
+      },
+    });
+    if (flip.count === 0) {
+      this.logger.log(
+        `routeBackFromFinanceRejection: dispute ${args.disputeId} concurrently moved — no-op`,
+      );
+      return { reopened: false };
+    }
+
+    await this.prisma.disputeMessage
+      .create({
+        data: {
+          disputeId: args.disputeId,
+          senderType: 'ADMIN',
+          senderId: args.adminId,
+          senderName: 'Finance',
+          body:
+            `Finance rejected the refund for this dispute: ${args.reason}. ` +
+            `The case has been re-opened for re-decision.`,
+          isInternalNote: false,
+        },
+      })
+      .catch((err) =>
+        this.logger.error(
+          `routeBackFromFinanceRejection: failed to append message to ${args.disputeId}: ${(err as Error).message}`,
+        ),
+      );
+
+    this.eventBus
+      .publish({
+        eventName: 'disputes.refund_rejected',
+        aggregate: 'Dispute',
+        aggregateId: args.disputeId,
+        occurredAt: new Date(),
+        payload: {
+          disputeId: args.disputeId,
+          disputeNumber: dispute.disputeNumber,
+          previousStatus: dispute.status,
+          financeAdminId: args.adminId,
+          reason: args.reason,
+        },
+      })
+      .catch(() => undefined);
+
+    this.audit
+      .writeAuditLog({
+        actorId: args.adminId,
+        action: 'dispute.refund_rejected_reopened',
+        module: 'disputes',
+        resource: 'dispute',
+        resourceId: args.disputeId,
+        oldValue: { status: dispute.status, decisionAt: dispute.decisionAt },
+        newValue: { status: 'UNDER_REVIEW', financeRejectionReason: args.reason },
+      })
+      .catch(() => undefined);
+
+    this.logger.log(
+      `Dispute ${args.disputeId} re-opened (${dispute.status} → UNDER_REVIEW) after finance rejected the refund`,
+    );
+    return { reopened: true };
+  }
+
   // ── Admin actions ────────────────────────────────────────────────
 
   async assign(
@@ -1500,10 +1626,21 @@ export class DisputeService {
     // Already minted (by decide() or an earlier sweep)? createForDispute's
     // own findUnique would also short-circuit, but checking here keeps the
     // sweep's accounting honest (exists vs created) and avoids the log noise.
+    // Phase 171 review (#2b) — a terminal finance-REJECTED instruction
+    // (ROUTED_BACK_TO_DISPUTE / REJECTED / CANCELLED) must NOT count as
+    // "exists": the dispute was re-decided after a rejection and needs a FRESH
+    // refund. Fall through to createForDispute, which mints a versioned key.
     const existing = await this.prisma.refundInstruction.findUnique({
       where: { idempotencyKey: `dispute:${dispute.id}` },
     });
-    if (existing) return 'exists';
+    if (
+      existing &&
+      existing.status !== 'ROUTED_BACK_TO_DISPUTE' &&
+      existing.status !== 'REJECTED' &&
+      existing.status !== 'CANCELLED'
+    ) {
+      return 'exists';
+    }
 
     const refundCustomerId = await this.resolveCustomerForRefund(dispute);
     if (!refundCustomerId) {
@@ -1544,6 +1681,34 @@ export class DisputeService {
    * any illegal combination.
    */
   private validateDecisionMatrix(args: DecisionArgs): number | null {
+    // Phase 172 (Goodwill Credit audit #16) — hard cap on goodwill amount as
+    // defence-in-depth: finance approval is mandatory (the primary control),
+    // but a misclick / compromised admin must not be able to mint an arbitrary
+    // goodwill credit. The cap is env-tunable (default ₹50,000).
+    if (
+      args.customerRemedy === 'GOODWILL_CREDIT' &&
+      typeof args.amountInPaise === 'number' &&
+      args.amountInPaise > 0
+    ) {
+      // Adversarial-review fix (Phase 172): a misconfigured env returning 0/NaN
+      // must NOT collapse the cap to zero (which would reject ALL goodwill).
+      // Fall through to the default unless the configured value is a positive,
+      // finite number; Math.max(1, …) guarantees a positive cap regardless.
+      const configured = Number(
+        this.env?.getNumber?.('MAX_GOODWILL_AMOUNT_PER_DISPUTE_PAISE', 5_000_000),
+      );
+      const maxGoodwill = Math.max(
+        1,
+        Number.isFinite(configured) && configured > 0 ? configured : 5_000_000,
+      );
+      if (args.amountInPaise > maxGoodwill) {
+        throw new BadRequestAppException(
+          `Goodwill credit ₹${(args.amountInPaise / 100).toFixed(2)} exceeds the ` +
+            `per-dispute cap of ₹${(maxGoodwill / 100).toFixed(2)}. Reduce the amount ` +
+            `or use a different remedy.`,
+        );
+      }
+    }
     const { outcome, liabilityParty, customerRemedy } = args;
 
     // Outcome ↔ remedy compatibility.

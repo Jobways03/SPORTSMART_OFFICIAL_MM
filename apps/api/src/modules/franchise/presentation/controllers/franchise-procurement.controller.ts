@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { FranchiseAuthGuard, FranchiseActiveGuard } from '../../../../core/guards';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
@@ -83,16 +84,28 @@ function scrubPlatformBreakdown<T extends Record<string, any>>(request: T): T {
 export class FranchiseProcurementController {
   constructor(private readonly procurementService: ProcurementService) {}
 
+  // Phase 235 — @Throttle bounds burst-creates; @Idempotent (X-Idempotency-Key)
+  // makes a double-clicked submit return the first response instead of minting a
+  // second request + burning a sequence number.
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Idempotent()
   async createRequest(
     @Req() req: Request,
     @Body() dto: ProcurementCreateDto,
   ) {
     const franchiseId = (req as any).franchiseId;
+    // Falls back to the org id until multi-user franchise staff auth is wired
+    // onto this controller (the column captures whatever identity is available).
+    const requestedByStaffId =
+      (req as any).franchiseStaffId ??
+      (req as any).franchiseUserId ??
+      franchiseId;
     const data = await this.procurementService.createRequest(
       franchiseId,
       dto.items,
+      { notes: dto.notes ?? null, requestedByStaffId },
     );
 
     return {
@@ -158,6 +171,7 @@ export class FranchiseProcurementController {
 
   @Post(':id/submit')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async submitRequest(
     @Req() req: Request,
     @Param('id') id: string,
@@ -174,16 +188,22 @@ export class FranchiseProcurementController {
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async cancelRequest(
     @Req() req: Request,
     @Param('id') id: string,
     @Body() dto: ProcurementCancelDto,
   ) {
     const franchiseId = (req as any).franchiseId;
+    const actorId =
+      (req as any).franchiseStaffId ??
+      (req as any).franchiseUserId ??
+      franchiseId;
     const data = await this.procurementService.cancelRequest(
       franchiseId,
       id,
       dto.reason,
+      actorId,
     );
 
     return {
@@ -206,6 +226,7 @@ export class FranchiseProcurementController {
    */
   @Post(':id/receive')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Idempotent()
   async confirmReceipt(
     @Req() req: Request,

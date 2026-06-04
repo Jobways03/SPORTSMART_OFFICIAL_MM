@@ -103,12 +103,25 @@ function buildService(opts: {
       .mockResolvedValue({ ledgerId: null, flipped: false }),
   } as any;
 
+  // Phase 159aa — SettlementService now also takes CommissionInvoiceService
+  // (per-settlement commission tax invoice issuance at approve time).
+  const commissionInvoice: any = {
+    applyToCycleOnApprove: jest.fn().mockResolvedValue({
+      cycleId: 'cyc-test',
+      invoicesIssued: 0,
+      invoicesSkipped: 0,
+      invoicesFailed: 0,
+      failedSettlementIds: [],
+    }),
+    issueForSettlement: jest.fn(),
+  };
   const service = new SettlementService(
     prisma,
     audit,
     moneyDualWrite,
     tcsHook,
     tdsHook,
+    commissionInvoice,
   );
   return {
     service,

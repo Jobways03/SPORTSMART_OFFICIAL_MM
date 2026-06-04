@@ -103,15 +103,24 @@ export class DocumentSequenceService {
    * Race-safe: uses INSERT ... ON CONFLICT DO UPDATE to get exactly
    * one increment per call, even under concurrent invocation.
    */
-  async nextNumber(input: {
-    supplierGstin: string | null;
-    financialYear: string;
-    documentType: DocumentType;
-    /** Optional override of the default prefix for this series. Once
-     *  the row exists, the prefix is locked — passing a different
-     *  prefix later is ignored by the SQL. */
-    prefix?: string;
-  }): Promise<DocumentSequenceResult> {
+  async nextNumber(
+    input: {
+      supplierGstin: string | null;
+      financialYear: string;
+      documentType: DocumentType;
+      /** Optional override of the default prefix for this series. Once
+       *  the row exists, the prefix is locked — passing a different
+       *  prefix later is ignored by the SQL. */
+      prefix?: string;
+    },
+    // Phase 164 (review fix) — allocate WITHIN a caller's interactive
+    // transaction when supplied, so number allocation stays on the SAME
+    // connection as the surrounding work (no second pooled connection →
+    // no pool-starvation under concurrent credit-note generation) and
+    // the number rolls back if the caller's transaction aborts (no gap).
+    tx?: Prisma.TransactionClient,
+  ): Promise<DocumentSequenceResult> {
+    const db = tx ?? this.prisma;
     const { supplierGstin, financialYear, documentType } = input;
     const sequenceKey = DocumentSequenceService.sequenceKeyOf(
       supplierGstin,
@@ -123,7 +132,7 @@ export class DocumentSequenceService {
     // Atomic upsert + increment via raw SQL. Returns the newly
     // allocated number + the stored prefix (which may differ from
     // initialPrefix if the row pre-existed with an admin-set prefix).
-    const rows = await this.prisma.$queryRaw<
+    const rows = await db.$queryRaw<
       Array<{ last_number: number; prefix: string }>
     >`
       INSERT INTO "document_sequences"

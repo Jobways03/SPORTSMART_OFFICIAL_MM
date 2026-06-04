@@ -225,6 +225,13 @@ model Product {
   moderationStatus ModerationStatus @default(PENDING)
   moderationNote   String?          @map("moderation_note")
 
+  /// Phase 192 (#4) — structured sport classification (e.g. "cricket",
+  /// "football", "running"). Replaces the title-text-search workaround the
+  /// storefront used for `?sport=` links. Null until a product is
+  /// classified (admin or backfill); the storefront falls back to a title
+  /// match for unclassified rows so existing links keep working.
+  sport            String?
+
   // Moderation audit — populated on every admin review action. `moderationNote`
   // is kept for legacy readers but the canonical source is now the three
   // columns below. Each review overwrites these to reflect the latest
@@ -331,6 +338,16 @@ model Product {
 
   isDeleted Boolean   @default(false) @map("is_deleted")
   deletedAt DateTime? @map("deleted_at")
+
+  // Phase 249 (#4) — AI-content provenance. Set when a product is saved
+  // carrying AI-generated copy (the FE passes the AiGenerationLog id). Lets
+  // ops answer "which products have uncurated AI copy", drive a human-review
+  // queue, and disclose AI authorship where required.
+  aiGenerated     Boolean   @default(false) @map("ai_generated")
+  aiGeneratedAt   DateTime? @map("ai_generated_at")
+  aiPromptVersion String?   @map("ai_prompt_version")
+  aiHumanReviewed Boolean   @default(false) @map("ai_human_reviewed")
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 
@@ -358,6 +375,8 @@ model Product {
   pricingTiers             ProductPricingTier[]
   // User-generated reviews (see product-reviews.prisma).
   reviews                  ProductReview[]
+  // Phase 193 (#15) — back-in-stock notify requests (see back-in-stock.prisma).
+  backInStockRequests      BackInStockRequest[]
   // Phase 45 (2026-05-21) — append-only audit trail of tax-config
   // attestation transitions (ATTESTED / RESET / EDITED / BULK_EDITED).
   // CA-compliance audits demand the historical chain, not just the
@@ -371,6 +390,8 @@ model Product {
   @@index([moderationStatus])
   @@index([slug])
   @@index([isDeleted])
+  // Phase 192 (#4) — sport facet lookups.
+  @@index([sport, status])
   @@map("products")
 }
 
@@ -638,6 +659,14 @@ model ProductImage {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  // Cluster E (#5) — Cloudinary orphan-sweep delete retry tracking.
+  // A row whose asset delete keeps failing increments deleteAttemptCount;
+  // once it reaches the cap the sweep sets deleteFailed=true and skips it
+  // on subsequent runs (escalation instead of retrying forever).
+  deleteAttemptCount Int      @default(0) @map("delete_attempt_count")
+  lastDeleteError    String?  @map("last_delete_error")
+  deleteFailed       Boolean  @default(false) @map("delete_failed")
+
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([productId])
@@ -667,6 +696,13 @@ model ProductVariantImage {
   isPrimary Boolean  @default(false) @map("is_primary")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Cluster E (#5) — Cloudinary orphan-sweep delete retry tracking.
+  // Mirrors ProductImage: escalate a permanently-failing asset delete
+  // to deleteFailed=true past the retry cap instead of retrying daily.
+  deleteAttemptCount Int      @default(0) @map("delete_attempt_count")
+  lastDeleteError    String?  @map("last_delete_error")
+  deleteFailed       Boolean  @default(false) @map("delete_failed")
 
   variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
 
@@ -995,5 +1031,11 @@ model StorefrontFilter {
   //   CREATE UNIQUE INDEX storefront_filters_def_scope_unique
   //     ON storefront_filters (metafield_definition_id, scope_type, COALESCE(scope_id, ''))
   //     WHERE metafield_definition_id IS NOT NULL;
+  // Phase 194 (#5) — symmetric partial unique for built-in rows, so an
+  // admin can't register two `brand`/`price_range`/`availability` configs
+  // for the same scope (migration 20260602310000):
+  //   CREATE UNIQUE INDEX storefront_filters_builtin_scope_unique
+  //     ON storefront_filters (built_in_type, COALESCE(scope_type, ''), COALESCE(scope_id, ''))
+  //     WHERE built_in_type IS NOT NULL;
   @@map("storefront_filters")
 }

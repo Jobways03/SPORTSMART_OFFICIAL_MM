@@ -1048,6 +1048,10 @@ export class AffiliateRegistrationService {
     maxUses?: number | null;
     perUserLimit?: number;
     minOrderValue?: number | null;
+    // Finding #13 — optional human-readable reason recorded on the row when
+    // this update DEACTIVATES the coupon (revokes it). Threaded from the
+    // admin DTO; ignored on a reactivate / no-op.
+    revocationReason?: string | null;
     adminId: string;
     audit?: { ipAddress?: string; userAgent?: string };
   }) {
@@ -1186,6 +1190,26 @@ export class AffiliateRegistrationService {
     if (input.customerDiscountType === 'FREE_SHIPPING') {
       data.customerDiscountValue = null;
       data.maxDiscountAmount = null;
+    }
+
+    // Finding #13 — revocation provenance. Setting isActive=false silently
+    // killed a customer-facing coupon with no on-row trail of who/when/why.
+    // Only act on a genuine TRANSITION (incoming value differs from stored);
+    // an unchanged isActive (or an undefined isActive) leaves the columns
+    // alone so re-saving other config can't blank an existing revoke record.
+    if (input.isActive !== undefined && input.isActive !== coupon.isActive) {
+      if (input.isActive === false) {
+        // Deactivate → stamp the revocation provenance.
+        data.revokedByAdminId = input.adminId;
+        data.revokedAt = new Date();
+        data.revocationReason = input.revocationReason ?? null;
+      } else {
+        // Reactivate → clear the prior revocation so a re-enabled coupon
+        // doesn't carry a stale revoked-by/at/reason.
+        data.revokedByAdminId = null;
+        data.revokedAt = null;
+        data.revocationReason = null;
+      }
     }
 
     const updated = await this.prisma.affiliateCouponCode.update({

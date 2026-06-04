@@ -24,7 +24,7 @@ export interface IBrandRepository {
    * product count inside the same tx as the delete itself; race-safe
    * against a product being created between the controller's
    * pre-check and the delete. Returns the deleted row's logo fields
-   * so the caller can fire Cloudinary cleanup on the publicId.
+   * so the caller can fire media cleanup on the publicId.
    * Throws `BRAND_NOT_EMPTY` when the inner check fails.
    */
   deleteTransactional(id: string): Promise<{
@@ -38,7 +38,7 @@ export interface IBrandRepository {
   updateLogoUrl(id: string, logoUrl: string | null): Promise<any>;
   /**
    * Phase 35 (2026-05-21) — atomic write of logoUrl + logoPublicId.
-   * Used by the upload handler so the URL and the Cloudinary publicId
+   * Used by the upload handler so the URL and the media publicId
    * always land together.
    */
   updateLogoFields(

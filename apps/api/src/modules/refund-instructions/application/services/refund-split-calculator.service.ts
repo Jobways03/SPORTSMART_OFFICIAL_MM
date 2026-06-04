@@ -85,6 +85,8 @@ export class RefundSplitCalculatorService {
         id: true,
         totalAmountInPaise: true,
         paymentMethod: true,
+        // Phase 184 (#12) — authoritative wallet-usage snapshot.
+        walletAmountUsedInPaise: true,
       },
     });
     if (!order) {
@@ -101,27 +103,27 @@ export class RefundSplitCalculatorService {
       ];
     }
 
-    // Sum every COMPLETED debit on this order — the wallet portion.
-    // We intentionally exclude PENDING / FAILED / REVERSED rows: a
-    // failed debit never reduced wallet balance, and a reversed one
-    // has already been refunded once.
-    const walletDebits = await this.prisma.walletTransaction.findMany({
-      where: {
-        referenceType: 'ORDER',
-        referenceId: masterOrderId,
-        // type is signed; DEBIT means amountInPaise is negative.
-        // The platform's wallet conventions store the absolute
-        // value with a sign on `amountInPaise`. We pick rows where
-        // type is one of the debit-kinds.
-        type: { in: ['DEBIT', 'DEBIT_ADJUSTMENT'] },
-        status: 'COMPLETED',
-      },
-      select: { amountInPaise: true },
-    });
-    const walletPaidInPaise = walletDebits.reduce(
-      (sum, tx) => sum + bigintAbs(tx.amountInPaise),
-      0n,
-    );
+    // Phase 184 (#12) — PREFER the authoritative snapshot on the order. This
+    // removes the COD / fully-wallet-paid ambiguity AND sidesteps a latent
+    // referenceType case-mismatch ('ORDER' vs the legacy 'order') + the new
+    // ORDER_REDEMPTION type. Fall back to the ledger scan only for legacy orders
+    // that predate the snapshot column (walletAmountUsedInPaise still 0).
+    let walletPaidInPaise: bigint = order.walletAmountUsedInPaise ?? 0n;
+    if (walletPaidInPaise <= 0n) {
+      const walletDebits = await this.prisma.walletTransaction.findMany({
+        where: {
+          referenceType: { in: ['ORDER', 'order'] },
+          referenceId: masterOrderId,
+          type: { in: ['DEBIT', 'DEBIT_ADJUSTMENT', 'ORDER_REDEMPTION'] },
+          status: 'COMPLETED',
+        },
+        select: { amountInPaise: true },
+      });
+      walletPaidInPaise = walletDebits.reduce(
+        (sum, tx) => sum + bigintAbs(tx.amountInPaise),
+        0n,
+      );
+    }
 
     const orderTotalInPaise = order.totalAmountInPaise;
     // Gateway portion = order total - wallet portion. Capped at zero

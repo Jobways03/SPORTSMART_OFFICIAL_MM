@@ -10,6 +10,7 @@ import {
   RawBodyRequest,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import * as crypto from 'crypto';
 import type { Request } from 'express';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -41,6 +42,9 @@ export class RazorpayRefundWebhookController {
     private readonly webhookService: RazorpayRefundWebhookService,
   ) {}
 
+  // Phase 167 (Refund Execution audit) — bound the rate (parity with the
+  // payment webhook). Generous: legit Razorpay retries are bursty but bounded.
+  @Throttle({ default: { limit: 300, ttl: 60_000 } })
   @Post()
   @HttpCode(HttpStatus.OK)
   async handle(
@@ -77,7 +81,9 @@ export class RazorpayRefundWebhookController {
     if (
       eventType !== 'refund.processed' &&
       eventType !== 'refund.failed' &&
-      eventType !== 'refund.created'
+      eventType !== 'refund.created' &&
+      // Phase 167 (#7) — refund.settled = bank actually credited the customer.
+      eventType !== 'refund.settled'
     ) {
       // Acknowledge non-refund events so Razorpay stops resending,
       // but don't act on them. Payment events go to a separate

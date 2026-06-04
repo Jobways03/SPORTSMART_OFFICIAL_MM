@@ -24,7 +24,9 @@ describe('PaymentStatusPollerService.cancelExpiredPayments — stock release', (
     }>;
   }) => {
     const tx: any = {
-      masterOrder: { update: jest.fn().mockResolvedValue({}) },
+      // Phase 166 (#10) — cancel is now a CAS updateMany guarded on the
+      // pre-state; count > 0 means we won the race and proceed to release stock.
+      masterOrder: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       subOrder: { updateMany: jest.fn().mockResolvedValue({}) },
       stockReservation: {
         findMany: jest.fn().mockResolvedValue(opts.reservations),
@@ -57,6 +59,12 @@ describe('PaymentStatusPollerService.cancelExpiredPayments — stock release', (
       eventBus,
       razorpayAdapter,
       franchiseFacade,
+      // Phase 165 — LeaderElectedCron + CronInstrumentation (unused by the
+      // cancelExpiredPayments path this spec exercises directly).
+      {} as any,
+      {} as any,
+      // Phase 166 — PaymentOpsFacade (unused by this cancel path).
+      { recordAttempt: jest.fn(), flagMismatch: jest.fn() } as any,
     );
     return { svc, prisma, tx, franchiseFacade };
   };
@@ -159,8 +167,14 @@ describe('PaymentStatusPollerService.cancelExpiredPayments — stock release', (
 
     await callCancel(svc);
 
-    expect(tx.masterOrder.update).toHaveBeenCalledWith({
-      where: { id: 'order-5' },
+    // Phase 166 (#10) — cancel is a CAS updateMany guarded on the pre-state.
+    expect(tx.masterOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'order-5',
+        orderStatus: 'PENDING_PAYMENT',
+        razorpayPaymentId: null,
+        paymentStatus: { notIn: ['PAID'] },
+      },
       data: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
     });
     expect(tx.subOrder.updateMany).toHaveBeenCalledWith({

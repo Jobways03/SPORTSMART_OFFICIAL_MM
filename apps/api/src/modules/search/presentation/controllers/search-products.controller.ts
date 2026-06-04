@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { SearchPublicFacade } from '../../application/facades/search-public.facade';
 
 /**
@@ -7,6 +8,9 @@ import { SearchPublicFacade } from '../../application/facades/search-public.faca
  */
 @ApiTags('Search')
 @Controller('search')
+// Phase 195 (#5) — public search is an ILIKE fan-out; rate-limit per IP to
+// deter scraping / enumeration DoS.
+@Throttle({ default: { limit: 30, ttl: 60_000 } })
 export class SearchProductsController {
   constructor(private readonly searchFacade: SearchPublicFacade) {}
 
@@ -20,9 +24,14 @@ export class SearchProductsController {
     @Query('minPrice') minPrice?: string,
     @Query('maxPrice') maxPrice?: string,
   ) {
+    // Phase 195 (#21) — clamp page/limit (was unbounded parseInt, so
+    // ?limit=10000 could pull the whole table). Mirrors the storefront
+    // controller's [1,60] cap.
+    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
+    const limitNum = Math.min(60, Math.max(1, parseInt(limit || '20', 10) || 20));
     const result = await this.searchFacade.searchProducts(q || '', {
-      page: page ? parseInt(page, 10) : 1,
-      limit: limit ? parseInt(limit, 10) : 20,
+      page: pageNum,
+      limit: limitNum,
       categoryId,
       brandId,
       minPrice: minPrice ? parseFloat(minPrice) : undefined,

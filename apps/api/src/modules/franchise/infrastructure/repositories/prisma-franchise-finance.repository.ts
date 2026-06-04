@@ -5,7 +5,18 @@ import {
   FranchiseLedgerSource,
   FranchiseLedgerStatus,
   FranchiseSettlementStatus,
+  Prisma,
 } from '@prisma/client';
+
+// Phase 181 — event-sourced posts dedup on `type:sourceId`; ADJUSTMENT/PENALTY
+// legitimately repeat so they are NOT auto-keyed.
+const EVENT_SOURCED = new Set([
+  'ONLINE_ORDER', 'POS_SALE', 'POS_SALE_REVERSAL',
+  'PROCUREMENT_FEE', 'PROCUREMENT_COST', 'RETURN_REVERSAL',
+]);
+const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
+const toPaise = (d: Prisma.Decimal): bigint =>
+  BigInt(d.times(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP).toFixed(0));
 
 @Injectable()
 export class PrismaFranchiseFinanceRepository
@@ -25,21 +36,107 @@ export class PrismaFranchiseFinanceRepository
     computedAmount: number;
     platformEarning: number;
     franchiseEarning: number;
+    // Phase 181 — actor (#5) + explicit idempotency override (#4/#8). `tx` lets a
+    // caller compose this into a larger atomic unit (e.g. reversal #6).
+    // debit/credit overrides let a compensating entry move the balance WITHOUT a
+    // legacy franchise_earning (e.g. a PENDING-void reversal that must be neutral
+    // to the legacy aggregator). Provide exactly one positive.
+    createdByAdminId?: string | null;
+    createdBySystem?: boolean;
+    idempotencyKey?: string | null;
+    debitInPaise?: bigint;
+    creditInPaise?: bigint;
+    tx?: any;
   }): Promise<any> {
-    return this.prisma.franchiseFinanceLedger.create({
-      data: {
-        franchiseId: data.franchiseId,
-        sourceType: data.sourceType as FranchiseLedgerSource,
-        sourceId: data.sourceId,
-        description: data.description ?? null,
-        baseAmount: data.baseAmount,
-        rate: data.rate,
-        computedAmount: data.computedAmount,
-        platformEarning: data.platformEarning,
-        franchiseEarning: data.franchiseEarning,
-        status: 'PENDING',
-      },
-    });
+    // #4/#8 — deterministic dedup key for event-sourced posts.
+    const idempotencyKey =
+      data.idempotencyKey ??
+      (EVENT_SOURCED.has(data.sourceType) ? `${data.sourceType}:${data.sourceId}` : null);
+
+    // Fast path: a re-emitted source event returns the existing row, no insert.
+    if (idempotencyKey) {
+      const existing = await (data.tx ?? this.prisma).franchiseFinanceLedger.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existing) return existing;
+    }
+
+    // #2/#3 — canonical positive debit/credit from the franchise's balance
+    // perspective. Procurement fee/cost are franchise liabilities (debit);
+    // everything else follows the sign of franchiseEarning. NEVER negative.
+    const isProcurement =
+      data.sourceType === 'PROCUREMENT_FEE' || data.sourceType === 'PROCUREMENT_COST';
+    let creditInPaise = 0n;
+    let debitInPaise = 0n;
+    if (data.debitInPaise !== undefined || data.creditInPaise !== undefined) {
+      // Explicit override (compensating entries) — caller owns the sign rule.
+      creditInPaise = data.creditInPaise ?? 0n;
+      debitInPaise = data.debitInPaise ?? 0n;
+    } else if (isProcurement) {
+      debitInPaise = toPaise(D(data.computedAmount).abs());
+    } else {
+      const fe = D(data.franchiseEarning);
+      if (fe.greaterThanOrEqualTo(0)) creditInPaise = toPaise(fe);
+      else debitInPaise = toPaise(fe.abs());
+    }
+
+    const runCore = async (tx: any): Promise<any> => {
+      // #1 — serialize per-franchise so the running balance is consistent and
+      // point-in-time-recallable (advisory xact lock, released at commit).
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.franchiseId}))`;
+      const fr = await tx.franchisePartner.findUnique({
+        where: { id: data.franchiseId },
+        select: { ledgerBalanceInPaise: true },
+      });
+      const prev = fr?.ledgerBalanceInPaise ?? 0n;
+      const balanceAfterInPaise = prev + creditInPaise - debitInPaise;
+
+      const entry = await tx.franchiseFinanceLedger.create({
+        data: {
+          franchiseId: data.franchiseId,
+          sourceType: data.sourceType as FranchiseLedgerSource,
+          sourceId: data.sourceId,
+          description: data.description ?? null,
+          baseAmount: data.baseAmount,
+          rate: data.rate,
+          computedAmount: data.computedAmount,
+          platformEarning: data.platformEarning,
+          franchiseEarning: data.franchiseEarning,
+          debitInPaise,
+          creditInPaise,
+          balanceAfterInPaise,
+          createdByAdminId: data.createdByAdminId ?? null,
+          createdBySystem: data.createdBySystem ?? true,
+          idempotencyKey,
+          status: 'PENDING',
+        },
+      });
+      await tx.franchisePartner.update({
+        where: { id: data.franchiseId },
+        data: { ledgerBalanceInPaise: balanceAfterInPaise },
+      });
+      return entry;
+    };
+
+    // Composed into a caller's tx → run inline (caller owns atomicity + P2002).
+    if (data.tx) return runCore(data.tx);
+
+    try {
+      return await this.prisma.$transaction(runCore);
+    } catch (err) {
+      // Lost the idempotency race — return the row the winner created.
+      if (
+        idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const existing = await this.prisma.franchiseFinanceLedger.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) return existing;
+      }
+      throw err;
+    }
   }
 
   async findLedgerEntries(
@@ -136,19 +233,66 @@ export class PrismaFranchiseFinanceRepository
     });
   }
 
+  // Phase 181 (#14) — a status change appends an immutable history row (actor +
+  // reason) instead of being a silent edit; no-op when already at the target
+  // status. Amount columns are never touched.
   async updateLedgerEntryStatus(
     id: string,
     status: string,
     settlementBatchId?: string,
+    opts?: { actorAdminId?: string | null; reason?: string | null; tx?: any },
   ): Promise<any> {
-    const data: any = { status: status as FranchiseLedgerStatus };
-    if (settlementBatchId) {
-      data.settlementBatchId = settlementBatchId;
-    }
-    return this.prisma.franchiseFinanceLedger.update({
-      where: { id },
-      data,
+    const run = async (tx: any): Promise<any> => {
+      const current = await tx.franchiseFinanceLedger.findUnique({
+        where: { id },
+        select: { status: true },
+      });
+      if (!current) return null;
+      if (current.status === (status as FranchiseLedgerStatus)) {
+        // Idempotent no-op transition — still allow a settlement-batch link.
+        if (settlementBatchId) {
+          return tx.franchiseFinanceLedger.update({
+            where: { id },
+            data: { settlementBatchId },
+          });
+        }
+        return tx.franchiseFinanceLedger.findUnique({ where: { id } });
+      }
+      const data: any = { status: status as FranchiseLedgerStatus };
+      if (settlementBatchId) data.settlementBatchId = settlementBatchId;
+      const updated = await tx.franchiseFinanceLedger.update({ where: { id }, data });
+      await tx.franchiseLedgerStatusHistory.create({
+        data: {
+          ledgerEntryId: id,
+          fromStatus: current.status,
+          toStatus: status,
+          actorAdminId: opts?.actorAdminId ?? null,
+          reason: opts?.reason ?? null,
+        },
+      });
+      return updated;
+    };
+    return opts?.tx ? run(opts.tx) : this.prisma.$transaction(run);
+  }
+
+  // Phase 181 (#1/#9) — O(1) franchise balance read (no SUM-on-read).
+  async getFranchiseBalance(franchiseId: string): Promise<{ balanceInPaise: bigint; currency: string }> {
+    const fr = await this.prisma.franchisePartner.findUnique({
+      where: { id: franchiseId },
+      select: { ledgerBalanceInPaise: true },
     });
+    return { balanceInPaise: fr?.ledgerBalanceInPaise ?? 0n, currency: 'INR' };
+  }
+
+  // Phase 181 (#1) — point-in-time balance: the balanceAfter of the last entry
+  // posted at/before `asOf`.
+  async getFranchiseBalanceAsOf(franchiseId: string, asOf: Date): Promise<bigint> {
+    const last = await this.prisma.franchiseFinanceLedger.findFirst({
+      where: { franchiseId, createdAt: { lte: asOf } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { balanceAfterInPaise: true },
+    });
+    return last?.balanceAfterInPaise ?? 0n;
   }
 
   async bulkUpdateLedgerStatus(

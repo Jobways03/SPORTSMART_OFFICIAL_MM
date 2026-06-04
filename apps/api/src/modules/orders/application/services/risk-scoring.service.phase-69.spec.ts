@@ -12,6 +12,7 @@ function makeService(over: {
 } = {}) {
   const order = over.order ?? {
     id: 'mo-1',
+    orderStatus: 'PLACED',
     customerId: 'c-1',
     totalAmount: 30000,
     itemCount: 12,
@@ -31,6 +32,8 @@ function makeService(over: {
     return Promise.resolve(over.priorOrderCount ?? 0);
   });
   const masterOrderUpdate = jest.fn().mockResolvedValue({});
+  // Phase 174 — scoreOrder now CAS-writes via a status-scoped updateMany.
+  const masterOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const masterOrderFindMany = jest.fn().mockResolvedValue([]);
   const riskReasonDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
   const riskReasonCreateMany = jest.fn().mockResolvedValue({ count: 0 });
@@ -42,6 +45,7 @@ function makeService(over: {
       findUnique: masterOrderFindUnique,
       count: masterOrderCount,
       update: masterOrderUpdate,
+      updateMany: masterOrderUpdateMany,
       findMany: masterOrderFindMany,
     },
     orderRiskReason: {
@@ -51,7 +55,7 @@ function makeService(over: {
     orderRiskScoreHistory: { create: riskScoreHistoryCreate },
     $transaction: jest.fn(async (cb: any) =>
       cb({
-        masterOrder: { update: masterOrderUpdate },
+        masterOrder: { updateMany: masterOrderUpdateMany },
         orderRiskReason: {
           deleteMany: riskReasonDeleteMany,
           createMany: riskReasonCreateMany,
@@ -70,6 +74,7 @@ function makeService(over: {
     svc,
     masterOrderFindUnique,
     masterOrderUpdate,
+    masterOrderUpdateMany,
     riskReasonDeleteMany,
     riskReasonCreateMany,
   };
@@ -119,6 +124,7 @@ describe('RiskScoringService.scoreOrder (Phase 69 — Gap #20)', () => {
       priorOrderCount: 7,
       order: {
         id: 'mo-low',
+        orderStatus: 'PLACED',
         customerId: 'c-1',
         totalAmount: 500,
         itemCount: 1,
@@ -143,12 +149,16 @@ describe('RiskScoringService.scoreOrder (Phase 69 — Gap #20)', () => {
   });
 
   it('still upserts the JSON snapshot on MasterOrder', async () => {
-    const { svc, masterOrderUpdate } = makeService();
+    const { svc, masterOrderUpdateMany } = makeService();
     await svc.scoreOrder('mo-1');
-    const updateCall = masterOrderUpdate.mock.calls[0]![0];
+    // Phase 174 — the write is now a status-scoped CAS (updateMany).
+    const updateCall = masterOrderUpdateMany.mock.calls[0]![0];
     expect(updateCall.data.verificationRiskScore).toEqual(expect.any(Number));
-    expect(updateCall.data.verificationRiskBand).toMatch(/GREEN|YELLOW|RED/);
+    expect(updateCall.data.verificationRiskBand).toMatch(
+      /GREEN|YELLOW|RED|CRITICAL/,
+    );
     expect(Array.isArray(updateCall.data.verificationRiskReasons)).toBe(true);
+    expect(updateCall.where.id).toBe('mo-1');
   });
 
   it('skips child-table insert when no rules fired (defensive)', async () => {

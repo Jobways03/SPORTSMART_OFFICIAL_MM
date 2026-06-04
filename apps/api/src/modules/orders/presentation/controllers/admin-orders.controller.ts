@@ -8,6 +8,7 @@ import {
   Body,
   UseGuards,
   Req,
+  Header,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -21,6 +22,7 @@ import { VerifyOrderDto, RejectOrderBodyDto } from '../dtos/verification.dto';
 import { ReassignSubOrderDto } from '../dtos/reassign.dto';
 import { CancelSubOrderDto } from '../dtos/cancel-sub-order.dto';
 import { MarkDeliveredDto } from '../dtos/mark-delivered.dto';
+import { MarkCodPaidDto } from '../dtos/mark-cod-paid.dto';
 import {
   BadRequestAppException,
   ForbiddenAppException,
@@ -260,17 +262,82 @@ export class AdminOrdersController {
     return { success: true, message: 'Sub-order marked as delivered — return window started', data };
   }
 
+  // Phase 168 (COD Mark-Paid audit) — COD cash-collection mark-paid.
+  //   #6  @Permissions swapped from the semantically-wrong, untiered
+  //        `orders.cancel` to the dedicated CRITICAL `payments.cod.markPaid`.
+  //   #13 @Throttle so a compromised admin token can't batch-flip thousands.
+  //   #16 @Idempotent so a double-click retry returns the original response
+  //        instead of a 400 from the already-PAID guard.
+  //   #12 MarkCodPaidDto carries the collected amount + receipt reference.
+  // actorId / ip / ua are threaded for the audit row.
   @Patch(':id/mark-paid')
-  @Permissions('orders.cancel')
-  async markAsPaid(@Param('id') id: string) {
-    await this.ordersService.markAsPaid(id);
+  @Permissions('payments.cod.markPaid')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Idempotent()
+  async markAsPaid(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: MarkCodPaidDto,
+  ) {
+    await this.ordersService.markAsPaid(id, {
+      actorId: req?.adminId ?? req?.userId,
+      actorRole: req?.adminRole ?? req?.role,
+      collectedAmountInPaise:
+        body?.collectedAmountInPaise !== undefined
+          ? BigInt(body.collectedAmountInPaise)
+          : undefined,
+      collectionReference: body?.collectionReference,
+      notes: body?.notes,
+      varianceReason: body?.varianceReason,
+      ipAddress: req?.ip,
+      userAgent: req?.headers?.['user-agent'],
+    });
     return { success: true, message: 'Order marked as paid' };
+  }
+
+  // Phase 168 (COD Mark-Paid audit #10) — per-sub-order COD cash collection for
+  // multi-seller orders. Flips ONE delivered sub-order to PAID + recomputes the
+  // master (which flips to PAID only when every active sub-order is collected).
+  @Patch('sub-orders/:subOrderId/mark-paid')
+  @Permissions('payments.cod.markPaid')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Idempotent()
+  async markSubOrderAsPaid(
+    @Req() req: any,
+    @Param('subOrderId') subOrderId: string,
+    @Body() body: MarkCodPaidDto,
+  ) {
+    const data = await this.ordersService.markSubOrderAsPaid(subOrderId, {
+      actorId: req?.adminId ?? req?.userId,
+      actorRole: req?.adminRole ?? req?.role,
+      collectedAmountInPaise:
+        body?.collectedAmountInPaise !== undefined
+          ? BigInt(body.collectedAmountInPaise)
+          : undefined,
+      collectionReference: body?.collectionReference,
+      notes: body?.notes,
+      varianceReason: body?.varianceReason,
+      ipAddress: req?.ip,
+      userAgent: req?.headers?.['user-agent'],
+    });
+    return { success: true, message: 'Sub-order marked as paid', data };
   }
 
   // ── Epic 2: Manual Reassignment & Exception Queue ──────────────────────
 
+  /**
+   * @deprecated Phase 230 — sellers-ONLY listing. It silently hides franchise
+   * candidates, so an admin reassigning from here can miss a closer/better
+   * franchise. Use `eligible-nodes` (sellers + franchises). Kept active for
+   * back-compat; the `Deprecation` response header signals clients to migrate.
+   * Phase 230 also added the dedicated @Throttle — both eligible-* endpoints run
+   * a per-item allocator fan-out, so an unthrottled token could hammer the DB.
+   */
   @Get('sub-orders/:subOrderId/eligible-sellers')
   @Permissions('orders.read')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Header('Deprecation', 'true')
+  @Header('Link', '</admin/orders/sub-orders/:subOrderId/eligible-nodes>; rel="successor-version"')
   async getEligibleSellers(@Param('subOrderId') subOrderId: string) {
     const data = await this.ordersService.getEligibleSellers(subOrderId);
     return { success: true, message: 'Eligible sellers retrieved', data };
@@ -283,6 +350,7 @@ export class AdminOrdersController {
    */
   @Get('sub-orders/:subOrderId/eligible-nodes')
   @Permissions('orders.read')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async getEligibleNodes(@Param('subOrderId') subOrderId: string) {
     const data = await this.ordersService.getEligibleNodes(subOrderId);
     return { success: true, message: 'Eligible nodes retrieved', data };

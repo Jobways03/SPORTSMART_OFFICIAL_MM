@@ -93,21 +93,46 @@ describe('AiContentController — decorator metadata', () => {
   });
 });
 
-describe('AiContentController — input length caps', () => {
-  const instance = (() => {
-    const ctrl = new AiContentController();
-    return ctrl;
-  })();
+describe('AiContentController — actor gate + input length caps', () => {
+  // Brought current (Phase 249): the controller takes (req, body) and is
+  // DI-constructed. Mock the deps; onModuleInit is not called so the
+  // optional-chained metric handles stay undefined (no-op).
+  const build = () =>
+    new AiContentController(
+      { counter: () => ({ inc: () => {} }), histogram: () => ({ observe: () => {} }) } as any,
+      { generate: jest.fn() } as any,
+      { assertWithinQuota: jest.fn().mockResolvedValue(undefined), recordCall: jest.fn() } as any,
+    );
+  const sellerReq = { authActorId: 's1', user: { type: 'SELLER' } } as any;
 
-  it('rejects missing title', async () => {
+  // Phase 249 (#1) — the budget gate: only SELLER/ADMIN may generate.
+  it('rejects a CUSTOMER actor (budget gate) with Forbidden', async () => {
     await expect(
-      instance.generateProductContent({ title: '' } as any),
+      build().generateProductContent(
+        { authActorId: 'c1', user: { type: 'CUSTOMER' } } as any,
+        { title: 'Tennis Racket' } as any,
+      ),
+    ).rejects.toThrow(/Not allowed to use AI/i);
+  });
+
+  it('rejects an AFFILIATE actor (budget gate) with Forbidden', async () => {
+    await expect(
+      build().generateProductContent(
+        { authActorId: 'a1', user: { type: 'AFFILIATE' } } as any,
+        { title: 'Tennis Racket' } as any,
+      ),
+    ).rejects.toThrow(/Not allowed to use AI/i);
+  });
+
+  it('rejects missing title (seller)', async () => {
+    await expect(
+      build().generateProductContent(sellerReq, { title: '' } as any),
     ).rejects.toThrow(/title is required/i);
   });
 
-  it('rejects title longer than 200 chars', async () => {
+  it('rejects title longer than 200 chars (seller)', async () => {
     await expect(
-      instance.generateProductContent({ title: 'a'.repeat(201) } as any),
+      build().generateProductContent(sellerReq, { title: 'a'.repeat(201) } as any),
     ).rejects.toThrow(/200 characters/);
   });
 });

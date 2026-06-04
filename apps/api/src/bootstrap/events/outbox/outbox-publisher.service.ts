@@ -9,6 +9,7 @@ import type { OutboxEvent } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { RedisService } from '../../cache/redis.service';
 import { EnvService } from '../../env/env.service';
+import { CronInstrumentationService } from '../../../core/cron-observability/cron-instrumentation.service';
 import { DomainEvent } from '../domain-event.interface';
 
 /**
@@ -55,6 +56,11 @@ export class OutboxPublisherService
   // Backoff cap — 1h. After that, slot stays at 1h until MAX_ATTEMPTS.
   private static readonly BACKOFF_CAP_MS = 60 * 60 * 1000;
 
+  // Phase 186 (#12) — per-eventName consecutive-failure tracking lives in
+  // Redis (shared across replicas). Keyed below; reset on the first success.
+  private static readonly FAIL_COUNTER_PREFIX = 'outbox:failcount:';
+  private static readonly FAIL_COUNTER_TTL_SECONDS = 24 * 60 * 60;
+
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -62,6 +68,8 @@ export class OutboxPublisherService
     private readonly redis: RedisService,
     private readonly env: EnvService,
     private readonly eventEmitter: EventEmitter2,
+    // Phase 186 (#6) — cron-run observability for the publisher tick.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   onModuleInit(): void {
@@ -122,21 +130,26 @@ export class OutboxPublisherService
       const rows = await this.claimBatch();
       if (rows.length === 0) return 0;
 
-      // Process events in parallel — each is independent, and emitAsync
-      // already serializes within a single event name. Cap concurrency
-      // at the batch size; we won't blow up the pool because the batch
-      // size is bounded above by OUTBOX_BATCH_SIZE.
-      const results = await Promise.allSettled(
-        rows.map((row) => this.dispatchSingle(row)),
-      );
-      // Log a single summary per tick rather than per-row to keep log
-      // volume manageable under steady state. Failures already get
-      // their own ERROR-level lines from dispatchSingle.
-      const ok = results.filter((r) => r.status === 'fulfilled').length;
-      this.logger.log(
-        `Outbox tick: processed ${rows.length} (${ok} ok, ${rows.length - ok} requeued)`,
-      );
-      return rows.length;
+      // Phase 186 (#6) — instrument ONLY productive ticks (rows > 0). At a
+      // 1s poll a blanket wrap would write ~86k empty cron_runs rows/day;
+      // recording only ticks that did work keeps the metric meaningful
+      // (count + duration + {processed, ok, requeued} per real drain).
+      //
+      // Phase 186 (#11) — EventEmitter2.emitAsync invokes every listener and
+      // awaits Promise.all of their results, so async handlers for the SAME
+      // event run CONCURRENTLY (not sequentially — the audit's stall premise
+      // only holds for synchronous-blocking listeners, of which we have
+      // none). dispatchSingle calls per row run concurrently via allSettled.
+      return await this.instr.wrap('outbox-publisher', async () => {
+        const results = await Promise.allSettled(
+          rows.map((row) => this.dispatchSingle(row)),
+        );
+        const ok = results.filter((r) => r.status === 'fulfilled').length;
+        this.logger.log(
+          `Outbox tick: processed ${rows.length} (${ok} ok, ${rows.length - ok} requeued)`,
+        );
+        return rows.length;
+      });
     } finally {
       // Fenced release: the Lua script atomically deletes ONLY if
       // the lock value still matches our token. If the TTL expired
@@ -187,11 +200,19 @@ export class OutboxPublisherService
     // CTE-style "select-then-update" with RETURNING. Postgres-specific.
     // The inner SELECT uses FOR UPDATE SKIP LOCKED so multiple ticks
     // never claim the same row.
+    //
+    // Phase 186 — the predicate now also gates on:
+    //   (#7) state ∈ {PENDING, RETRYING}    — RETRYING rows are in backoff
+    //   (#1) debounce_until <= now()         — hold debounced rows until the
+    //                                          collapse window closes
+    //   (#5) scheduled_at <= now()           — future-dated delivery
     return this.prisma.$queryRaw<OutboxEvent[]>`
       WITH claim AS (
         SELECT id FROM outbox_events
-         WHERE state = 'PENDING'
+         WHERE state IN ('PENDING', 'RETRYING')
            AND next_attempt_at <= now()
+           AND (debounce_until IS NULL OR debounce_until <= now())
+           AND (scheduled_at IS NULL OR scheduled_at <= now())
          ORDER BY next_attempt_at
          LIMIT ${batchSize}
          FOR UPDATE SKIP LOCKED
@@ -223,6 +244,9 @@ export class OutboxPublisherService
       aggregateId: row.aggregateId,
       occurredAt: row.occurredAt,
       payload: row.payload as unknown,
+      // Phase 186 (#16) — surface trace ids to handlers/observability.
+      correlationId: (row as { correlationId?: string | null }).correlationId ?? null,
+      causationId: (row as { causationId?: string | null }).causationId ?? null,
     };
     // The event id is also exposed on the payload so handlers using
     // @IdempotentHandler() can dedupe on it without re-fetching the
@@ -240,6 +264,8 @@ export class OutboxPublisherService
       // didn't blow up before we commit publishedAt.
       await this.eventEmitter.emitAsync(row.eventName, event);
       await this.markPublished(row.id);
+      // Phase 186 (#12) — a success clears the consecutive-failure streak.
+      await this.resetFailureCounter(row.eventName);
     } catch (err) {
       const message = (err as Error)?.message ?? String(err);
       this.logger.error(
@@ -260,6 +286,12 @@ export class OutboxPublisherService
     const newAttempts = row.attempts + 1;
     const maxAttempts = this.env.getNumber('OUTBOX_MAX_ATTEMPTS', 10);
 
+    // Phase 186 (#12) — track consecutive failures per eventName so a
+    // systemic outage (e.g. SMTP down → every notification handler throws)
+    // raises a single high-severity alert rather than silently DLQ'ing
+    // hundreds of rows one by one.
+    await this.recordFailureAndMaybeAlert(row.eventName, errorMessage);
+
     if (newAttempts >= maxAttempts) {
       // Move to DLQ inside a single tx so we never have a row that's
       // both in outbox_events and outbox_dead_letters.
@@ -271,7 +303,9 @@ export class OutboxPublisherService
             aggregate: row.aggregate,
             aggregateId: row.aggregateId,
             payload: row.payload as never,
-            failureReason: errorMessage,
+            // Phase 186 (#10) — keep the full trace (10k) so DLQ triage
+            // isn't blind to the root cause buried past the first 1k chars.
+            failureReason: errorMessage.slice(0, 10_000),
             attempts: newAttempts,
           },
         }),
@@ -287,6 +321,10 @@ export class OutboxPublisherService
     // herd if the same upstream dependency was the failure cause for a
     // whole batch (e.g. SMTP outage); without jitter the whole batch
     // retries on the same wall-clock tick.
+    //
+    // Phase 186 (#17) — Math.random() is intentional here: this jitter is a
+    // load-spreading heuristic, NOT a security boundary, so a CSPRNG would
+    // add cost (syscall) for no benefit. Documented per the audit.
     const baseMs = Math.min(
       1000 * Math.pow(2, newAttempts - 1),
       OutboxPublisherService.BACKOFF_CAP_MS,
@@ -297,10 +335,65 @@ export class OutboxPublisherService
     await this.prisma.outboxEvent.update({
       where: { id: row.id },
       data: {
+        // Phase 186 (#7) — first failure flips PENDING → RETRYING so ops can
+        // query backed-off events directly. The claim predicate matches both.
+        state: 'RETRYING',
         attempts: newAttempts,
-        lastError: errorMessage.slice(0, 1000),
+        lastError: errorMessage.slice(0, 10_000),
         nextAttemptAt,
       },
     });
+  }
+
+  /**
+   * Phase 186 (#12) — per-eventName consecutive-failure counter in Redis.
+   * Increments on every failure; the first success for that eventName resets
+   * it (see `resetFailureCounter`, called from the success path). When the
+   * streak crosses `OUTBOX_FAILURE_ALERT_THRESHOLD` (default 25) we log a
+   * CRITICAL line and emit `outbox.publisher.failing` (severity 95) so a
+   * downstream pager/handler can escalate — decoupled from any one module.
+   */
+  private async recordFailureAndMaybeAlert(
+    eventName: string,
+    errorMessage: string,
+  ): Promise<void> {
+    const threshold = this.env.getNumber('OUTBOX_FAILURE_ALERT_THRESHOLD', 25);
+    try {
+      const key = `${OutboxPublisherService.FAIL_COUNTER_PREFIX}${eventName}`;
+      const client = this.redis.getClient();
+      const count = await client.incr(key);
+      if (count === 1) {
+        await client.expire(key, OutboxPublisherService.FAIL_COUNTER_TTL_SECONDS);
+      }
+      // Alert exactly once when crossing the threshold (==), not on every
+      // subsequent failure, to avoid alert storms.
+      if (count === threshold) {
+        this.logger.error(
+          `[ALERT] Outbox publisher: ${count} consecutive failures for "${eventName}" — ` +
+            `likely a systemic outage. Last error: ${errorMessage.slice(0, 500)}`,
+        );
+        this.eventEmitter.emit('outbox.publisher.failing', {
+          eventName,
+          consecutiveFailures: count,
+          severity: 95,
+          lastError: errorMessage.slice(0, 1000),
+        });
+      }
+    } catch (err) {
+      // Alerting must never break the retry path.
+      this.logger.warn(
+        `Failed to record outbox failure counter for ${eventName}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async resetFailureCounter(eventName: string): Promise<void> {
+    try {
+      await this.redis
+        .getClient()
+        .del(`${OutboxPublisherService.FAIL_COUNTER_PREFIX}${eventName}`);
+    } catch {
+      /* best-effort */
+    }
   }
 }

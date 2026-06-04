@@ -123,8 +123,11 @@ const WEBSITE_JSON_LD = {
   name: 'SPORTSMART',
   url: SITE_URL,
   potentialAction: {
+    // Phase 195 (#6) — the storefront has no /search route; the real SERP is
+    // /products?search=. Pointing the Sitelinks searchbox at /search?q= sent
+    // Google (and users clicking the box) to a 404.
     '@type': 'SearchAction',
-    target: `${SITE_URL}/search?q={search_term_string}`,
+    target: `${SITE_URL}/products?search={search_term_string}`,
     'query-input': 'required name=search_term_string',
   },
 };

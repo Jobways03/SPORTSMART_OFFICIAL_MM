@@ -1,10 +1,10 @@
 /**
- * Phase 47 (2026-05-21) — pins the Cloudinary cleanup contract on the
+ * Phase 47 (2026-05-21) — pins the media cleanup contract on the
  * write paths (resetSlot / uploadImage) and the cache invalidation
  * behaviour. Pre-Phase-47 the service hard-deleted the row, did not
  * persist publicId, and never invalidated. Each of those would have
  * caused a real bug:
- *   - storage leak (orphan Cloudinary asset on replace/reset)
+ *   - storage leak (orphan media asset on replace/reset)
  *   - "the banner I uploaded isn't showing" (stale Redis cache)
  *   - "the old image still shows on the homepage" (no soft-delete
  *      visibility on the public read).
@@ -65,7 +65,7 @@ function makeRow(over: Partial<Record<string, unknown>> = {}) {
 }
 
 describe('StorefrontContentService.uploadImage (Phase 47)', () => {
-  it('persists imagePublicId returned by Cloudinary', async () => {
+  it('persists imagePublicId returned by media', async () => {
     const { service, prisma, cloudinary } = makeService();
     prisma.findUnique.mockResolvedValueOnce(null); // no prior
     prisma.upsert.mockResolvedValueOnce(
@@ -117,7 +117,7 @@ describe('StorefrontContentService.uploadImage (Phase 47)', () => {
 
   it('does NOT delete the prior asset when publicId is unchanged (defensive)', async () => {
     const { service, prisma, cloudinary } = makeService();
-    // Cloudinary returns the same publicId as before (rare but possible).
+    // media returns the same publicId as before (rare but possible).
     cloudinary.upload.mockResolvedValueOnce({
       secureUrl: 'https://res.cloudinary.com/x/image/upload/v1/same.jpg',
       publicId: 'storefront-content/hero-slide-1/same',
@@ -151,7 +151,7 @@ describe('StorefrontContentService.uploadImage (Phase 47)', () => {
       }),
     ).rejects.toThrow('db down');
 
-    // The just-uploaded Cloudinary asset must be deleted.
+    // The just-uploaded media asset must be deleted.
     expect(cloudinary.delete).toHaveBeenCalledWith(
       'storefront-content/hero-slide-1/abc123',
     );
@@ -184,7 +184,7 @@ describe('StorefrontContentService.uploadImage (Phase 47)', () => {
 });
 
 describe('StorefrontContentService.resetSlot (Phase 47)', () => {
-  it('soft-deletes the row + deletes Cloudinary asset fire-and-forget', async () => {
+  it('soft-deletes the row + deletes media asset fire-and-forget', async () => {
     const { service, prisma, cloudinary } = makeService();
     prisma.findUnique.mockResolvedValueOnce(
       makeRow({ imagePublicId: 'storefront-content/hero-slide-1/OLD' }),
@@ -220,7 +220,7 @@ describe('StorefrontContentService.resetSlot (Phase 47)', () => {
     expect(cloudinary.delete).not.toHaveBeenCalled();
   });
 
-  it('does not call Cloudinary delete when imagePublicId is null', async () => {
+  it('does not call media delete when imagePublicId is null', async () => {
     const { service, prisma, cloudinary } = makeService();
     prisma.findUnique.mockResolvedValueOnce(makeRow({ imagePublicId: null }));
     prisma.update.mockResolvedValueOnce(undefined);

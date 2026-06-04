@@ -12,6 +12,7 @@ import { UserAuthGuard } from '../../../core/guards';
 import { Idempotent } from '../../../core/decorators/idempotent.decorator';
 import { CheckoutService } from '../application/services/checkout.service';
 import {
+  InitiateCheckoutDto,
   PlaceOrderDto,
   RetryPaymentDto,
   VerifyPaymentDto,
@@ -24,14 +25,18 @@ export class CheckoutController {
   constructor(private readonly checkoutService: CheckoutService) {}
 
   // ── POST /customer/checkout/initiate ────────────────────────────────
+  // Phase 197 (Checkout audit #4/#5) — typed body + rate limit. Initiate
+  // allocates + reserves stock per cart line, so an unbounded loop is a
+  // stock-churn vector; 10/min is generous for a real checkout.
   @Post('initiate')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async initiateCheckout(
     @Req() req: any,
-    @Body() body: { addressId: string },
+    @Body() dto: InitiateCheckoutDto,
   ) {
     const result = await this.checkoutService.initiateCheckout(
       req.userId,
-      body.addressId,
+      dto.addressId,
     );
     return { success: true, ...result };
   }
@@ -60,7 +65,9 @@ export class CheckoutController {
   }
 
   // ── POST /customer/checkout/remove-unserviceable ────────────────────
+  // Phase 197 (Checkout audit #5) — rate limit a cart-mutating endpoint.
   @Post('remove-unserviceable')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async removeUnserviceableItems(@Req() req: any) {
     const result = await this.checkoutService.removeUnserviceableItems(
       req.userId,

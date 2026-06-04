@@ -1,7 +1,7 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../core/exceptions';
-import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
 import { computeProfileCompletion } from '../../../../core/utils';
 import { MediaType } from './upload-seller-media.use-case';
 import {
@@ -14,7 +14,7 @@ export class DeleteSellerMediaUseCase {
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('DeleteSellerMediaUseCase');
@@ -62,10 +62,10 @@ export class DeleteSellerMediaUseCase {
 
     await this.sellerRepo.updateSeller(sellerId, updateData);
 
-    // Delete from Cloudinary (best-effort)
-    this.cloudinary.delete(currentPublicId).catch((err) => {
+    // Delete from media (best-effort)
+    this.media.delete(currentPublicId).catch((err) => {
       this.logger.warn(
-        `Failed to delete Cloudinary asset ${currentPublicId}: ${err?.message}`,
+        `Failed to delete media asset ${currentPublicId}: ${err?.message}`,
       );
     });
 

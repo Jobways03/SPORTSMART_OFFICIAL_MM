@@ -44,6 +44,8 @@ function makeController(): {
   const tcs = {
     markFiled: jest.fn(),
     markPaidToGovt: jest.fn(),
+    markCertificatesIssued: jest.fn(),
+    renderCertificateHtml: jest.fn(),
     reverse: jest.fn(),
   };
   // Phase 159z (audit B3) — controller now takes PlatformGstProfileService.
@@ -72,6 +74,8 @@ function makeController(): {
     marketplaceCommissionGstr as any,
     platformGstProfile as any,
     audit as any,
+    // Phase 163 — EnvService (readiness cache TTL + window knobs).
+    { getNumber: (_k: string, fb: number) => fb, getBoolean: (_k: string, fb: boolean) => fb } as any,
   );
   return {
     controller,
@@ -105,20 +109,27 @@ describe('AdminTaxReportsController.getMode', () => {
 });
 
 describe('AdminTaxReportsController.auditReadiness', () => {
-  it('serialises BigInt values in the report', async () => {
-    const { controller, readiness } = makeController();
+  // Phase 163 (#18) — the readiness report carries no BigInt fields, so the
+  // endpoint returns it directly (the serialiseBigInt wrapper was removed).
+  // (#10) — and the read is audit-logged.
+  it('returns the readiness report directly + audit-logs the read', async () => {
+    const { controller, readiness, audit } = makeController();
     readiness.build.mockResolvedValue({
       currentMode: 'AUDIT',
       ready: false,
       generatedAt: new Date(),
       blockers: [],
       totalBlockers: 0,
-      totalTcs: 123n,
+      criticalBlockers: 0,
+      filter: { sellerId: null, filingPeriod: null, gstProfileId: null },
     });
-    const r = await controller.auditReadiness();
+    const r = await controller.auditReadiness({ adminId: 'a-1', headers: {} } as any);
     expect(r.success).toBe(true);
-    // BigInt serialised to string via the controller's helper.
-    expect(typeof (r.data as any).totalTcs).toBe('string');
+    expect((r.data as any).currentMode).toBe('AUDIT');
+    expect((r.data as any).totalBlockers).toBe(0);
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'tax.readiness.viewed' }),
+    );
   });
 });
 
@@ -305,6 +316,7 @@ describe('AdminTaxReportsController.markFiled', () => {
     tcs.markFiled.mockResolvedValue({
       flippedCount: 2,
       flippedIds: ['l-1', 'l-2'],
+      skipped: [],
     });
     const r = await controller.markFiled(req, {
       ledgerIds: ['l-1', 'l-2'],
@@ -320,26 +332,95 @@ describe('AdminTaxReportsController.markFiled', () => {
     // Phase 159z (lifecycle audits) — one audit row per flipped ledger.
     expect(audit.writeAuditLog).toHaveBeenCalledTimes(2);
   });
+
+  // Phase 160 (§52 lifecycle audit B4 / #4) — the controller surfaces the
+  // exact skipped stragglers (id + current status), not just a count.
+  it('surfaces skipped stragglers in the response', async () => {
+    const { controller, tcs } = makeController();
+    tcs.markFiled.mockResolvedValue({
+      flippedCount: 1,
+      flippedIds: ['l-1'],
+      skipped: [{ ledgerId: 'l-2', currentStatus: 'FILED' }],
+    });
+    const r = await controller.markFiled(req, {
+      ledgerIds: ['l-1', 'l-2'],
+      nicArn: 'AA1234567890123',
+    });
+    expect(r.data.skipped).toEqual([
+      { ledgerId: 'l-2', currentStatus: 'FILED' },
+    ]);
+    expect(r.message).toMatch(/1 skipped/);
+  });
 });
 
 describe('AdminTaxReportsController.markPaid', () => {
-  it('passes paymentReference through + audits per row', async () => {
+  it('passes paymentReference + proof file through + audits per row', async () => {
     const { controller, tcs, audit } = makeController();
     tcs.markPaidToGovt.mockResolvedValue({
       flippedCount: 1,
       flippedIds: ['l-1'],
+      skipped: [],
     });
     const r = await controller.markPaid(req, {
       ledgerIds: ['l-1'],
       paymentReference: 'UTR-12345',
+      paymentProofFileId: 'file-9',
     });
     expect(tcs.markPaidToGovt).toHaveBeenCalledWith({
       ledgerIds: ['l-1'],
       paidBy: 'a-1',
       paymentReference: 'UTR-12345',
+      paymentProofFileId: 'file-9',
     });
     expect(r.data.flipped).toBe(1);
     expect(audit.writeAuditLog).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AdminTaxReportsController.markCertificatesIssued', () => {
+  it('issues certificates, returns per-row numbers + skipped, audits flipped rows', async () => {
+    const { controller, tcs, audit } = makeController();
+    tcs.markCertificatesIssued.mockResolvedValue({
+      flippedCount: 1,
+      flippedIds: ['l-1'],
+      certificateNumbers: { 'l-1': 'TCS/2026-04/AB12CD34' },
+      skipped: [{ ledgerId: 'l-2', currentStatus: 'FILED' }],
+    });
+    const r = await controller.markCertificatesIssued(req, {
+      ledgerIds: ['l-1', 'l-2'],
+    });
+    expect(tcs.markCertificatesIssued).toHaveBeenCalledWith({
+      ledgerIds: ['l-1', 'l-2'],
+      issuedBy: 'a-1',
+      certificateNumberPrefix: undefined,
+    });
+    expect(r.data.flipped).toBe(1);
+    expect(r.data.certificateNumbers['l-1']).toBe('TCS/2026-04/AB12CD34');
+    expect(r.data.skipped).toHaveLength(1);
+    // one audit row per flipped certificate
+    expect(audit.writeAuditLog).toHaveBeenCalledTimes(1);
+    expect(audit.writeAuditLog.mock.calls[0][0].action).toBe(
+      'tax.tcs.certificateIssued',
+    );
+  });
+});
+
+describe('AdminTaxReportsController.tcsCertificateHtml', () => {
+  it('renders the certificate HTML for an existing ledger row', async () => {
+    const { controller, tcs } = makeController();
+    tcs.renderCertificateHtml.mockResolvedValue('<html>cert</html>');
+    const res = makeRes();
+    await controller.tcsCertificateHtml(req, res, 'l-1');
+    expect(res.send).toHaveBeenCalledWith('<html>cert</html>');
+  });
+
+  it('404s when the ledger row does not exist', async () => {
+    const { controller, tcs } = makeController();
+    tcs.renderCertificateHtml.mockResolvedValue(null);
+    const res = makeRes();
+    await expect(
+      controller.tcsCertificateHtml(req, res, 'missing'),
+    ).rejects.toMatchObject({ status: HttpStatus.NOT_FOUND });
   });
 });
 
@@ -350,6 +431,7 @@ describe('AdminTaxReportsController.reverseTcs', () => {
       ledger: { id: 'l-1', status: 'REVERSED' },
       previousStatus: 'FILED',
       wasAlreadyReversed: false,
+      reason: 'duplicate row',
     });
     const r = await controller.reverseTcs(
       req,

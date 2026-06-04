@@ -8,8 +8,23 @@ import { apiClient, ApiResponse, API_BASE } from '@/lib/api-client';
 
 export type TaxMode = 'OFF' | 'AUDIT' | 'STRICT';
 
+// Phase 163 (Tax Audit Readiness audit #11 / #12).
+export type BlockerSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+export type BlockerResourceType =
+  | 'product'
+  | 'seller'
+  | 'taxDocument'
+  | 'return'
+  | 'tcsLedger'
+  | 'tdsLedger'
+  | 'ewayBill'
+  | 'platformGstProfile';
+
 export interface BlockerSummary {
   code: string;
+  // Phase 163 (#11) — severity tier; #12 — what the sampleIds point at.
+  severity: BlockerSeverity;
+  resourceType: BlockerResourceType;
   count: number;
   sampleIds: string[];
   message: string;
@@ -20,7 +35,55 @@ export interface AuditReadinessReport {
   ready: boolean;
   generatedAt: string;
   totalBlockers: number;
+  // Phase 163 (#11) — rollup of CRITICAL-severity blocker counts.
+  criticalBlockers: number;
   blockers: BlockerSummary[];
+  filter?: { sellerId: string | null; filingPeriod: string | null; gstProfileId: string | null };
+}
+
+// Phase 163 (#16) — readiness trend snapshot.
+export interface AuditReadinessSnapshot {
+  id: string;
+  currentMode: string;
+  ready: boolean;
+  totalBlockers: number;
+  criticalBlockers: number;
+  generatedAt: string;
+}
+
+// Phase 164 (#11) — a row in the admin credit-note register.
+export interface CreditNoteRow {
+  id: string;
+  documentNumber: string;
+  generatedAt: string | null;
+  originalDocumentNumber: string | null;
+  returnId: string | null;
+  customerId: string | null;
+  sellerId: string | null;
+  buyerGstin: string | null;
+  invoiceType: string | null;
+  status: string;
+  taxableAmountInPaise: string;
+  totalTaxAmountInPaise: string;
+  cessAmountInPaise: string;
+  documentTotalInPaise: string;
+  partialCoverageLineCount: number;
+  customerNotifiedAt: string | null;
+  reason: string | null;
+}
+
+// Phase 160 (§52 lifecycle audit B4 / #4) — a bulk transition's skipped
+// straggler (id + the status it's actually in).
+export interface TcsSkippedRow {
+  ledgerId: string;
+  currentStatus: string;
+}
+
+// Phase 160 (§52 lifecycle audit #9 / #10) — a per-row compute warning.
+export interface TcsComputeWarning {
+  code: string;
+  message: string;
+  detail?: Record<string, unknown>;
 }
 
 export interface Gstr8SummaryRow {
@@ -32,6 +95,8 @@ export interface Gstr8SummaryRow {
   grossTaxableSupplyInPaise: string;
   netTaxableSupplyInPaise: string;
   totalTcsInPaise: string;
+  // Phase 160 (§52 lifecycle audit #13) — carry-forward visible per row.
+  adjustmentCarriedForwardInPaise?: string;
   // Phase 159z (audit B1) — the seller relation is now included so the
   // admin UI can show the trade name alongside the GSTIN.
   seller?: {
@@ -41,6 +106,11 @@ export interface Gstr8SummaryRow {
   } | null;
   // Phase 159z (audit #6) — populated after the row flips to FILED.
   nicArn?: string | null;
+  // Phase 160 (§52 lifecycle audit B1) — populated after CERTIFICATE_ISSUED.
+  certificateNumber?: string | null;
+  certificateIssuedAt?: string | null;
+  // Phase 160 (§52 lifecycle audit #9 / #10) — non-fatal compute warnings.
+  computeWarningsJson?: TcsComputeWarning[];
 }
 
 export interface Gstr8Summary {
@@ -55,6 +125,15 @@ export interface Gstr8Summary {
   totalGrossInPaise: string;
   totalNetTaxableInPaise: string;
   totalTcsInPaise: string;
+  // Phase 160 (§52 lifecycle audit #13) — period carry-forward total.
+  totalAdjustmentCarriedForwardInPaise?: string;
+  // Phase 160 (§52 lifecycle audit B1) — per-status counters.
+  statusCounts?: Record<string, number>;
+  // Phase 160 (§52 lifecycle audit #9 / #10) — period-level warnings.
+  warnings?: {
+    rateVariance: { distinctRatesBps: number[] } | null;
+    carryForward: { rowCount: number; totalInPaise: string } | null;
+  };
   rows: Gstr8SummaryRow[];
 }
 
@@ -70,8 +149,37 @@ class AdminTaxService {
     });
   }
 
-  getAuditReadiness(): Promise<ApiResponse<AuditReadinessReport>> {
-    return apiClient('/admin/tax/audit-readiness');
+  getAuditReadiness(
+    filter: { sellerId?: string; filingPeriod?: string; gstProfileId?: string; refresh?: boolean } = {},
+  ): Promise<ApiResponse<AuditReadinessReport>> {
+    const qs = new URLSearchParams();
+    if (filter.sellerId) qs.set('sellerId', filter.sellerId);
+    if (filter.filingPeriod) qs.set('filingPeriod', filter.filingPeriod);
+    if (filter.gstProfileId) qs.set('gstProfileId', filter.gstProfileId);
+    if (filter.refresh) qs.set('refresh', 'true');
+    const q = qs.toString();
+    return apiClient(`/admin/tax/audit-readiness${q ? `?${q}` : ''}`);
+  }
+
+  // Phase 163 (#16) — readiness trend history (snapshots from the cron).
+  getAuditReadinessHistory(
+    days = 30,
+  ): Promise<ApiResponse<{ items: AuditReadinessSnapshot[] }>> {
+    return apiClient(`/admin/tax/audit-readiness/history?days=${days}`);
+  }
+
+  // Phase 164 (#11) — admin credit-note register.
+  listCreditNotes(
+    filter: { filingPeriod?: string; sellerId?: string; returnId?: string; status?: string; limit?: number } = {},
+  ): Promise<ApiResponse<{ items: CreditNoteRow[] }>> {
+    const qs = new URLSearchParams();
+    if (filter.filingPeriod) qs.set('filingPeriod', filter.filingPeriod);
+    if (filter.sellerId) qs.set('sellerId', filter.sellerId);
+    if (filter.returnId) qs.set('returnId', filter.returnId);
+    if (filter.status) qs.set('status', filter.status);
+    if (filter.limit) qs.set('limit', String(filter.limit));
+    const q = qs.toString();
+    return apiClient(`/admin/tax/credit-notes${q ? `?${q}` : ''}`);
   }
 
   getGstr8Summary(
@@ -85,24 +193,68 @@ class AdminTaxService {
   }
 
   // Phase 159z (audit #6) — ARN required on mark-filed.
+  // Phase 160 (audit B4 / #4) — response now includes `skipped`.
   markFiled(
     ledgerIds: string[],
     nicArn: string,
-  ): Promise<ApiResponse<{ flipped: number; requested: number; nicArn: string }>> {
+  ): Promise<
+    ApiResponse<{
+      flipped: number;
+      requested: number;
+      nicArn: string;
+      skipped: TcsSkippedRow[];
+    }>
+  > {
     return apiClient('/admin/tax/tcs/mark-filed', {
       method: 'POST',
       body: JSON.stringify({ ledgerIds, nicArn }),
     });
   }
 
+  // Phase 160 (audit #11) — optional paymentProofFileId; (#4) skipped rows.
   markPaid(
     ledgerIds: string[],
     paymentReference: string,
-  ): Promise<ApiResponse<{ flipped: number; requested: number }>> {
+    paymentProofFileId?: string,
+  ): Promise<
+    ApiResponse<{ flipped: number; requested: number; skipped: TcsSkippedRow[] }>
+  > {
     return apiClient('/admin/tax/tcs/mark-paid', {
       method: 'POST',
-      body: JSON.stringify({ ledgerIds, paymentReference }),
+      body: JSON.stringify({
+        ledgerIds,
+        paymentReference,
+        ...(paymentProofFileId ? { paymentProofFileId } : {}),
+      }),
     });
+  }
+
+  // Phase 160 (§52 lifecycle audit B1 / #12) — terminal stage: furnish
+  // the §52(5) TCS certificates. Per-row certificate numbers returned.
+  markCertificatesIssued(
+    ledgerIds: string[],
+    certificateNumberPrefix?: string,
+  ): Promise<
+    ApiResponse<{
+      flipped: number;
+      requested: number;
+      certificateNumbers: Record<string, string>;
+      skipped: TcsSkippedRow[];
+    }>
+  > {
+    return apiClient('/admin/tax/tcs/mark-certificates-issued', {
+      method: 'POST',
+      body: JSON.stringify({
+        ledgerIds,
+        ...(certificateNumberPrefix ? { certificateNumberPrefix } : {}),
+      }),
+    });
+  }
+
+  // Phase 160 — §52(5) TCS certificate HTML per ledger row. The browser
+  // opens this and the admin uses Print → Save as PDF. Per-ledger-row.
+  tcsCertificateHtmlUrl(ledgerId: string): string {
+    return `/api/v1/admin/tax/tcs/certificate/${encodeURIComponent(ledgerId)}.html`;
   }
 
   // Phase 159z (audit #10) — correction flow. UI surfaces a per-row
@@ -381,33 +533,80 @@ class AdminTaxService {
   }
 
   // Phase 28+ — marketplace's OWN GSTR-1 commission section (SAC 9985).
-  // Aggregates per (seller GSTIN, period); admin imports into the
-  // marketplace's GSTR-1 filing alongside the per-seller §4 / §7
-  // sections.
+  // Phase 159aa rewrite: per-invoice §4 B2B + §7 B2C bucket + §9B CDNR.
+  // Server resolves the operator GSTIN from PlatformGstProfile; UI
+  // never passes it as a query param.
   marketplaceCommissionGstr1CsvUrl(filingPeriod: string): string {
     return `/api/v1/admin/tax/reports/marketplace-commission-gstr1.csv?filingPeriod=${encodeURIComponent(filingPeriod)}`;
   }
+  async marketplaceCommissionGstr1Json(filingPeriod: string): Promise<void> {
+    const res = await apiClient<{
+      gstin: string;
+      ret_period: string;
+      schema_version: string;
+      b2b: unknown[];
+      b2cs: unknown[];
+      cdnr: unknown[];
+      warnings: string[];
+      totals: { total_taxable_in_paise: string; total_gst_in_paise: string };
+    }>(
+      `/admin/tax/reports/marketplace-commission-gstr1.json?filingPeriod=${encodeURIComponent(filingPeriod)}`,
+    );
+    if (!res?.success || !res.data) {
+      throw new Error(res?.message ?? 'Marketplace GSTR-1 JSON download failed');
+    }
+    const blob = new Blob([JSON.stringify(res.data, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `marketplace-commission-gstr1-${filingPeriod}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+  marketplaceCommissionGstr1Summary(filingPeriod: string) {
+    return apiClient<MarketplaceCommissionGstr1Summary>(
+      `/admin/tax/reports/marketplace-commission-gstr1/summary?filingPeriod=${encodeURIComponent(filingPeriod)}`,
+    );
+  }
 
-  setSeller194oExemption(sellerId: string, exempt: boolean, reason?: string) {
+  // Phase 161 — `reason` is now REQUIRED (≥8 chars) for BOTH grant and revoke
+  // (CBIC attestation basis / revoke reason). effectiveFrom defaults to now
+  // server-side; effectiveTo is optional (auto-expiry / annual revalidation).
+  setSeller194oExemption(
+    sellerId: string,
+    exempt: boolean,
+    reason: string,
+    opts: { effectiveFrom?: string; effectiveTo?: string } = {},
+  ) {
     return apiClient<{
       id: string;
       is194OExempt: boolean;
       exempt194OReason: string | null;
       exempt194OAttestedBy: string | null;
       exempt194OAttestedAt: string | null;
+      exempt194OEffectiveFrom?: string | null;
+      exempt194OEffectiveTo?: string | null;
+      exempt194ORevokedBy?: string | null;
     }>(`/admin/tax/sellers/${sellerId}/194o-exempt`, {
       method: 'POST',
-      body: JSON.stringify({ exempt, reason }),
+      body: JSON.stringify({ exempt, reason, ...opts }),
     });
   }
 
-  // ── Phase 37 — HSN master CRUD ────────────────────────────────
-  listHsn(opts: { search?: string; activeOnly?: boolean } = {}) {
+  // ── Phase 37 — HSN master CRUD (Phase 161: paginated + attribution) ──
+  listHsn(opts: { search?: string; activeOnly?: boolean; page?: number; limit?: number } = {}) {
     const qs = new URLSearchParams();
     if (opts.search) qs.set('search', opts.search);
     if (opts.activeOnly) qs.set('activeOnly', 'true');
+    if (opts.page) qs.set('page', String(opts.page));
+    if (opts.limit) qs.set('limit', String(opts.limit));
     const q = qs.toString();
-    return apiClient<HsnMasterItem[]>(`/admin/tax/hsn${q ? `?${q}` : ''}`);
+    // Phase 161 #9 — the endpoint now returns a paginated envelope.
+    return apiClient<HsnMasterPage>(`/admin/tax/hsn${q ? `?${q}` : ''}`);
   }
   createHsn(input: {
     hsnCode: string;
@@ -430,7 +629,13 @@ class AdminTaxService {
       defaultUqcCode?: string | null;
       categoryHint?: string | null;
       isActive?: boolean;
-      effectiveTo?: string | null;
+      // Phase 161 #11 — required by the API when deactivating.
+      deactivationReason?: string;
+      // Phase 161 #5 — override the live-reference guard.
+      force?: boolean;
+      // Phase 161 #12 — optimistic-concurrency token.
+      expectedVersion?: number;
+      // NB: effectiveTo is no longer accepted here (#10) — use closeHsnWindow.
     },
   ) {
     return apiClient<HsnMasterItem>(`/admin/tax/hsn/${id}`, {
@@ -438,14 +643,27 @@ class AdminTaxService {
       body: JSON.stringify(input),
     });
   }
+  // Phase 161 #10 — the only path that adjusts an effective window.
+  closeHsnWindow(
+    id: string,
+    input: { effectiveTo: string | null; reason?: string; expectedVersion?: number },
+  ) {
+    return apiClient<HsnMasterItem>(`/admin/tax/hsn/${id}/close-window`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
 
-  // ── Phase 37 — UQC master CRUD ────────────────────────────────
-  listUqc(opts: { search?: string; activeOnly?: boolean } = {}) {
+  // ── Phase 37 — UQC master CRUD (Phase 161: paginated + attribution) ──
+  listUqc(opts: { search?: string; activeOnly?: boolean; page?: number; limit?: number } = {}) {
     const qs = new URLSearchParams();
     if (opts.search) qs.set('search', opts.search);
     if (opts.activeOnly) qs.set('activeOnly', 'true');
+    if (opts.page) qs.set('page', String(opts.page));
+    if (opts.limit) qs.set('limit', String(opts.limit));
     const q = qs.toString();
-    return apiClient<UqcMasterItem[]>(`/admin/tax/uqc${q ? `?${q}` : ''}`);
+    // Phase 161 #8 — the endpoint now returns a paginated envelope.
+    return apiClient<UqcMasterPage>(`/admin/tax/uqc${q ? `?${q}` : ''}`);
   }
   createUqc(input: { code: string; description: string }) {
     return apiClient<UqcMasterItem>('/admin/tax/uqc', {
@@ -453,9 +671,25 @@ class AdminTaxService {
       body: JSON.stringify(input),
     });
   }
+  // Phase 161 #14 — bulk import.
+  bulkCreateUqc(rows: Array<{ code: string; description: string }>) {
+    return apiClient<{ requested: number; inserted: number; skipped: number }>(
+      '/admin/tax/uqc/bulk',
+      { method: 'POST', body: JSON.stringify({ rows }) },
+    );
+  }
   updateUqc(
     id: string,
-    input: { description?: string; isActive?: boolean },
+    input: {
+      description?: string;
+      isActive?: boolean;
+      // Phase 161 #11 — required by the API when deactivating.
+      deactivationReason?: string;
+      // Phase 161 #5 — override the reference guard.
+      force?: boolean;
+      // Phase 161 #9 — optimistic-concurrency token.
+      expectedVersion?: number;
+    },
   ) {
     return apiClient<UqcMasterItem>(`/admin/tax/uqc/${id}`, {
       method: 'PATCH',
@@ -499,6 +733,14 @@ class AdminTaxService {
       registrationType?: string;
       panNumber?: string | null;
       isActive?: boolean;
+      // Phase 161 #17 — promote to default in the same call (needs reason).
+      isDefault?: boolean;
+      // Phase 161 #10 — required by the API when deactivating.
+      deactivationReason?: string;
+      // Phase 161 #11 — required by the API when promoting to default.
+      setDefaultReason?: string;
+      // Phase 161 #12 — optimistic-concurrency token.
+      expectedVersion?: number;
     },
   ) {
     return apiClient<PlatformGstProfileItem>(`/admin/tax/platform-gst/${id}`, {
@@ -506,12 +748,56 @@ class AdminTaxService {
       body: JSON.stringify(input),
     });
   }
-  setDefaultPlatformGst(id: string) {
+  // Phase 161 #11 — switching the default platform GSTIN requires a reason.
+  setDefaultPlatformGst(id: string, reason: string) {
     return apiClient<PlatformGstProfileItem>(
       `/admin/tax/platform-gst/${id}/set-default`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify({ reason }) },
     );
   }
+}
+
+// Phase 159aa — Marketplace commission GSTR-1 summary shape (B2B/B2C/CDNR
+// counts + totals + drift warnings + first-25-row samples for preview).
+export interface MarketplaceCommissionGstr1Summary {
+  filingPeriod: string;
+  supplierGstin: string;
+  totals: {
+    b2bInvoiceCount: number;
+    b2cBucketCount: number;
+    creditNoteCount: number;
+    totalTaxableInPaise: string;
+    totalGstInPaise: string;
+  };
+  warnings: string[];
+  sample: {
+    b2b: Array<{
+      invoiceNumber: string;
+      invoiceDate: string;
+      recipientGstin: string;
+      recipientLegalName: string;
+      placeOfSupplyStateCode: string;
+      commissionInPaise: string;
+      totalGstInPaise: string;
+      taxSplit: 'CGST_SGST' | 'IGST';
+      irn: string | null;
+    }>;
+    b2cs: Array<{
+      placeOfSupplyStateCode: string;
+      rateBps: number;
+      commissionInPaise: string;
+      totalGstInPaise: string;
+      taxSplit: 'CGST_SGST' | 'IGST';
+      settlementCount: number;
+    }>;
+    cdnr: Array<{
+      creditNoteNumber: string;
+      originalInvoiceNumber: string;
+      recipientGstin: string;
+      commissionInPaise: string;
+      totalGstInPaise: string;
+    }>;
+  };
 }
 
 export interface PlatformGstProfileItem {
@@ -521,11 +807,17 @@ export interface PlatformGstProfileItem {
   registeredAddressJson: unknown;
   gstStateCode: string;
   registrationType: string;
-  panNumber: string | null;
+  // Phase 161 #7 — full PAN is no longer returned by the API; only the last 4.
   panLast4: string | null;
   panVerified: boolean;
   isDefault: boolean;
   isActive: boolean;
+  // Phase 161 — attribution + OCC + reason trail.
+  version?: number;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  deactivationReason?: string | null;
+  setDefaultReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -545,8 +837,22 @@ export interface UqcMasterItem {
   code: string;
   description: string;
   isActive: boolean;
+  // Phase 161 — attribution + OCC + deactivation trail.
+  version?: number;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  deactivationReason?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Phase 161 #8 — paginated list envelope.
+export interface UqcMasterPage {
+  items: UqcMasterItem[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
 }
 
 export interface HsnMasterItem {
@@ -560,8 +866,22 @@ export interface HsnMasterItem {
   isActive: boolean;
   effectiveFrom: string;
   effectiveTo: string | null;
+  // Phase 161 — attribution + OCC + deactivation trail.
+  version?: number;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  deactivationReason?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// Phase 161 #9 — paginated list envelope.
+export interface HsnMasterPage {
+  items: HsnMasterItem[];
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
 }
 
 export interface TimebarReviewItem {
@@ -694,6 +1014,13 @@ export interface SellerGstinItem {
   legalName: string;
   isPrimary: boolean;
   registrationType: string;
+  // Phase 161 — authoritative, persisted verification state (was derivable
+  // only from verifiedAt, which used to be set even on a FAILED check).
+  isVerified: boolean;
+  legalNameMismatch: boolean;
+  gstLegalName?: string | null;
+  gstnPortalStatus?: string | null;
+  lastCheckedAt?: string | null;
   verifiedAt: string | null;
   verifiedBy: string | null;
   verificationNotes: string | null;

@@ -71,3 +71,13 @@
   .rail::-webkit-scrollbar { display: none; }
   .rail > * { @apply snap-start shrink-0; }
 }
+
+/* Phase 196 (#2) — CartDrawer slide-in + backdrop fade. */
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

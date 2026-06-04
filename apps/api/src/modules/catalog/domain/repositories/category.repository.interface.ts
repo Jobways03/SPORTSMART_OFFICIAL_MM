@@ -30,7 +30,7 @@ export interface ICategoryRepository {
    * children + products counts inside the same tx as the delete to
    * close the race window where a child gets added between the
    * "is it empty?" check and the actual delete. Returns the deleted
-   * row so the caller can fire Cloudinary cleanup on imageUrl /
+   * row so the caller can fire media cleanup on imageUrl /
    * bannerUrl asset publicIds.
    */
   deleteTransactional(id: string): Promise<{ imageUrl: string | null; bannerUrl: string | null } | null>;

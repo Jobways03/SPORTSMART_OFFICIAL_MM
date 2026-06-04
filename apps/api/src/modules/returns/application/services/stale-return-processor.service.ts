@@ -1,17 +1,12 @@
-import {
-  Injectable,
-  OnModuleInit,
-  OnModuleDestroy,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
-import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
+import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { isTransitionAllowed } from '../../../../core/fsm/status-transitions';
-
-const LOCK_KEY = 'lock:stale-return-processor';
-const LOCK_TTL = 120;
 
 /**
  * Background processor that handles returns stuck in intermediate states.
@@ -31,93 +26,155 @@ const LOCK_TTL = 120;
  * "Escalate" = publish an event that the admin notification handler catches.
  * "Auto-close" = move to COMPLETED status.
  * "Auto-cancel" = move to CANCELLED status.
+ *
+ * Phase 214 (#7) — migrated from the legacy `OnModuleInit` + `setInterval`
+ * + unfenced `redis.acquireLock/releaseLock` loop (the last returns cron
+ * still on that pattern, with no observability) to the canonical cron shape
+ * used everywhere else in this module (see seller-response-sweeper.cron.ts /
+ * refund-status-poller.cron.ts):
+ *
+ *   • `@Cron(EVERY_HOUR)` — equivalent cadence to the old default
+ *     RETURN_STALE_CHECK_INTERVAL_MINUTES=60; flag-gated on
+ *     RETURN_STALE_DAYS (<= 0 disables, unchanged contract).
+ *   • `LeaderElectedCron.run(...)` — fenced (Lua-CAS) cluster lock so N
+ *     replicas don't all scan the same rows; replaces the raw lock pair
+ *     whose TTL-expiry race could let two replicas run concurrently.
+ *   • `CronInstrumentationService.wrap(...)` — one cron_runs row + Prom
+ *     metrics per tick (counts surfaced in the `result` JSON).
+ *   • Best-effort `AuditPublicFacade` summary row per tick (one row, OUTSIDE
+ *     the per-row transactions, so an audit blip never aborts the sweep).
+ *   • Each per-row status flip + status_history breadcrumb now commits in a
+ *     single `$transaction` so a crash between them can't leave a CANCELLED /
+ *     COMPLETED row with no history line.
  */
 @Injectable()
-export class StaleReturnProcessorService
-  implements OnModuleInit, OnModuleDestroy
-{
+export class StaleReturnProcessorService {
   private readonly logger = new Logger(StaleReturnProcessorService.name);
-  private tickInterval: ReturnType<typeof setInterval> | null = null;
   private readonly staleDays: number;
-  private readonly checkIntervalMs: number;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
     private readonly envService: EnvService,
     private readonly eventBus: EventBusService,
+    private readonly leader: LeaderElectedCron,
+    private readonly instrumentation: CronInstrumentationService,
+    private readonly audit: AuditPublicFacade,
   ) {
     this.staleDays = this.envService.getNumber('RETURN_STALE_DAYS', 30);
-    this.checkIntervalMs =
-      this.envService.getNumber(
-        'RETURN_STALE_CHECK_INTERVAL_MINUTES',
-        60,
-      ) * 60_000;
   }
 
-  onModuleInit() {
-    if (this.staleDays <= 0) {
-      this.logger.log('Stale-return processor disabled (RETURN_STALE_DAYS=0)');
+  /**
+   * Disabled when RETURN_STALE_DAYS <= 0 (preserves the old onModuleInit
+   * contract — setting it to 0 turned the processor off without a code
+   * change). The @Cron decorator still registers on every replica, but a
+   * disabled tick returns immediately before acquiring the leader lock.
+   */
+  enabled(): boolean {
+    return this.staleDays > 0;
+  }
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async run(): Promise<void> {
+    if (!this.enabled()) {
+      this.logger.debug(
+        'Stale-return processor disabled (RETURN_STALE_DAYS <= 0); tick skipped',
+      );
       return;
     }
-    this.tickInterval = setInterval(() => {
-      this.tick().catch((err) =>
-        this.logger.error(
-          `Stale-return tick crashed: ${(err as Error).message}`,
-        ),
-      );
-    }, this.checkIntervalMs);
-    this.logger.log(
-      `Stale-return processor started (stale=${this.staleDays}d, check every ${this.checkIntervalMs / 60_000}min)`,
-    );
+    // ttl = 2 * tick interval (1h) per LeaderElectedCron's rule of thumb.
+    await this.leader.run('return-stale-processor', 2 * 60 * 60, async () => {
+      await this.instrumentation.wrap('returns.stale_processor', async () => {
+        return this.tick();
+      });
+    });
   }
 
-  onModuleDestroy() {
-    if (this.tickInterval) clearInterval(this.tickInterval);
-  }
+  /**
+   * One sweep. Returns the per-tick counts so CronInstrumentation captures
+   * them in the cron_runs `result` JSON and the audit summary row mirrors
+   * them. Public so it stays manually tick-able from tests.
+   */
+  async tick(): Promise<{
+    cancelled: number;
+    closed: number;
+    escalated: number;
+    exhausted: number;
+  }> {
+    const cutoff = new Date(Date.now() - this.staleDays * 24 * 60 * 60 * 1000);
 
-  async tick(): Promise<void> {
-    const lockAcquired = await this.redis.acquireLock(LOCK_KEY, LOCK_TTL);
-    if (!lockAcquired) return;
+    // ── Auto-cancel: REQUESTED / APPROVED that went nowhere ──
+    const cancelled = await this.autoCancelStale(cutoff, [
+      'REQUESTED',
+      'APPROVED',
+    ]);
 
-    try {
-      const cutoff = new Date(
-        Date.now() - this.staleDays * 24 * 60 * 60 * 1000,
-      );
+    // ── Auto-close: REFUNDED / QC_REJECTED that were never formally closed ──
+    const closed = await this.autoCloseStale(cutoff, ['REFUNDED', 'QC_REJECTED']);
 
-      // ── Auto-cancel: REQUESTED / APPROVED that went nowhere ──
-      await this.autoCancelStale(cutoff, ['REQUESTED', 'APPROVED']);
+    // ── Escalate: intermediate states that need human attention ──
+    const escalated = await this.escalateStale(cutoff, [
+      'PICKUP_SCHEDULED',
+      'IN_TRANSIT',
+      'RECEIVED',
+    ]);
 
-      // ── Auto-close: REFUNDED / QC_REJECTED that were never formally closed ──
-      await this.autoCloseStale(cutoff, ['REFUNDED', 'QC_REJECTED']);
+    // ── Escalate exhausted refund retries ──
+    const exhausted = await this.escalateExhaustedRefunds(cutoff);
 
-      // ── Escalate: intermediate states that need human attention ──
-      await this.escalateStale(cutoff, [
-        'PICKUP_SCHEDULED',
-        'IN_TRANSIT',
-        'RECEIVED',
-      ]);
+    const counts = { cancelled, closed, escalated, exhausted };
 
-      // ── Escalate exhausted refund retries ──
-      await this.escalateExhaustedRefunds(cutoff);
-    } finally {
-      await this.redis.releaseLock(LOCK_KEY);
+    // Phase 214 (#7) — one best-effort summary audit row per tick. Written
+    // OUTSIDE every per-row transaction so a logging failure can never abort
+    // (or roll back) the sweep. We only bother when something actually moved.
+    if (cancelled + closed + escalated + exhausted > 0) {
+      this.audit
+        .writeAuditLog({
+          actorType: 'SYSTEM',
+          actorRole: 'SYSTEM',
+          action: 'RETURN_STALE_PROCESSED',
+          module: 'returns',
+          resource: 'return',
+          resourceId: 'stale-return-processor',
+          metadata: { ...counts, staleDays: this.staleDays },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `[stale-return-processor] summary audit write failed: ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          ),
+        );
     }
+
+    return counts;
+  }
+
+  /** Env-tunable per-status batch caps (default 50; exhausted-refund default 20). */
+  private batchSize(): number {
+    return this.envService.getNumber('RETURN_STALE_BATCH_SIZE' as any, 50);
+  }
+
+  private exhaustedBatchSize(): number {
+    return this.envService.getNumber(
+      'RETURN_STALE_EXHAUSTED_BATCH_SIZE' as any,
+      20,
+    );
   }
 
   private async autoCancelStale(
     cutoff: Date,
     statuses: string[],
-  ): Promise<void> {
+  ): Promise<number> {
     const stale = await this.prisma.return.findMany({
       where: {
         status: { in: statuses as any },
         updatedAt: { lt: cutoff },
       },
       select: { id: true, returnNumber: true, status: true },
-      take: 50,
+      take: this.batchSize(),
     });
 
+    let cancelled = 0;
     for (const ret of stale) {
       try {
         // Phase 0 (PR 0.8) — guard the transition + CAS on status so a
@@ -131,26 +188,35 @@ export class StaleReturnProcessorService
           );
           continue;
         }
-        const result = await this.prisma.return.updateMany({
-          where: { id: ret.id, status: ret.status as any },
-          data: { status: 'CANCELLED', closedAt: new Date() },
+        // Phase 214 (#7) — the CAS flip + history breadcrumb commit
+        // atomically. Pre-214 a crash between them could leave a CANCELLED
+        // row with no history line (or vice versa). The transaction returns
+        // the claim count so we only count rows we actually moved.
+        const moved = await this.prisma.$transaction(async (tx) => {
+          const result = await tx.return.updateMany({
+            where: { id: ret.id, status: ret.status as any },
+            data: { status: 'CANCELLED', closedAt: new Date() },
+          });
+          if (result.count === 0) return false;
+          await tx.returnStatusHistory.create({
+            data: {
+              returnId: ret.id,
+              fromStatus: ret.status,
+              toStatus: 'CANCELLED',
+              changedBy: 'SYSTEM',
+              changedById: 'stale-return-processor',
+              notes: `Auto-cancelled — stale in ${ret.status} for ${this.staleDays}+ days`,
+            },
+          });
+          return true;
         });
-        if (result.count === 0) {
+        if (!moved) {
           this.logger.log(
             `Skipped auto-cancel for ${ret.returnNumber}: status changed under us (was ${ret.status})`,
           );
           continue;
         }
-        await this.prisma.returnStatusHistory.create({
-          data: {
-            returnId: ret.id,
-            fromStatus: ret.status,
-            toStatus: 'CANCELLED',
-            changedBy: 'SYSTEM',
-            changedById: 'stale-return-processor',
-            notes: `Auto-cancelled — stale in ${ret.status} for ${this.staleDays}+ days`,
-          },
-        });
+        cancelled++;
         this.logger.log(
           `Auto-cancelled stale return ${ret.returnNumber} (was ${ret.status})`,
         );
@@ -160,21 +226,23 @@ export class StaleReturnProcessorService
         );
       }
     }
+    return cancelled;
   }
 
   private async autoCloseStale(
     cutoff: Date,
     statuses: string[],
-  ): Promise<void> {
+  ): Promise<number> {
     const stale = await this.prisma.return.findMany({
       where: {
         status: { in: statuses as any },
         updatedAt: { lt: cutoff },
       },
       select: { id: true, returnNumber: true, status: true },
-      take: 50,
+      take: this.batchSize(),
     });
 
+    let closed = 0;
     for (const ret of stale) {
       try {
         // Phase 0 (PR 0.8) — same CAS-on-status pattern as autoCancelStale.
@@ -195,35 +263,42 @@ export class StaleReturnProcessorService
         // when added) fire for stale-closed rows too.
         const now = new Date();
         const closeReason = `Auto-closed — stale in ${ret.status} for ${this.staleDays}+ days`;
-        const result = await this.prisma.return.updateMany({
-          where: { id: ret.id, status: ret.status as any },
-          data: {
-            status: 'COMPLETED' as any,
-            closedAt: now,
-            closedBy: 'stale-return-processor',
-            closedByActorType: 'SYSTEM',
-            closeReason,
-          } as any,
+        // Phase 214 (#7) — CAS flip + history breadcrumb in one transaction.
+        const moved = await this.prisma.$transaction(async (tx) => {
+          const result = await tx.return.updateMany({
+            where: { id: ret.id, status: ret.status as any },
+            data: {
+              status: 'COMPLETED' as any,
+              closedAt: now,
+              closedBy: 'stale-return-processor',
+              closedByActorType: 'SYSTEM',
+              closeReason,
+            } as any,
+          });
+          if (result.count === 0) return false;
+          await tx.returnStatusHistory.create({
+            data: {
+              returnId: ret.id,
+              fromStatus: ret.status,
+              toStatus: 'COMPLETED',
+              changedBy: 'SYSTEM',
+              changedById: 'stale-return-processor',
+              notes: closeReason,
+            },
+          });
+          return true;
         });
-        if (result.count === 0) {
+        if (!moved) {
           this.logger.log(
             `Skipped auto-close for ${ret.returnNumber}: status changed under us (was ${ret.status})`,
           );
           continue;
         }
-        await this.prisma.returnStatusHistory.create({
-          data: {
-            returnId: ret.id,
-            fromStatus: ret.status,
-            toStatus: 'COMPLETED',
-            changedBy: 'SYSTEM',
-            changedById: 'stale-return-processor',
-            notes: closeReason,
-          },
-        });
+        closed++;
         // Publish the same event the service path emits so any
         // downstream subscribers (customer notification, metrics)
-        // see stale-closed returns too.
+        // see stale-closed returns too. Best-effort + OUTSIDE the tx —
+        // a publish failure must not roll back the close.
         try {
           await this.eventBus.publish({
             eventName: 'returns.return.closed',
@@ -256,12 +331,13 @@ export class StaleReturnProcessorService
         );
       }
     }
+    return closed;
   }
 
   private async escalateStale(
     cutoff: Date,
     statuses: string[],
-  ): Promise<void> {
+  ): Promise<number> {
     const stale = await this.prisma.return.findMany({
       where: {
         status: { in: statuses as any },
@@ -274,9 +350,10 @@ export class StaleReturnProcessorService
         masterOrderId: true,
         customerId: true,
       },
-      take: 50,
+      take: this.batchSize(),
     });
 
+    let escalated = 0;
     for (const ret of stale) {
       try {
         this.eventBus
@@ -294,6 +371,7 @@ export class StaleReturnProcessorService
             },
           })
           .catch(() => {});
+        escalated++;
         this.logger.warn(
           `Escalated stale return ${ret.returnNumber} (${ret.status} for ${this.staleDays}+ days)`,
         );
@@ -303,9 +381,10 @@ export class StaleReturnProcessorService
         );
       }
     }
+    return escalated;
   }
 
-  private async escalateExhaustedRefunds(cutoff: Date): Promise<void> {
+  private async escalateExhaustedRefunds(cutoff: Date): Promise<number> {
     const exhausted = await this.prisma.return.findMany({
       where: {
         status: 'REFUND_PROCESSING',
@@ -319,9 +398,10 @@ export class StaleReturnProcessorService
         refundAttempts: true,
         refundFailureReason: true,
       },
-      take: 20,
+      take: this.exhaustedBatchSize(),
     });
 
+    let count = 0;
     for (const ret of exhausted) {
       try {
         this.eventBus
@@ -339,6 +419,7 @@ export class StaleReturnProcessorService
             },
           })
           .catch(() => {});
+        count++;
         this.logger.warn(
           `Escalated exhausted refund for ${ret.returnNumber} (${ret.refundAttempts} attempts, last: ${ret.refundFailureReason})`,
         );
@@ -348,5 +429,6 @@ export class StaleReturnProcessorService
         );
       }
     }
+    return count;
   }
 }

@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AdminAuthGuard, PermissionsGuard } from '../guards';
 import { Permissions } from '../decorators/permissions.decorator';
 import { BadRequestAppException } from '../exceptions';
@@ -28,6 +29,9 @@ const ALLOWED_RESOURCES: QueueResource[] = ['dispute', 'return', 'ticket'];
 @ApiTags('Admin Queues')
 @Controller('admin/queues')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
+// Generous ceiling — the queue UI refreshes/polls — but still bounds a
+// scripted scrape of the full cross-domain case backlog.
+@Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class AdminQueuesController {
   constructor(private readonly queues: QueueService) {}
 

@@ -19,6 +19,7 @@ import {
   adminActivityService,
   ActivityItem,
 } from '@/services/admin-activity.service';
+import { RequirePermission } from '@/lib/permissions';
 
 const ACTOR_TYPES: AccessActorType[] = ['CUSTOMER', 'ADMIN', 'SELLER', 'FRANCHISE', 'AFFILIATE'];
 const KINDS: AccessEventKind[] = [
@@ -34,6 +35,17 @@ const TAB_LABEL: Record<Tab, string> = {
 };
 
 export default function AccessLogsPage() {
+  return (
+    <RequirePermission
+      anyOf={['audit.read']}
+      fallback={<div style={{ padding: 24 }}>Loading…</div>}
+    >
+      <AccessLogsInner />
+    </RequirePermission>
+  );
+}
+
+function AccessLogsInner() {
   const [tab, setTab] = useState<Tab>('spike');
 
   return (

@@ -13,7 +13,10 @@ export class ProductApprovedIndexHandler {
     private readonly openSearchAdapter: OpenSearchAdapter,
   ) {}
 
-  @OnEvent('catalog.product.approved')
+  // Phase 195 (#12) — was 'catalog.product.approved', an event NOBODY emits
+  // (the real one is 'catalog.listing.approved', admin-products.controller),
+  // so this handler never fired even once registered.
+  @OnEvent('catalog.listing.approved')
   async handleProductApproved(event: DomainEvent): Promise<void> {
     try {
       const { productId } = event.payload as any;
@@ -53,7 +56,10 @@ export class ProductApprovedIndexHandler {
     }
   }
 
-  @OnEvent('catalog.product.archived')
+  // Phase 195 (#12) — a rejected listing must drop out of the index. Was
+  // 'catalog.product.archived' (never emitted); the real removal trigger is
+  // 'catalog.listing.rejected' (admin-products.controller).
+  @OnEvent('catalog.listing.rejected')
   async handleProductArchived(event: DomainEvent): Promise<void> {
     try {
       const { productId } = event.payload as any;

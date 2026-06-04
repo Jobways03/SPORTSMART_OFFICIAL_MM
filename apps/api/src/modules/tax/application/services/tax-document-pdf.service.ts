@@ -108,8 +108,17 @@ export class TaxDocumentPdfService {
       contentType: 'text/html; charset=utf-8',
     });
 
-    const updated = await this.prisma.taxDocument.update({
-      where: { id: doc.id },
+    // CAS (Cluster E, CRITICAL): scope the status flip to the PDF
+    // sub-lifecycle states the cron actually feeds us (PDF_PENDING /
+    // PDF_FAILED). Pre-fix this was a plain `update` that wrote
+    // status='PDF_GENERATED' unconditionally — so if a concurrent
+    // credit-note flow flipped the row to PARTIALLY_REVERSED /
+    // FULLY_REVERSED between our findUnique above and this write, we
+    // clobbered a legal-reversal state with PDF_GENERATED (a
+    // transition the FSM forbids — see tax-document-state-machine).
+    // The conditional write loses the race instead of corrupting it.
+    const cas = await this.prisma.taxDocument.updateMany({
+      where: { id: doc.id, status: { in: ['PDF_PENDING', 'PDF_FAILED'] } },
       data: {
         pdfUrl: result.publicUrl,
         pdfStoragePath: result.storagePath,
@@ -119,6 +128,25 @@ export class TaxDocumentPdfService {
         pdfFailureReason: null,
         status: 'PDF_GENERATED',
       },
+    });
+    if (cas.count === 0) {
+      // The row left the PDF sub-lifecycle under us (reversed /
+      // superseded). The uploaded artifact is harmless; the document's
+      // current status is the source of truth. Surface the current row
+      // so the cron records a no-op rather than a fake success.
+      const current = await this.prisma.taxDocument.findUnique({
+        where: { id: doc.id },
+      });
+      this.logger.warn(
+        `PDF render for ${doc.documentNumber} skipped status flip: row is ` +
+          `now ${current?.status ?? 'GONE'} (not PDF_PENDING/PDF_FAILED).`,
+      );
+      if (!current) throw new PdfDocumentNotFoundError(doc.id);
+      return current;
+    }
+
+    const updated = await this.prisma.taxDocument.findUniqueOrThrow({
+      where: { id: doc.id },
     });
     this.logger.log(
       `PDF rendered: ${doc.documentNumber} → ${result.storagePath} ` +
@@ -132,8 +160,17 @@ export class TaxDocumentPdfService {
     documentId: string;
     reason: string;
   }): Promise<TaxDocument> {
-    const updated = await this.prisma.taxDocument.update({
-      where: { id: args.documentId },
+    // CAS (Cluster E): same guard as renderAndUpload — only stamp a
+    // failure while the row is still in the PDF sub-lifecycle. If a
+    // concurrent reversal advanced it to PARTIALLY_REVERSED /
+    // FULLY_REVERSED, do NOT yank it back to PDF_FAILED (that is a
+    // forbidden transition and would resurrect a closed render queue
+    // entry on the next cron tick).
+    const cas = await this.prisma.taxDocument.updateMany({
+      where: {
+        id: args.documentId,
+        status: { in: ['PDF_PENDING', 'PDF_FAILED'] },
+      },
       data: {
         status: 'PDF_FAILED',
         pdfFailureReason: args.reason,
@@ -141,9 +178,19 @@ export class TaxDocumentPdfService {
         pdfRetryCount: { increment: 1 },
       },
     });
-    this.logger.warn(
-      `PDF render failed: ${updated.documentNumber} (attempt ${updated.pdfRetryCount}): ${args.reason}`,
-    );
+    const updated = await this.prisma.taxDocument.findUniqueOrThrow({
+      where: { id: args.documentId },
+    });
+    if (cas.count === 0) {
+      this.logger.warn(
+        `PDF render failed for ${updated.documentNumber} but row is now ` +
+          `${updated.status} (left PDF sub-lifecycle); not re-flagging PDF_FAILED.`,
+      );
+    } else {
+      this.logger.warn(
+        `PDF render failed: ${updated.documentNumber} (attempt ${updated.pdfRetryCount}): ${args.reason}`,
+      );
+    }
     return updated;
   }
 

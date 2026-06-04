@@ -22,7 +22,7 @@ interface MockOpts {
 }
 
 function makeSvc(opts: MockOpts = {}) {
-  const order = opts.order ?? {
+  const rawOrder = opts.order ?? {
     id: 'mo-1',
     customerId: 'c-1',
     totalAmount: 9900,
@@ -37,6 +37,9 @@ function makeSvc(opts: MockOpts = {}) {
     ],
     customer: { email: 'shopper@example.com' },
   };
+  // Phase 174 — scoreOrder guards on a scorable orderStatus; default the
+  // test orders to PLACED unless a spec overrides it.
+  const order = { orderStatus: 'PLACED', ...rawOrder };
 
   // Distinguish count calls by their WHERE shape.
   let cancellationCallSeen = false;
@@ -65,6 +68,7 @@ function makeSvc(opts: MockOpts = {}) {
 
   const masterOrderFindUnique = jest.fn().mockResolvedValue(order);
   const masterOrderUpdate = jest.fn().mockResolvedValue({});
+  const masterOrderUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const masterOrderFindMany = jest.fn().mockResolvedValue([]);
   const riskReasonDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
   const riskReasonCreateMany = jest.fn().mockResolvedValue({ count: 0 });
@@ -75,6 +79,7 @@ function makeSvc(opts: MockOpts = {}) {
       findUnique: masterOrderFindUnique,
       count: masterOrderCount,
       update: masterOrderUpdate,
+      updateMany: masterOrderUpdateMany,
       findMany: masterOrderFindMany,
     },
     orderRiskReason: {
@@ -84,7 +89,7 @@ function makeSvc(opts: MockOpts = {}) {
     orderRiskScoreHistory: { create: riskScoreHistoryCreate },
     $transaction: jest.fn(async (cb: any) =>
       cb({
-        masterOrder: { update: masterOrderUpdate },
+        masterOrder: { updateMany: masterOrderUpdateMany },
         orderRiskReason: {
           deleteMany: riskReasonDeleteMany,
           createMany: riskReasonCreateMany,
@@ -99,12 +104,18 @@ function makeSvc(opts: MockOpts = {}) {
   };
 
   const svc = new RiskScoringService(prisma, moneyDualWrite);
-  return { svc, masterOrderUpdate, riskReasonCreateMany, riskScoreHistoryCreate };
+  return {
+    svc,
+    masterOrderUpdate,
+    masterOrderUpdateMany,
+    riskReasonCreateMany,
+    riskScoreHistoryCreate,
+  };
 }
 
 describe('RiskScoringService (Phase 71 — risk hardening)', () => {
   it('Gap #8/#9/#10 — writes OrderRiskScoreHistory + stamps source/scoredBy/version on auto path', async () => {
-    const { svc, masterOrderUpdate, riskScoreHistoryCreate } = makeSvc();
+    const { svc, masterOrderUpdateMany, riskScoreHistoryCreate } = makeSvc();
     await svc.scoreOrder('mo-1');
     expect(riskScoreHistoryCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -116,7 +127,7 @@ describe('RiskScoringService (Phase 71 — risk hardening)', () => {
         }),
       }),
     );
-    expect(masterOrderUpdate).toHaveBeenCalledWith(
+    expect(masterOrderUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           verificationScoreSource: 'RULES',
@@ -128,9 +139,9 @@ describe('RiskScoringService (Phase 71 — risk hardening)', () => {
   });
 
   it('Gap #9 — manual rescore records source=MANUAL + scoredBy=adminId', async () => {
-    const { svc, masterOrderUpdate, riskScoreHistoryCreate } = makeSvc();
+    const { svc, masterOrderUpdateMany, riskScoreHistoryCreate } = makeSvc();
     await svc.rescore('mo-1', 'admin-42');
-    expect(masterOrderUpdate).toHaveBeenCalledWith(
+    expect(masterOrderUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           verificationScoreSource: 'MANUAL',

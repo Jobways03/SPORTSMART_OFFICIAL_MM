@@ -1,6 +1,6 @@
 // Phase 88 (2026-05-23) — Shipment Evidence Gap #9 / DPDP retention.
 //
-// Pre-Phase-88 shipment evidence lived in Cloudinary forever — no
+// Pre-Phase-88 shipment evidence lived in media forever — no
 // process pruned photos after the dispute window closed. DPDP §8(7)
 // requires "no longer than necessary" retention; the platform
 // defaults to 180 days post-delivery (configurable per policy).
@@ -10,7 +10,7 @@
 //      AND deleted_at IS NULL.
 //   2. Soft-delete each row (PURGED action in the audit chain) so the
 //      audit log preserves the lifecycle even after the asset is gone.
-//   3. TODO: hand off the Cloudinary publicId to the asset-GC queue
+//   3. TODO: hand off the media publicId to the asset-GC queue
 //      (separate cron deletes the underlying file). Out of scope for
 //      this cron — DB-side purge is the auditable boundary.
 //

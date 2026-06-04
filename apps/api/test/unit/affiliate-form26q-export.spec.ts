@@ -67,6 +67,19 @@ describe('AffiliatePayoutService.generateAffiliateForm26QCsv (Phase 159g)', () =
     expect(row).toContain('30/06/2026'); // challan date IST
   });
 
+  // Phase 160 (§194-O affiliate audit #16) — a REVERSED row must never reach
+  // the filing CSV (it's been corrected out).
+  it('excludes REVERSED rows from the filing query', async () => {
+    const svc = buildAffiliateSvc({ ledgerRows: [] });
+    await svc.generateAffiliateForm26QCsv('2026-Q1');
+    const findMany = (svc as any).prisma.affiliateTds194OLedger.findMany as jest.Mock;
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: { not: 'REVERSED' } }),
+      }),
+    );
+  });
+
   it('neutralises a formula-injection affiliate name', async () => {
     const svc = buildAffiliateSvc({
       ledgerRows: [{ ...LEDGER_ROW, affiliate: { id: 'a1', firstName: '=DANGER', lastName: '' } }],

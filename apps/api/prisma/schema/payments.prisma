@@ -11,6 +11,10 @@ enum PaymentAttemptKind {
   CAPTURE // capture an authorised payment
   VERIFY_SIGNATURE // server-side signature verify on success callback
   REFUND // request a refund through the gateway
+  // Phase 166 (Payment Status Poller audit #6) — the background poller's
+  // orphan-recovery GET to the gateway (fetchOrderPayments). Lets a forensic
+  // review reconstruct "did we poll this order, how often, with what result".
+  POLL_STATUS
 }
 
 enum PaymentAttemptStatus {
@@ -31,6 +35,44 @@ enum PaymentMismatchStatus {
   IN_REVIEW
   RESOLVED
   IGNORED
+}
+
+// Phase 169 (Payment Ops audit #13) — provenance of a mismatch alert, so a
+// forged/surprising alert can be traced to the exact code path that minted it.
+enum PaymentMismatchSource {
+  WEBHOOK
+  POLLER
+  CHECKOUT_VERIFY
+  RECONCILIATION
+  MANUAL
+  SYSTEM
+}
+
+// Phase 169 (Payment Ops audit #1/#2) — Razorpay payment-dispute (chargeback)
+// lifecycle. Mirrors Razorpay's dispute event flow:
+//   created → under_review → won | lost ; closed is terminal-any.
+enum ChargebackStatus {
+  OPEN // payment.dispute.created
+  UNDER_REVIEW // payment.dispute.under_review
+  WON // payment.dispute.won  — funds retained
+  LOST // payment.dispute.lost — funds debited, platform loss
+  CLOSED // payment.dispute.closed (no win/loss split supplied)
+}
+
+// Whether we have submitted contest evidence to the gateway yet.
+enum ChargebackEvidenceStatus {
+  NOT_REQUIRED // already WON/LOST/CLOSED on arrival
+  PENDING // contest window open, evidence not yet submitted
+  SUBMITTED // evidence pushed to the gateway
+  EXPIRED // dueDate passed without submission
+}
+
+// Settlement / finance impact of the disputed amount.
+enum ChargebackFinancialImpact {
+  HELD // gateway is holding the disputed amount on our settlement
+  RECOVERED // dispute WON — hold released back to us
+  LOST // dispute LOST — amount permanently debited
+  NONE
 }
 
 // Phase 70 (2026-05-22) — Phase 66 audit Gap #3 + Gap #10,
@@ -154,6 +196,14 @@ model PaymentAttempt {
   @@index([masterOrderId, kind, createdAt(sort: Desc)])
   @@index([providerPaymentId])
   @@index([status, createdAt(sort: Desc)])
+  // Phase 169 (Payment Ops audit, race section) — a partial unique on
+  // (masterOrderId, kind, attemptNumber) is created in the migration (Prisma
+  // can't express WHERE-NOT-NULL): two concurrent attempts for the same
+  // (order, kind) computed the same COUNT-based attemptNumber and inserted
+  // duplicates. Rows with a NULL masterOrderId (orphan attempts) are exempt.
+  // Phase 169 (#3) — failed-payments dashboard surface:
+  // `WHERE status='FAILURE' AND kind IN (...) ORDER BY created_at DESC`.
+  @@index([status, kind, createdAt(sort: Desc)])
   @@map("payment_attempts")
 }
 
@@ -164,6 +214,16 @@ model PaymentMismatchAlert {
   status   PaymentMismatchStatus @default(OPEN)
   // Optional severity — drives sort order in admin queue.
   severity Int                   @default(50)
+
+  // Phase 169 (Payment Ops audit #6-provider) — which PSP raised this. Assumed
+  // razorpay pre-169; explicit now so a second gateway can't be mis-attributed.
+  provider String @default("razorpay")
+
+  // Phase 169 (#13) — provenance: which code path minted this alert + the
+  // structured context (e.g. webhook event key, poller run id). Lets ops trace
+  // a forged/surprising alert back to its source without grepping logs.
+  sourceType    PaymentMismatchSource @default(SYSTEM) @map("source_type")
+  sourceContext Json?                 @map("source_context")
 
   // Linked context (any may be null for orphans).
   masterOrderId     String? @map("master_order_id")
@@ -189,4 +249,102 @@ model PaymentMismatchAlert {
   @@index([masterOrderId])
   @@index([providerPaymentId])
   @@map("payment_mismatch_alerts")
+}
+
+// Phase 169 (Payment Ops audit #1/#2) — Razorpay payment dispute / chargeback.
+//
+// Pre-169 the dashboard's "chargeback" pillar was entirely absent: Razorpay's
+// payment.dispute.* webhooks were silently 200-ack'd and dropped, so the
+// platform lost contestable disputes by default (evidence-response deadlines
+// invisible). One row per dispute, keyed on the gateway's dispute id; the
+// webhook upserts state transitions onto it. `dueDate` is Razorpay's
+// `respond_by` — the deadline the CHARGEBACK_EVIDENCE_DUE admin task chases.
+model Chargeback {
+  id String @id @default(uuid())
+
+  provider             String  @default("razorpay")
+  providerDisputeId    String  @unique @map("provider_dispute_id")
+  providerPaymentId    String? @map("provider_payment_id")
+
+  // Best-effort order/customer linkage (resolved from the payment; may be null).
+  masterOrderId String? @map("master_order_id")
+  orderNumber   String? @map("order_number")
+  customerId    String? @map("customer_id")
+
+  reasonCode String? @map("reason_code")
+  status     ChargebackStatus @default(OPEN)
+
+  // Disputed amount in paise (BigInt — high-value B2B safe).
+  amountInPaise BigInt @map("amount_in_paise")
+  currency      String @default("INR")
+
+  // Razorpay `respond_by` — the contest deadline (typically 7-14 days).
+  dueDate DateTime? @map("due_date")
+
+  evidenceStatus  ChargebackEvidenceStatus  @default(PENDING) @map("evidence_status")
+  financialImpact ChargebackFinancialImpact @default(HELD) @map("financial_impact")
+
+  // When evidence was submitted to the gateway + free-text submitter note.
+  evidenceSubmittedAt DateTime? @map("evidence_submitted_at")
+  evidenceSubmittedBy String?   @map("evidence_submitted_by")
+  evidenceNotes       String?   @map("evidence_notes") @db.Text
+
+  // Latest raw gateway payload (forensic record of the dispute entity).
+  rawPayload Json? @map("raw_payload")
+
+  // When the dispute reached a terminal status (WON/LOST/CLOSED).
+  resolvedAt DateTime? @map("resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, dueDate])
+  @@index([providerPaymentId])
+  @@index([masterOrderId])
+  @@index([evidenceStatus, dueDate])
+  @@map("chargebacks")
+}
+
+// Phase 165 (Razorpay Integration audit #3) — durable inbound-webhook
+// idempotency ledger. Pre-Phase-165 webhook dedup was Redis-only (SET NX,
+// 24h TTL); a Redis flush / outage within that window re-processed every
+// webhook (double order-confirmation / double stock-cancellation). This
+// table is the durable claim: the webhook handler inserts a row (eventKey
+// @unique) BEFORE running side-effects; a duplicate insert (P2002) means
+// the event was already claimed and is dropped. Redis remains the fast
+// first-line check; this is the correctness backstop that survives Redis.
+enum PaymentWebhookProcessingStatus {
+  PROCESSING // claimed, side-effects running
+  PROCESSED // side-effects completed (terminal success)
+  FAILED_PERMANENT // permanent error (kept claimed; gateway should stop)
+  IGNORED // acked with no order linkage / unsupported event
+}
+
+model PaymentWebhookEvent {
+  id String @id @default(uuid())
+
+  provider String @default("razorpay")
+  // The dedup discriminator: `${event}:${payment.id}` (mirrors the Redis key).
+  eventKey String @unique @map("event_key")
+  eventType String @map("event_type")
+  // Razorpay's own event id (X-Razorpay-Event-Id header) when present.
+  providerEventId String? @map("provider_event_id")
+  providerPaymentId String? @map("provider_payment_id")
+  masterOrderId    String? @map("master_order_id")
+
+  // sha-256 of the raw body — lets a forensic review prove the exact
+  // bytes processed without storing the (PII-bearing) full payload.
+  payloadSha256 String  @map("payload_sha256")
+  signature     String? @db.Text
+
+  processingStatus PaymentWebhookProcessingStatus @default(PROCESSING) @map("processing_status")
+  errorMessage     String?                        @db.Text @map("error_message")
+
+  receivedAt  DateTime  @default(now()) @map("received_at")
+  processedAt DateTime? @map("processed_at")
+
+  @@index([providerPaymentId])
+  @@index([masterOrderId])
+  @@index([eventType, receivedAt(sort: Desc)])
+  @@map("payment_webhook_events")
 }

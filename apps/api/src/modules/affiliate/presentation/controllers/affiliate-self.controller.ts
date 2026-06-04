@@ -23,7 +23,7 @@ import { AffiliateAuthGuard } from '../../../../core/guards';
 import { NotFoundAppException } from '../../../../core/exceptions';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
-import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AffiliateRegistrationService } from '../../application/services/affiliate-registration.service';
 import { AffiliateCommissionService } from '../../application/services/affiliate-commission.service';
@@ -58,21 +58,25 @@ export class AffiliateSelfController {
     private readonly commissionService: AffiliateCommissionService,
     private readonly kycService: AffiliateKycService,
     private readonly payoutService: AffiliatePayoutService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly prisma: PrismaService,
     private readonly audit: AuditPublicFacade,
   ) {}
 
   /**
-   * Affiliate-facing view of their own TDS records (Section 194H — 5%
-   * deducted on commission once cumulative payouts cross the per-FY
-   * threshold). One row per financial year. Mirrors the admin endpoint
-   * at `/admin/affiliates/reports/tds` but locked to the requester's
-   * own affiliateId so the affiliate can never see another affiliate's
-   * deductions.
+   * Affiliate-facing view of their own annual TDS records. The active
+   * regime is finance-configured (AffiliateSettings.tdsSection):
+   *   - §194-O (default): per-payout, PAN-aware — 1% with PAN on file,
+   *     5% without (§194-O(4)). Quarterly Form 16A available via
+   *     `/affiliate/me/tax/summary` + `/tax/:quarter/form-16a`.
+   *   - §194H: 10% on the FY cumulative slice above ₹15,000 (20% if no
+   *     PAN, §206AA).
+   * One row per financial year. Locked to the requester's own
+   * affiliateId so an affiliate can never see another's deductions.
    *
-   * Cumulative gross / TDS / net are stored in paise; we let the
-   * frontend format (BigInt-safe).
+   * (Per-quarter §194-O detail lives on the tax-summary endpoint below;
+   * this annual roll-up is the FY cumulative.) Amounts are paise —
+   * BigInt-safe; the frontend formats.
    */
   @Get('tds')
   async myTds(@Req() req: Request, @Query('financialYear') financialYear?: string) {
@@ -261,7 +265,7 @@ export class AffiliateSelfController {
     }
 
     const affiliateId = (req as any).affiliateId;
-    const result = await this.cloudinary.upload(file.buffer, {
+    const result = await this.media.upload(file.buffer, {
       folder: `sportsmart/affiliates/${affiliateId}/kyc/${kind}`,
       transformation: [{ width: 1600, height: 1600, crop: 'limit' }],
     });

@@ -28,8 +28,16 @@ import { escapeCsvField } from '../../../../core/utils/csv.util';
  *   - admin approve → mark paid → mark failed
  *
  * Phase 2 additions (now in scope):
- *   - TDS auto-deduction at request time per §16 / Section 194H
- *     (10% over ₹15k FY cumulative).
+ *   - TDS auto-deduction at request time. The regime is finance-
+ *     configurable (AffiliateSettings.tdsSection), implementing internal
+ *     SRS §16:
+ *       • '194O' (DEFAULT — IT-Act Section 194-O, e-commerce
+ *         participant): per-payout, PAN-aware — 1% with PAN on file, 5%
+ *         without (§194-O(4)); quarterly Form 26Q / Form 16A lifecycle.
+ *       • '194H' (IT-Act Section 194H, commission/brokerage): 10% on the
+ *         FY cumulative slice above ₹15,000; §206AA escalates a PAN-less
+ *         deductee to 20%.
+ *     ("§16" here is the internal SRS section, NOT an IT-Act section.)
  *   - Reversal-balance netting per §13.4 — REVERSED commissions are
  *     deducted from the next payout until cleared.
  *
@@ -158,8 +166,9 @@ export class AffiliatePayoutService {
    * until admin marks the request PAID.
    *
    * Phase 2 — also nets unsettled REVERSED commissions (clawbacks
-   * from post-payout returns, SRS §13.4) and deducts §194H TDS at
-   * 10% on the cumulative FY commission income above ₹15,000.
+   * from post-payout returns, SRS §13.4) and deducts TDS per the
+   * finance-configured regime (default §194-O, 1%/5% PAN-aware;
+   * §194H is the switchable alternative — see the class docstring).
    *
    * Eligibility (SRS §15.1):
    *   - affiliate.status === 'ACTIVE'
@@ -295,20 +304,20 @@ export class AffiliatePayoutService {
 
       let tdsAmount: Prisma.Decimal;
       let tdsRateBps: number;
-      let panOnFile = false;
-      let panLast4: string | null = null;
+      // PAN status is needed by BOTH regimes now: §194-O picks 1% vs 5%,
+      // §194H applies the §206AA 20% escalation when no PAN is furnished.
+      const kyc = await tx.affiliateKyc.findUnique({
+        where: { affiliateId: input.affiliateId },
+        select: { panNumberEnc: true, panLast4: true },
+      });
+      const panOnFile = !!kyc?.panNumberEnc;
+      const panLast4: string | null = kyc?.panLast4 ?? null;
 
       if (tdsSection === '194O') {
         // §194-O e-commerce-participant TDS: PER-TRANSACTION, NO threshold,
-        // PAN-aware. PAN "furnished" (present on the KYC row) → 1%, else 5%.
-        // No in-flight aggregation: §194-O isn't cumulative, so each payout
-        // is deducted on its own gross.
-        const kyc = await tx.affiliateKyc.findUnique({
-          where: { affiliateId: input.affiliateId },
-          select: { panNumberEnc: true, panLast4: true },
-        });
-        panOnFile = !!kyc?.panNumberEnc;
-        panLast4 = kyc?.panLast4 ?? null;
+        // PAN-aware. PAN "furnished" (present on the KYC row) → 1%, else 5%
+        // (§194-O(4); a PAN-less §194-O deductee is capped at 5%, NOT the
+        // §206AA 20% — §194-O has its own no-PAN rate).
         tdsRateBps = panOnFile
           ? settings?.tdsRateWithPanBps ?? 100
           : settings?.tdsRateWithoutPanBps ?? 500;
@@ -319,11 +328,19 @@ export class AffiliatePayoutService {
         // §194H commission/brokerage: cumulative FY slice above the threshold,
         // rate + threshold from settings. In-flight aggregation prevents two
         // concurrent withdrawals from both reclaiming the same headroom.
-        const rate = new Prisma.Decimal(settings?.tdsRate ?? 10).div(100);
+        //
+        // §206AA escalation (audit B6): a deductee who has NOT furnished a PAN
+        // is withheld at the HIGHER of the in-force rate and 20%. With no PAN
+        // on file we floor the rate at 20% so a PAN-less affiliate isn't
+        // under-withheld (a statutory + recovery exposure for the platform).
+        const SECTION_206AA_FLOOR_PCT = new Prisma.Decimal(20);
+        const configuredRatePct = new Prisma.Decimal(settings?.tdsRate ?? 10);
+        const effectiveRatePct = panOnFile
+          ? configuredRatePct
+          : Prisma.Decimal.max(configuredRatePct, SECTION_206AA_FLOOR_PCT);
+        const rate = effectiveRatePct.div(100);
         const threshold = new Prisma.Decimal(settings?.tdsThresholdPerFY ?? 15000);
-        tdsRateBps = Number(
-          new Prisma.Decimal(settings?.tdsRate ?? 10).mul(100).toFixed(0),
-        );
+        tdsRateBps = Number(effectiveRatePct.mul(100).toFixed(0));
         const tdsRecord = await tx.affiliateTdsRecord.findUnique({
           where: {
             affiliateId_financialYear: {
@@ -365,10 +382,12 @@ export class AffiliatePayoutService {
           tdsAmount,
           netAmount,
           financialYear: fy,
-          // Phase 159e — frozen TDS snapshot.
+          // Phase 159e — frozen TDS snapshot. panOnFileAtDeduction is now
+          // recorded for BOTH regimes (§194-O rate selection AND §194H §206AA
+          // escalation depend on it, so it's audit-relevant either way).
           tdsSection,
           tdsRateBps,
-          panOnFileAtDeduction: tdsSection === '194O' ? panOnFile : null,
+          panOnFileAtDeduction: panOnFile,
           filingQuarter,
           status: 'REQUESTED',
           // Phase 154 — immutable method snapshot (method-as-of-request-time).
@@ -473,6 +492,13 @@ export class AffiliatePayoutService {
           netAmount: request.netAmount.toString(),
           financialYear: request.financialYear,
           payoutMethodType: request.payoutMethodType,
+          // Phase 160 (§194-O affiliate audit #14) — make the TDS DECISION
+          // itself reconstructable from the audit row: which section + rate
+          // applied, the filing quarter, and whether a PAN drove the rate.
+          tdsSection: request.tdsSection,
+          tdsRateBps: request.tdsRateBps,
+          filingQuarter: request.filingQuarter,
+          panOnFileAtDeduction: request.panOnFileAtDeduction,
         },
         ipAddress: input.ipAddress,
         userAgent: input.userAgent,
@@ -1002,6 +1028,120 @@ export class AffiliatePayoutService {
     return { flipped: result.count };
   }
 
+  /**
+   * Phase 160 (§194-O affiliate audit #16) — correction flow. Marks a
+   * single ledger row REVERSED from ANY non-REVERSED state (a wrong
+   * deduction discovered after deposit, a duplicate, etc.). Idempotent
+   * (re-reversing is a no-op that keeps the original reason). CAS-guarded
+   * so a concurrent reverse can't double-apply. The reversed row drops out
+   * of the Form 26Q export + quarterly report (both count only
+   * WITHHELD/DEPOSITED/CERTIFICATE_ISSUED). Audited.
+   *
+   * The reversal also DECREMENTS the annual AffiliateTdsRecord cumulative
+   * (gross/TDS/net) by the reversed row's amounts — but ONLY when the row
+   * was past WITHHELD (i.e. markPaid had bumped the cumulative). Without
+   * this, a stale cumulative would over-count the §194H ₹15k-threshold base
+   * on a subsequent payout (review fix). The ledger update + the cumulative
+   * decrement run in ONE transaction so they can't diverge.
+   */
+  async reverseTds194O(args: {
+    ledgerId: string;
+    reversedBy: string;
+    reason: string;
+    audit?: { ipAddress?: string; userAgent?: string };
+  }): Promise<{ reversed: boolean; previousStatus: string; wasAlreadyReversed: boolean }> {
+    const reason = (args.reason ?? '').replace(/<[^>]*>/g, '').trim();
+    if (reason.length < 6) {
+      throw new BadRequestAppException(
+        'A reversal reason (min 6 characters) is required.',
+      );
+    }
+    const ledger = await this.prisma.affiliateTds194OLedger.findUnique({
+      where: { id: args.ledgerId },
+      select: {
+        id: true,
+        status: true,
+        affiliateId: true,
+        filingPeriod: true,
+        grossInPaise: true,
+        tdsInPaise: true,
+      },
+    });
+    if (!ledger) throw new NotFoundAppException('TDS ledger row not found');
+    if (ledger.status === 'REVERSED') {
+      return { reversed: false, previousStatus: 'REVERSED', wasAlreadyReversed: true };
+    }
+    const now = new Date();
+    // markPaid bumps AffiliateTdsRecord only once the payout is PAID — which
+    // is exactly when the ledger row leaves COMPUTED. So we decrement the
+    // cumulative iff the row was already past COMPUTED (a COMPUTED row's
+    // payout was never paid → nothing was added → nothing to subtract).
+    const cumulativeWasBumped = ledger.status !== 'COMPUTED';
+    const grossRupees = new Prisma.Decimal(ledger.grossInPaise.toString()).div(100);
+    const tdsRupees = new Prisma.Decimal(ledger.tdsInPaise.toString()).div(100);
+    const netRupees = grossRupees.minus(tdsRupees);
+    const financialYear = financialYearOfQuarter(ledger.filingPeriod);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // CAS: only flip if STILL in the previously-read non-REVERSED status, so
+      // a concurrent reverse / lifecycle transition can't be clobbered.
+      const upd = await tx.affiliateTds194OLedger.updateMany({
+        where: { id: args.ledgerId, status: ledger.status },
+        data: {
+          status: 'REVERSED',
+          reversedAt: now,
+          reversedBy: args.reversedBy,
+          reversalReason: reason,
+        },
+      });
+      if (upd.count === 1 && cumulativeWasBumped && financialYear) {
+        // updateMany (not update) so a missing record is a silent no-op
+        // rather than a throw; clamp via the WHERE so we never touch another
+        // affiliate's row. Decrement keeps the cumulative consistent with the
+        // surviving (non-reversed) ledger rows.
+        await tx.affiliateTdsRecord.updateMany({
+          where: { affiliateId: ledger.affiliateId, financialYear },
+          data: {
+            cumulativeGross: { decrement: grossRupees },
+            cumulativeTds: { decrement: tdsRupees },
+            cumulativeNet: { decrement: netRupees },
+          },
+        });
+      }
+      return upd;
+    });
+    if (result.count === 0) {
+      // Lost the race — re-read for an accurate response.
+      const fresh = await this.prisma.affiliateTds194OLedger.findUnique({
+        where: { id: args.ledgerId },
+        select: { status: true },
+      });
+      return {
+        reversed: false,
+        previousStatus: fresh?.status ?? ledger.status,
+        wasAlreadyReversed: fresh?.status === 'REVERSED',
+      };
+    }
+    this.audit
+      .writeAuditLog({
+        actorId: args.reversedBy,
+        actorRole: 'ADMIN',
+        action: 'AFFILIATE_TDS_REVERSED',
+        module: 'affiliate',
+        resource: 'AffiliateTds194OLedger',
+        resourceId: args.ledgerId,
+        oldValue: { status: ledger.status },
+        newValue: { status: 'REVERSED', reason },
+        ipAddress: args.audit?.ipAddress,
+        userAgent: args.audit?.userAgent,
+      })
+      .catch((e) => this.logger.error(`Audit (TDS reversed) failed: ${e}`));
+    this.logger.log(
+      `Affiliate TDS reversed: ledger=${args.ledgerId} from=${ledger.status} by=${args.reversedBy}`,
+    );
+    return { reversed: true, previousStatus: ledger.status, wasAlreadyReversed: false };
+  }
+
   /** Admin ops list — §194-O ledger rows for a quarter (optionally by status). */
   async listTds194OLedger(params: { filingPeriod: string; status?: string }) {
     const where: any = { filingPeriod: params.filingPeriod };
@@ -1034,7 +1174,11 @@ export class AffiliatePayoutService {
    */
   async getAffiliateTaxSummary(affiliateId: string) {
     const rows = await this.prisma.affiliateTds194OLedger.findMany({
-      where: { affiliateId },
+      // Phase 160 (§194-O affiliate audit #16, review fix) — exclude REVERSED
+      // rows: a cancelled deduction must not inflate the affiliate's quarterly
+      // gross/TDS totals or drag the quarter's status label. A quarter whose
+      // only rows are REVERSED correctly disappears from the summary.
+      where: { affiliateId, status: { not: 'REVERSED' } },
       select: { filingPeriod: true, status: true, grossInPaise: true, tdsInPaise: true },
     });
     const RANK: Record<string, number> = {
@@ -1168,7 +1312,10 @@ export class AffiliatePayoutService {
     const lines = [header.map((h) => escapeCsvField(h)).join(',')];
 
     const rows = await this.prisma.affiliateTds194OLedger.findMany({
-      where: { filingPeriod },
+      // Phase 160 (§194-O affiliate audit #16) — never file a REVERSED row
+      // (it's been corrected out). The filing CSV is the TDS-withheld trail;
+      // a reversed deduction must not reach NSDL.
+      where: { filingPeriod, status: { not: 'REVERSED' } },
       include: { affiliate: { select: { id: true, firstName: true, lastName: true } } },
       orderBy: { computedAt: 'asc' },
     });
@@ -1268,6 +1415,16 @@ function affiliatePaiseToRupees(p: bigint): string {
   const rupees = abs / 100n;
   const paise = abs % 100n;
   return `${neg ? '-' : ''}${rupees.toString()}.${paise.toString().padStart(2, '0')}`;
+}
+
+// Phase 160 (review fix) — "2026-Q1" → "2026-27" (matches
+// currentFinancialYear()'s format). Returns null for a malformed quarter so
+// the caller skips the cumulative decrement rather than touching a wrong row.
+function financialYearOfQuarter(filingPeriod: string): string | null {
+  const m = /^(\d{4})-Q[1-4]$/.exec(filingPeriod);
+  if (!m) return null;
+  const startYear = parseInt(m[1]!, 10);
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
 }
 
 function affiliateFormatIstDate(d: Date): string {

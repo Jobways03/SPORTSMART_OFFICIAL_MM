@@ -39,4 +39,20 @@ export class DisputesPublicFacade {
   }): Promise<void> {
     return this.disputeService.mirrorTicketMessageToDispute(args);
   }
+
+  /**
+   * Phase 171 (Refund Approve/Reject audit #1) — re-open a decided dispute when
+   * finance rejects its refund. Consumed by the disputes module's own
+   * refund-rejected event handler (the refund-instructions module can't import
+   * DisputesModule — that's the circular-dep direction — so the routing is
+   * event-driven, and this is the facade the handler calls).
+   */
+  async routeBackFromFinanceRejection(args: {
+    disputeId: string;
+    adminId: string;
+    reason: string;
+    rerouteSlaHours?: number;
+  }): Promise<{ reopened: boolean }> {
+    return this.disputeService.routeBackFromFinanceRejection(args);
+  }
 }

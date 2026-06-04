@@ -9,6 +9,7 @@ import {
   FranchiseCatalogMapping,
   FranchiseInventoryItem,
   FranchiseOrderItem,
+  FranchisePosSale,
 } from '@/services/admin-franchises.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
@@ -104,7 +105,7 @@ export default function AdminFranchiseDetailPage() {
   const [settlementsLoading, setSettlementsLoading] = useState(false);
 
   // POS Sales
-  const [posSales, setPosSales] = useState<any[]>([]);
+  const [posSales, setPosSales] = useState<FranchisePosSale[]>([]);
   const [posLoading, setPosLoading] = useState(false);
 
   // Profile edit state
@@ -1035,12 +1036,12 @@ export default function AdminFranchiseDetailPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {posSales.map((sale: any) => (
+                      {posSales.map((sale: FranchisePosSale) => (
                         <tr key={sale.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
                           <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontSize: 12 }}>{sale.id?.slice(0, 8)}...</td>
-                          <td style={{ padding: '10px 14px' }}>{(sale.saleType || sale.type || 'WALK_IN').replace(/_/g, ' ')}</td>
-                          <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontWeight: 600 }}>{'\u20B9'}{Number(sale.totalAmount || sale.amount || 0).toLocaleString('en-IN')}</td>
-                          <td style={{ padding: '10px 14px' }}>{sale.itemCount || sale.items?.length || 0}</td>
+                          <td style={{ padding: '10px 14px' }}>{(sale.saleType || 'WALK_IN').replace(/_/g, ' ')}</td>
+                          <td style={{ padding: '10px 14px', fontFamily: 'monospace', fontWeight: 600 }}>{'\u20B9'}{Number(sale.netAmount || 0).toLocaleString('en-IN')}</td>
+                          <td style={{ padding: '10px 14px' }}>{sale._count?.items ?? 0}</td>
                           <td style={{ padding: '10px 14px' }}>
                             <span style={{
                               fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4,

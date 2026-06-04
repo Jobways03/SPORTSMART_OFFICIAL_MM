@@ -8,6 +8,7 @@ import {
 } from '../../../core/exceptions';
 import { ContentAuditService } from '../storefront-content/content-audit.service';
 import { StorefrontContentService } from '../storefront-content/storefront-content.service';
+import { SAFE_HREF_PATTERN } from '../storefront-content/dtos/storefront-content.dto';
 
 export interface SlotDefinitionDto {
   id: string;
@@ -25,6 +26,17 @@ export interface CreateSlotInput {
   label: string;
   defaultHref?: string | null;
   position?: number;
+}
+
+export interface UpdateSlotInput {
+  label?: string;
+  defaultHref?: string | null;
+  position?: number;
+}
+
+export interface ReorderSlotItem {
+  id: string;
+  position: number;
 }
 
 /**
@@ -197,6 +209,157 @@ export class StorefrontSlotsService {
     // anyway.
     await this.content.invalidateActiveMapCache();
     this.logger.log(`Slot soft-deleted section=${def.sectionKey} key=${def.slotKey}`);
+  }
+
+  /**
+   * Phase 48 (Finding #15) — partial update of a slot definition.
+   * Pre-Phase-48 the only mutations were create + soft-delete, so an
+   * admin who wanted to retitle a slot (or fix a bad defaultHref) had
+   * to delete and recreate it — which dropped the linked content block
+   * and minted a new slotKey. This patches the presentational columns
+   * in place; identity (sectionKey / slotKey) is immutable so the
+   * content-block linkage is preserved. Editing isSystem slots is
+   * allowed but, like create / remove, is written to the audit log.
+   */
+  async update(
+    id: string,
+    patch: UpdateSlotInput,
+    actorId?: string,
+  ): Promise<SlotDefinitionDto> {
+    const def = await this.prisma.storefrontSlotDefinition.findUnique({
+      where: { id },
+    });
+    if (!def || def.deletedAt) {
+      throw new NotFoundAppException('Slot definition not found');
+    }
+
+    const data: {
+      label?: string;
+      defaultHref?: string | null;
+      position?: number;
+    } = {};
+
+    if (patch.label !== undefined) {
+      const label = patch.label.trim();
+      if (!label) throw new BadRequestAppException('label cannot be blank');
+      if (label.length > 80) {
+        throw new BadRequestAppException('label must not exceed 80 characters');
+      }
+      data.label = label;
+    }
+
+    if (patch.defaultHref !== undefined) {
+      const href = patch.defaultHref?.trim() || null;
+      // Defence-in-depth: the DTO already enforces this allowlist, but
+      // the service is also called from tests / future internal callers
+      // that bypass the pipe. Reject `javascript:` / `data:` / `//host`.
+      if (href !== null && !SAFE_HREF_PATTERN.test(href)) {
+        throw new BadRequestAppException(
+          'defaultHref must be a relative path starting with "/" or an http(s) URL',
+        );
+      }
+      data.defaultHref = href;
+    }
+
+    if (patch.position !== undefined) {
+      if (!Number.isInteger(patch.position) || patch.position < 0) {
+        throw new BadRequestAppException('position must be a non-negative integer');
+      }
+      data.position = patch.position;
+    }
+
+    // Nothing to change — return the current row rather than writing a
+    // no-op audit entry.
+    if (Object.keys(data).length === 0) {
+      return this.toDto(def);
+    }
+
+    const row = await this.prisma.storefrontSlotDefinition.update({
+      where: { id },
+      data,
+    });
+
+    await this.audit.record({
+      resourceType: 'SLOT',
+      resourceId: row.id,
+      action: 'UPDATE',
+      prevState: {
+        sectionKey: def.sectionKey,
+        slotKey: def.slotKey,
+        label: def.label,
+        position: def.position,
+        defaultHref: def.defaultHref,
+        isSystem: def.isSystem,
+      },
+      newState: {
+        sectionKey: row.sectionKey,
+        slotKey: row.slotKey,
+        label: row.label,
+        position: row.position,
+        defaultHref: row.defaultHref,
+        isSystem: row.isSystem,
+      },
+      actorId,
+    });
+    // The defaultHref / label surface in the admin list but not in the
+    // public active-map, so no cache bust is needed here. (Removal
+    // still busts because it cascades the content block.)
+    this.logger.log(
+      `Slot updated id=${id} section=${row.sectionKey} key=${row.slotKey}`,
+    );
+    return this.toDto(row);
+  }
+
+  /**
+   * Phase 48 (Finding #16) — bulk reorder. Drag-and-drop in the admin
+   * UI sends the full ordered list; we apply each {id, position} in a
+   * single transaction so the section never observes a half-applied
+   * order. Idempotent: re-sending the same payload is a no-op write.
+   * Unknown / soft-deleted ids are skipped (updateMany matches zero
+   * rows) rather than failing the whole batch.
+   */
+  async reorder(
+    items: ReorderSlotItem[],
+    actorId?: string,
+  ): Promise<{ updated: number }> {
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new BadRequestAppException('items must be a non-empty array');
+    }
+    for (const it of items) {
+      if (!it?.id) throw new BadRequestAppException('each item needs an id');
+      if (!Number.isInteger(it.position) || it.position < 0) {
+        throw new BadRequestAppException(
+          `position for slot ${it.id} must be a non-negative integer`,
+        );
+      }
+    }
+
+    const results = await this.prisma.$transaction(
+      items.map((it) =>
+        this.prisma.storefrontSlotDefinition.updateMany({
+          where: { id: it.id, deletedAt: null },
+          data: { position: it.position },
+        }),
+      ),
+    );
+    const updated = results.reduce((sum, r) => sum + r.count, 0);
+
+    await this.audit.record({
+      resourceType: 'SLOT',
+      // No single resource — key on a sentinel so the bulk action is
+      // still queryable in the audit log.
+      resourceId: 'reorder',
+      action: 'UPDATE',
+      newState: {
+        op: 'REORDER',
+        requested: items.length,
+        updated,
+        items: items.map((it) => ({ id: it.id, position: it.position })),
+      },
+      actorId,
+    });
+    this.logger.log(`Slots reordered requested=${items.length} updated=${updated}`);
+    return { updated };
   }
 
   // ─── helpers ──────────────────────────────────────────────────────

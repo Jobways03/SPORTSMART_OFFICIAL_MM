@@ -134,9 +134,26 @@ const router = useRouter();
   // AI generation
   const [aiGenerating, setAiGenerating] = useState(false);
   const [selfStatusSaving, setSelfStatusSaving] = useState(false);
+  // Phase 249 (#4) — the generationLogId returned by the AI generate
+  // endpoint (meta.generationLogId), captured only when the seller
+  // actually accepts the generated draft. Echoed back on product save
+  // so the backend stamps AI provenance + flips the log to ACCEPTED.
+  // Cleared after a successful save (consumed) or null when untracked.
+  const [aiGenerationLogId, setAiGenerationLogId] = useState<string | null>(null);
 
   const generateWithAI = useCallback(async () => {
     if (!form.title.trim()) return;
+    // Data-loss guard: if the seller already wrote content into any of
+    // the fields AI would overwrite, confirm before clobbering it. Reuses
+    // the confirmDialog from useModal already used for variant/image deletes.
+    const hasExistingContent =
+      form.description.trim() !== '' ||
+      form.seoHandle.trim() !== '' ||
+      form.seoMetaTitle.trim() !== '' ||
+      form.seoMetaDescription.trim() !== '';
+    if (hasExistingContent) {
+      if (!(await confirmDialog('You already have content in some fields. Overwrite it with the AI-generated version?'))) return;
+    }
     setAiGenerating(true);
     try {
       const json = await apiClient<any>('/ai/generate-product-content', {
@@ -156,11 +173,15 @@ const router = useRouter();
           seoMetaTitle: json.data.metaTitle || prev.seoMetaTitle,
           seoMetaDescription: json.data.metaDescription || prev.seoMetaDescription,
         }));
-        setToast({ type: 'success', message: 'AI content generated!' });
+        // meta is a sibling of data on the raw apiClient response envelope.
+        // Captured only here — after the confirm guard passed and we applied
+        // the result — so the id is threaded only when the seller accepted.
+        setAiGenerationLogId((json as any).meta?.generationLogId ?? null);
+        setToast({ type: 'success', message: '✨ AI-generated — review for accuracy before saving.' });
       }
     } catch { setToast({ type: 'error', message: 'AI generation failed.' }); }
     finally { setAiGenerating(false); }
-  }, [form.title, form.categoryName, form.brandName, form.shortDescription]);
+  }, [form.title, form.categoryName, form.brandName, form.shortDescription, form.description, form.seoHandle, form.seoMetaTitle, form.seoMetaDescription, confirmDialog]);
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -440,7 +461,13 @@ const router = useRouter();
     try {
       const token = sessionStorage.getItem('accessToken') || '';
       const payload = buildPayload();
+      // Phase 249 (#4) — thread the AI generation log id onto the update
+      // so the backend stamps provenance + marks the generation ACCEPTED.
+      // Allowlisted on SellerUpdateProductDto; backend CAS-guards double-accept.
+      if (aiGenerationLogId) payload.aiGenerationLogId = aiGenerationLogId;
       await sellerProductService.updateProduct(token, productId, payload);
+      // Consumed — clear so the follow-up reload / next save doesn't re-send it.
+      setAiGenerationLogId(null);
 
       if (submitForReview) {
         try {

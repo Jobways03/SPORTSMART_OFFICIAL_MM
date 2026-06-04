@@ -9,6 +9,7 @@ import {
   IsUUID,
   Matches,
   Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -165,6 +166,19 @@ export class SellerUpdateProductDto {
   @ValidateNested({ each: true })
   @Type(() => CreateVariantInlineDto)
   variants?: CreateVariantInlineDto[];
+
+  /**
+   * Phase 249 (#4) — AI-content provenance on the update path. The
+   * seller re-saves a product still carrying the AI draft (e.g. a
+   * draft created earlier with AI copy is now being submitted). The
+   * controller stamps the product's AI provenance and flips the log
+   * GENERATED → ACCEPTED (CAS-guarded so a second save is a no-op on
+   * the log). Allowlisted for the same forbidNonWhitelisted reason.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  aiGenerationLogId?: string;
 
   /**
    * Phase 39 (2026-05-21) — seller-supplied metafield values for the

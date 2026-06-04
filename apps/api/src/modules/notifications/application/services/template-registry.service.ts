@@ -7,6 +7,13 @@ export interface ResolvedTemplate {
   channel: NotificationChannel;
   subject: string | null;
   body: string;
+  // Phase 185 — carried through so the facade/renderer can enforce DLT
+  // (#4), required-vars (#6) and internal-field stripping (#14). DB rows
+  // populate these; code-side defaults leave them null/true.
+  dltTemplateId?: string | null;
+  dltHeaderId?: string | null;
+  variablesSchema?: unknown;
+  customerVisibleOnly?: boolean;
 }
 
 /**
@@ -32,6 +39,10 @@ export class TemplateRegistry {
         channel: row.channel,
         subject: row.subject,
         body: row.body,
+        dltTemplateId: row.dltTemplateId,
+        dltHeaderId: row.dltHeaderId,
+        variablesSchema: row.variablesSchema,
+        customerVisibleOnly: row.customerVisibleOnly,
       };
     }
     const fallback = DEFAULT_TEMPLATES[key];
@@ -39,7 +50,10 @@ export class TemplateRegistry {
       this.logger.warn(`No template (DB or default) for key: ${key}`);
       return null;
     }
-    return { key, ...fallback };
+    // Code defaults are platform-authored (no internal-field risk) and
+    // carry no DLT ids; default customerVisibleOnly=true so the strip still
+    // runs on their payloads.
+    return { key, customerVisibleOnly: true, ...fallback };
   }
 }
 

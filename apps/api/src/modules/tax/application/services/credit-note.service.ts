@@ -12,46 +12,58 @@
 //      throw `Section34TimeBarredError`. Caller decides whether to
 //      issue a wallet adjustment instead (Phase 13).
 //   4. For each approved ReturnItem: load OrderItemTaxSnapshot,
-//      compute proportional reversal via `calculateGstReversal`,
-//      write a CreditNoteLine.
-//   5. Allocate CREDIT_NOTE number via DocumentSequenceService.
-//   6. Persist `tax_documents` (documentType=CREDIT_NOTE) + lines.
-//   7. Transition source invoice via `TaxDocumentService.transitionStatus`
-//      to PARTIALLY_REVERSED or FULLY_REVERSED based on cumulative
-//      reversal.
+//      compute proportional reversal via `calculateGstReversal`.
+//   5. Under a per-return advisory lock (Phase 164 #1/#6): read prior
+//      CNs, compute the DELTA, allocate a number, persist the CN + lines.
+//   6. Transition source invoice to PARTIALLY_REVERSED / FULLY_REVERSED.
+//   7. Audit (#4), publish a domain event (#19), notify the customer.
 //
 // Idempotency (Phase 30 — multi-cycle): re-running for the same return
 // computes the DELTA between the cumulative reversal already credited
 // across prior credit notes and the reversal the current QC-approved
-// state implies. If the delta is zero (re-call with no new approvals
-// since last CN), the most recent CN is returned. If the delta is non-
-// zero (a QC re-approval added more reversible quantity, or a previously
-// pending line was cleared), a NEW credit note is generated covering
-// only that delta. This supports the realistic flow where a return
-// gets QC'd in stages — e.g. 2 of 3 returned units approved on day 1,
-// the third approved on day 5 after re-inspection.
+// state implies. The multi-cycle design intentionally issues MULTIPLE
+// credit notes per return (staged QC), so prior-CN discovery keys on the
+// structured `returnId` column (Phase 164 #2/#3 — replacing the brittle
+// `reason CONTAINS returnNumber` text match that an admin reason override
+// silently defeated). The whole read-compute-write runs under a
+// transaction-scoped advisory lock keyed on the return, so two concurrent
+// callers (QC trigger + admin override, or two API replicas) can't both
+// insert a CN for the same delta — the second sees the first's CN and
+// returns it idempotently (Phase 164 #1/#6).
 //
 // See:
 //   - docs/tax/CREDIT_NOTE_TIME_BAR_POLICY.md
 //   - docs/tax/INVOICE_CANCELLATION_POLICY.md
 //   - docs/tax/CA.md §6.2 Section 34
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { DocumentSequenceService } from './document-sequence.service';
 import { TaxDocumentService } from './tax-document.service';
 import { TaxNotificationService } from './tax-notification.service';
+import { TaxModeService } from './tax-mode.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { paiseToInvoiceWords } from '../../domain/amount-in-words';
 import { computeInvoiceRoundOff } from '../../domain/round-off';
 import {
   isWithinSection34Window,
   section34CutoffFor,
 } from '../../domain/credit-note-time-bar';
+import { CREDIT_NOTE_EVENTS } from '../../domain/credit-note-events';
 import { calculateGstReversal } from '../../../discounts/domain/tax/calculate-gst';
 import {
   Prisma,
   type TaxDocumentStatus,
 } from '@prisma/client';
+
+/**
+ * Phase 164 (#17) — system actor sentinel for the auto / cron path. The
+ * QC-completion trigger passes the QC-completing admin's id; the time-bar
+ * retry cron and any other unattended path passes this constant so the
+ * FSM-transition + audit rows are never attributed to `null`.
+ */
+export const SYSTEM_CREDIT_NOTE_ACTOR = 'SYSTEM_TAX_CREDIT_NOTE';
 
 export class Section34TimeBarredError extends Error {
   constructor(
@@ -84,6 +96,25 @@ export class SourceInvoiceNotFoundError extends Error {
   }
 }
 
+/**
+ * Phase 164 (#14) — thrown in STRICT mode when one or more QC-approved
+ * lines lack an OrderItemTaxSnapshot, so the CN would silently under-credit.
+ * In OFF/AUDIT the generator proceeds with partial coverage (flagged on the
+ * row); in STRICT the missing snapshot is a hard stop for finance to resolve.
+ */
+export class CreditNoteIncompleteSnapshotError extends Error {
+  constructor(
+    public readonly returnNumber: string,
+    public readonly skippedLineCount: number,
+  ) {
+    super(
+      `Return ${returnNumber}: ${skippedLineCount} QC-approved line(s) have no ` +
+        `OrderItemTaxSnapshot — cannot compute a complete GST reversal in STRICT mode.`,
+    );
+    this.name = 'CreditNoteIncompleteSnapshotError';
+  }
+}
+
 export interface GenerateCreditNoteForReturnOptions {
   /** Override "now" — useful for testing the time-bar window. */
   now?: Date;
@@ -109,6 +140,28 @@ export interface GenerateCreditNoteResult {
   isNew: boolean;
 }
 
+interface LineReversal {
+  orderItemId: string;
+  sourceLineId: string;
+  sourceSnapshotId: string;
+  productId: string | null;
+  variantId: string | null;
+  productName: string;
+  hsnOrSacCode: string | null;
+  uqcCode: string | null;
+  gstRateBps: number;
+  returnedQuantity: number;
+  grossReversal: bigint;
+  discountReversal: bigint;
+  taxableReversal: bigint;
+  cgstReversal: bigint;
+  sgstReversal: bigint;
+  igstReversal: bigint;
+  cessReversal: bigint;
+  totalTaxReversal: bigint;
+  totalCreditLine: bigint;
+}
+
 @Injectable()
 export class CreditNoteService {
   private readonly logger = new Logger(CreditNoteService.name);
@@ -119,9 +172,15 @@ export class CreditNoteService {
     private readonly taxDocument: TaxDocumentService,
     // Phase 31 — fires customerCreditNoteIssued always and
     // customerB2bItcReversalRequired when the source invoice was B2B.
-    // Both are best-effort and non-throwing inside the notification
-    // service, so a notify failure can't crash CN issuance.
     private readonly notifications: TaxNotificationService,
+    // Phase 164 (#4) — compliance audit trail on every CN issuance.
+    private readonly audit: AuditPublicFacade,
+    // Phase 164 (KEY: GST mode) — the generator now consults the engine
+    // mode for data-integrity strictness (missing-snapshot handling, #14).
+    private readonly taxMode: TaxModeService,
+    // Phase 164 (#19) — durable lifecycle event (best-effort; @Optional so
+    // unit tests can construct the service without the full DI graph).
+    @Optional() private readonly eventBus?: EventBusService,
   ) {}
 
   /**
@@ -133,13 +192,12 @@ export class CreditNoteService {
     options: GenerateCreditNoteForReturnOptions = {},
   ): Promise<GenerateCreditNoteResult> {
     const now = options.now ?? new Date();
+    const actorId = options.actorId ?? SYSTEM_CREDIT_NOTE_ACTOR;
 
     // 1. Load return + items.
     const returnRow = await this.prisma.return.findUnique({
       where: { id: returnId },
-      include: {
-        items: true,
-      },
+      include: { items: true },
     });
     if (!returnRow) throw new Error(`Return ${returnId} not found`);
 
@@ -157,13 +215,8 @@ export class CreditNoteService {
     const sourceInvoice = await this.prisma.taxDocument.findFirst({
       where: {
         subOrderId: returnRow.subOrderId,
-        documentType: {
-          in: ['TAX_INVOICE', 'INVOICE_CUM_BILL_OF_SUPPLY'],
-        },
-        // Skip terminal SUPERSEDED / VOIDED_DRAFT
-        status: {
-          notIn: ['VOIDED_DRAFT', 'SUPERSEDED'],
-        },
+        documentType: { in: ['TAX_INVOICE', 'INVOICE_CUM_BILL_OF_SUPPLY'] },
+        status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
       },
       orderBy: { generatedAt: 'desc' },
     });
@@ -183,103 +236,13 @@ export class CreditNoteService {
       );
     }
 
-    // 5. Find all prior credit notes for this return so we can compute
-    //    per-snapshot deltas. The discriminator is
-    //    `originalDocumentId + reason contains returnNumber` — the same
-    //    filter used for the no-change idempotency check at the end.
-    const priorCreditNotes = await this.prisma.taxDocument.findMany({
-      where: {
-        documentType: 'CREDIT_NOTE',
-        originalDocumentId: sourceInvoice.id,
-        reason: { contains: returnRow.returnNumber },
-        status: { notIn: ['VOIDED_DRAFT'] },
-      },
-      orderBy: { generatedAt: 'desc' },
-      include: {
-        // Lines carry sourceSnapshotId — that's how we attribute
-        // already-credited amounts back to the original order items.
-        // (the include shape is the public delegate name; if Prisma
-        // refuses the literal, the manual two-step at line ~210
-        // re-fetches by documentId.)
-      },
-    });
-
-    // Sum already-credited reversal per source snapshot ID. Snapshots
-    // map 1:1 to order items, so this gives us "how much taxable +
-    // tax + quantity has already been reversed for each line".
-    const priorReversalsBySnapshot = new Map<
-      string,
-      {
-        taxable: bigint;
-        cgst: bigint;
-        sgst: bigint;
-        igst: bigint;
-        totalTax: bigint;
-        gross: bigint;
-        discount: bigint;
-        creditTotal: bigint;
-        quantity: number;
-      }
-    >();
-    if (priorCreditNotes.length > 0) {
-      const priorIds = priorCreditNotes.map((cn) => cn.id);
-      const priorLines = await this.prisma.taxDocumentLine.findMany({
-        where: { documentId: { in: priorIds } },
-      });
-      for (const line of priorLines) {
-        if (!line.sourceSnapshotId) continue;
-        const agg = priorReversalsBySnapshot.get(line.sourceSnapshotId) ?? {
-          taxable: 0n,
-          cgst: 0n,
-          sgst: 0n,
-          igst: 0n,
-          totalTax: 0n,
-          gross: 0n,
-          discount: 0n,
-          creditTotal: 0n,
-          quantity: 0,
-        };
-        agg.taxable += line.taxableAmountInPaise;
-        agg.cgst += line.cgstAmountInPaise;
-        agg.sgst += line.sgstAmountInPaise;
-        agg.igst += line.igstAmountInPaise;
-        agg.totalTax += line.totalTaxAmountInPaise;
-        agg.gross += line.grossAmountInPaise;
-        agg.discount += line.discountAmountInPaise;
-        agg.creditTotal += line.lineTotalInPaise;
-        agg.quantity += Number(line.quantity);
-        priorReversalsBySnapshot.set(line.sourceSnapshotId, agg);
-      }
-    }
-
-    // 6. Per-line proportional reversal — DELTA computation.
-    interface LineReversal {
-      orderItemId: string;
-      sourceLineId: string;
-      sourceSnapshotId: string;
-      productId: string | null;
-      variantId: string | null;
-      productName: string;
-      hsnOrSacCode: string | null;
-      uqcCode: string | null;
-      gstRateBps: number;
-      returnedQuantity: number;
-      grossReversal: bigint;
-      discountReversal: bigint;
-      taxableReversal: bigint;
-      cgstReversal: bigint;
-      sgstReversal: bigint;
-      igstReversal: bigint;
-      totalTaxReversal: bigint;
-      totalCreditLine: bigint;
-    }
-
+    // 5. Load snapshots + source lines (immutable once issued — safe to
+    //    read outside the lock).
     const orderItemIds = approvedItems.map((it) => it.orderItemId);
     const snapshots = await this.prisma.orderItemTaxSnapshot.findMany({
       where: { orderItemId: { in: orderItemIds } },
     });
     const snapshotByOrderItemId = new Map(snapshots.map((s) => [s.orderItemId!, s]));
-
     const sourceLines = await this.prisma.taxDocumentLine.findMany({
       where: { documentId: sourceInvoice.id },
     });
@@ -287,10 +250,28 @@ export class CreditNoteService {
       sourceLines.filter((l) => l.sourceSnapshotId).map((l) => [l.sourceSnapshotId!, l]),
     );
 
-    const reversals: LineReversal[] = [];
+    // 6. Compute the CUMULATIVE reversal implied by the current QC state,
+    //    per approved item. Skip (and count) items whose snapshot or
+    //    source line is missing — legacy orders with no GST trail.
+    interface Candidate {
+      snapshotId: string;
+      sourceLine: (typeof sourceLines)[number];
+      productName: string;
+      hsnOrSacCode: string | null;
+      uqcCode: string | null;
+      gstRateBps: number;
+      productId: string | null;
+      variantId: string | null;
+      orderItemId: string;
+      returnedQty: number;
+      cumulative: ReturnType<typeof calculateGstReversal>;
+    }
+    const candidates: Candidate[] = [];
+    let skippedLineCount = 0;
     for (const item of approvedItems) {
       const snapshot = snapshotByOrderItemId.get(item.orderItemId);
       if (!snapshot) {
+        skippedLineCount++;
         this.logger.warn(
           `Return ${returnRow.returnNumber}: no OrderItemTaxSnapshot for orderItem ${item.orderItemId} — skipping (legacy order; no GST reversal possible)`,
         );
@@ -298,14 +279,12 @@ export class CreditNoteService {
       }
       const sourceLine = sourceLineBySnapshotId.get(snapshot.id);
       if (!sourceLine) {
+        skippedLineCount++;
         this.logger.warn(
           `Return ${returnRow.returnNumber}: no TaxDocumentLine for snapshot ${snapshot.id} — skipping`,
         );
         continue;
       }
-
-      // Need original purchased quantity. The snapshot has it (Phase 5
-      // added quantity Decimal column); fall back to OrderItem.quantity.
       const orderItem = await this.prisma.orderItem.findUnique({
         where: { id: item.orderItemId },
         select: { quantity: true },
@@ -313,84 +292,301 @@ export class CreditNoteService {
       const purchasedQty = orderItem?.quantity ?? 1;
       const returnedQty = item.qcQuantityApproved ?? 0;
       if (returnedQty <= 0 || returnedQty > purchasedQty) {
+        skippedLineCount++;
         this.logger.warn(
           `Return ${returnRow.returnNumber}: invalid returnedQty=${returnedQty} vs purchasedQty=${purchasedQty} for item ${item.orderItemId}`,
         );
         continue;
       }
-
-      // Cumulative reversal implied by the CURRENT QC-approved state.
       const cumulative = calculateGstReversal({
         originalGrossInPaise: snapshot.grossLineAmountInPaise,
         originalDiscountInPaise: snapshot.discountAmountInPaise,
         originalCgstInPaise: snapshot.cgstAmountInPaise,
         originalSgstInPaise: snapshot.sgstAmountInPaise,
         originalIgstInPaise: snapshot.igstAmountInPaise,
+        // Phase 164 (#8) — cess now reverses proportionally instead of
+        // being dropped to 0n.
+        originalCessInPaise: snapshot.cessAmountInPaise,
         purchasedQuantity: purchasedQty,
         returnedQuantity: returnedQty,
       });
-
-      // Subtract whatever's already been credited across prior CNs for
-      // this snapshot. Result is the delta this new CN should carry.
-      const prior = priorReversalsBySnapshot.get(snapshot.id);
-      const deltaQty = returnedQty - (prior?.quantity ?? 0);
-      if (deltaQty <= 0) {
-        // This line was fully (or over-) credited already — skip it.
-        continue;
-      }
-      const deltaGross = cumulative.grossReturnedInPaise - (prior?.gross ?? 0n);
-      const deltaDiscount =
-        cumulative.discountReversalInPaise - (prior?.discount ?? 0n);
-      const deltaTaxable =
-        cumulative.taxableReversalInPaise - (prior?.taxable ?? 0n);
-      const deltaCgst = cumulative.cgstReversalInPaise - (prior?.cgst ?? 0n);
-      const deltaSgst = cumulative.sgstReversalInPaise - (prior?.sgst ?? 0n);
-      const deltaIgst = cumulative.igstReversalInPaise - (prior?.igst ?? 0n);
-      const deltaTotalTax =
-        cumulative.totalTaxReversalInPaise - (prior?.totalTax ?? 0n);
-      const deltaCredit =
-        cumulative.totalCreditNoteInPaise - (prior?.creditTotal ?? 0n);
-
-      // Defensive: skip lines where every monetary delta is zero
-      // (quantity bumped but value didn't — shouldn't happen but cheap
-      // to guard).
-      if (
-        deltaGross === 0n &&
-        deltaTaxable === 0n &&
-        deltaTotalTax === 0n &&
-        deltaCredit === 0n
-      ) {
-        continue;
-      }
-
-      reversals.push({
-        orderItemId: item.orderItemId,
-        sourceLineId: sourceLine.id,
-        sourceSnapshotId: snapshot.id,
-        productId: snapshot.productId,
-        variantId: snapshot.variantId,
+      candidates.push({
+        snapshotId: snapshot.id,
+        sourceLine,
         productName: snapshot.description ?? sourceLine.productName,
         hsnOrSacCode: snapshot.hsnCode,
         uqcCode: snapshot.uqcCode,
         gstRateBps: snapshot.gstRateBps,
-        returnedQuantity: deltaQty,
-        grossReversal: deltaGross,
-        discountReversal: deltaDiscount,
-        taxableReversal: deltaTaxable,
-        cgstReversal: deltaCgst,
-        sgstReversal: deltaSgst,
-        igstReversal: deltaIgst,
-        totalTaxReversal: deltaTotalTax,
-        totalCreditLine: deltaCredit,
+        productId: snapshot.productId,
+        variantId: snapshot.variantId,
+        orderItemId: item.orderItemId,
+        returnedQty,
+        cumulative,
       });
     }
 
-    // If no per-line delta survived, the caller is re-running the
-    // generator with no new QC-approved quantity since the last credit
-    // note. Idempotent: return the most-recent CN.
-    if (reversals.length === 0 && priorCreditNotes.length > 0) {
-      const latest = priorCreditNotes[0]!;
+    // Phase 164 (#14 + KEY mode) — partial coverage is a data-integrity
+    // problem. The generator now consults the tax engine mode: STRICT is a
+    // hard stop (finance must backfill the snapshot or route to wallet);
+    // AUDIT records the violation but proceeds with partial coverage
+    // (flagged on the CN via partialCoverageLineCount); OFF is permissive.
+    if (skippedLineCount > 0) {
+      const mode = await this.taxMode.getMode();
+      if (mode === 'STRICT') {
+        throw new CreditNoteIncompleteSnapshotError(returnRow.returnNumber, skippedLineCount);
+      }
+      await this.taxMode
+        .report({
+          code: 'cn.incomplete_snapshot',
+          message:
+            `Return ${returnRow.returnNumber}: ${skippedLineCount} QC-approved line(s) ` +
+            `lack an OrderItemTaxSnapshot — credit note covers only the snapshotted lines.`,
+          context: { returnId, skippedLineCount },
+        })
+        .catch(() => undefined);
+    }
 
+    // 7. Critical section — advisory-locked read-compute-write. Closes the
+    //    duplicate-CN race (#1) + the prior-CN TOCTOU (#6): two concurrent
+    //    callers for the same return serialise here, so the second sees the
+    //    first's committed CN and computes a zero delta.
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      // pg_advisory_xact_lock auto-releases at transaction end. Keyed on the
+      // return id so different returns don't contend.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${returnId})::bigint)`;
+
+      // Prior CNs for this return. Primary key is the structured returnId
+      // (#2/#3) — matched across ALL source invoices, not just the current
+      // one, so a re-invoiced sub-order (old invoice SUPERSEDED) can't be
+      // double-credited (#7: prior CNs against the old invoice are still
+      // subtracted, because the delta aggregates per sourceSnapshotId). The
+      // reason-CONTAINS branch is the legacy fallback for pre-migration CNs
+      // whose returnId wasn't backfilled (scoped to this invoice + number).
+      const priorCreditNotes = await tx.taxDocument.findMany({
+        where: {
+          documentType: 'CREDIT_NOTE',
+          status: { notIn: ['VOIDED_DRAFT'] },
+          OR: [
+            { returnId },
+            {
+              returnId: null,
+              originalDocumentId: sourceInvoice.id,
+              reason: { contains: returnRow.returnNumber },
+            },
+          ],
+        },
+        orderBy: { generatedAt: 'desc' },
+      });
+
+      const priorBySnapshot = await this.aggregatePriorReversals(tx, priorCreditNotes.map((c) => c.id));
+
+      // Per-line DELTA.
+      const reversals: LineReversal[] = [];
+      for (const c of candidates) {
+        const prior = priorBySnapshot.get(c.snapshotId);
+        const deltaQty = c.returnedQty - (prior?.quantity ?? 0);
+        if (deltaQty <= 0) continue;
+        const deltaGross = c.cumulative.grossReturnedInPaise - (prior?.gross ?? 0n);
+        const deltaDiscount = c.cumulative.discountReversalInPaise - (prior?.discount ?? 0n);
+        const deltaTaxable = c.cumulative.taxableReversalInPaise - (prior?.taxable ?? 0n);
+        const deltaCgst = c.cumulative.cgstReversalInPaise - (prior?.cgst ?? 0n);
+        const deltaSgst = c.cumulative.sgstReversalInPaise - (prior?.sgst ?? 0n);
+        const deltaIgst = c.cumulative.igstReversalInPaise - (prior?.igst ?? 0n);
+        const deltaCess = c.cumulative.cessReversalInPaise - (prior?.cess ?? 0n);
+        const deltaTotalTax = c.cumulative.totalTaxReversalInPaise - (prior?.totalTax ?? 0n);
+        const deltaCredit = c.cumulative.totalCreditNoteInPaise - (prior?.creditTotal ?? 0n);
+        if (
+          deltaGross === 0n &&
+          deltaTaxable === 0n &&
+          deltaTotalTax === 0n &&
+          deltaCess === 0n &&
+          deltaCredit === 0n
+        ) {
+          continue;
+        }
+        reversals.push({
+          orderItemId: c.orderItemId,
+          sourceLineId: c.sourceLine.id,
+          sourceSnapshotId: c.snapshotId,
+          productId: c.productId,
+          variantId: c.variantId,
+          productName: c.productName,
+          hsnOrSacCode: c.hsnOrSacCode,
+          uqcCode: c.uqcCode,
+          gstRateBps: c.gstRateBps,
+          returnedQuantity: deltaQty,
+          grossReversal: deltaGross,
+          discountReversal: deltaDiscount,
+          taxableReversal: deltaTaxable,
+          cgstReversal: deltaCgst,
+          sgstReversal: deltaSgst,
+          igstReversal: deltaIgst,
+          cessReversal: deltaCess,
+          totalTaxReversal: deltaTotalTax,
+          totalCreditLine: deltaCredit,
+        });
+      }
+
+      // No new delta → idempotent (re-run with nothing new since last CN).
+      if (reversals.length === 0) {
+        const latest = priorCreditNotes[0] ?? null;
+        return { kind: 'idempotent' as const, latest };
+      }
+
+      // Aggregate header totals.
+      let taxableTotal = 0n;
+      let cgstTotal = 0n;
+      let sgstTotal = 0n;
+      let igstTotal = 0n;
+      let cessTotal = 0n;
+      let totalTaxTotal = 0n;
+      let creditTotal = 0n;
+      for (const r of reversals) {
+        taxableTotal += r.taxableReversal;
+        cgstTotal += r.cgstReversal;
+        sgstTotal += r.sgstReversal;
+        igstTotal += r.igstReversal;
+        cessTotal += r.cessReversal;
+        totalTaxTotal += r.totalTaxReversal;
+        creditTotal += r.totalCreditLine;
+      }
+
+      const roundOff = computeInvoiceRoundOff(creditTotal);
+      const magnitude =
+        roundOff.roundedAmountInPaise < 0n
+          ? -roundOff.roundedAmountInPaise
+          : roundOff.roundedAmountInPaise;
+      // Phase 164 (#9) — a CN is a credit, not an invoice: prefix the words
+      // so the PDF / ledger reads "Credit of Rupees ... Only".
+      const amountInWords = `Credit of ${paiseToInvoiceWords(magnitude)}`;
+
+      const fy = DocumentSequenceService.financialYearOf(now);
+      // Phase 164 (review fix) — allocate the CN number on the SAME tx
+      // connection (inside the advisory lock), not a second pooled
+      // connection: avoids pool starvation under concurrent generation and
+      // rolls the number back if this transaction aborts.
+      const numberAlloc = await this.docSequence.nextNumber(
+        {
+          supplierGstin: sourceInvoice.supplierGstin,
+          financialYear: fy,
+          documentType: 'CREDIT_NOTE',
+        },
+        tx,
+      );
+
+      const cn = await tx.taxDocument.create({
+        data: {
+          documentNumber: numberAlloc.documentNumber,
+          documentType: 'CREDIT_NOTE',
+          financialYear: fy,
+          masterOrderId: sourceInvoice.masterOrderId,
+          subOrderId: sourceInvoice.subOrderId,
+          sellerId: sourceInvoice.sellerId,
+          customerId: sourceInvoice.customerId,
+          supplierType: sourceInvoice.supplierType,
+          invoiceType: sourceInvoice.invoiceType,
+          supplierGstin: sourceInvoice.supplierGstin,
+          sellerRegistrationType: sourceInvoice.sellerRegistrationType,
+          sellerLegalName: sourceInvoice.sellerLegalName,
+          sellerAddressJson: sourceInvoice.sellerAddressJson as Prisma.InputJsonValue,
+          sellerStateCode: sourceInvoice.sellerStateCode,
+          buyerGstin: sourceInvoice.buyerGstin,
+          buyerLegalName: sourceInvoice.buyerLegalName,
+          billingAddressJson: sourceInvoice.billingAddressJson as Prisma.InputJsonValue,
+          shippingAddressJson: sourceInvoice.shippingAddressJson as Prisma.InputJsonValue,
+          placeOfSupplyStateCode: sourceInvoice.placeOfSupplyStateCode,
+          reverseChargeApplicable: sourceInvoice.reverseChargeApplicable,
+          reverseChargeReason: sourceInvoice.reverseChargeReason,
+          taxableAmountInPaise: taxableTotal,
+          cgstAmountInPaise: cgstTotal,
+          sgstAmountInPaise: sgstTotal,
+          igstAmountInPaise: igstTotal,
+          totalTaxAmountInPaise: totalTaxTotal,
+          // Phase 164 (#8) — real cess reversal (was hardcoded 0n).
+          cessAmountInPaise: cessTotal,
+          roundOffAmountInPaise: roundOff.roundOffInPaise,
+          documentTotalInPaise: roundOff.roundedAmountInPaise,
+          amountInWords,
+          currencyCode: 'INR',
+          paymentMode: sourceInvoice.paymentMode,
+          originalDocumentId: sourceInvoice.id,
+          originalDocumentNumber: sourceInvoice.documentNumber,
+          // Phase 164 (#2/#3) — structured return linkage + always keep the
+          // return number in the reason (belt-and-braces vs the old text-only
+          // discriminator, even when an admin supplies a custom reason).
+          returnId,
+          reason: options.reason
+            ? `Return ${returnRow.returnNumber} — ${options.reason}`
+            : `Return ${returnRow.returnNumber}`,
+          // Phase 164 (#14) — how many approved lines were skipped for lack
+          // of a snapshot (0 = complete coverage).
+          partialCoverageLineCount: skippedLineCount,
+          status: 'PDF_PENDING',
+          einvoiceStatus: 'NOT_APPLICABLE',
+          generatedAt: now,
+        },
+      });
+
+      for (let i = 0; i < reversals.length; i++) {
+        const r = reversals[i]!;
+        await tx.taxDocumentLine.create({
+          data: {
+            documentId: cn.id,
+            sourceSnapshotId: r.sourceSnapshotId,
+            lineNumber: i + 1,
+            lineType: 'PRODUCT',
+            productId: r.productId,
+            variantId: r.variantId,
+            productName: r.productName,
+            hsnOrSacCode: r.hsnOrSacCode,
+            uqcCode: r.uqcCode,
+            quantity: new Prisma.Decimal(r.returnedQuantity),
+            // `grossAmountInPaise` is the canonical line value. `unitPriceInPaise`
+            // is a presentation convenience via BigInt floor-division and may
+            // drift up to (returnedQuantity − 1) paise from gross; auditors
+            // reconcile on grossAmountInPaise, NOT unitPrice × quantity (#18).
+            unitPriceInPaise:
+              r.returnedQuantity > 0
+                ? r.grossReversal / BigInt(r.returnedQuantity)
+                : 0n,
+            grossAmountInPaise: r.grossReversal,
+            discountAmountInPaise: r.discountReversal,
+            taxableAmountInPaise: r.taxableReversal,
+            gstRateBps: r.gstRateBps,
+            cgstAmountInPaise: r.cgstReversal,
+            sgstAmountInPaise: r.sgstReversal,
+            igstAmountInPaise: r.igstReversal,
+            totalTaxAmountInPaise: r.totalTaxReversal,
+            // Phase 164 (#8) — per-line cess reversal.
+            cessAmountInPaise: r.cessReversal,
+            lineTotalInPaise: r.totalCreditLine,
+            currencyCode: 'INR',
+          },
+        });
+      }
+
+      return {
+        kind: 'inserted' as const,
+        cn,
+        taxableTotal,
+        cgstTotal,
+        sgstTotal,
+        igstTotal,
+        cessTotal,
+        totalTaxTotal,
+        creditTotal,
+      };
+    });
+
+    // 8. Handle the idempotent / no-eligible-lines outcomes.
+    if (txResult.kind === 'idempotent') {
+      if (!txResult.latest) {
+        throw new Error(
+          `Return ${returnRow.returnNumber}: no eligible lines for credit-note reversal ` +
+            `(all approved items lacked snapshots or had invalid quantities).`,
+        );
+      }
+      const latest = txResult.latest;
       return {
         creditNote: {
           id: latest.id,
@@ -408,152 +604,10 @@ export class CreditNoteService {
       };
     }
 
-    if (reversals.length === 0) {
-      throw new Error(
-        `Return ${returnRow.returnNumber}: no eligible lines for credit-note reversal ` +
-          `(all approved items lacked snapshots or had invalid quantities).`,
-      );
-    }
+    const cn = txResult.cn;
 
-    // 7. Aggregate totals for credit-note header.
-    let taxableTotal = 0n;
-    let cgstTotal = 0n;
-    let sgstTotal = 0n;
-    let igstTotal = 0n;
-    let totalTaxTotal = 0n;
-    let grossTotal = 0n;
-    let creditTotal = 0n;
-    for (const r of reversals) {
-      taxableTotal += r.taxableReversal;
-      cgstTotal += r.cgstReversal;
-      sgstTotal += r.sgstReversal;
-      igstTotal += r.igstReversal;
-      totalTaxTotal += r.totalTaxReversal;
-      grossTotal += r.grossReversal;
-      creditTotal += r.totalCreditLine;
-    }
-
-    const roundOff = computeInvoiceRoundOff(creditTotal);
-    const amountInWords = paiseToInvoiceWords(
-      roundOff.roundedAmountInPaise < 0n
-        ? -roundOff.roundedAmountInPaise
-        : roundOff.roundedAmountInPaise,
-    );
-
-    // 8. Allocate CREDIT_NOTE number under the same supplier GSTIN
-    //    as the source invoice (so the series is supplier-scoped).
-    const fy = DocumentSequenceService.financialYearOf(now);
-    const numberAlloc = await this.docSequence.nextNumber({
-      supplierGstin: sourceInvoice.supplierGstin,
-      financialYear: fy,
-      documentType: 'CREDIT_NOTE',
-    });
-
-    // 9. Persist credit note + lines + transition source invoice.
-    const result = await this.prisma.$transaction(async (tx) => {
-      const cn = await tx.taxDocument.create({
-        data: {
-          documentNumber: numberAlloc.documentNumber,
-          documentType: 'CREDIT_NOTE',
-          financialYear: fy,
-          masterOrderId: sourceInvoice.masterOrderId,
-          subOrderId: sourceInvoice.subOrderId,
-          sellerId: sourceInvoice.sellerId,
-          customerId: sourceInvoice.customerId,
-          supplierType: sourceInvoice.supplierType,
-          invoiceType: sourceInvoice.invoiceType,
-
-          // Supplier + recipient snapshot — mirror the source invoice
-          // so the credit note can stand alone for legal review.
-          supplierGstin: sourceInvoice.supplierGstin,
-          sellerRegistrationType: sourceInvoice.sellerRegistrationType,
-          sellerLegalName: sourceInvoice.sellerLegalName,
-          sellerAddressJson: sourceInvoice.sellerAddressJson as Prisma.InputJsonValue,
-          sellerStateCode: sourceInvoice.sellerStateCode,
-
-          buyerGstin: sourceInvoice.buyerGstin,
-          buyerLegalName: sourceInvoice.buyerLegalName,
-          billingAddressJson: sourceInvoice.billingAddressJson as Prisma.InputJsonValue,
-          shippingAddressJson: sourceInvoice.shippingAddressJson as Prisma.InputJsonValue,
-          placeOfSupplyStateCode: sourceInvoice.placeOfSupplyStateCode,
-
-          reverseChargeApplicable: sourceInvoice.reverseChargeApplicable,
-          reverseChargeReason: sourceInvoice.reverseChargeReason,
-
-          // Money: positive amounts representing reversal magnitude.
-          taxableAmountInPaise: taxableTotal,
-          cgstAmountInPaise: cgstTotal,
-          sgstAmountInPaise: sgstTotal,
-          igstAmountInPaise: igstTotal,
-          totalTaxAmountInPaise: totalTaxTotal,
-          cessAmountInPaise: 0n,
-          roundOffAmountInPaise: roundOff.roundOffInPaise,
-          documentTotalInPaise: roundOff.roundedAmountInPaise,
-          amountInWords,
-          currencyCode: 'INR',
-          paymentMode: sourceInvoice.paymentMode,
-
-          // Cross-reference
-          originalDocumentId: sourceInvoice.id,
-          originalDocumentNumber: sourceInvoice.documentNumber,
-          reason: options.reason ?? `Return ${returnRow.returnNumber}`,
-
-          status: 'PDF_PENDING',
-          einvoiceStatus: 'NOT_APPLICABLE',
-          generatedAt: now,
-        },
-      });
-
-      // Lines mirror source line numbering structure but renumber from 1.
-      for (let i = 0; i < reversals.length; i++) {
-        const r = reversals[i]!;
-
-        await tx.taxDocumentLine.create({
-          data: {
-            documentId: cn.id,
-            sourceSnapshotId: r.sourceSnapshotId,
-            lineNumber: i + 1,
-            lineType: 'PRODUCT',
-            productId: r.productId,
-            variantId: r.variantId,
-            productName: r.productName,
-            hsnOrSacCode: r.hsnOrSacCode,
-            uqcCode: r.uqcCode,
-            quantity: new Prisma.Decimal(r.returnedQuantity),
-            // `grossAmountInPaise` IS THE CANONICAL VALUE on a credit-
-            // note line. `unitPriceInPaise` is a presentation
-            // convenience computed by BigInt floor-division and may
-            // drift up to (returnedQuantity − 1) paise from the gross
-            // due to rounding. Auditors reconciling line totals MUST
-            // sum grossAmountInPaise — reconstructing via unitPrice ×
-            // quantity is informational only.
-            unitPriceInPaise:
-              r.returnedQuantity > 0
-                ? r.grossReversal / BigInt(r.returnedQuantity)
-                : 0n,
-            grossAmountInPaise: r.grossReversal,
-            discountAmountInPaise: r.discountReversal,
-            taxableAmountInPaise: r.taxableReversal,
-            gstRateBps: r.gstRateBps,
-            cgstAmountInPaise: r.cgstReversal,
-            sgstAmountInPaise: r.sgstReversal,
-            igstAmountInPaise: r.igstReversal,
-            totalTaxAmountInPaise: r.totalTaxReversal,
-            cessAmountInPaise: 0n,
-            lineTotalInPaise: r.totalCreditLine,
-            currencyCode: 'INR',
-          },
-        });
-      }
-
-      return cn;
-    });
-
-    // 10. Transition source invoice status based on cumulative reversal.
-    //
-    // Cumulative reversed taxable across ALL non-cancelled credit notes
-    // for this source invoice. If equals source taxable → FULLY_REVERSED;
-    // else > 0 → PARTIALLY_REVERSED.
+    // 9. Transition source invoice status based on cumulative reversal
+    //    across ALL non-cancelled credit notes for it.
     const allCreditNotes = await this.prisma.taxDocument.findMany({
       where: {
         documentType: 'CREDIT_NOTE',
@@ -572,73 +626,137 @@ export class CreditNoteService {
     } else if (cumulativeReversed > 0n) {
       nextStatus = 'PARTIALLY_REVERSED';
     }
-
     if (nextStatus !== sourceInvoice.status) {
-      // Will throw if FSM forbids — should not happen since the source
-      // is in a non-terminal issued state.
-      await this.taxDocument.transitionStatus({
-        documentId: sourceInvoice.id,
-        toStatus: nextStatus,
-        reason: `Credit note ${result.documentNumber} applied (return ${returnRow.returnNumber})`,
-        actorId: options.actorId ?? null,
-      });
+      // Phase 164 (review fix) — the CN is already committed; a failure to
+      // flip the (purely derivative) source-invoice status must NOT fail an
+      // otherwise-valid credit note. The status is re-derived from the
+      // cumulative reversal on every CN issuance, and GSTR-1 §9B / GSTR-3B
+      // read the CN rows directly (not this flag), so a transient failure is
+      // reconcilable and does not affect filings. Log loudly for ops.
+      try {
+        await this.taxDocument.transitionStatus({
+          documentId: sourceInvoice.id,
+          toStatus: nextStatus,
+          reason: `Credit note ${cn.documentNumber} applied (return ${returnRow.returnNumber})`,
+          actorId,
+        });
+      } catch (err) {
+        nextStatus = sourceInvoice.status;
+        this.logger.error(
+          `Credit note ${cn.documentNumber} was issued but the source-invoice ` +
+            `${sourceInvoice.documentNumber} status transition failed: ` +
+            `${(err as Error).message}. The CN is valid; the invoice status will ` +
+            `be re-derived on the next CN or needs manual reconciliation.`,
+        );
+      }
     }
 
     this.logger.log(
-      `Credit note ${result.documentNumber} (${(creditTotal / 100n).toString()} ₹ approx) ` +
+      `Credit note ${cn.documentNumber} (${(txResult.creditTotal / 100n).toString()} ₹ approx) ` +
         `issued for return ${returnRow.returnNumber} against invoice ${sourceInvoice.documentNumber}. ` +
         `Source invoice status: ${sourceInvoice.status} → ${nextStatus}.`,
     );
 
-    // Phase 31 — customer notifications. Fired post-commit and after
-    // the source invoice's FSM transition so a notify failure can't
-    // affect the persisted state. The notification service is
-    // non-throwing internally; this try/catch is belt + braces.
+    // 10. Phase 164 (#4) — compliance audit trail.
+    try {
+      await this.audit.writeAuditLog({
+        actorId,
+        actorRole: 'SYSTEM',
+        action: CREDIT_NOTE_EVENTS.ISSUED,
+        module: 'tax',
+        resource: 'tax_document',
+        resourceId: cn.id,
+        newValue: {
+          documentNumber: cn.documentNumber,
+          returnId,
+          returnNumber: returnRow.returnNumber,
+          sourceInvoiceId: sourceInvoice.id,
+          taxableReversalInPaise: txResult.taxableTotal.toString(),
+          totalTaxReversalInPaise: txResult.totalTaxTotal.toString(),
+          cessReversalInPaise: txResult.cessTotal.toString(),
+          documentTotalInPaise: cn.documentTotalInPaise.toString(),
+          partialCoverageLineCount: skippedLineCount,
+        },
+        metadata: {
+          sourceInvoiceStatusAfter: nextStatus,
+          isManualOverride: options.actorId != null && options.actorId !== SYSTEM_CREDIT_NOTE_ACTOR,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Credit-note audit-log write failed for ${cn.documentNumber}: ${(err as Error).message} — CN was issued correctly.`,
+      );
+    }
+
+    // 11. Phase 164 (#19) — durable domain event for downstream consumers.
+    this.emitIssued({
+      creditNoteId: cn.id,
+      documentNumber: cn.documentNumber,
+      returnId,
+      returnNumber: returnRow.returnNumber,
+      sourceInvoiceId: sourceInvoice.id,
+      sourceInvoiceNumber: sourceInvoice.documentNumber,
+      customerId: cn.customerId,
+      sellerId: cn.sellerId,
+      taxableReversalInPaise: txResult.taxableTotal.toString(),
+      totalTaxReversalInPaise: txResult.totalTaxTotal.toString(),
+      cessReversalInPaise: txResult.cessTotal.toString(),
+      documentTotalInPaise: cn.documentTotalInPaise.toString(),
+      isB2b: sourceInvoice.invoiceType === 'B2B' && !!sourceInvoice.buyerGstin,
+      buyerGstin: sourceInvoice.buyerGstin,
+      partialCoverageLineCount: skippedLineCount,
+    });
+
+    // 12. Customer notifications — best-effort, post-commit. Phase 164 (#20):
+    //     stamp customerNotifiedAt when the issued-notification fires so
+    //     support can answer "did the customer get it?".
+    let notified = false;
     try {
       await this.notifications.customerCreditNoteIssued({
         customerId: returnRow.customerId,
-        documentId: result.id,
-        documentNumber: result.documentNumber,
-        documentTotalInPaise: result.documentTotalInPaise,
+        documentId: cn.id,
+        documentNumber: cn.documentNumber,
+        documentTotalInPaise: cn.documentTotalInPaise,
         originalInvoiceNumber: sourceInvoice.documentNumber,
         returnNumber: returnRow.returnNumber,
       });
+      notified = true;
 
-      // B2B sales (buyer had a GSTIN on the source invoice) trigger
-      // the additional ITC-reversal demand email. The buyer is
-      // legally required to reverse the corresponding ITC under
-      // GSTR-3B Table 4(B) once the credit note appears in their
-      // GSTR-2B; this email puts the per-leg amounts on record.
       if (sourceInvoice.invoiceType === 'B2B' && sourceInvoice.buyerGstin) {
         await this.notifications.customerB2bItcReversalRequired({
           customerId: returnRow.customerId,
-          documentId: result.id,
-          documentNumber: result.documentNumber,
+          documentId: cn.id,
+          documentNumber: cn.documentNumber,
           originalInvoiceNumber: sourceInvoice.documentNumber,
           originalInvoiceDate: sourceInvoice.generatedAt,
           buyerGstin: sourceInvoice.buyerGstin,
-          cgstReversalInPaise: cgstTotal,
-          sgstReversalInPaise: sgstTotal,
-          igstReversalInPaise: igstTotal,
-          totalTaxReversalInPaise: totalTaxTotal,
+          cgstReversalInPaise: txResult.cgstTotal,
+          sgstReversalInPaise: txResult.sgstTotal,
+          igstReversalInPaise: txResult.igstTotal,
+          totalTaxReversalInPaise: txResult.totalTaxTotal,
           returnNumber: returnRow.returnNumber,
         });
       }
     } catch (err) {
       this.logger.warn(
         `Credit-note notifications failed for return ${returnRow.returnNumber}: ` +
-          `${(err as Error).message} — CN was issued correctly; email retry ` +
-          `is the notifications module's responsibility.`,
+          `${(err as Error).message} — CN was issued correctly; the issued event ` +
+          `(${CREDIT_NOTE_EVENTS.ISSUED}) is the durable retry path.`,
       );
+    }
+    if (notified) {
+      await this.prisma.taxDocument
+        .update({ where: { id: cn.id }, data: { customerNotifiedAt: new Date() } })
+        .catch(() => undefined);
     }
 
     return {
       creditNote: {
-        id: result.id,
-        documentNumber: result.documentNumber,
-        documentTotalInPaise: result.documentTotalInPaise,
-        taxableReversalInPaise: taxableTotal,
-        totalTaxReversalInPaise: totalTaxTotal,
+        id: cn.id,
+        documentNumber: cn.documentNumber,
+        documentTotalInPaise: cn.documentTotalInPaise,
+        taxableReversalInPaise: txResult.taxableTotal,
+        totalTaxReversalInPaise: txResult.totalTaxTotal,
       },
       sourceInvoice: {
         id: sourceInvoice.id,
@@ -647,5 +765,111 @@ export class CreditNoteService {
       },
       isNew: true,
     };
+  }
+
+  /**
+   * Sum already-credited reversal per source snapshot ID across the given
+   * prior credit notes. Snapshots map 1:1 to order items.
+   */
+  private async aggregatePriorReversals(
+    tx: Prisma.TransactionClient,
+    priorCreditNoteIds: string[],
+  ): Promise<
+    Map<
+      string,
+      {
+        taxable: bigint;
+        cgst: bigint;
+        sgst: bigint;
+        igst: bigint;
+        cess: bigint;
+        totalTax: bigint;
+        gross: bigint;
+        discount: bigint;
+        creditTotal: bigint;
+        quantity: number;
+      }
+    >
+  > {
+    const map = new Map<
+      string,
+      {
+        taxable: bigint;
+        cgst: bigint;
+        sgst: bigint;
+        igst: bigint;
+        cess: bigint;
+        totalTax: bigint;
+        gross: bigint;
+        discount: bigint;
+        creditTotal: bigint;
+        quantity: number;
+      }
+    >();
+    if (priorCreditNoteIds.length === 0) return map;
+    const priorLines = await tx.taxDocumentLine.findMany({
+      where: { documentId: { in: priorCreditNoteIds } },
+    });
+    for (const line of priorLines) {
+      if (!line.sourceSnapshotId) continue;
+      const agg = map.get(line.sourceSnapshotId) ?? {
+        taxable: 0n,
+        cgst: 0n,
+        sgst: 0n,
+        igst: 0n,
+        cess: 0n,
+        totalTax: 0n,
+        gross: 0n,
+        discount: 0n,
+        creditTotal: 0n,
+        quantity: 0,
+      };
+      agg.taxable += line.taxableAmountInPaise;
+      agg.cgst += line.cgstAmountInPaise;
+      agg.sgst += line.sgstAmountInPaise;
+      agg.igst += line.igstAmountInPaise;
+      agg.cess += line.cessAmountInPaise;
+      agg.totalTax += line.totalTaxAmountInPaise;
+      agg.gross += line.grossAmountInPaise;
+      agg.discount += line.discountAmountInPaise;
+      agg.creditTotal += line.lineTotalInPaise;
+      agg.quantity += Number(line.quantity);
+      map.set(line.sourceSnapshotId, agg);
+    }
+    return map;
+  }
+
+  /** Phase 164 (#19) — fire-and-forget domain event (never blocks issuance). */
+  private emitIssued(payload: {
+    creditNoteId: string;
+    documentNumber: string;
+    returnId: string;
+    returnNumber: string;
+    sourceInvoiceId: string;
+    sourceInvoiceNumber: string;
+    customerId: string | null;
+    sellerId: string | null;
+    taxableReversalInPaise: string;
+    totalTaxReversalInPaise: string;
+    cessReversalInPaise: string;
+    documentTotalInPaise: string;
+    isB2b: boolean;
+    buyerGstin: string | null;
+    partialCoverageLineCount: number;
+  }): void {
+    if (!this.eventBus) return;
+    void this.eventBus
+      .publish({
+        eventName: CREDIT_NOTE_EVENTS.ISSUED,
+        aggregate: 'TaxDocument',
+        aggregateId: payload.creditNoteId,
+        occurredAt: new Date(),
+        payload,
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Failed to publish ${CREDIT_NOTE_EVENTS.ISSUED} for ${payload.documentNumber}: ${(err as Error).message}`,
+        ),
+      );
   }
 }

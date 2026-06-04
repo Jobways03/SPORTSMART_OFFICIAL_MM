@@ -80,11 +80,15 @@ function Inner() {
     if (reason === null) return; // user cancelled
     setRevoking((prev) => new Set(prev).add(row.id));
     try {
-      await adminSessionsService.revoke({
+      const res = await adminSessionsService.revoke({
         sessionId: row.id,
         actorType: row.actorType,
         reason: reason || undefined,
       });
+      // Phase 209 (#12) — distinguish "already revoked" from a fresh kill.
+      if (res.data?.alreadyRevoked) {
+        setErr(`That ${row.actorType.toLowerCase()} session was already revoked.`);
+      }
       // Optimistic — drop the row immediately. Refetch in the
       // background so any new sessions also surface.
       setRows((prev) => prev.filter((r) => r.id !== row.id));
@@ -161,18 +165,20 @@ function Inner() {
             <tr>
               <th style={thStyle}>Actor</th>
               <th style={thStyle}>Type</th>
-              <th style={thStyle}>IP</th>
+              <th style={thStyle}>Device / IP</th>
               <th style={thStyle}>User agent</th>
               <th style={thStyle}>Created</th>
+              {/* Phase 209 (#4) — last refresh-rotation; the freshness signal. */}
+              <th style={thStyle}>Last used</th>
               <th style={thStyle}>Expires</th>
               <th style={thStyle}>&nbsp;</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} style={tdEmpty}>Loading…</td></tr>
+              <tr><td colSpan={8} style={tdEmpty}>Loading…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} style={tdEmpty}>No active sessions match these filters.</td></tr>
+              <tr><td colSpan={8} style={tdEmpty}>No active sessions match these filters.</td></tr>
             ) : (
               rows.map((r) => {
                 const isRevoking = revoking.has(r.id);
@@ -193,13 +199,27 @@ function Inner() {
                     <td style={tdStyle}>
                       <span style={actorTypeBadge(r.actorType)}>{r.actorType}</span>
                     </td>
-                    <td style={tdStyle}>{r.ipAddress ?? '—'}</td>
+                    <td style={tdStyle}>
+                      {r.deviceLabel && (
+                        <div style={{ fontSize: 12, color: '#111827' }}>{r.deviceLabel}</div>
+                      )}
+                      {/* Phase 209 (#20) — mask the IP in the UI. Full value
+                          stays server-side (behind sessions.read + audit); the
+                          masked form is enough to recognise a network without
+                          casually exposing every operator's exact address. */}
+                      <span title="IP masked — full value in audit log" style={{ fontSize: 12, color: '#6b7280' }}>
+                        {maskIp(r.ipAddress)}
+                      </span>
+                    </td>
                     <td style={{ ...tdStyle, maxWidth: 200 }}>
-                      <span title={r.userAgent ?? ''} style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {r.userAgent ?? '—'}
+                      {/* Phase 209 (#20) — show a compact UA summary, not the
+                          raw fingerprintable string. */}
+                      <span title="User agent summarised" style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {summariseUa(r.userAgent)}
                       </span>
                     </td>
                     <td style={tdStyle}>{formatWhen(r.createdAt)}</td>
+                    <td style={tdStyle}>{r.lastUsedAt ? formatWhen(r.lastUsedAt) : <span style={{ color: '#9ca3af' }}>never</span>}</td>
                     <td style={tdStyle}>{formatWhen(r.expiresAt)}</td>
                     <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {canRevoke ? (
@@ -399,4 +419,40 @@ function formatWhen(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+// Phase 209 (#20) — mask the client IP for display. IPv4: keep the first
+// two octets (203.0.x.x). IPv6: keep the first two hextets (2001:db8:…).
+// The unmasked address remains server-side behind sessions.read + the
+// SESSIONS_VIEWED audit row.
+function maskIp(ip: string | null): string {
+  if (!ip) return '—';
+  const addr = ip.split('%')[0] ?? ip;
+  if (addr.includes(':')) {
+    const parts = addr.split(':').filter(Boolean);
+    return parts.length <= 2 ? addr : `${parts.slice(0, 2).join(':')}:…`;
+  }
+  const octets = addr.split('.');
+  if (octets.length !== 4) return addr;
+  return `${octets[0]}.${octets[1]}.x.x`;
+}
+
+// Phase 209 (#20) — summarise the user-agent into a coarse, non-
+// fingerprintable label instead of rendering the raw string.
+function summariseUa(ua: string | null): string {
+  if (!ua) return '—';
+  const os =
+    /Windows/i.test(ua) ? 'Windows'
+    : /Mac OS X|Macintosh/i.test(ua) ? 'macOS'
+    : /Android/i.test(ua) ? 'Android'
+    : /iPhone|iPad|iOS/i.test(ua) ? 'iOS'
+    : /Linux/i.test(ua) ? 'Linux'
+    : 'Unknown OS';
+  const browser =
+    /Edg\//i.test(ua) ? 'Edge'
+    : /Chrome\//i.test(ua) ? 'Chrome'
+    : /Firefox\//i.test(ua) ? 'Firefox'
+    : /Safari\//i.test(ua) ? 'Safari'
+    : 'Unknown';
+  return `${browser} · ${os}`;
 }

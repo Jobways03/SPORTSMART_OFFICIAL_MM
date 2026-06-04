@@ -75,7 +75,19 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
         }),
       },
     } as any;
-    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit, prisma);
+    // PR 12.x — PermissionsGuard.strict() now resolves via
+    // AuthzModeService.isStrict() (effective env-OR-runtime-override
+    // flag) as the 6th constructor arg, instead of reading env
+    // directly. These tests exercise soak mode → isStrict() false.
+    const authzMode = { isStrict: () => false } as any;
+    const guard = new PermissionsGuard(
+      reflector,
+      env,
+      audit,
+      unifiedAudit,
+      prisma,
+      authzMode,
+    );
     return { guard, reflector, audit };
   }
 
@@ -93,6 +105,9 @@ describe('Authorization guards → AuthorizationAuditService wiring', () => {
         },
       } as any,
       { getBoolean: () => abacEnabled } as any,
+      // PR 12.x — evaluator strict mode now resolves via
+      // AuthzModeService.isAbacEnabled() (3rd constructor arg).
+      { isAbacEnabled: () => abacEnabled } as any,
     );
     const audit = { record: jest.fn() } as any;
     const guard = new PolicyGuard(reflector, evaluator, audit);

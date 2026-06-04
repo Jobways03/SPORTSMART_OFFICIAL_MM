@@ -7,6 +7,11 @@ import { EventBusService } from '../../../../bootstrap/events/event-bus.service'
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { Prisma } from '@prisma/client';
+import {
+  NotFoundAppException,
+  ConflictAppException,
+  BadRequestAppException,
+} from '../../../../core/exceptions';
 
 @Injectable()
 export class FranchiseCommissionService {
@@ -199,10 +204,36 @@ export class FranchiseCommissionService {
       return clawback;
     }
 
-    const updated = await this.financeRepo.updateLedgerEntryStatus(
-      original.id,
-      'REVERSED',
-    );
+    // Phase 181 — a PENDING void posts a compensating reversal entry (so the
+    // running balance returns to where it was) AND flips the original, in ONE
+    // transaction. The compensating entry carries the canonical DEBIT (cancels
+    // the original's credit) but ZERO legacy franchise_earning, so the legacy
+    // settlement aggregator (excludes REVERSED) is unaffected. Idempotent via the
+    // POS_VOID key (re-void is a no-op).
+    const originalCreditPaise = BigInt((original.creditInPaise ?? 0) as any);
+    const originalDebitPaise = BigInt((original.debitInPaise ?? 0) as any);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.financeRepo.createLedgerEntry({
+        franchiseId: params.franchiseId,
+        sourceType: 'POS_SALE_REVERSAL',
+        sourceId: params.saleId,
+        description: `POS void reversal — PENDING sale ${params.saleId} commission reversed`,
+        baseAmount: 0,
+        rate: 0,
+        computedAmount: 0,
+        platformEarning: 0,
+        franchiseEarning: 0,
+        // Cancel the original's net effect on the balance (credit→debit, debit→credit).
+        debitInPaise: originalCreditPaise,
+        creditInPaise: originalDebitPaise,
+        idempotencyKey: `POS_VOID:${params.saleId}`,
+        tx,
+      });
+      return this.financeRepo.updateLedgerEntryStatus(original.id, 'REVERSED', undefined, {
+        tx,
+        reason: `POS void (was PENDING) for sale ${params.saleId}`,
+      });
+    });
 
     await this.eventBus.publish({
       eventName: 'franchise.finance.pos_void_recorded',
@@ -397,26 +428,34 @@ export class FranchiseCommissionService {
     subOrderId: string;
     reversalAmount: number;
   }) {
-    // Create a reversal entry with negative amounts
-    const entry = await this.financeRepo.createLedgerEntry({
-      franchiseId: params.franchiseId,
-      sourceType: 'RETURN_REVERSAL',
-      sourceId: params.subOrderId,
-      description: `Return reversal for order ${params.subOrderId} (original entry: ${params.originalLedgerEntryId})`,
-      baseAmount: -params.reversalAmount,
-      rate: 0,
-      computedAmount: 0,
-      platformEarning: 0,
-      franchiseEarning: -params.reversalAmount,
+    // Phase 181 (#6) — the reversal entry AND the original's status flip are now
+    // ONE atomic transaction (was two separate writes; a failure between them
+    // left the original un-REVERSED and the aggregate over-counting).
+    const entry = await this.prisma.$transaction(async (tx) => {
+      const created = await this.financeRepo.createLedgerEntry({
+        franchiseId: params.franchiseId,
+        sourceType: 'RETURN_REVERSAL',
+        sourceId: params.subOrderId,
+        description: `Return reversal for order ${params.subOrderId} (original entry: ${params.originalLedgerEntryId})`,
+        // The canonical debit (positive) is derived from franchiseEarning's sign;
+        // legacy signed columns retained for the settlement aggregator.
+        baseAmount: -params.reversalAmount,
+        rate: 0,
+        computedAmount: 0,
+        platformEarning: 0,
+        franchiseEarning: -params.reversalAmount,
+        tx,
+      });
+      if (params.originalLedgerEntryId) {
+        await this.financeRepo.updateLedgerEntryStatus(
+          params.originalLedgerEntryId,
+          'REVERSED',
+          undefined,
+          { tx, reason: `Reversed by return-reversal entry ${created.id}` },
+        );
+      }
+      return created;
     });
-
-    // Mark the original entry as REVERSED (if provided)
-    if (params.originalLedgerEntryId) {
-      await this.financeRepo.updateLedgerEntryStatus(
-        params.originalLedgerEntryId,
-        'REVERSED',
-      );
-    }
 
     await this.eventBus.publish({
       eventName: 'franchise.finance.reversal_recorded',
@@ -462,6 +501,9 @@ export class FranchiseCommissionService {
       franchiseEarning: isCredit
         ? Math.abs(params.amount)
         : -Math.abs(params.amount),
+      // Phase 181 (#5) — actor in a queryable column, not only the sourceId.
+      createdByAdminId: params.adminId,
+      createdBySystem: false,
     });
 
     await this.eventBus
@@ -505,6 +547,9 @@ export class FranchiseCommissionService {
       computedAmount: params.amount,
       platformEarning: params.amount,
       franchiseEarning: -params.amount,
+      // Phase 181 (#5) — actor in a queryable column.
+      createdByAdminId: params.adminId,
+      createdBySystem: false,
     });
 
     await this.eventBus
@@ -528,6 +573,105 @@ export class FranchiseCommissionService {
     );
 
     return entry;
+  }
+
+  // ── Phase 181 (#11) — high-value penalty two-person approval ────────────
+
+  /** Create a PENDING approval request; no ledger entry is posted yet. */
+  async requestPenaltyApproval(params: {
+    franchiseId: string;
+    amount: number;
+    reason: string;
+    requestedByAdminId: string;
+  }) {
+    const approval = await this.prisma.franchisePenaltyApproval.create({
+      data: {
+        franchiseId: params.franchiseId,
+        amount: params.amount,
+        reason: params.reason,
+        requestedByAdminId: params.requestedByAdminId,
+        status: 'PENDING',
+      },
+    });
+    await this.eventBus
+      .publish({
+        eventName: 'franchise.finance.penalty_approval_requested',
+        aggregate: 'FranchisePenaltyApproval',
+        aggregateId: approval.id,
+        occurredAt: new Date(),
+        payload: { approvalId: approval.id, franchiseId: params.franchiseId, amount: params.amount, requestedByAdminId: params.requestedByAdminId },
+      })
+      .catch(() => undefined);
+    return approval;
+  }
+
+  /**
+   * Approve a pending request — posts the penalty ledger entry AND flips the
+   * approval to APPROVED in ONE transaction (CAS, one-time). The approver MUST
+   * differ from the requester (two-person control).
+   */
+  async approvePenalty(params: { approvalId: string; approverAdminId: string }) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const appr = await tx.franchisePenaltyApproval.findUnique({ where: { id: params.approvalId } });
+      if (!appr) throw new NotFoundAppException('Penalty approval not found');
+      if (appr.status !== 'PENDING') throw new ConflictAppException(`Penalty approval already ${appr.status}`);
+      if (appr.requestedByAdminId === params.approverAdminId) {
+        throw new BadRequestAppException('The approver must be a different admin from the requester.');
+      }
+      const amount = Number(appr.amount);
+      const entry = await this.financeRepo.createLedgerEntry({
+        franchiseId: appr.franchiseId,
+        sourceType: 'PENALTY',
+        sourceId: `PEN-${appr.id}`,
+        description: appr.reason,
+        baseAmount: amount,
+        rate: 0,
+        computedAmount: amount,
+        platformEarning: amount,
+        franchiseEarning: -amount,
+        createdByAdminId: appr.requestedByAdminId,
+        createdBySystem: false,
+        idempotencyKey: `PENALTY_APPROVAL:${appr.id}`, // one ledger entry per approval
+        tx,
+      });
+      const cas = await tx.franchisePenaltyApproval.updateMany({
+        where: { id: appr.id, status: 'PENDING' },
+        data: { status: 'APPROVED', approvedByAdminId: params.approverAdminId, ledgerEntryId: entry.id, decidedAt: new Date() },
+      });
+      if (cas.count !== 1) throw new ConflictAppException('Approval changed during processing — retry.');
+      return { approvalId: appr.id, ledgerEntryId: entry.id, franchiseId: appr.franchiseId, amount };
+    });
+    await this.eventBus
+      .publish({
+        eventName: 'franchise.finance.penalty_approved',
+        aggregate: 'FranchisePenaltyApproval',
+        aggregateId: result.approvalId,
+        occurredAt: new Date(),
+        payload: { ...result, approvedByAdminId: params.approverAdminId },
+      })
+      .catch(() => undefined);
+    return result;
+  }
+
+  /** Reject a pending request — no ledger entry is posted. */
+  async rejectPenalty(params: { approvalId: string; approverAdminId: string; reason?: string }) {
+    const cas = await this.prisma.franchisePenaltyApproval.updateMany({
+      where: { id: params.approvalId, status: 'PENDING' },
+      data: { status: 'REJECTED', approvedByAdminId: params.approverAdminId, decisionReason: params.reason ?? null, decidedAt: new Date() },
+    });
+    if (cas.count !== 1) throw new ConflictAppException('Penalty approval is not pending.');
+    return this.prisma.franchisePenaltyApproval.findUnique({ where: { id: params.approvalId } });
+  }
+
+  async listPenaltyApprovals(params: { status?: string; franchiseId?: string; page: number; limit: number }) {
+    const where: any = {};
+    if (params.status) where.status = params.status;
+    if (params.franchiseId) where.franchiseId = params.franchiseId;
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.franchisePenaltyApproval.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (params.page - 1) * params.limit, take: params.limit }),
+      this.prisma.franchisePenaltyApproval.count({ where }),
+    ]);
+    return { items, total };
   }
 
   // ── Get earnings summary (dashboard) ────────────────────────
@@ -663,4 +807,30 @@ export class FranchiseCommissionService {
   ) {
     return this.financeRepo.findLedgerEntries(franchiseId, params);
   }
+
+  // Phase 181 (#1/#9) — running-balance read (current or point-in-time).
+  async getBalance(franchiseId: string, asOf?: Date) {
+    if (asOf) {
+      const paise = await this.financeRepo.getFranchiseBalanceAsOf(franchiseId, asOf);
+      return { balanceInPaise: paise.toString(), balance: paiseToRupeeString(paise), currency: 'INR', asOf: asOf.toISOString() };
+    }
+    const { balanceInPaise, currency } = await this.financeRepo.getFranchiseBalance(franchiseId);
+    return { balanceInPaise: balanceInPaise.toString(), balance: paiseToRupeeString(balanceInPaise), currency, asOf: null };
+  }
+
+  // Phase 181 (#17) — entries for CSV export (capped), with running balance.
+  async getLedgerForExport(
+    franchiseId: string,
+    params: { sourceType?: string; status?: string; fromDate?: Date; toDate?: Date },
+  ) {
+    const { entries } = await this.financeRepo.findLedgerEntries(franchiseId, { ...params, page: 1, limit: 50000 });
+    return entries;
+  }
+}
+
+// Phase 181 — exact paise → 2-decimal rupee string (handles negatives).
+function paiseToRupeeString(p: bigint): string {
+  const neg = p < 0n;
+  const abs = neg ? -p : p;
+  return `${neg ? '-' : ''}${abs / 100n}.${(abs % 100n).toString().padStart(2, '0')}`;
 }

@@ -167,8 +167,10 @@ function MutateForm({
   onDone: () => void;
 }) {
   const [amountInRupees, setAmountInRupees] = useState('');
+  const [reason, setReason] = useState('');
   const [description, setDescription] = useState('');
   const [internalNotes, setInternalNotes] = useState('');
+  const [referenceNumber, setReferenceNumber] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -183,27 +185,39 @@ function MutateForm({
       setError('Enter a positive amount');
       return;
     }
+    if (reason.trim().length < 3) {
+      setError('Reason (internal, audit-grade) is required');
+      return;
+    }
     if (!description.trim()) {
       setError('Description is required');
       return;
     }
     const amountInPaise = Math.round(rupees * 100);
+    if (amountInPaise > 50_000_000) {
+      setError('Single adjustment is capped at ₹5,00,000 — use the dual-approval flow for more');
+      return;
+    }
 
     setSubmitting(true);
     try {
       const fn = mode === 'credit' ? adminWalletService.credit : adminWalletService.debit;
       const res = await fn(userId, {
         amountInPaise,
+        reason: reason.trim(),
         description: description.trim(),
         internalNotes: internalNotes.trim() || undefined,
+        referenceNumber: referenceNumber.trim() || undefined,
       });
       if (res.data) {
         setSuccess(
           `${mode === 'credit' ? 'Credited' : 'Debited'} — new balance ${formatPaise(res.data.balanceInPaise)}`,
         );
         setAmountInRupees('');
+        setReason('');
         setDescription('');
         setInternalNotes('');
+        setReferenceNumber('');
         onDone();
       }
     } catch (err) {
@@ -266,6 +280,19 @@ function MutateForm({
       </div>
 
       <div style={{ marginBottom: 12 }}>
+        <label style={lbl}>Reason (internal, audit-grade — required)</label>
+        <input
+          type="text"
+          value={reason}
+          maxLength={500}
+          onChange={(e) => setReason(e.target.value)}
+          disabled={submitting}
+          placeholder={isCredit ? 'Comp for SR-2026-0123 missed SLA' : 'Fraud reversal per case CS-2026-0456'}
+          style={input}
+        />
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
         <label style={lbl}>Description (customer-visible)</label>
         <input
           type="text"
@@ -278,6 +305,19 @@ function MutateForm({
         />
       </div>
 
+      <div style={{ marginBottom: 12 }}>
+        <label style={lbl}>Reference # (optional — ticket/dispute id; dedups re-submission)</label>
+        <input
+          type="text"
+          value={referenceNumber}
+          maxLength={100}
+          onChange={(e) => setReferenceNumber(e.target.value.replace(/[^A-Za-z0-9_-]/g, ''))}
+          disabled={submitting}
+          placeholder="SR-2026-0123"
+          style={input}
+        />
+      </div>
+
       <div style={{ marginBottom: 14 }}>
         <label style={lbl}>Internal notes (optional)</label>
         <textarea
@@ -286,7 +326,7 @@ function MutateForm({
           onChange={(e) => setInternalNotes(e.target.value)}
           disabled={submitting}
           rows={2}
-          placeholder="Reason / reference / approver"
+          placeholder="Additional context / approver"
           style={{ ...input, height: 56, resize: 'vertical' }}
         />
       </div>
@@ -438,7 +478,7 @@ function TransactionsTable({ transactions }: { transactions: AdminWalletTransact
                   fontWeight: 600,
                   // Compare via BigInt so the sign check works for
                   // both number and string (BigInt-serialised) amounts.
-                  color: BigInt(tx.amountInPaise) >= 0n ? '#15803d' : '#b91c1c',
+                  color: BigInt(tx.amountInPaise) >= BigInt(0) ? '#15803d' : '#b91c1c',
                 }}
               >
                 {signedAmount(tx)}

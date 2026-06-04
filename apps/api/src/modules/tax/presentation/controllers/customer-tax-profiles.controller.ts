@@ -19,6 +19,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { UserAuthGuard } from '../../../../core/guards';
 import { CustomerTaxProfileService } from '../../application/services/customer-tax-profile.service';
 import { CreateCustomerTaxProfileDto } from '../dtos/create-customer-tax-profile.dto';
@@ -34,6 +35,8 @@ export class CustomerTaxProfilesController {
 
   @Get()
   @HttpCode(HttpStatus.OK)
+  // Phase 200 (audit #3) — GET 60/min.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async list(@Req() req: any) {
     const profiles = await this.profiles.list(req.userId);
     return {
@@ -45,13 +48,19 @@ export class CustomerTaxProfilesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  // Phase 161 (#10) — bound profile-create rate (also backstops the max-5 cap).
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async create(@Req() req: any, @Body() dto: CreateCustomerTaxProfileDto) {
-    const created = await this.profiles.create(req.userId, {
-      gstin: dto.gstin,
-      legalName: dto.legalName,
-      billingAddress: dto.billingAddress,
-      isDefault: dto.isDefault,
-    });
+    const created = await this.profiles.create(
+      req.userId,
+      {
+        gstin: dto.gstin,
+        legalName: dto.legalName,
+        billingAddress: dto.billingAddress,
+        isDefault: dto.isDefault,
+      },
+      { ipAddress: ipOf(req) },
+    );
     return {
       success: true,
       message: 'Tax profile created',
@@ -61,12 +70,13 @@ export class CustomerTaxProfilesController {
 
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async update(
     @Req() req: any,
     @Param('id') id: string,
     @Body() dto: UpdateCustomerTaxProfileDto,
   ) {
-    const updated = await this.profiles.update(req.userId, id, dto);
+    const updated = await this.profiles.update(req.userId, id, dto, { ipAddress: ipOf(req) });
     return {
       success: true,
       message: 'Tax profile updated',
@@ -76,8 +86,9 @@ export class CustomerTaxProfilesController {
 
   @Post(':id/set-default')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async setDefault(@Req() req: any, @Param('id') id: string) {
-    const updated = await this.profiles.setDefault(req.userId, id);
+    const updated = await this.profiles.setDefault(req.userId, id, { ipAddress: ipOf(req) });
     return {
       success: true,
       message: 'Default tax profile updated',
@@ -87,8 +98,9 @@ export class CustomerTaxProfilesController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async delete(@Req() req: any, @Param('id') id: string) {
-    await this.profiles.delete(req.userId, id);
+    await this.profiles.delete(req.userId, id, { ipAddress: ipOf(req) });
     return {
       success: true,
       message: 'Tax profile deleted',
@@ -97,8 +109,18 @@ export class CustomerTaxProfilesController {
   }
 }
 
-// Strip internal fields (verifiedBy admin id, verificationNotes) from
-// the customer-facing response; verification status itself stays.
+function ipOf(req: any): string | null {
+  return req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null;
+}
+
+// Strip internal fields (verifiedBy admin id, verificationNotes,
+// gstnRawResponseJson, verificationFailureReason) from the customer-facing
+// response; verification status itself stays.
+//
+// Phase 200 (audit #4/#8) — surface legalNameMismatch + gstnPortalStatus so the
+// UI can warn the customer that their saved name differs from the GST portal,
+// or that the GSTIN is suspended/cancelled and won't produce a clean B2B
+// invoice. These are read-only flags, never accepted as input.
 function serialise(profile: {
   id: string;
   gstin: string;
@@ -108,6 +130,8 @@ function serialise(profile: {
   isDefault: boolean;
   isVerified: boolean;
   verifiedAt: Date | null;
+  legalNameMismatch?: boolean;
+  gstnPortalStatus?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -120,6 +144,8 @@ function serialise(profile: {
     isDefault: profile.isDefault,
     isVerified: profile.isVerified,
     verifiedAt: profile.verifiedAt,
+    legalNameMismatch: profile.legalNameMismatch ?? false,
+    portalStatus: profile.gstnPortalStatus ?? null,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   };

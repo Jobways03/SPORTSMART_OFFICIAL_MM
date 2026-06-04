@@ -85,6 +85,24 @@ export class EWayBillCancellationWindowClosedError extends Error {
   }
 }
 
+/**
+ * Phase 160 (e-way-bill audit B4) — thrown when EWB generation is globally
+ * disabled via the `eway_bill_enabled` tax-config kill switch. The retry
+ * cron treats it as a skip; the controller maps it to 409. A REQUIRED row
+ * that can't be generated then blocks `canShip` — forcing an explicit,
+ * audited `adminOverride` to dispatch, which is the safe behaviour (we do
+ * NOT silently allow shipping without an EWB when generation is off).
+ */
+export class EWayBillDisabledError extends Error {
+  constructor(public readonly subOrderId: string) {
+    super(
+      `E-way-bill generation is disabled (tax_config.eway_bill_enabled = false). ` +
+        `Re-enable it, or use an audited admin override to dispatch.`,
+    );
+    this.name = 'EWayBillDisabledError';
+  }
+}
+
 export class EWayBillNotEligibleError extends Error {
   constructor(
     public readonly ewbId: string,
@@ -121,14 +139,21 @@ export interface GenerateTransportDetails {
 export class EWayBillService {
   private readonly logger = new Logger(EWayBillService.name);
   private static readonly CANCELLATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+  // Phase 160 (cancel/override audit #9/#10) — absorb clock skew between
+  // our clock and NIC's. We reject at `effective window = 24h − margin`
+  // (and at the boundary, `>=`) so a cancel we accept can't be one NIC's
+  // portal then rejects for being just past its own 24h mark.
+  private static readonly CANCELLATION_SAFETY_MARGIN_MS = 10 * 60 * 1000;
   // Phase 89 — Gap #24 policy versioning. Bumped when CBIC notifies
   // new HSN rules or the per-state threshold table changes.
   private static readonly POLICY_VERSION = 'cbic-2024-q3';
-  // Phase 89 — Gap #9 dual-control threshold. Above this consignment
-  // value, override requires the senior `tax.ewayBill.override.superAdmin`
-  // permission (controller enforces) AND the override actor must differ
-  // from the original classify / generate actor (service enforces).
-  private static readonly OVERRIDE_HIGH_VALUE_PAISE = 2_00_00_00; // ₹2,00,000
+  // Phase 89 — Gap #9 / Phase 160 cancel-override audit #17 dual-control
+  // threshold. Above this consignment value, override requires the senior
+  // `tax.ewayBill.override.superAdmin` permission (controller enforces) AND
+  // the override actor must differ from the original classify / generate
+  // actor (service enforces). PUBLIC so the controller gates on the exact
+  // same boundary the separation-of-duty check uses (no magic-number drift).
+  static readonly OVERRIDE_HIGH_VALUE_PAISE = 2_00_00_00; // ₹2,00,000
 
   constructor(
     private readonly prisma: PrismaService,
@@ -139,6 +164,25 @@ export class EWayBillService {
     @Optional()
     private readonly eventBus?: EventBusService,
   ) {}
+
+  /**
+   * Phase 160 (e-way-bill audit B4) — the `eway_bill_enabled` kill switch.
+   * Defaults to TRUE when the flag is absent (the seed ships it true; EWB
+   * enforcement is on by default) — only an explicit `false` disables
+   * generation. `!== false` also tolerates a config-read returning
+   * undefined (unit-test mocks), keeping the default-on behaviour.
+   */
+  async isEnabled(): Promise<boolean> {
+    // getBoolean returns the `true` fallback for a missing config row, so the
+    // only way this throws is a hard config-store failure — which we let
+    // PROPAGATE (fail-loud) rather than swallow. Swallowing to `true` would
+    // bypass an operator's explicit `false`; swallowing to `false` would halt
+    // all EWB generation on a transient blip. Propagating fails just this
+    // attempt transparently, so neither the flag's intent nor availability is
+    // silently compromised.
+    const v = await this.taxConfig.getBoolean('eway_bill_enabled' as any, true);
+    return v !== false;
+  }
 
   /**
    * Phase 89 (2026-05-23) — Gap #5 chain of custody helper.
@@ -561,6 +605,12 @@ export class EWayBillService {
     subOrderId: string,
     details: GenerateTransportDetails = {},
   ): Promise<EWayBill> {
+    // Phase 160 (audit B4) — the kill switch gates the provider call. A
+    // disabled platform never mints; the REQUIRED row stays REQUIRED and
+    // canShip blocks it (forcing an audited override to dispatch).
+    if (!(await this.isEnabled())) {
+      throw new EWayBillDisabledError(subOrderId);
+    }
     // Ensure classification has run.
     const { row, required } = await this.classifyForSubOrder(subOrderId);
     if (!required) {
@@ -574,6 +624,29 @@ export class EWayBillService {
     }
     if (row.status === 'CANCELLED') {
       throw new EWayBillNotEligibleError(row.id, row.status, 'generate');
+    }
+
+    // Phase 160 (audit #16) — re-resolve addresses at generate time if the
+    // classify-time row is missing any leg (e.g. the shipping snapshot or
+    // warehouse pincode landed AFTER classification ran). Without this the
+    // row inherits the classify-time nulls and the NIC payload would be
+    // rejected for a missing consignor/consignee address.
+    const addressPatch: {
+      fromPincode?: string;
+      fromStateCode?: string;
+      toPincode?: string;
+      toStateCode?: string;
+    } = {};
+    if (!row.fromStateCode || !row.toStateCode || !row.fromPincode || !row.toPincode) {
+      const addr = await this.resolveAddresses(subOrderId);
+      // Only FILL a currently-null leg with a freshly-resolved non-null
+      // value. Never include a field that's already set (no overwrite) or
+      // one that resolves to null again (no null→null churn) — so the
+      // spread can only ever ADD missing addresses, never clear good ones.
+      if (!row.fromPincode && addr.fromPincode) addressPatch.fromPincode = addr.fromPincode;
+      if (!row.fromStateCode && addr.fromStateCode) addressPatch.fromStateCode = addr.fromStateCode;
+      if (!row.toPincode && addr.toPincode) addressPatch.toPincode = addr.toPincode;
+      if (!row.toStateCode && addr.toStateCode) addressPatch.toStateCode = addr.toStateCode;
     }
 
     // Phase 89 — Gap #21 TOCTOU lock. Row lock keeps a concurrent
@@ -608,6 +681,8 @@ export class EWayBillService {
           transporterId: details.transporterId ?? fresh.transporterId,
           transporterName: details.transporterName ?? fresh.transporterName,
           distanceKm: details.distanceKm ?? fresh.distanceKm,
+          // Phase 160 (audit #16) — apply any re-resolved addresses.
+          ...addressPatch,
         },
       });
     });
@@ -792,6 +867,20 @@ export class EWayBillService {
     });
     if (!ewb) throw new EWayBillNotFoundError(args.ewbId);
     if (ewb.status === 'CANCELLED') return ewb; // idempotent
+    // Phase 160 (audit B1) — re-drive a cancel that got stuck (the
+    // CANCELLATION_PENDING marker was written but the provider call or the
+    // settle write didn't complete) or failed. The NIC cancel is idempotent
+    // so retrying is safe; this is also how the reconcile cron heals drift.
+    if (ewb.status === 'CANCELLATION_PENDING' || ewb.status === 'CANCELLATION_FAILED') {
+      if (!ewb.ewbNumber) {
+        throw new Error(`EWayBill ${ewb.id} is ${ewb.status} but missing ewbNumber.`);
+      }
+      return this.driveCancelToCompletion(
+        ewb,
+        args.cancelledBy,
+        ewb.cancellationReason ?? args.reason,
+      );
+    }
     if (ewb.status !== 'GENERATED') {
       throw new EWayBillNotEligibleError(ewb.id, ewb.status, 'cancel');
     }
@@ -803,16 +892,18 @@ export class EWayBillService {
 
     const now = args.now ?? new Date();
     const ageMs = now.getTime() - ewb.ewbDate.getTime();
-    if (ageMs > EWayBillService.CANCELLATION_WINDOW_MS) {
+    // Phase 160 (#9/#10) — reject at the (skew-adjusted) boundary with `>=`.
+    if (
+      ageMs >=
+      EWayBillService.CANCELLATION_WINDOW_MS -
+        EWayBillService.CANCELLATION_SAFETY_MARGIN_MS
+    ) {
       throw new EWayBillCancellationWindowClosedError(ewb.id, ewb.ewbDate);
     }
 
     // Phase 89 (2026-05-23) — Cancel post-delivery block. CBIC FAQ
     // explicitly disallows cancellation of an EWB after the consignor
-    // confirms delivery. Pre-Phase-89 the service only checked the
-    // 24h window — a sub-order that delivered within 24h of issuance
-    // could still be cancelled, leaving the EWB report inconsistent
-    // with the delivered shipment.
+    // confirms delivery.
     const sub = await this.prisma.subOrder.findUnique({
       where: { id: ewb.subOrderId },
       select: { fulfillmentStatus: true },
@@ -821,38 +912,189 @@ export class EWayBillService {
       throw new EWayBillNotEligibleError(ewb.id, ewb.status, 'cancel');
     }
 
-    const result = await this.provider.cancel({
-      ewbNumber: ewb.ewbNumber,
+    // Phase 160 (audit B1) — PHASE 1: mark CANCELLATION_PENDING BEFORE the
+    // provider call. If the process dies between here and the settle write,
+    // the row carries a recoverable marker (the reconcile cron re-drives
+    // it) instead of silently staying GENERATED while NIC says cancelled.
+    const pendingRow = await this.prisma.eWayBill.update({
+      where: { id: ewb.id },
+      data: {
+        status: 'CANCELLATION_PENDING',
+        cancelInitiatedAt: now,
+        cancelInitiatedBy: args.cancelledBy,
+        cancellationReason: args.reason,
+      },
+    });
+    await this.writeAuditLog({
+      ewayBillId: ewb.id,
+      action: 'CANCEL_INITIATED',
+      fromStatus: 'GENERATED',
+      toStatus: 'CANCELLATION_PENDING',
+      actorId: args.cancelledBy,
+      actorRole: 'ADMIN',
       reason: args.reason,
     });
+
+    // PHASE 2: provider call + settle.
+    return this.driveCancelToCompletion(pendingRow, args.cancelledBy, args.reason);
+  }
+
+  /**
+   * Phase 160 (audit B1) — PHASE 2 of the two-phase cancel. Calls the
+   * provider (idempotent at NIC) and settles the row to CANCELLED on
+   * success, or CANCELLATION_FAILED on provider error (the reconcile cron
+   * retries failed rows). Shared by the direct cancel path and the cron.
+   */
+  private async driveCancelToCompletion(
+    ewb: EWayBill,
+    cancelledBy: string,
+    reason: string,
+  ): Promise<EWayBill> {
+    let result;
+    try {
+      result = await this.provider.cancel({
+        ewbNumber: ewb.ewbNumber!,
+        reason,
+      });
+    } catch (err) {
+      const failed = await this.prisma.eWayBill.update({
+        where: { id: ewb.id },
+        data: {
+          status: 'CANCELLATION_FAILED',
+          failureReason: (err as Error).message ?? String(err),
+        },
+      });
+      await this.writeAuditLog({
+        ewayBillId: ewb.id,
+        action: 'CANCEL_FAILED',
+        fromStatus: ewb.status,
+        toStatus: 'CANCELLATION_FAILED',
+        actorId: cancelledBy,
+        actorRole: 'ADMIN',
+        reason: (err as Error).message ?? String(err),
+      });
+      void failed;
+      throw err;
+    }
 
     const cancelled = await this.prisma.eWayBill.update({
       where: { id: ewb.id },
       data: {
         status: 'CANCELLED',
         cancelledAt: result.cancelledAt,
-        cancelledBy: args.cancelledBy,
-        cancellationReason: args.reason,
-        rawResponseJson: result.rawResponseJson as Prisma.InputJsonValue,
+        cancelledBy,
+        cancellationReason: reason,
+        // Phase 160 (#7) — queryable cancel reference.
+        providerCancelReference: result.providerCancelReference ?? null,
+        // Phase 160 (#8) — keep the cancel response SEPARATE; never clobber
+        // the original generate response in rawResponseJson.
+        rawCancelResponseJson: result.rawResponseJson as Prisma.InputJsonValue,
       },
     });
     await this.writeAuditLog({
       ewayBillId: ewb.id,
       action: 'CANCEL',
-      fromStatus: 'GENERATED',
+      fromStatus: ewb.status,
       toStatus: 'CANCELLED',
-      actorId: args.cancelledBy,
+      actorId: cancelledBy,
       actorRole: 'ADMIN',
-      reason: args.reason,
+      reason,
     });
     this.emit(EWAY_BILL_EVENTS.CANCELLED, {
       ewayBillId: ewb.id,
       subOrderId: ewb.subOrderId,
       ewbNumber: ewb.ewbNumber,
-      cancelledBy: args.cancelledBy,
-      reason: args.reason,
+      cancelledBy,
+      reason,
     });
     return cancelled;
+  }
+
+  /**
+   * Phase 160 (e-way-bill audit #18) — update Part-B (transport details) on
+   * an ISSUED EWB without cancelling it. NIC's Part-B update covers a
+   * vehicle change / trans-shipment and RE-ISSUES the validity. Only
+   * GENERATED rows are eligible. Audited + emits PART_B_UPDATED.
+   */
+  async updateTransportDetails(args: {
+    ewbId: string;
+    actorId: string;
+    reason: string;
+    transportMode?: EWayBillTransportMode;
+    vehicleNumber?: string | null;
+    transporterId?: string | null;
+    transporterName?: string | null;
+    distanceKm?: number | null;
+  }): Promise<EWayBill> {
+    const reason = (args.reason ?? '').trim();
+    if (reason.length < 3) {
+      throw new Error('A Part-B update reason (min 3 characters) is required.');
+    }
+    const ewb = await this.prisma.eWayBill.findUnique({
+      where: { id: args.ewbId },
+    });
+    if (!ewb) throw new EWayBillNotFoundError(args.ewbId);
+    if (ewb.status !== 'GENERATED' || !ewb.ewbNumber) {
+      // Part-B updates only apply to a live, issued EWB.
+      throw new EWayBillNotEligibleError(ewb.id, ewb.status, 'generate');
+    }
+    const transportMode = args.transportMode ?? ewb.transportMode;
+    // ROAD requires a vehicle number per CBIC.
+    const vehicleNumber =
+      args.vehicleNumber !== undefined ? args.vehicleNumber : ewb.vehicleNumber;
+    if (transportMode === 'ROAD' && !vehicleNumber) {
+      throw new Error('vehicleNumber is required for ROAD transport.');
+    }
+
+    const result = await this.provider.updatePartB({
+      ewbNumber: ewb.ewbNumber,
+      transportMode,
+      vehicleNumber: vehicleNumber ?? null,
+      transporterId:
+        args.transporterId !== undefined ? args.transporterId : ewb.transporterId,
+      transporterName:
+        args.transporterName !== undefined
+          ? args.transporterName
+          : ewb.transporterName,
+      distanceKm: args.distanceKm !== undefined ? args.distanceKm : ewb.distanceKm,
+      reason,
+    });
+
+    const updated = await this.prisma.eWayBill.update({
+      where: { id: ewb.id },
+      data: {
+        transportMode,
+        vehicleNumber: vehicleNumber ?? null,
+        transporterId:
+          args.transporterId !== undefined ? args.transporterId : ewb.transporterId,
+        transporterName:
+          args.transporterName !== undefined
+            ? args.transporterName
+            : ewb.transporterName,
+        distanceKm: args.distanceKm !== undefined ? args.distanceKm : ewb.distanceKm,
+        // NIC re-issues validity on a Part-B update.
+        validUntil: result.validUntil,
+        rawResponseJson: result.rawResponseJson as Prisma.InputJsonValue,
+      },
+    });
+    await this.writeAuditLog({
+      ewayBillId: ewb.id,
+      action: 'UPDATE_PART_B',
+      fromStatus: 'GENERATED',
+      toStatus: 'GENERATED',
+      actorId: args.actorId,
+      actorRole: 'ADMIN',
+      reason,
+    });
+    this.emit(EWAY_BILL_EVENTS.PART_B_UPDATED, {
+      ewayBillId: ewb.id,
+      subOrderId: ewb.subOrderId,
+      ewbNumber: ewb.ewbNumber,
+      vehicleNumber: vehicleNumber ?? null,
+      updatedBy: args.actorId,
+      reason,
+    });
+    return updated;
   }
 
   /**
@@ -884,8 +1126,11 @@ export class EWayBillService {
     });
     if (!ewb) throw new EWayBillNotFoundError(args.ewbId);
     if (ewb.status === 'NOT_REQUIRED') {
-      // Nothing to override — return as-is.
-      return ewb;
+      // Phase 160 (audit #13) — overriding a NOT_REQUIRED EWB is meaningless
+      // (there's no ship-permission to bypass). Make it an EXPLICIT error
+      // (consistent with the GENERATED/CANCELLED rejection below) instead of
+      // a silent no-op the UI might read as success.
+      throw new EWayBillNotEligibleError(ewb.id, ewb.status, 'generate');
     }
     if (ewb.status === 'GENERATED' || ewb.status === 'CANCELLED') {
       // Override only makes sense for REQUIRED / FAILED / EXPIRED /
@@ -918,6 +1163,11 @@ export class EWayBillService {
       where: { id: ewb.id },
       data: {
         status: 'OVERRIDDEN',
+        // Phase 160 (audit #2) — remember the status we overrode FROM so
+        // reports show what was bypassed + a revoke restores it accurately.
+        // Re-overriding an already-OVERRIDDEN row keeps the ORIGINAL.
+        preOverrideStatus:
+          ewb.status === 'OVERRIDDEN' ? ewb.preOverrideStatus : ewb.status,
         overrideAdminId: args.adminId,
         overrideAt: new Date(),
         overrideReason: args.reason,
@@ -968,10 +1218,14 @@ export class EWayBillService {
     if (ewb.status !== 'OVERRIDDEN') {
       throw new EWayBillNotEligibleError(ewb.id, ewb.status, 'generate');
     }
+    // Phase 160 (audit #2) — restore the EXACT status the override masked
+    // (REQUIRED / FAILED / EXPIRED), not a hardcoded REQUIRED.
+    const restoredStatus = ewb.preOverrideStatus ?? 'REQUIRED';
     const updated = await this.prisma.eWayBill.update({
       where: { id: ewb.id },
       data: {
-        status: 'REQUIRED',
+        status: restoredStatus,
+        preOverrideStatus: null,
         overrideRevokedAt: new Date(),
         overrideRevokedBy: args.adminId,
         overrideRevokeReason: args.reason,
@@ -981,7 +1235,7 @@ export class EWayBillService {
       ewayBillId: ewb.id,
       action: 'REVOKE_OVERRIDE',
       fromStatus: 'OVERRIDDEN',
-      toStatus: 'REQUIRED',
+      toStatus: restoredStatus,
       actorId: args.adminId,
       actorRole: 'ADMIN',
       reason: args.reason,
@@ -1026,12 +1280,94 @@ export class EWayBillService {
           reason: `EWB override was revoked at ${ewb.overrideRevokedAt.toISOString()} — generate or re-override`,
         };
       }
+      // Phase 160 (audit #14) — optional override TTL. An override is a
+      // time-bounded compliance exception; once `eway_bill_override_ttl_hours`
+      // (default 0 = no expiry) has elapsed since it was stamped, it stops
+      // permitting dispatch so a stale bypass can't ride forever.
+      if (ewb.status === 'OVERRIDDEN' && ewb.overrideAt) {
+        const ttlHours = await this.taxConfig.getNumber(
+          'eway_bill_override_ttl_hours' as any,
+          0,
+        );
+        if (
+          ttlHours > 0 &&
+          Date.now() - ewb.overrideAt.getTime() > ttlHours * 60 * 60 * 1000
+        ) {
+          return {
+            allowed: false,
+            reason: `EWB override expired (older than ${ttlHours}h) — re-override or generate a real EWB before ship.`,
+          };
+        }
+      }
+      // Phase 160 (audit B5) — a GENERATED EWB past its validity is legally
+      // dead even before the hourly expiry cron flips it to EXPIRED. Block
+      // dispatch synchronously so a roadside-invalid EWB can never ship in
+      // the window between expiry and the cron run.
+      if (ewb.status === 'GENERATED' && ewb.validUntil && ewb.validUntil.getTime() < Date.now()) {
+        return {
+          allowed: false,
+          reason: `EWB ${ewb.ewbNumber ?? ewb.id} expired at ${ewb.validUntil.toISOString()} — extend validity or regenerate before ship.`,
+        };
+      }
       return { allowed: true, reason: ewb.status };
     }
     return {
       allowed: false,
       reason: `EWB status ${ewb.status} — generation required before ship.`,
     };
+  }
+
+  /**
+   * Phase 160 (cancel/override audit #11) — replace an EWB: cancel the
+   * existing one then generate a fresh EWB for the same sub-order, linking
+   * the new row's `replacedEwayBillId` back to the cancelled one. Used when
+   * a wrong vehicle/transporter needs correcting beyond a Part-B update.
+   *
+   * Not a single DB transaction (each leg is an external provider call),
+   * but ordered so a failed cancel aborts BEFORE any new EWB is minted; a
+   * cancel-success-then-generate-failure leaves the old CANCELLED + a fresh
+   * REQUIRED row the admin can re-generate (recoverable, not orphaned).
+   */
+  async replaceEwayBill(args: {
+    ewbId: string;
+    actorId: string;
+    cancelReason: string;
+    transport?: GenerateTransportDetails;
+  }): Promise<EWayBill> {
+    const old = await this.prisma.eWayBill.findUnique({
+      where: { id: args.ewbId },
+    });
+    if (!old) throw new EWayBillNotFoundError(args.ewbId);
+    // Cancel first (enforces the 24h window + provider call). Throws on
+    // ineligibility / window-closed / provider failure → replace aborts.
+    await this.cancel({
+      ewbId: args.ewbId,
+      cancelledBy: args.actorId,
+      reason: args.cancelReason,
+    });
+    // Generate a fresh EWB for the same sub-order (classify creates a new
+    // row now that the old one is CANCELLED).
+    const fresh = await this.generate(old.subOrderId, args.transport ?? {});
+    if (fresh.id === old.id) {
+      // Defensive — should never happen (old is CANCELLED, classify makes
+      // a new row), but never self-link.
+      return fresh;
+    }
+    await this.prisma.eWayBill.update({
+      where: { id: fresh.id },
+      data: { replacedEwayBillId: old.id },
+    });
+    await this.writeAuditLog({
+      ewayBillId: fresh.id,
+      action: 'REPLACE',
+      fromStatus: fresh.status,
+      toStatus: fresh.status,
+      actorId: args.actorId,
+      actorRole: 'ADMIN',
+      reason: `Replaces cancelled EWB ${old.id}: ${args.cancelReason}`,
+      payloadAfter: { replacedEwayBillId: old.id },
+    });
+    return this.prisma.eWayBill.findUniqueOrThrow({ where: { id: fresh.id } });
   }
 
   /**
@@ -1134,7 +1470,7 @@ export class EWayBillService {
   }): Promise<number> {
     const nationalThreshold = await this.taxConfig.getNumber(
       'eway_bill_threshold_paise',
-      50_00_00,
+      50_00_00, // Phase 160 (audit #6): 5,000,000 paise = ₹50,000 (CBIC default)
     );
     // Per-state override applies only for intra-state movements
     // (otherwise inter-state always uses the national default).

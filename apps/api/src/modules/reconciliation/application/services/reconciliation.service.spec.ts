@@ -68,7 +68,8 @@ function buildService(opts: {
     $queryRaw: jest.fn().mockResolvedValue([]),
   } as any;
   const events = { publish: jest.fn().mockResolvedValue(undefined) } as any;
-  const service = new ReconciliationService(prisma, events);
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+  const service = new ReconciliationService(prisma, events, audit);
   return { service, prisma, recordDiscrepancy };
 }
 
@@ -99,7 +100,8 @@ describe('ReconciliationService — Phase 0 PR 0.6 precision safety', () => {
     expect(recordDiscrepancy).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          kind: 'EXPECTED_NOT_FOUND',
+          // Phase 173 (#7) — precise kind for a PAID order missing its payment id.
+          kind: 'MISSING_PAYMENT',
           // Phase 2 (PR 2.3) — recon columns are BigInt; the service
           // now passes bigint straight through (no more clamp helper).
           expectedInPaise: 99999n,

@@ -1,11 +1,17 @@
-import { apiClient, ApiResponse } from '@/lib/api-client';
+import { apiClient, API_BASE, ApiResponse } from '@/lib/api-client';
 
 export type WalletTransactionType =
   | 'TOPUP'
   | 'REFUND'
   | 'CREDIT_ADJUSTMENT'
   | 'DEBIT'
-  | 'DEBIT_ADJUSTMENT';
+  | 'DEBIT_ADJUSTMENT'
+  | 'LOYALTY_REBATE' // Phase 182 (#2)
+  | 'MANUAL_CREDIT' // Phase 183 (#5)
+  | 'MANUAL_DEBIT'
+  | 'GOODWILL_CREDIT'
+  | 'ORDER_REDEMPTION'
+  | 'REVERSAL';
 
 export type WalletTransactionStatus =
   | 'PENDING'
@@ -20,18 +26,20 @@ export interface WalletBalance {
 
 export interface WalletTransaction {
   id: string;
-  walletId: string;
   userId: string;
   type: WalletTransactionType;
   status: WalletTransactionStatus;
   amountInPaise: number;
   balanceAfterInPaise: number;
+  balanceBeforeInPaise?: number; // Phase 182 (#4)
+  direction?: 'CREDIT' | 'DEBIT'; // Phase 182 (#5)
+  currency?: string; // Phase 182 (#9)
   referenceType: string | null;
   referenceId: string | null;
+  referenceNumber?: string | null; // Phase 182 (#8)
   description: string;
-  internalNotes: string | null;
-  createdByAdminId: string | null;
   createdAt: string;
+  // internalNotes + createdByAdminId are stripped server-side (#11) — not here.
 }
 
 export interface WalletTransactionPage {
@@ -90,6 +98,26 @@ export const walletService = {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  },
+
+  // Phase 182 (#10) — download the statement-of-account CSV. Token auth means a
+  // plain <a download> can't carry the header, so we fetch + blob-download.
+  async downloadStatementCsv(): Promise<void> {
+    const token =
+      typeof window !== 'undefined' ? window.localStorage.getItem('accessToken') : null;
+    const res = await fetch(`${API_BASE}/customer/wallet/transactions/export.csv`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!res.ok) throw new Error('Could not download statement');
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wallet-statement-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
   },
 };
 

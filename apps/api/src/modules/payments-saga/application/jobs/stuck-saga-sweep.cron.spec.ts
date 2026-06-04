@@ -58,9 +58,11 @@ function buildCron(opts: {
   const instr = {
     wrap: jest.fn(async (_n: string, fn: () => Promise<unknown>) => fn()),
   } as any;
+  // Cluster C (#216-#4) — best-effort audit summary row per tick.
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
 
-  const cron = new StuckSagaSweepCron(prisma, env, eventBus, leader, ledger, instr);
-  return { cron, prisma, env, eventBus, leader, ledger, findMany, updateMany, instr };
+  const cron = new StuckSagaSweepCron(prisma, env, eventBus, leader, ledger, instr, audit);
+  return { cron, prisma, env, eventBus, leader, ledger, findMany, updateMany, instr, audit };
 }
 
 const aMinuteAgo = (mins: number) =>
@@ -159,7 +161,11 @@ describe('StuckSagaSweepCron — Phase 1 PR 1.5', () => {
     await cron.sweep();
 
     expect(ledger.enqueueAdminTask).toHaveBeenCalledTimes(3);
-    expect(eventBus.publish).toHaveBeenCalledTimes(3);
+    // Phase 174 — each escalated saga now fires TWO events: the ops
+    // escalation AND a customer-facing notification (one per saga).
+    const names = eventBus.publish.mock.calls.map((c: any[]) => c[0].eventName);
+    expect(names.filter((n: string) => n === 'payments.saga.stuck_auto_escalated')).toHaveLength(3);
+    expect(names.filter((n: string) => n === 'payments.saga.stuck_customer_notification')).toHaveLength(3);
   });
 
   it('maps RefundSourceType.REPLACEMENT to LedgerSourceType.MANUAL for the admin task', async () => {
@@ -233,6 +239,69 @@ describe('StuckSagaSweepCron — Phase 1 PR 1.5', () => {
       expect.any(Number),
       expect.any(Function),
     );
+  });
+
+  it('emits a customer-notification event per escalated saga (#216-#4)', async () => {
+    const { cron, eventBus } = buildCron({
+      sagas: [
+        {
+          id: 'saga-cn',
+          refundType: 'RETURN',
+          sourceId: 'r-9',
+          customerId: 'cust-9',
+          amountInPaise: 12_300n,
+          startedAt: aMinuteAgo(10),
+          status: 'IN_PROGRESS',
+        },
+      ],
+    });
+    await cron.sweep();
+    expect(eventBus.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: 'payments.saga.stuck_customer_notification',
+        aggregateId: 'saga-cn',
+        payload: expect.objectContaining({
+          customerId: 'cust-9',
+          amountInPaise: '12300',
+        }),
+      }),
+    );
+  });
+
+  it('writes ONE best-effort audit summary row when sagas were escalated (#216-#4)', async () => {
+    const { cron, audit } = buildCron({
+      sagas: [
+        { id: 'a', refundType: 'DISPUTE', sourceId: 'd', customerId: 'c', amountInPaise: 1n, startedAt: aMinuteAgo(10), status: 'IN_PROGRESS' },
+        { id: 'b', refundType: 'RETURN',  sourceId: 'r', customerId: 'c', amountInPaise: 2n, startedAt: aMinuteAgo(10), status: 'IN_PROGRESS' },
+      ],
+    });
+    await cron.sweep();
+    expect(audit.writeAuditLog).toHaveBeenCalledTimes(1);
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'REFUND_SAGA_STUCK_ESCALATED',
+        module: 'payments',
+        newValue: expect.objectContaining({ scanned: 2, escalated: 2 }),
+      }),
+    );
+  });
+
+  it('writes NO audit row on an empty sweep (no noise)', async () => {
+    const { cron, audit } = buildCron({ sagas: [] });
+    await cron.sweep();
+    expect(audit.writeAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('does not unwind when the audit write throws (best-effort)', async () => {
+    const { cron, audit, eventBus } = buildCron({
+      sagas: [
+        { id: 'a', refundType: 'DISPUTE', sourceId: 'd', customerId: 'c', amountInPaise: 1n, startedAt: aMinuteAgo(10), status: 'IN_PROGRESS' },
+      ],
+    });
+    audit.writeAuditLog.mockRejectedValueOnce(new Error('audit DB down'));
+    await expect(cron.sweep()).resolves.toBeUndefined();
+    // The escalation side-effects still fired.
+    expect(eventBus.publish).toHaveBeenCalled();
   });
 });
 

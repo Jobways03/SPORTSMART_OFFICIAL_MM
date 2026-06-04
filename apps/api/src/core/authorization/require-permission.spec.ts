@@ -5,8 +5,6 @@
 import { requirePermissionOrSoak } from './require-permission';
 import { ForbiddenAppException } from '../exceptions';
 
-const env = (strict: boolean) =>
-  ({ getBoolean: jest.fn().mockReturnValue(strict) }) as any;
 const reqWith = (permissions: string[]) => ({
   adminId: 'a-1',
   user: { permissions },
@@ -16,7 +14,7 @@ const call = (req: any, strict: boolean) =>
   requirePermissionOrSoak({
     req,
     permission: 'disputes.internalNote',
-    env: env(strict),
+    authzMode: { isStrict: () => strict },
     context: 'dispute.internalNote',
   });
 

@@ -1,5 +1,6 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   ProcurementRepository,
   PROCUREMENT_REPOSITORY,
@@ -19,6 +20,7 @@ import {
   BadRequestAppException,
   NotFoundAppException,
   ForbiddenAppException,
+  ConflictAppException,
 } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
@@ -39,8 +41,41 @@ export class ProcurementService {
     private readonly logger: AppLoggerService,
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    // Phase 235/236 — hash-chained audit trail for procurement transitions.
+    // @Optional so the manual-construction unit specs (which don't wire it) keep
+    // working; AuditPublicFacade is @Global so the live app always injects it.
+    @Optional() private readonly auditFacade?: AuditPublicFacade,
   ) {
     this.logger.setContext('ProcurementService');
+  }
+
+  /**
+   * Phase 235/236 — best-effort hash-chained audit_logs row for a procurement
+   * transition. Mirrors recordProcurementEvent (which is the in-tx history) but
+   * writes to the tamper-evident cross-module audit chain. Never throws back
+   * into the caller.
+   */
+  private async writeProcurementAudit(args: {
+    actorId: string | null;
+    actorRole: 'ADMIN' | 'FRANCHISE' | 'SYSTEM';
+    action: string;
+    resourceId: string;
+    oldValue?: Record<string, unknown>;
+    newValue?: Record<string, unknown>;
+  }): Promise<void> {
+    if (!this.auditFacade) return;
+    await this.auditFacade
+      .writeAuditLog({
+        actorId: args.actorId ?? 'SYSTEM',
+        actorRole: args.actorRole,
+        action: args.action,
+        module: 'franchise',
+        resource: 'ProcurementRequest',
+        resourceId: args.resourceId,
+        oldValue: args.oldValue,
+        newValue: args.newValue,
+      } as any)
+      .catch(() => undefined);
   }
 
   /**
@@ -84,6 +119,7 @@ export class ProcurementService {
   async createRequest(
     franchiseId: string,
     items: Array<{ productId: string; variantId?: string; quantity: number }>,
+    opts?: { notes?: string | null; requestedByStaffId?: string | null },
   ) {
     if (!items || items.length === 0) {
       throw new BadRequestAppException(
@@ -114,6 +150,33 @@ export class ProcurementService {
     // `request.procurementFeeRate`, never the live franchise rate.
     const procurementFeeRate = Number(franchise.procurementFeeRate ?? 5);
 
+    // Phase 235 — batch the product + variant resolution (was 2 of the 3
+    // per-item queries). The catalog-mapping approved/active check stays
+    // per-item to preserve its exact (productId, variantId) matching semantics,
+    // now bounded by the DTO's @ArrayMaxSize(100).
+    const productIds = [...new Set(items.map((i) => i.productId))];
+    const variantIds = [
+      ...new Set(
+        items.map((i) => i.variantId).filter((v): v is string => !!v),
+      ),
+    ];
+    const [products, variants] = await Promise.all([
+      this.prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, title: true, basePrice: true },
+      }),
+      variantIds.length
+        ? this.prisma.productVariant.findMany({
+            where: { id: { in: variantIds } },
+            select: { id: true, title: true },
+          })
+        : Promise.resolve(
+            [] as Array<{ id: string; title: string | null }>,
+          ),
+    ]);
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const variantById = new Map(variants.map((v) => [v.id, v]));
+
     // Validate all items have catalog mappings and resolve product info
     const resolvedItems: Array<{
       productId: string;
@@ -122,6 +185,7 @@ export class ProcurementService {
       productTitle: string;
       variantTitle?: string;
       requestedQty: number;
+      mrpSnapshot?: number | null;
     }> = [];
 
     for (const item of items) {
@@ -139,49 +203,67 @@ export class ProcurementService {
         );
       }
 
-      // Resolve product title from the database
-      const product = await this.prisma.product.findUnique({
-        where: { id: item.productId },
-        select: { title: true },
-      });
-
-      let variantTitle: string | undefined;
-      if (item.variantId) {
-        const variant = await this.prisma.productVariant.findUnique({
-          where: { id: item.variantId },
-          select: { title: true },
-        });
-        variantTitle = variant?.title ?? undefined;
-      }
-
+      const product = productById.get(item.productId);
       resolvedItems.push({
         productId: item.productId,
         variantId: item.variantId,
         globalSku: mapping.globalSku,
         productTitle: product?.title ?? '',
-        variantTitle,
+        variantTitle: item.variantId
+          ? variantById.get(item.variantId)?.title ?? undefined
+          : undefined,
         requestedQty: item.quantity,
+        // Phase 237 — MRP (customer base price) snapshot at creation, so finance
+        // can compute procurement margin against the price that existed when the
+        // request was raised even after basePrice later changes.
+        mrpSnapshot:
+          product?.basePrice != null ? Number(product.basePrice) : null,
       });
     }
 
-    // Generate request number
-    const requestNumber = await this.procurementRepo.generateNextRequestNumber();
-
-    // Create the request
-    const request = await this.procurementRepo.create({
-      franchiseId,
-      requestNumber,
-      procurementFeeRate,
-    });
-
-    // Create items
-    const createdItems = await this.procurementRepo.createItems(
-      request.id,
-      resolvedItems,
+    // Phase 235 — atomic create: allocate the request number + write the header
+    // + items in ONE transaction. Pre-235 these were 3 separate writes, so a
+    // crash between the header and items left an orphan empty DRAFT with a
+    // burned request number; the number is now allocated INSIDE the tx so a
+    // failure rolls it back.
+    const { request, createdItems } = await this.prisma.$transaction(
+      async (tx) => {
+        const requestNumber = await this.procurementRepo.nextRequestNumberInTx(tx);
+        const created = await this.procurementRepo.create(
+          {
+            franchiseId,
+            requestNumber,
+            procurementFeeRate,
+            notes: opts?.notes ?? null,
+            requestedByStaffId: opts?.requestedByStaffId ?? null,
+          },
+          tx,
+        );
+        const createdItemRows = await this.procurementRepo.createItems(
+          created.id,
+          resolvedItems,
+          tx,
+        );
+        return { request: created, createdItems: createdItemRows };
+      },
     );
 
+    // Phase 235 — hash-chained audit row (best-effort; the in-flow trail
+    // continues via ProcurementRequestEvent on subsequent transitions).
+    await this.writeProcurementAudit({
+      actorId: opts?.requestedByStaffId ?? franchiseId,
+      actorRole: 'FRANCHISE',
+      action: 'PROCUREMENT_REQUEST_CREATED',
+      resourceId: request.id,
+      newValue: {
+        requestNumber: request.requestNumber,
+        franchiseId,
+        itemCount: createdItems.length,
+      },
+    });
+
     this.logger.log(
-      `Procurement request ${requestNumber} created for franchise ${franchiseId} with ${createdItems.length} items`,
+      `Procurement request ${request.requestNumber} created for franchise ${franchiseId} with ${createdItems.length} items`,
     );
 
     return { ...request, items: createdItems };
@@ -289,7 +371,12 @@ export class ProcurementService {
   /**
    * Cancel a DRAFT or SUBMITTED procurement request.
    */
-  async cancelRequest(franchiseId: string, requestId: string, reason?: string) {
+  async cancelRequest(
+    franchiseId: string,
+    requestId: string,
+    reason?: string,
+    actorId?: string,
+  ) {
     const request = await this.procurementRepo.findByIdWithItems(requestId);
     if (!request) {
       throw new NotFoundAppException('Procurement request not found');
@@ -307,30 +394,49 @@ export class ProcurementService {
     }
 
     const fromStatus = request.status;
+    const cancelActor = actorId ?? franchiseId;
+    const now = new Date();
     const updated = await this.prisma.$transaction(async (tx) => {
-      const u = await this.procurementRepo.update(
-        requestId,
-        {
+      // Phase 236 — CAS: only flip if STILL cancellable, so a concurrent admin
+      // approve/dispatch can't be silently overwritten (the pre-read status is
+      // not a lock). Phase 235/236 — stamp the dedicated cancelledBy/At/reason
+      // columns instead of overwriting the franchise's free-form `notes`.
+      const cas = await tx.procurementRequest.updateMany({
+        where: { id: requestId, status: { in: cancellableStatuses as any } },
+        data: {
           status: 'CANCELLED',
-          notes: reason
-            ? `Cancelled by franchise: ${reason}`
-            : 'Cancelled by franchise',
+          cancelledBy: cancelActor,
+          cancelledAt: now,
+          cancellationReason: reason ?? null,
         },
-        tx,
-      );
+      });
+      if (cas.count === 0) {
+        throw new ConflictAppException(
+          'Request is no longer cancellable — it may have just been approved or cancelled by another action.',
+        );
+      }
       await this.recordProcurementEvent(
         {
           procurementRequestId: requestId,
           action: 'CANCELLED',
           fromStatus,
           toStatus: 'CANCELLED',
-          actorId: franchiseId,
+          actorId: cancelActor,
           actorType: 'FRANCHISE',
           reason: reason ?? null,
         },
         tx,
       );
-      return u;
+      return this.procurementRepo.findByIdWithItems(requestId, tx);
+    });
+
+    await this.writeProcurementAudit({
+      actorId: cancelActor,
+      actorRole: 'FRANCHISE',
+      action: 'PROCUREMENT_CANCELLED',
+      resourceId: requestId,
+      oldValue: { status: fromStatus },
+      newValue: { status: 'CANCELLED', reason: reason ?? null },
     });
 
     this.logger.log(
@@ -562,17 +668,28 @@ export class ProcurementService {
       );
       const finalStatus = anyShort ? 'PARTIALLY_RECEIVED' : 'RECEIVED';
 
-      const u = await this.procurementRepo.update(
-        requestId,
-        {
+      // Phase 236 — CAS on the request status (the pre-read at method entry is
+      // not a lock); stamp receivedBy (the franchise actor who confirmed).
+      const cas = await tx.procurementRequest.updateMany({
+        where: {
+          id: requestId,
+          status: { in: ['DISPATCHED', 'PARTIALLY_RECEIVED'] },
+        },
+        data: {
           status: finalStatus,
+          receivedBy: effectiveActorId,
           ...(finalStatus === 'RECEIVED' ? { receivedAt: new Date() } : {}),
           totalApprovedAmount: totals.totalApprovedAmount,
           procurementFeeAmount: totals.procurementFeeAmount,
           finalPayableAmount: totals.finalPayableAmount,
         },
-        tx,
-      );
+      });
+      if (cas.count === 0) {
+        throw new ConflictAppException(
+          'Request is no longer in a receivable state.',
+        );
+      }
+      const u = await this.procurementRepo.findByIdWithItems(requestId, tx);
       await this.recordProcurementEvent(
         {
           procurementRequestId: requestId,
@@ -633,6 +750,15 @@ export class ProcurementService {
         })
         .catch(() => {});
     }
+
+    await this.writeProcurementAudit({
+      actorId: effectiveActorId,
+      actorRole: 'FRANCHISE',
+      action: 'PROCUREMENT_RECEIVED',
+      resourceId: requestId,
+      oldValue: { status: request.status },
+      newValue: { status: finalStatus },
+    });
 
     this.logger.log(
       `Procurement request ${request.requestNumber} ${finalStatus === 'RECEIVED' ? 'fully received' : 'partially received'} by franchise (actor=${effectiveActorId})`,
@@ -777,16 +903,27 @@ export class ProcurementService {
 
         const totals = await this.procurementRepo.calculateTotals(requestId, tx);
 
-        const updated = await this.procurementRepo.update(
-          requestId,
-          {
-            status: requestStatus,
+        // Phase 236 — CAS on status='SUBMITTED' so a request cancelled by the
+        // franchise between the pre-read and here can't be silently approved
+        // (closes the approve-vs-cancel race).
+        const cas = await tx.procurementRequest.updateMany({
+          where: { id: requestId, status: 'SUBMITTED' },
+          data: {
+            status: requestStatus as any,
             approvedAt: new Date(),
             approvedBy: adminId,
             totalApprovedAmount: totals.totalApprovedAmount,
             procurementFeeAmount: totals.procurementFeeAmount,
             finalPayableAmount: totals.finalPayableAmount,
           },
+        });
+        if (cas.count === 0) {
+          throw new ConflictAppException(
+            'Request is no longer in SUBMITTED state — it may have just been cancelled.',
+          );
+        }
+        const updated = await this.procurementRepo.findByIdWithItems(
+          requestId,
           tx,
         );
 
@@ -913,6 +1050,15 @@ export class ProcurementService {
       },
     });
 
+    await this.writeProcurementAudit({
+      actorId: adminId,
+      actorRole: 'ADMIN',
+      action: 'PROCUREMENT_APPROVED',
+      resourceId: requestId,
+      oldValue: { status: 'SUBMITTED' },
+      newValue: { status: requestStatus },
+    });
+
     this.logger.log(
       `Procurement request ${request.requestNumber} ${requestStatus} by admin ${adminId}`,
     );
@@ -975,6 +1121,15 @@ export class ProcurementService {
         adminId,
         reason,
       },
+    });
+
+    await this.writeProcurementAudit({
+      actorId: adminId,
+      actorRole: 'ADMIN',
+      action: 'PROCUREMENT_REJECTED',
+      resourceId: requestId,
+      oldValue: { status: 'SUBMITTED' },
+      newValue: { status: 'REJECTED', reason: reason ?? null },
     });
 
     this.logger.log(
@@ -1053,17 +1208,27 @@ export class ProcurementService {
         );
       }
 
-      const u = await this.procurementRepo.update(
-        requestId,
-        {
+      // Phase 236 — CAS on the request status; stamp dispatchedBy (the admin).
+      const cas = await tx.procurementRequest.updateMany({
+        where: {
+          id: requestId,
+          status: { in: ['APPROVED', 'PARTIALLY_APPROVED', 'SOURCING'] },
+        },
+        data: {
           status: 'DISPATCHED',
           dispatchedAt: new Date(),
+          dispatchedBy: adminId,
           trackingNumber: shipment?.trackingNumber ?? null,
           carrierName: shipment?.carrierName ?? null,
           expectedDeliveryAt: shipment?.expectedDeliveryAt ?? null,
         },
-        tx,
-      );
+      });
+      if (cas.count === 0) {
+        throw new ConflictAppException(
+          'Request is no longer in a dispatchable state.',
+        );
+      }
+      const u = await this.procurementRepo.findByIdWithItems(requestId, tx);
       await this.recordProcurementEvent(
         {
           procurementRequestId: requestId,
@@ -1094,6 +1259,19 @@ export class ProcurementService {
       },
     });
 
+    await this.writeProcurementAudit({
+      actorId: adminId,
+      actorRole: 'ADMIN',
+      action: 'PROCUREMENT_DISPATCHED',
+      resourceId: requestId,
+      oldValue: { status: request.status },
+      newValue: {
+        status: 'DISPATCHED',
+        trackingNumber: shipment?.trackingNumber ?? null,
+        carrierName: shipment?.carrierName ?? null,
+      },
+    });
+
     this.logger.log(
       `Procurement request ${request.requestNumber} dispatched by admin ${adminId}`,
     );
@@ -1116,14 +1294,21 @@ export class ProcurementService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const u = await this.procurementRepo.update(
-        requestId,
-        {
+      // Phase 236 — CAS on status='RECEIVED' so a double-clicked settle (or a
+      // concurrent transition) can't double-fire.
+      const cas = await tx.procurementRequest.updateMany({
+        where: { id: requestId, status: 'RECEIVED' },
+        data: {
           status: 'SETTLED',
           settledAt: new Date(),
         },
-        tx,
-      );
+      });
+      if (cas.count === 0) {
+        throw new ConflictAppException(
+          'Request is no longer in RECEIVED state — it may have already been settled.',
+        );
+      }
+      const u = await this.procurementRepo.findByIdWithItems(requestId, tx);
       await this.recordProcurementEvent(
         {
           procurementRequestId: requestId,
@@ -1184,6 +1369,15 @@ export class ProcurementService {
         );
       }
     }
+
+    await this.writeProcurementAudit({
+      actorId: adminId,
+      actorRole: 'ADMIN',
+      action: 'PROCUREMENT_SETTLED',
+      resourceId: requestId,
+      oldValue: { status: 'RECEIVED' },
+      newValue: { status: 'SETTLED' },
+    });
 
     this.logger.log(
       `Procurement request ${request.requestNumber} settled by admin ${adminId}`,

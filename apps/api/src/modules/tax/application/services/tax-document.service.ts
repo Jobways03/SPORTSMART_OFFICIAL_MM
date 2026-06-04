@@ -27,6 +27,7 @@
 
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { BadRequestAppException } from '../../../../core/exceptions';
 import { EWayBillService } from './eway-bill.service';
 import { TaxModeService } from './tax-mode.service';
 // Phase 90 (2026-05-23) — auto-classify hook (Gap #1).
@@ -238,6 +239,8 @@ export class TaxDocumentService {
             customerId: true,
             paymentMethod: true,
             shippingAddressSnapshot: true,
+            // Phase 37 — the B2B profile the buyer picked at checkout.
+            selectedTaxProfileId: true,
           },
         },
       },
@@ -250,6 +253,9 @@ export class TaxDocumentService {
     let sellerAddressJson: unknown = null;
     let sellerStateCode: string | null = null;
     let sellerRegistrationType: GstRegistrationType | null = null;
+    // Phase 161 (Platform GST Profile audit B3) — snapshot FK to the minting
+    // platform profile (OWN_BRAND / SPORTSMART supplies only).
+    let platformGstProfileId: string | null = null;
 
     if (summary.supplierType === 'MARKETPLACE_SELLER' && subOrder.sellerId) {
       const seller = await this.prisma.seller.findUnique({
@@ -270,6 +276,29 @@ export class TaxDocumentService {
         sellerAddressJson = seller.registeredBusinessAddressJson;
         sellerStateCode = seller.gstStateCode;
         sellerRegistrationType = seller.gstRegistrationType;
+        // Phase 161 (Seller GSTIN Verification audit #6) — STRICT mode must
+        // not invoice under an unverified / name-mismatched seller GSTIN.
+        // report() is non-blocking outside STRICT (logs in AUDIT, no-op in
+        // OFF), so this is safe for the current default mode.
+        if (seller.gstin) {
+          const gstinRow = await this.prisma.sellerGstin.findFirst({
+            where: { sellerId: subOrder.sellerId, gstin: seller.gstin },
+            select: { isVerified: true, legalNameMismatch: true },
+          });
+          if (!gstinRow || !gstinRow.isVerified) {
+            await this.taxMode.report({
+              code: 'seller.gstin.unverified',
+              message: `Seller ${subOrder.sellerId} GSTIN ${seller.gstin} is not GSTN-verified — strict mode requires a verified seller GSTIN before invoicing`,
+              context: { sellerId: subOrder.sellerId, gstin: seller.gstin },
+            });
+          } else if (gstinRow.legalNameMismatch) {
+            await this.taxMode.report({
+              code: 'seller.gstin.legal_name_mismatch',
+              message: `Seller ${subOrder.sellerId} GSTIN ${seller.gstin} legal name differs from the GST portal — strict mode requires resolution before invoicing`,
+              context: { sellerId: subOrder.sellerId, gstin: seller.gstin },
+            });
+          }
+        }
       }
     } else if (summary.supplierType === 'FRANCHISE' && subOrder.franchiseId) {
       // Franchise has gstNumber / panNumber but not the full new
@@ -305,6 +334,11 @@ export class TaxDocumentService {
         sellerAddressJson = platform.registeredAddressJson;
         sellerStateCode = platform.gstStateCode;
         sellerRegistrationType = platform.registrationType;
+        // Phase 161 (audit B3) — record WHICH profile minted this invoice so
+        // reports can group by profile without a GSTIN-string scan. (The
+        // supplier identity itself is already snapshotted in the seller*
+        // columns, so there's no historical drift; this is the FK only.)
+        platformGstProfileId = platform.id;
       }
     }
 
@@ -316,31 +350,96 @@ export class TaxDocumentService {
       | string
       | null
       | undefined;
-    let customerProfile = selectedProfileId
-      ? await this.prisma.customerTaxProfile.findFirst({
-          where: {
-            id: selectedProfileId,
-            customerId: subOrder.masterOrder.customerId,
-          },
-        })
+    // Phase 200 (audit #11) — place-order snapshot of the chosen profile,
+    // captured on MasterOrder.customer_tax_profile_snapshot (added by migration
+    // 20260602380000). Shape: { gstin, legalName, billingAddress, stateCode }.
+    // Read only when a B2B profile was selected AND the live row resolution
+    // below misses; the raw read avoids a hard dependency on the generated
+    // Prisma type before the cross-module orders.prisma field lands.
+    const profileSnapshot = selectedProfileId
+      ? await this.readProfileSnapshot(subOrder.masterOrder.id)
       : null;
-    if (!customerProfile) {
+    let customerProfile;
+    let snapshotFallbackUsed = false;
+    if (selectedProfileId) {
+      customerProfile = await this.prisma.customerTaxProfile.findFirst({
+        where: {
+          id: selectedProfileId,
+          customerId: subOrder.masterOrder.customerId,
+        },
+      });
+      // Phase 161 (Customer Tax Profile audit #6) — fail LOUD when the order
+      // references a tax profile the customer doesn't own, instead of silently
+      // falling back to the default (which would silently downgrade a B2B
+      // order to B2C and issue the wrong invoice type).
+      //
+      // Phase 200 (audit #11) — EXCEPT when the profile was DELETED after the
+      // order was placed: the order legitimately chose a B2B GSTIN, so recover
+      // the buyer identity from the place-order snapshot rather than failing
+      // invoice generation permanently. Only the snapshot (which we KNOW was
+      // this customer's at placement) is trusted — a missing selection with no
+      // snapshot still throws (genuinely bad reference).
+      if (!customerProfile) {
+        if (profileSnapshot && profileSnapshot.gstin) {
+          snapshotFallbackUsed = true;
+          this.logger.warn(
+            `SubOrder ${subOrderId}: selected tax profile ${selectedProfileId} no longer exists; ` +
+              `recovering buyer identity from the place-order snapshot (GSTIN ${profileSnapshot.gstin}).`,
+          );
+        } else {
+          throw new BadRequestAppException(
+            `Selected tax profile ${selectedProfileId} not found or not owned by this customer.`,
+          );
+        }
+      }
+    } else {
       customerProfile = await this.prisma.customerTaxProfile.findFirst({
         where: { customerId: subOrder.masterOrder.customerId, isDefault: true },
       });
     }
+    // Phase 161 (audit B2) — snapshot FK to the buyer profile (null for B2C, or
+    // when the live row is gone and we fell back to the JSON snapshot).
+    const customerTaxProfileId = customerProfile?.id ?? null;
     const customer = await this.prisma.user.findUnique({
       where: { id: subOrder.masterOrder.customerId },
       select: { id: true, firstName: true, lastName: true, email: true },
     });
 
-    const buyerGstin = customerProfile?.gstin ?? null;
+    const buyerGstin =
+      customerProfile?.gstin ?? (snapshotFallbackUsed ? profileSnapshot!.gstin : null);
     const invoiceType: InvoiceType = buyerGstin ? 'B2B' : 'B2C';
     const buyerLegalName =
       customerProfile?.legalName ??
+      (snapshotFallbackUsed ? profileSnapshot!.legalName : null) ??
       (customer ? `${customer.firstName} ${customer.lastName}`.trim() : null);
     const billingAddressJson =
-      customerProfile?.billingAddressJson ?? subOrder.masterOrder.shippingAddressSnapshot;
+      customerProfile?.billingAddressJson ??
+      (snapshotFallbackUsed ? profileSnapshot!.billingAddress : null) ??
+      subOrder.masterOrder.shippingAddressSnapshot;
+
+    // Phase 161 (Customer Tax Profile audit B3) — STRICT mode must not issue a
+    // B2B invoice to an unverified / name-mismatched buyer GSTIN (it breaks the
+    // buyer's GSTR-2A reconciliation + ITC claim). report() is non-blocking
+    // outside STRICT (logs in AUDIT, no-op in OFF).
+    if (buyerGstin && customerProfile) {
+      if (!customerProfile.isVerified) {
+        await this.taxMode.report({
+          code: 'buyer.gstin.unverified',
+          message: `B2B invoice buyer GSTIN ${buyerGstin} is not GSTN-verified — strict mode requires a verified buyer profile before invoicing`,
+          context: { customerId: subOrder.masterOrder.customerId, gstin: buyerGstin },
+        });
+      } else if (customerProfile.legalNameMismatch) {
+        await this.taxMode.report({
+          code: 'buyer.gstin.name_mismatch',
+          message: `B2B invoice buyer GSTIN ${buyerGstin} legal name differs from the GST portal — strict mode requires resolution before invoicing`,
+          context: { customerId: subOrder.masterOrder.customerId, gstin: buyerGstin },
+        });
+      }
+      // Phase 161 (audit #18) — record that this profile was used (best-effort).
+      void this.prisma.customerTaxProfile
+        .update({ where: { id: customerProfile.id }, data: { lastSelectedAt: new Date() } })
+        .catch(() => undefined);
+    }
 
     // 4. Decide document type.
     const hasTaxableLines = snapshots.some(
@@ -428,9 +527,13 @@ export class TaxDocumentService {
           sellerLegalName,
           sellerAddressJson: sellerAddressJson as Prisma.InputJsonValue,
           sellerStateCode,
+          // Phase 161 (audit B3) — snapshot FK to the minting platform profile.
+          platformGstProfileId,
 
           buyerGstin,
           buyerLegalName,
+          // Phase 161 (audit B2) — snapshot FK to the buyer tax profile.
+          customerTaxProfileId,
           billingAddressJson: (billingAddressJson ?? null) as Prisma.InputJsonValue,
           shippingAddressJson: subOrder.masterOrder.shippingAddressSnapshot as Prisma.InputJsonValue,
           placeOfSupplyStateCode: summary.placeOfSupplyStateCode,
@@ -932,4 +1035,60 @@ export class TaxDocumentService {
       `Voided draft ${doc.documentNumber} (${doc.documentType}) by ${input.actorId}: ${input.reason}`,
     );
   }
+
+  /**
+   * Phase 200 (audit #11) — read MasterOrder.customer_tax_profile_snapshot via
+   * raw SQL so this module compiles before the cross-module orders.prisma field
+   * lands. Returns the parsed snapshot, or null when the column/value is absent
+   * (pre-existing orders, or the central wiring not yet applied → falls through
+   * to the existing live-lookup behaviour). Never throws.
+   */
+  private async readProfileSnapshot(masterOrderId: string): Promise<{
+    gstin: string;
+    legalName: string | null;
+    billingAddress: unknown;
+    stateCode: string | null;
+  } | null> {
+    try {
+      const rows = await this.prisma.$queryRaw<
+        Array<{ customer_tax_profile_snapshot: unknown }>
+      >(Prisma.sql`
+        SELECT "customer_tax_profile_snapshot"
+        FROM "master_orders"
+        WHERE "id" = ${masterOrderId}
+        LIMIT 1
+      `);
+      return parseProfileSnapshot(rows[0]?.customer_tax_profile_snapshot);
+    } catch (err) {
+      // Column may not exist yet (migration not applied) — degrade gracefully.
+      this.logger.warn(
+        `readProfileSnapshot failed for master order ${masterOrderId}: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+}
+
+/**
+ * Phase 200 (Customer Tax Profile audit #11) — parse the buyer-profile snapshot
+ * captured on MasterOrder.customerTaxProfileSnapshot at order placement. Used as
+ * the fallback when the selected profile row has been deleted before the invoice
+ * is generated. Returns null unless a usable {gstin} is present.
+ */
+function parseProfileSnapshot(raw: unknown): {
+  gstin: string;
+  legalName: string | null;
+  billingAddress: unknown;
+  stateCode: string | null;
+} | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  const gstin = typeof s.gstin === 'string' ? s.gstin : null;
+  if (!gstin) return null;
+  return {
+    gstin,
+    legalName: typeof s.legalName === 'string' ? s.legalName : null,
+    billingAddress: s.billingAddress ?? null,
+    stateCode: typeof s.stateCode === 'string' ? s.stateCode : null,
+  };
 }

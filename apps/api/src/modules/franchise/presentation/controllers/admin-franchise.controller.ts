@@ -37,7 +37,9 @@ import { AdminChangeFranchisePasswordUseCase } from '../../application/use-cases
 import { AdminImpersonateFranchiseUseCase } from '../../application/use-cases/admin-impersonate-franchise.use-case';
 import { AdminEndImpersonationUseCase } from '../../../admin/application/use-cases/admin-end-impersonation.use-case';
 import { AdminDeleteFranchiseUseCase } from '../../application/use-cases/admin-delete-franchise.use-case';
+import { AdminFranchiseFulfillmentHoldUseCase } from '../../application/use-cases/admin-franchise-fulfillment-hold.use-case';
 import { AdminUpdateFranchiseStatusDto } from '../dtos/admin-update-franchise-status.dto';
+import { AdminSetFranchiseFulfillmentHoldDto } from '../dtos/admin-set-franchise-fulfillment-hold.dto';
 import { AdminUpdateFranchiseVerificationDto } from '../dtos/admin-update-franchise-verification.dto';
 import { AdminUpdateFranchiseCommissionDto } from '../dtos/admin-update-franchise-commission.dto';
 import { AdminEditFranchiseProfileDto } from '../dtos/admin-edit-franchise-profile.dto';
@@ -65,6 +67,7 @@ export class AdminFranchiseController {
     // Phase 28 (2026-05-21) — shared use case for end-impersonation.
     private readonly endImpersonationUseCase: AdminEndImpersonationUseCase,
     private readonly adminDeleteFranchiseUseCase: AdminDeleteFranchiseUseCase,
+    private readonly fulfillmentHoldUseCase: AdminFranchiseFulfillmentHoldUseCase,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -274,6 +277,67 @@ export class AdminFranchiseController {
     });
 
     return { success: true, message: 'Franchise status updated successfully', data };
+  }
+
+  /**
+   * Phase 232 (eligible-node / allocation-preview audit) — place a risk/fraud
+   * FULFILLMENT HOLD on a franchise. A held franchise is excluded from the
+   * allocation engine (no auto-routing and no manual reassignment of new
+   * orders), so the reason is mandatory.
+   *
+   * Like the status/verification endpoints, the class-level @Permissions is
+   * 'franchise.read', so without this method-level override ANY admin who can
+   * VIEW franchises could bench one. Gate on the 'franchise.approve' management
+   * permission. Stamps actor + timestamp and writes a hash-chained audit row.
+   */
+  @Post(':franchiseId/fulfillment-hold')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('franchise.approve')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async setFulfillmentHold(
+    @Req() req: Request,
+    @Param('franchiseId') franchiseId: string,
+    @Body() dto: AdminSetFranchiseFulfillmentHoldDto,
+  ) {
+    const adminId = (req as any).adminId;
+    const userAgentHeader = req.headers['user-agent'];
+    const data = await this.fulfillmentHoldUseCase.setHold({
+      adminId,
+      franchiseId,
+      reason: dto.reason,
+      ipAddress: req.ip || req.socket.remoteAddress || undefined,
+      userAgent:
+        typeof userAgentHeader === 'string' ? userAgentHeader : undefined,
+    });
+
+    return { success: true, message: 'Franchise fulfillment hold placed', data };
+  }
+
+  /**
+   * Phase 232 — clear the fulfillment hold (re-enable the franchise for
+   * allocation). Reason is optional here; same permission + throttle as SET.
+   */
+  @Delete(':franchiseId/fulfillment-hold')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('franchise.approve')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async clearFulfillmentHold(
+    @Req() req: Request,
+    @Param('franchiseId') franchiseId: string,
+    @Body() body: { reason?: string } = {},
+  ) {
+    const adminId = (req as any).adminId;
+    const userAgentHeader = req.headers['user-agent'];
+    const data = await this.fulfillmentHoldUseCase.clearHold({
+      adminId,
+      franchiseId,
+      reason: body?.reason,
+      ipAddress: req.ip || req.socket.remoteAddress || undefined,
+      userAgent:
+        typeof userAgentHeader === 'string' ? userAgentHeader : undefined,
+    });
+
+    return { success: true, message: 'Franchise fulfillment hold cleared', data };
   }
 
   @Patch(':franchiseId/verification')

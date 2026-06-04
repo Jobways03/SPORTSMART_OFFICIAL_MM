@@ -57,10 +57,83 @@ export interface TopAllocatedSellerRow {
   allocationCount: number;
 }
 
+export interface TopAllocatedFranchiseRow {
+  franchiseId: string;
+  franchiseName: string;
+  allocationCount: number;
+}
+
 export interface SellerNameEntry {
   id: string;
   sellerName: string;
   sellerShopName: string;
+}
+
+// ── Allocation analytics (Phase 233) ─────────────────────────────
+
+/**
+ * Phase 233 — filters threaded from the dashboard query DTO down to
+ * every aggregate. The eventSource exclusion (LIVE / REALLOCATION /
+ * MANUAL_REASSIGNMENT only) is applied by the repository regardless of
+ * these — `fromDate`/`toDate`/`nodeType` are the *additional* operator
+ * filters layered on top of that always-on noise exclusion.
+ */
+export interface AllocationAnalyticsFilters {
+  fromDate?: Date;
+  toDate?: Date;
+  /** 'SELLER' | 'FRANCHISE' — matched against allocated_node_type. */
+  nodeType?: string;
+}
+
+/** One outcome bucket from the GROUP BY `outcome` over real rows. */
+export interface AllocationOutcomeCountRow {
+  outcome: string | null;
+  count: number;
+}
+
+/**
+ * Phase 233 — drill-down filters for the raw-row endpoint. A superset
+ * of {@link AllocationAnalyticsFilters}: adds explicit `outcome` /
+ * `eventSource` selectors (so an operator can list the excluded
+ * PREVIEW/LISTING rows too) plus pagination. When `eventSource` is
+ * omitted the drill-down still defaults to the real-routing subset for
+ * consistency with the counters.
+ */
+export interface AllocationEventsFilters {
+  outcome?: string;
+  eventSource?: string;
+  fromDate?: Date;
+  toDate?: Date;
+  nodeType?: string;
+  page: number;
+  limit: number;
+}
+
+/** One raw allocation_logs row surfaced by the drill-down. */
+export interface AllocationEventRow {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  customerPincode: string;
+  allocatedNodeType: string | null;
+  allocatedSellerId: string | null;
+  allocatedFranchiseId: string | null;
+  allocationReason: string | null;
+  eventSource: string;
+  outcome: string | null;
+  reasonCode: string | null;
+  distanceKm: number | null;
+  score: number | null;
+  isReallocated: boolean;
+  orderId: string | null;
+  createdAt: Date;
+}
+
+export interface AllocationEventsPage {
+  rows: AllocationEventRow[];
+  total: number;
+  page: number;
+  limit: number;
 }
 
 // ── Operations DTOs ──────────────────────────────────────────────
@@ -202,12 +275,36 @@ export interface AdminControlTowerRepository {
   getSellerRevenue(sellerId: string): Promise<SellerRevenueResult>;
   getSellerMappingStats(sellerId: string): Promise<SellerMappingStats>;
 
-  /* ── Dashboard (allocation analytics) ── */
-  countAllocations(): Promise<number>;
-  countReallocations(): Promise<number>;
-  getAvgAllocationMetrics(): Promise<{ avgDistanceKm: number; avgScore: number }>;
-  getTopAllocatedSellers(limit: number): Promise<TopAllocatedSellerRow[]>;
+  /* ── Dashboard (allocation analytics) ──
+   *
+   * Phase 233 — every aggregate takes the optional filter bag and
+   * applies the always-on eventSource exclusion (real routing rows
+   * only). The legacy no-arg callers keep working because the bag is
+   * optional and an empty bag means "all-time, all node types".
+   */
+  countAllocations(filters?: AllocationAnalyticsFilters): Promise<number>;
+  countReallocations(filters?: AllocationAnalyticsFilters): Promise<number>;
+  getAvgAllocationMetrics(
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<{ avgDistanceKm: number; avgScore: number }>;
+  getOutcomeCounts(
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<AllocationOutcomeCountRow[]>;
+  getTopAllocatedSellers(
+    limit: number,
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<TopAllocatedSellerRow[]>;
+  getTopAllocatedFranchises(
+    limit: number,
+    filters?: AllocationAnalyticsFilters,
+  ): Promise<TopAllocatedFranchiseRow[]>;
   findSellersByIds(ids: string[]): Promise<SellerNameEntry[]>;
+  /** Count MasterOrders currently parked in the exception queue. */
+  countExceptionQueueOrders(): Promise<number>;
+  /** Phase 233 — drill-down: paginated raw allocation_logs rows. */
+  getAllocationEvents(
+    filters: AllocationEventsFilters,
+  ): Promise<AllocationEventsPage>;
 
   /* ── Operations (bulk pricing) ── */
   findProductById(productId: string): Promise<ProductBasic | null>;

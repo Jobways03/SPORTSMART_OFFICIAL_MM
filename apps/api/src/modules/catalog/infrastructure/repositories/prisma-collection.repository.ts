@@ -92,7 +92,7 @@ export class PrismaCollectionRepository implements ICollectionRepository {
   /**
    * Phase 37 (2026-05-21) — soft-delete. Stamps deletedAt + cascades
    * map removal in one tx. Returns image fields so the controller
-   * can fire Cloudinary cleanup.
+   * can fire media cleanup.
    */
   async softDelete(id: string): Promise<{
     imageUrl: string | null;

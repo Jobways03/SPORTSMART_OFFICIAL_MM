@@ -34,7 +34,10 @@ describe('EventEmitter2 — wildcard listener config', () => {
     // OUTBOX_DUAL_WRITE persistence. Wildcard tests exercise direct
     // emit only; OUTBOX_DUAL_WRITE off short-circuits the outbox write.
     const prisma: any = { outboxEvent: { create: jest.fn() } };
-    const env: any = { getBoolean: () => false };
+    const env: any = {
+      getBoolean: () => false,
+      getNumber: (_k: string, d: number) => d,
+    };
     const bus = new EventBusService(emitter, logger, prisma, env);
 
     const wildcardHandler = jest.fn();
@@ -66,7 +69,10 @@ describe('EventEmitter2 — wildcard listener config', () => {
     // OUTBOX_DUAL_WRITE persistence. Wildcard tests exercise direct
     // emit only; OUTBOX_DUAL_WRITE off short-circuits the outbox write.
     const prisma: any = { outboxEvent: { create: jest.fn() } };
-    const env: any = { getBoolean: () => false };
+    const env: any = {
+      getBoolean: () => false,
+      getNumber: (_k: string, d: number) => d,
+    };
     const bus = new EventBusService(emitter, logger, prisma, env);
 
     const adminHandler = jest.fn();
@@ -108,7 +114,10 @@ describe('EventEmitter2 — wildcard listener config', () => {
     // OUTBOX_DUAL_WRITE persistence. Wildcard tests exercise direct
     // emit only; OUTBOX_DUAL_WRITE off short-circuits the outbox write.
     const prisma: any = { outboxEvent: { create: jest.fn() } };
-    const env: any = { getBoolean: () => false };
+    const env: any = {
+      getBoolean: () => false,
+      getNumber: (_k: string, d: number) => d,
+    };
     const bus = new EventBusService(emitter, logger, prisma, env);
 
     const wildcardHandler = jest.fn();
