@@ -29,12 +29,12 @@
     ]
   },
   "devDependencies": {
-    "@types/nodemailer": "^7.0.11",
-    "@types/react": "19.2.14",
+    "@types/nodemailer": "^8.0.0",
+    "@types/react": "19.2.16",
     "@types/react-dom": "19.2.3",
-    "turbo": "^2.0.0"
+    "turbo": "^2.9.16"
   },
   "dependencies": {
-    "nodemailer": "^8.0.2"
+    "nodemailer": "^8.0.10"
   }
 }
