@@ -139,7 +139,7 @@ export class AdminOrdersController {
   ) {
     const data = await this.ordersService.verifyOrder(
       id,
-      req.userId,
+      req.adminId,
       body.remarks,
       { ipAddress: req.ip, userAgent: req.headers?.['user-agent'] },
     );
@@ -175,7 +175,7 @@ export class AdminOrdersController {
   ) {
     await this.ordersService.rejectOrder(
       id,
-      req.userId,
+      req.adminId,
       body.reason,
       { ipAddress: req.ip, userAgent: req.headers?.['user-agent'] },
     );

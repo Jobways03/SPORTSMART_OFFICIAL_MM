@@ -492,6 +492,19 @@ export class PrismaProductRepository implements IProductRepository {
           'Product was modified concurrently — refresh and retry.',
         );
       }
+
+      // 2026-06-02 — activate the product's variants on publish. Variants
+      // are created DRAFT (ProductVariant.status @default(DRAFT)) and were
+      // never flipped to ACTIVE at approval, so an ACTIVE/APPROVED product
+      // was left with DRAFT variants. The cart's validateVariant only
+      // accepts ACTIVE/OUT_OF_STOCK, so every such product failed add-to-cart
+      // with "Variant not found or not available". Flip DRAFT → ACTIVE in the
+      // same tx (DISABLED/ARCHIVED/OUT_OF_STOCK left untouched).
+      await tx.productVariant.updateMany({
+        where: { productId, isDeleted: false, status: 'DRAFT' },
+        data: { status: 'ACTIVE' },
+      });
+
       for (const entry of historyEntries) {
         await tx.productStatusHistory.create({ data: { productId, ...entry } });
       }

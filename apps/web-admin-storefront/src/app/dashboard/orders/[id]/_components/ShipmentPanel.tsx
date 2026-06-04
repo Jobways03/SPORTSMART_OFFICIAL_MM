@@ -31,7 +31,9 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
   const [ndrRto, setNdrRto] = useState<NdrRtoState | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  // Default OPEN so the carrier-actions (track / re-attempt / cancel / force-RTO)
+  // are visible without hunting for the "Expand" toggle (2026-06-02).
+  const [expanded, setExpanded] = useState(true);
 
   const [creating, setCreating] = useState(false);
   const [createCourier, setCreateCourier] = useState('');
@@ -44,6 +46,15 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
 
   const [loadingLabel, setLoadingLabel] = useState(false);
   const [loadingNdr, setLoadingNdr] = useState(false);
+
+  // Phase 3 Delhivery wiring (2026-06-02) — carrier outbound actions.
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [reattempting, setReattempting] = useState(false);
+  const [rtoReason, setRtoReason] = useState('');
+  const [forcingRto, setForcingRto] = useState(false);
+  const [requestingPickup, setRequestingPickup] = useState(false);
 
   const fetchShipment = useCallback(async () => {
     setLoading(true);
@@ -68,6 +79,17 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
   useEffect(() => {
     fetchShipment();
   }, [fetchShipment]);
+
+  // Auto-fetch the shipping label once a shipment with an AWB is loaded, so the
+  // seller / franchise can download it in one click for their own order — no
+  // waiting on the Super Admin to fetch + forward it. Fires once (guarded on
+  // !label && !loadingLabel); a missing label just shows a "not ready" note.
+  useEffect(() => {
+    if (expanded && shipment?.awb && !label && !loadingLabel) {
+      handleLoadLabel();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shipment?.awb, expanded]);
 
   const handleCreate = async () => {
     if (!createCourier.trim() && !createAwb.trim()) {
@@ -140,6 +162,116 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
       setErr(e?.body?.message || e?.message || 'NDR/RTO state not available');
     } finally {
       setLoadingNdr(false);
+    }
+  };
+
+  // ── Phase 3 Delhivery wiring — carrier outbound actions ──
+  const msgOf = (res: any, fallback: string) =>
+    res?.message ?? res?.data?.message ?? fallback;
+
+  const handleRefreshTracking = async () => {
+    setRefreshing(true);
+    setErr(null);
+    setActionMsg(null);
+    try {
+      const res = await adminShippingService.refreshTracking(subOrderId);
+      setActionMsg(msgOf(res, 'Tracking refreshed'));
+      await fetchShipment();
+      onChange?.();
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleRequestPickup = async () => {
+    setRequestingPickup(true);
+    setErr(null);
+    setActionMsg(null);
+    try {
+      const res = await adminShippingService.requestPickup(subOrderId);
+      const ok = res.data?.success ?? res.success ?? false;
+      const msg = res.data?.message ?? res.message ?? 'Pickup requested';
+      if (ok) {
+        setActionMsg(msg);
+        onChange?.();
+      } else {
+        setErr(msg);
+      }
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Pickup request failed');
+    } finally {
+      setRequestingPickup(false);
+    }
+  };
+
+  const handleCourierCancel = async () => {
+    // Cancels the ORDER (sub-order) AND its Delhivery shipment together: the
+    // order-cancel emits orders.sub_order.cancelled_by_admin, which the
+    // DelhiveryCancelHandler consumes to void the AWB. force=true covers
+    // in-transit (SHIPPED) goods and is permission-gated server-side.
+    const reason = window.prompt(
+      'Cancel this ORDER and its Delhivery shipment?\n\n' +
+        'The sub-order is cancelled, a prepaid customer is refunded, and the ' +
+        'Delhivery AWB is voided — this cannot be undone.\n\n' +
+        'Enter a cancellation reason (min 10 characters) to confirm:',
+      '',
+    );
+    if (reason === null) return; // operator dismissed the prompt
+    if (reason.trim().length < 10) {
+      setErr('Cancellation reason must be at least 10 characters.');
+      return;
+    }
+    setCancelling(true);
+    setErr(null);
+    setActionMsg(null);
+    try {
+      await adminShippingService.cancelOrder(subOrderId, reason.trim(), true);
+      setActionMsg('Order + Delhivery shipment cancelled.');
+      await fetchShipment();
+      onChange?.();
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Cancel failed');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleNdrReattempt = async () => {
+    setReattempting(true);
+    setErr(null);
+    setActionMsg(null);
+    try {
+      const res = await adminShippingService.ndrAction(subOrderId, 'REATTEMPT');
+      setActionMsg(msgOf(res, 'Re-attempt requested'));
+      await handleLoadNdr();
+      onChange?.();
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'NDR re-attempt failed');
+    } finally {
+      setReattempting(false);
+    }
+  };
+
+  const handleForceRto = async () => {
+    if (rtoReason.trim().length < 10) {
+      setErr('RTO reason must be at least 10 characters');
+      return;
+    }
+    setForcingRto(true);
+    setErr(null);
+    setActionMsg(null);
+    try {
+      const res = await adminShippingService.forceRto(subOrderId, rtoReason.trim());
+      setActionMsg(msgOf(res, 'RTO initiated'));
+      setRtoReason('');
+      await fetchShipment();
+      onChange?.();
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Force RTO failed');
+    } finally {
+      setForcingRto(false);
     }
   };
 
@@ -232,24 +364,42 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
             </div>
           </div>
 
-          {/* Label fetch */}
+          {/* Label — auto-fetched on open (see effect above) so sellers /
+              franchise grab it in one click for their own order. */}
           <div>
             <div style={subHeader}>Shipping label</div>
-            {label ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
-                {label.labelUrl && (
-                  <a href={String(label.labelUrl)} target="_blank" rel="noopener noreferrer" style={linkStyle}>
-                    Download label PDF ↗
-                  </a>
-                )}
+            {label?.labelUrl ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                <a
+                  href={String(label.labelUrl)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    ...btnPrimary(false),
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    textDecoration: 'none',
+                    width: 'fit-content',
+                  }}
+                >
+                  ⬇ Download shipping label
+                </a>
                 {label.manifestUrl && (
                   <a href={String(label.manifestUrl)} target="_blank" rel="noopener noreferrer" style={linkStyle}>
                     Download manifest ↗
                   </a>
                 )}
-                {!label.labelUrl && !label.manifestUrl && (
-                  <pre style={preStyle}>{JSON.stringify(label, null, 2)}</pre>
-                )}
+              </div>
+            ) : loadingLabel ? (
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>Loading label…</div>
+            ) : label ? (
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+                Label not generated by Delhivery yet — available once the shipment
+                is manifested / picked up.{' '}
+                <button type="button" onClick={handleLoadLabel} style={linkBtn}>
+                  Retry
+                </button>
               </div>
             ) : (
               <button
@@ -258,7 +408,7 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
                 disabled={loadingLabel}
                 style={{ ...btnSecondary(loadingLabel), marginTop: 6 }}
               >
-                {loadingLabel ? 'Fetching…' : 'Fetch label / manifest'}
+                Get shipping label
               </button>
             )}
           </div>
@@ -306,6 +456,68 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
               >
                 {loadingNdr ? 'Fetching…' : 'Fetch NDR / RTO state'}
               </button>
+            )}
+          </div>
+
+          {/* Phase 3 Delhivery wiring (2026-06-02) — carrier outbound actions.
+              These hit Delhivery via the logistics-facade. Cancel is pre-pickup
+              only; Force RTO aliases to cancel (Delhivery has no explicit RTO). */}
+          <div>
+            <div style={subHeader}>Carrier actions (Delhivery)</div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={handleRefreshTracking}
+                disabled={refreshing}
+                style={btnSecondary(refreshing)}
+              >
+                {refreshing ? 'Refreshing…' : 'Refresh tracking'}
+              </button>
+              <button
+                type="button"
+                onClick={handleNdrReattempt}
+                disabled={reattempting}
+                style={btnSecondary(reattempting)}
+              >
+                {reattempting ? 'Requesting…' : 'Re-attempt delivery'}
+              </button>
+              <button
+                type="button"
+                onClick={handleCourierCancel}
+                disabled={cancelling}
+                style={btnSecondary(cancelling)}
+              >
+                {cancelling ? 'Cancelling…' : 'Cancel order + shipment'}
+              </button>
+              <button
+                type="button"
+                onClick={handleRequestPickup}
+                disabled={requestingPickup}
+                style={btnSecondary(requestingPickup)}
+                title="Schedule a Delhivery pickup at your warehouse for today (collects all ready parcels)"
+              >
+                {requestingPickup ? 'Requesting…' : 'Request pickup'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={rtoReason}
+                placeholder="RTO reason (min 10 chars)"
+                onChange={(e) => setRtoReason(e.target.value)}
+                style={{ ...inputStyle, minWidth: 220 }}
+              />
+              <button
+                type="button"
+                onClick={handleForceRto}
+                disabled={forcingRto || rtoReason.trim().length < 10}
+                style={btnPrimary(forcingRto || rtoReason.trim().length < 10)}
+              >
+                {forcingRto ? 'Forcing…' : 'Force RTO'}
+              </button>
+            </div>
+            {actionMsg && (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#065f46' }}>{actionMsg}</div>
             )}
           </div>
         </div>
@@ -434,15 +646,8 @@ const errBanner: React.CSSProperties = {
   fontSize: 12,
   color: '#991b1b',
 };
-const preStyle: React.CSSProperties = {
-  background: '#0f172a',
-  color: '#e2e8f0',
-  padding: 10,
-  borderRadius: 6,
-  fontSize: 11,
-  maxHeight: 200,
-  overflow: 'auto',
-};
+// preStyle removed — the raw-JSON label fallback was replaced with a friendly
+// "label not generated yet" message, so the <pre> style is no longer needed.
 
 function btnPrimary(disabled: boolean): React.CSSProperties {
   return {

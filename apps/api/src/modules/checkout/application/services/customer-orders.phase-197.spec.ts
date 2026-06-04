@@ -11,7 +11,7 @@
 import 'reflect-metadata';
 import { CustomerOrdersService } from './customer-orders.service';
 
-function build(over: { repo?: any; audit?: any } = {}) {
+function build(over: { repo?: any; eventBus?: any; audit?: any } = {}) {
   const repo: any = {
     findAddressByIdAndCustomer: jest.fn(),
     findCartWithLegacyItems: jest.fn(),
@@ -20,12 +20,18 @@ function build(over: { repo?: any; audit?: any } = {}) {
     cancelOrderTransaction: jest.fn().mockResolvedValue(undefined),
     ...over.repo,
   };
+  // Merge note: the constructor gained `eventBus` (Delhivery courier-cancel
+  // propagation) alongside `audit` — keep this mock so the 3-arg signature holds.
+  const eventBus: any = {
+    publish: jest.fn().mockResolvedValue(undefined),
+    ...over.eventBus,
+  };
   const audit: any = {
     writeAuditLog: jest.fn().mockResolvedValue(undefined),
     ...over.audit,
   };
-  const svc = new CustomerOrdersService(repo, audit);
-  return { svc, repo, audit };
+  const svc = new CustomerOrdersService(repo, eventBus, audit);
+  return { svc, repo, eventBus, audit };
 }
 
 describe('CustomerOrdersService legacy place-order gate (Phase 197 #20)', () => {

@@ -172,6 +172,25 @@ export interface FranchiseOrderItem {
   createdAt: string;
 }
 
+/**
+ * The /admin/franchise-orders/franchises/:id endpoint returns RAW sub-order
+ * rows under the `subOrders` key (nested masterOrder + items) — NOT the
+ * flattened FranchiseOrderItem the table renders. The page flattens these in
+ * fetchOrders. Only the fields the UI consumes are typed here.
+ */
+export interface FranchiseSubOrderRaw {
+  id: string;
+  subTotal: string | number | null;
+  fulfillmentStatus: string;
+  acceptStatus: string;
+  createdAt: string;
+  items?: unknown[];
+  masterOrder?: {
+    orderNumber?: string;
+    shippingAddressSnapshot?: { fullName?: string; name?: string } | null;
+  } | null;
+}
+
 // Shape of a row from GET /admin/franchises/:id/pos-sales (FranchisePosSale +
 // _count.items). netAmount is a Prisma Decimal, serialised over JSON as a string.
 export interface FranchisePosSale {
@@ -263,7 +282,7 @@ export const adminFranchisesService = {
   listFranchiseOrders(
     franchiseId: string,
     params: { page?: number; limit?: number } = {},
-  ): Promise<ApiResponse<{ orders: FranchiseOrderItem[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>> {
+  ): Promise<ApiResponse<{ subOrders: FranchiseSubOrderRaw[]; pagination: { page: number; limit: number; total: number; totalPages: number } }>> {
     const query = new URLSearchParams();
     if (params.page) query.set('page', String(params.page));
     if (params.limit) query.set('limit', String(params.limit));
@@ -422,6 +441,20 @@ export const adminFranchisesService = {
   markOrderDelivered(subOrderId: string): Promise<ApiResponse> {
     return apiClient(`/admin/franchise-orders/${subOrderId}/mark-delivered`, {
       method: 'PATCH',
+    });
+  },
+
+  // Cancel a (franchise) sub-order. Reuses the shared admin cancel route —
+  // it handles fulfillmentNodeType FRANCHISE and operates on the same
+  // SubOrder table, so subOrderId here is the correct param. Reason ≥10 chars
+  // (DTO @Length(10,500)); X-Idempotency-Key pairs with the @Idempotent route.
+  cancelOrder(subOrderId: string, reason: string, force = false): Promise<ApiResponse> {
+    return apiClient(`/admin/shipping/sub-orders/${subOrderId}/cancel-with-courier`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, force }),
+      headers: {
+        'X-Idempotency-Key': `cancel-sub-order-${subOrderId}-${Date.now()}`,
+      },
     });
   },
 

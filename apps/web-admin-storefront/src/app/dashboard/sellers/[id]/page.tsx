@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { PartnerRegistrationPanel } from '@/components/seller/PartnerRegistrationPanel';
 
 /* ── Types ──────────────────────────────────────────────────── */
 
@@ -386,6 +387,18 @@ export default function SellerDetailPage() {
             <strong>Policy gap:</strong> Under the 2026-05-18 policy, GSTIN + PAN are mandatory for seller approval. This seller is missing one or both — the approval endpoint will refuse to activate them. Ask the seller to resubmit onboarding with both fields.
           </p>
         )}
+      </Section>
+
+      {/* ── Logistics partner registrations ────────────────── */}
+      {/* Renders one row per partner whose facade catalogue entry
+          advertises `warehouseRegistration: REQUIRED`. When a new
+          partner is added to the facade, the row appears here
+          automatically — no frontend change needed. */}
+      <Section
+        title="Logistics partners"
+        subtitle="Pickup-location registration with each courier that requires it."
+      >
+        <PartnerRegistrationPanel sellerId={seller.sellerId} />
       </Section>
 
       {/* ── Commission / orders table ──────────────────────── */}

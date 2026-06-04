@@ -1,0 +1,53 @@
+// ─── Shipments ────────────────────────────────────────────────────
+// One row per piece booked with a courier. `orderId` and `subOrderId`
+// reference the apps/api domain; we do NOT enforce a foreign key
+// because the two services own their own databases. Reconciliation
+// jobs assert orphan-free consistency on a schedule.
+
+model Shipment {
+  id                     String         @id @default(uuid())
+  orderId                String         @map("order_id")
+  subOrderId             String         @map("sub_order_id")
+  /// Free-form partner code. Once the Partner enum has a non-placeholder
+  /// value, migrate this column to that type. Kept as a free-form
+  /// String in M0 so adding a partner doesn't require an enum migration.
+  partner                String
+  /// Air-Way-Bill (carrier-assigned tracking number). Nullable because
+  /// the row is created BEFORE the partner booking call returns —
+  /// failure to obtain an AWB leaves the row DRAFT and the saga can
+  /// retry.
+  awb                    String?
+  /// Partner-side order id (some partners issue a separate id alongside
+  /// the AWB). Used for cancellation and tracking lookups.
+  carrierOrderRef        String?        @map("carrier_order_ref")
+  status                 ShipmentStatus @default(DRAFT)
+  weightGrams            Int            @map("weight_grams")
+  /// JSON-encoded `{ lengthCm, widthCm, heightCm }`. Stored as JSON
+  /// rather than three columns so future partner-specific dimension
+  /// attributes (volumetric weight modifier, sleeve length, etc.)
+  /// don't require a migration.
+  dimsCm                 Json           @map("dims_cm")
+  declaredValuePaise     BigInt         @map("declared_value_paise")
+  cod                    Boolean        @default(false)
+  codAmountPaise         BigInt?        @map("cod_amount_paise")
+  pickupAddressSnapshot  Json           @map("pickup_address_snapshot")
+  dropAddressSnapshot    Json           @map("drop_address_snapshot")
+  labelUrl               String?        @map("label_url")
+  trackingUrl            String?        @map("tracking_url")
+  bookedAt               DateTime?      @map("booked_at")
+  lastTrackingEventAt    DateTime?      @map("last_tracking_event_at")
+  createdAt              DateTime       @default(now()) @map("created_at")
+  updatedAt              DateTime       @updatedAt @map("updated_at")
+
+  trackingEvents TrackingEvent[]
+  returns        Return[]
+  ndrAttempts    NdrAttempt[]
+  rtoAttempts    RtoAttempt[]
+
+  @@index([orderId])
+  @@index([subOrderId])
+  @@index([awb])
+  @@index([partner, status])
+  @@index([lastTrackingEventAt])
+  @@map("shipments")
+}

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { sellerProductService } from '@/services/product.service';
 import { ApiError } from '@/lib/api-client';
+import { sellerAuthService } from '@/services/auth.service';
 import '../../products/product-form.css';
 import '../../products/products.css';
 
@@ -113,14 +114,21 @@ export default function MyProductsPage() {
 
   // ===== Seller status check =====
   useEffect(() => {
-    try {
-      const sellerData = sessionStorage.getItem('seller');
-      if (sellerData) {
-        const parsed = JSON.parse(sellerData);
-        if (parsed.status) setSellerStatus(parsed.status);
-        if (parsed.isEmailVerified !== undefined) setIsEmailVerified(parsed.isEmailVerified);
-      }
-    } catch {}
+    // Phase 21 — live status from /seller/auth/me (cookie-auth), not the
+    // sessionStorage key login no longer writes (which left sellerStatus=''
+    // and showed "Account Approval Required" for approved sellers).
+    let cancelled = false;
+    sellerAuthService
+      .me()
+      .then((res) => {
+        if (cancelled || !res?.data) return;
+        setSellerStatus(res.data.status);
+        setIsEmailVerified(res.data.isEmailVerified);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const canAccess = sellerStatus === 'ACTIVE' && isEmailVerified;
@@ -249,15 +257,29 @@ export default function MyProductsPage() {
   const toggleActive = async (mappingId: string, currentActive: boolean) => {
     try {
       const token = sessionStorage.getItem('accessToken') || '';
-      const newStatus = !currentActive;
-      await sellerProductService.updateMapping(token, mappingId, { isActive: newStatus });
+      // Activate / deactivate is NOT a symmetric PATCH (the update endpoint
+      // forbids `isActive`, Phase 58). Deactivating = pause (sets STOPPED +
+      // releases reservations). Re-activation requires admin re-approval, so
+      // a seller cannot self-reactivate from here.
+      if (!currentActive) {
+        showToast(
+          'error',
+          'Reactivation requires admin approval — contact the marketplace admin.',
+        );
+        return;
+      }
+      await sellerProductService.pauseMapping(
+        token,
+        mappingId,
+        'Deactivated by seller from My Products',
+      );
       setProducts(prev =>
         prev.map(p => ({
           ...p,
-          mappings: p.mappings.map(m => m.id === mappingId ? { ...m, isActive: newStatus } : m),
+          mappings: p.mappings.map(m => m.id === mappingId ? { ...m, isActive: false } : m),
         }))
       );
-      showToast('success', newStatus ? 'Variant activated.' : 'Variant deactivated.');
+      showToast('success', 'Variant deactivated (paused). Reactivation needs admin approval.');
     } catch (err: any) {
       if (err instanceof ApiError && err.status === 401) {
         router.replace('/login');
@@ -300,10 +322,13 @@ export default function MyProductsPage() {
     setEditError('');
     try {
       const token = sessionStorage.getItem('accessToken') || '';
+      // NOTE: `isActive` is NOT sent — the PATCH mapping endpoint forbids it
+      // (UpdateMappingDto, Phase 58). Activate/deactivate is a separate flow
+      // (pause endpoint + admin re-approval). Sending it caused the
+      // "property isActive should not exist" validation error.
       const payload: any = {
         stockQty: Number(editForm.stockQty),
         dispatchSla: Number(editForm.dispatchSla) || 2,
-        isActive: editForm.isActive,
       };
       if (editForm.pickupPincode) payload.pickupPincode = editForm.pickupPincode;
 
@@ -317,7 +342,6 @@ export default function MyProductsPage() {
                   ...m,
                   stockQty: payload.stockQty,
                   dispatchSla: payload.dispatchSla,
-                  isActive: payload.isActive,
                   pickupPincode: editForm.pickupPincode || null,
                 }
               : m

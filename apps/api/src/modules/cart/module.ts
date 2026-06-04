@@ -18,7 +18,7 @@ import { CatalogModule } from '../catalog/module';
 import { InventoryModule } from '../inventory/module';
 
 @Module({
-  imports: [forwardRef(() => CatalogModule), InventoryModule],
+  imports: [forwardRef(() => CatalogModule), forwardRef(() => InventoryModule)],
   controllers: [CartController, CustomerReservationsController],
   providers: [
     UserAuthGuard,

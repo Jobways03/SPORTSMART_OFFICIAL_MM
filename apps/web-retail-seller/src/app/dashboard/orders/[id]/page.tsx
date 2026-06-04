@@ -74,7 +74,7 @@ interface SubOrderDetail {
   trackingNumber: string | null;
   courierName: string | null;
   // Delivery method fields surfaced from the API.
-  deliveryMethod?: 'SELF_DELIVERY' | null;
+  deliveryMethod?: 'SELF_DELIVERY' | 'DELHIVERY' | null;
   selfDeliveryStatus?:
     | 'PENDING'
     | 'READY_FOR_PICKUP'
@@ -641,10 +641,12 @@ const { id } = useParams<{ id: string }>();
   // Mark-Shipped is gated on the shipment-evidence count. Same constant
   // as the API's SHIPMENT_EVIDENCE_REQUIRED — keep in sync.
   const SHIPMENT_EVIDENCE_REQUIRED = 4;
+  const hasEnoughEvidence =
+    shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED;
   const canMarkShipped =
     order.acceptStatus === 'ACCEPTED' &&
     order.fulfillmentStatus === 'PACKED' &&
-    shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED;
+    hasEnoughEvidence;
   const showsShipmentEvidenceBlock =
     order.acceptStatus === 'ACCEPTED' &&
     order.fulfillmentStatus === 'PACKED';
@@ -652,6 +654,10 @@ const { id } = useParams<{ id: string }>();
     0,
     SHIPMENT_EVIDENCE_REQUIRED - shipmentEvidence.length,
   );
+  // Delhivery sub-orders ship automatically (the system books the courier +
+  // attaches the AWB when the seller marks PACKED), so the manual "Mark as
+  // Shipped" tracking-entry form is hidden for them — the seller just packs.
+  const isDelhivery = (order.deliveryMethod as string | undefined) === 'DELHIVERY';
 
   return (
     <div>
@@ -791,23 +797,68 @@ const { id } = useParams<{ id: string }>();
                 </>
               )}
 
-              {/* Fulfillment status progression - PACK */}
+              {/* Fulfillment status progression - PACK. Delhivery auto-ships
+                  the moment this is clicked, so the 4 dispatch photos are
+                  required BEFORE packing (the backend enforces this too). */}
               {canMarkPacked && (
                 <button
                   onClick={() => setShowPackModal(true)}
-                  disabled={!!actionLoading}
-                  style={{ ...btnBlue, background: '#d97706' }}
+                  disabled={
+                    !!actionLoading || (isDelhivery && !hasEnoughEvidence)
+                  }
+                  title={
+                    isDelhivery && !hasEnoughEvidence
+                      ? `Upload ${evidenceShortBy} more shipment photo${
+                          evidenceShortBy === 1 ? '' : 's'
+                        } first — a Delhivery order ships automatically when packed (need ${SHIPMENT_EVIDENCE_REQUIRED} total).`
+                      : undefined
+                  }
+                  style={{
+                    ...btnBlue,
+                    background:
+                      isDelhivery && !hasEnoughEvidence ? '#fcd34d' : '#d97706',
+                    color: isDelhivery && !hasEnoughEvidence ? '#92400e' : '#fff',
+                    cursor:
+                      isDelhivery && !hasEnoughEvidence
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
                 >
-                  {actionLoading === 'pack' ? 'Updating...' : 'MARK AS PACKED'}
+                  {actionLoading === 'pack'
+                    ? 'Updating...'
+                    : isDelhivery && !hasEnoughEvidence
+                      ? `MARK AS PACKED (${shipmentEvidence.length}/${SHIPMENT_EVIDENCE_REQUIRED} photos)`
+                      : 'MARK AS PACKED'}
                 </button>
               )}
 
-              {/* Fulfillment status progression - SHIP. Hard-blocked
-                  until SHIPMENT_EVIDENCE_REQUIRED photos are uploaded.
-                  Disabled-but-visible when the seller is still short
-                  so they see the path forward, with the count surfaced
-                  inline. */}
-              {showsShipmentEvidenceBlock && (
+              {/* Delhivery auto-ships on PACK — the system books the courier
+                  and attaches the AWB automatically, so the seller sees a
+                  status note instead of the manual tracking-entry form. */}
+              {isDelhivery && showsShipmentEvidenceBlock && (
+                <div
+                  style={{
+                    display: 'flex', flexDirection: 'column', gap: 2,
+                    padding: '10px 14px', background: '#eff6ff',
+                    border: '1px solid #bfdbfe', borderRadius: 8,
+                  }}
+                >
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#1e40af' }}>
+                    &#128230; Auto-shipping via Delhivery
+                  </span>
+                  <span style={{ fontSize: 12, color: '#3b82f6' }}>
+                    The courier is being booked — the AWB &amp; tracking link will
+                    appear here in a moment. No manual tracking entry needed; just
+                    refresh if it doesn&apos;t update.
+                  </span>
+                </div>
+              )}
+
+              {/* Fulfillment status progression - SHIP (manual, non-Delhivery).
+                  Hard-blocked until SHIPMENT_EVIDENCE_REQUIRED photos are
+                  uploaded. Disabled-but-visible when the seller is still short
+                  so they see the path forward, with the count surfaced inline. */}
+              {!isDelhivery && showsShipmentEvidenceBlock && (
                 <button
                   onClick={() => canMarkShipped && setShowShipModal(true)}
                   disabled={!!actionLoading || !canMarkShipped}
@@ -896,7 +947,12 @@ const { id } = useParams<{ id: string }>();
                 </h3>
                 <p style={{ fontSize: 12, color: '#047857', marginBottom: 12, lineHeight: 1.5 }}>
                   Upload <strong>{SHIPMENT_EVIDENCE_REQUIRED} photos</strong> of the
-                  packaged item before you can mark the order shipped. Recommended
+                  packaged item before you can mark the order{' '}
+                  {isDelhivery ? 'as Packed' : 'shipped'}
+                  {isDelhivery
+                    ? ' — a Delhivery order ships automatically once packed, so the photos are required first.'
+                    : '.'}{' '}
+                  Recommended
                   angles: front, back, label / serial close-up, and packed-in-box.
                   These give the marketplace admin an &quot;as-shipped&quot; baseline
                   if the customer files a return — your photos protect you against
@@ -2463,6 +2519,137 @@ function DeliverySection({
           onChanged={onChanged}
         />
       )}
+
+      {/* Delhivery: self-service pickup + label so the seller schedules their
+          own pickup and prints the label themselves, instead of asking an admin
+          (and risking it being forgotten). */}
+      {(order.deliveryMethod as string | null) === 'DELHIVERY' &&
+        (order.fulfillmentStatus === 'PACKED' ||
+          order.fulfillmentStatus === 'SHIPPED') && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            <RequestPickupButton subOrderId={order.id} onChanged={onChanged} />
+            <DownloadLabelButton subOrderId={order.id} />
+          </div>
+        )}
+    </div>
+  );
+}
+
+/**
+ * Phase 92 — seller self-service Delhivery pickup button. POSTs to the
+ * seller-scoped /seller/sub-orders/:id/request-pickup (seller JWT auto-attached
+ * by apiClient); the backend schedules the warehouse pickup for the day and is
+ * idempotent per warehouse+day.
+ */
+function RequestPickupButton({
+  subOrderId,
+  onChanged,
+}: {
+  subOrderId: string;
+  onChanged: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const onClick = async () => {
+    setLoading(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const res = await apiClient<{ message?: string }>(
+        `/seller/sub-orders/${subOrderId}/request-pickup`,
+        {
+          method: 'POST',
+          headers: { 'X-Idempotency-Key': `pickup-${subOrderId}-${Date.now()}` },
+        },
+      );
+      setMsg(res?.message || 'Pickup requested with Delhivery.');
+      onChanged();
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Pickup request failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={loading}
+        style={{
+          padding: '10px 16px',
+          fontSize: 13,
+          fontWeight: 600,
+          background: loading ? '#93c5fd' : '#2563eb',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 8,
+          cursor: loading ? 'not-allowed' : 'pointer',
+          alignSelf: 'flex-start',
+        }}
+      >
+        {loading ? 'Requesting pickup…' : '\u{1F69A} Request Delhivery pickup'}
+      </button>
+      {msg && <span style={{ fontSize: 12, color: '#065f46' }}>{msg}</span>}
+      {err && <span style={{ fontSize: 12, color: '#b91c1c' }}>{err}</span>}
+    </div>
+  );
+}
+
+/**
+ * Phase 92 — seller self-service shipping label. GETs the seller-scoped
+ * /seller/sub-orders/:id/label (seller JWT auto-attached), then opens the real
+ * Delhivery label PDF in a new tab. The seller packs the box, so they need the
+ * label to print + paste before pickup. labelUrl can be null right after
+ * booking (carrier propagation), so we show a friendly message instead of
+ * opening an undefined URL.
+ */
+function DownloadLabelButton({ subOrderId }: { subOrderId: string }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const onClick = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await apiClient<{ labelUrl?: string | null }>(
+        `/seller/sub-orders/${subOrderId}/label`,
+      );
+      const url = res?.data?.labelUrl;
+      if (!url) {
+        setErr(
+          'Label not generated by Delhivery yet — available once the shipment is manifested / picked up.',
+        );
+        return;
+      }
+      window.open(String(url), '_blank', 'noopener,noreferrer');
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Could not fetch the label.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={loading}
+        style={{
+          padding: '10px 16px',
+          fontSize: 13,
+          fontWeight: 600,
+          background: '#fff',
+          color: '#2563eb',
+          border: '1px solid #2563eb',
+          borderRadius: 8,
+          cursor: loading ? 'not-allowed' : 'pointer',
+          alignSelf: 'flex-start',
+        }}
+      >
+        {loading ? 'Fetching label…' : '\u{1F3F7}\u{FE0F} Download shipping label'}
+      </button>
+      {err && <span style={{ fontSize: 12, color: '#b91c1c' }}>{err}</span>}
     </div>
   );
 }

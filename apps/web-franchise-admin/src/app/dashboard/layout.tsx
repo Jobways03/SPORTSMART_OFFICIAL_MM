@@ -90,9 +90,14 @@ export default function DashboardLayout({
     { href: '/dashboard/procurement', label: 'Procurement', icon: '&#128188;' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
     { href: '/dashboard/verification', label: 'Verification', icon: '&#128269;' },
+    // Delhivery Tools console hidden (2026-06-02) — page kept; re-enable by uncommenting.
+    // { href: '/dashboard/delhivery-tools', label: 'Delhivery Tools', icon: '&#128666;' },
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
     { href: '/dashboard/settlements', label: 'Settlements', icon: '&#128202;' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },
+    // Settings hub — currently surfaces the Logistics-partners panel
+    // for self-registration of pickup locations with each courier.
+    { href: '/dashboard/settings', label: 'Settings', icon: '&#9881;' },
   ];
 
   return (

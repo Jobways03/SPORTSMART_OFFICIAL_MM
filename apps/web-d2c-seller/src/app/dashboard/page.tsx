@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { sellerAuthService } from '@/services/auth.service';
 
 interface SellerInfo {
   sellerName: string;
@@ -52,10 +53,27 @@ export default function DashboardPage() {
   const [kpis, setKpis] = useState<KpiState>(INITIAL_KPIS);
 
   useEffect(() => {
-    try {
-      const data = sessionStorage.getItem('seller');
-      if (data) setSeller(JSON.parse(data));
-    } catch {}
+    // Phase 21 — identity comes from the cookie-authenticated
+    // /seller/auth/me endpoint, not sessionStorage (login no longer writes
+    // it). Reading the dead sessionStorage key left `seller` null forever,
+    // so the whole dashboard body short-circuited at `if (!seller) return
+    // null` and rendered a blank panel.
+    let cancelled = false;
+    sellerAuthService
+      .me()
+      .then((res) => {
+        if (cancelled || !res?.data) return;
+        setSeller({
+          sellerName: res.data.sellerName,
+          sellerShopName: res.data.sellerShopName,
+          email: res.data.email,
+          phoneNumber: res.data.phoneNumber,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

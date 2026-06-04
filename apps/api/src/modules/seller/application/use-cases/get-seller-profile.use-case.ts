@@ -90,19 +90,26 @@ export class GetSellerProfileUseCase {
     // wizard's three CTAs (bank details, first product, delivery
     // method) reflect real state. Each query is bounded to a
     // single-row predicate so the cost is essentially free.
-    const [hasBankDetails, hasFirstProduct, hasDeliveryMethod] = await Promise.all([
-      this.prisma.sellerBankDetails
-        .findUnique({ where: { sellerId }, select: { id: true } })
-        .then((r: { id: string } | null) => !!r)
-        .catch(() => false),
-      this.prisma.product
-        .findFirst({ where: { sellerId }, select: { id: true } })
-        .then((r: { id: string } | null) => !!r)
-        .catch(() => false),
-      // Delivery method "configured" means self-delivery is enabled.
-      // Same source of truth as the seller shipping admin page.
-      Promise.resolve((seller as any).selfDeliveryEnabled ?? false),
-    ]);
+    const [hasBankDetails, hasFirstProduct, hasDeliveryMethod, logisticsLocked] =
+      await Promise.all([
+        this.prisma.sellerBankDetails
+          .findUnique({ where: { sellerId }, select: { id: true } })
+          .then((r: { id: string } | null) => !!r)
+          .catch(() => false),
+        this.prisma.product
+          .findFirst({ where: { sellerId }, select: { id: true } })
+          .then((r: { id: string } | null) => !!r)
+          .catch(() => false),
+        // Delivery method "configured" means self-delivery is enabled.
+        // Same source of truth as the seller shipping admin page.
+        Promise.resolve((seller as any).selfDeliveryEnabled ?? false),
+        // Pickup/identity fields are frozen once the seller is registered
+        // with a logistics partner (the data feeds the courier warehouse).
+        this.prisma.sellerPartnerRegistration
+          .findFirst({ where: { sellerId, status: 'REGISTERED' }, select: { id: true } })
+          .then((r: { id: string } | null) => !!r)
+          .catch(() => false),
+      ]);
 
     return {
       sellerId: seller.id,
@@ -150,6 +157,11 @@ export class GetSellerProfileUseCase {
       hasBankDetails,
       hasFirstProduct,
       hasDeliveryMethod,
+      // True once registered with a logistics partner — the portal
+      // disables the pickup/identity fields and shows a "contact your
+      // admin" banner. Enforced server-side in UpdateSellerProfileUseCase
+      // regardless of this flag.
+      logisticsLocked,
     };
   }
 }

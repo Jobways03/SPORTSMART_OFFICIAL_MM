@@ -91,6 +91,23 @@ export class EmailService {
         ? options.text
         : htmlToText(html);
 
+    // Dev-only: surface verification/OTP codes in the logs so email-gated
+    // flows (email verification + password reset, across every persona —
+    // customer, seller, franchise, admin, affiliate) are testable without
+    // depending on real inbox delivery. Gated on NODE_ENV so it NEVER logs
+    // a code in production. Detects an OTP email by keyword, then extracts
+    // the 6-digit code from the body.
+    if (process.env.NODE_ENV !== 'production') {
+      const looksLikeOtp =
+        /\b(otp|verification code|verify your|reset code|one[- ]time|password reset)\b/i.test(
+          `${subject} ${text}`,
+        );
+      const code = looksLikeOtp ? (text.match(/\b(\d{6})\b/) || [])[1] : undefined;
+      if (code) {
+        this.logger.warn(`🔑 [DEV OTP] for ${to}: ${code}   (subject: "${subject}")`);
+      }
+    }
+
     if (!this.transporter) {
       this.logger.warn(`[DEV-MAIL] To: ${to} | Subject: ${subject}`);
       this.logger.warn(`[DEV-MAIL] Body: ${text || html}`);

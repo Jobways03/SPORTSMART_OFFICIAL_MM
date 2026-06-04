@@ -1,0 +1,11 @@
+-- MasterOrder.sourceCartSnapshot (Json?) exists in the Prisma schema
+-- (prisma/schema/orders.prisma) but was never migrated into the database.
+-- The missing column made POST /api/v1/customer/checkout/place-order fail
+-- with Prisma P2022 ("The column `master_orders.source_cart_snapshot` does
+-- not exist in the current database") inside placeOrderTransaction →
+-- masterOrder.findUnique(), surfacing to the storefront as a 500
+-- "Internal server error" on the Place Order button.
+--
+-- Nullable JSONB matches Prisma `Json?`. IF NOT EXISTS keeps this safe on
+-- environments where the column was already added manually.
+ALTER TABLE "master_orders" ADD COLUMN IF NOT EXISTS "source_cart_snapshot" JSONB;

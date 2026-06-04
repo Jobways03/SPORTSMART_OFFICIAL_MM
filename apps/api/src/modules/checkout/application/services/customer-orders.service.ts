@@ -7,6 +7,7 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class CustomerOrdersService {
   constructor(
     @Inject(CHECKOUT_REPOSITORY)
     private readonly repo: ICheckoutRepository,
+    private readonly eventBus: EventBusService,
     // Phase 197 (Checkout audit #11 / My-Orders audit #11) — audit log
     // on customer-initiated cancel. AuditModule is @Global() so no
     // module wiring is required.
@@ -117,6 +119,40 @@ export class CustomerOrdersService {
     }
 
     await this.repo.cancelOrderTransaction(order);
+
+    // Propagate the cancellation to the courier. A Delhivery sub-order that was
+    // already BOOKED (has an AWB — e.g. PACKED before this cancel) must have its
+    // shipment cancelled too, or the pickup stays live carrier-side while the
+    // order is dead in our DB. The admin cancel path does this via
+    // orders.sub_order.cancelled_by_admin → DelhiveryCancelHandler; the customer
+    // path emits a customer-scoped twin that the SAME handler subscribes to.
+    // Post-commit + best-effort: a courier/outbox hiccup must never un-cancel
+    // the already-committed order. The handler no-ops for non-Delhivery / no-AWB
+    // sub-orders, so emitting one event per sub-order is safe.
+    for (const so of order.subOrders) {
+      try {
+        await this.eventBus.publish({
+          eventName: 'orders.sub_order.cancelled_by_customer',
+          aggregate: 'SubOrder',
+          aggregateId: so.id,
+          occurredAt: new Date(),
+          payload: {
+            subOrderId: so.id,
+            orderNumber,
+            customerId: userId,
+            source: 'CUSTOMER',
+          },
+        });
+      } catch (err) {
+        // Order is already cancelled; a failed emit must not surface to the
+        // customer. The stranded AWB is recoverable via reconciliation/ops.
+        this.logger.error(
+          `Failed to emit cancelled_by_customer for sub-order ${so.id} (order ${orderNumber}): ${
+            (err as Error)?.message
+          }`,
+        );
+      }
+    }
 
     // Phase 197 (Checkout audit #11 / My-Orders audit #11) — compliance
     // audit row for the customer self-cancel. Best-effort: a failed

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { InventoryPublicFacade } from './application/facades/inventory-public.facade';
 import { InventoryManagementService } from './application/services/inventory-management.service';
 import { LowStockAlertService } from './application/services/low-stock-alert.service';
@@ -21,7 +21,8 @@ import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
   // FranchiseModule exports FranchisePublicFacade, which the admin
   // inventory service uses to merge franchise stock into the unified
   // overview / low-stock / out-of-stock queries.
-  imports: [FranchiseModule],
+  // forwardRef: Catalog↔Inventory↔Franchise form an import cycle.
+  imports: [forwardRef(() => FranchiseModule)],
   controllers: [
     SellerInventoryController,
     AdminInventoryController,

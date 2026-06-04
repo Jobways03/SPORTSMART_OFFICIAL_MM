@@ -204,6 +204,14 @@ model Seller {
   // constraint on SellerBankDetails.sellerId enforces 1:1.
   bankDetails       SellerBankDetails?
 
+  // Logistics partner registrations — one row per (seller, partner)
+  // pair. Tracks whether the seller's pickup address has been
+  // registered as a "warehouse" with each courier that requires it
+  // (Delhivery). Driven by the admin "Add pickup location to
+  // {Partner}" button on the seller detail page. Idempotent: a
+  // re-register call updates the existing row in place.
+  partnerRegistrations SellerPartnerRegistration[]
+
   @@index([status])
   @@index([isProfileCompleted])
   @@index([isDeleted])
@@ -352,4 +360,47 @@ model SellerBankDetails {
   seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
 
   @@map("seller_bank_details")
+}
+
+/// Logistics partner registration tracker.
+///
+/// Records, per (sellerId, partner), whether the seller's pickup
+/// address has been registered with the named courier. Driven by the
+/// admin "Add pickup location to {Partner}" button on the seller
+/// detail page; status reflects the most recent attempt.
+///
+/// Status semantics:
+///   • PENDING    — row exists but no successful partner-side ack yet.
+///   • REGISTERED — partner returned 2xx; `warehouseName` populated
+///                  with the immutable canonical id (Delhivery echoes
+///                  the name the request supplied).
+///   • FAILED     — partner returned an error; `lastError` populated
+///                  with the verbatim message for admin retry.
+///   • NOT_NEEDED — partner advertises `warehouseRegistration: NOT_NEEDED`
+///                  via the facade catalogue (Shadowfax). A row in
+///                  this state means the admin clicked the button by
+///                  mistake; the API short-circuits without calling
+///                  the partner.
+///
+/// The (sellerId, partner) unique constraint enforces idempotency —
+/// "Re-register" updates the existing row rather than creating a
+/// second one.
+model SellerPartnerRegistration {
+  id            String    @id @default(uuid())
+  sellerId      String    @map("seller_id")
+  partner       String    @db.VarChar(32)
+  warehouseName String?   @map("warehouse_name") @db.VarChar(128)
+  status        String    @default("PENDING") @db.VarChar(16)
+  lastError     String?   @map("last_error")
+  registeredAt  DateTime? @map("registered_at")
+  registeredBy  String?   @map("registered_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([sellerId, partner])
+  @@index([sellerId])
+  @@index([partner, status])
+  @@map("seller_partner_registrations")
 }

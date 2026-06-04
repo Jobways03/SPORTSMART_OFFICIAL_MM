@@ -436,6 +436,7 @@ enum MetafieldType {
 // module remains for a future carrier.
 enum DeliveryMethod {
   SELF_DELIVERY // Seller / franchise delivers themselves; no courier.
+  DELHIVERY     // Booked with Delhivery via the logistics-facade.
 }
 
 // Status lifecycle for SELF_DELIVERY shipments — the only delivery

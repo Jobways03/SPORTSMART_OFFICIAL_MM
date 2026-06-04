@@ -12,12 +12,14 @@ import {
   FranchisePartnerRepository,
   FRANCHISE_PARTNER_REPOSITORY,
 } from '../../domain/repositories/franchise.repository.interface';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 @Injectable()
 export class UpdateFranchiseProfileUseCase {
   constructor(
     @Inject(FRANCHISE_PARTNER_REPOSITORY)
     private readonly franchiseRepo: FranchisePartnerRepository,
+    private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -37,6 +39,41 @@ export class UpdateFranchiseProfileUseCase {
     }
     if (franchise.status === 'SUSPENDED') {
       throw new ForbiddenAppException('Account is suspended. Profile editing is not allowed.');
+    }
+
+    // Logistics lock — once the franchise is registered with a logistics
+    // partner, the fields that make up the courier pickup warehouse
+    // (business name, owner/contact, address, city, state, pincode,
+    // warehouse address/pincode) are frozen. The franchise can't change
+    // them directly; they contact the franchise admin, who edits + re-syncs
+    // via "Update address to Delhivery". Tax fields stay editable.
+    const LOGISTICS_LOCKED_FIELDS = [
+      'ownerName',
+      'businessName',
+      'state',
+      'city',
+      'address',
+      'pincode',
+      'locality',
+      'country',
+      'warehouseAddress',
+      'warehousePincode',
+    ];
+    const touchesLockedField = LOGISTICS_LOCKED_FIELDS.some(
+      (f) => (dto as Record<string, unknown>)[f] !== undefined,
+    );
+    if (touchesLockedField) {
+      const reg = await this.prisma.franchisePartnerRegistration.findFirst({
+        where: { franchiseId, status: 'REGISTERED' },
+        select: { partner: true },
+      });
+      if (reg) {
+        throw new ForbiddenAppException(
+          `Your pickup details are locked because they're registered with ` +
+            `${reg.partner}. Contact your franchise admin to update your address.`,
+          'LOGISTICS_ADDRESS_LOCKED',
+        );
+      }
     }
 
     // Build update data

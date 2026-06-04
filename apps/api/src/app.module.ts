@@ -82,6 +82,7 @@ import { MoneyModule } from './core/money/money.module';
 import { PaymentsSagaModule } from './modules/payments-saga/module';
 import { RefundInstructionsModule } from './modules/refund-instructions/module';
 import { TaxModule } from './modules/tax/module';
+import { LogisticsPartnerModule } from './modules/logistics-partner/logistics-partner.module';
 
 @Module({
   imports: [
@@ -165,6 +166,15 @@ import { TaxModule } from './modules/tax/module';
     PayoutsModule,
     ContentModule,
     SchedulerModule,
+
+    // Logistics partner registration (gated by
+    // LOGISTICS_PARTNER_REGISTRATION_ENABLED). Setting the env var to
+    // literal 'false' returns a no-op module so the
+    // `/admin/logistics-partner/*` routes are not mounted — clean
+    // rollback path for MVP 1.
+    LogisticsPartnerModule.forRoot({
+      enabled: process.env.LOGISTICS_PARTNER_REGISTRATION_ENABLED !== 'false',
+    }),
   ],
   controllers: [HealthController],
   providers: [

@@ -29,7 +29,7 @@ interface SubOrder {
   id: string;
   fulfillmentStatus: string;
   acceptStatus: string;
-  deliveryMethod?: 'SELF_DELIVERY' | null;
+  deliveryMethod?: 'SELF_DELIVERY' | 'DELHIVERY' | null;
   selfDeliveryStatus?:
     | 'PENDING'
     | 'READY_FOR_PICKUP'

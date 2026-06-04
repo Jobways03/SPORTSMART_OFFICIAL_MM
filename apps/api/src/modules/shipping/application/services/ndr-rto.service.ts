@@ -26,6 +26,7 @@ import {
   COURIER_GATEWAY_RESOLVER,
   type CourierGatewayResolver,
 } from '../ports/outbound/courier-gateway.port';
+import { OrdersService } from '../../../orders/application/services/orders.service';
 
 export type NdrCustomerAction =
   | 'REATTEMPT'
@@ -41,6 +42,7 @@ export class NdrRtoService {
     private readonly eventBus: EventBusService,
     @Inject(COURIER_GATEWAY_RESOLVER)
     private readonly courierResolver: CourierGatewayResolver,
+    private readonly ordersService: OrdersService,
   ) {}
 
   /**
@@ -187,61 +189,71 @@ export class NdrRtoService {
     if (!sub) {
       throw new NotFoundAppException(`Sub-order ${args.subOrderId} not found`);
     }
-    if (sub.rtoInitiatedAt) {
-      throw new BadRequestAppException('Sub-order is already in RTO');
-    }
     if (sub.fulfillmentStatus === 'DELIVERED') {
       throw new BadRequestAppException(
-        'Cannot force RTO on a delivered sub-order',
+        'Cannot force RTO on a delivered sub-order — use the returns flow',
       );
     }
-    const awb = sub.trackingNumber;
+    if (sub.fulfillmentStatus === 'CANCELLED') {
+      throw new BadRequestAppException('Sub-order is already cancelled');
+    }
 
     const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.subOrder.update({
-        where: { id: args.subOrderId },
-        data: {
-          rtoInitiatedAt: now,
-          rtoReason: args.reason,
-          ndrStatus: 'EXHAUSTED',
-        },
-      });
-      await tx.rtoEvent.create({
-        data: {
-          subOrderId: args.subOrderId,
-          status: 'RTO_INITIATED',
-          occurredAt: now,
-          reason: args.reason,
-        },
-      });
 
-      await this.eventBus.publish(
-        {
-          eventName: SHIPPING_EVENTS.RTO_INITIATED,
-          aggregate: 'SubOrder',
-          aggregateId: args.subOrderId,
-          occurredAt: now,
-          payload: {
-            subOrderId: args.subOrderId,
-            reason: args.reason,
-            source: 'ADMIN_FORCE',
-            adminId: args.adminId,
-            awb,
-          },
-        },
-        { tx } as any,
+    // Phase 89 (2026-06-02) — force-RTO is now financially complete.
+    // Previously this only stamped rtoInitiatedAt + emitted RTO_INITIATED
+    // (whose ONLY subscriber is the customer notification), so the order was
+    // left stuck SHIPPED with no refund, no stock release, no master rollup.
+    // Delegate the terminal to the proven admin-cancel path (force=true for
+    // in-transit goods): it restores stock, rolls the master order up to
+    // CANCELLED, refunds prepaid under key `cancel-sub-order:<id>`, and emits
+    // orders.sub_order.cancelled_by_admin — which DelhiveryCancelHandler
+    // consumes to cancel the AWB at Delhivery (so the carrier-side initiateRto
+    // that used to live here is no longer needed).
+    try {
+      await this.ordersService.adminCancelSubOrder(
+        args.subOrderId,
+        args.adminId,
+        args.reason,
+        { force: true },
       );
-    });
+    } catch (err) {
+      // Tolerate an idempotent re-run (a prior attempt already cancelled it);
+      // any other failure must surface so the operator can retry.
+      if (!/already cancelled/i.test((err as Error)?.message ?? '')) {
+        throw err;
+      }
+    }
 
-    if (awb && sub.deliveryMethod) {
-      const gateway = this.courierResolver.forMethod(sub.deliveryMethod);
+    // RTO audit trail — records that this cancellation was an admin-forced RTO
+    // (drives the NDR/RTO panel) WITHOUT re-notifying the customer (the cancel
+    // path above already sends the cancelled+refunded notification). Best-effort:
+    // the cancel above is the source of truth. Skipped if a prior run already
+    // stamped it (retry-safe).
+    if (!sub.rtoInitiatedAt) {
       try {
-        await gateway.initiateRto({ awb, remark: args.reason });
+        await this.prisma.$transaction(async (tx) => {
+          await tx.subOrder.update({
+            where: { id: args.subOrderId },
+            data: {
+              rtoInitiatedAt: now,
+              rtoReason: args.reason,
+              ndrStatus: 'EXHAUSTED',
+            },
+          });
+          await tx.rtoEvent.create({
+            data: {
+              subOrderId: args.subOrderId,
+              status: 'RTO_INITIATED',
+              occurredAt: now,
+              reason: args.reason,
+            },
+          });
+        });
       } catch (err) {
         this.logger.warn(
-          `Carrier-side initiateRto failed for ${awb}: ${(err as Error).message}` +
-            ' — DB-side RTO state is committed; carrier sweep will reconcile.',
+          `RTO audit write failed for ${args.subOrderId} (order already ` +
+            `cancelled + refunded): ${(err as Error).message}`,
         );
       }
     }

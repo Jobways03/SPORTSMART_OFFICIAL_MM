@@ -107,6 +107,9 @@ import { InventoryModule } from '../inventory/module';
 // chain (pre-Phase-57 only logger.log was written, leaving no
 // queryable forensic trail of who approved what when).
 import { AuditModule } from '../audit/module';
+// Phase 4 Delhivery wiring (2026-06-02) — real courier serviceability in the
+// PDP check (ServiceabilityService injects LogisticsFacadeClient).
+import { LogisticsFacadeModule } from '../../integrations/logistics-facade/logistics-facade.module';
 // Phase 193 (#15) — back-in-stock notifier needs the notifications facade.
 import { NotificationsModule } from '../notifications/module';
 import { BackInStockNotifyCron } from './application/jobs/back-in-stock-notify.cron';
@@ -116,7 +119,13 @@ import { BackInStockNotifyCron } from './application/jobs/back-in-stock-notify.c
 import { StockCacheInvalidationHandler } from './application/event-handlers/stock-cache-invalidation.handler';
 
 @Module({
-  imports: [forwardRef(() => CartModule), InventoryModule, AuditModule, NotificationsModule],
+  imports: [
+    forwardRef(() => CartModule),
+    forwardRef(() => InventoryModule),
+    AuditModule,
+    NotificationsModule,
+    LogisticsFacadeModule,
+  ],
   controllers: [
     CatalogReferenceController,
     StorefrontProductsController,

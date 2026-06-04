@@ -5,7 +5,15 @@
 //   Gap #14 — handleNdrAction routes to carrier adapter
 //   Gap #15 — gateway.reattempt + gateway.initiateRto are called
 //   Gap #18 — autoInitiateRtoForExhaustedNdr writes RtoEvent + emits
-//   Gap #24 — forceInitiateRto writes RtoEvent + emits
+//   Gap #24 — forceInitiateRto delegates to the admin-cancel terminal
+//
+// Phase 89 (2026-06-02) — forceInitiateRto now delegates the financial
+// terminal (refund/stock/status/master-rollup/AWB-cancel) to
+// OrdersService.adminCancelSubOrder({ force: true }) instead of only
+// stamping rtoInitiatedAt + emitting RTO_INITIATED (which left the order
+// stuck SHIPPED with no refund). The constructor therefore takes a 4th
+// dependency (OrdersService), and the force-RTO assertions below check the
+// delegation + the RTO audit row rather than the old event/carrier calls.
 
 import { NdrRtoService } from './ndr-rto.service';
 import { SHIPPING_EVENTS } from '../../domain/events/shipping.events';
@@ -39,11 +47,20 @@ function buildResolver(gateway: any) {
   return { forMethod: jest.fn().mockReturnValue(gateway) };
 }
 
+// Phase 89 — OrdersService dependency. adminCancelSubOrder is the terminal
+// forceInitiateRto delegates to; default resolves (cancel succeeded).
+function buildOrders(overrides: any = {}) {
+  return {
+    adminCancelSubOrder: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
 describe('NdrRtoService (Phase 87)', () => {
   describe('handleNdrAction', () => {
     it('throws on missing sub-order', async () => {
       const prisma = buildPrisma();
-      const svc = new NdrRtoService(prisma as any, buildEventBus() as any, buildResolver({}) as any);
+      const svc = new NdrRtoService(prisma as any, buildEventBus() as any, buildResolver({}) as any, buildOrders() as any);
       await expect(
         svc.handleNdrAction({
           subOrderId: 'missing',
@@ -69,7 +86,7 @@ describe('NdrRtoService (Phase 87)', () => {
           }),
         },
       });
-      const svc = new NdrRtoService(prisma as any, buildEventBus() as any, buildResolver({}) as any);
+      const svc = new NdrRtoService(prisma as any, buildEventBus() as any, buildResolver({}) as any, buildOrders() as any);
       await expect(
         svc.handleNdrAction({
           subOrderId: 'sub-1',
@@ -101,6 +118,7 @@ describe('NdrRtoService (Phase 87)', () => {
         prisma as any,
         buildEventBus() as any,
         buildResolver({ initiateRto }) as any,
+        buildOrders() as any,
       );
       const res = await svc.handleNdrAction({
         subOrderId: 'sub-1',
@@ -139,6 +157,7 @@ describe('NdrRtoService (Phase 87)', () => {
         prisma as any,
         buildEventBus() as any,
         buildResolver({ reattempt }) as any,
+        buildOrders() as any,
       );
       const res = await svc.handleNdrAction({
         subOrderId: 'sub-1',
@@ -173,6 +192,7 @@ describe('NdrRtoService (Phase 87)', () => {
         prisma as any,
         eventBus as any,
         buildResolver({ reattempt: jest.fn() }) as any,
+        buildOrders() as any,
       );
       await svc.handleNdrAction({
         subOrderId: 'sub-1',
@@ -186,11 +206,11 @@ describe('NdrRtoService (Phase 87)', () => {
   });
 
   describe('forceInitiateRto', () => {
-    it('writes rtoInitiatedAt + RtoEvent + emits RTO_INITIATED', async () => {
+    it('delegates the terminal to adminCancelSubOrder(force) + writes the RTO audit row', async () => {
       const txSubUpdate = jest.fn().mockResolvedValue({});
       const txRtoCreate = jest.fn().mockResolvedValue({});
       const eventBus = buildEventBus();
-      const initiateRto = jest.fn().mockResolvedValue({});
+      const orders = buildOrders();
       const prisma: any = {
         subOrder: {
           findUnique: jest.fn().mockResolvedValue({
@@ -211,13 +231,23 @@ describe('NdrRtoService (Phase 87)', () => {
       const svc = new NdrRtoService(
         prisma,
         eventBus as any,
-        buildResolver({ initiateRto }) as any,
+        buildResolver({ initiateRto: jest.fn() }) as any,
+        orders as any,
       );
       await svc.forceInitiateRto({
         subOrderId: 'sub-1',
         reason: 'High fraud risk',
         adminId: 'admin-7',
       });
+      // Phase 89 — the financial terminal is delegated to the admin-cancel
+      // path with force=true (refund + stock + master rollup + AWB cancel).
+      expect(orders.adminCancelSubOrder).toHaveBeenCalledWith(
+        'sub-1',
+        'admin-7',
+        'High fraud risk',
+        { force: true },
+      );
+      // RTO audit row still written (drives the NDR/RTO panel).
       expect(txSubUpdate).toHaveBeenCalled();
       expect(txRtoCreate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -226,18 +256,6 @@ describe('NdrRtoService (Phase 87)', () => {
             reason: 'High fraud risk',
           }),
         }),
-      );
-      const names = eventBus.publish.mock.calls.map((c) => c[0].eventName);
-      expect(names).toContain(SHIPPING_EVENTS.RTO_INITIATED);
-      // ADMIN_FORCE source provenance.
-      const rtoEvent = eventBus.publish.mock.calls.find(
-        (c) => c[0].eventName === SHIPPING_EVENTS.RTO_INITIATED,
-      );
-      expect(rtoEvent![0].payload.source).toBe('ADMIN_FORCE');
-      expect(rtoEvent![0].payload.adminId).toBe('admin-7');
-      // Carrier-side initiateRto invoked after the DB commit.
-      expect(initiateRto).toHaveBeenCalledWith(
-        expect.objectContaining({ awb: 'AWB1', remark: 'High fraud risk' }),
       );
     });
 
@@ -254,10 +272,12 @@ describe('NdrRtoService (Phase 87)', () => {
         },
         $transaction: jest.fn(),
       };
+      const orders = buildOrders();
       const svc = new NdrRtoService(
         prisma,
         buildEventBus() as any,
         buildResolver({ initiateRto: jest.fn() }) as any,
+        orders as any,
       );
       await expect(
         svc.forceInitiateRto({
@@ -266,6 +286,8 @@ describe('NdrRtoService (Phase 87)', () => {
           adminId: 'admin-1',
         }),
       ).rejects.toThrow(/delivered/i);
+      // Must not have touched the order when the guard rejects.
+      expect(orders.adminCancelSubOrder).not.toHaveBeenCalled();
     });
   });
 
@@ -294,6 +316,7 @@ describe('NdrRtoService (Phase 87)', () => {
         prisma,
         eventBus as any,
         buildResolver({}) as any,
+        buildOrders() as any,
       );
       await svc.autoInitiateRtoForExhaustedNdr({
         subOrderId: 'sub-1',
@@ -324,6 +347,7 @@ describe('NdrRtoService (Phase 87)', () => {
         prisma,
         eventBus as any,
         buildResolver({}) as any,
+        buildOrders() as any,
       );
       await svc.autoInitiateRtoForExhaustedNdr({
         subOrderId: 'sub-1',

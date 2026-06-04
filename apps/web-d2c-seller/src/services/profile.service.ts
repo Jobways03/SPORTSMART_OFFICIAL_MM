@@ -1,5 +1,13 @@
 import { apiClient, ApiError, ApiResponse } from '@/lib/api-client';
 
+// Auth is cookie-based (httpOnly). Only attach a Bearer header when a real
+// legacy token is present. Sending an empty "Bearer " is worse than sending
+// nothing: the API's seller guard does `bearer ?? cookie`, and since "" is
+// not null/undefined the `??` keeps the empty string and rejects with 401.
+// With no Authorization header, the guard falls through to the httpOnly cookie.
+const authHeaders = (token?: string | null): Record<string, string> =>
+  token ? { Authorization: `Bearer ${token}` } : {};
+
 
 export interface SellerProfileData {
   sellerId: string;
@@ -51,6 +59,10 @@ export interface SellerProfileData {
   kycApprovalNotes?: string | null;
   kycRejectionReason?: string | null;
   kycReviewedAt?: string | null;
+  // True once registered with a logistics partner — pickup/identity
+  // fields are frozen (the data feeds the courier warehouse), so the
+  // portal locks the form and shows a "contact your admin" banner.
+  logisticsLocked?: boolean;
   // Phase 19 (2026-05-20) — first-listing wizard flags. Returned by
   // the API so the wizard can show real "done / to-do" state for the
   // three post-approval steps.
@@ -84,7 +96,7 @@ export const sellerProfileService = {
   getProfile(token: string): Promise<ApiResponse<SellerProfileData>> {
     return apiClient<SellerProfileData>('/seller/profile', {
       method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     });
   },
 
@@ -94,7 +106,7 @@ export const sellerProfileService = {
   ): Promise<ApiResponse<SellerProfileData>> {
     return apiClient<SellerProfileData>('/seller/profile', {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       body: JSON.stringify(payload),
     });
   },
@@ -107,7 +119,7 @@ export const sellerProfileService = {
     formData.append('profileImage', file);
     return apiClient<MediaUploadResponse>('/seller/profile/media/profile-image', {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       body: formData,
     });
   },
@@ -117,7 +129,7 @@ export const sellerProfileService = {
   ): Promise<ApiResponse<MediaUploadResponse>> {
     return apiClient<MediaUploadResponse>('/seller/profile/media/profile-image', {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     });
   },
 
@@ -129,7 +141,7 @@ export const sellerProfileService = {
     formData.append('shopLogo', file);
     return apiClient<MediaUploadResponse>('/seller/profile/media/shop-logo', {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       body: formData,
     });
   },
@@ -139,14 +151,14 @@ export const sellerProfileService = {
   ): Promise<ApiResponse<MediaUploadResponse>> {
     return apiClient<MediaUploadResponse>('/seller/profile/media/shop-logo', {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     });
   },
 
   sendEmailVerificationOtp(token: string): Promise<ApiResponse<void>> {
     return apiClient<void>('/seller/profile/verify-email/send-otp', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       body: JSON.stringify({}),
     });
   },
@@ -157,7 +169,7 @@ export const sellerProfileService = {
   ): Promise<ApiResponse<{ isEmailVerified: boolean }>> {
     return apiClient<{ isEmailVerified: boolean }>('/seller/profile/verify-email/verify', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       body: JSON.stringify({ otp }),
     });
   },
@@ -170,7 +182,7 @@ export const sellerProfileService = {
   ): Promise<ApiResponse<void>> {
     return apiClient<void>('/seller/profile/change-password', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
     });
   },

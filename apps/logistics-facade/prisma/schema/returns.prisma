@@ -1,0 +1,35 @@
+// ─── Returns ──────────────────────────────────────────────────────
+// Customer-initiated reverse pickup. Distinct from RTO (carrier-
+// initiated). One Return row spans the entire reverse journey from
+// schedule through QC; the QC outcome is in a separate QcRecord row
+// referenced via qcRecordId.
+
+model Return {
+  id                     String       @id @default(uuid())
+  /// Original forward shipment when known. Nullable for returns
+  /// raised against orders that pre-date the facade (data migration
+  /// from apps/api).
+  shipmentId             String?      @map("shipment_id")
+  shipment               Shipment?    @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  orderId                String       @map("order_id")
+  subOrderId             String       @map("sub_order_id")
+  reverseAwb             String?      @map("reverse_awb")
+  reversePartner         String?      @map("reverse_partner")
+  pickupScheduledAt      DateTime?    @map("pickup_scheduled_at")
+  pickupAddressSnapshot  Json         @map("pickup_address_snapshot")
+  /// FK into the QcRecord table. Set when QC is performed; nullable
+  /// throughout the in-flight states.
+  qcRecordId             String?      @unique @map("qc_record_id")
+  status                 ReturnStatus @default(REQUESTED)
+  createdAt              DateTime     @default(now()) @map("created_at")
+  updatedAt              DateTime     @updatedAt @map("updated_at")
+
+  qcRecord QcRecord?
+
+  @@index([orderId])
+  @@index([subOrderId])
+  @@index([reverseAwb])
+  @@index([status, createdAt])
+  @@map("returns")
+}

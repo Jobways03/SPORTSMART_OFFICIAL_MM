@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tax Invoice — SM-INV-000008</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 11px;
+      color: #222;
+      margin: 20px;
+      line-height: 1.4;
+    }
+    h1 { font-size: 18px; margin: 0 0 8px 0; }
+    h2 { font-size: 13px; margin: 0 0 4px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f5; font-weight: 600; }
+    .text-right { text-align: right; }
+    .totals { width: 50%; margin-left: auto; margin-top: 8px; }
+    .totals td { border: none; padding: 2px 6px; }
+    .totals td.label { text-align: right; }
+    .totals tr.grand td { border-top: 2px solid #222; font-weight: 700; padding-top: 4px; }
+    .meta { display: flex; gap: 16px; margin-top: 8px; }
+    .meta-block { flex: 1; border: 1px solid #ccc; padding: 6px 8px; min-height: 80px; }
+    .footer { margin-top: 16px; padding-top: 6px; border-top: 1px solid #ccc;
+              font-size: 9px; color: #555; }
+  </style>
+</head>
+<body>
+  
+    <div style="background: #fff3cd; border: 1px solid #ffeeba; color: #856404;
+                padding: 8px 12px; margin-bottom: 12px; font-size: 11px;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+      <strong>DRAFT</strong> — Template pending CA sign-off. Layout, supplier branding,
+      and legal disclaimers are not final. Not for issuance to customers.
+    </div>
+  <h1>Tax Invoice</h1>
+  <table class="totals" style="width: 100%; margin-top: 0;">
+    <tr>
+      <td class="label" style="width: 30%;">Document Number:</td>
+      <td><strong>SM-INV-000008</strong></td>
+      <td class="label" style="width: 20%;">Date:</td>
+      <td>04-06-2026</td>
+    </tr>
+    <tr>
+      <td class="label">Financial Year:</td>
+      <td>2026-27</td>
+      <td class="label">Invoice Type:</td>
+      <td>B2C</td>
+    </tr>
+    
+    
+  </table>
+
+  <div class="meta">
+    <div class="meta-block">
+      <h2>Supplier</h2>
+      <div>Vansh Sports</div>
+      <div>Sn-57/ rk puram, Hyderabad, Telangana, 500084, India</div>
+      <div>GSTIN: <strong>29PQRST5678K1ZY</strong></div>
+      <div>State Code: 29</div>
+    </div>
+    <div class="meta-block">
+      <h2>Billed To</h2>
+      <div>Riya Sharma</div>
+      <div>HYDERABAD, TELANGANA, India</div>
+      <div>GSTIN: <strong>—</strong></div>
+      <div>Place of Supply: 36</div>
+    </div>
+    <div class="meta-block">
+      <h2>Shipped To</h2>
+      <div>HYDERABAD, TELANGANA, India</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 28px;">#</th>
+        <th>Description</th>
+        <th>HSN/SAC</th>
+        <th>UQC</th>
+        <th class="text-right">Qty</th>
+        <th class="text-right">Rate (₹)</th>
+        <th class="text-right">Taxable (₹)</th>
+        
+          <th class="text-right">Rate %</th>
+          <th class="text-right">CGST (₹)</th>
+          <th class="text-right">SGST (₹)</th>
+          <th class="text-right">IGST (₹)</th>
+        <th class="text-right">Total (₹)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+    <td>1</td>
+    <td>Men’s Batting Cricket Gloves – Comfort Grip Edition</td>
+    <td>—</td>
+    <td>—</td>
+    <td class="text-right">1</td>
+    <td class="text-right">1,799.00</td>
+    <td class="text-right">1,799.00</td>
+      <td class="text-right">0.00</td>
+      <td class="text-right">0.00</td>
+      <td class="text-right">0.00</td>
+      <td class="text-right">0.00</td>
+    <td class="text-right">1,799.00</td>
+  </tr>
+<tr>
+    <td>2</td>
+    <td>Shipping &amp; Handling</td>
+    <td>9968</td>
+    <td>OTH</td>
+    <td class="text-right">1</td>
+    <td class="text-right">10.00</td>
+    <td class="text-right">10.00</td>
+      <td class="text-right">18.00</td>
+      <td class="text-right">0.00</td>
+      <td class="text-right">0.00</td>
+      <td class="text-right">1.80</td>
+    <td class="text-right">11.80</td>
+  </tr>
+    </tbody>
+  </table>
+
+  <table class="totals">
+    <tr><td class="label">Taxable Value:</td><td class="text-right">1,809.00</td></tr>
+    
+      <tr><td class="label">CGST:</td><td class="text-right">0.00</td></tr>
+      <tr><td class="label">SGST:</td><td class="text-right">0.00</td></tr>
+      <tr><td class="label">IGST:</td><td class="text-right">1.80</td></tr>
+      <tr><td class="label">Cess:</td><td class="text-right">0.00</td></tr>
+      <tr><td class="label">Total Tax:</td><td class="text-right">1.80</td></tr>
+    <tr><td class="label">Round Off:</td><td class="text-right">0.20</td></tr>
+    <tr class="grand"><td class="label">Grand Total:</td><td class="text-right">1,811.00</td></tr>
+    <tr><td colspan="2" style="padding-top: 8px;"><em>Amount in words:</em> Indian Rupees One Thousand Eight Hundred Eleven Only</td></tr>
+  </table>
+
+  
+
+  <div class="footer">
+    Line items: 2 · Currency: INR · Payment mode: COD<br />
+    This is a computer-generated document. Verify GSTIN authenticity at https://www.gst.gov.in
+  </div>
+</body>
+</html>

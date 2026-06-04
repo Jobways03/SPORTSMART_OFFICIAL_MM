@@ -59,12 +59,12 @@ import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
   imports: [
-    CommissionModule,
-    FranchiseModule,
+    forwardRef(() => CommissionModule),
+    forwardRef(() => FranchiseModule),
     RazorpayModule,
     WalletModule,
     LiabilityLedgerModule,
-    DiscountsModule,
+    forwardRef(() => DiscountsModule),
     MoneyModule,
     // Break Tax-centric cycles (Tax → Checkout → Returns and similar).
     forwardRef(() => TaxModule),

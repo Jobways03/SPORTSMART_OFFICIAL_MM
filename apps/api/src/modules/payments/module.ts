@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { PaymentsPublicFacade } from './application/facades/payments-public.facade';
 import { PaymentStatusPollerService } from './application/services/payment-status-poller.service';
 // Phase 66 (2026-05-22) — payment expiry sweep cron (audit Gap #18).
@@ -22,7 +22,7 @@ import { OrphanRecoveredHandler } from './application/event-handlers/orphan-reco
 import { OrderExpiredHandler } from './application/event-handlers/order-expired.handler';
 
 @Module({
-  imports: [OrdersModule, RazorpayModule, FranchiseModule, NotificationsModule],
+  imports: [forwardRef(() => OrdersModule), RazorpayModule, forwardRef(() => FranchiseModule), NotificationsModule],
   controllers: [
     AdminPaymentsController,
     PaymentWebhookController,

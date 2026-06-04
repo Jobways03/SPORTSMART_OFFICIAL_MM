@@ -1,0 +1,32 @@
+// ─── Tracking events ──────────────────────────────────────────────
+// Every scan / status update from a partner (webhook OR pull) lands
+// here. `normalizedStatus` is the vendor-agnostic enum (see
+// `@sportsmart/logistics-contracts/tracking`); `partnerStatusCode`
+// is the raw code so adapter regressions can be replayed against
+// the historical mapping.
+
+model TrackingEvent {
+  id                 String   @id @default(uuid())
+  shipmentId         String   @map("shipment_id")
+  shipment           Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  partner            String
+  partnerStatusCode  String   @map("partner_status_code")
+  /// One of the NormalizedStatus values; stored as String so the
+  /// enum can evolve independently of a Prisma migration.
+  normalizedStatus   String   @map("normalized_status")
+  eventAt            DateTime @map("event_at")
+  /// When OUR ingestion accepted this event. Distinct from eventAt
+  /// because partner clocks drift and we sometimes backfill from a
+  /// daily pull job. Latency = receivedAt - eventAt is a useful BI metric.
+  receivedAt         DateTime @default(now()) @map("received_at")
+  location           String?
+  /// Raw webhook / poll payload preserved verbatim so a mapper bug
+  /// can be retroactively patched without losing data.
+  rawPayload         Json     @map("raw_payload")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@index([shipmentId, eventAt])
+  @@index([partner, partnerStatusCode])
+  @@map("tracking_events")
+}

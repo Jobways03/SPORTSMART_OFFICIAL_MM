@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
 import { DiscountGstBreakdownCard } from './_components/DiscountGstBreakdownCard';
+import { ShipmentPanel } from './_components/ShipmentPanel';
 
 /* -- types -- */
 
@@ -352,6 +353,15 @@ export default function OrderDetailPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [verifyRemarks, setVerifyRemarks] = useState('');
   const [verifySuccess, setVerifySuccess] = useState(false);
+  // Cancel sub-order — parity with Super Admin. Reason ≥10 chars +
+  // X-Idempotency-Key (the PATCH endpoint is @Idempotent).
+  const [cancelSubOrderId, setCancelSubOrderId] = useState<string | null>(null);
+  const [cancelSubOrderStatus, setCancelSubOrderStatus] = useState<string>('');
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  // SHIPPED/FULFILLED (in-transit) cancels need force=true server-side.
+  const [forceAck, setForceAck] = useState(false);
 
   const fetchOrder = useCallback(() => {
     apiClient<OrderDetail>(`/admin/orders/${id}`)
@@ -375,6 +385,37 @@ export default function OrderDetailPage() {
       //
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const submitCancel = async () => {
+    if (!cancelSubOrderId || cancelling) return;
+    const trimmed = cancelReason.trim();
+    if (trimmed.length < 10) {
+      setCancelError('Cancellation reason is required (minimum 10 characters)');
+      return;
+    }
+    setCancelError('');
+    setCancelling(true);
+    const needsForce =
+      cancelSubOrderStatus === 'SHIPPED' || cancelSubOrderStatus === 'FULFILLED';
+    try {
+      await apiClient(`/admin/shipping/sub-orders/${cancelSubOrderId}/cancel-with-courier`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: trimmed, force: needsForce }),
+        headers: {
+          'X-Idempotency-Key': `cancel-sub-order-${cancelSubOrderId}-${Date.now()}`,
+        },
+      });
+      setCancelSubOrderId(null);
+      setCancelSubOrderStatus('');
+      setForceAck(false);
+      setCancelReason('');
+      fetchOrder();
+    } catch (err: any) {
+      setCancelError(err?.body?.message || err?.message || 'Cancel failed');
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -705,6 +746,12 @@ export default function OrderDetailPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Delhivery carrier-actions panel — track / re-attempt / cancel
+                  shipment / force-RTO. Same component the Super Admin uses. */}
+              {so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED' && (
+                <ShipmentPanel subOrderId={so.id} onChange={fetchOrder} />
+              )}
             </div>
           ))}
 
@@ -972,6 +1019,48 @@ export default function OrderDetailPage() {
                     </>
                   )}
 
+                  {/* Cancel sub-order — accepted orders that aren't terminal.
+                      PRE-SHIP (UNFULFILLED/PACKED) cancels send no force;
+                      SHIPPED/FULFILLED (in-transit) are also exposed but the
+                      modal requires a force acknowledgement and sends force=true.
+                      DELIVERED uses the returns flow. */}
+                  {order.subOrders.some(
+                    (so) =>
+                      so.acceptStatus === 'ACCEPTED' &&
+                      (so.fulfillmentStatus === 'UNFULFILLED' ||
+                        so.fulfillmentStatus === 'PACKED' ||
+                        so.fulfillmentStatus === 'SHIPPED' ||
+                        so.fulfillmentStatus === 'FULFILLED'),
+                  ) && (
+                    <>
+                      {order.subOrders
+                        .filter(
+                          (so) =>
+                            so.acceptStatus === 'ACCEPTED' &&
+                            (so.fulfillmentStatus === 'UNFULFILLED' ||
+                              so.fulfillmentStatus === 'PACKED' ||
+                              so.fulfillmentStatus === 'SHIPPED' ||
+                              so.fulfillmentStatus === 'FULFILLED'),
+                        )
+                        .map((so) => (
+                          <button
+                            key={`cancel-${so.id}`}
+                            onClick={() => {
+                              setCancelSubOrderId(so.id);
+                              setCancelSubOrderStatus(so.fulfillmentStatus);
+                              setCancelReason('');
+                              setCancelError('');
+                              setForceAck(false);
+                            }}
+                            disabled={!!actionLoading || cancelling}
+                            style={btnDanger}
+                          >
+                            {`CANCEL SUB-ORDER${so.seller ? ` (${so.seller.sellerShopName})` : ''}`}
+                          </button>
+                        ))}
+                    </>
+                  )}
+
                   {order.subOrders.some((so) => so.fulfillmentStatus === 'DELIVERED') && (
                     <div style={{ fontSize: 13, color: '#7c3aed', fontWeight: 600 }}>&#10003; Delivered</div>
                   )}
@@ -1057,6 +1146,97 @@ export default function OrderDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Cancel-sub-order reason modal */}
+      {cancelSubOrderId && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}
+          onClick={() => !cancelling && setCancelSubOrderId(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 12, padding: 24, width: 440, maxWidth: '90vw' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700, color: '#111827' }}>
+              Cancel sub-order
+            </h3>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#6b7280' }}>
+              This releases stock holds and refunds the customer if the order was prepaid. Provide a reason (minimum 10 characters).
+            </p>
+            {(cancelSubOrderStatus === 'SHIPPED' || cancelSubOrderStatus === 'FULFILLED') && (
+              <div style={{ margin: '0 0 12px', padding: '10px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontSize: 12, lineHeight: 1.5 }}>
+                <strong>In-transit cancellation ({cancelSubOrderStatus}).</strong> Force-cancels the
+                sub-order: refunds a prepaid customer, releases stock and cancels the Delhivery AWB.
+                It does <strong>not</strong> physically stop a parcel already moving — coordinate the
+                courier/recall separately.
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontWeight: 600, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={forceAck} onChange={(e) => setForceAck(e.target.checked)} disabled={cancelling} />
+                  I understand — force-cancel this in-transit sub-order
+                </label>
+              </div>
+            )}
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Reason for cancellation…"
+              rows={3}
+              style={{
+                width: '100%', padding: 10, fontSize: 13, borderRadius: 8,
+                border: `1px solid ${cancelReason.trim().length > 0 && cancelReason.trim().length < 10 ? '#dc2626' : '#d1d5db'}`,
+                resize: 'vertical', boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ fontSize: 11, color: cancelReason.trim().length >= 10 ? '#059669' : '#6b7280', marginTop: 4 }}>
+              {cancelReason.trim().length}/10 characters minimum {cancelReason.trim().length >= 10 ? '✓' : ''}
+            </div>
+            {cancelError && (
+              <div style={{ marginTop: 8, padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#991b1b' }}>
+                {cancelError}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                onClick={() => { setCancelSubOrderId(null); setCancelReason(''); setCancelError(''); }}
+                disabled={cancelling}
+                style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, border: '1px solid #d1d5db', background: '#fff', color: '#374151', borderRadius: 8, cursor: 'pointer' }}
+              >
+                Keep order
+              </button>
+              <button
+                onClick={submitCancel}
+                disabled={
+                  cancelling ||
+                  cancelReason.trim().length < 10 ||
+                  ((cancelSubOrderStatus === 'SHIPPED' || cancelSubOrderStatus === 'FULFILLED') && !forceAck)
+                }
+                style={{
+                  padding: '8px 16px', fontSize: 13, fontWeight: 600, border: 'none',
+                  background:
+                    cancelling ||
+                    cancelReason.trim().length < 10 ||
+                    ((cancelSubOrderStatus === 'SHIPPED' || cancelSubOrderStatus === 'FULFILLED') && !forceAck)
+                      ? '#fca5a5' : '#dc2626',
+                  color: '#fff', borderRadius: 8,
+                  cursor:
+                    cancelling ||
+                    cancelReason.trim().length < 10 ||
+                    ((cancelSubOrderStatus === 'SHIPPED' || cancelSubOrderStatus === 'FULFILLED') && !forceAck)
+                      ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {cancelling
+                  ? 'Cancelling…'
+                  : cancelSubOrderStatus === 'SHIPPED' || cancelSubOrderStatus === 'FULFILLED'
+                    ? 'Force cancel (in transit)'
+                    : 'Cancel sub-order'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

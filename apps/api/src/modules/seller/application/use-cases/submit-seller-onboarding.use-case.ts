@@ -108,9 +108,17 @@ export class SubmitSellerOnboardingUseCase {
       );
     }
 
-    if (seller.status !== 'PENDING_APPROVAL') {
+    // KYC submission is allowed whenever the account is operable and KYC
+    // isn't already done. This used to require PENDING_APPROVAL, but a seller
+    // activated by an admin status-override BEFORE submitting KYC (status
+    // ACTIVE, verificationStatus NOT_VERIFIED) was then permanently unable to
+    // provide it — ACTIVE has no transition back to PENDING_APPROVAL. Allow
+    // PENDING_APPROVAL / ACTIVE / INACTIVE; block only hard-disabled accounts.
+    // The verificationStatus checks below still prevent double-submits and
+    // re-submits after the account is already verified.
+    if (seller.status === 'DEACTIVATED' || seller.status === 'SUSPENDED') {
       throw new ForbiddenAppException(
-        `Onboarding submission is only allowed while the account is PENDING_APPROVAL. Current status: ${seller.status}.`,
+        `Onboarding submission is not allowed while the account is ${seller.status}.`,
       );
     }
 

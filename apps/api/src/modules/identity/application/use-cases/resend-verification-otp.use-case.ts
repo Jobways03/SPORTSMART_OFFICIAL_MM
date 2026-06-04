@@ -66,10 +66,20 @@ export class ResendVerificationOtpUseCase {
 
     const user = await this.userRepo.findByEmailForVerification(email);
 
-    if (!user || user.status !== 'PENDING_VERIFICATION') {
-      // No user, or already verified / suspended / etc. Simulate the
-      // timing of the create path so an enumeration probe can't
-      // distinguish the branches by response latency.
+    // Resend only when the account exists, is NOT already verified, and is in
+    // a verifiable state. Email verification is tracked by `emailVerified`,
+    // not by status — customers are created ACTIVE (the PENDING_VERIFICATION
+    // state is never wired), so the old `status === PENDING_VERIFICATION`
+    // gate silently no-oped for every customer. Allow ACTIVE/PENDING; refuse
+    // already-verified or disabled accounts.
+    const verifiable =
+      !!user &&
+      !user.emailVerified &&
+      (user.status === 'ACTIVE' || user.status === 'PENDING_VERIFICATION');
+    if (!verifiable) {
+      // No user, already verified, or disabled. Simulate the timing of the
+      // create path so an enumeration probe can't distinguish the branches
+      // by response latency.
       await this.simulateDelay();
       return uniformResponse;
     }

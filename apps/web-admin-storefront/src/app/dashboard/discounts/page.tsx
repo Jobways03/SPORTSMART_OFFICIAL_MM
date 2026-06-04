@@ -345,7 +345,8 @@ export default function DiscountsPage() {
 // Phase 243 — restore the TypeIcon component referenced throughout this page
 // but defined nowhere (a pre-existing break at HEAD — every reference threw
 // "TypeIcon is not defined" at render). Minimal dependency-free inline SVGs
-// keyed by the four discount-type icon names.
+// keyed by the four discount-type icon names. Stroke uses currentColor so the
+// surrounding element's `color` drives the tint.
 function TypeIcon({ name, size = 16 }: { name: TypeIconName; size?: number }) {
   const common = {
     width: size,

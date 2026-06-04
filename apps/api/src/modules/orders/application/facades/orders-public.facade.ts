@@ -440,6 +440,7 @@ export class OrdersPublicFacade {
     opts?: {
       source?:
         | 'WEBHOOK_SHIPROCKET'
+        | 'WEBHOOK_DELHIVERY'
         | 'MANUAL_ADMIN'
         | 'MANUAL_FRANCHISE';
       deliveredBy?: string;

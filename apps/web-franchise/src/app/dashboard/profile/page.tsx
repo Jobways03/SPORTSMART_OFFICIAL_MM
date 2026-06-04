@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   franchiseProfileService,
   FranchiseProfile,
@@ -114,6 +115,7 @@ function formatRate(value: number | null | undefined): string {
 
 export default function ProfilePage() {
   const { notify, confirmDialog } = useModal();
+  const router = useRouter();
 const [profile, setProfile] = useState<FranchiseProfile | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isEditing, setIsEditing] = useState(false);
@@ -584,7 +586,26 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
           <p>Manage your franchise details and business information</p>
         </div>
         {!isEditing && (
-          <button type="button" className="btn btn-primary" onClick={handleEdit}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={async () => {
+              // Locked once registered with a logistics partner — the
+              // franchise can't edit here; pop a modal pointing them to
+              // support so the franchise admin makes the change.
+              if (profile?.logisticsLocked) {
+                const ok = await confirmDialog({
+                  title: 'Profile locked',
+                  message:
+                    "This profile is registered with a logistics partner, so these details can't be edited here. Please ask your franchise admin to update them. Open a support request now?",
+                  confirmText: 'Talk to Support',
+                });
+                if (ok) router.push('/dashboard/support/new');
+                return;
+              }
+              handleEdit();
+            }}
+          >
             Edit Profile
           </button>
         )}
@@ -598,6 +619,13 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
       {successMessage && (
         <div className="alert alert-success" role="status">
           {successMessage}
+        </div>
+      )}
+      {profile?.logisticsLocked && (
+        <div className="alert alert-warning" role="alert" style={{ marginBottom: 12 }}>
+          Your business name, contact, and pickup/warehouse address are locked
+          because they&apos;re registered with a logistics partner. Contact your
+          franchise admin to change them.
         </div>
       )}
 
@@ -628,7 +656,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   type="text"
                   value={form.ownerName}
                   onChange={(e) => handleChange('ownerName', e.target.value)}
-                  disabled={isSaving}
+                  disabled={isSaving || profile?.logisticsLocked}
                 />
               ) : (
                 <div className="value">{profile.ownerName}</div>
@@ -643,7 +671,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   type="text"
                   value={form.businessName}
                   onChange={(e) => handleChange('businessName', e.target.value)}
-                  disabled={isSaving}
+                  disabled={isSaving || profile?.logisticsLocked}
                 />
               ) : (
                 <div className="value">{profile.businessName}</div>
@@ -686,7 +714,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                 id="address"
                 value={form.address}
                 onChange={(e) => handleChange('address', e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || profile?.logisticsLocked}
                 rows={3}
               />
             ) : (
@@ -712,7 +740,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                       const sanitized = e.target.value.replace(/\D/g, '').slice(0, 6);
                       lookupPincode(sanitized);
                     }}
-                    disabled={isSaving}
+                    disabled={isSaving || profile?.logisticsLocked}
                     placeholder="ZIP / PIN code"
                     style={fieldErrors.pincode ? { borderColor: '#dc2626' } : undefined}
                   />
@@ -752,7 +780,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   type="text"
                   value={form.country}
                   onChange={(e) => handleChange('country', e.target.value)}
-                  disabled={isSaving}
+                  disabled={isSaving || profile?.logisticsLocked}
                   placeholder="Country"
                 />
               ) : (
@@ -775,7 +803,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   }}
                   readOnly={pincodeAutoFilled}
                   style={pincodeAutoFilled ? AUTO_FILLED_STYLE : undefined}
-                  disabled={isSaving}
+                  disabled={isSaving || profile?.logisticsLocked}
                   placeholder="City"
                 />
               ) : (
@@ -798,7 +826,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   }}
                   readOnly={pincodeAutoFilled}
                   style={pincodeAutoFilled ? AUTO_FILLED_STYLE : undefined}
-                  disabled={isSaving}
+                  disabled={isSaving || profile?.logisticsLocked}
                   placeholder="State"
                 />
               ) : (
@@ -816,7 +844,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                 id="locality"
                 value={form.locality}
                 onChange={(e) => handleChange('locality', e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || profile?.logisticsLocked}
                 style={form.locality ? LOCALITY_SELECT_STYLE_SELECTED : LOCALITY_SELECT_STYLE}
               >
                 <option value="">Select your locality</option>
@@ -854,7 +882,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                     maxLength={15}
                     value={form.gstNumber}
                     onChange={(e) => handleChange('gstNumber', e.target.value)}
-                    disabled={isSaving}
+                    disabled={isSaving || profile?.logisticsLocked}
                     placeholder="e.g. 27AAAPA1234A1Z5"
                     autoCapitalize="characters"
                     spellCheck={false}
@@ -887,7 +915,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                     maxLength={10}
                     value={form.panNumber}
                     onChange={(e) => handleChange('panNumber', e.target.value)}
-                    disabled={isSaving}
+                    disabled={isSaving || profile?.logisticsLocked}
                     placeholder="e.g. ABCDE1234F"
                     autoCapitalize="characters"
                     spellCheck={false}
@@ -923,7 +951,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   id="warehouseAddress"
                   value={form.warehouseAddress}
                   onChange={(e) => handleChange('warehouseAddress', e.target.value)}
-                  disabled={isSaving}
+                  disabled={isSaving || profile?.logisticsLocked}
                 />
               ) : (
                 <div className={`value${profile.warehouseAddress ? '' : ' muted'}`}>
@@ -947,7 +975,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                       const sanitized = e.target.value.replace(/\D/g, '').slice(0, 6);
                       lookupWarehousePincode(sanitized);
                     }}
-                    disabled={isSaving}
+                    disabled={isSaving || profile?.logisticsLocked}
                     placeholder="6-digit pincode"
                     style={fieldErrors.warehousePincode ? { borderColor: '#dc2626' } : undefined}
                   />
@@ -1068,11 +1096,11 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
               type="button"
               className="btn btn-secondary"
               onClick={handleCancel}
-              disabled={isSaving}
+              disabled={isSaving || profile?.logisticsLocked}
             >
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn btn-primary" disabled={isSaving || profile?.logisticsLocked}>
               {isSaving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>

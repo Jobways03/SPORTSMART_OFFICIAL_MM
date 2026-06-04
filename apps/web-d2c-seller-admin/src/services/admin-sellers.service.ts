@@ -14,6 +14,12 @@ export interface SellerListItem {
   profileImageUrl: string | null;
   createdAt: string;
   lastLoginAt: string | null;
+  // KYC identity (for the Verify KYC review). Optional because the list
+  // endpoint doesn't return them — populated from the seller detail.
+  legalBusinessName?: string | null;
+  gstin?: string | null;
+  gstStateCode?: string | null;
+  panLast4?: string | null;
 }
 
 export interface SellerListResponse {
@@ -46,6 +52,11 @@ export interface SellerDetail {
   sellerShopLogoUrl: string | null;
   status: string;
   verificationStatus: string;
+  // KYC identity submitted via onboarding (shown in the Verify KYC review).
+  legalBusinessName: string | null;
+  gstin: string | null;
+  gstStateCode: string | null;
+  panLast4: string | null;
   isEmailVerified: boolean;
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
@@ -112,6 +123,24 @@ export const adminSellersService = {
     return apiClient(`/admin/sellers/${sellerId}/verification`, {
       method: 'PATCH',
       body: JSON.stringify({ verificationStatus, reason }),
+    });
+  },
+
+  // Proper KYC review actions. Unlike updateVerification (a raw status
+  // override that skips the KYC requirement), approve requires the seller to
+  // have submitted GSTIN+PAN via onboarding and sets ACTIVE+VERIFIED; reject
+  // sends them back with a reason they can see. Both gated on sellers.approve.
+  approveKyc(sellerId: string, notes?: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(notes ? { notes } : {}),
+    });
+  },
+
+  rejectKyc(sellerId: string, reason: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     });
   },
 

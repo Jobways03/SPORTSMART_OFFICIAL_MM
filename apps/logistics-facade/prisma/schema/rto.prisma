@@ -1,0 +1,25 @@
+// ─── RTO attempts ─────────────────────────────────────────────────
+// Carrier-initiated Return-To-Origin. Triggered when delivery
+// attempts exhaust without a customer response (typically 3 NDRs
+// + a customer-unreachable signal). One row per RTO journey — a
+// shipment can have at most one RTO, but we model it as a list
+// to leave headroom for partners that re-attempt after RTO recall.
+
+model RtoAttempt {
+  id            String    @id @default(uuid())
+  shipmentId    String    @map("shipment_id")
+  shipment      Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  reason        String
+  /// Partner-mapped status: INITIATED | IN_TRANSIT | DELIVERED_BACK |
+  /// LOST | DAMAGED. Kept as String so the enum can move in
+  /// @sportsmart/logistics-contracts without a DB migration.
+  status        String
+  returnedAt    DateTime? @map("returned_at")
+  rawPayload    Json      @map("raw_payload")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([shipmentId])
+  @@index([status, createdAt])
+  @@map("rto_attempts")
+}

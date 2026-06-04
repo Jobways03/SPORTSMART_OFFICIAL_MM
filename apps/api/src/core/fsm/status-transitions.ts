@@ -70,7 +70,12 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   // remaining sub-orders continue to DELIVERED.
   // Phase 83 — DISPATCHED → PARTIALLY_DELIVERED when first sub-order
   // arrives but others still in transit.
-  DISPATCHED: ['DELIVERED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED', 'PARTIALLY_DELIVERED'],
+  // Phase 90 (2026-06-03) — added 'CANCELLED' so an admin force-cancel of a
+  // dispatched order's LAST/ONLY sub-order rolls the master FULLY to CANCELLED
+  // (mirrors the sub-order FSM's SHIPPED → CANCELLED force-cancel edge).
+  // Without it the master stuck at DISPATCHED while the sub-order showed
+  // CANCELLED, so the admin list/detail + customer page disagreed.
+  DISPATCHED: ['DELIVERED', 'CANCELLED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED', 'PARTIALLY_DELIVERED'],
   // Phase 81 — PARTIALLY_CANCELLED can resolve either way:
   //   • last remaining sub-order delivers → DELIVERED
   //   • last remaining sub-order cancels → CANCELLED

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { sellerProductService } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
+import { sellerAuthService } from '@/services/auth.service';
 import '../products/product-form.css';
 import '../products/products.css';
 
@@ -79,14 +80,19 @@ export default function BrowseCatalogPage() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
-    try {
-      const sellerData = sessionStorage.getItem('seller');
-      if (sellerData) {
-        const parsed = JSON.parse(sellerData);
-        if (parsed.status) setSellerStatus(parsed.status);
-        if (parsed.isEmailVerified !== undefined) setIsEmailVerified(parsed.isEmailVerified);
-      }
-    } catch {}
+    // Phase 21 — live status from /seller/auth/me (cookie-auth), not the
+    // sessionStorage key login no longer writes. The dead read left
+    // sellerStatus='' so canAccess was always false ("Account Approval
+    // Required") even for an approved seller.
+    let cancelled = false;
+    sellerAuthService
+      .me()
+      .then((res) => {
+        if (cancelled || !res?.data) return;
+        setSellerStatus(res.data.status);
+        setIsEmailVerified(res.data.isEmailVerified);
+      })
+      .catch(() => {});
 
     // Fetch seller profile to get default pickup pincode
     apiClient<{ sellerZipCode?: string }>('/seller/profile')

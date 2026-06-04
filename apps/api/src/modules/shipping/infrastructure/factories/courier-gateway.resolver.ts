@@ -7,6 +7,7 @@ import {
 } from '../../application/ports/outbound/courier-gateway.port';
 
 import { SelfDeliveryCourierAdapter } from '../adapters/self-delivery-courier.adapter';
+import { DelhiveryCourierAdapter } from '../adapters/delhivery-courier.adapter';
 
 /**
  * Strategy resolver: takes a SubOrder's `deliveryMethod` and returns
@@ -21,12 +22,17 @@ import { SelfDeliveryCourierAdapter } from '../adapters/self-delivery-courier.ad
  */
 @Injectable()
 export class CourierGatewayResolverImpl implements CourierGatewayResolver {
-  constructor(private readonly selfDelivery: SelfDeliveryCourierAdapter) {}
+  constructor(
+    private readonly selfDelivery: SelfDeliveryCourierAdapter,
+    private readonly delhivery: DelhiveryCourierAdapter,
+  ) {}
 
   forMethod(method: DeliveryMethod): CourierGatewayPort {
     switch (method) {
       case 'SELF_DELIVERY':
         return this.selfDelivery;
+      case 'DELHIVERY':
+        return this.delhivery;
       default: {
         // Exhaustiveness check — if a new DeliveryMethod is added to
         // the Prisma enum without a case here, TypeScript fails the

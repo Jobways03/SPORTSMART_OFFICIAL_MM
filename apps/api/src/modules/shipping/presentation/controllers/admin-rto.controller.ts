@@ -24,14 +24,17 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, Length } from 'class-validator';
+import { IsIn, IsOptional, IsString, Length } from 'class-validator';
 
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { CurrentAdmin } from '../../../../core/decorators/current-actor.decorator';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
-import { NdrRtoService } from '../../application/services/ndr-rto.service';
+import {
+  NdrRtoService,
+  type NdrCustomerAction,
+} from '../../application/services/ndr-rto.service';
 
 export class ForceRtoDto {
   // Reason text is required + min 10 chars so an admin can't fire
@@ -39,6 +42,17 @@ export class ForceRtoDto {
   @IsString()
   @Length(10, 500)
   reason!: string;
+}
+
+// Phase 3 Delhivery wiring (2026-06-02) — admin NDR action (re-attempt etc.).
+export class NdrActionDto {
+  @IsString()
+  @IsIn(['REATTEMPT', 'CONVERT_TO_RTO', 'UPDATE_ADDRESS'])
+  action!: NdrCustomerAction;
+
+  @IsOptional()
+  @IsString()
+  newAddress?: string;
 }
 
 @ApiTags('Admin Shipping')
@@ -83,5 +97,50 @@ export class AdminRtoController {
     });
 
     return { success: true, message: 'RTO initiated' };
+  }
+
+  /**
+   * POST /admin/shipping/sub-orders/:subOrderId/ndr-action
+   *
+   * Phase 3 Delhivery wiring (2026-06-02) — admin-triggered NDR action
+   * (re-attempt / convert-to-RTO / update-address). Reuses NdrRtoService
+   * with actorType ADMIN; the carrier call goes through the Delhivery
+   * adapter → facade. Returns outcome OK or CARRIER_ERROR.
+   */
+  @Post(':subOrderId/ndr-action')
+  @Permissions('orders.ship.manual')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async ndrAction(
+    @CurrentAdmin() adminId: string,
+    @Param('subOrderId') subOrderId: string,
+    @Body() body: NdrActionDto,
+  ): Promise<{ success: boolean; message: string; data: unknown }> {
+    const result = await this.ndrRtoService.handleNdrAction({
+      subOrderId,
+      action: body.action,
+      actorType: 'ADMIN',
+      actorId: adminId,
+      newAddress: body.newAddress,
+    });
+
+    await this.auditFacade.writeAuditLog({
+      actorId: adminId,
+      action: 'shipment.ndr.action',
+      module: 'shipping',
+      resource: 'sub_order',
+      resourceId: subOrderId,
+      metadata: { ndrAction: body.action, outcome: result.outcome },
+    });
+
+    return {
+      success: result.outcome === 'OK',
+      message:
+        result.message ??
+        (result.outcome === 'OK'
+          ? 'NDR action applied'
+          : 'Carrier rejected the NDR action'),
+      data: result,
+    };
   }
 }
