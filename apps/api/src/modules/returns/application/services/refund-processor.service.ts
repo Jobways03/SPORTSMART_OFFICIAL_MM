@@ -5,6 +5,7 @@ import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { ReturnService } from './return.service';
 import { RefundGatewayService } from './refund-gateway.service';
 
@@ -53,6 +54,8 @@ export class RefundProcessorService {
     private readonly refundGateway: RefundGatewayService,
     private readonly leader: LeaderElectedCron,
     private readonly instrumentation: CronInstrumentationService,
+    // Phase 214 (#7) — best-effort SYSTEM audit summary per tick.
+    private readonly audit: AuditPublicFacade,
   ) {
     this.intervalSec = this.envService.getNumber(
       'REFUND_POLL_INTERVAL_SECONDS',
@@ -115,9 +118,39 @@ export class RefundProcessorService {
             // share one leader lease so two replicas don't both
             // process the same row. Inside the lease we still run them
             // sequentially so a slow poll doesn't starve retry.
-            await this.pollPendingRefunds();
-            await this.retryFailedRefunds();
-            return { ok: true };
+            const polled = await this.pollPendingRefunds();
+            const retried = await this.retryFailedRefunds();
+            // Phase 214 (#7) — one best-effort SYSTEM audit row per tick,
+            // OUTSIDE any per-row transaction, so a logging blip never
+            // aborts the sweep. Only emit when something actually moved.
+            if (polled.confirmed + polled.failed + retried.retried > 0) {
+              this.audit
+                .writeAuditLog({
+                  actorType: 'SYSTEM',
+                  actorRole: 'SYSTEM',
+                  action: 'RETURN_REFUND_PROCESSED',
+                  module: 'returns',
+                  resource: 'return',
+                  resourceId: 'refund-processor',
+                  metadata: {
+                    polledConfirmed: polled.confirmed,
+                    polledFailed: polled.failed,
+                    retried: retried.retried,
+                  },
+                })
+                .catch((err) =>
+                  this.logger.warn(
+                    `[refund-processor] summary audit write failed: ${
+                      (err as Error)?.message ?? 'unknown error'
+                    }`,
+                  ),
+                );
+            }
+            return {
+              polledConfirmed: polled.confirmed,
+              polledFailed: polled.failed,
+              retried: retried.retried,
+            };
           },
         );
       },
@@ -141,7 +174,12 @@ export class RefundProcessorService {
    * Poll Razorpay for returns that have a gateway refund ID but haven't
    * been confirmed yet. When gateway says "processed", auto-confirm.
    */
-  private async pollPendingRefunds(): Promise<void> {
+  private async pollPendingRefunds(): Promise<{
+    confirmed: number;
+    failed: number;
+  }> {
+    let confirmed = 0;
+    let failed = 0;
     const pending = await this.prisma.return.findMany({
       where: {
         status: 'REFUND_PROCESSING',
@@ -158,6 +196,29 @@ export class RefundProcessorService {
     for (const ret of pending) {
       if (!ret.refundReference) continue;
       try {
+        // Phase 170 (Refund Queue audit #3) — DO NOT auto-confirm/fail a Return
+        // whose linked RefundInstruction is still awaiting finance approval (or
+        // was cancelled). Pre-170 this poller acted purely on
+        // Return.refundReference, which initiateRefund sets on gateway success
+        // REGARDLESS of instruction approval state — so a return queued for
+        // finance approval on the instruction side could be confirmed here
+        // without sign-off. Mirror the retry-path guard (Phase 105).
+        const instruction = await this.prisma.refundInstruction.findFirst({
+          where: { sourceType: 'RETURN' as any, sourceId: ret.id },
+          select: { status: true },
+        });
+        if (
+          instruction &&
+          ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION', 'CANCELLED'].includes(
+            String(instruction.status),
+          )
+        ) {
+          this.logger.warn(
+            `[refund-poll-cron] skipped ${ret.returnNumber}: linked instruction is ` +
+              `${instruction.status} — refund not yet approved by finance`,
+          );
+          continue;
+        }
         const gatewayStatus = await this.refundGateway.checkRefundStatus(
           ret.id,
           ret.refundReference,
@@ -181,6 +242,7 @@ export class RefundProcessorService {
               notes: 'Auto-confirmed by refund poller',
             },
           );
+          confirmed++;
           this.logger.log(
             `Auto-confirmed refund for ${ret.returnNumber} (ref=${ret.refundReference})`,
           );
@@ -191,6 +253,7 @@ export class RefundProcessorService {
             'refund-processor',
             gatewayStatus.failureReason || 'Gateway reported failure',
           );
+          failed++;
           this.logger.warn(
             `Refund failed at gateway for ${ret.returnNumber}: ${gatewayStatus.failureReason}`,
           );
@@ -202,6 +265,7 @@ export class RefundProcessorService {
         );
       }
     }
+    return { confirmed, failed };
   }
 
   /**
@@ -209,7 +273,8 @@ export class RefundProcessorService {
    * Only retries if last attempt was > backoff minutes ago, and only up to
    * the 5-attempt cap enforced by ReturnService.retryRefund().
    */
-  private async retryFailedRefunds(): Promise<void> {
+  private async retryFailedRefunds(): Promise<{ retried: number }> {
+    let retried = 0;
     const backoffCutoff = new Date(Date.now() - this.retryBackoffMs);
 
     // Phase 101 (2026-05-23) — Refund Retry audit Gap #6/#7 closure.
@@ -264,6 +329,7 @@ export class RefundProcessorService {
           'SYSTEM',
           'refund-processor',
         );
+        retried++;
         this.logger.log(
           `Auto-retried refund for ${ret.returnNumber} (attempt ${(ret.refundAttempts ?? 0) + 1})`,
         );
@@ -273,5 +339,6 @@ export class RefundProcessorService {
         );
       }
     }
+    return { retried };
   }
 }

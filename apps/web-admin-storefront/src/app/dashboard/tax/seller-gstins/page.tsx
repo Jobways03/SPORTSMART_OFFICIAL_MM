@@ -40,13 +40,19 @@ export default function SellerGstinsPage() {
 
   const submitExempt = async () => {
     if (!exemptFor) return;
+    // Phase 161 — a documented reason is required for BOTH grant and revoke.
+    const reason = exemptReason.trim();
+    if (reason.length < 8) {
+      setExemptErr('A reason of at least 8 characters is required (CBIC attestation / revoke basis).');
+      return;
+    }
     setExemptSaving(true);
     setExemptErr(null);
     try {
       await adminTaxService.setSeller194oExemption(
         exemptFor.sellerId,
         exemptValue === 'true',
-        exemptReason.trim() || undefined,
+        reason,
       );
       setMsg({
         kind: 'ok',
@@ -102,18 +108,23 @@ export default function SellerGstinsPage() {
   // ── Derivations ────────────────────────────────────────
 
   const counts = useMemo(() => {
-    const verified = items.filter((g) => g.verifiedAt).length;
+    // Phase 161 — use the authoritative persisted isVerified / legalNameMismatch
+    // (not verifiedAt, which used to be set even on a failed check, and not the
+    // transient per-session lastOutcomes).
+    const verified = items.filter((g) => g.isVerified).length;
     const unverified = items.length - verified;
-    const mismatch = items.filter((g) => lastOutcomes[g.id]?.legalNameMismatch).length;
+    const mismatch = items.filter(
+      (g) => g.legalNameMismatch || lastOutcomes[g.id]?.legalNameMismatch,
+    ).length;
     const primary = items.filter((g) => g.isPrimary).length;
     return { verified, unverified, mismatch, primary };
   }, [items, lastOutcomes]);
 
   const filtered = useMemo(() => {
     let out = items;
-    if (tab === 'VERIFIED') out = out.filter((g) => Boolean(g.verifiedAt));
-    if (tab === 'UNVERIFIED') out = out.filter((g) => !g.verifiedAt);
-    if (tab === 'MISMATCH') out = out.filter((g) => lastOutcomes[g.id]?.legalNameMismatch);
+    if (tab === 'VERIFIED') out = out.filter((g) => g.isVerified);
+    if (tab === 'UNVERIFIED') out = out.filter((g) => !g.isVerified);
+    if (tab === 'MISMATCH') out = out.filter((g) => g.legalNameMismatch || lastOutcomes[g.id]?.legalNameMismatch);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       out = out.filter((g) =>
@@ -127,8 +138,8 @@ export default function SellerGstinsPage() {
     }
     // Sort: unverified first, then by createdAt desc
     out = [...out].sort((a, b) => {
-      const av = a.verifiedAt ? 1 : 0;
-      const bv = b.verifiedAt ? 1 : 0;
+      const av = a.isVerified ? 1 : 0;
+      const bv = b.isVerified ? 1 : 0;
       if (av !== bv) return av - bv;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
@@ -366,8 +377,8 @@ function Row({
   outcome: GstnVerifyOutcome | undefined;
   onVerify: () => void;
 }) {
-  const verified = Boolean(item.verifiedAt);
-  const mismatch = outcome?.legalNameMismatch === true;
+  const verified = item.isVerified;
+  const mismatch = item.legalNameMismatch || outcome?.legalNameMismatch === true;
   return (
     <tr style={{ borderTop: '1px solid #F3F4F6' }}>
       <td style={td}>

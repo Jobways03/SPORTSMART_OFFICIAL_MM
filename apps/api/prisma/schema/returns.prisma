@@ -302,6 +302,10 @@ model Return {
   @@index([sellerIdSnapshot, status, createdAt(sort: Desc)])
   @@index([franchiseIdSnapshot, status, createdAt(sort: Desc)])
   @@index([riskScore])
+  // Phase 174 (audit #228) — server-side risk-review dashboard filter
+  // (WHERE status = ? AND risk_score >= ?) now runs in the DB instead of
+  // client-side over a truncated page; this composite serves it in order.
+  @@index([status, riskScore])
   @@index([replacementStatus])
   // Phase 2 (PR 2.1) — admin returns queue: `WHERE status = ?
   // ORDER BY created_at DESC` paginated. The leading single-column
@@ -317,6 +321,10 @@ model Return {
   // + retry cron's "next attempt due" sweep query.
   @@index([closedAt(sort: Desc)])
   @@index([status, refundNextRetryAt])
+  // Phase 163 (Tax Audit Readiness audit #7) — the readiness timebar scan
+  // filters returns on creditNoteEligibilityStatus; without this it is a
+  // full table scan.
+  @@index([creditNoteEligibilityStatus])
   // Phase 107 (2026-05-25) — CSV export with a date-only filter (no
   // status) couldn't use the [status, createdAt] composite (status is the
   // leading column); this serves the bare `ORDER BY created_at DESC` range
@@ -384,6 +392,15 @@ model ReturnItem {
   @@index([orderItemId])
   // Phase 97 — Gap #26 analytics: "all DAMAGED items in last 30 days"
   @@index([qcOutcome])
+  // Phase 199 (2026-06-02) — Returns audit #5. A DB-level "one active
+  // return per order_item" guard lives in migration
+  // 20260602350000_returns_active_per_orderitem_guard as a BEFORE INSERT
+  // trigger (returns_assert_no_active_dup_on_item_insert) + a status-
+  // reactivation trigger on `returns`. It cannot be a Prisma @@unique /
+  // partial index because the "active" predicate is on `returns.status`
+  // while the key is `return_items.order_item_id` (cross-table). It is
+  // defense-in-depth behind CaseDuplicateService R1 + the FOR-UPDATE
+  // recheck in PrismaReturnRepository.create.
   @@map("return_items")
 }
 

@@ -6,22 +6,54 @@
 // reviews them before approving a refund. The score and its flags
 // are surfaced inline so reviewers see "why is this risky" at a
 // glance without re-running the scorer.
+//
+// Risk-review audit — filtering moved SERVER-SIDE. Previously this
+// page pulled one limit:200 page (the backend caps at 100, so it was
+// really 100 rows) and bucketed by score in the browser. That made
+// every HIGH return past row 100 invisible and gave no pagination.
+// We now translate the active bucket into the backend's
+// riskScoreMin / riskScoreMax / hasRiskScore query params and page
+// through the full result set with real Prev/Next controls.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   adminReturnsService,
+  ListReturnsParams,
   ReturnListItem,
 } from '@/services/admin-returns.service';
 
 type Bucket = 'HIGH' | 'MEDIUM' | 'LOW' | 'ALL';
 
-const BUCKETS: { key: Bucket; label: string; min: number; max: number }[] = [
-  { key: 'ALL', label: 'All scored', min: 0, max: 100 },
-  { key: 'HIGH', label: 'High (≥ 60)', min: 60, max: 100 },
-  { key: 'MEDIUM', label: 'Medium (30–59)', min: 30, max: 59 },
-  { key: 'LOW', label: 'Low (< 30)', min: 0, max: 29 },
+const PAGE_LIMIT = 20;
+
+const BUCKETS: { key: Bucket; label: string }[] = [
+  { key: 'ALL', label: 'All scored' },
+  { key: 'HIGH', label: 'High (≥ 60)' },
+  { key: 'MEDIUM', label: 'Medium (30–59)' },
+  { key: 'LOW', label: 'Low (< 30)' },
 ];
+
+// Bucket → backend risk query params. The server applies these against
+// the whole table (not a truncated page) and returns highest-risk-first
+// within the chosen window. ALL = "has any score" so unscored intake
+// rows stay out of the review queue, matching the old client behaviour.
+function bucketParams(bucket: Bucket): Pick<
+  ListReturnsParams,
+  'riskScoreMin' | 'riskScoreMax' | 'hasRiskScore'
+> {
+  switch (bucket) {
+    case 'HIGH':
+      return { riskScoreMin: 60 };
+    case 'MEDIUM':
+      return { riskScoreMin: 30, riskScoreMax: 59 };
+    case 'LOW':
+      return { riskScoreMax: 29 };
+    case 'ALL':
+    default:
+      return { hasRiskScore: true };
+  }
+}
 
 const FLAG_COLOR: Record<string, string> = {
   CUSTOMER_ABUSE: '#b91c1c',
@@ -35,30 +67,57 @@ const FLAG_COLOR: Record<string, string> = {
 export default function RiskReviewPage() {
   const [bucket, setBucket] = useState<Bucket>('ALL');
   const [rows, setRows] = useState<ReturnListItem[]>([]);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: PAGE_LIMIT,
+    total: 0,
+    totalPages: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    setLoading(true);
-    setError('');
-    adminReturnsService
-      .listReturns({ page: 1, limit: 200 })
-      .then((res) => {
-        if (res.data) setRows(res.data.returns);
-      })
-      .catch((err) => {
+  const fetchPage = useCallback(
+    async (activeBucket: Bucket, page: number) => {
+      setLoading(true);
+      setError('');
+      try {
+        const res = await adminReturnsService.listReturns({
+          ...bucketParams(activeBucket),
+          page,
+          limit: PAGE_LIMIT,
+        });
+        if (res.data) {
+          setRows(res.data.returns);
+          setPagination(res.data.pagination);
+        }
+      } catch (err) {
+        setRows([]);
         setError(err instanceof Error ? err.message : 'Failed to load');
-      })
-      .finally(() => setLoading(false));
-  }, []);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
-  const filtered = useMemo(() => {
-    const scored = rows.filter((r) => typeof r.riskScore === 'number');
-    const b = BUCKETS.find((x) => x.key === bucket)!;
-    return scored
-      .filter((r) => (r.riskScore ?? 0) >= b.min && (r.riskScore ?? 0) <= b.max)
-      .sort((a, b1) => (b1.riskScore ?? 0) - (a.riskScore ?? 0));
-  }, [rows, bucket]);
+  // Reset to page 1 whenever the bucket changes; otherwise follow the
+  // operator's Prev/Next through the active bucket.
+  useEffect(() => {
+    fetchPage(bucket, 1);
+  }, [bucket, fetchPage]);
+
+  const goToPage = (page: number) => {
+    if (page < 1 || page > pagination.totalPages || page === pagination.page) return;
+    fetchPage(bucket, page);
+  };
+
+  // The backend already returns highest-risk-first; render in the order
+  // it sends. (No client-side re-sort — the previous in-browser sort only
+  // ordered the truncated page, which is exactly the bug we removed.)
+  const visibleRows = useMemo(
+    () => rows.filter((r) => typeof r.riskScore === 'number'),
+    [rows],
+  );
 
   return (
     <div style={{ padding: '24px 32px', maxWidth: 1280, margin: '0 auto' }}>
@@ -101,9 +160,9 @@ export default function RiskReviewPage() {
       )}
 
       <div style={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 16, overflow: 'hidden' }}>
-        {loading && filtered.length === 0 ? (
+        {loading && visibleRows.length === 0 ? (
           <div style={{ padding: 32, color: '#7A828F', textAlign: 'center' }}>Loading…</div>
-        ) : filtered.length === 0 ? (
+        ) : visibleRows.length === 0 ? (
           <div style={{ padding: 32, color: '#7A828F', textAlign: 'center' }}>
             Nothing in this bucket.
           </div>
@@ -120,7 +179,7 @@ export default function RiskReviewPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r) => {
+              {visibleRows.map((r) => {
                 const flags = (r.riskFlags ?? []) as string[];
                 const score = r.riskScore ?? 0;
                 const scoreColor =
@@ -177,11 +236,62 @@ export default function RiskReviewPage() {
         )}
       </div>
 
+      {pagination.totalPages > 1 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, marginTop: 12, flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: 12, color: '#7A828F' }}>
+            Showing{' '}
+            <strong>{(pagination.page - 1) * pagination.limit + 1}</strong>–
+            <strong>
+              {Math.min(pagination.page * pagination.limit, pagination.total)}
+            </strong>{' '}
+            of <strong>{pagination.total.toLocaleString('en-IN')}</strong>
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              disabled={pagination.page <= 1 || loading}
+              onClick={() => goToPage(pagination.page - 1)}
+              style={pageBtnStyle(pagination.page <= 1 || loading)}
+            >
+              Prev
+            </button>
+            <span style={{ fontSize: 12, color: '#525A65', fontWeight: 600 }}>
+              Page {pagination.page} of {pagination.totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={pagination.page >= pagination.totalPages || loading}
+              onClick={() => goToPage(pagination.page + 1)}
+              style={pageBtnStyle(pagination.page >= pagination.totalPages || loading)}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       <p style={{ marginTop: 8, fontSize: 11, color: '#7A828F' }}>
-        {filtered.length} matches · sorted by score descending
+        {pagination.total.toLocaleString('en-IN')} matches · sorted by score descending
       </p>
     </div>
   );
+}
+
+function pageBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    height: 30,
+    padding: '0 14px',
+    borderRadius: 8,
+    border: '1px solid #D2D6DC',
+    background: '#fff',
+    color: disabled ? '#B0B6BE' : '#0F1115',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  };
 }
 
 function Th({ children }: { children: React.ReactNode }) {

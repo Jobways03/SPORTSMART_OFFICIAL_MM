@@ -81,7 +81,7 @@ export class SellerRespondDto {
 
   // Phase 94 — Gap #12 evidence array cap + per-URL length cap. The
   // host-allowlist + format check live in the service so the env-driven
-  // allowlist (Cloudinary cloud name) can shift without redeploying
+  // allowlist (media cloud name) can shift without redeploying
   // this DTO.
   @IsOptional()
   @IsArray()

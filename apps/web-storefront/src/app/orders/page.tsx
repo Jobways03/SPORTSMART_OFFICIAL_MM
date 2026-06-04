@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -11,9 +11,10 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
+import { useSseStream } from '@sportsmart/ui';
 
 interface OrderItem {
   productTitle: string;
@@ -55,7 +56,16 @@ interface Order {
 
 interface OrdersResponse {
   orders: Order[];
-  pagination: { page: number; total: number; totalPages: number };
+  pagination: {
+    page: number;
+    total: number;
+    totalPages: number;
+    // Phase 197 (My-Orders audit #7) — server-side filter + accurate
+    // per-bucket counts (correct on any page, unlike the old
+    // single-page client-side tally).
+    status?: 'all' | 'active' | 'delivered' | 'cancelled';
+    counts?: { all: number; active: number; delivered: number; cancelled: number };
+  };
 }
 
 // ───────── status normalization ─────────
@@ -263,50 +273,54 @@ export default function OrdersPage() {
   const authStatus = useAuthGuard();
   const [data, setData] = useState<OrdersResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<Filter>('all');
 
-  const fetchOrders = (p: number) => {
+  // Phase 197 (My-Orders audit #7/#14) — the bucket filter now drives a
+  // server-side query (?status=...) so the visible list is correct
+  // across ALL pages, and the tab counts come from the server's
+  // per-bucket totals (previously a single-page client-side tally that
+  // under-counted the moment a customer had >1 page). On error we
+  // redirect to /login ONLY for a 401; any other failure shows an
+  // inline retry instead of bouncing an authenticated customer.
+  const fetchOrders = (p: number, f: Filter) => {
     setLoading(true);
-    apiClient<OrdersResponse>(`/customer/orders?page=${p}&limit=20`)
+    setLoadError(null);
+    const statusQs = f === 'all' ? '' : `&status=${f}`;
+    apiClient<OrdersResponse>(`/customer/orders?page=${p}&limit=20${statusQs}`)
       .then((res) => {
         if (res.data) setData(res.data);
       })
-      .catch(() => router.push('/login'))
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          router.push('/login');
+          return;
+        }
+        setLoadError('We couldn’t load your orders. Please try again.');
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     if (authStatus !== 'authed') return;
-    fetchOrders(page);
+    fetchOrders(page, filter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus, page]);
+  }, [authStatus, page, filter]);
 
-  const { activeOrders, deliveredOrders, cancelledOrders, allOrders } = useMemo(() => {
-    const orders = data?.orders ?? [];
-    const buckets = {
-      activeOrders: [] as Order[],
-      deliveredOrders: [] as Order[],
-      cancelledOrders: [] as Order[],
-      allOrders: orders,
-    };
-    for (const o of orders) {
-      const s = deriveStatus(o);
-      if (s.isCancelled) buckets.cancelledOrders.push(o);
-      else if (s.isDelivered) buckets.deliveredOrders.push(o);
-      else buckets.activeOrders.push(o);
-    }
-    return buckets;
-  }, [data]);
+  // Live updates: the customer "my-cases" SSE stream signals return /
+  // dispute / ticket changes (PII-free); refetch the orders list so
+  // return badges + statuses update without a manual refresh.
+  useSseStream('/portal/streams/my-cases', {
+    enabled: authStatus === 'authed',
+    onMessage: () => fetchOrders(page, filter),
+  });
 
-  const visibleOrders =
-    filter === 'all'
-      ? allOrders
-      : filter === 'active'
-        ? activeOrders
-        : filter === 'delivered'
-          ? deliveredOrders
-          : cancelledOrders;
+  // Phase 197 (My-Orders audit #7) — tab badge counts from the server's
+  // per-bucket totals; fall back to the loaded page length only if the
+  // server didn't supply counts (older API).
+  const counts = data?.pagination?.counts;
+  const visibleOrders = data?.orders ?? [];
 
   const formatPrice = (price: number) => `₹${Number(price).toLocaleString('en-IN')}`;
   const formatDate = (d: string) =>
@@ -328,7 +342,31 @@ export default function OrdersPage() {
     );
   }
 
-  const hasOrders = (data?.orders?.length ?? 0) > 0;
+  // Phase 197 (My-Orders audit #14) — inline error (no /login bounce on
+  // a transient failure for an authenticated customer).
+  if (loadError && !data) {
+    return (
+      <StorefrontShell>
+        <div className="container-x py-20 text-center">
+          <h2 className="font-display text-h2 text-ink-900">Something went wrong</h2>
+          <p className="mt-3 text-body text-ink-600">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => fetchOrders(page, filter)}
+            className="mt-6 inline-flex items-center h-11 px-5 bg-ink-900 text-white font-semibold hover:bg-ink-800 transition-colors rounded-full"
+          >
+            Try again
+          </button>
+        </div>
+      </StorefrontShell>
+    );
+  }
+
+  // "Has the customer EVER ordered" — drives the empty zero-state.
+  // Based on the server's grand total (counts.all) so a filtered-empty
+  // bucket (e.g. no cancelled orders) doesn't masquerade as "no orders
+  // yet". Falls back to the loaded page length for an older API.
+  const hasOrders = (counts?.all ?? data?.orders?.length ?? 0) > 0;
 
   return (
     <StorefrontShell>
@@ -348,11 +386,11 @@ export default function OrdersPage() {
             <h1 className="font-display text-h1 text-ink-900 leading-none tracking-tight">
               My Orders
             </h1>
-            {hasOrders && (
+            {hasOrders && counts && (
               <p className="mt-3 text-body text-ink-600">
-                {activeOrders.length > 0
-                  ? `${activeOrders.length} in progress · ${deliveredOrders.length} delivered`
-                  : `${deliveredOrders.length} delivered · ${cancelledOrders.length} cancelled`}
+                {counts.active > 0
+                  ? `${counts.active} in progress · ${counts.delivered} delivered`
+                  : `${counts.delivered} delivered · ${counts.cancelled} cancelled`}
               </p>
             )}
           </div>
@@ -391,26 +429,26 @@ export default function OrdersPage() {
               <FilterPill
                 active={filter === 'all'}
                 label="All"
-                count={allOrders.length}
-                onClick={() => setFilter('all')}
+                count={counts?.all ?? 0}
+                onClick={() => { setFilter('all'); setPage(1); }}
               />
               <FilterPill
                 active={filter === 'active'}
                 label="In progress"
-                count={activeOrders.length}
-                onClick={() => setFilter('active')}
+                count={counts?.active ?? 0}
+                onClick={() => { setFilter('active'); setPage(1); }}
               />
               <FilterPill
                 active={filter === 'delivered'}
                 label="Delivered"
-                count={deliveredOrders.length}
-                onClick={() => setFilter('delivered')}
+                count={counts?.delivered ?? 0}
+                onClick={() => { setFilter('delivered'); setPage(1); }}
               />
               <FilterPill
                 active={filter === 'cancelled'}
                 label="Cancelled"
-                count={cancelledOrders.length}
-                onClick={() => setFilter('cancelled')}
+                count={counts?.cancelled ?? 0}
+                onClick={() => { setFilter('cancelled'); setPage(1); }}
               />
             </nav>
 
@@ -421,7 +459,7 @@ export default function OrdersPage() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => setFilter('all')}
+                  onClick={() => { setFilter('all'); setPage(1); }}
                   className="mt-3 text-caption font-semibold text-accent-dark hover:text-ink-900 hover:underline underline-offset-2"
                 >
                   Show all orders

@@ -11,6 +11,7 @@ const config = (over: Partial<FundingConfig>): FundingConfig => ({
   platformFundingPercent: over.platformFundingPercent,
   sellerFundingPercent: over.sellerFundingPercent,
   brandFundingPercent: over.brandFundingPercent,
+  franchiseFundingPercent: over.franchiseFundingPercent,
 });
 
 describe('splitFundingShares', () => {
@@ -220,5 +221,67 @@ describe('validateFundingConfig', () => {
         sellerFundingPercent: 30,
       }),
     ).toThrow(/sum to 100/);
+  });
+
+  // Phase 247-FB — FRANCHISE funding party.
+  it('FRANCHISE with 100% franchise passes', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'FRANCHISE',
+        franchiseFundingPercent: 100,
+      }),
+    ).not.toThrow();
+  });
+  it('SHARED 4-way (incl. franchise) summing to 100 passes', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'SHARED',
+        platformFundingPercent: 25,
+        sellerFundingPercent: 25,
+        brandFundingPercent: 25,
+        franchiseFundingPercent: 25,
+      }),
+    ).not.toThrow();
+  });
+  it('SHARED 4-way ignoring the franchise share throws (sum < 100)', () => {
+    expect(() =>
+      validateFundingConfig({
+        fundingType: 'SHARED',
+        platformFundingPercent: 25,
+        sellerFundingPercent: 25,
+        brandFundingPercent: 25,
+        // franchise 25 omitted → sums to 75
+      }),
+    ).toThrow(/sum to 100/);
+  });
+});
+
+describe('splitFundingShares — FRANCHISE (Phase 247-FB)', () => {
+  it('pure FRANCHISE funding → one FRANCHISE row, full amount', () => {
+    const shares = splitFundingShares(
+      30_000n,
+      config({ fundingType: 'FRANCHISE' }),
+    );
+    expect(shares).toEqual([
+      { liabilityParty: 'FRANCHISE', amountInPaise: 30_000n },
+    ]);
+  });
+  it('SHARED 4-way splits to one row per party, conserving the total', () => {
+    const shares = splitFundingShares(
+      40_000n,
+      config({
+        fundingType: 'SHARED',
+        platformFundingPercent: 25,
+        sellerFundingPercent: 25,
+        brandFundingPercent: 25,
+        franchiseFundingPercent: 25,
+      }),
+    );
+    const total = shares.reduce((s, r) => s + r.amountInPaise, 0n);
+    expect(total).toBe(40_000n);
+    expect(shares).toContainEqual({
+      liabilityParty: 'FRANCHISE',
+      amountInPaise: 10_000n,
+    });
   });
 });

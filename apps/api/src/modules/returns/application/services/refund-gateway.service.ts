@@ -24,6 +24,13 @@ export interface RefundGatewayInput {
   orderNumber: string;
   paymentMethod: string; // 'COD', 'ONLINE', etc.
   amount: number;
+  /**
+   * Phase 167 (Refund Execution audit #5) — precise paise. `amount` is a JS
+   * Number (legacy contract) and `Math.round(amount * 100)` truncates above
+   * ~₹90 lakh. Callers have a `refundAmountInPaise` BigInt sibling; when they
+   * pass it, the gateway call + attempt ledger use it directly (no Number coercion).
+   */
+  amountInPaise?: bigint;
   customerId: string;
   returnId: string;
   returnNumber: string;
@@ -44,6 +51,12 @@ export interface RefundGatewayStatus {
  */
 @Injectable()
 export class RefundGatewayService {
+  // Phase 167 (#16) — consecutive refund-status check failures. checkRefundStatus
+  // swallows adapter errors into a PENDING result so the poller keeps trying;
+  // crossing this threshold opens an alert so revoked/expired credentials (which
+  // would otherwise fail silently the whole window) surface to ops.
+  private consecutiveStatusCheckFailures = 0;
+
   constructor(
     private readonly logger: AppLoggerService,
     private readonly razorpayAdapter: RazorpayAdapter,
@@ -188,9 +201,13 @@ export class RefundGatewayService {
       // retry would otherwise create a duplicate refund (paying the
       // customer twice from our balance). With the key, Razorpay
       // dedupes attempts and returns the existing refund on replay.
+      // Phase 167 (#5) — prefer the caller's precise paise; fall back to the
+      // legacy Number conversion only when the sibling column wasn't supplied.
+      const amountPaise =
+        input.amountInPaise ?? BigInt(Math.round(input.amount * 100));
       const refundResult = await this.razorpayAdapter.initiateRefund(
         order.razorpayPaymentId,
-        BigInt(Math.round(input.amount * 100)),
+        amountPaise,
         {
           return_id: input.returnId,
           return_number: input.returnNumber,
@@ -208,7 +225,7 @@ export class RefundGatewayService {
           status: 'SUCCESS',
           providerPaymentId: order.razorpayPaymentId,
           providerRefundId: refundResult.providerRefundId,
-          amountInPaise: Math.round(input.amount * 100),
+          amountInPaise: amountPaise,
         })
         .catch(() => undefined);
 
@@ -269,7 +286,8 @@ export class RefundGatewayService {
           orderNumber: input.orderNumber,
           kind: 'REFUND',
           status: 'FAILURE',
-          amountInPaise: Math.round(input.amount * 100),
+          amountInPaise:
+            input.amountInPaise ?? BigInt(Math.round(input.amount * 100)),
           failureReason: (error as Error).message,
         })
         .catch(() => undefined);
@@ -315,6 +333,7 @@ export class RefundGatewayService {
         paymentId,
         gatewayRefundId,
       );
+      this.consecutiveStatusCheckFailures = 0; // a success resets the counter
 
       switch (refundStatus.status) {
         case 'processed':
@@ -328,7 +347,34 @@ export class RefundGatewayService {
       this.logger.error(
         `Failed to check refund status for ${gatewayRefundId}: ${(error as Error).message}`,
       );
+      // Phase 167 (#16) — don't fail silently forever; alert after N in a row.
+      await this.onStatusCheckFailure(gatewayRefundId, error as Error);
       return { status: 'PENDING' };
+    }
+  }
+
+  /**
+   * Phase 167 (#16) — open a PaymentMismatchAlert after N consecutive gateway
+   * refund-status fetch failures (then reset, so it doesn't spam).
+   */
+  private async onStatusCheckFailure(
+    gatewayRefundId: string,
+    err: Error,
+  ): Promise<void> {
+    this.consecutiveStatusCheckFailures++;
+    if (this.consecutiveStatusCheckFailures >= 5) {
+      await this.paymentOps
+        .flagMismatch({
+          kind: 'ORPHAN_PAYMENT',
+          providerPaymentId: gatewayRefundId,
+          severity: 90,
+          description:
+            `[refund-poller] ${this.consecutiveStatusCheckFailures} consecutive Razorpay ` +
+            `refund-status fetch failures (last: ${err.message}). Refund confirmation is ` +
+            `effectively down — check gateway credentials / connectivity.`,
+        })
+        .catch(() => undefined);
+      this.consecutiveStatusCheckFailures = 0;
     }
   }
 }

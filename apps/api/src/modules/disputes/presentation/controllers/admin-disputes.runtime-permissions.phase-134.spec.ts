@@ -23,10 +23,12 @@ function build(strict: boolean) {
     getBoolean: jest.fn().mockReturnValue(strict), // PERMISSIONS_GUARD_STRICT
     getNumber: jest.fn().mockReturnValue(THRESHOLD),
   };
+  const authzMode = { isStrict: () => strict };
   const ctrl = new AdminDisputesController(
     service as any,
     prisma as any,
     env as any,
+    authzMode as any,
   );
   return { ctrl, service };
 }

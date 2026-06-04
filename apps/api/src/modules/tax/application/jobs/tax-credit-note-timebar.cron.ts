@@ -35,6 +35,12 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
 import { CreditNoteEligibilityService } from '../services/credit-note-eligibility.service';
+import {
+  CreditNoteService,
+  SYSTEM_CREDIT_NOTE_ACTOR,
+  Section34TimeBarredError,
+  SourceInvoiceNotFoundError,
+} from '../services/credit-note.service';
 
 interface SweepCounts {
   scanned: number;
@@ -43,6 +49,12 @@ interface SweepCounts {
   requiresReview: number;
   adminTasksOpened: number;
   errors: number;
+  // Phase 164 — safety-net retry of credit notes whose synchronous QC-time
+  // generation failed (non-timebar). Was a gap: the cron classified
+  // eligibility only and never re-issued, so a one-off failure left the
+  // return ELIGIBLE-but-uncredited until an admin manually overrode.
+  reissued: number;
+  reissueFailed: number;
 }
 
 @Injectable()
@@ -55,6 +67,8 @@ export class TaxCreditNoteTimeBarCron {
     private readonly eligibility: CreditNoteEligibilityService,
     private readonly leader: LeaderElectedCron,
     private readonly instr: CronInstrumentationService,
+    // Phase 164 — safety-net re-issue of failed CN generations.
+    private readonly creditNote: CreditNoteService,
   ) {}
 
   enabled(): boolean {
@@ -116,11 +130,19 @@ export class TaxCreditNoteTimeBarCron {
       requiresReview: 0,
       adminTasksOpened: 0,
       errors: 0,
+      reissued: 0,
+      reissueFailed: 0,
     };
 
     const candidates = await this.collectCandidates();
     counts.scanned = candidates.length;
-    if (candidates.length === 0) return counts;
+    // Even when there are no NEW classification candidates, the re-issue
+    // safety-net must still run (a prior failure could be sitting in the
+    // ELIGIBLE-but-uncredited state with nothing new to classify).
+    if (candidates.length === 0) {
+      await this.reissueEligibleUncredited(now, counts);
+      return counts;
+    }
 
     const approachingDays = this.approachingDays();
 
@@ -156,12 +178,78 @@ export class TaxCreditNoteTimeBarCron {
       }
     }
 
+    // Phase 164 — re-issue safety net after classification.
+    await this.reissueEligibleUncredited(now, counts);
+
     this.logger.log(
       `Sec 34 cron: scanned=${counts.scanned} eligible=${counts.eligible} ` +
         `time_barred=${counts.timeBarred} review=${counts.requiresReview} ` +
-        `admin_tasks_opened=${counts.adminTasksOpened} errors=${counts.errors}`,
+        `admin_tasks_opened=${counts.adminTasksOpened} errors=${counts.errors} ` +
+        `reissued=${counts.reissued} reissue_failed=${counts.reissueFailed}`,
     );
     return counts;
+  }
+
+  /**
+   * Phase 164 — safety-net retry. The synchronous QC-completion trigger
+   * (return.service) calls CreditNoteService.generateForReturn; on a
+   * non-timebar failure it logs and proceeds, leaving the return
+   * ELIGIBLE-but-uncredited. Nothing previously re-issued it. Here we find
+   * ELIGIBLE returns with no credit note and re-attempt generation
+   * (idempotent — the service's advisory lock + delta logic returns the
+   * existing CN if one was created in the meantime). Bounded by scanLimit.
+   */
+  private async reissueEligibleUncredited(
+    now: Date,
+    counts: SweepCounts,
+  ): Promise<void> {
+    const eligible = await this.prisma.return.findMany({
+      where: {
+        creditNoteEligibilityStatus: 'ELIGIBLE',
+        qcCompletedAt: { not: null },
+        qcDecision: { in: ['APPROVED', 'PARTIAL'] },
+      },
+      select: { id: true, returnNumber: true },
+      orderBy: { qcCompletedAt: 'asc' },
+      take: this.scanLimit(),
+    });
+    if (eligible.length === 0) return;
+
+    for (const r of eligible) {
+      // Skip returns that already have a credit note (the common case).
+      const existing = await this.prisma.taxDocument.count({
+        where: { documentType: 'CREDIT_NOTE', returnId: r.id },
+      });
+      if (existing > 0) continue;
+
+      try {
+        const res = await this.creditNote.generateForReturn(r.id, {
+          actorId: SYSTEM_CREDIT_NOTE_ACTOR,
+          now,
+        });
+        if (res.isNew) {
+          counts.reissued++;
+          this.logger.log(
+            `Sec 34 cron re-issued credit note ${res.creditNote.documentNumber} ` +
+              `for previously-uncredited return ${r.returnNumber}.`,
+          );
+        }
+      } catch (err) {
+        // Time-barred / no-source-invoice are expected terminal states for
+        // some rows — they're handled by classification + the wallet route,
+        // not by re-issue. Anything else is a real failure worth surfacing.
+        if (
+          err instanceof Section34TimeBarredError ||
+          err instanceof SourceInvoiceNotFoundError
+        ) {
+          continue;
+        }
+        counts.reissueFailed++;
+        this.logger.warn(
+          `Sec 34 cron re-issue failed for return ${r.returnNumber}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   /**

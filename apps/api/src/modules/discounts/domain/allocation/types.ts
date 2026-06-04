@@ -18,6 +18,10 @@ export interface AllocatableItem {
   /** SubOrder + seller for multi-seller allocation. */
   subOrderId: string;
   sellerId?: string | null;
+  // Phase 247-FB — the fulfilling franchise (when fulfillmentNodeType=
+  // FRANCHISE), so a FRANCHISE-funded discount's share can be attributed
+  // to the franchise that bears it.
+  franchiseId?: string | null;
   /** Pre-discount line gross = unitPrice × quantity, in paise. */
   grossInPaise: bigint;
   /** Used by BXGY's cheapest-first selection. */
@@ -36,6 +40,9 @@ export interface ItemAllocation {
   variantId?: string | null;
   subOrderId: string;
   sellerId?: string | null;
+  // Phase 247-FB — carried through so the ledger row can attribute a
+  // FRANCHISE-funded share to the fulfilling franchise.
+  franchiseId?: string | null;
   discountInPaise: bigint;
 }
 

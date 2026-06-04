@@ -194,22 +194,49 @@ export class PrismaProcurementRepository implements ProcurementRepository {
     return { requests, total };
   }
 
-  async create(data: {
-    franchiseId: string;
-    requestNumber: string;
-    procurementFeeRate: number;
-  }): Promise<any> {
-    return this.prisma.procurementRequest.create({
+  async create(
+    data: {
+      franchiseId: string;
+      requestNumber: string;
+      procurementFeeRate: number;
+      // Phase 235 — franchise-supplied notes + the staff/user who created it.
+      notes?: string | null;
+      requestedByStaffId?: string | null;
+    },
+    tx?: Prisma.TransactionClient,
+  ): Promise<any> {
+    const client = tx ?? this.prisma;
+    return client.procurementRequest.create({
       data: {
         franchiseId: data.franchiseId,
         requestNumber: data.requestNumber,
         procurementFeeRate: data.procurementFeeRate,
         status: 'DRAFT',
+        notes: data.notes ?? null,
+        requestedByStaffId: data.requestedByStaffId ?? null,
       },
       include: {
         items: true,
       },
     });
+  }
+
+  /**
+   * Phase 235 — tx-aware request-number allocation. The `increment: 1` upsert
+   * takes a row-level lock on the single ProcurementSequence row, so concurrent
+   * create transactions serialize on it (race-safe without the standalone
+   * Serializable wrapper that `generateNextRequestNumber` uses). Running it
+   * INSIDE the create tx means a failed create rolls the increment back instead
+   * of burning the number.
+   */
+  async nextRequestNumberInTx(tx: Prisma.TransactionClient): Promise<string> {
+    const year = new Date().getFullYear();
+    const sequence = await tx.procurementSequence.upsert({
+      where: { id: 1 },
+      update: { lastNumber: { increment: 1 } },
+      create: { id: 1, lastNumber: 1 },
+    });
+    return `SM-PO-${year}-${String(sequence.lastNumber).padStart(6, '0')}`;
   }
 
   async update(
@@ -236,8 +263,12 @@ export class PrismaProcurementRepository implements ProcurementRepository {
       productTitle: string;
       variantTitle?: string;
       requestedQty: number;
+      // Phase 237 — MRP snapshot captured at creation.
+      mrpSnapshot?: number | null;
     }>,
+    tx?: Prisma.TransactionClient,
   ): Promise<any[]> {
+    const client = tx ?? this.prisma;
     const createData = items.map((item) => ({
       procurementRequestId,
       productId: item.productId,
@@ -246,14 +277,15 @@ export class PrismaProcurementRepository implements ProcurementRepository {
       productTitle: item.productTitle,
       variantTitle: item.variantTitle ?? null,
       requestedQty: item.requestedQty,
+      mrpSnapshot: item.mrpSnapshot ?? null,
       status: 'PENDING' as const,
     }));
 
-    await this.prisma.procurementRequestItem.createMany({
+    await client.procurementRequestItem.createMany({
       data: createData,
     });
 
-    return this.prisma.procurementRequestItem.findMany({
+    return client.procurementRequestItem.findMany({
       where: { procurementRequestId },
       orderBy: { createdAt: 'asc' },
     });

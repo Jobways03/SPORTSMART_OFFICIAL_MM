@@ -22,16 +22,39 @@ function build(originalStatus: string) {
   };
   const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
   const logger: any = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
-  const service = new FranchiseCommissionService(financeRepo, eventBus, logger, {} as any);
+  // Phase 181 — the PENDING void now posts the compensating reversal AND flips
+  // the original inside one prisma.$transaction. The transaction body calls back
+  // through financeRepo (already mocked above), so `tx` just needs to be a
+  // passable handle the callback receives.
+  const tx: any = {};
+  const prisma: any = {
+    $transaction: jest.fn(async (cb: any) => cb(tx)),
+  };
+  const service = new FranchiseCommissionService(financeRepo, eventBus, logger, prisma);
   return { service, financeRepo };
 }
 
 describe('FranchiseCommissionService.recordPosVoid — #14 clawback', () => {
-  it('PENDING commission is reversed in place (no clawback entry)', async () => {
+  it('PENDING commission is reversed AND posts a compensating POS_SALE_REVERSAL entry', async () => {
+    // Phase 181 — the PENDING void now posts a compensating POS_SALE_REVERSAL
+    // ledger entry (cancelling the original's balance effect) AND flips the
+    // original to REVERSED inside one transaction. updateLedgerEntryStatus
+    // gained two args: (id, 'REVERSED', undefined, { tx, reason }).
     const { service, financeRepo } = build('PENDING');
     await service.recordPosVoid({ franchiseId: 'fr-1', saleId: 'sale-1' });
-    expect(financeRepo.updateLedgerEntryStatus).toHaveBeenCalledWith('led-1', 'REVERSED');
-    expect(financeRepo.createLedgerEntry).not.toHaveBeenCalled();
+    expect(financeRepo.createLedgerEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceType: 'POS_SALE_REVERSAL',
+        sourceId: 'sale-1',
+        idempotencyKey: 'POS_VOID:sale-1',
+      }),
+    );
+    expect(financeRepo.updateLedgerEntryStatus).toHaveBeenCalledWith(
+      'led-1',
+      'REVERSED',
+      undefined,
+      expect.objectContaining({ reason: expect.stringContaining('sale-1') }),
+    );
   });
 
   it('SETTLED commission posts a compensating negative ADJUSTMENT', async () => {

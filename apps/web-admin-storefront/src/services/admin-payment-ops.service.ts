@@ -72,6 +72,48 @@ export interface PaymentOpsMetrics {
   }>;
 }
 
+// Phase 169 (#1/#2) — chargeback types.
+export type ChargebackStatus = 'OPEN' | 'UNDER_REVIEW' | 'WON' | 'LOST' | 'CLOSED';
+export type ChargebackEvidenceStatus = 'NOT_REQUIRED' | 'PENDING' | 'SUBMITTED' | 'EXPIRED';
+export type ChargebackFinancialImpact = 'HELD' | 'RECOVERED' | 'LOST' | 'NONE';
+
+export interface Chargeback {
+  id: string;
+  provider: string;
+  providerDisputeId: string;
+  providerPaymentId: string | null;
+  masterOrderId: string | null;
+  orderNumber: string | null;
+  customerId: string | null;
+  reasonCode: string | null;
+  status: ChargebackStatus;
+  amountInPaise: number | string | null;
+  currency: string;
+  dueDate: string | null;
+  evidenceStatus: ChargebackEvidenceStatus;
+  financialImpact: ChargebackFinancialImpact;
+  evidenceSubmittedAt: string | null;
+  evidenceSubmittedBy: string | null;
+  evidenceNotes: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChargebackListPage {
+  items: Chargeback[];
+  page: number;
+  limit: number;
+  total: number;
+}
+
+export interface FailedPaymentsPage {
+  items: PaymentAttempt[];
+  page: number;
+  limit: number;
+  total: number;
+}
+
 export const adminPaymentOpsService = {
   listAlerts(filter: {
     page?: number;
@@ -81,6 +123,7 @@ export const adminPaymentOpsService = {
     search?: string;
     fromDate?: string;
     toDate?: string;
+    minSeverity?: number;
   } = {}): Promise<ApiResponse<AlertListPage>> {
     const qs = new URLSearchParams();
     qs.set('page', String(filter.page ?? 1));
@@ -90,7 +133,31 @@ export const adminPaymentOpsService = {
     if (filter.search?.trim()) qs.set('search', filter.search.trim());
     if (filter.fromDate) qs.set('fromDate', filter.fromDate);
     if (filter.toDate) qs.set('toDate', filter.toDate);
+    if (filter.minSeverity != null) qs.set('minSeverity', String(filter.minSeverity));
     return apiClient<AlertListPage>(`/admin/payment-ops/alerts?${qs.toString()}`);
+  },
+  // Phase 169 (#3) — failed-payments surface.
+  listFailedPayments(filter: { page?: number; search?: string } = {}): Promise<ApiResponse<FailedPaymentsPage>> {
+    const qs = new URLSearchParams();
+    qs.set('page', String(filter.page ?? 1));
+    qs.set('limit', '20');
+    if (filter.search?.trim()) qs.set('search', filter.search.trim());
+    return apiClient<FailedPaymentsPage>(`/admin/payment-ops/failed-payments?${qs.toString()}`);
+  },
+  // Phase 169 (#1/#2) — chargebacks surface.
+  listChargebacks(filter: { page?: number; status?: ChargebackStatus | ''; search?: string } = {}): Promise<ApiResponse<ChargebackListPage>> {
+    const qs = new URLSearchParams();
+    qs.set('page', String(filter.page ?? 1));
+    qs.set('limit', '20');
+    if (filter.status) qs.set('status', filter.status);
+    if (filter.search?.trim()) qs.set('search', filter.search.trim());
+    return apiClient<ChargebackListPage>(`/admin/payment-ops/chargebacks?${qs.toString()}`);
+  },
+  submitChargebackEvidence(id: string, payload: { notes?: string }): Promise<ApiResponse<unknown>> {
+    return apiClient(`/admin/payment-ops/chargebacks/${id}/evidence`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
   getAlert(id: string): Promise<ApiResponse<{ alert: PaymentMismatchAlert; attempts: PaymentAttempt[] }>> {
     return apiClient(`/admin/payment-ops/alerts/${id}`);
@@ -127,7 +194,35 @@ export const KIND_LABEL: Record<PaymentMismatchKind, string> = {
   SIGNATURE_INVALID: 'Invalid signature',
 };
 
-export function inrFromPaise(p: number | null): string {
+export function inrFromPaise(p: number | string | null): string {
   if (p == null) return '—';
-  return '₹' + (p / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const n = typeof p === 'string' ? Number(p) : p;
+  if (!Number.isFinite(n)) return '—';
+  return '₹' + (n / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+// Phase 169 (#9) — mask the provider payment id for display (full value behind
+// a copy affordance). Razorpay ids are `pay_<16>`; keep the prefix + last 4.
+export function maskPaymentId(id: string | null): string {
+  if (!id) return '—';
+  if (id.length <= 8) return id;
+  const prefixMatch = id.match(/^[a-z]+_/i);
+  const prefix = prefixMatch ? prefixMatch[0] : '';
+  return `${prefix}••••${id.slice(-4)}`;
+}
+
+export const CHARGEBACK_STATUS_COLOR: Record<ChargebackStatus, string> = {
+  OPEN: '#b91c1c',
+  UNDER_REVIEW: '#d97706',
+  WON: '#15803d',
+  LOST: '#7f1d1d',
+  CLOSED: '#7A828F',
+};
+
+export const CHARGEBACK_STATUS_LABEL: Record<ChargebackStatus, string> = {
+  OPEN: 'Open',
+  UNDER_REVIEW: 'Under review',
+  WON: 'Won',
+  LOST: 'Lost',
+  CLOSED: 'Closed',
+};

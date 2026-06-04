@@ -10,12 +10,20 @@ export interface StorefrontListParams {
   sortBy?: string;
   minPrice?: string;
   maxPrice?: string;
+  sport?: string;
   filterObj?: Record<string, string>;
 }
 
 export interface IStorefrontRepository {
   // ── Product listing (raw SQL for performance) ──
   findProductsPaginated(params: StorefrontListParams): Promise<{ products: any[]; total: number }>;
+  // Phase 193 (#2) — same-category/brand, in-stock, approved, excluding self.
+  findRelatedProducts(args: {
+    productId: string;
+    categoryId?: string | null;
+    brandId?: string | null;
+    limit: number;
+  }): Promise<any[]>;
   findSearchSuggestions(query: string): Promise<Array<{ title: string; slug: string }>>;
   findProductDetailBySlug(slug: string): Promise<any | null>;
   findSellerMappingsForProduct(productId: string): Promise<any[]>;
@@ -42,7 +50,9 @@ export interface IStorefrontRepository {
 
   // ── Storefront filter faceted counts (raw SQL) ──
   computeBrandFacets(baseConditions: any[], otherConditions: any[]): Promise<{ value: string; label: string; count: number }[]>;
-  computePriceRange(baseConditions: any[], otherConditions: any[]): Promise<{ min: number; max: number } | null>;
+  // Phase 194 (#13) — price bounds are money: returned as Decimal-precise
+  // strings, coerced to Number only at the client slider boundary.
+  computePriceRange(baseConditions: any[], otherConditions: any[]): Promise<{ min: string; max: string } | null>;
   computeAvailabilityFacets(baseConditions: any[]): Promise<{ in_stock: number; out_of_stock: number }>;
   computeBooleanMetafieldFacets(defKey: string, allConditions: any[]): Promise<{ val: boolean; count: number }[]>;
   computeNumericMetafieldRange(defKey: string, allConditions: any[]): Promise<{ min: number; max: number } | null>;

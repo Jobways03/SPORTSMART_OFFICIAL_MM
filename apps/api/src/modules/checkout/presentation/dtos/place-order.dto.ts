@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -31,6 +32,20 @@ const upper = ({ value }: { value: unknown }) =>
 export enum PlaceOrderPaymentMethod {
   COD = 'COD',
   ONLINE = 'ONLINE',
+}
+
+/**
+ * Phase 197 (Checkout audit #4) — typed body for POST
+ * /customer/checkout/initiate. Pre-Phase-197 the controller took
+ * `@Body() body: { addressId: string }`, i.e. an untyped inline
+ * interface with no validation — a missing/non-UUID addressId reached
+ * the service before failing, and any extra keys rode along (the
+ * global whitelist pipe strips unknowns only when a DTO class is
+ * present).
+ */
+export class InitiateCheckoutDto {
+  @IsUUID(undefined, { message: 'addressId must be a UUID' })
+  addressId!: string;
 }
 
 export class PlaceOrderDto {
@@ -62,6 +77,8 @@ export class PlaceOrderDto {
   @IsOptional()
   @IsInt({ message: 'walletApplyAmountInPaise must be an integer' })
   @Min(0, { message: 'walletApplyAmountInPaise must be non-negative' })
+  // Phase 184 (#7) — hard upper bound (service still clamps to balance ∩ order).
+  @Max(100_000_000, { message: 'walletApplyAmountInPaise exceeds the maximum' })
   walletApplyAmountInPaise?: number;
 
   @IsOptional()

@@ -11,6 +11,7 @@ import type {
 } from '@prisma/client';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
+import { AuthzModeService } from './authz-mode.service';
 import {
   MetricsRegistry,
   CounterHandle,
@@ -89,6 +90,7 @@ export class AuthorizationAuditService implements OnModuleInit, OnModuleDestroy 
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly metrics: MetricsRegistry,
+    private readonly authzMode: AuthzModeService,
   ) {}
 
   onModuleInit(): void {
@@ -115,7 +117,7 @@ export class AuthorizationAuditService implements OnModuleInit, OnModuleDestroy 
   }
 
   record(entry: AuthorizationAuditEntry): void {
-    if (!this.env.getBoolean('AUTHZ_AUDIT_ENABLED', true)) return;
+    if (!this.authzMode.isAuditEnabled()) return;
 
     this.buffer.push({
       layer: entry.layer,

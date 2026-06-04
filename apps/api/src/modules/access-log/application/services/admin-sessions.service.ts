@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 // Cross-table session representation. The five session tables (admins,
@@ -22,6 +23,14 @@ export interface ActiveSessionRow {
   userAgent: string | null;
   createdAt: Date;
   expiresAt: Date;
+  // Phase 209 (#4) — the session tables already carry lastUsedAt (Phase
+  // 27, bumped on every refresh-rotation) + deviceLabel, but the admin
+  // cross-actor list never projected them. Surfacing lastUsedAt lets an
+  // operator tell a live session ("used 2 min ago") from a stale one
+  // ("created 20 days ago, never refreshed") — the single most useful
+  // signal when deciding which of an actor's sessions to revoke.
+  lastUsedAt: Date | null;
+  deviceLabel: string | null;
 }
 
 export type ActorType = ActiveSessionRow['actorType'];
@@ -53,7 +62,28 @@ export class AdminSessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditPublicFacade,
+    // Phase 209 (#8) — emit security.session_revoked_by_admin so a
+    // downstream handler can notify the booted actor ("an administrator
+    // ended your session"). EventBusService is @Global, no module wiring.
+    private readonly eventBus: EventBusService,
   ) {}
+
+  /**
+   * Phase 209 (#13) — reject a missing / literal-'unknown' revoker id.
+   * The controller already fails closed when the guard didn't populate
+   * adminId, but the service is the last line: a caller that passes
+   * 'unknown' (the old controller fallback) would poison the audit log +
+   * the self-protection check (an admin id of 'unknown' can never equal a
+   * real session's adminId, silently defeating "can't revoke your own").
+   */
+  private assertRealRevoker(revokedByAdminId: string | undefined | null): string {
+    if (!revokedByAdminId || revokedByAdminId === 'unknown') {
+      throw new BadRequestException(
+        'Revoking admin identity is missing or unresolved — refusing to revoke.',
+      );
+    }
+    return revokedByAdminId;
+  }
 
   async list(filters: ListFilters = {}): Promise<{
     items: ActiveSessionRow[];
@@ -159,6 +189,8 @@ export class AdminSessionsService {
         userAgent: s.userAgent,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
+        lastUsedAt: s.lastUsedAt ?? null,
+        deviceLabel: s.deviceLabel ?? null,
       })),
       ...userRows.map((s: any) => ({
         id: s.id,
@@ -171,6 +203,8 @@ export class AdminSessionsService {
         userAgent: s.userAgent,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
+        lastUsedAt: s.lastUsedAt ?? null,
+        deviceLabel: s.deviceLabel ?? null,
       })),
       ...sellerRows.map((s: any) => ({
         id: s.id,
@@ -183,6 +217,8 @@ export class AdminSessionsService {
         userAgent: s.userAgent,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
+        lastUsedAt: s.lastUsedAt ?? null,
+        deviceLabel: s.deviceLabel ?? null,
       })),
       ...franchiseRows.map((s: any) => ({
         id: s.id,
@@ -195,6 +231,9 @@ export class AdminSessionsService {
         userAgent: s.userAgent,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
+        lastUsedAt: s.lastUsedAt ?? null,
+        // FranchiseSession also carries deviceLabel (Phase 27).
+        deviceLabel: s.deviceLabel ?? null,
       })),
       ...affiliateRows.map((s: any) => ({
         id: s.id,
@@ -210,6 +249,8 @@ export class AdminSessionsService {
         userAgent: s.userAgent,
         createdAt: s.createdAt,
         expiresAt: s.expiresAt,
+        lastUsedAt: s.lastUsedAt ?? null,
+        deviceLabel: s.deviceLabel ?? null,
       })),
     ];
 
@@ -235,7 +276,18 @@ export class AdminSessionsService {
     revokedByAdminId: string;
     revokedByAdminRole?: string;
     reason?: string;
-  }): Promise<{ revoked: true; sessionId: string; actorType: ActorType; actorId: string }> {
+  }): Promise<{
+    revoked: true;
+    sessionId: string;
+    actorType: ActorType;
+    actorId: string;
+    // Phase 209 (#12) — true when the session was ALREADY revoked, so the
+    // caller can render "already signed out" instead of a misleading
+    // "revoked just now." The operation stays idempotent (still 200).
+    alreadyRevoked: boolean;
+  }> {
+    // Phase 209 (#13) — never trust a missing / 'unknown' revoker id.
+    const revokedByAdminId = this.assertRealRevoker(args.revokedByAdminId);
     const now = new Date();
     let actorId: string | null = null;
 
@@ -246,7 +298,7 @@ export class AdminSessionsService {
     // answerable via a single SELECT without joining audit_logs.
     const revokeData = {
       revokedAt: now,
-      revokedBy: args.revokedByAdminId,
+      revokedBy: revokedByAdminId,
       revocationReason: args.reason ?? null,
     } as const;
 
@@ -257,7 +309,7 @@ export class AdminSessionsService {
           select: { adminId: true, revokedAt: true },
         });
         if (!row) throw new NotFoundException('Session not found');
-        if (row.adminId === args.revokedByAdminId) {
+        if (row.adminId === revokedByAdminId) {
           throw new BadRequestException(
             'Cannot revoke your own admin session. Use the logout flow to end your own session.',
           );
@@ -265,7 +317,7 @@ export class AdminSessionsService {
         if (row.revokedAt) {
           // Idempotent — already revoked, treat as success without
           // re-stamping (audit chain should record the first revoke).
-          return { revoked: true, sessionId: args.sessionId, actorType: 'ADMIN', actorId: row.adminId };
+          return { revoked: true, sessionId: args.sessionId, actorType: 'ADMIN', actorId: row.adminId, alreadyRevoked: true };
         }
         await this.prisma.adminSession.update({
           where: { id: args.sessionId },
@@ -281,7 +333,7 @@ export class AdminSessionsService {
         });
         if (!row) throw new NotFoundException('Session not found');
         if (row.revokedAt) {
-          return { revoked: true, sessionId: args.sessionId, actorType: 'USER', actorId: row.userId };
+          return { revoked: true, sessionId: args.sessionId, actorType: 'USER', actorId: row.userId, alreadyRevoked: true };
         }
         await this.prisma.session.update({
           where: { id: args.sessionId },
@@ -297,7 +349,7 @@ export class AdminSessionsService {
         });
         if (!row) throw new NotFoundException('Session not found');
         if (row.revokedAt) {
-          return { revoked: true, sessionId: args.sessionId, actorType: 'SELLER', actorId: row.sellerId };
+          return { revoked: true, sessionId: args.sessionId, actorType: 'SELLER', actorId: row.sellerId, alreadyRevoked: true };
         }
         await this.prisma.sellerSession.update({
           where: { id: args.sessionId },
@@ -313,7 +365,7 @@ export class AdminSessionsService {
         });
         if (!row) throw new NotFoundException('Session not found');
         if (row.revokedAt) {
-          return { revoked: true, sessionId: args.sessionId, actorType: 'FRANCHISE', actorId: row.franchisePartnerId };
+          return { revoked: true, sessionId: args.sessionId, actorType: 'FRANCHISE', actorId: row.franchisePartnerId, alreadyRevoked: true };
         }
         await this.prisma.franchiseSession.update({
           where: { id: args.sessionId },
@@ -330,7 +382,7 @@ export class AdminSessionsService {
         });
         if (!row) throw new NotFoundException('Session not found');
         if (row.revokedAt) {
-          return { revoked: true, sessionId: args.sessionId, actorType: 'AFFILIATE', actorId: row.affiliateId };
+          return { revoked: true, sessionId: args.sessionId, actorType: 'AFFILIATE', actorId: row.affiliateId, alreadyRevoked: true };
         }
         await this.prisma.affiliateSession.update({
           where: { id: args.sessionId },
@@ -342,7 +394,7 @@ export class AdminSessionsService {
     }
 
     await this.audit.writeAuditLog({
-      actorId: args.revokedByAdminId,
+      actorId: revokedByAdminId,
       actorRole: args.revokedByAdminRole,
       action: 'session.revoke',
       module: 'security',
@@ -355,11 +407,35 @@ export class AdminSessionsService {
       },
     });
 
+    // Phase 209 (#8) — notify the booted actor out-of-band. Best-effort:
+    // a publish failure must not fail the revoke (the session is already
+    // revoked at this point). A handler in the notifications module
+    // (or the per-actor notification surface) consumes this.
+    this.eventBus
+      .publish({
+        eventName: 'security.session_revoked_by_admin',
+        aggregate: 'session',
+        aggregateId: args.sessionId,
+        occurredAt: new Date(),
+        payload: {
+          actorType: args.actorType,
+          actorId: actorId,
+          revokedByAdminId,
+          reason: args.reason ?? null,
+          scope: 'single_session',
+        },
+      })
+      .catch((e) =>
+        this.logger.warn(
+          `Failed to publish session_revoked_by_admin: ${(e as Error).message}`,
+        ),
+      );
+
     this.logger.log(
-      `Session revoked: ${args.actorType} session ${args.sessionId} by admin ${args.revokedByAdminId}`,
+      `Session revoked: ${args.actorType} session ${args.sessionId} by admin ${revokedByAdminId}`,
     );
 
-    return { revoked: true, sessionId: args.sessionId, actorType: args.actorType, actorId: actorId! };
+    return { revoked: true, sessionId: args.sessionId, actorType: args.actorType, actorId: actorId!, alreadyRevoked: false };
   }
 
   /**
@@ -374,13 +450,17 @@ export class AdminSessionsService {
     revokedByAdminRole?: string;
     reason?: string;
   }): Promise<{ revoked: number; actorType: ActorType; actorId: string }> {
+    // Phase 209 (#13) — reject a missing / 'unknown' revoker BEFORE the
+    // self-protection check (an 'unknown' id would never match the target
+    // admin id, silently bypassing "can't bulk-revoke your own").
+    const revokedByAdminId = this.assertRealRevoker(args.revokedByAdminId);
     const now = new Date();
     let count = 0;
 
     // Same self-protection as revokeOne — never let an admin nuke
     // their own session set in bulk. They'd lock themselves out and
     // the only recovery is a DB-level reset.
-    if (args.actorType === 'ADMIN' && args.actorId === args.revokedByAdminId) {
+    if (args.actorType === 'ADMIN' && args.actorId === revokedByAdminId) {
       throw new BadRequestException(
         'Cannot revoke your own admin sessions. Use the logout flow to end your own session.',
       );
@@ -389,7 +469,7 @@ export class AdminSessionsService {
     // Phase 27 (2026-05-21) — same revoker + reason stamp as revokeOne.
     const bulkRevokeData = {
       revokedAt: now,
-      revokedBy: args.revokedByAdminId,
+      revokedBy: revokedByAdminId,
       revocationReason: args.reason ?? null,
     } as const;
 
@@ -437,7 +517,7 @@ export class AdminSessionsService {
     }
 
     await this.audit.writeAuditLog({
-      actorId: args.revokedByAdminId,
+      actorId: revokedByAdminId,
       actorRole: args.revokedByAdminRole,
       action: 'session.revoke_all',
       module: 'security',
@@ -450,8 +530,34 @@ export class AdminSessionsService {
       },
     });
 
+    // Phase 209 (#8) — notify the actor that ALL their sessions were
+    // ended by an admin. Only fire when something was actually revoked
+    // (a no-op bulk revoke shouldn't alarm the user). Best-effort.
+    if (count > 0) {
+      this.eventBus
+        .publish({
+          eventName: 'security.session_revoked_by_admin',
+          aggregate: 'session',
+          aggregateId: args.actorId,
+          occurredAt: new Date(),
+          payload: {
+            actorType: args.actorType,
+            actorId: args.actorId,
+            revokedByAdminId,
+            reason: args.reason ?? null,
+            scope: 'all_sessions',
+            revokedCount: count,
+          },
+        })
+        .catch((e) =>
+          this.logger.warn(
+            `Failed to publish session_revoked_by_admin (bulk): ${(e as Error).message}`,
+          ),
+        );
+    }
+
     this.logger.log(
-      `Revoked ${count} session(s) for ${args.actorType} ${args.actorId} by admin ${args.revokedByAdminId}`,
+      `Revoked ${count} session(s) for ${args.actorType} ${args.actorId} by admin ${revokedByAdminId}`,
     );
 
     return { revoked: count, actorType: args.actorType, actorId: args.actorId };

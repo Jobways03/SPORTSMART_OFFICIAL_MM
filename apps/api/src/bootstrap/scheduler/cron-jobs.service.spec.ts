@@ -7,15 +7,19 @@ import { CronJobsService } from './cron-jobs.service';
  * here we just pin the wiring per cron service so a future refactor
  * can't quietly un-wrap a body.
  *
- * CronJobsService is the densest cron service (4 methods), so it's
- * the natural sentinel for the migration. The other 10 cron files
- * apply the same wrapper shape — repeating identical wiring tests
- * for each would add ~30 LoC of noise per file for one line of
- * substance. The helper spec already covers the semantics.
+ * CronJobsService is the densest cron service, so it's the natural
+ * sentinel for the migration. The other cron files apply the same
+ * wrapper shape — repeating identical wiring tests for each would add
+ * ~30 LoC of noise per file for one line of substance. The helper spec
+ * already covers the semantics.
+ *
+ * Cluster C (#218-#1) — the duplicate `hourlyLowStockSweep` was removed
+ * from CronJobsService (the canonical low-stock sweep is
+ * inventory/.../jobs/low-stock-sweep.cron.ts). Its tests + the
+ * LowStockAlertService injection were removed here accordingly.
  */
 
 function buildService(opts: { leaderWins?: boolean } = {}) {
-  const lowStock = { sweep: jest.fn().mockResolvedValue({ flagged: 0 }) };
   const recon = { runAndCollect: jest.fn().mockResolvedValue(undefined) };
   const prisma = {
     ticket: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
@@ -29,8 +33,8 @@ function buildService(opts: { leaderWins?: boolean } = {}) {
     }),
   } as any;
   // Phase 5 (PR 5.4) — pass-through instr so the existing leader-
-  // election assertions still observe the underlying lowStock /
-  // recon / prisma calls.
+  // election assertions still observe the underlying recon / prisma
+  // calls.
   const instr = {
     wrap: jest.fn(async (_n: string, fn: () => Promise<unknown>) => fn()),
   } as any;
@@ -47,34 +51,24 @@ function buildService(opts: { leaderWins?: boolean } = {}) {
   } as any;
   const service = new CronJobsService(
     prisma,
-    lowStock as any,
     recon as any,
     leader,
     instr,
     env,
     eventBus,
   );
-  return { service, prisma, lowStock, recon, leader, instr, env, eventBus };
+  return { service, prisma, recon, leader, instr, env, eventBus };
 }
 
 describe('CronJobsService — leader-election wrapping (PR 1.2)', () => {
-  it('hourlyLowStockSweep is wrapped by LeaderElectedCron', async () => {
-    const { service, leader, lowStock } = buildService({});
-    await service.hourlyLowStockSweep();
-    expect(leader.run).toHaveBeenCalledWith(
-      'hourly-low-stock-sweep',
-      expect.any(Number),
-      expect.any(Function),
-    );
-    expect(lowStock.sweep).toHaveBeenCalledTimes(1);
-  });
-
   it('SKIPS the body when leader-election loses (multi-replica safety)', async () => {
-    const { service, lowStock } = buildService({ leaderWins: false });
-    await service.hourlyLowStockSweep();
+    const { service, leader, recon } = buildService({ leaderWins: false });
+    await service.dailyReconciliation();
     // The headline assertion: when another replica holds the lock,
-    // the cron body is NOT invoked on this replica.
-    expect(lowStock.sweep).not.toHaveBeenCalled();
+    // the cron body is NOT invoked on this replica. leader.run was
+    // still called (to attempt election) but the body short-circuited.
+    expect(leader.run).toHaveBeenCalled();
+    expect(recon.runAndCollect).not.toHaveBeenCalled();
   });
 
   it('ticketSlaBreachCheck is wrapped with the right job key', async () => {
@@ -112,7 +106,6 @@ describe('CronJobsService — leader-election wrapping (PR 1.2)', () => {
 
   it('each method uses a UNIQUE job key (no accidental sharing)', async () => {
     const { service, leader } = buildService({});
-    await service.hourlyLowStockSweep();
     await service.ticketSlaBreachCheck();
     await service.dailyReconciliation();
     await service.cleanupStalePendingFiles();
@@ -122,7 +115,6 @@ describe('CronJobsService — leader-election wrapping (PR 1.2)', () => {
     expect(keys.sort()).toEqual([
       'cleanup-stale-pending-files',
       'daily-reconciliation',
-      'hourly-low-stock-sweep',
       'ticket-sla-breach',
     ]);
   });

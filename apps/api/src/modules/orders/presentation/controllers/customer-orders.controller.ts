@@ -17,6 +17,20 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { ListCustomerOrdersDto } from '../dtos/list-customer-orders.dto';
+
+// Phase 197 (My-Orders audit #5) — order-number shape guard. Format is
+// `SM${year}${seq}`; the seq pad was widened from 4 to 7 in Phase 197
+// (Checkout audit #3) but legacy rows still carry 4-digit suffixes, so
+// accept 4–7 digits after the 4-digit year. Bare param validation here
+// (the global ValidationPipe doesn't reach a raw @Param string) keeps a
+// junk order-number from reaching the DB lookup.
+const ORDER_NUMBER_PATTERN = /^SM\d{4}\d{4,7}$/;
+function assertOrderNumber(orderNumber: string): void {
+  if (!ORDER_NUMBER_PATTERN.test(orderNumber)) {
+    throw new BadRequestAppException('Invalid order number');
+  }
+}
 
 @ApiTags('Customer Orders')
 @Controller('customer/orders')
@@ -31,29 +45,33 @@ export class CustomerOrdersController {
     private readonly prisma: PrismaService,
   ) {}
 
+  // Phase 197 (My-Orders audit #4) — @Throttle on the listing. A read
+  // endpoint, but an authed scraper could otherwise loop it; 60/min is
+  // generous for a human browsing their orders.
   @Get()
-  async listOrders(
-    @Req() req: any,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async listOrders(@Req() req: any, @Query() query: ListCustomerOrdersDto) {
+    const pageNum = query.page ?? 1;
+    const limitNum = query.limit ?? 20;
 
     const data = await this.ordersService.listCustomerOrders(
       req.userId,
       pageNum,
       limitNum,
+      // Phase 197 (My-Orders audit #7) — server-side status bucket.
+      query.status ?? 'all',
     );
 
     return { success: true, message: 'Orders retrieved', data };
   }
 
   @Get(':orderNumber')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async getOrder(
     @Req() req: any,
     @Param('orderNumber') orderNumber: string,
   ) {
+    assertOrderNumber(orderNumber);
     const data = await this.ordersService.getCustomerOrder(req.userId, orderNumber);
     return { success: true, message: 'Order retrieved', data };
   }

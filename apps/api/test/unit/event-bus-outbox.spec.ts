@@ -31,6 +31,9 @@ describe('EventBusService — outbox dual-write', () => {
         if (key === 'OUTBOX_AUTHORITATIVE') return opts.authoritative ?? false;
         return false;
       }),
+      // PR 12.x — publish() now caps payload size via
+      // env.getNumber('OUTBOX_MAX_PAYLOAD_BYTES', …). Return the default.
+      getNumber: jest.fn((_k: string, d: number) => d),
     };
     const prisma = {
       outboxEvent: { create: jest.fn().mockResolvedValue({}) },

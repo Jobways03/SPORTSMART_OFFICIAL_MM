@@ -190,8 +190,14 @@ describe('PaymentsPublicFacade.markOrderPaid — Phase 0 amount-check', () => {
 
   // ── Admin manual-mark-paid path (no snapshot) ──────────────────────
 
-  it('skips the gateway check when no snapshot is supplied (admin manual override)', async () => {
-    ordersFacade.getMasterOrderBasic.mockResolvedValue(baseOrder as any);
+  it('skips the gateway check when no snapshot is supplied (admin manual COD override)', async () => {
+    // Phase 168 (#1/#2) — the manual (no-snapshot) override is now COD-ONLY.
+    // An ONLINE order can no longer be flipped PAID without a gateway snapshot
+    // (that path is exercised in the dedicated Phase-168 guard describe below).
+    ordersFacade.getMasterOrderBasic.mockResolvedValue({
+      ...baseOrder,
+      paymentMethod: 'COD',
+    } as any);
     // Phase 0 (PR 0.12) — facade now drives the flip via the conditional
     // updateMany. Default mock already returns flipped=true above; tests
     // that need the loser path override it locally.
@@ -350,5 +356,59 @@ describe('PaymentsPublicFacade.markOrderPaid — Phase 0 amount-check', () => {
         }),
       ).resolves.toBeDefined();
     });
+  });
+});
+
+// Phase 168 (COD Mark-Paid audit #1/#2) — a MANUAL mark-paid (no
+// gatewaySnapshot) must be COD. An ONLINE order flipped PAID with no snapshot
+// would bypass the gateway entirely (no amount/signature verification) — the
+// exact fraud vector the audit flagged on the second mark-paid endpoint.
+describe('PaymentsPublicFacade.markOrderPaid — Phase 168 manual COD-only guard', () => {
+  function build(order: any) {
+    const ordersFacade = {
+      getMasterOrderBasic: jest.fn().mockResolvedValue(order),
+      flipPaymentStatusIfFrom: jest.fn().mockResolvedValue({
+        flipped: true,
+        order: { ...order, paymentStatus: 'PAID' },
+      }),
+    };
+    const eventBus = { publish: jest.fn().mockResolvedValue(undefined) };
+    const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    const paymentOps = { flagMismatch: jest.fn(), recordAttempt: jest.fn() };
+    const facade = new PaymentsPublicFacade(
+      ordersFacade as any, eventBus as any, logger as any, paymentOps as any,
+    );
+    return { facade, ordersFacade, eventBus };
+  }
+
+  const onlineOrder = {
+    id: 'order-x', orderNumber: 'SM-9', customerId: 'c1',
+    totalAmount: '1000.00', totalAmountInPaise: 100_000n,
+    razorpayOrderId: 'rzp_x', paymentMethod: 'ONLINE',
+    paymentStatus: 'PENDING', orderStatus: 'PENDING_PAYMENT', verified: true, itemCount: 1, createdAt: new Date(),
+  };
+
+  it('REJECTS a manual (no-snapshot) mark-paid on an ONLINE order', async () => {
+    const { facade, eventBus } = build(onlineOrder);
+    await expect(
+      facade.markOrderPaid({ masterOrderId: 'order-x', actorType: 'ADMIN', actorId: 'a1' }),
+    ).rejects.toThrow(/COD/);
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it('ALLOWS a manual mark-paid on a COD order', async () => {
+    const { facade, ordersFacade } = build({ ...onlineOrder, paymentMethod: 'COD' });
+    await facade.markOrderPaid({ masterOrderId: 'order-x', actorType: 'ADMIN', actorId: 'a1' });
+    expect(ordersFacade.flipPaymentStatusIfFrom).toHaveBeenCalled();
+  });
+
+  it('STILL ALLOWS an ONLINE order via the gateway-snapshot (verified) path', async () => {
+    const { facade, ordersFacade } = build(onlineOrder);
+    await facade.markOrderPaid({
+      masterOrderId: 'order-x',
+      actorType: 'WEBHOOK',
+      gatewaySnapshot: { amount: 100_000, status: 'captured', captured: true, order_id: 'rzp_x' },
+    });
+    expect(ordersFacade.flipPaymentStatusIfFrom).toHaveBeenCalled();
   });
 });

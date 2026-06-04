@@ -15,13 +15,16 @@
 // CronInstrumentationService (counts: scanned, generated, failed,
 // escalated).
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
-import { EInvoiceService } from '../services/einvoice.service';
+import { EInvoiceService, EInvoiceDisabledError } from '../services/einvoice.service';
+import { TaxModeService } from '../services/tax-mode.service';
+import { EINVOICE_EVENTS } from '../../domain/einvoice-events';
 
 interface SweepCounts {
   scanned: number;
@@ -40,6 +43,10 @@ export class EInvoiceRetryCron {
     private readonly leader: LeaderElectedCron,
     private readonly instr: CronInstrumentationService,
     private readonly einvoice: EInvoiceService,
+    // Phase 160 (#17 / #12) — optional so unit tests can construct the cron
+    // without the full DI graph.
+    @Optional() private readonly eventBus?: EventBusService,
+    @Optional() private readonly taxMode?: TaxModeService,
   ) {}
 
   enabled(): boolean {
@@ -56,6 +63,15 @@ export class EInvoiceRetryCron {
 
   private scanLimit(): number {
     return this.env.getNumber('TAX_EINVOICE_RETRY_SCAN_LIMIT', 50);
+  }
+
+  /**
+   * Phase 160 (#11) — inter-call delay (ms) between IRP generate calls so a
+   * 50-candidate sweep can't blow NIC's ~100/min per-credentials rate limit
+   * (default 600ms ≈ 100/min). Set 0 to disable (tests / stub provider).
+   */
+  private interCallDelayMs(): number {
+    return this.env.getNumber('TAX_EINVOICE_RETRY_INTER_CALL_MS' as any, 600);
   }
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -78,6 +94,13 @@ export class EInvoiceRetryCron {
       escalated: 0,
     };
 
+    // Phase 160 (#2) — honour the kill switch. When e-invoicing is disabled
+    // the sweep is a no-op (don't burn the retry cap calling a gated service).
+    if (!(await this.einvoice.isEnabled())) {
+      this.logger.log('IRN retry cron: e-invoicing disabled — skipping sweep.');
+      return counts;
+    }
+
     const cap = this.retryCap();
     const cooldownCutoff = new Date(
       now.getTime() - this.cooldownMinutes() * 60 * 1000,
@@ -96,15 +119,26 @@ export class EInvoiceRetryCron {
       take: this.scanLimit(),
     });
     counts.scanned = candidates.length;
-    if (candidates.length === 0) return counts;
-
-    for (const c of candidates) {
+    // Phase 160 — do NOT early-return when there are no sub-cap candidates:
+    // escalation must still run, else a period whose rows are ALL exhausted
+    // would never open AdminTasks (escalation was previously coupled to
+    // having at least one retryable candidate in the same sweep).
+    const delayMs = this.interCallDelayMs();
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i]!;
       try {
         await this.einvoice.generateForDocument(c.id);
         counts.generated++;
-      } catch {
+      } catch (err) {
+        // Phase 160 (#2) — disabled mid-sweep: stop (don't keep hammering).
+        if (err instanceof EInvoiceDisabledError) break;
         // service already wrote FAILED + retry_count via its catch
         counts.failed++;
+      }
+      // Phase 160 (#11) — pace inter-call so a full sweep respects NIC's
+      // per-credentials rate limit. No delay after the last candidate.
+      if (delayMs > 0 && i < candidates.length - 1) {
+        await sleep(delayMs);
       }
     }
 
@@ -154,7 +188,51 @@ export class EInvoiceRetryCron {
         },
       });
       opened++;
+
+      // Phase 160 (#17) — publish a domain event so notification / analytics
+      // subscribers can react (the AdminTask alone is invisible unless an
+      // admin watches the dashboard). Fire-and-forget.
+      if (this.eventBus) {
+        void this.eventBus
+          .publish({
+            eventName: EINVOICE_EVENTS.RETRY_EXHAUSTED,
+            aggregate: 'TaxDocument',
+            aggregateId: e.id,
+            occurredAt: new Date(),
+            payload: {
+              documentId: e.id,
+              documentNumber: e.documentNumber,
+              retryCap: cap,
+              failureReason: e.einvoiceFailureReason ?? null,
+            },
+          })
+          .catch(() => undefined);
+      }
+
+      // Phase 160 (#12) — surface the exhausted failure through the GST-mode
+      // service. In STRICT mode report() throws a TaxStrictModeViolationError;
+      // we catch it so one violation can't abort the whole escalation sweep —
+      // the point is that the violation is recorded / logged by report().
+      if (this.taxMode) {
+        try {
+          await this.taxMode.report({
+            code: 'einvoice.generation_failed',
+            message:
+              `IRN generation exhausted ${cap} retries for ${e.documentNumber}`,
+            context: { documentId: e.id, retryCap: cap },
+          });
+        } catch (err) {
+          this.logger.warn(
+            `tax-mode STRICT violation on e-invoice exhaustion for ${e.documentNumber}: ${(err as Error).message}`,
+          );
+        }
+      }
     }
     return opened;
   }
+}
+
+/** Phase 160 (#11) — small awaitable sleep for inter-call pacing. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

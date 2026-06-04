@@ -43,13 +43,29 @@ enum RefundMethod {
 
 enum RefundInstructionStatus {
   PENDING_APPROVAL // high-value or risk-flagged; awaits manager
+  // Phase 170 (Refund Queue audit #10) — finance asked the upstream admin for
+  // clarification; the instruction is OUT of the "to decide" queue until the
+  // question is resolved (then it returns to PENDING_APPROVAL or is decided).
+  NEEDS_CLARIFICATION
   APPROVED // ready for execution
   PROCESSING // saga in flight
-  SUCCESS // money landed
+  SUCCESS // gateway accepted/processed the refund (money in flight to bank)
+  // Phase 167 (Refund Execution audit #7) — Razorpay distinguishes
+  // `processed` (refund created, debited from our balance) from `settled`
+  // (the bank actually credited the customer). SUCCESS = processed; SETTLED
+  // is set by the refund.settled webhook so finance sees true settlement.
+  SETTLED // bank confirmed the customer was credited
   FAILED // gateway said no AND retries exhausted
   RETRYING // failed once but inside retry budget
   MANUAL_REQUIRED // COD with no UPI/bank → ops to wire manually
-  CANCELLED // refund was retracted before execution
+  CANCELLED // refund was retracted before execution (admin pre-approval cancel)
+  // Phase 171 (Refund Approve/Reject audit #2/#3) — distinguish a FINANCE veto
+  // of the money movement from an admin pre-approval CANCELLED. REJECTED is the
+  // terminal state for a non-dispute (e.g. RETURN) finance rejection;
+  // ROUTED_BACK_TO_DISPUTE is the terminal state for a dispute-sourced rejection
+  // that bounced the case back to the dispute team for re-decision.
+  REJECTED
+  ROUTED_BACK_TO_DISPUTE
 }
 
 model RefundInstruction {
@@ -107,6 +123,51 @@ model RefundInstruction {
   firstApprovedBy String?   @map("first_approved_by")
   firstApprovedAt DateTime? @map("first_approved_at")
 
+  // Phase 170 (Refund Queue audit #6) — approval SLA. Defaulted to
+  // createdAt + REFUND_APPROVAL_SLA_HOURS (48h) at create time so the queue can
+  // surface overdue instructions (?overdue=true) + finance has an aging report.
+  approvalDueBy DateTime? @map("approval_due_by")
+  // Phase 170 (#10) — clarification context (the question finance asked + who).
+  clarificationNote     String?   @map("clarification_note") @db.Text
+  clarificationBy       String?   @map("clarification_by")
+  clarificationAt       DateTime? @map("clarification_at")
+
+  // Phase 171 (Refund Approve/Reject audit) — finance-rejection + dispute
+  // route-back context.
+  //   #4  linkedDisputeId — explicit dispute link (besides the polymorphic
+  //       sourceType='DISPUTE'+sourceId), so dispute→refund-history is a fast
+  //       indexed lookup. Populated on createForDispute + on reject route-back.
+  //   #6  customerVisibleReason — the SAFE, customer-facing message finance
+  //       picks, kept SEPARATE from the internal rejectionReason (which can
+  //       contain "fraud signals" etc). Customer-facing surfaces read only this.
+  //   #1/#3 routedBack* — when/who/why a dispute-sourced refund bounced back.
+  linkedDisputeId       String?   @map("linked_dispute_id")
+  customerVisibleReason String?   @map("customer_visible_reason") @db.Text
+  routedBackAt          DateTime? @map("routed_back_at")
+  routedBackBy          String?   @map("routed_back_by")
+
+  // Phase 172 (Goodwill Credit audit #2/#12) — goodwill is piggy-backed on this
+  // table (ADR-009 unified refund). These make the goodwill flow first-class:
+  //   #2  isGoodwill — explicit marker so finance can filter "goodwill only"
+  //       without joining Dispute; populated from customerRemedy on create.
+  //   customerRemedy — snapshot of the dispute remedy at instruction time, so
+  //       the row is self-describing (refund vs goodwill) for reconciliation.
+  //   #12 customerVisibleMessage — the apologetic, customer-facing goodwill
+  //       note finance can set at decision time (distinct from the rejection
+  //       customerVisibleReason); surfaced in the notification + wallet.
+  isGoodwill            Boolean   @default(false) @map("is_goodwill")
+  customerRemedy        String?   @map("customer_remedy")
+  customerVisibleMessage String?  @map("customer_visible_message") @db.Text
+
+  // Phase 167 (Refund Execution audit #7) — set by the refund.settled webhook.
+  settledAt DateTime? @map("settled_at")
+  // Phase 167 (#8) — gateway-reconciliation poll tracking so the recon cron
+  // backs off (no ~720 redundant gateway GETs over a 24h-stuck window) and a
+  // forensic review sees when/how-often/with-what-error we polled the gateway.
+  lastPolledAt     DateTime? @map("last_polled_at")
+  pollAttemptCount Int       @default(0) @map("poll_attempt_count")
+  lastPollError    String?   @map("last_poll_error") @db.Text
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -119,7 +180,36 @@ model RefundInstruction {
   // Finance reporting: refunds grouped by method (+ status), e.g.
   // "bank-transfer refunds awaiting approval".
   @@index([refundMethod, status])
+  // Phase 170 (#6) — overdue sweep: "PENDING_APPROVAL past approval_due_by".
+  @@index([status, approvalDueBy])
+  // Phase 171 (#4) — dispute → refund-instruction history lookup.
+  @@index([linkedDisputeId])
+  // Phase 172 (#2/#17) — "pending goodwill approvals" queue filter.
+  @@index([isGoodwill, status])
+  // Phase 170 (#16) — status-transition history back-relation.
+  statusHistory RefundInstructionStatusHistory[]
   @@map("refund_instructions")
+}
+
+// Phase 170 (Refund Queue audit #16) — append-only status-transition trail.
+// Pre-170 a multi-step lifecycle (PENDING_APPROVAL → PROCESSING → FAILED →
+// manual-fix) overwrote the row, losing every intermediate timestamp/actor
+// beyond approvedAt/rejectedAt/processedAt. One row per transition.
+model RefundInstructionStatusHistory {
+  id            String                   @id @default(uuid())
+  instructionId String                   @map("instruction_id")
+  fromStatus    RefundInstructionStatus? @map("from_status")
+  toStatus      RefundInstructionStatus  @map("to_status")
+  // Admin id (polymorphic, no FK per ADR) or a SYSTEM sentinel ('SYSTEM',
+  // 'saga', 'recon') for non-human transitions.
+  actorId       String?                  @map("actor_id")
+  notes         String?                  @db.Text
+  occurredAt    DateTime                 @default(now()) @map("occurred_at")
+
+  instruction RefundInstruction @relation(fields: [instructionId], references: [id], onDelete: Cascade)
+
+  @@index([instructionId, occurredAt])
+  @@map("refund_instruction_status_history")
 }
 
 enum RefundSagaStatus {

@@ -54,12 +54,17 @@ interface SeedTarget {
  * heartbeat detector all share the same identifier.
  */
 const TARGETS: SeedTarget[] = [
-  // ── bootstrap/scheduler/cron-jobs.service.ts ─────────────────
+  // ── inventory/.../jobs/low-stock-sweep.cron.ts ───────────────
+  // Phase 174 — the duplicate hourly sweep in cron-jobs.service.ts was
+  // removed (audit #218-#1); the canonical detector is the 15-min
+  // LowStockSweepCron (leader-elected + instrumented, job 'low-stock-sweep').
   {
-    jobName: 'hourly-low-stock-sweep',
-    expectedIntervalSeconds: 60 * 60,
-    description: 'Refresh low-stock alerts on seller mappings.',
+    jobName: 'low-stock-sweep',
+    expectedIntervalSeconds: 15 * 60,
+    description: 'Refresh low-stock alerts on seller mappings (15-min sweep).',
   },
+
+  // ── bootstrap/scheduler/cron-jobs.service.ts ─────────────────
   {
     jobName: 'ticket-sla-breach',
     expectedIntervalSeconds: 60 * 60,

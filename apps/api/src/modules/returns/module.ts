@@ -5,7 +5,7 @@ import {
   SellerAuthGuard,
   UserAuthGuard,
 } from '../../core/guards';
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { CommissionModule } from '../commission/module';
 import { FranchiseModule } from '../franchise/module';
@@ -38,6 +38,9 @@ import { RestockingFeeCalculator } from './application/services/restocking-fee.c
 import { CustomerAbuseCounterService } from './application/services/customer-abuse-counter.service';
 import { StaleReturnProcessorService } from './application/services/stale-return-processor.service';
 import { SellerResponseSweeperCron } from './application/jobs/seller-response-sweeper.cron';
+// Phase 199 (2026-06-02) — Returns audit #9 orphaned-evidence cleanup
+// (bounded skeleton; default-OFF, fail-closed — see the cron's doc).
+import { OrphanedEvidenceCleanupCron } from './application/jobs/orphaned-evidence-cleanup.cron';
 import { ReturnRiskScorerService } from './application/services/return-risk-scorer.service';
 import { ReplacementOrderService } from './application/services/replacement-order.service';
 import { ReturnsPublicFacade } from './application/facades/returns-public.facade';
@@ -89,11 +92,12 @@ import { MoneyModule } from '../../core/money/money.module';
     CustomerAbuseCounterService,
     StaleReturnProcessorService,
     SellerResponseSweeperCron,
+    OrphanedEvidenceCleanupCron,
     ReturnRiskScorerService,
     ReplacementOrderService,
     ReturnsPublicFacade,
     ReturnNotificationHandler,
-    CloudinaryAdapter,
+    MediaStorageAdapter,
     RazorpayRefundWebhookService,
     RefundStatusPollerCron,
     SellerReversalService,

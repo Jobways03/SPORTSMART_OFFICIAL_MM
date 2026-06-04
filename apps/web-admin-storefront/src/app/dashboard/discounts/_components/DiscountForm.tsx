@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
+import { STATUS } from '../page';
 
 interface SelectedProduct { id: string; title: string; imageUrl: string | null; }
 interface SelectedCollection { id: string; name: string; productCount: number; imageUrl: string | null; }
@@ -27,6 +28,38 @@ function randomCode() {
   return Array.from({ length: 10 }, () => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 36)]).join('');
 }
 
+// India Standard Time is a fixed +05:30 with no DST.
+const IST_OFFSET_MINUTES = 330;
+
+// Phase 243 (#tz) — the date/time inputs are labelled "(IST)" but the old code
+// did `new Date(`${date}T${time}`).toISOString()`, which parses the string in
+// the *browser's* local zone. An admin in any non-IST zone (or a CI/Vercel box
+// running UTC) would therefore persist the wrong instant. Interpret the entered
+// wall-clock as Asia/Kolkata explicitly: build the epoch as if the components
+// were UTC, then subtract the +05:30 offset to get the true UTC instant.
+// Returns null when the date is missing.
+function istWallClockToUtcIso(date: string, time: string): string | null {
+  if (!date) return null;
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = (time || '00:00').split(':').map(Number);
+  if (![y, m, d, hh, mm].every((n) => Number.isFinite(n))) return null;
+  const utcMs = Date.UTC(y, m - 1, d, hh, mm) - IST_OFFSET_MINUTES * 60_000;
+  return new Date(utcMs).toISOString();
+}
+
+// Inverse of istWallClockToUtcIso, used when hydrating the form for edit so the
+// inputs show the same IST wall-clock that was entered (independent of the
+// browser zone). Returns { date: 'YYYY-MM-DD', time: 'HH:MM' } in IST.
+function utcIsoToIstWallClock(iso: string): { date: string; time: string } {
+  const istMs = new Date(iso).getTime() + IST_OFFSET_MINUTES * 60_000;
+  const ist = new Date(istMs); // read via UTC getters → IST wall-clock parts
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return {
+    date: `${ist.getUTCFullYear()}-${pad(ist.getUTCMonth() + 1)}-${pad(ist.getUTCDate())}`,
+    time: `${pad(ist.getUTCHours())}:${pad(ist.getUTCMinutes())}`,
+  };
+}
+
 export default function DiscountForm({ discountId, discountType }: { discountId?: string; discountType?: string }) {
   const router = useRouter();
   const isEdit = !!discountId;
@@ -46,8 +79,10 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   const [combProd, setCombProd] = useState(false);
   const [combOrder, setCombOrder] = useState(false);
   const [combShip, setCombShip] = useState(false);
-  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
-  const [startTime, setStartTime] = useState(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }).slice(0, 5));
+  // Prefill "now" as IST wall-clock so the create-form default matches the
+  // "(IST)" labels (and what istWallClockToUtcIso will convert back).
+  const [startDate, setStartDate] = useState(() => utcIsoToIstWallClock(new Date().toISOString()).date);
+  const [startTime, setStartTime] = useState(() => utcIsoToIstWallClock(new Date().toISOString()).time);
   const [hasEnd, setHasEnd] = useState(false);
   const [endDate, setEndDate] = useState('');
   const [endTime, setEndTime] = useState('');
@@ -94,11 +129,21 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   // current behavior (PLATFORM-funded / GROSS commission) for any
   // discount created without explicitly choosing.
   const [fundingType, setFundingType] = useState<
-    'PLATFORM' | 'SELLER' | 'BRAND' | 'SHARED'
+    'PLATFORM' | 'SELLER' | 'BRAND' | 'FRANCHISE' | 'SHARED'
   >('PLATFORM');
   const [platformFundingPercent, setPlatformFundingPercent] = useState('100');
   const [sellerFundingPercent, setSellerFundingPercent] = useState('0');
   const [brandFundingPercent, setBrandFundingPercent] = useState('0');
+  // FRANCHISE/BRAND funding — the franchise share in a SHARED split, which
+  // franchise bears a FRANCHISE-funded discount (blank = the fulfilling
+  // franchise pays), and which brand funds a BRAND/SHARED-brand discount.
+  const [franchiseFundingPercent, setFranchiseFundingPercent] = useState('0');
+  const [franchiseId, setFranchiseId] = useState('');
+  const [brandId, setBrandId] = useState('');
+  // Selector option lists. Best-effort: if the endpoint is unavailable the
+  // dropdown is empty and the admin can still type the id manually.
+  const [franchises, setFranchises] = useState<Array<{ id: string; franchiseCode?: string; businessName?: string }>>([]);
+  const [brands, setBrands] = useState<Array<{ id: string; name?: string }>>([]);
   const [commissionBasis, setCommissionBasis] = useState<
     'GROSS' | 'NET_AFTER_DISCOUNT' | 'SELLER_FUNDED_NET'
   >('GROSS');
@@ -112,8 +157,16 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
   const [affiliates, setAffiliates] = useState<Array<{ id: string; firstName?: string; lastName?: string; email?: string }>>([]);
 
   const [saving, setSaving] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [loading, setLoading] = useState(isEdit);
   const [status, setStatus] = useState('ACTIVE');
+  // #8 / OCC — the version we loaded for an existing discount. Echoed back on
+  // PUT as `expectedVersion` so the server can reject a stale two-admin write.
+  const [version, setVersion] = useState<number | null>(null);
+  // #2 — top-of-form error banner. handleSave must surface 400/409/network
+  // failures here instead of silently swallowing them (the old `catch {}`
+  // made a rejected save look successful).
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Load existing
   useEffect(() => {
@@ -138,6 +191,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         setCombOrder(d.combineOrder);
         setCombShip(d.combineShipping);
         setStatus(d.status);
+        if (typeof d.version === 'number') setVersion(d.version);
         // Phase B (P0.5) — funding fields. Default to PLATFORM if
         // unset (legacy rows that haven't been edited since the
         // schema migration land here).
@@ -148,6 +202,10 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
           setSellerFundingPercent(String(Number(d.sellerFundingPercent)));
         if (d.brandFundingPercent !== undefined && d.brandFundingPercent !== null)
           setBrandFundingPercent(String(Number(d.brandFundingPercent)));
+        if (d.franchiseFundingPercent !== undefined && d.franchiseFundingPercent !== null)
+          setFranchiseFundingPercent(String(Number(d.franchiseFundingPercent)));
+        if (d.franchiseId) setFranchiseId(d.franchiseId);
+        if (d.brandId) setBrandId(d.brandId);
         if (d.commissionBasis) setCommissionBasis(d.commissionBasis);
         if (d.fundingNotes) setFundingNotes(d.fundingNotes);
         if (d.affiliateId) setAffiliateId(d.affiliateId);
@@ -157,14 +215,18 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         ) {
           setAffiliateCommissionPercent(String(Number(d.affiliateCommissionPercent)));
         }
-        const sd = new Date(d.startsAt);
-        setStartDate(sd.toISOString().slice(0, 10));
-        setStartTime(sd.toTimeString().slice(0, 5));
+        // Display the stored UTC instants as IST wall-clock so the "(IST)"
+        // inputs round-trip correctly regardless of the browser's zone.
+        if (d.startsAt) {
+          const s = utcIsoToIstWallClock(d.startsAt);
+          setStartDate(s.date);
+          setStartTime(s.time);
+        }
         if (d.endsAt) {
           setHasEnd(true);
-          const ed = new Date(d.endsAt);
-          setEndDate(ed.toISOString().slice(0, 10));
-          setEndTime(ed.toTimeString().slice(0, 5));
+          const e = utcIsoToIstWallClock(d.endsAt);
+          setEndDate(e.date);
+          setEndTime(e.time);
         }
         if (d.buyType) setBuyType(d.buyType);
         if (d.buyValue) setBuyValue(String(Number(d.buyValue)));
@@ -231,6 +293,35 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
               lastName: a.lastName,
               email: a.email,
             })),
+          );
+        }
+      })
+      .catch((err) => console.warn(err));
+  }, []);
+
+  // FRANCHISE/BRAND funding — load the franchise + brand option lists once for
+  // the selector dropdowns (GET /admin/franchises, GET /admin/brands). Same
+  // best-effort posture as the affiliate loader: a failed/missing endpoint
+  // leaves the list empty and the admin can still paste the id manually.
+  useEffect(() => {
+    apiClient<{ franchises: any[] }>('/admin/franchises?limit=200')
+      .then((r) => {
+        if (Array.isArray(r.data?.franchises)) {
+          setFranchises(
+            r.data.franchises.map((f: any) => ({
+              id: f.id,
+              franchiseCode: f.franchiseCode,
+              businessName: f.businessName,
+            })),
+          );
+        }
+      })
+      .catch((err) => console.warn(err));
+    apiClient<{ brands: any[] }>('/admin/brands?limit=200')
+      .then((r) => {
+        if (Array.isArray(r.data?.brands)) {
+          setBrands(
+            r.data.brands.map((b: any) => ({ id: b.id, name: b.name })),
           );
         }
       })
@@ -317,11 +408,60 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
     setBrowseMode(null);
   };
 
-  const handleSave = async () => {
+  // asDraft only applies on CREATE — the update DTO forbids `status`, so a
+  // saved-as-draft existing discount would 400. The primary Save button passes
+  // asDraft=false and lets the server derive status from the date window.
+  const handleSave = async (asDraft = false) => {
+    setFormError(null);
+
+    // ── Client-side validation (#3) — block the POST and surface the banner
+    // before we hit the now-strict server DTO. ──────────────────────────────
+    const isFreeShip = type === 'FREE_SHIPPING';
+    const isBxgy = type === 'BUY_X_GET_Y';
+    const numValue = parseFloat(value);
+
+    if (!isFreeShip && !isBxgy) {
+      if (!(numValue > 0)) {
+        setFormError('Discount value must be greater than 0.');
+        return;
+      }
+      if (valueType === 'PERCENTAGE' && numValue > 100) {
+        setFormError('Percentage discount cannot exceed 100%.');
+        return;
+      }
+    }
+
+    if (isBxgy) {
+      const numBuy = parseFloat(buyValue);
+      const numGetQty = parseInt(getQuantity, 10);
+      if (!(numBuy > 0)) {
+        setFormError('Buy quantity/amount must be greater than 0.');
+        return;
+      }
+      if (!(numGetQty > 0)) {
+        setFormError('Get quantity must be greater than 0.');
+        return;
+      }
+      if (numGetQty > 50) {
+        setFormError('Get quantity cannot exceed 50.');
+        return;
+      }
+      if (selectedBuyProducts.length === 0) {
+        setFormError('Select at least one product customers must buy.');
+        return;
+      }
+      if (selectedGetProducts.length === 0) {
+        setFormError('Select at least one product customers get.');
+        return;
+      }
+    }
+
     setSaving(true);
+    if (asDraft) setSavingDraft(true);
     try {
-      const startsAt = new Date(`${startDate}T${startTime || '00:00'}`).toISOString();
-      const endsAt = hasEnd && endDate ? new Date(`${endDate}T${endTime || '23:59'}`).toISOString() : null;
+      // Phase 243 (#tz) — entered wall-clock is IST; convert to UTC explicitly.
+      const startsAt = istWallClockToUtcIso(startDate, startTime || '00:00');
+      const endsAt = hasEnd && endDate ? istWallClockToUtcIso(endDate, endTime || '23:59') : null;
 
       // Phase B (P0.5) — funding fields. UI validates that the
       // selected fundingType lines up with the percent inputs
@@ -369,11 +509,22 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
       const platformPct = parseFloat(platformFundingPercent) || 0;
       const sellerPct = parseFloat(sellerFundingPercent) || 0;
       const brandPct = parseFloat(brandFundingPercent) || 0;
-      const fundingSum = platformPct + sellerPct + brandPct;
+      const franchisePct = parseFloat(franchiseFundingPercent) || 0;
+      // SHARED must split across all four payers (platform/seller/brand/
+      // franchise) summing to 100%. The server re-validates.
+      const fundingSum = platformPct + sellerPct + brandPct + franchisePct;
       if (fundingType === 'SHARED' && Math.abs(fundingSum - 100) > 0.01) {
         throw new Error(
           `Funding percentages must sum to 100% for SHARED funding (currently ${fundingSum}%)`,
         );
+      }
+
+      // brandId is REQUIRED whenever a brand bears any of the cost — i.e.
+      // fundingType=BRAND or a SHARED split with a brand share > 0.
+      const brandRequired =
+        fundingType === 'BRAND' || (fundingType === 'SHARED' && brandPct > 0);
+      if (brandRequired && !brandId.trim()) {
+        throw new Error('Select the brand that funds this discount');
       }
 
       const payload: any = {
@@ -388,8 +539,13 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         combineOrder: combOrder,
         combineShipping: combShip,
         startsAt, endsAt,
-        eligibility,
-        customerIds: eligibility === 'SPECIFIC_CUSTOMERS' ? selectedCustomers.map((c) => c.id) : [],
+        // Phase 243 (#1) — `customerIds` (silently dropped server-side, now
+        // 400s under forbidNonWhitelisted) and the legacy scalar `eligibility`
+        // are intentionally NOT sent. The "Specific customers" picker that
+        // drove them is hidden, so this form only ever means ALL_CUSTOMERS;
+        // omitting `eligibility` also avoids clobbering an API-set value on
+        // update. Per-customer targeting will be rebuilt as an
+        // eligibilityRules CUSTOMER_SEGMENT_IN rule.
         productIds: appliesTo === 'SPECIFIC_PRODUCTS' ? selectedProducts.map((p) => p.id) : [],
         collectionIds: appliesTo === 'SPECIFIC_COLLECTIONS' ? selectedCollections.map((c) => c.id) : [],
         // Phase B (P0.5) funding & settlement
@@ -397,6 +553,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
         platformFundingPercent: platformPct,
         sellerFundingPercent: sellerPct,
         brandFundingPercent: brandPct,
+        franchiseFundingPercent: franchisePct,
         commissionBasis,
         fundingNotes: fundingNotes.trim() || null,
         // Phase E (P1.3) — always send the array (incl. []) so update
@@ -408,6 +565,21 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
           ? parseFloat(affiliateCommissionPercent)
           : null,
       };
+
+      // FRANCHISE/BRAND funding — only attach the FK fields when a franchise
+      // or brand is actually involved, so a platform/seller-funded discount
+      // never carries a stray relation. On update, send null to detach when
+      // the field is relevant but left blank (franchiseId blank = "the
+      // fulfilling franchise pays"). Irrelevant fields are omitted entirely.
+      const franchiseRelevant =
+        fundingType === 'FRANCHISE' ||
+        (fundingType === 'SHARED' && franchisePct > 0);
+      if (franchiseRelevant) {
+        payload.franchiseId = franchiseId.trim() || null;
+      }
+      if (brandRequired) {
+        payload.brandId = brandId.trim();
+      }
 
       if (method === 'CODE') { payload.code = code; payload.title = null; }
       else { payload.title = title; payload.code = null; }
@@ -425,13 +597,35 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
       }
 
       if (isEdit) {
+        // #8 / OCC — echo the loaded version so the server can reject a stale
+        // two-admin write. `status` is forbidden on update (FSM endpoint only).
+        if (version !== null) payload.expectedVersion = version;
         await apiClient(`/admin/discounts/${discountId}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {
+        // #18 — "Save as draft" is the only create that pins a status; the
+        // primary Save omits it so the server derives it from the date window.
+        // DRAFT is the only status the create DTO accepts.
+        if (asDraft) payload.status = 'DRAFT';
         await apiClient('/admin/discounts', { method: 'POST', body: JSON.stringify(payload) });
       }
       router.push('/dashboard/discounts');
-    } catch { /* */ }
-    finally { setSaving(false); }
+    } catch (e) {
+      // #2 — never swallow the failure. Surface 400 (validation), 409 (stale
+      // OCC), or network errors in the banner so the admin knows the save
+      // didn't land instead of seeing a phantom success.
+      if (e instanceof ApiError) {
+        if (e.status === 409) {
+          setFormError('Another admin updated this discount. Reload the page and reapply your changes.');
+        } else {
+          setFormError(e.message || `Save failed (HTTP ${e.status}).`);
+        }
+      } else {
+        setFormError(e instanceof Error ? e.message : 'Save failed. Please try again.');
+      }
+    } finally {
+      setSaving(false);
+      setSavingDraft(false);
+    }
   };
 
   if (loading) return <div style={{ textAlign: 'center', padding: 80, color: '#9ca3af' }}>Loading...</div>;
@@ -502,7 +696,16 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
                   <option value="FIXED_AMOUNT">Fixed amount</option>
                 </select>
                 <div style={{ position: 'relative', flex: 1 }}>
-                  <input type="number" value={value} onChange={(e) => setValue(e.target.value)} style={{ ...input, paddingRight: 30 }} placeholder="0" />
+                  <input
+                    type="number"
+                    min={0}
+                    max={valueType === 'PERCENTAGE' ? 100 : undefined}
+                    step={0.01}
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    style={{ ...input, paddingRight: 30 }}
+                    placeholder="0"
+                  />
                   <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 14 }}>
                     {valueType === 'PERCENTAGE' ? '%' : '\u20B9'}
                   </span>
@@ -575,7 +778,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
                 <RadioOption name="buyType" value="MIN_AMOUNT" checked={buyType === 'MIN_AMOUNT'} onChange={() => setBuyType('MIN_AMOUNT')} label="Minimum purchase amount" />
               </div>
               <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-                <div><label style={label}>Quantity</label><input type="number" value={buyValue} onChange={(e) => setBuyValue(e.target.value)} style={{ ...input, width: 100 }} /></div>
+                <div><label style={label}>Quantity</label><input type="number" min={1} value={buyValue} onChange={(e) => setBuyValue(e.target.value)} style={{ ...input, width: 100 }} /></div>
                 <div style={{ flex: 1 }}>
                   <label style={label}>Any items from</label>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -604,7 +807,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
               <h3 style={{ ...cardTitle, marginTop: 20 }}>Customer gets</h3>
               <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 12px' }}>Customers must add the quantity of items specified below to their cart.</p>
               <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
-                <div><label style={label}>Quantity</label><input type="number" value={getQuantity} onChange={(e) => setGetQuantity(e.target.value)} style={{ ...input, width: 100 }} /></div>
+                <div><label style={label}>Quantity</label><input type="number" min={1} max={50} value={getQuantity} onChange={(e) => setGetQuantity(e.target.value)} style={{ ...input, width: 100 }} /></div>
                 <div style={{ flex: 1 }}>
                   <label style={label}>Any items from</label>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -650,6 +853,8 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             <h3 style={cardTitle}>Eligibility</h3>
             <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>Available on all sales channels</div>
             <RadioOption name="elig" value="ALL_CUSTOMERS" checked={eligibility === 'ALL_CUSTOMERS'} onChange={() => { setEligibility('ALL_CUSTOMERS'); setSelectedCustomers([]); }} label="All customers" />
+            {/* Phase 243: hidden — not persisted server-side; rebuild as eligibilityRules CUSTOMER_SEGMENT_IN */}
+            {/*
             <RadioOption name="elig" value="SPECIFIC_CUSTOMERS" checked={eligibility === 'SPECIFIC_CUSTOMERS'} onChange={() => setEligibility('SPECIFIC_CUSTOMERS')} label="Specific customers" />
 
             {eligibility === 'SPECIFIC_CUSTOMERS' && (
@@ -675,6 +880,7 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
                 ))}
               </div>
             )}
+            */}
           </section>
 
           {/* Eligibility rules (Phase E P1.3) — fraud / velocity / payment / customer */}
@@ -824,30 +1030,45 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             <select
               value={fundingType}
               onChange={(e) => {
-                const v = e.target.value as 'PLATFORM' | 'SELLER' | 'BRAND' | 'SHARED';
+                const v = e.target.value as
+                  | 'PLATFORM'
+                  | 'SELLER'
+                  | 'BRAND'
+                  | 'FRANCHISE'
+                  | 'SHARED';
                 setFundingType(v);
                 // Auto-fill the percent fields to match the chosen type.
                 if (v === 'PLATFORM') {
                   setPlatformFundingPercent('100');
                   setSellerFundingPercent('0');
                   setBrandFundingPercent('0');
+                  setFranchiseFundingPercent('0');
                   setCommissionBasis('GROSS');
                 } else if (v === 'SELLER') {
                   setPlatformFundingPercent('0');
                   setSellerFundingPercent('100');
                   setBrandFundingPercent('0');
+                  setFranchiseFundingPercent('0');
                   setCommissionBasis('NET_AFTER_DISCOUNT');
                 } else if (v === 'BRAND') {
                   setPlatformFundingPercent('0');
                   setSellerFundingPercent('0');
                   setBrandFundingPercent('100');
+                  setFranchiseFundingPercent('0');
+                  setCommissionBasis('GROSS');
+                } else if (v === 'FRANCHISE') {
+                  setPlatformFundingPercent('0');
+                  setSellerFundingPercent('0');
+                  setBrandFundingPercent('0');
+                  setFranchiseFundingPercent('100');
                   setCommissionBasis('GROSS');
                 } else {
                   // SHARED — leave as user-entered; default to 50/50 if empty
                   if (
                     parseFloat(platformFundingPercent) +
                       parseFloat(sellerFundingPercent) +
-                      parseFloat(brandFundingPercent) ===
+                      parseFloat(brandFundingPercent) +
+                      parseFloat(franchiseFundingPercent) ===
                     0
                   ) {
                     setPlatformFundingPercent('50');
@@ -861,11 +1082,12 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
               <option value="PLATFORM">Platform funded (marketing expense)</option>
               <option value="SELLER">Seller funded</option>
               <option value="BRAND">Brand funded</option>
+              <option value="FRANCHISE">Franchise funded</option>
               <option value="SHARED">Shared (split percentages)</option>
             </select>
 
             {fundingType === 'SHARED' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 12 }}>
                 <div>
                   <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Platform %</label>
                   <input
@@ -898,6 +1120,90 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
                     onChange={(e) => setBrandFundingPercent(e.target.value)}
                     style={input}
                   />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Franchise %</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={franchiseFundingPercent}
+                    onChange={(e) => setFranchiseFundingPercent(e.target.value)}
+                    style={input}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Franchise picker — shown for FRANCHISE funding or a SHARED split
+                with a franchise share. franchiseId is optional (blank = the
+                fulfilling franchise pays). */}
+            {(fundingType === 'FRANCHISE' ||
+              (fundingType === 'SHARED' && (parseFloat(franchiseFundingPercent) || 0) > 0)) && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
+                  Funding franchise
+                </label>
+                {franchises.length > 0 ? (
+                  <select
+                    value={franchiseId}
+                    onChange={(e) => setFranchiseId(e.target.value)}
+                    style={input}
+                  >
+                    <option value="">The fulfilling franchise pays</option>
+                    {franchises.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {[f.franchiseCode, f.businessName].filter(Boolean).join(' — ') || f.id}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={franchiseId}
+                    onChange={(e) => setFranchiseId(e.target.value)}
+                    placeholder="Franchise ID (optional)"
+                    style={input}
+                  />
+                )}
+                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                  Leave blank = the fulfilling franchise pays.
+                </div>
+              </div>
+            )}
+
+            {/* Brand picker — shown (and REQUIRED) for BRAND funding or a SHARED
+                split with a brand share. */}
+            {(fundingType === 'BRAND' ||
+              (fundingType === 'SHARED' && (parseFloat(brandFundingPercent) || 0) > 0)) && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
+                  Funding brand <span style={{ color: '#dc2626' }}>*</span>
+                </label>
+                {brands.length > 0 ? (
+                  <select
+                    value={brandId}
+                    onChange={(e) => setBrandId(e.target.value)}
+                    style={input}
+                  >
+                    <option value="">Select a brand…</option>
+                    {brands.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name || b.id}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={brandId}
+                    onChange={(e) => setBrandId(e.target.value)}
+                    placeholder="Brand ID (required)"
+                    style={input}
+                  />
+                )}
+                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                  Required — the brand whose co-funding budget absorbs this discount.
                 </div>
               </div>
             )}
@@ -936,6 +1242,9 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
               </div>
               <div>
                 <strong>Seller-funded:</strong> seller settlement reduced by the discount amount.
+              </div>
+              <div>
+                <strong>Franchise-funded:</strong> the franchise bears the discount cost; deducted from its settlement (blank franchise = the fulfilling franchise pays).
               </div>
             </div>
           </section>
@@ -1010,9 +1319,21 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
           <section style={card}>
             <div style={{ fontWeight: 700, fontSize: 15, color: '#111' }}>{displayName}</div>
             <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>{method === 'CODE' ? 'Code' : 'Automatic'}</div>
-            {isEdit && (
-              <span style={{ fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#dcfce7', color: '#15803d' }}>{status}</span>
-            )}
+            {isEdit && (() => {
+              // Phase 243 — use the shared status→color map (was hardcoded
+              // green, so a PAUSED/ARCHIVED/EXPIRED discount looked active).
+              const s = STATUS[status] || STATUS.DRAFT;
+              return (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 20,
+                  background: s.bg, color: s.fg,
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.dot }} />
+                  {status}
+                </span>
+              );
+            })()}
             <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginTop: 12, marginBottom: 6 }}>Type</div>
             <div style={{ fontSize: 13, color: '#374151' }}>{TYPE_LABELS[type]}</div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>{TYPE_ICONS[type]}</div>
@@ -1022,18 +1343,44 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             </ul>
           </section>
 
-          {/* Sales channel */}
+          {/* Phase 243: hidden — not persisted server-side; rebuild as eligibilityRules CUSTOMER_SEGMENT_IN */}
+          {/*
           <section style={card}>
             <h3 style={{ ...cardTitle, marginBottom: 8 }}>Sales channel access</h3>
             <CheckboxOption checked={false} onChange={() => {}} label="Allow discount to be featured on selected channels" disabled />
           </section>
+          */}
 
-          <button onClick={handleSave} disabled={saving} style={{
+          {/* #2 — surface save failures (400 validation / 409 stale OCC / network)
+              instead of swallowing them. */}
+          {formError && (
+            <div style={{
+              padding: '10px 12px', marginBottom: 10, fontSize: 13, lineHeight: 1.4,
+              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, color: '#991b1b',
+            }}>
+              {formError}
+            </div>
+          )}
+
+          <button onClick={() => handleSave(false)} disabled={saving} style={{
             width: '100%', padding: '11px 0', fontSize: 14, fontWeight: 600,
-            background: '#303030', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', marginTop: 4,
+            background: '#303030', color: '#fff', border: 'none', borderRadius: 8,
+            cursor: saving ? 'default' : 'pointer', marginTop: 4, opacity: saving ? 0.7 : 1,
           }}>
-            {saving ? 'Saving...' : 'Save'}
+            {saving && !savingDraft ? 'Saving...' : 'Save'}
           </button>
+
+          {/* #18 — "Save as draft" creates the discount in DRAFT (create only;
+              the update DTO forbids `status`). */}
+          {!isEdit && (
+            <button onClick={() => handleSave(true)} disabled={saving} style={{
+              width: '100%', padding: '11px 0', fontSize: 14, fontWeight: 600,
+              background: '#fff', color: '#303030', border: '1px solid #c9cccf', borderRadius: 8,
+              cursor: saving ? 'default' : 'pointer', marginTop: 8, opacity: saving ? 0.7 : 1,
+            }}>
+              {savingDraft ? 'Saving draft...' : 'Save as draft'}
+            </button>
+          )}
         </div>
       </div>
 

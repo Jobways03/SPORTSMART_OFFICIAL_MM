@@ -114,9 +114,11 @@ function buildService(opts: { mappings?: Mapping[]; alerts?: AlertRow[] } = {}) 
   const eventBus: any = {
     publish: jest.fn().mockResolvedValue(undefined),
   };
+  // Cluster C (#218-#12) — best-effort sweep audit summary row.
+  const audit: any = { writeAuditLog: jest.fn().mockResolvedValue(undefined) };
 
-  const service = new LowStockAlertService(prisma, env, eventBus);
-  return { service, prisma, alerts, eventBus };
+  const service = new LowStockAlertService(prisma, env, eventBus, audit);
+  return { service, prisma, alerts, eventBus, audit };
 }
 
 const MAPPING = (overrides: Partial<Mapping> = {}): Mapping => ({
@@ -399,8 +401,9 @@ describe('LowStockAlertService.triggerForFranchiseStock (Phase 55 polish)', () =
     } as any;
     const env: any = { getNumber: jest.fn((_k: string, def: number) => def) };
     const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
+    const audit: any = { writeAuditLog: jest.fn().mockResolvedValue(undefined) };
     return {
-      service: new LowStockAlertService(prisma, env, eventBus),
+      service: new LowStockAlertService(prisma, env, eventBus, audit),
       prisma,
       eventBus,
       created,

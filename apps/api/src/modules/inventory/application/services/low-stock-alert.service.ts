@@ -9,6 +9,7 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { INVENTORY_EVENTS } from '../../domain/events/inventory.events';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 /**
  * Phase 54 (2026-05-21) — low-stock alert service hardened.
@@ -54,6 +55,9 @@ export class LowStockAlertService {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly eventBus: EventBusService,
+    // Cluster C (#218-#12) — best-effort summary row per sweep run.
+    // @Global AuditModule, so no module import is needed.
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   /**
@@ -223,6 +227,28 @@ export class LowStockAlertService {
     this.logger.log(
       `Low-stock sweep: scanned=${scanned} created=${created} resolved=${resolved}`,
     );
+
+    // Cluster C (#218-#12) — one best-effort audit summary row per sweep
+    // run when something actually changed. Written after the scan loop so
+    // a logging blip never aborts the sweep; `.catch` keeps it non-fatal.
+    if (created > 0 || resolved > 0) {
+      await this.audit
+        .writeAuditLog({
+          actorId: 'system',
+          actorRole: 'SYSTEM',
+          action: 'LOW_STOCK_SWEEP',
+          module: 'inventory',
+          resource: 'low_stock_alert',
+          resourceId: 'sweep',
+          newValue: { scanned, created, resolved },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to write low-stock sweep audit row: ${(err as Error)?.message ?? err}`,
+          ),
+        );
+    }
+
     return { created, resolved, scanned };
   }
 

@@ -124,13 +124,53 @@ export class PrismaOrderRepository implements OrderRepository {
     });
   }
 
+  /**
+   * Phase 197 (My-Orders audit #7) — map a customer status bucket to a
+   * Prisma WHERE fragment. The buckets mirror the storefront's derived
+   * labels so the server-side filter and the client badge agree:
+   *   • cancelled — orderStatus CANCELLED/REJECTED OR a terminal-cancel
+   *     paymentStatus (CANCELLED/EXPIRED/VOIDED).
+   *   • delivered — orderStatus DELIVERED.
+   *   • active    — neither of the above (NOT cancelled, NOT delivered).
+   *   • all (or undefined) — no extra predicate.
+   * Returns {} for `all` so callers can spread it unconditionally.
+   */
+  private customerBucketWhere(
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+  ): any {
+    const cancelledClause = {
+      OR: [
+        { orderStatus: { in: ['CANCELLED', 'REJECTED'] as any } },
+        { paymentStatus: { in: ['CANCELLED', 'EXPIRED', 'VOIDED'] as any } },
+      ],
+    };
+    switch (bucket) {
+      case 'cancelled':
+        return cancelledClause;
+      case 'delivered':
+        return {
+          orderStatus: 'DELIVERED' as any,
+          NOT: cancelledClause,
+        };
+      case 'active':
+        return {
+          NOT: {
+            OR: [{ orderStatus: 'DELIVERED' as any }, cancelledClause],
+          },
+        };
+      default:
+        return {};
+    }
+  }
+
   async findCustomerOrders(
     customerId: string,
     skip: number,
     take: number,
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
   ): Promise<any[]> {
     return this.prisma.masterOrder.findMany({
-      where: { customerId },
+      where: { customerId, ...this.customerBucketWhere(bucket) },
       include: {
         subOrders: {
           include: { items: true },
@@ -142,8 +182,34 @@ export class PrismaOrderRepository implements OrderRepository {
     });
   }
 
-  async countCustomerOrders(customerId: string): Promise<number> {
-    return this.prisma.masterOrder.count({ where: { customerId } });
+  async countCustomerOrders(
+    customerId: string,
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+  ): Promise<number> {
+    return this.prisma.masterOrder.count({
+      where: { customerId, ...this.customerBucketWhere(bucket) },
+    });
+  }
+
+  /**
+   * Phase 197 (My-Orders audit #7) — per-bucket counts in one round
+   * trip so the listing response can render accurate tab badges
+   * regardless of which page the customer is on. Returns the count for
+   * every bucket plus the grand total.
+   */
+  async countCustomerOrdersByBucket(customerId: string): Promise<{
+    all: number;
+    active: number;
+    delivered: number;
+    cancelled: number;
+  }> {
+    const [all, active, delivered, cancelled] = await Promise.all([
+      this.countCustomerOrders(customerId, 'all'),
+      this.countCustomerOrders(customerId, 'active'),
+      this.countCustomerOrders(customerId, 'delivered'),
+      this.countCustomerOrders(customerId, 'cancelled'),
+    ]);
+    return { all, active, delivered, cancelled };
   }
 
   async updateMasterOrder(id: string, data: any): Promise<any> {

@@ -257,6 +257,16 @@ export class Gstr8ReportService {
     totalSgstTcsInPaise: bigint;
     totalIgstTcsInPaise: bigint;
     totalTcsInPaise: bigint;
+    // Phase 160 (§52 lifecycle audit #13) — carry-forward total surfaced.
+    totalAdjustmentCarriedForwardInPaise: bigint;
+    // Phase 160 (§52 lifecycle audit B1) — per-status counters for the
+    // certificate workflow (paid-awaiting-cert vs issued).
+    statusCounts: Record<string, number>;
+    // Phase 160 (§52 lifecycle audit #9 / #10) — period-level warnings.
+    warnings: {
+      rateVariance: { distinctRatesBps: number[] } | null;
+      carryForward: { rowCount: number; totalInPaise: bigint } | null;
+    };
     rows: GstTcsSettlementLedgerWithSeller[];
   }> {
     const page = args.page && args.page > 0 ? args.page : 1;
@@ -264,11 +274,15 @@ export class Gstr8ReportService {
       args.pageSize && args.pageSize > 0
         ? Math.min(500, args.pageSize)
         : 50;
-    const paged = await this.tcs.listForPeriodPaginated({
-      filingPeriod: args.filingPeriod,
-      page,
-      pageSize,
-    });
+    const [paged, statusCounts, warnings] = await Promise.all([
+      this.tcs.listForPeriodPaginated({
+        filingPeriod: args.filingPeriod,
+        page,
+        pageSize,
+      }),
+      this.tcs.getPeriodStatusCounts(args.filingPeriod),
+      this.tcs.getPeriodComputeWarnings(args.filingPeriod),
+    ]);
     return {
       filingPeriod: args.filingPeriod,
       sellerCount: paged.totalRows,
@@ -282,6 +296,10 @@ export class Gstr8ReportService {
       totalSgstTcsInPaise: paged.totals.sgstTcsInPaise,
       totalIgstTcsInPaise: paged.totals.igstTcsInPaise,
       totalTcsInPaise: paged.totals.totalTcsInPaise,
+      totalAdjustmentCarriedForwardInPaise:
+        paged.totals.adjustmentCarriedForwardInPaise,
+      statusCounts,
+      warnings,
       rows: paged.rows,
     };
   }

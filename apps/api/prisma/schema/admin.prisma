@@ -213,6 +213,15 @@ model AdminActionAuditLog {
   adminId    String   @map("admin_id")
   sellerId   String?  @map("seller_id")
   actionType String   @map("action_type")
+  // Phase 208 (#4) — role of the acting admin AT WRITE TIME. Pre-Phase-208
+  // the Admin Activity timeline filled BUSINESS-row roles from the request
+  // FILTER ("show me SUPER_ADMIN activity" → every row labelled SUPER_ADMIN),
+  // which lies when the admin's role changed after the action or when the
+  // view is unfiltered. Snapshotting the role on the row makes the timeline
+  // truthful and self-contained (no join to the live Admin row, which would
+  // itself show the CURRENT — possibly different — role). Nullable for
+  // back-compat with pre-Phase-208 rows; new writes populate it.
+  actorRole  String?  @map("actor_role")
   oldValue   Json?    @map("old_value")
   newValue   Json?    @map("new_value")
   reason     String?

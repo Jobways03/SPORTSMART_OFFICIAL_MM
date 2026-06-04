@@ -31,13 +31,17 @@ import { FranchiseAuthController } from '../../src/modules/franchise/presentatio
 const limitKey = 'THROTTLER:LIMITdefault';
 const ttlKey = 'THROTTLER:TTLdefault';
 
-const assertThrottled = (ctor: any, method: string) => {
+// Most sensitive auth methods cap at 5/min; a few are deliberately TIGHTER
+// (e.g. franchise `register` at 3 — anti-mass-signup). `expectedLimit` lets a
+// caller pin the intended tighter value; the contract proven is "this method
+// carries a tight @Throttle", not a single magic number.
+const assertThrottled = (ctor: any, method: string, expectedLimit = 5) => {
   const target = ctor.prototype[method];
   const limit = Reflect.getMetadata(limitKey, target);
   const ttl = Reflect.getMetadata(ttlKey, target);
   expect({ method, limit, ttl }).toEqual({
     method,
-    limit: 5,
+    limit: expectedLimit,
     ttl: 60_000,
   });
 };
@@ -74,7 +78,7 @@ describe('Auth endpoints — @Throttle decorator', () => {
   });
 
   it('franchise register + login + password-reset flow is throttled', () => {
-    assertThrottled(FranchiseAuthController, 'register');
+    assertThrottled(FranchiseAuthController, 'register', 3); // tighter: anti-mass-signup
     assertThrottled(FranchiseAuthController, 'login');
     assertThrottled(FranchiseAuthController, 'forgotPassword');
     assertThrottled(FranchiseAuthController, 'verifyResetOtp');

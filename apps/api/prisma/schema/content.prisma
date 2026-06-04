@@ -101,6 +101,14 @@ model ContentPageAuditLog {
 //
 // When a row is absent (or row.active=false), the storefront's MediaTile
 // fallback renders the curated Unsplash placeholder for that slot.
+// Phase 248 (storefront-slots audit #3) — which form factor a content
+// block renders on. ALL is the back-compat default.
+enum StorefrontDeviceVisibility {
+  ALL
+  DESKTOP_ONLY
+  MOBILE_ONLY
+}
+
 model StorefrontContentBlock {
   id            String    @id @default(uuid())
   slot          String    @unique
@@ -125,6 +133,17 @@ model StorefrontContentBlock {
   price         String?
   priceCaption  String?   @map("price_caption")
   active        Boolean   @default(true)
+  // Phase 248 (storefront-slots audit #3) — device-targeted media. A
+  // hero designed for desktop 16:6 crops badly on mobile portrait;
+  // imageUrlMobile + deviceVisibility let marketing ship a mobile
+  // variant or restrict a block to one form factor. ALL = render
+  // everywhere (back-compat default).
+  imageUrlMobile   String?                   @map("image_url_mobile")
+  deviceVisibility StorefrontDeviceVisibility @default(ALL) @map("device_visibility")
+  // Phase 248 (storefront-slots audit #21) — optimistic-concurrency
+  // token. Bumped on every upsert; the admin drawer rejects a stale
+  // two-editor collision instead of silently last-write-wins.
+  version          Int                       @default(1)
   // Phase 47 (2026-05-21) — campaign schedule window. NULL on either
   // bound means open-ended. Public listActiveAsMap filters out rows
   // outside the window so marketing can pre-load Summer Sale on
@@ -221,9 +240,10 @@ model BlogPostAuditLog {
 // can add a 9th sport tile or a 4th hero slide without engineering work.
 //
 // The seed migration inserts the original 38 slots with isSystem=true.
-// Admins can still delete system slots (no protection enforced) — the
-// flag is informational so the UI can warn ("This is a default slot —
-// removing it will fall back to the curated placeholder").
+// Phase 248 (storefront-slots audit #14) — system slots ARE protected:
+// StorefrontSlotsService.remove() throws ForbiddenAppException when
+// def.isSystem is true (prior comment said "no protection enforced" —
+// that was stale). The flag also drives the UI warning.
 //
 // When a slot definition is removed, any StorefrontContentBlock with the
 // same slot key becomes orphaned. The service deletes the block in the

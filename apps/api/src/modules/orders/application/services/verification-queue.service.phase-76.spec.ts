@@ -46,7 +46,14 @@ function makeSvc(opts: {
     $queryRaw: queryRaw,
     $queryRawUnsafe: queryRawUnsafe,
     $executeRaw: executeRaw,
-    masterOrder: { count: jest.fn().mockResolvedValue(0) },
+    masterOrder: {
+      count: jest.fn().mockResolvedValue(0),
+      // Phase 174 — bulk-approve re-checks each claimed order's band right
+      // before verify; default to GREEN so the verify path runs.
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ verificationRiskBand: 'GREEN' }),
+    },
   };
 
   const svc = new VerificationQueueService(
@@ -248,7 +255,12 @@ describe('VerificationQueueService.bulkApproveGreen (Phase 76)', () => {
       $queryRaw: jest.fn(),
       $queryRawUnsafe: jest.fn().mockResolvedValue(rows),
       $executeRaw: jest.fn().mockResolvedValue(1),
-      masterOrder: { count: jest.fn().mockResolvedValue(0) },
+      masterOrder: {
+        count: jest.fn().mockResolvedValue(0),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ verificationRiskBand: 'GREEN' }),
+      },
     };
     const svc = new VerificationQueueService(
       prisma,

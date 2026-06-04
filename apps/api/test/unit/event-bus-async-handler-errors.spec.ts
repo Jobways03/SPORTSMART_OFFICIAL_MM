@@ -29,7 +29,10 @@ describe('EventBusService — async listener error capture', () => {
     // is irrelevant; supply minimal stubs that look "off" so the bus
     // takes the legacy code path under test.
     const prisma: any = {};
-    const env: any = { getBoolean: () => false };
+    const env: any = {
+      getBoolean: () => false,
+      getNumber: (_k: string, d: number) => d,
+    };
     const bus = new EventBusService(emitter, logger, prisma, env);
     return { bus, emitter, logger };
   };

@@ -30,6 +30,7 @@ import {
   RejectAffiliateDto,
   SuspendAffiliateDto,
   UpdateCommissionRateDto,
+  UpdateCouponConfigDto,
 } from '../dtos/register-affiliate.dto';
 import { RejectAffiliateKycDto } from '../dtos/affiliate-kyc.dto';
 
@@ -377,18 +378,7 @@ export class AdminAffiliateController {
     @Req() req: Request,
     @Param('affiliateId') affiliateId: string,
     @Param('couponId') couponId: string,
-    @Body()
-    body: {
-      isActive?: boolean;
-      customerDiscountType?: 'PERCENT' | 'FIXED' | 'FREE_SHIPPING' | null;
-      customerDiscountValue?: number | null;
-      maxDiscountAmount?: number | null;
-      startsAt?: string | null;
-      expiresAt?: string | null;
-      maxUses?: number | null;
-      perUserLimit?: number;
-      minOrderValue?: number | null;
-    },
+    @Body() body: UpdateCouponConfigDto,
   ) {
     const adminId = (req as any).adminId;
     const userAgent = req.headers['user-agent'];
@@ -414,6 +404,9 @@ export class AdminAffiliateController {
       maxUses: body.maxUses,
       perUserLimit: body.perUserLimit,
       minOrderValue: body.minOrderValue,
+      // Finding #13 — provenance reason recorded on the row when this
+      // update deactivates (revokes) the coupon.
+      revocationReason: body.revocationReason,
       adminId,
       audit: {
         ipAddress: req.ip,

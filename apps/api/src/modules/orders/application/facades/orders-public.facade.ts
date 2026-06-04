@@ -549,6 +549,39 @@ export class OrdersPublicFacade {
   }
 
   /**
+   * Phase 165 (Razorpay audit #5/#6) — record gateway-side failure detail
+   * on a payment.failed webhook. Sets paymentStatus=CANCELLED + persists the
+   * gateway error_code / error_description + the failed payment id so support
+   * can answer "why did it fail" and correlate the payment id later (both were
+   * previously dropped). CAS-guarded so it never clobbers a PAID order.
+   */
+  async recordPaymentFailure(
+    masterOrderId: string,
+    detail: {
+      failedPaymentId?: string | null;
+      failureCode?: string | null;
+      failureReason?: string | null;
+    },
+  ): Promise<{ flipped: boolean }> {
+    const result = await this.prisma.masterOrder.updateMany({
+      // Only act on a not-yet-paid, not-already-cancelled order. A PAID order
+      // must never be flipped to CANCELLED by a late/duplicate failure event.
+      where: {
+        id: masterOrderId,
+        paymentStatus: { in: ['PENDING', 'FAILED'] as any },
+      },
+      data: {
+        paymentStatus: 'CANCELLED' as any,
+        lastFailedPaymentId: detail.failedPaymentId ?? undefined,
+        lastPaymentFailureCode: detail.failureCode ?? undefined,
+        lastPaymentFailureReason: detail.failureReason ?? undefined,
+        lastPaymentFailureAt: new Date(),
+      },
+    });
+    return { flipped: result.count > 0 };
+  }
+
+  /**
    * Phase 0 (PR 0.12) — conditional flip of `paymentStatus` to close
    * the TOCTOU window between `getMasterOrderBasic` and the prior
    * `updatePaymentStatus` call. Only flips when the current status is

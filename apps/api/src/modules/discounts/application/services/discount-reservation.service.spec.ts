@@ -23,6 +23,7 @@ function makePrismaMock(): {
   txClient: any;
   redemptionFindFirst: AnyMock;
   redemptionFindUnique: AnyMock;
+  redemptionFindMany: AnyMock;
   redemptionCount: AnyMock;
   redemptionCreate: AnyMock;
   redemptionUpdateMany: AnyMock;
@@ -32,6 +33,7 @@ function makePrismaMock(): {
 } {
   const redemptionFindFirst: AnyMock = jest.fn();
   const redemptionFindUnique: AnyMock = jest.fn().mockResolvedValue(null);
+  const redemptionFindMany: AnyMock = jest.fn().mockResolvedValue([]);
   const redemptionCount: AnyMock = jest.fn();
   const redemptionCreate: AnyMock = jest.fn();
   const redemptionUpdateMany: AnyMock = jest.fn();
@@ -41,6 +43,7 @@ function makePrismaMock(): {
     discountRedemption: {
       findFirst: redemptionFindFirst,
       findUnique: redemptionFindUnique,
+      findMany: redemptionFindMany,
       count: redemptionCount,
       create: redemptionCreate,
       updateMany: redemptionUpdateMany,
@@ -51,6 +54,7 @@ function makePrismaMock(): {
   const prisma = {
     discountRedemption: {
       findUnique: redemptionFindUnique,
+      findMany: redemptionFindMany,
       updateMany: redemptionUpdateMany,
     },
     // Prisma interactive transaction — invokes the callback with the
@@ -86,6 +90,7 @@ function makePrismaMock(): {
     txClient,
     redemptionFindFirst,
     redemptionFindUnique,
+    redemptionFindMany,
     redemptionCount,
     redemptionCreate,
     redemptionUpdateMany,
@@ -366,19 +371,83 @@ describe('DiscountReservationService.release', () => {
 });
 
 describe('DiscountReservationService.releaseExpired', () => {
-  it('releases RESERVED rows whose expiresAt has passed', async () => {
+  it('bounded batch: reads expired ids, flips only that set, returns the flipped count', async () => {
     const m = makePrismaMock();
-    m.redemptionUpdateMany.mockResolvedValueOnce({ count: 7 });
+    // 1st findMany — the bounded id scan; 2nd — the post-flip re-read.
+    m.redemptionFindMany
+      .mockResolvedValueOnce([{ id: 'r1' }, { id: 'r2' }])
+      .mockResolvedValueOnce([]);
+    m.redemptionUpdateMany.mockResolvedValueOnce({ count: 2 });
     const svc = new DiscountReservationService(m.prisma, m.events, m.affiliateUnification);
 
-    const count = await svc.releaseExpired(new Date('2030-01-01'));
-    expect(count).toBe(7);
-    expect(m.redemptionUpdateMany).toHaveBeenCalledWith(
+    const count = await svc.releaseExpired(new Date('2030-01-01'), 500);
+    expect(count).toBe(2);
+
+    // id scan is bounded by the batch size and ordered oldest-first.
+    expect(m.redemptionFindMany).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         where: expect.objectContaining({ status: 'RESERVED' }),
+        take: 500,
+        orderBy: { expiresAt: 'asc' },
+      }),
+    );
+    // flip is re-scoped to exactly the scanned ids (no table-wide lock).
+    expect(m.redemptionUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: { in: ['r1', 'r2'] },
+          status: 'RESERVED',
+        }),
         data: expect.objectContaining({ status: 'RELEASED' }),
       }),
     );
+  });
+
+  it('emits one released event per flipped row (analytics/affiliate reconciliation)', async () => {
+    const m = makePrismaMock();
+    m.redemptionFindMany
+      .mockResolvedValueOnce([{ id: 'r1' }, { id: 'r2' }])
+      .mockResolvedValueOnce([
+        {
+          id: 'r1',
+          discountId: 'd1',
+          customerId: 'c1',
+          masterOrderId: null,
+          discountAmountInPaise: 100n,
+        },
+        {
+          id: 'r2',
+          discountId: 'd1',
+          customerId: 'c2',
+          masterOrderId: 'o2',
+          discountAmountInPaise: 250n,
+        },
+      ]);
+    m.redemptionUpdateMany.mockResolvedValueOnce({ count: 2 });
+    const svc = new DiscountReservationService(m.prisma, m.events, m.affiliateUnification);
+
+    await svc.releaseExpired(new Date('2030-01-01'));
+
+    expect(m.events.emitRedemptionEvent).toHaveBeenCalledTimes(2);
+    expect(m.events.emitRedemptionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'released',
+        redemptionId: 'r1',
+        reason: 'EXPIRED',
+      }),
+    );
+  });
+
+  it('no expired rows: returns 0 without flipping or emitting', async () => {
+    const m = makePrismaMock();
+    m.redemptionFindMany.mockResolvedValueOnce([]);
+    const svc = new DiscountReservationService(m.prisma, m.events, m.affiliateUnification);
+
+    const count = await svc.releaseExpired(new Date('2030-01-01'));
+    expect(count).toBe(0);
+    expect(m.redemptionUpdateMany).not.toHaveBeenCalled();
+    expect(m.events.emitRedemptionEvent).not.toHaveBeenCalled();
   });
 });
 

@@ -97,11 +97,19 @@ export const envSchema = z.object({
   // dot) so the cookie is shared across api., admin., seller.* subdomains.
   AUTH_COOKIE_DOMAIN: z.string().optional(),
 
-  // S3 - optional in dev
-  S3_BUCKET: z.string().optional(),
-  S3_REGION: z.string().optional(),
-  S3_ACCESS_KEY: z.string().optional(),
-  S3_SECRET_KEY: z.string().optional(),
+  // Cloudflare R2 object storage (S3-API-compatible). Replaces the former
+  // S3 integration. Either set R2_ENDPOINT directly, or set R2_ACCOUNT_ID
+  // and the endpoint is derived as https://<account>.r2.cloudflarestorage.com.
+  // R2_PUBLIC_BASE_URL is the optional public/custom-domain delivery base
+  // for PUBLIC objects (e.g. https://media.sportsmart.com). All optional in
+  // dev; the adapter is configured only when bucket + creds + endpoint are
+  // present (otherwise it reports not-configured and callers fall back).
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ENDPOINT: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_PUBLIC_BASE_URL: z.string().optional(),
 
   // Razorpay - optional
   RAZORPAY_KEY_ID: z.string().optional(),
@@ -141,13 +149,15 @@ export const envSchema = z.object({
   DELHIVERY_WEBHOOK_TOKEN: z.string().optional(),
   DELHIVERY_WEBHOOK_IP_ALLOWLIST: z.string().optional(),
 
-  // OpenSearch - optional
+  // OpenSearch - optional. Phase 195 (#17) — node URL plus basic-auth
+  // credentials and a configurable products index. All optional so dev and
+  // the default Prisma path need none of them; when ops stands up a managed
+  // OpenSearch (which requires basic auth) these thread through
+  // OpenSearchClient. URL scheme is validated at OpenSearchClient.onModuleInit.
   OPENSEARCH_NODE: z.string().optional(),
-
-  // Cloudinary - optional in dev
-  CLOUDINARY_CLOUD_NAME: z.string().optional(),
-  CLOUDINARY_API_KEY: z.string().optional(),
-  CLOUDINARY_API_SECRET: z.string().optional(),
+  OPENSEARCH_USERNAME: z.string().optional(),
+  OPENSEARCH_PASSWORD: z.string().optional(),
+  OPENSEARCH_INDEX_PRODUCTS: z.string().default('sportsmart_products'),
 
   // WhatsApp - optional
   WHATSAPP_API_URL: z.string().optional(),
@@ -158,6 +168,32 @@ export const envSchema = z.object({
   // setup; app-secret is used for SHA-256 HMAC on every inbound payload.
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   WHATSAPP_APP_SECRET: z.string().optional(),
+
+  // SMS — Phase 185 (#1/#4). Provider-switched transactional SMS.
+  //   SMS_PROVIDER       — stub (default) | msg91 | twilio
+  //   SMS_AUTH_KEY       — MSG91 authkey OR Twilio Account SID
+  //   SMS_API_SECRET     — Twilio auth token (unused by MSG91)
+  //   SMS_SENDER_ID      — registered DLT header / Twilio 'From' number
+  //   SMS_API_URL        — override the provider base URL (tests/proxies)
+  //   SMS_DLT_ENFORCED   — when 'true', SMS-channel templates without a
+  //                        DLT template id are refused (TRAI compliance).
+  SMS_PROVIDER: z.enum(['stub', 'msg91', 'twilio']).optional().default('stub'),
+  SMS_AUTH_KEY: z.string().optional(),
+  SMS_API_SECRET: z.string().optional(),
+  SMS_SENDER_ID: z.string().optional(),
+  SMS_API_URL: z.string().optional(),
+  SMS_DLT_ENFORCED: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('false'),
+
+  // Phase 185 (#5) — shared secret a carrier delivery-receipt (DLR)
+  // webhook must present to flip a notification SENT → DELIVERED.
+  NOTIFICATION_DELIVERY_RECEIPT_SECRET: z.string().optional(),
+
+  // Phase 189 (#14) — HMAC secret for one-click email-unsubscribe links.
+  // When unset, the unsubscribe endpoint fails closed (links won't verify).
+  NOTIFICATION_UNSUBSCRIBE_SECRET: z.string().optional(),
 
   // AI providers — optional. At least one must be configured for AI
   // endpoints to work. The provider order in AI_PROVIDER_ORDER (comma
@@ -197,6 +233,28 @@ export const envSchema = z.object({
   SETTLEMENT_CYCLE_PERIOD_DAYS: z.coerce.number().default(7),
   SETTLEMENT_AUTO_CYCLE_INTERVAL_MINUTES: z.coerce.number().default(60),
 
+  // Phase 178 (Outstanding Payables audit #11) — §194-O TDS payout holdback.
+  // When ON (default), an hourly guard freezes any APPROVED, past-due seller
+  // settlement whose TDS hook FAILED (no tdsLedgerId AND no tdsSkipReason) so it
+  // is never disbursed before §194-O is handled; auto-releases once finance
+  // re-runs the compute. Kill switch for ops.
+  TDS_PAYOUT_HOLDBACK_ENABLED: z.string().default('true'),
+
+  // Phase 181 (Franchise Ledger audit #11) — a punitive franchise penalty at or
+  // above this rupee amount requires a SECOND admin's co-acknowledgement
+  // (coApproverAdminId ≠ actor). 0 disables the gate.
+  FRANCHISE_PENALTY_MAX_WITHOUT_APPROVAL_RUPEES: z.coerce.number().default(50000),
+
+  // Phase 182 (Customer Wallet audit #2/#3) — loyalty/cashback rebate. OFF by
+  // default (it emits money — opt-in is a business decision). When ON, a captured
+  // order earns `bps` of its value as a LOYALTY_REBATE wallet credit, capped, with
+  // an expiry, only above the min-order floor.
+  LOYALTY_ENABLED: z.string().default('false'),
+  LOYALTY_CASHBACK_BPS: z.coerce.number().default(100), // 100 bps = 1%
+  LOYALTY_CASHBACK_MAX_PAISE: z.coerce.number().default(50000), // ₹500 cap / order
+  LOYALTY_MIN_ORDER_PAISE: z.coerce.number().default(50000), // ₹500 min to qualify
+  LOYALTY_EARN_EXPIRY_DAYS: z.coerce.number().default(180),
+
   // Phase 159r (POS void/return audit #9) — a franchise may self-void a POS
   // sale only within this many hours of the sale. 0 disables the window.
   POS_VOID_WINDOW_HOURS: z.coerce.number().default(24),
@@ -206,6 +264,11 @@ export const envSchema = z.object({
   // reports. Default 330 = IST (UTC+5:30). India has no DST so a fixed offset
   // is correct and avoids server-local-TZ wrong-day bleed.
   FRANCHISE_REPORT_TZ_OFFSET_MINUTES: z.coerce.number().int().default(330),
+
+  // Phase 242 (POS Reconciliation audit) — cash-vs-expected variance tolerance
+  // (paise) within which a reconciliation is auto-flagged MATCHED rather than
+  // VARIANCE. Default 100 = ₹1 (rounding slack).
+  POS_RECON_MATCH_TOLERANCE_PAISE: z.coerce.number().int().default(100),
 
   // Order acceptance SLA. If a sub-order stays OPEN longer than this,
   // a background job auto-rejects it and triggers re-routing. 0 disables.
@@ -252,11 +315,26 @@ export const envSchema = z.object({
   // beyond this many days are escalated or auto-closed.
   RETURN_STALE_DAYS: z.coerce.number().default(30),
   RETURN_STALE_CHECK_INTERVAL_MINUTES: z.coerce.number().default(60),
+  // Phase 174 — per-status batch cap for the stale-return processor's
+  // auto-cancel / auto-close / escalate scans (drains backlog across ticks).
+  RETURN_STALE_BATCH_SIZE: z.coerce.number().int().min(1).default(50),
+  // Phase 174 — batch cap for the exhausted-refund escalation scan.
+  RETURN_STALE_EXHAUSTED_BATCH_SIZE: z.coerce.number().int().min(1).default(20),
 
   // Payment poller. Checks Razorpay for orders stuck in PENDING_PAYMENT
   // and auto-cancels orders past the payment window.
   PAYMENT_POLL_INTERVAL_SECONDS: z.coerce.number().default(60),
   PAYMENT_WINDOW_MINUTES: z.coerce.number().default(30),
+  // Phase 166 (Payment Status Poller audit #14) — per-tick batch caps, env-tunable
+  // so a sale spike can be drained faster without a code change.
+  PAYMENT_POLL_CANCEL_BATCH: z.coerce.number().int().min(1).default(30),
+  PAYMENT_POLL_ORPHAN_BATCH: z.coerce.number().int().min(1).default(20),
+  // #7 — minimum gap (seconds) between orphan-recovery polls of the SAME order,
+  // so a captured-but-orphaned order isn't polled ~30× over the 30-min window.
+  PAYMENT_POLL_ORPHAN_BACKOFF_SECONDS: z.coerce.number().int().min(0).default(180),
+  // #13 — open an alert after this many consecutive gateway fetch failures
+  // (e.g. revoked credentials would otherwise fail silently all window).
+  PAYMENT_POLL_FETCH_FAILURE_ALERT_THRESHOLD: z.coerce.number().int().min(1).default(5),
 
   // Number of reverse-proxy hops to trust for req.ip (used by the throttler
   // to rate-limit per client IP). 0 = don't trust X-Forwarded-For (dev).
@@ -346,6 +424,19 @@ export const envSchema = z.object({
   // Hard cap before a row goes to outbox_dead_letters. Total time-to-DLQ
   // with default exp-backoff (1s, 2s, 4s, … capped at 1h) is roughly 5h.
   OUTBOX_MAX_ATTEMPTS: z.coerce.number().default(10),
+  // Phase 186 (#4) — retention sweeper windows (days). PUBLISHED rows are
+  // never read again → purge at 30d; dead-letters kept 90d for audit.
+  OUTBOX_RETENTION_DAYS: z.coerce.number().default(30),
+  OUTBOX_DLQ_RETENTION_DAYS: z.coerce.number().default(90),
+  // Phase 186 (#9) — write-boundary payload cap (bytes). 256 KB is generous
+  // for any real domain event; a DB CHECK at 1 MB is the hard backstop.
+  OUTBOX_MAX_PAYLOAD_BYTES: z.coerce.number().default(262_144),
+  // Phase 186 (#12) — consecutive per-eventName failures before a CRITICAL
+  // alert fires (systemic-outage detector).
+  OUTBOX_FAILURE_ALERT_THRESHOLD: z.coerce.number().default(25),
+  // Phase 186 (#1) — default debounce window (ms) when a writer passes a
+  // dedupeKey without an explicit window. Collapses bursts within 30s.
+  OUTBOX_DEBOUNCE_DEFAULT_MS: z.coerce.number().default(30_000),
 
   // ── Phase 3 — Unified Refund System (ADR-009) ────────────────────────
   // REFUND_SAGA_ENABLED: when ON, RefundSagaService orchestrates execution
@@ -380,6 +471,16 @@ export const envSchema = z.object({
   // PENDING_APPROVAL until a second, different admin approves. Default
   // ₹1,00,000. Set very high to effectively disable dual approval.
   REFUND_DUAL_APPROVAL_THRESHOLD_PAISE: z.coerce.number().default(10_000_000),
+  // Phase 172 (Goodwill Credit audit #9) — goodwill wallet credits lapse after
+  // this many days (0 disables expiry). Refunds (money genuinely owed) never expire.
+  GOODWILL_CREDIT_EXPIRY_DAYS: z.coerce.number().default(180),
+  // Phase 172 (#16) — hard cap on a single dispute's goodwill amount (paise),
+  // defence-in-depth against a misclick/compromise (₹50,000 default). Finance
+  // approval is still required; this is an upper bound the decision can't exceed.
+  MAX_GOODWILL_AMOUNT_PER_DISPUTE_PAISE: z.coerce.number().default(5_000_000),
+  // Phase 170 (Refund Queue audit #6) — approval SLA. A queued instruction's
+  // approvalDueBy = createdAt + this; the overdue sweep + aging report use it.
+  REFUND_APPROVAL_SLA_HOURS: z.coerce.number().default(48),
 
   // Phase 126 — dispute-decision settlement recovery sweep. decide()
   // mints the customer's RefundInstruction AFTER its atomic status+outbox
@@ -415,9 +516,22 @@ export const envSchema = z.object({
   WALLET_LEDGER_RECON_INTERVAL_MINUTES: z.coerce.number().default(24 * 60),
   REFUND_GATEWAY_RECON_ENABLED: z.string().default('true'),
   REFUND_GATEWAY_RECON_INTERVAL_MINUTES: z.coerce.number().default(60),
+  // Phase 167 (Refund Execution audit #8/#16) — the recon cron now actually
+  // calls Razorpay: per-row poll backoff (don't re-GET the same refund every
+  // tick), batch cap, and the consecutive-fetch-failure alert threshold.
+  REFUND_GATEWAY_RECON_BACKOFF_MINUTES: z.coerce.number().int().min(0).default(30),
+  REFUND_GATEWAY_RECON_BATCH: z.coerce.number().int().min(1).default(50),
+  REFUND_GATEWAY_RECON_FAILURE_ALERT_THRESHOLD: z.coerce.number().int().min(1).default(5),
   COD_REFUND_PENDING_ENABLED: z.string().default('true'),
   COD_REFUND_PENDING_INTERVAL_MINUTES: z.coerce.number().default(4 * 60),
   COD_REFUND_PENDING_STUCK_HOURS: z.coerce.number().default(48),
+  // Phase 168 (COD Mark-Paid audit #11) — delivered-but-uncollected COD sweep.
+  // Default 'true': uncollected COD cash is silent money-at-risk, the sweep is
+  // read-mostly + idempotent (enqueues a deduped AdminTask), same rationale as
+  // the sibling recon crons above.
+  COD_COLLECTION_PENDING_ENABLED: z.string().default('true'),
+  COD_COLLECTION_PENDING_STUCK_HOURS: z.coerce.number().int().min(1).default(72),
+  COD_COLLECTION_PENDING_BATCH: z.coerce.number().int().min(1).default(100),
 
   // Sprint 2 Story 1.4 cleanup — guardrail thresholds layered on top of
   // the admin-editable cod_rules engine. Engine still owns the dynamic
@@ -442,6 +556,9 @@ export const envSchema = z.object({
   // is the primary correctness mechanism; this cron keeps the
   // active-reservation count fresh for the admin UI and metrics.
   DISCOUNT_RESERVATION_CRON_ENABLED: z.string().default('true'),
+  // Phase 174 — per-tick batch cap for releasing expired RESERVED
+  // redemptions (bounded id-scan + per-row released events, drains over ticks).
+  DISCOUNT_RELEASE_EXPIRED_BATCH_SIZE: z.coerce.number().int().min(1).default(500),
 
   // Sprint 4 Story 3.4 — auto-detect low-stock conditions every 30 min.
   // Off in dev / staging by default if you want to test the manual
@@ -510,6 +627,41 @@ export const envSchema = z.object({
   // touched. The unified AuditLog retains the revoke event in full;
   // the session row past 90 days is just disk + index bloat.
   SESSION_REVOKED_SWEEP_ENABLED: z.string().default('true'),
+  // Phase 209 (#17) — daily cleanup of EXPIRED (never-revoked) sessions.
+  // The revoked-session sweep only touches revokedAt rows; a session that
+  // simply timed out (expiresAt < now) without an explicit revoke would
+  // otherwise live forever. Both are fail-closed at auth time regardless
+  // (the guard checks expiresAt) — this is pure disk/index hygiene, so
+  // default ON, env-gated for local-dev convenience. A grace window keeps
+  // very-recently-expired rows briefly for forensic lookup.
+  SESSION_EXPIRED_CLEANUP_ENABLED: z.string().default('true'),
+  SESSION_EXPIRED_CLEANUP_GRACE_DAYS: z.coerce.number().int().min(0).default(30),
+  // Phase 201 (#8) — daily retention sweep of access_logs. Login/refresh
+  // events (TOKEN_REFRESH fires on every refresh) accumulate without
+  // bound; rows older than the window have no forensic value (the unified
+  // AuditLog covers compliance). Default ON; window configurable.
+  ACCESS_LOG_RETENTION_ENABLED: z.string().default('true'),
+  ACCESS_LOG_RETENTION_DAYS: z.coerce.number().int().min(1).default(180),
+  // Phase 207 (#2/#6/#15) — brute-force spike detector cron. Runs every
+  // 5 minutes (leader-elected, instrumented), scans the recent
+  // LOGIN_FAILURE window with three lenses — per-(account,IP), per-IP
+  // (credential-stuffing / spray), per-account (distributed botnet) — and
+  // on a crossing emits `security.brute_force_detected` + opens an
+  // idempotent AdminTask. Default ON (read + event/task only; no money
+  // movement). Thresholds are env-tunable per lens (#15) so ops can dial
+  // sensitivity without a deploy. Window kept short (15min) so the signal
+  // is "active attack now," not "noisy yesterday."
+  BRUTE_FORCE_SPIKE_CRON_ENABLED: z.string().default('true'),
+  BRUTE_FORCE_SPIKE_WINDOW_MINUTES: z.coerce.number().int().min(1).default(15),
+  // (account, IP) pair threshold — the classic per-target burst.
+  BRUTE_FORCE_SPIKE_PER_ACTOR_IP: z.coerce.number().int().min(2).default(10),
+  // One source IP across many accounts (spray / stuffing).
+  BRUTE_FORCE_SPIKE_PER_IP: z.coerce.number().int().min(2).default(30),
+  // One account across many IPs (distributed botnet on a victim).
+  BRUTE_FORCE_SPIKE_PER_ACCOUNT: z.coerce.number().int().min(2).default(20),
+  // Max spike rows to escalate into AdminTasks per tick (bounds blast
+  // radius if a huge attack lights up thousands of groups at once).
+  BRUTE_FORCE_SPIKE_MAX_TASKS_PER_RUN: z.coerce.number().int().min(1).default(50),
   // Phase 4 (PR 4.3) — ABAC resource-policy evaluator runs after
   // PermissionsGuard. Off by default; flips on with PR 4.5.
   ABAC_ENABLED: z.string().default('false'),
@@ -564,6 +716,11 @@ export const envSchema = z.object({
   // sub-order is an independent atomic-claimed transaction; the cap bounds
   // DB-connection pressure.
   COMMISSION_PROCESSOR_CONCURRENCY: z.coerce.number().int().min(1).default(5),
+  // Phase 174 — COD cash-in-hand gate. When ON, a DELIVERED COD sub-order's
+  // commission is deferred until its SubOrder.paymentStatus = PAID (cash
+  // collected). Default OFF preserves pay-on-delivery; flip after finance
+  // sign-off. ONLINE/prepaid sub-orders are unaffected.
+  COMMISSION_REQUIRE_COD_PAID: z.string().default('false'),
 
   // Phase 3.8 (2026-05-16) — Double-entry invariant validator.
   // Daily cron at 04:00 IST sums the day's wallet + payout + refund
@@ -640,6 +797,12 @@ export const envSchema = z.object({
   WALLET_REFUND_SAGA_ENABLED: z.string().default('true'),
   WALLET_REFUND_SAGA_BATCH_LIMIT: z.coerce.number().int().min(1).max(1000).default(100),
   WALLET_REFUND_SAGA_COOLDOWN_MINUTES: z.coerce.number().int().min(1).default(5),
+  // Phase 173 (Recon audit #1) — stale-run reaper knobs.
+  RECON_STALE_RUN_REAPER_ENABLED: z.string().default('true'),
+  RECON_STALE_RUN_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+  // Phase 172 (#9) — goodwill-expiry sweep cron knobs.
+  WALLET_GOODWILL_EXPIRY_ENABLED: z.string().default('true'),
+  WALLET_GOODWILL_EXPIRY_BATCH_LIMIT: z.coerce.number().int().min(1).max(10000).default(1000),
 
   // Phase 70 (2026-05-22) — Phase 66 audit Gap #19 (wallet flow).
   // Env-tunable single-topup cap (paise). Default ₹1,00,000 mirrors
@@ -697,9 +860,9 @@ export const envSchema = z.object({
 
   // Phase 11 (2026-05-16) — external-dependency health probes.
   // `HEALTH_EXTERNAL_PROBES_DEFAULT=true` makes /health include
-  // Razorpay / S3 / Cloudinary checks by default (still overridable
+  // Razorpay / R2 checks by default (still overridable
   // per-request via ?external=0). The dedicated /health/deps route
-  // always runs them. Per-probe timeout shared across all three.
+  // always runs them. Per-probe timeout shared across both.
   HEALTH_EXTERNAL_PROBES_DEFAULT: z.string().default('false'),
   HEALTH_PROBE_TIMEOUT_MS: z.coerce.number().default(3_000),
 
@@ -718,13 +881,26 @@ export const envSchema = z.object({
     .default('http://localhost:4318/v1/traces'),
   OTEL_TRACES_SAMPLER_RATIO: z.coerce.number().min(0).max(1).default(0.1),
 
-  // Phase 14 (2026-05-16) — Cloudinary orphan sweep cron. Daily
-  // cron that deletes Cloudinary assets whose owning Product was
-  // soft-deleted more than CLOUDINARY_ORPHAN_RETENTION_DAYS ago.
+  // Phase 14 (2026-05-16) — media orphan sweep cron. Daily cron that
+  // deletes orphaned media assets (R2) whose owning Product was
+  // soft-deleted more than MEDIA_ORPHAN_RETENTION_DAYS ago.
   // 30 days gives ops a recovery window before the asset is gone.
-  CLOUDINARY_ORPHAN_SWEEPER_ENABLED: z.string().default('true'),
-  CLOUDINARY_ORPHAN_RETENTION_DAYS: z.coerce.number().default(30),
-  CLOUDINARY_ORPHAN_BATCH_SIZE: z.coerce.number().default(200),
+  MEDIA_ORPHAN_SWEEPER_ENABLED: z.string().default('true'),
+  MEDIA_ORPHAN_RETENTION_DAYS: z.coerce.number().default(30),
+  MEDIA_ORPHAN_BATCH_SIZE: z.coerce.number().default(200),
+  // Phase 174 — after this many failed media deletes a row is flagged
+  // delete_failed=true and dropped from the scan instead of churning daily.
+  MEDIA_ORPHAN_DELETE_RETRY_CAP: z.coerce.number().int().min(1).default(5),
+
+  // Portal SSE realtime streams — per-actor connection caps (DoS guard).
+  // Opening more than the cap evicts the actor's oldest connection.
+  PORTAL_SSE_MAX_CONN_PER_ACTOR: z.coerce.number().int().min(1).default(5),
+  PORTAL_SSE_MAX_CONN_PER_ADMIN: z.coerce.number().int().min(1).default(3),
+  // Max connection lifetime (minutes). Past this the server force-closes
+  // the stream; the browser EventSource auto-reconnects, which re-runs the
+  // auth guard (DB session + account-active check) — bounding how long a
+  // revoked/suspended actor can keep streaming to at most this window.
+  PORTAL_SSE_MAX_CONN_AGE_MIN: z.coerce.number().int().min(1).default(15),
 
   // Phase 7 (2026-05-16) — Procurement approval SLA. When a franchise
   // submits a procurement request, the admin gets `PROCUREMENT_APPROVAL_SLA_HOURS`
@@ -788,6 +964,8 @@ export const envSchema = z.object({
   // FAIL-and-escalated. Default 5 min — Razorpay's hard refund
   // timeout is 30s, leaving 9.5× headroom for the longest legit run.
   REFUND_SAGA_STUCK_MINUTES: z.coerce.number().int().min(1).default(5),
+  // Phase 174 — per-tick batch for the stuck-saga sweep.
+  REFUND_SAGA_SWEEP_BATCH_SIZE: z.coerce.number().int().min(1).default(50),
   // Phase 116 — stuck PENDING_APPROVAL sweep. Set false to pause the
   // escalation cron during an ops incident.
   REFUND_PENDING_APPROVAL_SWEEP_ENABLED: z.string().default('true'),
@@ -800,6 +978,8 @@ export const envSchema = z.object({
   // forever. Set false to pause during ops incidents where the
   // franchise inventory ledger is being manually reconciled.
   FRANCHISE_RESERVATION_SWEEP_ENABLED: z.string().default('true'),
+  // Phase 174 — caps the expired ORDER_RESERVE ledger scan per tick.
+  FRANCHISE_RESERVATION_CLEANUP_BATCH_SIZE: z.coerce.number().int().min(1).default(500),
 
   // Phase 7 (PR 7.2) — retention enforcer. Off by default. Two flags
   // here so the cron can soak in DRY-RUN mode (writes execution audit
@@ -861,8 +1041,8 @@ export const envSchema = z.object({
 
   // Phase 19 GST — tax-document PDF storage provider. 'stub' writes
   // rendered HTML to `apps/api/storage/tax-pdfs/...` so dev can open
-  // the file directly; 's3' / 'cloudinary' wire real cloud storage
-  // once the upstream adapters land. Switching is single-line at boot
+  // the file directly; 'r2' wires real cloud storage (Cloudflare R2)
+  // via the tax-PDF storage provider. Switching is single-line at boot
   // — the service-layer code is identical across providers.
   TAX_PDF_STORAGE_PROVIDER: z.enum(['stub', 's3']).default('stub'),
   // Phase 19 GST — PDF render retry cron. ON by default in dev so a
@@ -912,6 +1092,21 @@ export const envSchema = z.object({
   // is reserved for the real GSTN sandbox API (crashes loudly at
   // boot until wired — see TaxModule factory).
   GSTN_PROVIDER: z.enum(['stub', 'sandbox']).default('stub'),
+  // Phase 161 (Seller GSTIN Verification audit #13) — re-verify cooldown.
+  // 0 (default) = no cooldown; >0 = skip the provider call (return the cached
+  // row) when the GSTIN was checked within this many hours, unless force=true.
+  GSTN_REVERIFY_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(0),
+  // Phase 200 (#14) — weekly GSTN re-verification cron. Default OFF so it
+  // doesn't burn provider quota against the stub; flip on once a live GSTN
+  // adapter is wired. STALE_DAYS = re-check profiles verified longer ago.
+  GSTN_REVERIFY_CRON_ENABLED: z.string().default('false'),
+  GSTN_REVERIFY_STALE_DAYS: z.coerce.number().int().min(1).default(90),
+  // Phase 197 (#20) — legacy single-seller place-order path (POST /customer/
+  // orders). Default OFF: the live flow is POST /customer/checkout/place-order.
+  LEGACY_PLACE_ORDER_ENABLED: z.string().default('false'),
+  // Phase 199 (#9) — orphaned return-evidence cleanup sweep.
+  // Default OFF: requires the R2 object-listing seam to be wired.
+  RETURN_EVIDENCE_ORPHAN_CLEANUP_ENABLED: z.string().default('false'),
   // Phase 22 GST — IRN retry cron flags.
   TAX_EINVOICE_RETRY_CRON_ENABLED: z.string().default('true'),
   TAX_EINVOICE_RETRY_CAP: z.coerce.number().int().min(1).default(5),
@@ -934,6 +1129,19 @@ export const envSchema = z.object({
   TAX_AUDIT_MODE: z.string().default('false'),
   TAX_STRICT_MODE: z.string().default('false'),
 
+  // Phase 163 (Tax Audit Readiness Dashboard audit) — readiness scan knobs.
+  //   #19 — "active seller" window for the missing-GSTIN / legal-name-mismatch
+  //         scans (was a hardcoded 30 days; 90 covers quarterly-only sellers).
+  //   #2  — a DRAFT tax document older than this is "stuck", not in-flight.
+  //   #5  — server-side cache TTL for the (expensive, 14-scan) readiness build.
+  //   #16 — the 6-hourly readiness-snapshot (trend table) cron toggle.
+  TAX_AUDIT_READINESS_ACTIVE_SELLER_WINDOW_DAYS:
+    z.coerce.number().int().min(1).default(90),
+  TAX_AUDIT_READINESS_DRAFT_STALE_HOURS:
+    z.coerce.number().int().min(0).default(24),
+  TAX_READINESS_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).default(30),
+  TAX_READINESS_SNAPSHOT_CRON_ENABLED: z.string().default('true'),
+
   // Phase 7 (PR 7.4) — erasure processor cron. Off by default; flip on
   // after compliance signs off on the cooldown window + outcome shape.
   ERASURE_PROCESSOR_ENABLED: z.string().default('false'),
@@ -953,6 +1161,28 @@ export const envSchema = z.object({
   // means staging runs the anchor on its own cadence and a missed
   // anchor surfaces in cron metrics before the prod cutover.
   AUDIT_CHAIN_ANCHOR_ENABLED: z.string().default('true'),
+
+  // Phase 203 (#9) / 204 (#7) — autonomous chain-break detector cron. Walks
+  // forward from the latest anchor every 30 min, persists a verification run,
+  // and emits `audit.chain.break_detected` on any tamper. Read-only over the
+  // audit log + one run row per tick, so default-on.
+  AUDIT_CHAIN_VERIFY_ENABLED: z.string().default('true'),
+  // Rows the cron walks per tick (anchor cadence keeps this small in steady
+  // state; the cap bounds a first-run backlog).
+  AUDIT_CHAIN_VERIFY_LIMIT: z.coerce.number().int().positive().default(20_000),
+
+  // Phase 206 (#4) — CSV export guard-rails. The export REQUIRES a date range;
+  // these bound it so one click can't dump the whole table.
+  AUDIT_EXPORT_MAX_RANGE_DAYS: z.coerce.number().int().positive().default(90),
+  AUDIT_EXPORT_MAX_ROWS: z.coerce.number().int().positive().default(100_000),
+
+  // Phase 203 (#15) — audit-log retention. HONEST-CALL: compliance (CERT-In /
+  // DPDP / financial) typically mandates a 5–7 YEAR floor, so the sweeper is
+  // OFF by default and the window defaults to ~7 years; turning it on is a
+  // deliberate, signed-off decision (and a cold-archive export should run
+  // first — surfaced, not built). See AuditLogRetentionCron.
+  AUDIT_LOG_RETENTION_ENABLED: z.string().default('false'),
+  AUDIT_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(2557),
 
   // Phase 8 (PR 8.3) — heartbeat-of-crons. Walks cron_heartbeat_targets,
   // emits `cron.silent` events for jobs that haven't succeeded within
@@ -1241,10 +1471,13 @@ export const envSchema = z.object({
     'RAZORPAY_KEY_ID',
     'RAZORPAY_KEY_SECRET',
     'RAZORPAY_WEBHOOK_SECRET',
-    'S3_BUCKET',
-    'S3_REGION',
-    'S3_ACCESS_KEY',
-    'S3_SECRET_KEY',
+    // Cloudflare R2 object storage (replaces S3). Endpoint is derived from
+    // R2_ACCOUNT_ID when R2_ENDPOINT isn't set, so only one of them is
+    // strictly required — R2_ACCOUNT_ID is the canonical one to require.
+    'R2_ACCOUNT_ID',
+    'R2_BUCKET',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
     // PR 10.8 — Phase 10's MFA flow (PR 10.6 login challenge,
     // PR 10.7 anti-replay) reads ADMIN_MFA_ENCRYPTION_KEY on every
     // verify-challenge request to decrypt the admin's stored TOTP
@@ -1268,6 +1501,25 @@ export const envSchema = z.object({
         path: [key],
         message: `${key} is required when NODE_ENV=production`,
       });
+    }
+  }
+
+  // Phase 185 (#1/#4) — SMS credentials are only mandatory in prod when a
+  // real provider is selected. Default `stub` keeps non-SMS deployments
+  // (the current state) booting unchanged; choosing msg91/twilio without
+  // creds would silently no-op every SMS, so fail fast instead.
+  if (env.NODE_ENV === 'production' && env.SMS_PROVIDER && env.SMS_PROVIDER !== 'stub') {
+    const needed: Array<keyof typeof env> = ['SMS_AUTH_KEY', 'SMS_SENDER_ID'];
+    if (env.SMS_PROVIDER === 'twilio') needed.push('SMS_API_SECRET');
+    for (const key of needed) {
+      const value = env[key];
+      if (value === undefined || value === null || String(value).trim() === '') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `${key} is required when SMS_PROVIDER=${env.SMS_PROVIDER} in production`,
+        });
+      }
     }
   }
 

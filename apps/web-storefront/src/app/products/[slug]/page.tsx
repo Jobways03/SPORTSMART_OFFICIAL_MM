@@ -11,14 +11,21 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Heart,
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { PriceTag } from '@/components/ui/PriceTag';
 import { Badge } from '@/components/ui/Badge';
+// Phase 202 (#1) — PDP heart, wired to the wishlist API via the shared
+// store that also powers the catalog card hearts + Navbar badge.
+import { useWishlistToggle } from '@/components/ui/ProductCard';
 import { apiClient } from '@/lib/api-client';
 import { useSession } from '@/lib/auth-context';
 import { sanitizeProductHtml } from '@/lib/sanitize';
 import { PricingTiersStrip } from './_components/PricingTiersStrip';
+// Phase 193 — related products (#2) + back-in-stock capture (#15).
+import { RelatedProducts } from './_components/RelatedProducts';
+import { NotifyWhenAvailable } from './_components/NotifyWhenAvailable';
 
 interface ProductImage {
   id: string;
@@ -177,6 +184,12 @@ export default function ProductDetailPage() {
     return groups;
   }, [product]);
 
+  // Phase 202 (#1) — wishlist heart state for this product. Called
+  // unconditionally (before the loading/error early-returns) with a
+  // stable id; an empty id while loading simply matches nothing.
+  const { wishlisted, pending: wishlistPending, toggle: toggleWishlist } =
+    useWishlistToggle(product?.id ?? '');
+
   const handleAddToCart = async (buyNow = false) => {
     // Auth is cookie-based (Phase 21). The old check read a sessionStorage
     // 'accessToken' that login never writes, so it ALWAYS pushed /login —
@@ -200,6 +213,10 @@ export default function ProductDetailPage() {
       if (buyNow) {
         router.push('/cart');
       } else {
+        // Phase 196 (#2) — open the slide-out cart drawer on add (replaces
+        // the old fire-and-forget text toast as the primary feedback; the
+        // toast stays as an aria-live announcement for screen readers).
+        window.dispatchEvent(new Event('cart-open'));
         setCartMessage('Added to cart');
         setTimeout(() => setCartMessage(''), 2200);
       }
@@ -375,9 +392,29 @@ export default function ProductDetailPage() {
                 {product.brand.name}
               </div>
             )}
-            <h1 className="mt-2 font-display text-4xl sm:text-5xl text-ink-900 leading-[1.05]">
-              {product.title}
-            </h1>
+            <div className="mt-2 flex items-start justify-between gap-4">
+              <h1 className="font-display text-4xl sm:text-5xl text-ink-900 leading-[1.05]">
+                {product.title}
+              </h1>
+              {/* Phase 202 (#1) — PDP wishlist heart. Saves the selected
+                  variant when one is picked, else the product abstractly.
+                  Persists via the wishlist API + shared store. */}
+              <button
+                type="button"
+                aria-label={wishlisted ? 'Remove from wishlist' : 'Add to wishlist'}
+                aria-pressed={wishlisted}
+                disabled={wishlistPending}
+                onClick={() => void toggleWishlist(selectedVariant?.id)}
+                className="shrink-0 size-11 grid place-items-center rounded-full border border-ink-200 hover:border-ink-400 transition-colors disabled:cursor-wait"
+              >
+                <Heart
+                  className={`size-5 transition-colors ${
+                    wishlisted ? 'fill-sale text-sale' : 'text-ink-700'
+                  }`}
+                  strokeWidth={1.75}
+                />
+              </button>
+            </div>
             {product.productCode && (
               <div className="mt-3 text-caption text-ink-500 tabular">
                 Product code · {product.productCode}
@@ -554,6 +591,8 @@ export default function ProductDetailPage() {
                 Buy now
               </button>
             </div>
+            {/* Phase 193 (#15) — out-of-stock conversion path. */}
+            {!isInStock && <NotifyWhenAvailable slug={slug} />}
             {cartMessage && (
               <div
                 className={`mt-3 text-body inline-flex items-center gap-1.5 ${
@@ -671,6 +710,10 @@ export default function ProductDetailPage() {
               </div>
             )}
           </div>
+        </div>
+        {/* Phase 193 (#2) — related products below the detail. */}
+        <div className="container-wide pb-16">
+          <RelatedProducts slug={slug} />
         </div>
       </div>
     </StorefrontShell>

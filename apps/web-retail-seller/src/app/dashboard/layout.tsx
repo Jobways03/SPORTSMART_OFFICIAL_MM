@@ -193,6 +193,7 @@ export default function DashboardLayout({
     { href: '/dashboard/reversals', label: 'Reversals', icon: '&#128257;', disabled: !isActive, description: 'B2B / off-platform reversal requests' },
     { href: '/dashboard/disputes', label: 'Disputes', icon: '&#9888;', disabled: !isActive, description: 'Respond to customer disputes; 72h SLA' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },
+    { href: '/dashboard/accounts', label: 'My Finances', icon: '&#128202;', disabled: !isActive, description: 'Revenue, payables, TDS/TCS, settlements — one view' },
     { href: '/dashboard/tax/invoices', label: 'Tax Invoices', icon: '&#129534;', disabled: !isActive, description: 'GST invoices, credit notes — download for filing' },
     { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },
     { href: '#', label: 'Analytics', icon: '&#128200;', disabled: true },

@@ -31,6 +31,14 @@ import { DiscountAffiliateUnificationService } from './discount-affiliate-unific
 /** Default reservation TTL — Default Decision #3. */
 export const DEFAULT_RESERVATION_TTL_MS = 15 * 60 * 1000;
 
+/**
+ * Default per-tick cap for releaseExpired (#222). The every-minute
+ * cron drains larger backlogs over successive ticks; the cap keeps
+ * any single flip + its event fan-out off a table-wide lock. The
+ * cron passes an env-overridable value.
+ */
+export const DEFAULT_RELEASE_EXPIRED_BATCH_SIZE = 500;
+
 export interface ReserveInput {
   discountId: string;
   /** Optional — for child-code campaigns (P0.6). Null for legacy single-code discounts. */
@@ -422,16 +430,77 @@ export class DiscountReservationService {
    * #9 — both lazy (checked at validation/reserve time) and active
    * (this cron) for defense in depth.
    *
+   * Bounded-batch design (#222): instead of one unbounded `updateMany`
+   * (which on a large backlog takes a wide row-lock and starves the
+   * checkout `SELECT ... FOR UPDATE` reservers), we first `findMany`
+   * a capped batch of expired ids, flip exactly those, then emit a
+   * per-row `discount.redemption.released` event for each one that
+   * actually transitioned. The events keep downstream analytics /
+   * affiliate reconciliation in sync — pre-fix the bulk path released
+   * silently and those consumers never saw the slot free up. The
+   * every-minute cron drains the remaining backlog batch-by-batch.
+   *
    * Returns the count released, for metrics.
    */
-  async releaseExpired(now: Date = new Date()): Promise<number> {
-    const result = await this.prisma.discountRedemption.updateMany({
+  async releaseExpired(
+    now: Date = new Date(),
+    batchSize = DEFAULT_RELEASE_EXPIRED_BATCH_SIZE,
+  ): Promise<number> {
+    // Bound the batch so a backlog never widens into a table-scoped
+    // lock. Fetch ids only — we re-scope the flip to this exact set.
+    const expired = await this.prisma.discountRedemption.findMany({
       where: { status: 'RESERVED', expiresAt: { lt: now } },
+      select: { id: true },
+      orderBy: { expiresAt: 'asc' },
+      take: batchSize,
+    });
+    if (expired.length === 0) return 0;
+
+    const ids = expired.map((r) => r.id);
+
+    // Flip only the batch we just read, still re-checking status so a
+    // concurrent redeem()/release() that won the row is not clobbered
+    // (count reflects rows we actually transitioned).
+    const result = await this.prisma.discountRedemption.updateMany({
+      where: { id: { in: ids }, status: 'RESERVED', expiresAt: { lt: now } },
       data: { status: 'RELEASED', releasedAt: now },
     });
-    if (result.count > 0) {
-      this.logger.log(`Released ${result.count} expired discount reservations`);
+    if (result.count === 0) return 0;
+
+    this.logger.log(`Released ${result.count} expired discount reservations`);
+
+    // Per-row released events (best-effort). We re-read the flipped
+    // rows so the payload carries discount / customer / order context
+    // for analytics + affiliate reconciliation. A failure to emit must
+    // never abort the sweep — correctness already landed in the flip.
+    try {
+      const released = await this.prisma.discountRedemption.findMany({
+        where: { id: { in: ids }, status: 'RELEASED' },
+        select: {
+          id: true,
+          discountId: true,
+          customerId: true,
+          masterOrderId: true,
+          discountAmountInPaise: true,
+        },
+      });
+      for (const row of released) {
+        void this.events.emitRedemptionEvent({
+          action: 'released',
+          redemptionId: row.id,
+          discountId: row.discountId,
+          customerId: row.customerId,
+          masterOrderId: row.masterOrderId,
+          discountAmountInPaise: row.discountAmountInPaise,
+          reason: 'EXPIRED',
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `releaseExpired: failed to emit released events: ${(err as Error).message}`,
+      );
     }
+
     return result.count;
   }
 

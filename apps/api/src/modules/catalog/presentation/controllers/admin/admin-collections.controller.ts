@@ -21,7 +21,8 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { CurrentAdmin } from '../../../../../core/decorators/current-actor.decorator';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../../files/application/services/file.service';
 import { RedisService } from '../../../../../bootstrap/cache/redis.service';
 import { BadRequestAppException, NotFoundAppException } from '../../../../../core/exceptions';
 import { COLLECTION_REPOSITORY, ICollectionRepository } from '../../../domain/repositories/collection.repository.interface';
@@ -41,9 +42,9 @@ function toSlug(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Phase 37 (2026-05-21) — Cloudinary publicId extractor; same shape
+/** Phase 37 (2026-05-21) — media publicId extractor; same shape
  *  as the category/brand controllers. */
-function extractCloudinaryPublicId(url: string | null): string | null {
+function extractmediaPublicId(url: string | null): string | null {
   if (!url) return null;
   const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-zA-Z0-9]+$/);
   return match ? match[1]! : null;
@@ -83,8 +84,9 @@ export class AdminCollectionsController {
 
   constructor(
     @Inject(COLLECTION_REPOSITORY) private readonly collectionRepo: ICollectionRepository,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly redis: RedisService,
+    private readonly fileService: FileService,
   ) {}
 
   private async invalidateCollectionsCache(): Promise<void> {
@@ -189,10 +191,26 @@ export class AdminCollectionsController {
 
     if (imageFile && imageFile.buffer) {
       try {
-        const result = await this.cloudinary.upload(imageFile.buffer, {
+        const result = await this.media.upload(imageFile.buffer, {
           folder: `collections/${collection.id}`,
           resourceType: 'image',
         });
+        // Additively register the media asset in the central
+        // FileMetadata table so the integrity-verifier, audit, and
+        // orphan sweep can see it. Best-effort — never breaks upload.
+        void this.fileService
+          .registerExternalAsset({
+            publicId: result.publicId,
+            url: result.secureUrl,
+            mimeType: imageFile.mimetype,
+            sizeBytes: imageFile.size,
+            purpose: 'BANNER',
+            uploadedBy: adminId,
+            uploadedByType: 'ADMIN',
+            fileName: imageFile.originalname,
+            buffer: imageFile.buffer,
+          })
+          .catch(() => undefined);
         try {
           collection = await this.collectionRepo.updateImageFields(
             collection.id,
@@ -200,7 +218,7 @@ export class AdminCollectionsController {
             result.publicId,
           );
         } catch (err) {
-          await this.cloudinary.delete(result.publicId).catch(() => undefined);
+          await this.media.delete(result.publicId).catch(() => undefined);
           throw err;
         }
       } catch (err) {
@@ -333,11 +351,11 @@ export class AdminCollectionsController {
     }
 
     const publicId =
-      existing.imagePublicId ?? extractCloudinaryPublicId(deleted.imageUrl);
+      existing.imagePublicId ?? extractmediaPublicId(deleted.imageUrl);
     if (publicId) {
-      this.cloudinary.delete(publicId).catch((err) =>
+      this.media.delete(publicId).catch((err) =>
         this.logger.warn(
-          `Cloudinary cleanup failed for collection ${id} hero ${publicId}: ${err?.message}`,
+          `media cleanup failed for collection ${id} hero ${publicId}: ${err?.message}`,
         ),
       );
     }
@@ -525,12 +543,29 @@ export class AdminCollectionsController {
     // brand logo handling.
     const previousPublicId =
       collection.imagePublicId ??
-      extractCloudinaryPublicId(collection.imageUrl ?? null);
+      extractmediaPublicId(collection.imageUrl ?? null);
 
-    const result = await this.cloudinary.upload(file.buffer, {
+    const result = await this.media.upload(file.buffer, {
       folder: `collections/${id}`,
       resourceType: 'image',
     });
+
+    // Additively register the media asset in the central
+    // FileMetadata table so the integrity-verifier, audit, and orphan
+    // sweep can see it. Best-effort — must never break the upload.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: result.publicId,
+        url: result.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'BANNER',
+        uploadedBy: adminId,
+        uploadedByType: 'ADMIN',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
 
     let updated;
     try {
@@ -540,16 +575,16 @@ export class AdminCollectionsController {
         result.publicId,
       );
     } catch (err) {
-      await this.cloudinary.delete(result.publicId).catch((cleanupErr) =>
+      await this.media.delete(result.publicId).catch((cleanupErr) =>
         this.logger.warn(
-          `Cloudinary cleanup after DB failure missed asset ${result.publicId}: ${cleanupErr?.message}`,
+          `media cleanup after DB failure missed asset ${result.publicId}: ${cleanupErr?.message}`,
         ),
       );
       throw err;
     }
 
     if (previousPublicId && previousPublicId !== result.publicId) {
-      this.cloudinary.delete(previousPublicId).catch((err) =>
+      this.media.delete(previousPublicId).catch((err) =>
         this.logger.warn(
           `Failed to delete previous collection image ${previousPublicId}: ${err?.message}`,
         ),
@@ -580,12 +615,12 @@ export class AdminCollectionsController {
 
     const previousPublicId =
       collection.imagePublicId ??
-      extractCloudinaryPublicId(collection.imageUrl ?? null);
+      extractmediaPublicId(collection.imageUrl ?? null);
 
     const updated = await this.collectionRepo.updateImageFields(id, null, null);
 
     if (previousPublicId) {
-      this.cloudinary.delete(previousPublicId).catch((err) =>
+      this.media.delete(previousPublicId).catch((err) =>
         this.logger.warn(
           `Failed to delete collection image asset ${previousPublicId}: ${err?.message}`,
         ),

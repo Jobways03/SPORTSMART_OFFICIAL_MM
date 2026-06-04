@@ -33,6 +33,11 @@ function makeService(over: { request?: any; itemsById?: Record<string, any> } = 
   };
   const prisma: any = {
     procurementRequestEvent: { create: jest.fn().mockResolvedValue({}) },
+    // Phase 236 — approve/dispatch/receive/settle flip the header via a CAS
+    // updateMany (status guard + actor stamp) now.
+    procurementRequest: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const env: any = { getNumber: jest.fn().mockReturnValue(48) };

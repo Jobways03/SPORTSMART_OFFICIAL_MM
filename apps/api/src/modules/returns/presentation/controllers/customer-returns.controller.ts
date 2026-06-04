@@ -16,10 +16,42 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
-import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../files/application/services/file.service';
 import { ReturnService } from '../../application/services/return.service';
 import { CreateReturnDto } from '../dtos/create-return.dto';
 import { CustomerMarkHandedOverDto } from '../dtos/customer-mark-handed-over.dto';
+
+// Phase 199 (2026-06-02) — Returns audit #18. Multer-level MIME filter
+// for the evidence upload. Rejects anything whose declared Content-Type
+// is not a real image format so the media bucket can't be used to
+// host arbitrary files. (Magic-byte verification — the deeper, harder
+// guard — happens inside MediaStorageAdapter.upload via detectImageMime.)
+const ALLOWED_EVIDENCE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
+function imageMimeFileFilter(
+  _req: any,
+  file: { mimetype?: string },
+  cb: (error: Error | null, acceptFile: boolean) => void,
+): void {
+  const mime = (file?.mimetype ?? '').toLowerCase();
+  if (ALLOWED_EVIDENCE_MIME_TYPES.has(mime)) {
+    cb(null, true);
+    return;
+  }
+  cb(
+    new BadRequestAppException(
+      'Only JPEG, PNG, WEBP, or HEIC images are accepted.',
+    ),
+    false,
+  );
+}
 
 @ApiTags('Customer Returns')
 @Controller('customer/returns')
@@ -27,14 +59,27 @@ import { CustomerMarkHandedOverDto } from '../dtos/customer-mark-handed-over.dto
 export class CustomerReturnsController {
   constructor(
     private readonly returnService: ReturnService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
+    private readonly fileService: FileService,
   ) {}
 
   // POST /customer/returns/evidence — upload a single issue photo before
   // submitting the return. Returns { url } which the client batches into
   // `evidenceFileUrls` on the create payload. 5MB cap per image.
   @Post('evidence')
-  @UseInterceptors(FileInterceptor('image', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  // Phase 199 (2026-06-02) — Returns audit #6 throttle + #18 MIME guard.
+  // Evidence upload is an unauthenticated-by-business-value media
+  // write path; without a cap a customer could hammer it to bloat our
+  // asset store. 20/min is generous for a 5-photo wizard. The
+  // fileFilter rejects anything that isn't a real image MIME so the
+  // bucket can't be used to host arbitrary uploads.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @UseInterceptors(
+    FileInterceptor('image', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: imageMimeFileFilter,
+    }),
+  )
   async uploadEvidence(
     @Req() req: any,
     @UploadedFile() file: Express.Multer.File,
@@ -42,10 +87,26 @@ export class CustomerReturnsController {
     if (!file?.buffer) {
       throw new BadRequestAppException('Image file is required');
     }
-    const result = await this.cloudinary.upload(file.buffer, {
+    const result = await this.media.upload(file.buffer, {
       folder: `sportsmart/returns/evidence/${req.userId}`,
       resourceType: 'image',
     });
+    // Additive, best-effort: register a central FileMetadata row so
+    // integrity/audit/orphan-sweep see this customer evidence asset.
+    // Never affects the upload/validation flow or the response.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: result.publicId,
+        url: result.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'QC_EVIDENCE',
+        uploadedBy: req.userId,
+        uploadedByType: 'CUSTOMER',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
     return {
       success: true,
       message: 'Evidence uploaded',
@@ -97,6 +158,8 @@ export class CustomerReturnsController {
 
   // GET /customer/returns — list customer's returns
   @Get()
+  // Phase 199 (2026-06-02) — Returns audit #6 throttle on customer reads.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async listReturns(
     @Req() req: any,
     @Query('page') page?: string,
@@ -113,6 +176,8 @@ export class CustomerReturnsController {
 
   // GET /customer/returns/:returnId — return detail
   @Get(':returnId')
+  // Phase 199 (2026-06-02) — Returns audit #6 throttle on customer reads.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async getReturnDetail(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -130,6 +195,12 @@ export class CustomerReturnsController {
   // Inline body shape (no DTO class) — single optional field that the
   // service persists on the Return row for audit.
   @Post(':returnId/cancel')
+  // Phase 199 (2026-06-02) — Returns audit #6 / #12. @Idempotent so a
+  // retried cancel (network blip, double-tap) returns the original
+  // response instead of racing a second CANCELLED write; the service
+  // also uses an optimistic-lock CAS. @Throttle caps the endpoint.
+  @Idempotent()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async cancelReturn(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -149,6 +220,8 @@ export class CustomerReturnsController {
 
   // POST /customer/returns/:returnId/handed-over — customer marks package handed over
   @Post(':returnId/handed-over')
+  // Phase 199 (2026-06-02) — Returns audit #6 throttle.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async markHandedOver(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -171,6 +244,8 @@ export class CustomerReturnsController {
   //      → verifies HMAC, marks payment complete, kicks the replacement
   //         pipeline so the actual replacement order ships
   @Post(':returnId/exchange-payment-init')
+  // Phase 199 (2026-06-02) — Returns audit #6 throttle on a money path.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async initiateExchangePayment(
     @Req() req: any,
     @Param('returnId') returnId: string,
@@ -183,6 +258,8 @@ export class CustomerReturnsController {
   }
 
   @Post(':returnId/exchange-payment-verify')
+  // Phase 199 (2026-06-02) — Returns audit #6 throttle on a money path.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async verifyExchangePayment(
     @Req() req: any,
     @Param('returnId') returnId: string,

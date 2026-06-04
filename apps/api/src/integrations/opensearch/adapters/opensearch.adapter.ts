@@ -1,13 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OpenSearchClient } from '../clients/opensearch.client';
 
-const PRODUCTS_INDEX = 'sportsmart_products';
-
 @Injectable()
 export class OpenSearchAdapter {
   private readonly logger = new Logger(OpenSearchAdapter.name);
 
   constructor(private readonly client: OpenSearchClient) {}
+
+  /**
+   * Phase 195 (#1) — true only when the underlying node is configured.
+   * The facade's useOpenSearch() gate consults this so an enabled flag
+   * without a reachable node falls back to Prisma instead of returning
+   * empty results.
+   */
+  get isReady(): boolean {
+    return this.client.isConfigured;
+  }
 
   /**
    * Index a product document for search.
@@ -30,7 +38,7 @@ export class OpenSearchAdapter {
   }): Promise<void> {
     if (!this.client.isConfigured) return;
 
-    await this.client.indexDocument(PRODUCTS_INDEX, product.id, {
+    await this.client.indexDocument(this.client.productsIndex, product.id, {
       title: product.title,
       description: product.description,
       slug: product.slug,
@@ -54,7 +62,7 @@ export class OpenSearchAdapter {
    */
   async removeProduct(productId: string): Promise<void> {
     if (!this.client.isConfigured) return;
-    await this.client.deleteDocument(PRODUCTS_INDEX, productId);
+    await this.client.deleteDocument(this.client.productsIndex, productId);
   }
 
   /**
@@ -102,7 +110,7 @@ export class OpenSearchAdapter {
     const page = params.page || 1;
     const limit = params.limit || 20;
 
-    const result = await this.client.search(PRODUCTS_INDEX, {
+    const result = await this.client.search(this.client.productsIndex, {
       query: {
         bool: {
           must: must.length > 0 ? must : [{ match_all: {} }],
@@ -145,7 +153,7 @@ export class OpenSearchAdapter {
     if (!this.client.isConfigured) return;
 
     await this.client.bulkIndex(
-      PRODUCTS_INDEX,
+      this.client.productsIndex,
       products.map((p) => ({
         id: p.id,
         body: {
@@ -172,7 +180,7 @@ export class OpenSearchAdapter {
   async initializeIndex(): Promise<void> {
     if (!this.client.isConfigured) return;
 
-    await this.client.createIndex(PRODUCTS_INDEX, {
+    await this.client.createIndex(this.client.productsIndex, {
       properties: {
         title: { type: 'text', analyzer: 'standard' },
         description: { type: 'text' },

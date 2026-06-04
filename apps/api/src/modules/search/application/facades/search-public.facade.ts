@@ -1,15 +1,22 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { OpenSearchAdapter } from '../../../../integrations/opensearch/adapters/opensearch.adapter';
+import { escapeLikePattern, sanitizeSearchTerm, MIN_SEARCH_TERM_LENGTH } from '../../../../core/utils/search-term.util';
 
 @Injectable()
 export class SearchPublicFacade {
   private readonly logger = new Logger(SearchPublicFacade.name);
+  // Phase 195 (#13) — single-instance guard so two admins clicking
+  // "reindex" don't launch overlapping full-catalog walks. Multi-instance
+  // safety would need a Redis fenced lock (surfaced, not built).
+  private reindexInProgress = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    private readonly eventBus: EventBusService,
     // Sprint 6 Story 5.1 — delegate to OpenSearch when the operational
     // flag is on AND the adapter is configured. Optional so the facade
     // still constructs in test harnesses that don't wire the adapter.
@@ -71,17 +78,31 @@ export class SearchPublicFacade {
     const brandId = filters.brandId as string | undefined;
     const minPrice = filters.minPrice ? Number(filters.minPrice) : undefined;
     const maxPrice = filters.maxPrice ? Number(filters.maxPrice) : undefined;
+    // Phase 195 (#7/#9) — sanitize (control/length) + escape LIKE wildcards
+    // before they reach Prisma `contains`. Below the 2-char floor we treat
+    // it as no query (browse-all) rather than scanning on a single char.
+    const sanitized = sanitizeSearchTerm(query);
+    const safe = sanitized.length >= MIN_SEARCH_TERM_LENGTH ? escapeLikePattern(sanitized) : '';
 
     const where: any = {
       status: 'ACTIVE',
       isDeleted: false,
+      // Phase 195 (#2 CRITICAL) — never surface pending/rejected products in
+      // search; mirrors the catalog listing's visibility predicate.
+      moderationStatus: 'APPROVED',
     };
 
-    if (query) {
+    if (safe) {
+      // Phase 195 (#11/#19) — drop the heavy long-text `description` scan;
+      // search title + SKU + tags + brand/category name instead (parity with
+      // the OpenSearch field set, so flipping the engine doesn't change which
+      // products match).
       where.OR = [
-        { title: { contains: query, mode: 'insensitive' } },
-        { description: { contains: query, mode: 'insensitive' } },
-        { baseSku: { contains: query, mode: 'insensitive' } },
+        { title: { contains: safe, mode: 'insensitive' } },
+        { baseSku: { contains: safe, mode: 'insensitive' } },
+        { tags: { some: { tag: { contains: safe, mode: 'insensitive' } } } },
+        { brand: { name: { contains: safe, mode: 'insensitive' } } },
+        { category: { name: { contains: safe, mode: 'insensitive' } } },
       ];
     }
 
@@ -114,12 +135,27 @@ export class SearchPublicFacade {
             take: 1,
           },
         },
-        orderBy: { createdAt: 'desc' },
+        // Phase 195 (#20) — secondary id key makes OFFSET pagination
+        // deterministic when createdAt ties (bulk imports share timestamps).
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         skip: (page - 1) * limit,
         take: limit,
       }),
       this.prisma.product.count({ where }),
     ]);
+
+    // Phase 195 (#15) — analytics signal + distinct zero-results event.
+    if (sanitized.length >= MIN_SEARCH_TERM_LENGTH) {
+      this.eventBus
+        .publish({
+          eventName: total === 0 ? 'search.zero_results' : 'search.performed',
+          aggregate: 'Search',
+          aggregateId: sanitized.slice(0, 64),
+          occurredAt: new Date(),
+          payload: { q: sanitized, total, page, source: 'search_module' },
+        })
+        .catch((err) => this.logger.warn(`Failed to emit search analytics: ${(err as Error).message}`));
+    }
 
     return { items, total, page, limit };
   }
@@ -220,6 +256,31 @@ export class SearchPublicFacade {
   }
 
   /**
+   * Phase 195 (#13) — non-blocking reindex trigger. The POST endpoint
+   * returns immediately (202) while the full-catalog walk runs in the
+   * background, and a single-instance guard rejects an overlapping run so
+   * two admins clicking the button can't launch two concurrent walks.
+   * Returns whether a run was started (false = one was already running, or
+   * OpenSearch is disabled so there's nothing to rebuild).
+   */
+  triggerReindex(): { started: boolean; reason?: string } {
+    if (!this.openSearch || !this.env.getBoolean('SEARCH_OPENSEARCH_ENABLED', false)) {
+      return { started: false, reason: 'OpenSearch disabled — Prisma fallback is authoritative, nothing to rebuild.' };
+    }
+    if (this.reindexInProgress) {
+      return { started: false, reason: 'A reindex is already in progress.' };
+    }
+    this.reindexInProgress = true;
+    // Detach: the request returns 202 immediately.
+    void this.rebuildSearchIndex()
+      .catch((err) => this.logger.error(`Background reindex failed: ${(err as Error).message}`))
+      .finally(() => {
+        this.reindexInProgress = false;
+      });
+    return { started: true };
+  }
+
+  /**
    * Update a single product's search document. Called on product
    * create / update / delete events so the index stays in sync without
    * waiting for the daily rebuild.
@@ -298,26 +359,33 @@ export class SearchPublicFacade {
    * brand names. Cheap LIKE for now; swap to pg_trgm + GIN for perf.
    */
   async suggest(q: string): Promise<Array<{ type: 'product' | 'brand' | 'category'; text: string; slug?: string; id?: string }>> {
-    const term = q.trim();
-    if (term.length < 2) return [];
+    // Phase 195 (#7/#9) — sanitize + escape; below the floor return nothing.
+    const term = sanitizeSearchTerm(q);
+    if (term.length < MIN_SEARCH_TERM_LENGTH) return [];
+    const safe = escapeLikePattern(term);
 
     const [products, brands, categories] = await Promise.all([
       this.prisma.product.findMany({
         where: {
           status: 'ACTIVE',
           isDeleted: false,
-          title: { contains: term, mode: 'insensitive' },
+          // Phase 195 (#2) — approved-only, consistent with searchProducts.
+          moderationStatus: 'APPROVED',
+          title: { contains: safe, mode: 'insensitive' },
         },
         select: { id: true, title: true, slug: true },
         take: 5,
       }),
       this.prisma.brand.findMany({
-        where: { name: { contains: term, mode: 'insensitive' } },
+        // Phase 195 (#4 CRITICAL) — disabled brands must not appear as
+        // autocomplete hits (they'd link to a zero-result brand page).
+        where: { isActive: true, name: { contains: safe, mode: 'insensitive' } },
         select: { id: true, name: true },
         take: 3,
       }),
       this.prisma.category.findMany({
-        where: { name: { contains: term, mode: 'insensitive' } },
+        // Phase 195 (#4 CRITICAL) — only active categories surface.
+        where: { isActive: true, name: { contains: safe, mode: 'insensitive' } },
         select: { id: true, name: true },
         take: 2,
       }),
@@ -339,7 +407,12 @@ export class SearchPublicFacade {
   private useOpenSearch(): boolean {
     return (
       this.env.getBoolean('SEARCH_OPENSEARCH_ENABLED', false) &&
-      this.openSearch !== undefined
+      this.openSearch !== undefined &&
+      // Phase 195 (#1) — also require the node to actually be configured.
+      // Without this, flag-on + adapter-wired + no OPENSEARCH_NODE returned
+      // an EMPTY result set (the client no-ops) instead of cleanly falling
+      // back to the proven Prisma path.
+      this.openSearch.isReady
     );
   }
 }

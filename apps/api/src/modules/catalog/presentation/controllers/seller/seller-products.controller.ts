@@ -17,6 +17,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { EventBusService } from '../../../../../bootstrap/events/event-bus.service';
+import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 import {
   NotFoundAppException,
   BadRequestAppException,
@@ -60,6 +61,7 @@ export class SellerProductsController {
     private readonly eventBus: EventBusService,
     private readonly metafieldValidation: MetafieldValidationService,
     private readonly taxAttestation: ProductTaxAttestationService,
+    private readonly prisma: PrismaService,
   ) {
     this.logger.setContext('SellerProductsController');
   }
@@ -169,6 +171,11 @@ export class SellerProductsController {
     );
 
     this.logger.log(`Product created: ${product.id} by seller ${sellerId}`);
+
+    // Phase 249 (#4) — stamp AI provenance + flip the log to ACCEPTED
+    // now that the product row exists (so we have its id). Best-effort:
+    // never blocks the create response.
+    await this.stampAiProvenance(product.id, dto.aiGenerationLogId);
 
     // ── Phase 11 / T3: Auto-create SellerProductMapping for the creator ──
     try {
@@ -376,6 +383,13 @@ export class SellerProductsController {
   ) {
     // Validate ownership
     await this.ownershipService.validateOwnership(sellerId, productId);
+
+    // Phase 249 (#4) — stamp AI provenance + flip the log to ACCEPTED.
+    // Done up front (independent of the field-diff below) so it still
+    // records even when this PATCH changes nothing else — e.g. the
+    // seller re-saves a draft that kept the AI copy. CAS on the log
+    // makes a repeat save a no-op on the log row. Best-effort.
+    await this.stampAiProvenance(productId, dto.aiGenerationLogId);
 
     // Phase 30 (2026-05-21) — admin-only field stripping removed; the
     // seller DTO no longer accepts procurementPrice / categoryName /
@@ -852,6 +866,73 @@ export class SellerProductsController {
     if (missing.length > 0) {
       throw new BadRequestAppException(
         `Cannot submit for review — missing: ${missing.join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Phase 249 (#4) — stamp AI-content provenance onto a freshly
+   * created / updated product and flip its AiGenerationLog row
+   * GENERATED → ACCEPTED. Called once the product id is known (after
+   * create, or from the route param on update) when the request carried
+   * `aiGenerationLogId`.
+   *
+   * Best-effort by design: a bad / missing / already-resolved log id
+   * must never fail the product save (the product row is the source of
+   * truth; provenance is a mirror). Talks to `prisma.aiGenerationLog`
+   * directly rather than importing the AI module — both live in the
+   * same database and the catalog controller already has PrismaService.
+   *
+   * Idempotency:
+   *   • Product stamp — re-stamping aiGenerated=true is harmless, so we
+   *     always stamp when the log resolves to a real row.
+   *   • Log flip — CAS on `status='GENERATED'` (updateMany) so a re-save
+   *     of the same draft does NOT clobber the first acceptance's
+   *     productId / acceptedAt.
+   */
+  private async stampAiProvenance(
+    productId: string,
+    aiGenerationLogId: string | undefined,
+  ): Promise<void> {
+    if (!aiGenerationLogId) return;
+    try {
+      const log = await this.prisma.aiGenerationLog.findUnique({
+        where: { id: aiGenerationLogId },
+        select: { id: true, promptVersion: true },
+      });
+      if (!log) {
+        this.logger.warn(
+          `aiGenerationLogId ${aiGenerationLogId} not found — skipping AI provenance for product ${productId}`,
+        );
+        return;
+      }
+
+      // Stamp the product's provenance columns. aiHumanReviewed stays
+      // at its default false — a human-review queue can flip it later.
+      await this.prisma.product.update({
+        where: { id: productId },
+        data: {
+          aiGenerated: true,
+          aiGeneratedAt: new Date(),
+          aiPromptVersion: log.promptVersion,
+        },
+      });
+
+      // CAS flip: only GENERATED → ACCEPTED. A second save (log already
+      // ACCEPTED / DISCARDED) updates 0 rows and leaves the original
+      // acceptance intact.
+      const res = await this.prisma.aiGenerationLog.updateMany({
+        where: { id: aiGenerationLogId, status: 'GENERATED' },
+        data: { status: 'ACCEPTED', productId, acceptedAt: new Date() },
+      });
+      if (res.count === 0) {
+        this.logger.log(
+          `AiGenerationLog ${aiGenerationLogId} was not in GENERATED state (already resolved) — product ${productId} stamped, log left as-is`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to stamp AI provenance for product ${productId} (log ${aiGenerationLogId}): ${err}`,
       );
     }
   }

@@ -105,6 +105,109 @@ describe('AffiliatePayoutService — §194-O deposit/certificate (Phase 159f)', 
     expect(html).toContain('Riya'); // deductee name
   });
 
+  // Phase 160 (§194-O affiliate audit #16) — correction flow.
+  function buildReverseSvc(
+    currentStatus: string | null,
+    opts: { txCount?: number } = {},
+  ) {
+    const row =
+      currentStatus === null
+        ? null
+        : {
+            id: 'l1',
+            status: currentStatus,
+            affiliateId: 'aff1',
+            filingPeriod: '2026-Q1',
+            grossInPaise: 2_000_000n, // ₹20,000
+            tdsInPaise: 10_000n, // ₹100
+          };
+    const findUnique = jest.fn().mockResolvedValue(row);
+    const txCount = opts.txCount ?? (currentStatus && currentStatus !== 'REVERSED' ? 1 : 0);
+    const ledgerUpdateMany = jest.fn().mockResolvedValue({ count: txCount });
+    const tdsRecordUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      affiliateTds194OLedger: { updateMany: ledgerUpdateMany },
+      affiliateTdsRecord: { updateMany: tdsRecordUpdateMany },
+    };
+    const prisma = {
+      affiliateTds194OLedger: { findUnique, updateMany: jest.fn(), findMany: jest.fn() },
+      $transaction: jest.fn(async (cb: any) => cb(tx)),
+    } as any;
+    const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+    const svc = new AffiliatePayoutService(prisma, {} as any, {} as any, audit, {} as any);
+    (svc as any).logger = { error: jest.fn(), log: jest.fn(), warn: jest.fn() };
+    return { svc, findUnique, ledgerUpdateMany, tdsRecordUpdateMany, audit };
+  }
+
+  it('reverseTds194O flips a WITHHELD row to REVERSED + audits + decrements cumulative', async () => {
+    const { svc, ledgerUpdateMany, tdsRecordUpdateMany, audit } = buildReverseSvc('WITHHELD');
+    const res = await svc.reverseTds194O({
+      ledgerId: 'l1',
+      reversedBy: 'admin1',
+      reason: 'duplicate deduction',
+    });
+    expect(res).toEqual({ reversed: true, previousStatus: 'WITHHELD', wasAlreadyReversed: false });
+    expect(ledgerUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // CAS on the previously-read status so a concurrent transition can't be clobbered.
+        where: { id: 'l1', status: 'WITHHELD' },
+        data: expect.objectContaining({ status: 'REVERSED', reversalReason: 'duplicate deduction', reversedBy: 'admin1' }),
+      }),
+    );
+    // Review fix — WITHHELD means markPaid bumped the cumulative, so the
+    // reversal must decrement it (FY derived from the 2026-Q1 quarter).
+    expect(tdsRecordUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { affiliateId: 'aff1', financialYear: '2026-27' },
+        data: expect.objectContaining({
+          cumulativeGross: { decrement: expect.anything() },
+          cumulativeTds: { decrement: expect.anything() },
+          cumulativeNet: { decrement: expect.anything() },
+        }),
+      }),
+    );
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AFFILIATE_TDS_REVERSED' }),
+    );
+  });
+
+  it('reverseTds194O does NOT decrement the cumulative for a COMPUTED row (never bumped)', async () => {
+    const { svc, tdsRecordUpdateMany } = buildReverseSvc('COMPUTED');
+    const res = await svc.reverseTds194O({ ledgerId: 'l1', reversedBy: 'admin1', reason: 'wrong compute' });
+    expect(res.reversed).toBe(true);
+    // A COMPUTED payout was never PAID → markPaid never bumped the cumulative
+    // → nothing to subtract. Decrementing would wrongly push it negative.
+    expect(tdsRecordUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('reverseTds194O is idempotent on an already-REVERSED row (no write)', async () => {
+    const { svc, ledgerUpdateMany } = buildReverseSvc('REVERSED');
+    const res = await svc.reverseTds194O({ ledgerId: 'l1', reversedBy: 'admin1', reason: 'already done' });
+    expect(res).toEqual({ reversed: false, previousStatus: 'REVERSED', wasAlreadyReversed: true });
+    expect(ledgerUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('reverseTds194O reports a lost CAS race without decrementing', async () => {
+    const { svc, tdsRecordUpdateMany } = buildReverseSvc('WITHHELD', { txCount: 0 });
+    const res = await svc.reverseTds194O({ ledgerId: 'l1', reversedBy: 'admin1', reason: 'race condition' });
+    expect(res.reversed).toBe(false);
+    expect(tdsRecordUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('reverseTds194O rejects a too-short reason', async () => {
+    const { svc } = buildReverseSvc('WITHHELD');
+    await expect(
+      svc.reverseTds194O({ ledgerId: 'l1', reversedBy: 'admin1', reason: 'x' }),
+    ).rejects.toThrow(/reason/i);
+  });
+
+  it('reverseTds194O 404s on a missing ledger row', async () => {
+    const { svc } = buildReverseSvc(null);
+    await expect(
+      svc.reverseTds194O({ ledgerId: 'ghost', reversedBy: 'admin1', reason: 'valid reason' }),
+    ).rejects.toThrow(/not found/i);
+  });
+
   it('getAffiliateTaxSummary: download enabled only when the whole quarter is CERTIFICATE_ISSUED', async () => {
     const { svc } = buildSvc({
       ledgerRows: [

@@ -13,6 +13,8 @@ export const EWAY_BILL_EVENTS = {
   FAILED: 'tax.ewayBill.failed',
   OVERRIDDEN: 'tax.ewayBill.overridden',
   OVERRIDE_REVOKED: 'tax.ewayBill.override_revoked',
+  // Phase 160 (audit #18) — Part-B (transport) updated without cancelling.
+  PART_B_UPDATED: 'tax.ewayBill.part_b_updated',
 } as const;
 
 // Phase 89 — Gap #26. Override reason categories. Free-text "ok"

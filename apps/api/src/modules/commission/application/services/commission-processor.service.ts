@@ -1,15 +1,11 @@
-import {
-  Inject,
-  Injectable,
-  OnModuleDestroy,
-  OnModuleInit,
-  Logger,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
 import {
   BadRequestAppException,
   ConflictAppException,
@@ -29,11 +25,12 @@ import {
 
 const LOCK_KEY = 'lock:commission-processor';
 const LOCK_TTL = 30; // 30 seconds lock
+// Cluster-B — instrumentation job name (cron_runs + Prometheus labels).
+const CRON_JOB_NAME = 'commission-processor';
 
 @Injectable()
-export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy {
+export class CommissionProcessorService {
   private readonly logger = new Logger(CommissionProcessorService.name);
-  private tickTimer: NodeJS.Timeout | null = null;
   // Phase 135 — in-process re-entrancy guard. Cheap first line of defence so
   // a slow tick doesn't overlap itself within ONE pod (the Redis lock guards
   // cross-pod; this avoids even acquiring it when we're already mid-tick).
@@ -53,6 +50,9 @@ export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy
     private readonly env: EnvService,
     // Phase 135 — system audit trail for processor-locked commission.
     private readonly audit: AuditPublicFacade,
+    // Cluster-B — cron_runs row + Prometheus metrics per tick. @Global() export
+    // from CronObservabilityModule, so no module import is needed.
+    private readonly instr: CronInstrumentationService,
   ) {}
 
   /** `sellerId:productId:variantId` key for the prefetched mapping cache. */
@@ -86,49 +86,50 @@ export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy
     await Promise.all(Array.from({ length: n }, () => worker()));
   }
 
-  onModuleInit() {
-    // Phase 3.6 (2026-05-16) — feature-flag gate. Default ON so we
-    // don't change production behaviour, but the team can pause the
-    // processor without a code change when needed (e.g. during a
-    // commission-rule migration, or to investigate a runaway
-    // commission row). The interval is env-tunable as well — for
-    // load tests we may want to slow it down.
+  /**
+   * Cluster-B — @Cron driver, replacing the prior onModuleInit setInterval
+   * (+ its onModuleDestroy cleanup, no longer needed: @nestjs/schedule owns
+   * the timer lifecycle and tears it down on shutdown).
+   *
+   * Phase 3.6 (2026-05-16) — feature-flag gate. Default ON so we don't change
+   * production behaviour, but the team can pause the processor without a code
+   * change when needed (e.g. during a commission-rule migration, or to
+   * investigate a runaway commission row).
+   *
+   * The existing FENCED Redis lock inside processCommissions() remains the
+   * cluster-wide single-runner guard (acquireLockWithToken = the same fenced
+   * primitive LeaderElectedCron uses), so we do NOT add a second leader layer
+   * here; we only add CronInstrumentationService.wrap for the cron_runs row +
+   * Prometheus metrics that the setInterval driver never produced.
+   */
+  @Cron(CronExpression.EVERY_MINUTE)
+  async run(): Promise<void> {
     if (!this.env.getBoolean('COMMISSION_PROCESSOR_ENABLED', true)) {
-      this.logger.warn(
-        'CommissionProcessorService disabled via COMMISSION_PROCESSOR_ENABLED=false — sub-orders past return-window will NOT auto-lock commission.',
+      // Logged once per tick at debug to avoid noise; the warn on first miss
+      // is enough signal in practice. Keep it terse.
+      this.logger.debug(
+        'CommissionProcessorService disabled via COMMISSION_PROCESSOR_ENABLED=false — skipping tick.',
       );
       return;
     }
-    const intervalMs = this.env.getNumber(
-      'COMMISSION_PROCESSOR_INTERVAL_MS',
-      15_000,
-    );
-    this.tickTimer = setInterval(() => this.processCommissions(), intervalMs);
-    this.logger.log(
-      `Commission processor started (${intervalMs}ms interval) — Model 1 margin-based`,
-    );
-  }
-
-  /**
-   * Clean up the setInterval on SIGTERM. Without this, the worker
-   * holds the event loop open until the next tick fires, delaying
-   * pod eviction and accumulating zombie tasks across rolling
-   * deploys.
-   */
-  onModuleDestroy() {
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-      this.logger.log('Commission processor stopped on module destroy');
+    try {
+      await this.instr.wrap(CRON_JOB_NAME, () => this.processCommissions());
+    } catch {
+      // already recorded as FAILED in cron_runs by the wrap
     }
   }
 
   /* ── Background job: process delivered sub-orders ───────────────── */
 
-  async processCommissions() {
+  async processCommissions(): Promise<{
+    scanned: number;
+    processed: number;
+    failed: number;
+    skippedUnpaidCod?: number;
+  }> {
     // Phase 135 — in-process overlap guard. Cheap first line of defence: don't
     // even acquire the Redis lock if this pod is already mid-tick.
-    if (this.isProcessing) return;
+    if (this.isProcessing) return { scanned: 0, processed: 0, failed: 0 };
     this.isProcessing = true;
     const startedAt = Date.now();
 
@@ -142,12 +143,13 @@ export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy
     );
     if (!acquired) {
       this.isProcessing = false;
-      return; // Another instance is already processing
+      return { scanned: 0, processed: 0, failed: 0 }; // Another instance is already processing
     }
 
     let scanned = 0;
     let processed = 0;
     let failed = 0;
+    let skippedUnpaidCod = 0;
     try {
       // Cap the per-tick batch (env-tunable). Successive ticks drain the
       // backlog; the atomic-claim makes cross-tick processing safe.
@@ -155,10 +157,61 @@ export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy
         'COMMISSION_PROCESSOR_BATCH_SIZE',
         200,
       );
-      const subOrders =
+      let subOrders =
         await this.commissionRepo.findDeliveredSubOrders(batchSize);
       scanned = subOrders.length;
-      if (subOrders.length === 0) return;
+      if (subOrders.length === 0)
+        return { scanned, processed, failed, skippedUnpaidCod };
+
+      // Cluster-B (#2b) — COD cash-in-hand gate. The eligibility scan
+      // (findDeliveredSubOrdersPastReturnWindow) admits a DELIVERED COD
+      // sub-order the moment its return window closes, REGARDLESS of whether
+      // the delivery agent's cash was ever collected — deliverSubOrder sets
+      // fulfillmentStatus=DELIVERED but never touches paymentStatus, and no
+      // downstream settlement step re-checks COD collection. So commission
+      // (and therefore the seller payable) can lock on money the platform may
+      // never receive (COD non-payment / RTO-after-delivery). Gated OFF by
+      // default because turning it ON shifts settlement timing for every
+      // in-flight COD order and is a finance-policy call (see honestCalls); when
+      // ON, a COD sub-order is processed only once its paymentStatus=PAID
+      // (set by orders.markSubOrderAsPaid on cash collection). ONLINE/prepaid
+      // sub-orders are unaffected.
+      if (
+        this.env.getBoolean('COMMISSION_REQUIRE_COD_PAID', false) &&
+        subOrders.length > 0
+      ) {
+        const masterIds = Array.from(
+          new Set(
+            (subOrders as any[])
+              .map((so) => so.masterOrderId)
+              .filter((x): x is string => !!x),
+          ),
+        );
+        const codMasterIds = new Set(
+          (
+            await this.prisma.masterOrder.findMany({
+              where: { id: { in: masterIds }, paymentMethod: 'COD' },
+              select: { id: true },
+            })
+          ).map((m) => m.id),
+        );
+        if (codMasterIds.size > 0) {
+          const before = subOrders.length;
+          subOrders = (subOrders as any[]).filter((so) => {
+            // Keep non-COD outright; keep COD only when its cash is collected.
+            if (!codMasterIds.has(so.masterOrderId)) return true;
+            return so.paymentStatus === 'PAID';
+          }) as typeof subOrders;
+          skippedUnpaidCod = before - subOrders.length;
+          if (skippedUnpaidCod > 0) {
+            this.logger.log(
+              `Commission tick: deferred ${skippedUnpaidCod} delivered COD sub-order(s) awaiting cash collection (COMMISSION_REQUIRE_COD_PAID)`,
+            );
+          }
+        }
+        if (subOrders.length === 0)
+          return { scanned, processed, failed, skippedUnpaidCod };
+      }
 
       // Fetch the global commission setting once per tick. Used as a fallback
       // when there's no mapping or a mapping leaves no margin so the platform
@@ -223,6 +276,9 @@ export class CommissionProcessorService implements OnModuleInit, OnModuleDestroy
         );
       }
     }
+    // Cluster-B — returned to CronInstrumentationService.wrap so the per-tick
+    // counts land in the cron_runs.result JSON column (SQL-queryable metric).
+    return { scanned, processed, failed, skippedUnpaidCod };
   }
 
   /**

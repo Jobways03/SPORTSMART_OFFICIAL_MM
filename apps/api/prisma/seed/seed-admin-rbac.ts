@@ -42,6 +42,7 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'paymentOps.read', 'paymentOps.transition',
       'recon.read',
       'audit.read',
+      'portal.streams.admin.read',
       'support.read', 'support.assign',
       'analytics.read',
       'customers.read',
@@ -81,6 +82,8 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'products.read', 'products.approve',
       'sellers.read',
       'storefront.read',
+      // Phase 249 — product authors can use AI content generation.
+      'ai.generate.product',
     ],
   },
   {
@@ -155,8 +158,17 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'disputes.read',
       'internalNotes.read', 'internalNotes.write',
       'audit.read',
+      // Phase 207 (#1) / Phase 208 (#3) — fraud/risk owns brute-force
+      // triage, so this tier carries the access-log spike surface and
+      // the unified admin activity timeline.
+      'security.read', 'admin.activity.read',
       'orders.read',
       'customers.read', 'customers.suspend',
+      // Phase 245 (abuse-detection audit #12) — the coupon-abuse surface
+      // belongs to risk, not general marketing. read = PII telemetry +
+      // concentration; review = triage; action = suspend coupon / block.
+      'discounts.read', 'discounts.abuse.read',
+      'discounts.abuse.review', 'discounts.abuse.action',
     ],
   },
   {
@@ -178,6 +190,10 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'recon.read', 'recon.run', 'recon.transition',
       'paymentOps.read', 'paymentOps.transition',
       'audit.read',
+      // Phase 243 #19 / 247 #13 — funding type/split is a finance
+      // decision (it shifts settlement money); P&L detail (fundingNotes,
+      // liability split) is finance-tier read.
+      'discounts.read', 'discounts.read.finance', 'discounts.write.funding',
     ],
   },
   {
@@ -208,6 +224,10 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
     permissions: [
       'content.read', 'content.write', 'content.publish',
       'discounts.read', 'discounts.write',
+      // Phase 243 #17 / 246 #14 — campaign owners read their own change
+      // history and export campaign analytics. Funding/finance + abuse
+      // tiers are intentionally NOT here (Finance Manager / Risk roles).
+      'discounts.audit', 'discounts.analytics.export',
       'storefront.read', 'storefront.write',
       'analytics.read',
     ],
@@ -236,14 +256,21 @@ const SYSTEM_ROLES: SystemRoleSeed[] = [
       'tax.creditNote.timebarOverride', 'tax.creditNote.timebarReview',
       'tax.debitNote.create',
       'tax.reports.read', 'tax.reports.export',
+      // Phase 163 — org-wide audit-readiness dashboard + the STRICT-mode
+      // export blocker-override (HIGH; every use is audit-logged).
+      'tax.readiness.read', 'tax.reports.overrideBlockers',
       'tax.tcs.read', 'tax.tcs.compute', 'tax.tcs.export',
       'tax.tcs.markFiled', 'tax.tcs.markPaidToGovt',
       'tax.ewayBill.read', 'tax.ewayBill.generate', 'tax.ewayBill.cancel', 'tax.ewayBill.override',
       'tax.einvoice.manage', 'tax.einvoice.cancelWithinWindow',
+      // Phase 161 — §194-O seller exemption (was wrongly gated by tax.gstn.verify).
+      'tax.tds194o.exempt',
       'tax.override',
       // Wallet-adjustments approval queue (Phase 13 dual approval lands here)
       'wallet.adjustment.read', 'wallet.adjustment.create',
       'wallet.adjustment.approve', 'wallet.adjustment.reject',
+      // Phase 162 — reverse a posted adjustment (compensating entry).
+      'wallet.adjustment.reverse',
       // Cross-context reads the queue needs to be useful
       'wallets.read',
       'recon.read',

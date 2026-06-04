@@ -1,7 +1,8 @@
 import { apiClient, ApiResponse } from '@/lib/api-client';
 import type { AccessActorType } from './admin-access-logs.service';
 
-export type ActivitySource = 'AUTH' | 'BUSINESS';
+// Phase 208 (#1/#8) — widened from the original AUTH|BUSINESS pair.
+export type ActivitySource = 'AUTH' | 'ADMIN_ACTION' | 'BUSINESS' | 'IMPERSONATION';
 
 export interface ActivityItem {
   source: ActivitySource;
@@ -23,6 +24,9 @@ export interface ActivityTimelineResponse {
   items: ActivityItem[];
   since: string;
   hours: number;
+  // Phase 208 (#9) — true when one source filled its page, so older
+  // events MAY have been dropped at the merge boundary. The UI warns.
+  truncated?: boolean;
 }
 
 function buildQs(params: Record<string, string | number | undefined>): string {

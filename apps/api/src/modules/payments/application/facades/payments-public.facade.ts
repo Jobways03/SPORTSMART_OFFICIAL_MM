@@ -74,6 +74,22 @@ export class PaymentsPublicFacade {
       );
     }
 
+    // Phase 168 (COD Mark-Paid audit #1/#2) — a MANUAL mark-paid (no
+    // gatewaySnapshot) must be COD. The gateway-snapshot paths (webhook +
+    // verify) handle ONLINE orders WITH an amount/order-id verification below;
+    // a snapshot-less call flipping an ONLINE order to PAID would bypass the
+    // gateway entirely (no PaymentAttempt, no signature, no amount match) — the
+    // exact fraud vector the audit flagged. ONLINE orders settle only via the
+    // verified path.
+    if (!params.gatewaySnapshot && order.paymentMethod !== 'COD') {
+      throw new BadRequestAppException(
+        `Manual mark-paid is only allowed for COD orders. Order ` +
+          `${order.orderNumber} is ${order.paymentMethod}; it must settle via ` +
+          `the Razorpay verify / webhook path (gateway amount verification).`,
+        'MARK_PAID_NON_COD',
+      );
+    }
+
     // Phase 0 (PR 0.1) — silent-money-loss guard. Centralised in the
     // facade so the webhook handler and checkout.verifyPayment both
     // share the same contract.
@@ -114,6 +130,14 @@ export class PaymentsPublicFacade {
             description:
               `Gateway payment rejected for order ${order.orderNumber}: ${err.message}. ` +
               `actor=${params.actorType} actorId=${params.actorId ?? 'n/a'}`,
+            // Phase 169 (#13) — provenance. The verify/webhook path is the only
+            // caller of markOrderPaid with a gatewaySnapshot.
+            sourceType: params.actorType === 'WEBHOOK' ? 'WEBHOOK' : 'CHECKOUT_VERIFY',
+            sourceContext: {
+              actorType: params.actorType,
+              actorId: params.actorId ?? null,
+              paymentReference: params.paymentReference ?? null,
+            },
           })
           .catch((alertErr) =>
             this.logger.error(
@@ -181,6 +205,12 @@ export class PaymentsPublicFacade {
     masterOrderId: string;
     reason: string;
     actorType: string;
+    // Phase 165 (#5/#6) — gateway-side failure detail from the
+    // payment.failed webhook (error_code / error_description) + the failed
+    // payment id, persisted on the order for support + correlation.
+    failedPaymentId?: string | null;
+    failureCode?: string | null;
+    failureReason?: string | null;
   }) {
     const order = await this.ordersFacade.getMasterOrderBasic(params.masterOrderId);
     if (!order) throw new NotFoundAppException('Order not found');
@@ -188,7 +218,24 @@ export class PaymentsPublicFacade {
       throw new BadRequestAppException('Cannot mark a PAID order as failed');
     }
 
-    const updated = await this.ordersFacade.updatePaymentStatus(params.masterOrderId, 'CANCELLED');
+    // Phase 165 (#5/#6) — CAS flip + persist gateway failure detail.
+    const { flipped } = await this.ordersFacade.recordPaymentFailure(
+      params.masterOrderId,
+      {
+        failedPaymentId: params.failedPaymentId ?? null,
+        failureCode: params.failureCode ?? null,
+        failureReason: params.failureReason ?? params.reason,
+      },
+    );
+    if (!flipped) {
+      // A concurrent caller already moved it out of PENDING/FAILED (e.g. a
+      // captured event won the race). Don't emit a duplicate failed event.
+      this.logger.warn(
+        `Order ${order.orderNumber}: payment.failed arrived but order is no longer ` +
+          `PENDING/FAILED (now ${order.paymentStatus}) — skipping.`,
+      );
+      return order;
+    }
 
     this.eventBus
       .publish({
@@ -200,10 +247,12 @@ export class PaymentsPublicFacade {
           masterOrderId: params.masterOrderId,
           orderNumber: order.orderNumber,
           reason: params.reason,
+          failureCode: params.failureCode ?? null,
+          failedPaymentId: params.failedPaymentId ?? null,
         },
       })
       .catch(() => {});
 
-    return updated;
+    return order;
   }
 }

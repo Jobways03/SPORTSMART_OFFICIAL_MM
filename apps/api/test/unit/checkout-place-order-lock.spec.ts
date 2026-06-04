@@ -29,37 +29,47 @@ describe('CheckoutService.placeOrder — per-user concurrency lock', () => {
     const repo: any = {
       placeOrderTransaction: jest.fn(),
     };
-    // PR 12.1 — CheckoutService grew from 8 to 17 deps. Order
-    // mirrors src/.../checkout.service.ts:
+    // CheckoutService now takes 26 ctor deps. Order mirrors
+    // src/.../checkout.service.ts constructor exactly:
     //   1 repo, 2 sessionService, 3 catalogFacade, 4 franchiseFacade,
-    //   5 discountFacade, 6 shippingOptionsFacade,
-    //   7 discountReservation, 8 discountAllocation,
-    //   9 taxSnapshot, 10 affiliateFacade, 11 walletFacade,
-    //   12 paymentOpsFacade, 13 razorpayAdapter, 14 prisma,
-    //   15 eventBus, 16 redis, 17 env, 18 moneyDualWrite.
+    //   5 commissionFacade, 6 discountFacade, 7 shippingOptionsFacade,
+    //   8 discountReservation, 9 discountAllocation, 10 taxSnapshot,
+    //   11 taxPreview, 12 taxFacade, 13 affiliateFacade, 14 walletFacade,
+    //   15 paymentOpsFacade, 16 razorpayAdapter, 17 razorpayClient,
+    //   18 codRuleEngine, 19 prisma, 20 eventBus, 21 redis, 22 env,
+    //   23 moneyDualWrite, 24 stockRestore, 25 auditFacade,
+    //   26 paymentLifecycle.
     // Lock-test only exercises redis + sessionService + repo, so
     // everything else is a no-op stub.
     const env: any = { getBoolean: () => false, getNumber: () => 0 };
     const noop: any = {};
     const svc = new CheckoutService(
-      repo,             // 1
-      sessionService,   // 2
+      repo,             // 1 repo
+      sessionService,   // 2 sessionService
       noop,             // 3 catalogFacade
       noop,             // 4 franchiseFacade
-      noop,             // 5 discountFacade
-      noop,             // 6 shippingOptionsFacade
-      noop,             // 7 discountReservation
-      noop,             // 8 discountAllocation
-      noop,             // 9 taxSnapshot
-      noop,             // 10 affiliateFacade
-      noop,             // 11 walletFacade
-      noop,             // 12 paymentOpsFacade
-      noop,             // 13 razorpayAdapter
-      noop,             // 14 prisma
-      noop,             // 15 eventBus
-      redis,            // 16 redis
-      env,              // 17 env
-      noop,             // 18 moneyDualWrite
+      noop,             // 5 commissionFacade
+      noop,             // 6 discountFacade
+      noop,             // 7 shippingOptionsFacade
+      noop,             // 8 discountReservation
+      noop,             // 9 discountAllocation
+      noop,             // 10 taxSnapshot
+      noop,             // 11 taxPreview
+      noop,             // 12 taxFacade
+      noop,             // 13 affiliateFacade
+      noop,             // 14 walletFacade
+      noop,             // 15 paymentOpsFacade
+      noop,             // 16 razorpayAdapter
+      noop,             // 17 razorpayClient
+      noop,             // 18 codRuleEngine
+      noop,             // 19 prisma
+      noop,             // 20 eventBus
+      redis,            // 21 redis
+      env,              // 22 env
+      noop,             // 23 moneyDualWrite
+      noop,             // 24 stockRestore
+      noop,             // 25 auditFacade
+      noop,             // 26 paymentLifecycle
     );
     return { svc, redis, sessionService, repo };
   };

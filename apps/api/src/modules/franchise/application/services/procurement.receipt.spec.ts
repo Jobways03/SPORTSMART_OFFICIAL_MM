@@ -81,6 +81,11 @@ function makeService(opts: { request?: any; itemsById?: Record<string, any> } = 
   const prisma: any = {
     // Phase 159p — the tx now also writes a ProcurementRequestEvent history row.
     procurementRequestEvent: { create: jest.fn().mockResolvedValue({}) },
+    // Phase 236 — the receive header flip is now a CAS updateMany (status guard
+    // + receivedBy stamp) instead of a plain update.
+    procurementRequest: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const env: any = { getNumber: jest.fn() };

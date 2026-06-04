@@ -25,6 +25,7 @@ import { Throttle } from '@nestjs/throttler';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { AccountsSettlementService } from '../../application/services/accounts-settlement.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { BatchMarkPaidDto } from '../dtos/batch-mark-paid.dto';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 
@@ -44,6 +45,8 @@ import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 export class AccountsSettlementsController {
   constructor(
     private readonly settlementService: AccountsSettlementService,
+    // Phase 177 (#9) — audit the bulk franchise-ledger CSV download.
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   /* ── GET /admin/accounts/settlements/payables ── */
@@ -162,6 +165,7 @@ export class AccountsSettlementsController {
   /* ── GET /admin/accounts/settlements/franchise-ledger/export ── */
   @Get('franchise-ledger/export')
   async exportFranchiseLedger(
+    @Req() req: any,
     @Res() res: Response,
     @Query('franchiseId') franchiseId?: string,
     @Query('sourceType') sourceType?: string,
@@ -177,6 +181,19 @@ export class AccountsSettlementsController {
         fromDate,
         toDate,
       });
+
+    // Phase 177 (#9) — bulk franchise-ledger PII download leaves a trail.
+    void this.audit
+      .writeAuditLog({
+        actorId: req?.adminId,
+        actorRole: 'ADMIN',
+        action: 'accounts.franchiseLedger.exported',
+        module: 'accounts',
+        resource: 'FranchiseFinanceLedger',
+        resourceId: franchiseId ?? 'all',
+        metadata: { franchiseId: franchiseId ?? null, sourceType: sourceType ?? null, status: status ?? null, fromDate: fromDate ?? null, toDate: toDate ?? null, rowCount: total, truncated },
+      })
+      .catch(() => undefined);
 
     const headers = [
       'createdAt',
@@ -203,11 +220,12 @@ export class AccountsSettlementsController {
       sourceType: r.sourceType,
       sourceId: r.sourceId,
       description: r.description ?? '',
-      baseAmount: Number(r.baseAmount),
-      rate: Number(r.rate),
-      computedAmount: Number(r.computedAmount),
-      platformEarning: Number(r.platformEarning),
-      franchiseEarning: Number(r.franchiseEarning),
+      // Phase 177 (#8) — exact Decimal strings, not lossy Number() coercion.
+      baseAmount: r.baseAmount == null ? '0.00' : r.baseAmount.toFixed(2),
+      rate: r.rate == null ? '' : String(r.rate),
+      computedAmount: r.computedAmount == null ? '0.00' : r.computedAmount.toFixed(2),
+      platformEarning: r.platformEarning == null ? '0.00' : r.platformEarning.toFixed(2),
+      franchiseEarning: r.franchiseEarning == null ? '0.00' : r.franchiseEarning.toFixed(2),
       status: r.status,
       settlementBatchId: r.settlementBatch?.id ?? null,
       settlementPaidAt: r.settlementBatch?.paidAt ?? null,

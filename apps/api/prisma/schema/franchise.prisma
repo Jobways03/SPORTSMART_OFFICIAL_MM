@@ -17,6 +17,14 @@ model FranchisePartner {
   failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
   lockUntil           DateTime? @map("lock_until")
   lastLoginAt         DateTime? @map("last_login_at")
+  // Phase 179 (Top Performers audit #16) — internal/demo/test franchise,
+  // excluded from public leaderboards & rankings. Default false.
+  isInternal          Boolean   @default(false) @map("is_internal")
+  // Phase 181 (Franchise Ledger audit #1) — running ledger balance (paise) the
+  // platform owes this franchise. Updated atomically with every ledger entry
+  // under a per-franchise advisory lock; the entry's balanceAfterInPaise mirrors
+  // it. O(1) balance reads (no SUM-on-read).
+  ledgerBalanceInPaise BigInt   @default(0) @map("ledger_balance_in_paise")
 
   // Location
   state    String?
@@ -88,6 +96,27 @@ model FranchisePartner {
   warehouseAddress String? @map("warehouse_address")
   warehousePincode String? @map("warehouse_pincode")
 
+  // Phase 231 (Eligible-node listing audit) — per-franchise dispatch SLA in
+  // days. Pre-231 the allocator hard-coded `dispatchSla = 1` for EVERY
+  // franchise, so the SLA term in the unified seller-vs-franchise score was
+  // meaningless (franchises always "won" the SLA component over any seller with
+  // sla>1). Default 1 = exact pre-231 behaviour (no regression); ops can raise
+  // it for a slower franchise so the score reflects reality.
+  dispatchSlaDays Int @default(1) @map("dispatch_sla_days")
+  // Phase 231 — whether this franchise accepts COD fulfillment. Default true =
+  // pre-231 behaviour (every franchise was implicitly COD-capable). When a COD
+  // order is routed/reassigned, a franchise with codEnabled=false is excluded.
+  codEnabled      Boolean @default(true) @map("cod_enabled")
+
+  // Phase 230/232 (Eligible-node + Allocation-preview audit) — manual
+  // fulfillment hold, mirroring Seller.fulfillmentHold. A franchise under
+  // investigation is flipped to true and excluded from allocation eligibility
+  // entirely. Default false = no regression.
+  fulfillmentHold       Boolean   @default(false) @map("fulfillment_hold")
+  fulfillmentHoldReason String?   @map("fulfillment_hold_reason") @db.Text
+  fulfillmentHoldAt     DateTime? @map("fulfillment_hold_at")
+  fulfillmentHoldBy     String?   @map("fulfillment_hold_by")
+
   // ─── Logistics entitlements (franchise-admin controlled) ──────
   // Toggled by franchise admin in web-franchise-admin. Self-delivery
   // is the only delivery method today (iThink removed).
@@ -123,6 +152,8 @@ model FranchisePartner {
   financeLedger       FranchiseFinanceLedger[]
   settlements         FranchiseSettlement[]
   staff               FranchiseStaff[]
+  // Phase 181 (#11) — high-value penalty approvals awaiting a second admin.
+  penaltyApprovals    FranchisePenaltyApproval[]
   procurementPrices   FranchiseProcurementPrice[]
   /// Phase 20 (2026-05-20) — 1:1 bank details back-relation.
   bankDetails         FranchiseBankDetails?
@@ -152,6 +183,8 @@ model FranchisePartner {
   // (status=ACTIVE, contractEndDate<now). Without this index the sweep
   // does a seq scan on the whole franchise table.
   @@index([contractEndDate])
+  // Phase 230 — ops "franchises on fulfillment hold" queue + allocator filter.
+  @@index([fulfillmentHold])
   @@map("franchise_partners")
 }
 
@@ -570,6 +603,20 @@ model ProcurementRequest {
   receivedAt   DateTime? @map("received_at")
   settledAt    DateTime? @map("settled_at")
 
+  // Phase 235/236 (Procurement audits) — first-class actor columns. The
+  // ProcurementRequestEvent history (Phase 159p) already records the actor per
+  // transition, but these make "who created / dispatched / received / cancelled
+  // this" queryable directly on the header without a join. requestedByStaffId is
+  // the franchise staff/user who created it (falls back to the org id until
+  // multi-user staff auth is wired here). cancelledAt + cancellationReason
+  // replace stuffing the cancel reason into the free-form `notes` column.
+  requestedByStaffId String?   @map("requested_by_staff_id")
+  dispatchedBy       String?   @map("dispatched_by")
+  receivedBy         String?   @map("received_by")
+  cancelledBy        String?   @map("cancelled_by")
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancellationReason String?   @map("cancellation_reason") @db.Text
+
   /// Phase 7 (2026-05-16) — SLA timestamps. `slaApproveBy` is set on
   /// `submitRequest` to `requestedAt + PROCUREMENT_APPROVAL_SLA_HOURS`
   /// (default 48h). The breach cron emits `procurement.sla_breached`
@@ -644,6 +691,15 @@ model ProcurementRequestItem {
   receivedQty   Int @default(0) @map("received_qty")
   damagedQty    Int @default(0) @map("damaged_qty")
 
+  // Phase 237 (Pricing Snapshot audit) — MRP (customer-facing base price)
+  // captured at REQUEST creation so finance can compute procurement margin
+  // against the price that existed when the franchise raised the request, even
+  // after the product's basePrice later changes. The landed/fee/final cost
+  // fields below remain admin-determined at APPROVAL (the platform has no
+  // pre-approval pricing-rule engine — that is a separate, deferred build, so a
+  // full "cost snapshot at creation" is not possible; the MRP is the one price
+  // that IS known at creation time).
+  mrpSnapshot              Decimal? @map("mrp_snapshot") @db.Decimal(10, 2)
   sourceSellerId           String?  @map("source_seller_id")
   landedUnitCost           Decimal? @map("landed_unit_cost") @db.Decimal(10, 2)
   procurementFeePerUnit    Decimal? @map("procurement_fee_per_unit") @db.Decimal(10, 2)
@@ -655,6 +711,9 @@ model ProcurementRequestItem {
   procurementRequest ProcurementRequest @relation(fields: [procurementRequestId], references: [id], onDelete: Cascade)
 
   @@index([procurementRequestId])
+  // Phase 235 — per-product analytics ("how much of SKU X have franchises
+  // procured / received") without a full-table scan.
+  @@index([productId])
   @@map("procurement_request_items")
 }
 
@@ -781,6 +840,56 @@ model FranchisePosReturnItem {
   @@map("franchise_pos_return_items")
 }
 
+// Phase 242 (POS Reconciliation audit) — end-of-day cash-vs-bank reconciliation.
+// BOUNDED CORE: one row per (franchise, business day). The franchise submits the
+// physically-counted cash + the bank-deposit amount/reference; the server computes
+// `expectedCashInPaise` AUTHORITATIVELY from the day's CASH sales net of refunds
+// (the IST-windowed, refund-adjusted daily report — the client's expected value is
+// never trusted), then records `varianceInPaise` and a MATCHED/VARIANCE status.
+// All money is BigInt paise (platform money convention). The admin approve/reject/
+// resolve workflow, deposit-proof S3 upload, bank-statement auto-match, and the
+// POS_RECONCILIATION_ADJUSTMENT ledger linkage are the surfaced follow-on.
+model FranchisePosReconciliation {
+  id          String   @id @default(uuid())
+  franchiseId String   @map("franchise_id")
+  // The business day being reconciled (IST). Stored as a date-only value.
+  businessDate DateTime @map("business_date") @db.Date
+
+  // Server-computed (authoritative) expected cash for the day = CASH sales net of
+  // cash refunds, IST window. The client never supplies this.
+  expectedCashInPaise BigInt @map("expected_cash_in_paise")
+  // Physically counted cash in the drawer (franchise input).
+  actualCashInPaise   BigInt @map("actual_cash_in_paise")
+  // Amount deposited to the bank (franchise input) + its UTR/slip reference.
+  bankDepositInPaise  BigInt @default(0) @map("bank_deposit_in_paise")
+  bankDepositReference String? @map("bank_deposit_reference") @db.VarChar(64)
+  // variance = actualCash - expectedCash (signed; negative = short).
+  varianceInPaise     BigInt @map("variance_in_paise")
+  // Snapshot of the expected-cash computation inputs so the figure is reproducible
+  // even after later late voids/returns mutate the underlying sales.
+  expectedSnapshotJson Json?  @map("expected_snapshot_json")
+
+  status   PosReconciliationStatus @default(SUBMITTED)
+  notes    String?                 @db.Text
+
+  submittedByStaffId String?   @map("submitted_by_staff_id")
+  submittedAt        DateTime  @default(now()) @map("submitted_at")
+  // Follow-on admin workflow columns (declared now so the model is complete; the
+  // approve/reject/resolve endpoints are surfaced, not yet built).
+  reviewedByAdminId  String?   @map("reviewed_by_admin_id")
+  reviewedAt         DateTime? @map("reviewed_at")
+  resolutionReason   String?   @map("resolution_reason") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // One reconciliation per franchise per business day.
+  @@unique([franchiseId, businessDate])
+  @@index([franchiseId, businessDate])
+  @@index([status])
+  @@map("franchise_pos_reconciliations")
+}
+
 model FranchisePosSaleItem {
   id           String  @id @default(uuid())
   saleId       String  @map("sale_id")
@@ -850,8 +959,28 @@ model FranchiseFinanceLedger {
   rate           Decimal @db.Decimal(5, 2)
   computedAmount Decimal @map("computed_amount") @db.Decimal(12, 2)
 
+  // Legacy signed "earning" model — retained because the settlement aggregator
+  // sums these with sign. Phase 181 adds the canonical double-entry fields below.
   platformEarning  Decimal @default(0) @map("platform_earning") @db.Decimal(12, 2)
   franchiseEarning Decimal @default(0) @map("franchise_earning") @db.Decimal(12, 2)
+
+  // Phase 181 (Franchise Ledger audit) — canonical double-entry columns. Exactly
+  // one of debit/credit is positive (NEVER negative, #2/#3); from the franchise's
+  // balance perspective credit raises and debit lowers what the platform owes.
+  // `balanceAfterInPaise` is the running-balance snapshot AT THIS ENTRY (#1),
+  // written under a per-franchise advisory lock so it is consistent + point-in-
+  // time-recallable. Paise BigInt = exact money (#7).
+  debitInPaise        BigInt  @default(0) @map("debit_in_paise")
+  creditInPaise       BigInt  @default(0) @map("credit_in_paise")
+  balanceAfterInPaise BigInt  @default(0) @map("balance_after_in_paise")
+  currency            String  @default("INR")
+
+  // #5 — queryable actor (manual adjustments/penalties); system posts flag true.
+  createdByAdminId String?  @map("created_by_admin_id")
+  createdBySystem  Boolean  @default(true) @map("created_by_system")
+  // #4/#8 — deterministic dedup key for event-sourced posts (`type:sourceId`);
+  // NULL for legitimately-repeatable ADJUSTMENT/PENALTY. @unique enforces it.
+  idempotencyKey   String?  @unique @map("idempotency_key")
 
   status            FranchiseLedgerStatus @default(PENDING)
   settlementBatchId String?               @map("settlement_batch_id")
@@ -861,12 +990,65 @@ model FranchiseFinanceLedger {
 
   franchise       FranchisePartner     @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   settlementBatch FranchiseSettlement? @relation(fields: [settlementBatchId], references: [id])
+  statusHistory   FranchiseLedgerStatusHistory[]
 
   @@index([franchiseId, status])
   @@index([sourceType, sourceId])
   @@index([settlementBatchId])
   @@index([createdAt])
+  // Phase 181 — paginated reads + filtered drill-down + actor audit.
+  @@index([franchiseId, createdAt])
+  @@index([franchiseId, sourceType, createdAt])
+  @@index([createdByAdminId, createdAt])
   @@map("franchise_finance_ledger")
+}
+
+// Phase 181 (#14) — immutable status-transition history. Entries are immutable;
+// a status change (e.g. → REVERSED, → SETTLED) appends a history row with actor +
+// reason instead of being a silent edit.
+model FranchiseLedgerStatusHistory {
+  id            String   @id @default(uuid())
+  ledgerEntryId String   @map("ledger_entry_id")
+  fromStatus    String   @map("from_status")
+  toStatus      String   @map("to_status")
+  actorAdminId  String?  @map("actor_admin_id")
+  reason        String?
+  occurredAt    DateTime @default(now()) @map("occurred_at")
+
+  ledgerEntry FranchiseFinanceLedger @relation(fields: [ledgerEntryId], references: [id], onDelete: Cascade)
+
+  @@index([ledgerEntryId])
+  @@map("franchise_ledger_status_history")
+}
+
+// Phase 181 (#11) — two-person control for punitive penalties at/above the env
+// threshold. The penalty is NOT posted to the ledger until a SECOND admin (≠ the
+// requester) approves; the ledger entry id is back-linked on approval.
+enum FranchisePenaltyApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model FranchisePenaltyApproval {
+  id                 String                         @id @default(uuid())
+  franchiseId        String                         @map("franchise_id")
+  amount             Decimal                        @db.Decimal(12, 2)
+  reason             String
+  status             FranchisePenaltyApprovalStatus @default(PENDING)
+  requestedByAdminId String                         @map("requested_by_admin_id")
+  approvedByAdminId  String?                        @map("approved_by_admin_id")
+  decisionReason     String?                        @map("decision_reason")
+  ledgerEntryId      String?                        @map("ledger_entry_id")
+  createdAt          DateTime                       @default(now()) @map("created_at")
+  decidedAt          DateTime?                      @map("decided_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([franchiseId])
+  @@map("franchise_penalty_approvals")
 }
 
 // ── Franchise Settlement (payout cycles) ───────────────────
@@ -901,6 +1083,12 @@ model FranchiseSettlement {
   paymentReference String?                   @map("payment_reference")
   // Phase 146 — payout provenance (mirrors SellerSettlement.paidByAdminId).
   paidByAdminId    String?                   @map("paid_by_admin_id")
+  // Phase 178 (Outstanding Payables audit) — SLA / aging / hold / partial-pay.
+  payoutDueBy       DateTime? @map("payout_due_by")
+  holdReason        String?   @map("hold_reason")
+  frozenAt          DateTime? @map("frozen_at")
+  frozenByAdminId   String?   @map("frozen_by_admin_id")
+  paidAmountInPaise BigInt    @default(0) @map("paid_amount_in_paise")
   createdAt        DateTime                  @default(now()) @map("created_at")
   updatedAt        DateTime                  @updatedAt @map("updated_at")
 
@@ -908,12 +1096,52 @@ model FranchiseSettlement {
   franchise     FranchisePartner         @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   ledgerEntries FranchiseFinanceLedger[]
   paidByAdmin   Admin?                   @relation("FranchiseSettlementPaidBy", fields: [paidByAdminId], references: [id], onDelete: SetNull)
+  // Phase 177 (#4) — itemized adjustments behind the net `adjustmentAmount`.
+  adjustments   FranchiseSettlementAdjustment[]
 
   @@unique([cycleId, franchiseId])
   @@index([cycleId])
   @@index([franchiseId])
   @@index([status])
+  // Phase 178 (#1) — aging / overdue queries scan by (status, payoutDueBy).
+  @@index([status, payoutDueBy])
   @@map("franchise_settlements")
+}
+
+/// Phase 177 (Per-Franchise Accounts audit #4 / audit #145 gap) — itemized
+/// settlement adjustments for a franchise. The seller side has
+/// `SettlementAdjustment`; the franchise side previously only had a net
+/// `FranchiseSettlement.adjustmentAmount` column with no line items. Each row is
+/// one penalty / correction / claw-back against a PENDING franchise settlement.
+/// Creating a row shifts the settlement's `adjustmentAmount` AND
+/// `netPayableToFranchise` by the (signed) row amount, in one transaction; only
+/// PENDING settlements may be adjusted (a PAID one needs a reversal flow).
+/// Reuses the generic SettlementAdjustmentType / SettlementAdjustmentStatus enums.
+model FranchiseSettlementAdjustment {
+  id           String @id @default(uuid())
+  settlementId String @map("settlement_id")
+  franchiseId  String @map("franchise_id")
+
+  // Signed: negative = deduction from the payout, positive = credit.
+  amount        Decimal @db.Decimal(12, 2)
+  amountInPaise BigInt  @default(0) @map("amount_in_paise")
+
+  adjustmentType SettlementAdjustmentType   @default(MANUAL_CORRECTION) @map("adjustment_type")
+  status         SettlementAdjustmentStatus @default(ACTIVE)
+
+  notes            String?   @db.Text
+  createdByAdminId String?   @map("created_by_admin_id")
+  voidedByAdminId  String?   @map("voided_by_admin_id")
+  voidedAt         DateTime? @map("voided_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  settlement FranchiseSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([settlementId])
+  @@index([franchiseId, status])
+  @@map("franchise_settlement_adjustments")
 }
 
 // ── Franchise Staff ───────────────────────────────────────────

@@ -77,6 +77,10 @@ function makeRepo(
     findCartByCustomerId: jest.fn().mockResolvedValue({ id: 'cart-1' }),
     findCartItemById: jest.fn().mockResolvedValue(null),
     getAggregatedStock: jest.fn().mockResolvedValue(100),
+    // Phase 196 (#10/#11) — batched stock (Map-like returning 100 for any
+    // key, matching the legacy getAggregatedStock default) + activity touch.
+    getAggregatedStockBatch: jest.fn().mockResolvedValue({ get: () => 100 }),
+    touchLastActivity: jest.fn().mockResolvedValue(undefined),
     validateProduct: jest.fn().mockResolvedValue(true),
     validateVariant: jest.fn().mockResolvedValue(true),
     countActiveItemsForVariant: jest.fn().mockResolvedValue(0),

@@ -21,7 +21,9 @@ import {
 export default function AdminActivityPage() {
   return (
     <RequirePermission
-      anyOf={['roles.read']}
+      // Phase 208 (#3) — dedicated permission split out of the coarse
+      // roles.read; only the security/risk/compliance tiers hold it.
+      anyOf={['admin.activity.read']}
       fallback={<div style={{ padding: 24 }}>Loading…</div>}
     >
       <Inner />
@@ -29,34 +31,47 @@ export default function AdminActivityPage() {
   );
 }
 
+const SOURCES = ['ALL', 'AUTH', 'ADMIN_ACTION', 'BUSINESS', 'IMPERSONATION'] as const;
+
 function Inner() {
   const [role, setRole] = useState<string>('SUPER_ADMIN');
+  // Phase 208 (#11) — pin the timeline to a single admin id (overrides the
+  // role filter when set). Empty = role-based filtering.
+  const [actorId, setActorId] = useState<string>('');
+  const [source, setSource] = useState<string>('ALL');
   const [hours, setHours] = useState(24);
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [since, setSince] = useState<string>('');
+  const [truncated, setTruncated] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const fetch = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
+      const trimmedId = actorId.trim();
       const res = await adminActivityService.timeline({
-        actorRole: role === 'ALL' ? undefined : role,
+        // When an explicit actorId is given, drop the role filter so the
+        // operator sees that admin's full activity regardless of role.
+        actorRole: trimmedId ? undefined : role === 'ALL' ? undefined : role,
+        actorId: trimmedId || undefined,
         actorType: 'ADMIN',
         hours,
         limit: 200,
+        source: source === 'ALL' ? undefined : (source as any),
       });
       if (res.data) {
         setItems(res.data.items);
         setSince(res.data.since);
+        setTruncated(Boolean(res.data.truncated));
       }
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to load activity');
     } finally {
       setLoading(false);
     }
-  }, [role, hours]);
+  }, [role, actorId, source, hours]);
 
   useEffect(() => { void fetch(); }, [fetch]);
 
@@ -72,9 +87,34 @@ function Inner() {
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
         <div>
           <label style={lbl}>Admin role</label>
-          <select value={role} onChange={(e) => setRole(e.target.value)} style={input}>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            style={input}
+            disabled={actorId.trim().length > 0}
+            title={actorId.trim() ? 'Cleared while an admin id is set' : undefined}
+          >
             <option value="ALL">All admin roles</option>
             {ADMIN_SUB_ROLES.map((r) => <option key={r} value={r}>{formatRoleLabel(r)}</option>)}
+          </select>
+        </div>
+        {/* Phase 208 (#11) — single-admin drill-down. */}
+        <div>
+          <label style={lbl}>Admin ID (overrides role)</label>
+          <input
+            type="text"
+            placeholder="UUID"
+            value={actorId}
+            onChange={(e) => setActorId(e.target.value)}
+            style={{ ...input, minWidth: 260 }}
+          />
+        </div>
+        {/* Phase 208 (#1/#8) — stream filter incl. the new business +
+            impersonation sources. */}
+        <div>
+          <label style={lbl}>Source</label>
+          <select value={source} onChange={(e) => setSource(e.target.value)} style={input}>
+            {SOURCES.map((s) => <option key={s} value={s}>{s === 'ALL' ? 'All sources' : s}</option>)}
           </select>
         </div>
         <div>
@@ -98,6 +138,17 @@ function Inner() {
       {err && (
         <div style={{ padding: 12, background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 8, color: '#B91C1C', fontSize: 13, marginBottom: 12 }}>
           {err}
+        </div>
+      )}
+
+      {/* Phase 208 (#9) — warn when the merged window may be cutting older
+          events, so the operator narrows the window instead of trusting a
+          silently-truncated list. */}
+      {truncated && !loading && (
+        <div style={{ padding: 12, background: '#FFFBEB', border: '1px solid #FCD34D', borderRadius: 8, color: '#92400E', fontSize: 13, marginBottom: 12 }}>
+          Showing the most recent {items.length} events — one or more streams
+          hit the page limit, so older activity in this window may be hidden.
+          Narrow the window or filter by source / admin to see everything.
         </div>
       )}
 
@@ -125,14 +176,7 @@ function Inner() {
                 <tr key={it.id} style={{ borderTop: '1px solid #F3F4F6' }}>
                   <td style={td}>{new Date(it.createdAt).toLocaleString('en-IN')}</td>
                   <td style={td}>
-                    <span style={{
-                      background: it.source === 'AUTH' ? '#DBEAFE' : '#FEF3C7',
-                      color: it.source === 'AUTH' ? '#1E40AF' : '#92400E',
-                      padding: '2px 10px',
-                      borderRadius: 12,
-                      fontSize: 11,
-                      fontWeight: 600,
-                    }}>
+                    <span style={{ ...sourceBadge(it.source), padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
                       {it.source}
                     </span>
                   </td>
@@ -167,3 +211,19 @@ const lbl: React.CSSProperties = {
   display: 'block', fontSize: 11, color: '#525A65', fontWeight: 600,
   textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4,
 };
+
+// Phase 208 (#1/#8) — per-source badge palette across the four streams.
+function sourceBadge(source: string): React.CSSProperties {
+  switch (source) {
+    case 'AUTH':
+      return { background: '#DBEAFE', color: '#1E40AF' };
+    case 'ADMIN_ACTION':
+      return { background: '#FEF3C7', color: '#92400E' };
+    case 'BUSINESS':
+      return { background: '#DCFCE7', color: '#166534' };
+    case 'IMPERSONATION':
+      return { background: '#FCE7F3', color: '#9D174D' };
+    default:
+      return { background: '#F3F4F6', color: '#374151' };
+  }
+}

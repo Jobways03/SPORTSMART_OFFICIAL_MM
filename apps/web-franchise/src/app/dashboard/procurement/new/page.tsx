@@ -17,6 +17,13 @@ import { ApiError } from '@/lib/api-client';
 
 type Step = 1 | 2;
 
+// Mirror the backend procurement DTO caps (CreateProcurementRequestDto):
+// @Max(10000) per item quantity and @ArrayMaxSize(100) on items. Kept in
+// sync here so the form never builds a payload the API will 400 on.
+const MAX_QTY_PER_ITEM = 10000;
+const MAX_ITEMS = 100;
+const MAX_NOTES_LENGTH = 500;
+
 interface SelectedItem {
   mappingId: string;
   productId: string;
@@ -90,9 +97,13 @@ const router = useRouter();
 
   const selectedItems = useMemo(() => Object.values(selection), [selection]);
   const selectedCount = selectedItems.length;
+  const overItemLimit = selectedCount > MAX_ITEMS;
 
   const handleQuantityChange = (mapping: CatalogMapping, rawValue: string) => {
-    const qty = Math.max(0, Math.floor(Number(rawValue) || 0));
+    const qty = Math.min(
+      MAX_QTY_PER_ITEM,
+      Math.max(0, Math.floor(Number(rawValue) || 0)),
+    );
     setSelection((prev) => {
       const next = { ...prev };
       if (qty <= 0) {
@@ -131,8 +142,15 @@ const router = useRouter();
     notes: notes.trim() || undefined,
   });
 
-  const handleSaveDraft = async () => {if (selectedCount === 0) {
+  const handleSaveDraft = async () => {
+    if (selectedCount === 0) {
       void notify('Please select at least one item.');
+      return;
+    }
+    if (selectedCount > MAX_ITEMS) {
+      void notify(
+        `A request can have at most ${MAX_ITEMS} items. Please remove ${selectedCount - MAX_ITEMS} to continue.`,
+      );
       return;
     }
     setSaving(true);
@@ -154,10 +172,24 @@ const router = useRouter();
     }
   };
 
-  const handleSubmitForApproval = async () => {if (selectedCount === 0) {
+  const handleSubmitForApproval = async () => {
+    if (selectedCount === 0) {
       void notify('Please select at least one item.');
       return;
     }
+    if (selectedCount > MAX_ITEMS) {
+      void notify(
+        `A request can have at most ${MAX_ITEMS} items. Please remove ${selectedCount - MAX_ITEMS} to continue.`,
+      );
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: `Send ${selectedCount} item${selectedCount === 1 ? '' : 's'} for admin approval?`,
+      message: 'You can no longer edit this request after sending.',
+      confirmText: 'Send',
+      cancelText: 'Cancel',
+    });
+    if (!confirmed) return;
     setSaving(true);
     setSubmitMode('submit');
     try {
@@ -309,19 +341,25 @@ const router = useRouter();
             >
               <span
                 style={{
-                  background: '#eff6ff',
-                  color: '#1d4ed8',
+                  background: overItemLimit ? '#fef2f2' : '#eff6ff',
+                  color: overItemLimit ? '#b91c1c' : '#1d4ed8',
                   padding: '6px 12px',
                   borderRadius: 999,
                   fontSize: 13,
                 }}
+                title={
+                  overItemLimit
+                    ? `A request can have at most ${MAX_ITEMS} items`
+                    : undefined
+                }
               >
                 Selected: {selectedCount} item{selectedCount === 1 ? '' : 's'}
+                {overItemLimit ? ` (max ${MAX_ITEMS})` : ''}
               </span>
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={selectedCount === 0}
+                disabled={selectedCount === 0 || overItemLimit}
                 onClick={() => setStep(2)}
               >
                 Continue &#8594;
@@ -475,8 +513,10 @@ const router = useRouter();
                             <input
                               type="number"
                               min={0}
+                              max={MAX_QTY_PER_ITEM}
                               inputMode="numeric"
                               placeholder="0"
+                              title={`Max ${MAX_QTY_PER_ITEM.toLocaleString('en-IN')} per item`}
                               value={selected?.quantity ?? ''}
                               onFocus={(e) => e.target.select()}
                               onChange={(e) =>
@@ -490,6 +530,15 @@ const router = useRouter();
                                 borderRadius: 6,
                               }}
                             />
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: '#9ca3af',
+                                marginTop: 4,
+                              }}
+                            >
+                              Max {MAX_QTY_PER_ITEM.toLocaleString('en-IN')} per item
+                            </div>
                           </td>
                         </tr>
                       );
@@ -636,6 +685,7 @@ const router = useRouter();
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={4}
+                maxLength={MAX_NOTES_LENGTH}
                 placeholder="Add any special instructions or context for this request..."
                 style={{
                   width: '100%',
@@ -648,6 +698,16 @@ const router = useRouter();
                 }}
                 disabled={saving}
               />
+              <div
+                style={{
+                  textAlign: 'right',
+                  fontSize: 11,
+                  color: '#9ca3af',
+                  marginTop: 4,
+                }}
+              >
+                {notes.length}/{MAX_NOTES_LENGTH}
+              </div>
             </div>
 
             <div
@@ -671,7 +731,7 @@ const router = useRouter();
                 type="button"
                 className="btn btn-secondary"
                 onClick={handleSaveDraft}
-                disabled={saving || selectedCount === 0}
+                disabled={saving || selectedCount === 0 || overItemLimit}
                 title="Save this request as a draft so you can edit and send it later"
               >
                 {saving && submitMode === 'draft' ? 'Saving…' : 'Save Draft'}
@@ -680,7 +740,7 @@ const router = useRouter();
                 type="button"
                 className="btn btn-primary"
                 onClick={handleSubmitForApproval}
-                disabled={saving || selectedCount === 0}
+                disabled={saving || selectedCount === 0 || overItemLimit}
                 title="Send this stock request to the admin team for approval"
               >
                 {saving && submitMode === 'submit'

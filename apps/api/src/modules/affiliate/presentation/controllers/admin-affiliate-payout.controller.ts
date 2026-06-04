@@ -203,6 +203,39 @@ export class AdminAffiliatePayoutController {
     return { success: true, message: `Issued certificate for ${data.flipped} row(s).`, data };
   }
 
+  // Phase 160 (§194-O affiliate audit #16) — correction flow. Reverse a
+  // single ledger row (any non-REVERSED state) with a reason. Highest gate
+  // (CRITICAL) because it undoes a recorded — possibly filed — deduction.
+  @Patch('tds/:ledgerId/reverse')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('affiliates.tax.reverse')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async reverseTds(
+    @Req() req: Request,
+    @Param('ledgerId') ledgerId: string,
+    @Body() body: { reason?: string },
+  ) {
+    if (!ledgerId || !/^[a-f0-9-]{8,}$/i.test(ledgerId)) {
+      return { success: false, message: 'A valid ledgerId path param is required.', data: null };
+    }
+    const ctx = actorCtx(req);
+    const data = await this.payoutService.reverseTds194O({
+      ledgerId,
+      reversedBy: ctx.adminId,
+      reason: body.reason ?? '',
+      audit: { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    });
+    return {
+      success: true,
+      message: data.wasAlreadyReversed
+        ? 'TDS row was already REVERSED (no-op).'
+        : data.reversed
+          ? `TDS row reversed (was ${data.previousStatus}).`
+          : 'TDS row changed state concurrently — refresh and retry.',
+      data,
+    };
+  }
+
   @Patch(':payoutRequestId/approve')
   @HttpCode(HttpStatus.OK)
   @Permissions('affiliates.payouts.approve')

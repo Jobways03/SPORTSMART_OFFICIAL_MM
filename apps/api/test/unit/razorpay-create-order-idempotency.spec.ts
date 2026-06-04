@@ -4,17 +4,20 @@ import { join } from 'path';
 
 /**
  * Phase 4 (PR 4.3) — `createOrder` callers pin a stable idempotency
- * key derived from their domain entity. Three call sites are
- * documented here; one (the retry-payment endpoint in
- * `checkout.service.ts`) is intentionally NOT idempotent — each
- * retry mints a fresh gateway order — and that exclusion is
- * documented inline in the controller.
+ * key derived from their domain entity.
+ *
+ * Phase 165 (Razorpay audit #1) — the retry-payment path, previously
+ * documented as "intentionally NOT idempotent", now ALSO pins a key:
+ * `checkout-order-${order.id}-retry-${retryIndex}`. The retry index is the
+ * count of prior ONLINE Payment rows, so a rapid double-click computes the
+ * same key (Razorpay dedupes → one order) while a genuine later retry gets a
+ * fresh index → a new order. This closes the "two orders per double-click"
+ * money-risk while preserving the ability to retry.
  *
  * The matcher walks the source for `razorpayAdapter.createOrder({`
- * / `razorpay.createOrder({` blocks and asserts each that we expect
- * to be idempotent includes an `idempotencyKey:` line. A future
- * createOrder call site missing the key surfaces as a meta-test
- * failure before CI.
+ * / `razorpay.createOrder({` blocks and asserts each includes an
+ * `idempotencyKey:` line. A future createOrder call site missing the key
+ * surfaces as a meta-test failure before CI.
  */
 
 interface CallerCheck {
@@ -34,13 +37,21 @@ const CALLERS: CallerCheck[] = [
   {
     file: 'src/modules/checkout/application/services/checkout.service.ts',
     blockStart: /this\.razorpayAdapter\.createOrder\(\{[\s\S]*?walletPaidPaise/,
-    expectedKey:
-      /idempotencyKey:\s*`checkout-order-\$\{result\.masterOrderId\}`/,
+    // The place-order key is a sha-256 of (userId|session.createdAt|orderNumber)
+    // — stable per checkout flow. (An earlier phase refactored this from the
+    // literal `checkout-order-${result.masterOrderId}` the spec used to assert.)
+    expectedKey: /const idempotencyKey = `checkout-order-\$\{createHash/,
   },
   {
     file: 'src/modules/returns/application/services/return.service.ts',
     blockStart: /this\.razorpayAdapter\.createOrder\(\{[\s\S]*?XCHG/,
     expectedKey: /idempotencyKey:\s*`exchange-diff-\$\{ret\.id\}`/,
+  },
+  // Phase 165 (#1) — the retry-payment block (notes carry retry: 'true').
+  {
+    file: 'src/modules/checkout/application/services/checkout.service.ts',
+    blockStart: /this\.razorpayAdapter\.createOrder\(\{[\s\S]*?retry: 'true'/,
+    expectedKey: /idempotencyKey/,
   },
 ];
 
@@ -62,12 +73,12 @@ describe('Razorpay createOrder callers — idempotency-key coverage (PR 4.3)', (
     },
   );
 
-  it('the retry-payment endpoint intentionally has NO idempotency key (each retry mints fresh)', () => {
-    // checkout.service.ts has TWO createOrder call sites. The second
-    // one (the retry-payment endpoint, marked with notes.retry =
-    // 'true') is the one we deliberately leave non-idempotent. The
-    // assertion below catches a future "let me add a key for
-    // consistency" PR that would silently break the retry semantics.
+  // Phase 165 (#1) — the retry-payment endpoint now ALSO pins an idempotency
+  // key (was deliberately keyless). A rapid double-click computes the same
+  // `checkout-order-${order.id}-retry-${retryIndex}` and Razorpay dedupes,
+  // so two clicks no longer mint two gateway orders. This replaces the old
+  // "retry intentionally has NO key" assertion (a verified money-risk).
+  it('the retry-payment endpoint now pins an idempotency key (Phase 165 #1)', () => {
     const source = read('src/modules/checkout/application/services/checkout.service.ts');
     const calls = [...source.matchAll(/razorpayAdapter\.createOrder\s*\(\s*\{[\s\S]*?\}\s*\)/g)].map(
       (m) => m[0],
@@ -75,6 +86,8 @@ describe('Razorpay createOrder callers — idempotency-key coverage (PR 4.3)', (
     expect(calls.length).toBeGreaterThanOrEqual(2);
     const retryCall = calls.find((c) => /retry:\s*['"]true['"]/.test(c));
     expect(retryCall).toBeDefined();
-    expect(retryCall).not.toMatch(/idempotencyKey:/);
+    expect(retryCall).toMatch(/idempotencyKey/);
+    // The key derivation is present in the retry method.
+    expect(source).toMatch(/`checkout-order-\$\{order\.id\}-retry-\$\{retryIndex\}`/);
   });
 });

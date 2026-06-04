@@ -32,7 +32,17 @@ function buildController() {
     markOrderPaid: jest.fn().mockResolvedValue(undefined),
     markOrderPaymentFailed: jest.fn().mockResolvedValue(undefined),
   };
-  return new PaymentWebhookController(paymentsFacade, env, redis);
+  // Phase 165 — durable webhook ledger + gateway-truth order lookup.
+  const prisma: any = {
+    paymentWebhookEvent: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({}),
+    },
+    masterOrder: { findFirst: jest.fn().mockResolvedValue(null) },
+  };
+  return new PaymentWebhookController(paymentsFacade, env, redis, prisma);
 }
 
 function makeReq(body: unknown) {

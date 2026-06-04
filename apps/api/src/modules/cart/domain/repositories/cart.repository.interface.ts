@@ -75,13 +75,19 @@ export interface CartRepository {
    */
   findItemsForTaxPreview(customerId: string): Promise<CartItemForTaxPreview[]>;
   upsertCart(customerId: string): Promise<{ id: string }>;
+  /** Phase 196 (#11) — refresh Cart.lastActivityAt after a non-add mutation. */
+  touchLastActivity(cartId: string): Promise<void>;
   findCartItem(cartId: string, productId: string, variantId: string | null): Promise<{ id: string; quantity: number } | null>;
-  updateCartItemQuantity(itemId: string, quantity: number): Promise<void>;
+  // Phase 196 (#16) — quantity set under the cart-row lock with an in-lock
+  // stock re-check (was a bare update after a non-transactional read).
+  updateCartItemQuantity(itemId: string, cartId: string, productId: string, variantId: string | null, quantity: number): Promise<void>;
   deleteCartItem(itemId: string): Promise<void>;
   clearCart(cartId: string): Promise<void>;
   findCartByCustomerId(customerId: string): Promise<{ id: string } | null>;
   findCartItemById(itemId: string, cartId: string): Promise<{ id: string; productId: string; variantId: string | null; quantity: number } | null>;
   getAggregatedStock(productId: string, variantId?: string | null): Promise<number>;
+  /** Phase 196 (#10) — batched stock aggregate; map keyed `${productId}:${variantId ?? 'null'}`. */
+  getAggregatedStockBatch(keys: Array<{ productId: string; variantId: string | null }>): Promise<Map<string, number>>;
   validateProduct(productId: string): Promise<boolean>;
   validateVariant(variantId: string, productId: string): Promise<boolean>;
   /**

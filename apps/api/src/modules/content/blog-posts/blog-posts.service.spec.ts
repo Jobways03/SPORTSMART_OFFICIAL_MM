@@ -3,9 +3,9 @@
  * the blog service:
  *   - contentHtml is sanitized (XSS stripped) on create + update
  *   - imagePublicId persisted on upload
- *   - prior Cloudinary asset deleted on replace
+ *   - prior media asset deleted on replace
  *   - orphan cleanup on DB failure after upload
- *   - soft-delete fires Cloudinary cleanup
+ *   - soft-delete fires media cleanup
  *   - tags normalized: lowercase + trim + dedupe + cap 20
  *   - category restricted to allowlist; unknown → 400
  *   - P2002 on create → ConflictAppException
@@ -257,7 +257,7 @@ describe('BlogPostsService.update (Phase 50)', () => {
 });
 
 describe('BlogPostsService.uploadImage (Phase 50)', () => {
-  it('persists imagePublicId returned by Cloudinary', async () => {
+  it('persists imagePublicId returned by media', async () => {
     const { service, blogPost } = makeService();
     blogPost.findUnique.mockResolvedValueOnce(baseRow());
     blogPost.update.mockImplementationOnce(async ({ data }: any) =>
@@ -326,7 +326,7 @@ describe('BlogPostsService.delete (Phase 50)', () => {
     expect(data.status).toBe(BlogPostStatus.ARCHIVED);
   });
 
-  it('fires Cloudinary delete if a publicId was set', async () => {
+  it('fires media delete if a publicId was set', async () => {
     const { service, blogPost, cloudinary } = makeService();
     blogPost.findUnique.mockResolvedValueOnce(
       baseRow({ imagePublicId: 'blog-posts/hello/pid' }),

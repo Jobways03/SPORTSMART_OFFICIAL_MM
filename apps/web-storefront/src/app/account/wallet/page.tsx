@@ -112,11 +112,20 @@ export default function WalletPage() {
         <section>
           <div className="flex items-end justify-between mb-4">
             <h2 className="font-display text-h2 text-ink-900">Transactions</h2>
-            {txPage && (
-              <div className="text-caption text-ink-600">
-                {txPage.total} total
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {txPage && txPage.total > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { void walletService.downloadStatementCsv().catch(() => {}); }}
+                  className="text-caption text-accent-dark hover:underline"
+                >
+                  Download statement (CSV)
+                </button>
+              )}
+              {txPage && (
+                <div className="text-caption text-ink-600">{txPage.total} total</div>
+              )}
+            </div>
           </div>
 
           {!txPage || txPage.items.length === 0 ? (
@@ -193,6 +202,14 @@ const TYPE_META: Record<
   CREDIT_ADJUSTMENT: { label: 'Credit', iconClass: 'bg-accent-soft text-accent-dark', Icon: ArrowDownLeft },
   DEBIT: { label: 'Spent', iconClass: 'bg-sale-soft text-sale-dark', Icon: ArrowUpRight },
   DEBIT_ADJUSTMENT: { label: 'Debit', iconClass: 'bg-sale-soft text-sale-dark', Icon: ArrowUpRight },
+  // Phase 182 (#2) — loyalty cashback rebate.
+  LOYALTY_REBATE: { label: 'Cashback', iconClass: 'bg-accent-soft text-accent-dark', Icon: ArrowDownLeft },
+  // Phase 183 (#5) — distinct admin/goodwill/redemption/reversal labels.
+  MANUAL_CREDIT: { label: 'Credit', iconClass: 'bg-accent-soft text-accent-dark', Icon: ArrowDownLeft },
+  MANUAL_DEBIT: { label: 'Debit', iconClass: 'bg-sale-soft text-sale-dark', Icon: ArrowUpRight },
+  GOODWILL_CREDIT: { label: 'Goodwill', iconClass: 'bg-accent-soft text-accent-dark', Icon: ArrowDownLeft },
+  ORDER_REDEMPTION: { label: 'Spent', iconClass: 'bg-sale-soft text-sale-dark', Icon: ArrowUpRight },
+  REVERSAL: { label: 'Reversal', iconClass: 'bg-accent-soft text-accent-dark', Icon: RefreshCcw },
 };
 
 function StatusBadge({ status }: { status: WalletTransactionStatus }) {

@@ -49,6 +49,9 @@ function makeSvc(opts: {
     $transaction: jest.fn(async (cb: any) =>
       cb({
         $queryRaw: jest.fn().mockResolvedValue(queryRawResult),
+        // Phase 174 — claimNext's candidate SELECT now uses $queryRawUnsafe
+        // (optional band filter interpolated as a whitelisted enum literal).
+        $queryRawUnsafe: jest.fn().mockResolvedValue(queryRawResult),
         $executeRawUnsafe: jest.fn().mockResolvedValue(1),
         masterOrder: {
           updateMany: masterOrderUpdateMany,

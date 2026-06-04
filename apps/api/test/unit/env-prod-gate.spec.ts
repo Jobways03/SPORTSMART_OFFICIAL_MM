@@ -5,7 +5,7 @@ import { envSchema } from '../../src/bootstrap/env/env.schema';
  * Regression test for production env validation.
  *
  * Before: the schema marked every integration secret (RAZORPAY_*,
- * S3_*, SHIPROCKET_*, …) as `z.string().optional()`. That's correct
+ * R2_*, SHIPROCKET_*, …) as `z.string().optional()`. That's correct
  * for dev, where you want to boot the API without paid accounts — but
  * it meant a prod rollout with a missing `RAZORPAY_KEY_SECRET` booted
  * fine and only surfaced the problem when the first customer tried to
@@ -53,10 +53,10 @@ describe('env schema — NODE_ENV=production gate', () => {
     RAZORPAY_KEY_ID: 'rzp_live_x',
     RAZORPAY_KEY_SECRET: 'secret-x',
     RAZORPAY_WEBHOOK_SECRET: 'whsec_x',
-    S3_BUCKET: 'sportsmart-prod',
-    S3_REGION: 'ap-south-1',
-    S3_ACCESS_KEY: 'akid',
-    S3_SECRET_KEY: 'akidsecret',
+    R2_ACCOUNT_ID: 'acct-x',
+    R2_BUCKET: 'sportsmart-prod',
+    R2_ACCESS_KEY_ID: 'akid',
+    R2_SECRET_ACCESS_KEY: 'akidsecret',
     ADMIN_MFA_ENCRYPTION_KEY: 'm'.repeat(32),
     APP_URL: 'https://api.sportsmart.com',
     CORS_ORIGINS: 'https://app.sportsmart.com',
@@ -85,16 +85,16 @@ describe('env schema — NODE_ENV=production gate', () => {
     expect(parsed.RAZORPAY_KEY_SECRET).toBeUndefined();
   });
 
-  it('rejects a prod env missing the Razorpay + S3 integration secrets', () => {
+  it('rejects a prod env missing the Razorpay + R2 integration secrets', () => {
     const result = envSchema.safeParse({
       ...baseProdEnv,
       RAZORPAY_KEY_ID: undefined,
       RAZORPAY_KEY_SECRET: undefined,
       RAZORPAY_WEBHOOK_SECRET: undefined,
-      S3_BUCKET: undefined,
-      S3_REGION: undefined,
-      S3_ACCESS_KEY: undefined,
-      S3_SECRET_KEY: undefined,
+      R2_ACCOUNT_ID: undefined,
+      R2_BUCKET: undefined,
+      R2_ACCESS_KEY_ID: undefined,
+      R2_SECRET_ACCESS_KEY: undefined,
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -104,10 +104,10 @@ describe('env schema — NODE_ENV=production gate', () => {
           'RAZORPAY_KEY_ID',
           'RAZORPAY_KEY_SECRET',
           'RAZORPAY_WEBHOOK_SECRET',
-          'S3_BUCKET',
-          'S3_REGION',
-          'S3_ACCESS_KEY',
-          'S3_SECRET_KEY',
+          'R2_ACCOUNT_ID',
+          'R2_BUCKET',
+          'R2_ACCESS_KEY_ID',
+          'R2_SECRET_ACCESS_KEY',
         ]),
       );
     }

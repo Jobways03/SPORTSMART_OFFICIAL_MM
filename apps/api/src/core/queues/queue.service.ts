@@ -95,10 +95,18 @@ export class QueueService {
       }
     }
 
+    // One batched risk lookup for the whole snapshot set — previously this
+    // was an `await getOrZero` per row inside the loop (N sequential DB
+    // round-trips; summary() multiplied that by three queues).
+    const riskByResource = await this.risk.getManyOrZero(
+      params.resource,
+      snapshots.map((s) => s.resourceId),
+    );
+
     const items: QueueItem[] = [];
     for (const s of snapshots) {
       const verdict = verdictByResource.get(s.resourceId);
-      const risk = await this.risk.getOrZero(params.resource, s.resourceId);
+      const risk = riskByResource.get(s.resourceId) ?? { score: 0, tier: 'LOW' };
       const item: QueueItem = {
         resourceType: params.resource,
         resourceId: s.resourceId,

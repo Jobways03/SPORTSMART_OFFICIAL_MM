@@ -91,4 +91,27 @@ export class RiskScoreService {
     const row = await this.get(resourceType, resourceId);
     return row ?? { score: 0, tier: 'LOW' };
   }
+
+  /**
+   * Batch variant of `getOrZero` for the queue API. One `findMany` for the
+   * whole page instead of one `findUnique` per row (the queue can carry up
+   * to MAX_LIMIT*5 snapshots, so the per-row version was N sequential
+   * round-trips). Missing rows default to the synthetic LOW score, same as
+   * `getOrZero`. Returned as a Map keyed on resourceId for O(1) lookup.
+   */
+  async getManyOrZero(
+    resourceType: string,
+    resourceIds: string[],
+  ): Promise<Map<string, { score: number; tier: string }>> {
+    const out = new Map<string, { score: number; tier: string }>();
+    if (resourceIds.length === 0) return out;
+    const rows = await this.prisma.riskScore.findMany({
+      where: { resourceType, resourceId: { in: resourceIds } },
+      select: { resourceId: true, score: true, tier: true },
+    });
+    for (const row of rows) {
+      out.set(row.resourceId, { score: row.score, tier: row.tier as string });
+    }
+    return out;
+  }
 }

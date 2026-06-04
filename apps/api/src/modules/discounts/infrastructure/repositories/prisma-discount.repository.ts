@@ -78,6 +78,123 @@ export class PrismaDiscountRepository implements DiscountRepository {
     await this.prisma.discount.delete({ where: { id } });
   }
 
+  // Phase 243 (#5) — atomic create of the discount + its scope links.
+  async createWithRelations(
+    data: any,
+    links: {
+      productIds?: string[];
+      collectionIds?: string[];
+      buyProductIds?: string[];
+      getProductIds?: string[];
+    },
+  ): Promise<any> {
+    return this.prisma.$transaction(async (tx) => {
+      const discount = await tx.discount.create({ data });
+      const productScopes: Array<[string, string[] | undefined]> = [
+        ['APPLIES', links.productIds],
+        ['BUY', links.buyProductIds],
+        ['GET', links.getProductIds],
+      ];
+      for (const [scope, ids] of productScopes) {
+        if (ids && ids.length) {
+          await tx.discountProduct.createMany({
+            // #14 — de-dupe a productId repeated within the array.
+            data: ids.map((productId) => ({
+              discountId: discount.id,
+              productId,
+              scope,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+      if (links.collectionIds && links.collectionIds.length) {
+        await tx.discountCollection.createMany({
+          data: links.collectionIds.map((collectionId) => ({
+            discountId: discount.id,
+            collectionId,
+            scope: 'APPLIES',
+          })),
+          skipDuplicates: true,
+        });
+      }
+      return discount;
+    });
+  }
+
+  // Phase 243 (#5) — atomic update + per-scope link replace.
+  async updateWithRelations(
+    id: string,
+    data: any,
+    links: {
+      productIds?: string[];
+      collectionIds?: string[];
+      buyProductIds?: string[];
+      getProductIds?: string[];
+    },
+  ): Promise<any> {
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.discount.update({ where: { id }, data });
+      const productScopes: Array<[string, string[] | undefined]> = [
+        ['APPLIES', links.productIds],
+        ['BUY', links.buyProductIds],
+        ['GET', links.getProductIds],
+      ];
+      for (const [scope, ids] of productScopes) {
+        if (ids !== undefined) {
+          await tx.discountProduct.deleteMany({
+            where: { discountId: id, scope },
+          });
+          if (ids.length) {
+            await tx.discountProduct.createMany({
+              data: ids.map((productId) => ({
+                discountId: id,
+                productId,
+                scope,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+      }
+      if (links.collectionIds !== undefined) {
+        await tx.discountCollection.deleteMany({
+          where: { discountId: id, scope: 'APPLIES' },
+        });
+        if (links.collectionIds.length) {
+          await tx.discountCollection.createMany({
+            data: links.collectionIds.map((collectionId) => ({
+              discountId: id,
+              collectionId,
+              scope: 'APPLIES',
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+      return updated;
+    });
+  }
+
+  // Phase 243 (#13) — which of the supplied product ids actually exist.
+  async findExistingProductIds(ids: string[]): Promise<string[]> {
+    if (!ids.length) return [];
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
+  }
+
+  async findExistingCollectionIds(ids: string[]): Promise<string[]> {
+    if (!ids.length) return [];
+    const rows = await this.prisma.productCollection.findMany({
+      where: { id: { in: ids } },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
+  }
+
   async createProductLinks(
     discountId: string,
     productIds: string[],

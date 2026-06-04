@@ -7,8 +7,9 @@ import { EventBusService } from '../../../../bootstrap/events/event-bus.service'
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
 import { LiabilityLedgerPublicFacade } from '../../../liability-ledger/application/facades/liability-ledger-public.facade';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
-const BATCH_SIZE = 50;
+const DEFAULT_BATCH_SIZE = 50;
 
 /**
  * RefundSourceType ⊇ LedgerSourceType. RefundSourceType has an extra
@@ -93,6 +94,11 @@ export class StuckSagaSweepCron {
     // result; failures land status=FAILED. The heartbeat detector
     // alerts when no row appears for > tolerance.
     private readonly instr: CronInstrumentationService,
+    // Cluster C (#216-#4) — best-effort tamper-evident summary row per
+    // tick so a finance review can see WHEN auto-escalation last ran and
+    // how many sagas it escalated, without joining refund_sagas. Provided
+    // by the @Global AuditModule (no module import needed).
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -117,6 +123,13 @@ export class StuckSagaSweepCron {
       'REFUND_SAGA_STUCK_MINUTES',
       StuckSagaSweepCron.DEFAULT_STUCK_MINUTES,
     );
+    // Cluster C — the hard-coded 50 is now env-tunable so ops can widen
+    // the per-tick batch during a large backlog (or shrink it to throttle
+    // gateway load) without a redeploy.
+    const batchSize = this.env.getNumber(
+      'REFUND_SAGA_SWEEP_BATCH_SIZE',
+      DEFAULT_BATCH_SIZE,
+    );
     const cutoff = new Date(Date.now() - stuckMinutes * 60 * 1000);
 
     const candidates = await this.prisma.refundSaga.findMany({
@@ -134,7 +147,7 @@ export class StuckSagaSweepCron {
         startedAt: true,
         status: true,
       },
-      take: BATCH_SIZE,
+      take: batchSize,
       orderBy: { startedAt: 'asc' },
     });
 
@@ -219,7 +232,60 @@ export class StuckSagaSweepCron {
             `Failed to emit stuck-saga event for ${saga.id}: ${err?.message ?? err}`,
           ),
         );
+
+      // Cluster C (#216-#4) — emit a dedicated customer-facing notification
+      // event so the existing notification layer can tell the customer their
+      // refund is delayed and under review. We do NOT build a template here;
+      // we only surface the trigger. Best-effort: a missing/erroring
+      // subscriber must never unwind the escalation (the FAILED flip +
+      // admin task are the load-bearing safety).
+      this.eventBus
+        .publish({
+          eventName: 'payments.saga.stuck_customer_notification',
+          aggregate: 'RefundSaga',
+          aggregateId: saga.id,
+          occurredAt: new Date(),
+          payload: {
+            sagaId: saga.id,
+            refundType: saga.refundType,
+            sourceId: saga.sourceId,
+            customerId: saga.customerId,
+            amountInPaise: saga.amountInPaise.toString(),
+          },
+        })
+        .catch((err) =>
+          this.logger.error(
+            `Failed to emit stuck-saga customer notification for ${saga.id}: ${err?.message ?? err}`,
+          ),
+        );
     }
+
+    // Cluster C (#216-#4) — one best-effort audit summary row per tick.
+    // Written OUTSIDE the per-saga loop so a logging blip never aborts the
+    // sweep, and only when something was actually escalated (no noise on
+    // empty ticks). `.catch` keeps it non-fatal.
+    if (escalated > 0) {
+      await this.audit
+        .writeAuditLog({
+          actorId: 'system',
+          actorRole: 'SYSTEM',
+          action: 'REFUND_SAGA_STUCK_ESCALATED',
+          module: 'payments',
+          resource: 'refund_saga',
+          resourceId: 'sweep',
+          newValue: {
+            scanned: candidates.length,
+            escalated,
+            stuckMinutes,
+          },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to write stuck-saga sweep audit row: ${(err as Error)?.message ?? err}`,
+          ),
+        );
+    }
+
     return { scanned: candidates.length, escalated };
   }
 }

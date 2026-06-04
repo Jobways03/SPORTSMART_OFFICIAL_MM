@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   ICheckoutRepository,
@@ -17,6 +17,8 @@ import { attachReferralAttribution } from '../../../affiliate/application/attach
 
 @Injectable()
 export class PrismaCheckoutRepository implements ICheckoutRepository {
+  private readonly logger = new Logger(PrismaCheckoutRepository.name);
+
   constructor(
     private readonly prisma: PrismaService,
     // Phase 7 (PR 7.6) — paise-sibling dual-write for the order /
@@ -468,6 +470,13 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             id: true,
             basePrice: true,
             status: true,
+            // Phase 197 (Checkout audit #1) — moderation gate. Pre-Phase-197
+            // the place-order tx re-checked `status='ACTIVE'` but NOT
+            // `moderationStatus`, so a product that was UNLISTED/REJECTED/
+            // PENDING by the moderation team (but still ACTIVE in the
+            // catalog sense) could be carried straight through checkout.
+            // Read inside the tx and assert APPROVED per item below.
+            moderationStatus: true,
             // Phase 70 (audit Gap #15) — tax config snapshot fields.
             // Read inside the tx so OrderItemTaxConfigSnapshot is
             // populated from the same committed values the price
@@ -528,6 +537,18 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             `Product is no longer available — please refresh your cart`,
           );
         }
+        // Phase 197 (Checkout audit #1) — moderation gate. Only an
+        // APPROVED product may be purchased; a product the moderation
+        // team has UNLISTED / REJECTED / left PENDING must not slip
+        // through place-order even if it's catalog-ACTIVE. The public
+        // storefront reads already filter on moderationStatus='APPROVED';
+        // this is the authoritative server-side enforcement at the
+        // money boundary (a stale cart / direct API call can't bypass it).
+        if ((product as any).moderationStatus !== 'APPROVED') {
+          throw new BadRequestAppException(
+            `"${item.productTitle}" is not available for purchase — please refresh your cart`,
+          );
+        }
 
         let canonicalListPricePaise: bigint;
         if (item.variantId) {
@@ -565,10 +586,19 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           ? expectedListPricePaise - canonicalListPricePaise
           : canonicalListPricePaise - expectedListPricePaise;
         if (listDriftPaise > PRICE_TOLERANCE_PAISE) {
-          const wasRupees = (Number(expectedListPricePaise) / 100).toFixed(2);
-          const nowRupees = (Number(canonicalListPricePaise) / 100).toFixed(2);
+          // Phase 197 (Checkout audit #21) — log the exact was/now on the
+          // server for forensics, but return a GENERIC message. The
+          // precise server-canonical figure (and which line drifted) is
+          // an internal pricing detail; the customer just needs "refresh
+          // your cart". Keeps a price-probing client from reading the
+          // live canonical price back out of a crafted stale-cart submit.
+          this.logger.warn(
+            `Price drift rejected for product=${item.productId} ` +
+              `variant=${item.variantId ?? '-'} customer=${input.customerId}: ` +
+              `expected=${expectedListPricePaise}p canonical=${canonicalListPricePaise}p`,
+          );
           throw new BadRequestAppException(
-            `Price for "${item.productTitle}" has changed (was ₹${wasRupees}, now ₹${nowRupees}). Please refresh your cart and try again.`,
+            'Some prices in your cart have changed. Please refresh your cart and try again.',
           );
         }
         // If a tier was applied, item.unitPrice may legitimately be
@@ -576,8 +606,13 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         // than the list price (signals price-spoofing upward).
         const itemUnitPricePaise = BigInt(Math.round(item.unitPrice * 100));
         if (itemUnitPricePaise > canonicalListPricePaise + PRICE_TOLERANCE_PAISE) {
+          this.logger.warn(
+            `Upward price-spoof rejected for product=${item.productId} ` +
+              `variant=${item.variantId ?? '-'} customer=${input.customerId}: ` +
+              `submitted=${itemUnitPricePaise}p canonical=${canonicalListPricePaise}p`,
+          );
           throw new BadRequestAppException(
-            `Price for "${item.productTitle}" exceeds the listed amount. Please refresh your cart and try again.`,
+            'Some prices in your cart have changed. Please refresh your cart and try again.',
           );
         }
       }
@@ -590,16 +625,27 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
       // surrounding tx rolls back (a known-and-accepted property
       // of Postgres sequences — leaves gaps, never duplicates).
       //
-      // Format unchanged (`SM${year}${0001…}`) so existing parsers
-      // and customer-facing displays stay valid. Numbers above 9999
-      // naturally grow to 5+ digits — the padStart only adds
-      // leading zeros, doesn't truncate.
+      // Format (`SM${year}${0000001…}`) so existing parsers and
+      // customer-facing displays stay valid. The padStart only adds
+      // leading zeros, never truncates — numbers above the pad width
+      // grow naturally (so this was never a hard cap). Phase 197
+      // (Checkout audit #3) — widened the pad from 4 to 7 so the
+      // common-case order number is fixed-width (lexicographically
+      // sortable) up to 9,999,999 before it grows.
+      //
+      // NOTE (surfaced, not changed): `order_number_seq` is GLOBAL,
+      // not year-scoped — it never resets on Jan-1, so the numeric
+      // suffix is monotonic across years (SM20260001234 →
+      // SM20270001235). Resetting per-year would require a guarded
+      // sequence-restart at the year boundary (race-prone) and would
+      // reintroduce cross-year collisions if back-dated. Left global
+      // by design; the `SM${year}` prefix already disambiguates.
       const seqRows = await tx.$queryRaw<{ nextval: bigint }[]>`
         SELECT nextval('order_number_seq') AS nextval
       `;
       const seqValue = Number(seqRows[0]!.nextval);
       const year = new Date().getFullYear();
-      const orderNumber = `SM${year}${String(seqValue).padStart(4, '0')}`;
+      const orderNumber = `SM${year}${String(seqValue).padStart(7, '0')}`;
 
       const paymentMethod = input.paymentMethod ?? 'COD';
       const isOnline = paymentMethod === 'ONLINE';
@@ -738,7 +784,7 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             sku: item.sku,
             masterSku: item.masterSku,
             imageUrl: item.imageUrl,
-            // Phase 67 (audit Gap #23) — Cloudinary public id snapshot
+            // Phase 67 (audit Gap #23) — media public id snapshot
             // so the UI can rebuild the URL after a regeneration.
             // Null until ProductImage carries publicId end-to-end.
             imagePublicId: item.imagePublicId ?? null,
@@ -1193,6 +1239,31 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
 
   async cancelOrderTransaction(order: MasterOrderEntity): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
+      // Phase 197 (My-Orders audit #15) — cancel race close. The
+      // caller's blocking-status check ran against a snapshot read
+      // OUTSIDE this tx; a sub-order could have shipped in the gap.
+      // Re-read the live fulfillment statuses under a row lock
+      // (FOR UPDATE) so a concurrent ship/deliver either serialises
+      // behind us or makes us abort. We lock the master row too so a
+      // concurrent cancel can't double-process.
+      await tx.$queryRaw`
+        SELECT id FROM master_orders WHERE id = ${order.id} FOR UPDATE
+      `;
+      const lockedSubs = await tx.$queryRaw<
+        { id: string; fulfillment_status: string }[]
+      >`
+        SELECT id, fulfillment_status
+        FROM sub_orders
+        WHERE master_order_id = ${order.id}
+        FOR UPDATE
+      `;
+      const BLOCKING = new Set(['SHIPPED', 'DELIVERED', 'FULFILLED']);
+      if (lockedSubs.some((s) => BLOCKING.has(s.fulfillment_status))) {
+        throw new BadRequestAppException(
+          'This order has already shipped or been delivered. Please use the returns flow instead of cancelling.',
+        );
+      }
+
       // Update master order
       await tx.masterOrder.update({
         where: { id: order.id },

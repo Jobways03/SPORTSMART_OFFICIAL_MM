@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   Search,
   ShoppingBag,
+  Heart,
   User,
   ChevronDown,
   X,
@@ -18,8 +19,16 @@ import { apiClient } from '@/lib/api-client';
 import { fetchMenuClient } from '@/lib/menu';
 import { type MenuNode, type MenuTree, nodeHref } from '@/data/menuTypes';
 import { MegaMenu } from './MegaMenu';
+import { CartDrawer } from '@/components/cart/CartDrawer';
 import { useSession, broadcastAuthChange } from '@/lib/auth-context';
 import { authService } from '@/services/auth.service';
+// Phase 202 (#15) — wishlist count badge. Reads the shared client store
+// (kept in ProductCard, the owned wishlist FE surface) which is seeded by
+// the catalog/PDP and updated on every heart toggle; the Navbar also does
+// one authoritative fetch on sign-in so the badge is correct on pages
+// without product cards.
+import { wishlistStore } from '@/components/ui/ProductCard';
+import { wishlistService } from '@/services/wishlist.service';
 
 interface CartData {
   itemCount: number;
@@ -36,6 +45,8 @@ export function Navbar() {
   const router = useRouter();
   const { user, status, clearUser } = useSession();
   const [cartCount, setCartCount] = useState(0);
+  // Phase 202 (#15) — wishlist count for the heart badge.
+  const [wishlistCount, setWishlistCount] = useState(0);
 
   const [menu, setMenu] = useState<MenuTree | null>(null);
 
@@ -82,6 +93,28 @@ export function Navbar() {
     };
     window.addEventListener('cart-updated', handler);
     return () => window.removeEventListener('cart-updated', handler);
+  }, []);
+
+  // Phase 202 (#15) — wishlist badge. On sign-in, fetch the authoritative
+  // total once (the wishlist store also seeds itself from /ids when the
+  // catalog mounts, but the Navbar may render on a card-less page). The
+  // store fires `wishlist-updated` on every heart toggle; we re-read its
+  // in-memory size so the badge updates instantly without a roundtrip.
+  useEffect(() => {
+    if (status !== 'authed') {
+      setWishlistCount(0);
+      return;
+    }
+    wishlistService
+      .list(1, 1)
+      .then((res) => setWishlistCount(res.data?.total ?? 0))
+      .catch(() => {});
+  }, [status]);
+
+  useEffect(() => {
+    const handler = () => setWishlistCount(wishlistStore.count());
+    window.addEventListener('wishlist-updated', handler);
+    return () => window.removeEventListener('wishlist-updated', handler);
   }, []);
 
   // Outside click for user dropdown
@@ -172,6 +205,10 @@ export function Navbar() {
     } finally {
       clearUser();
       setCartCount(0);
+      // Phase 202 (#15) — clear the wishlist badge + shared store so a
+      // stale signed-in count doesn't linger after sign-out.
+      setWishlistCount(0);
+      wishlistStore.reset();
       broadcastAuthChange();
       router.replace('/');
     }
@@ -315,9 +352,33 @@ export function Navbar() {
               </Link>
             )}
 
+            {/* Phase 202 (#15) — wishlist link + count badge. Additive,
+                sits between the account menu and the cart; does not touch
+                the cart code below. */}
+            <Link
+              href="/account/wishlist"
+              aria-label={`Wishlist with ${wishlistCount} items`}
+              className="relative size-10 grid place-items-center hover:bg-ink-100 rounded-full transition-colors"
+            >
+              <Heart className="size-5" strokeWidth={1.75} />
+              {wishlistCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-4 h-4 px-1 grid place-items-center bg-sale text-white text-[10px] font-semibold rounded-full tabular leading-none">
+                  {wishlistCount > 99 ? '99+' : wishlistCount}
+                </span>
+              )}
+            </Link>
+
+            {/* Phase 196 (#2) — opens the slide-out CartDrawer on a plain
+                click; cmd/ctrl/middle-click still deep-link to /cart so
+                "open in new tab" keeps working. */}
             <Link
               href="/cart"
               aria-label={`Cart with ${cartCount} items`}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+                e.preventDefault();
+                window.dispatchEvent(new Event('cart-open'));
+              }}
               className="relative size-10 grid place-items-center hover:bg-ink-100 rounded-full transition-colors"
             >
               <ShoppingBag className="size-5" strokeWidth={1.75} />
@@ -406,6 +467,10 @@ export function Navbar() {
           </div>
         </div>
       )}
+
+      {/* Phase 196 (#2) — global slide-out cart. Opens on `cart-open`
+          (Navbar cart button + PDP add-to-cart success). */}
+      <CartDrawer />
     </>
   );
 }

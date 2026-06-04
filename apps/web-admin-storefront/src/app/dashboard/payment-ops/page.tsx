@@ -12,8 +12,25 @@ import {
   STATUS_COLOR,
   KIND_LABEL,
   inrFromPaise,
+  maskPaymentId,
 } from '@/services/admin-payment-ops.service';
 import { ApiError } from '@/lib/api-client';
+
+// Phase 169 (#11) — severity preset filters so critical alerts surface without
+// scrolling a severity-sorted list.
+const SEVERITY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'All severities' },
+  { value: '90', label: 'Critical (90+)' },
+  { value: '70', label: 'High (70+)' },
+  { value: '50', label: 'Medium (50+)' },
+];
+
+// Phase 169 (#3/#1/#2) — sibling dashboard surfaces.
+const TABS: Array<{ href: string; label: string; active?: boolean }> = [
+  { href: '/dashboard/payment-ops', label: 'Mismatches', active: true },
+  { href: '/dashboard/payment-ops/failed-payments', label: 'Failed payments' },
+  { href: '/dashboard/payment-ops/chargebacks', label: 'Chargebacks' },
+];
 
 const STATUS_OPTIONS: Array<{ value: PaymentMismatchStatus | ''; label: string }> = [
   { value: '', label: 'All statuses' },
@@ -39,10 +56,13 @@ export default function PaymentOpsAlertsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<PaymentMismatchStatus | ''>('OPEN');
   const [kindFilter, setKindFilter] = useState<PaymentMismatchKind | ''>('');
+  const [severityFilter, setSeverityFilter] = useState('');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState<PaymentOpsMetrics | null>(null);
+  // Phase 169 (#15) — surface metrics failure instead of a silent blank.
+  const [metricsError, setMetricsError] = useState(false);
 
   // 300ms debounce for the free-text search input
   useEffect(() => {
@@ -58,6 +78,7 @@ export default function PaymentOpsAlertsPage() {
         status: statusFilter || undefined,
         kind: kindFilter || undefined,
         search: debouncedSearch || undefined,
+        minSeverity: severityFilter ? Number(severityFilter) : undefined,
       });
       if (res.data) {
         setItems(res.data.items);
@@ -68,15 +89,18 @@ export default function PaymentOpsAlertsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, statusFilter, kindFilter, debouncedSearch, router]);
+  }, [page, statusFilter, kindFilter, severityFilter, debouncedSearch, router]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // Metrics summary refreshes when the alerts page does.
+  // Phase 169 (#15) — record failure so the UI can show a banner, not a blank.
   useEffect(() => {
+    setMetricsError(false);
     void adminPaymentOpsService.metrics(7).then((res) => {
       if (res.data) setMetrics(res.data);
-    }).catch(() => undefined);
+      else setMetricsError(true);
+    }).catch(() => setMetricsError(true));
   }, [page]);
 
   const totalPages = Math.max(1, Math.ceil(total / 20));
@@ -101,6 +125,33 @@ export default function PaymentOpsAlertsPage() {
       <p style={{ marginTop: 4, marginBottom: 16, fontSize: 14, color: '#525A65' }}>
         Mismatches and signature failures detected on the gateway.
       </p>
+
+      {/* Phase 169 (#3/#1/#2) — surface tabs. */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #E5E7EB' }}>
+        {TABS.map((t) => (
+          <Link
+            key={t.href}
+            href={t.href}
+            style={{
+              padding: '8px 16px', fontSize: 14, fontWeight: 600, textDecoration: 'none',
+              color: t.active ? '#0F1115' : '#7A828F',
+              borderBottom: t.active ? '2px solid #0F1115' : '2px solid transparent',
+            }}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
+      {/* Phase 169 (#15) — metrics-unavailable banner instead of a silent blank. */}
+      {metricsError && (
+        <div style={{
+          marginBottom: 16, padding: '10px 14px', background: '#fffbeb',
+          border: '1px solid #fde68a', color: '#92400e', borderRadius: 10, fontSize: 13,
+        }}>
+          Metrics are temporarily unavailable. The alerts list below is unaffected.
+        </div>
+      )}
 
       {summary && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 12, marginBottom: 20 }}>
@@ -128,6 +179,9 @@ export default function PaymentOpsAlertsPage() {
         </select>
         <select value={kindFilter} onChange={(e) => { setKindFilter(e.target.value as any); setPage(1); }} style={selectStyle}>
           {KIND_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select value={severityFilter} onChange={(e) => { setSeverityFilter(e.target.value); setPage(1); }} style={selectStyle}>
+          {SEVERITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </div>
 
@@ -157,7 +211,16 @@ export default function PaymentOpsAlertsPage() {
                   </td>
                   <td style={td}>
                     <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, color: '#0F1115', fontWeight: 600 }}>{a.orderNumber ?? '(orphan)'}</div>
-                    <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#7A828F' }}>{a.providerPaymentId ?? '—'}</div>
+                    {/* Phase 169 (#9) — masked id; click to copy the full value. */}
+                    <div
+                      style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#7A828F', cursor: a.providerPaymentId ? 'copy' : 'default' }}
+                      title={a.providerPaymentId ? 'Click to copy full payment id' : undefined}
+                      onClick={(e) => {
+                        if (!a.providerPaymentId) return;
+                        e.stopPropagation();
+                        void navigator.clipboard?.writeText(a.providerPaymentId);
+                      }}
+                    >{maskPaymentId(a.providerPaymentId)}</div>
                   </td>
                   <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{inrFromPaise(a.expectedInPaise)}</td>
                   <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#b91c1c', fontWeight: 600 }}>{inrFromPaise(a.actualInPaise)}</td>

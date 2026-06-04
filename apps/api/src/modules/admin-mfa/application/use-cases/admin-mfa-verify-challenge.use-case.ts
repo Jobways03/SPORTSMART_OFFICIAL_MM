@@ -374,6 +374,21 @@ export class AdminMfaVerifyChallengeUseCase {
       })
       .catch(() => undefined);
 
+    // Phase 207 (#3) — explicit second-factor success row so the access
+    // log carries the MFA outcome distinctly from the session-mint
+    // LOGIN_SUCCESS. metadata records whether a backup code was used.
+    this.accessLog
+      .record({
+        actorType: 'ADMIN',
+        actorId: claims.sub,
+        actorRole: admin.role ?? null,
+        kind: 'MFA_VERIFY_SUCCESS',
+        ipAddress,
+        userAgent,
+        metadata: { usedBackupCode },
+      })
+      .catch(() => undefined);
+
     // Phase 23 (2026-05-20) — audit log + event hooks on success.
     if (usedBackupCode) {
       this.writeAudit(
@@ -482,6 +497,26 @@ export class AdminMfaVerifyChallengeUseCase {
       ipAddress,
       userAgent,
     });
+
+    // Phase 207 (#3) — also write the failure to access_logs so the
+    // brute-force spike detectors (which scan access_logs, NOT the
+    // admin-mfa AuditLog table) can SEE an MFA-guessing attack. Without
+    // this, an attacker who has the password and is hammering TOTP codes
+    // is invisible to failedLoginSpike() / the BruteForceSpikeCron.
+    // succeeded=false; metadata carries the failure reason (NOT the code).
+    this.accessLog
+      .record({
+        actorType: 'ADMIN',
+        actorId: adminId,
+        actorRole: actorRole ?? undefined,
+        kind: 'MFA_VERIFY_FAILED',
+        ipAddress: ipAddress ?? null,
+        userAgent: userAgent ?? null,
+        succeeded: false,
+        reason,
+        metadata: { failedMfaAttempts: next, locked: lock !== null },
+      })
+      .catch(() => undefined);
   }
 
   private writeAudit(

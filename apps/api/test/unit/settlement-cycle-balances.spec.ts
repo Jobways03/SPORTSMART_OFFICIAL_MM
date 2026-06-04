@@ -38,6 +38,7 @@ function build(opts: {
     {} as any,
     {} as any,
     {} as any,
+    { applyToCycleOnApprove: jest.fn().mockResolvedValue(undefined) } as any, // commissionInvoice
   );
   (svc as any).logger = { error: jest.fn(), log: jest.fn(), warn: jest.fn() };
   return { svc, sellerFindMany, franchiseFindMany };

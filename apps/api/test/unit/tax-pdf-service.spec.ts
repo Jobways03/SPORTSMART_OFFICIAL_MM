@@ -14,6 +14,10 @@ function makeService(): {
   const prisma = {
     taxDocument: {
       findUnique: jest.fn(),
+      // Phase 174 (Cluster E) — renderAndUpload + markAttemptFailed now do a
+      // status-scoped CAS via updateMany, then re-read via findUniqueOrThrow.
+      findUniqueOrThrow: jest.fn(),
+      updateMany: jest.fn(),
       update: jest.fn(),
     },
   };
@@ -130,10 +134,14 @@ describe('TaxDocumentPdfService.renderAndUpload', () => {
       sha256: 'deadbeef',
       provider: 'stub',
     });
-    prisma.taxDocument.update.mockImplementation(async (args: any) => ({
-      ...args.where,
-      ...args.data,
-    }));
+    prisma.taxDocument.updateMany.mockResolvedValue({ count: 1 });
+    prisma.taxDocument.findUniqueOrThrow.mockResolvedValue(
+      makeRow({
+        status: 'PDF_GENERATED',
+        pdfUrl: 'file:///abs/SM-INV-000001.html',
+        pdfFailureReason: null,
+      }),
+    );
 
     const result = await service.renderAndUpload({ documentId: 'doc-1' });
     expect(storage.upload).toHaveBeenCalledTimes(1);
@@ -162,9 +170,10 @@ describe('TaxDocumentPdfService.renderAndUpload', () => {
       sha256: 'abc',
       provider: 'stub',
     });
-    prisma.taxDocument.update.mockImplementation(async (args: any) => ({
-      ...args.data,
-    }));
+    prisma.taxDocument.updateMany.mockResolvedValue({ count: 1 });
+    prisma.taxDocument.findUniqueOrThrow.mockResolvedValue(
+      makeRow({ status: 'PDF_GENERATED' }),
+    );
 
     await service.renderAndUpload({ documentId: 'doc-1' });
     expect(storage.upload.mock.calls[0][0].storagePath).toBe(
@@ -183,7 +192,10 @@ describe('TaxDocumentPdfService.renderAndUpload', () => {
       sha256: 'x',
       provider: 'stub',
     });
-    prisma.taxDocument.update.mockResolvedValue({});
+    prisma.taxDocument.updateMany.mockResolvedValue({ count: 1 });
+    prisma.taxDocument.findUniqueOrThrow.mockResolvedValue(
+      makeRow({ status: 'PDF_GENERATED' }),
+    );
     await service.renderAndUpload({ documentId: 'doc-1' });
     expect(storage.upload.mock.calls[0][0].storagePath).toContain(
       'INV-2026-27-XYZ-00001',
@@ -197,15 +209,16 @@ describe('TaxDocumentPdfService.renderAndUpload', () => {
     await expect(
       service.renderAndUpload({ documentId: 'doc-1' }),
     ).rejects.toThrow(/S3 503/);
-    // Update should NOT have been called on failure path.
-    expect(prisma.taxDocument.update).not.toHaveBeenCalled();
+    // Status flip should NOT have happened on the upload-failure path.
+    expect(prisma.taxDocument.updateMany).not.toHaveBeenCalled();
   });
 });
 
 describe('TaxDocumentPdfService.markAttemptFailed', () => {
   it('increments retryCount + stamps reason + flips to PDF_FAILED', async () => {
     const { service, prisma } = makeService();
-    prisma.taxDocument.update.mockResolvedValue({
+    prisma.taxDocument.updateMany.mockResolvedValue({ count: 1 });
+    prisma.taxDocument.findUniqueOrThrow.mockResolvedValue({
       id: 'doc-1',
       documentNumber: 'SM-INV-000001',
       status: 'PDF_FAILED',
@@ -216,10 +229,11 @@ describe('TaxDocumentPdfService.markAttemptFailed', () => {
       documentId: 'doc-1',
       reason: 'S3 timeout',
     });
-    const args = prisma.taxDocument.update.mock.calls[0][0];
+    const args = prisma.taxDocument.updateMany.mock.calls[0][0];
     expect(args.data.status).toBe('PDF_FAILED');
     expect(args.data.pdfFailureReason).toBe('S3 timeout');
     expect(args.data.pdfRetryCount).toEqual({ increment: 1 });
+    expect(args.where.status).toEqual({ in: ['PDF_PENDING', 'PDF_FAILED'] });
     expect(r.status).toBe('PDF_FAILED');
   });
 });

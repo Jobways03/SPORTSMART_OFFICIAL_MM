@@ -4,6 +4,13 @@ import { AuditPublicFacade } from './application/facades/audit-public.facade';
 import { AuditLogBuilderService } from './application/services/audit-log-builder.service';
 import { AuditChainAnchorService } from './application/services/audit-chain-anchor.service';
 import { AuditChainAnchorCron } from './application/jobs/audit-chain-anchor.cron';
+// Phase 203 (#9) / 204 (#7) — autonomous chain-break detector + its alert
+// consumer. The cron walks the chain every 30 min and the handler raises an
+// alert (and a SYSTEM audit row) on any detected break.
+import { AuditChainVerifyCron } from './application/jobs/audit-chain-verify.cron';
+// Phase 203 (#15) — env-gated (OFF by default) retention sweeper skeleton.
+import { AuditLogRetentionCron } from './application/jobs/audit-log-retention.cron';
+import { AuditChainBreakHandler } from './application/event-handlers/audit-chain-break.handler';
 import { DomainEventLogHandler } from './application/event-handlers/domain-event-log.handler';
 import { AdminActionAuditHandler } from './application/event-handlers/admin-action-audit.handler';
 // Phase 79 (2026-05-22) — history audit Gap #18. Mirrors
@@ -24,6 +31,9 @@ import { AdminAuditController } from './presentation/controllers/admin-audit.con
     AuditLogBuilderService,
     AuditChainAnchorService,
     AuditChainAnchorCron,
+    AuditChainVerifyCron,
+    AuditLogRetentionCron,
+    AuditChainBreakHandler,
     DomainEventLogHandler,
     // PR 2 — previously declared but never registered. Listens to
     // `admin.action.**` and writes to admin_action_audit_logs.

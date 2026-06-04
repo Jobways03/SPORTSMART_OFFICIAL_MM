@@ -23,6 +23,18 @@ model WishlistItem {
   // "for Diwali gift". Kept short to discourage repurposing as a
   // freeform notes feature.
   note      String?  @db.VarChar(280)
+
+  // Phase 202 (#13) — price snapshot at add-time (integer paise,
+  // BigInt). Wishlist items are explicitly NOT priced for checkout
+  // (the cart re-prices), but capturing what the customer saw when
+  // they saved the item lets the UI surface "price dropped since you
+  // saved this" later without inventing a price-history join. Nullable
+  // because (a) legacy rows predate it and (b) an abstract "any
+  // variant" save on a variant-priced product has no single price to
+  // snapshot. Money discipline: integer paise, serialized as a string
+  // on the wire, Number() only at the format boundary.
+  unitPriceInPaiseAtAdd BigInt? @map("unit_price_in_paise_at_add")
+
   createdAt DateTime @default(now()) @map("created_at")
 
   user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)

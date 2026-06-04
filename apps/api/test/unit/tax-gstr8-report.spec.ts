@@ -21,6 +21,10 @@ interface MockTcs {
   listForPeriod: jest.Mock;
   listForPeriodPaginated: jest.Mock;
   streamForPeriod: jest.Mock;
+  // Phase 160 (§52 lifecycle audit B1 / #13) — summarise now also fetches
+  // status counts + period warnings.
+  getPeriodStatusCounts: jest.Mock;
+  getPeriodComputeWarnings: jest.Mock;
 }
 
 function placeOfSupplyStub(codeToName: Map<string, string> = new Map()) {
@@ -74,11 +78,26 @@ function makeService(
           (a: bigint, r: any) => a + (r.totalTcsInPaise ?? 0n),
           0n,
         ),
+        adjustmentCarriedForwardInPaise: rows.reduce(
+          (a: bigint, r: any) => a + (r.adjustmentCarriedForwardInPaise ?? 0n),
+          0n,
+        ),
       },
     }),
     streamForPeriod: jest.fn().mockImplementation(async function* () {
       for (const r of rows) yield r;
     }),
+    getPeriodStatusCounts: jest.fn().mockResolvedValue({
+      COMPUTED: 0,
+      COLLECTED: 0,
+      FILED: 0,
+      PAID_TO_GOVT: 0,
+      CERTIFICATE_ISSUED: 0,
+      REVERSED: 0,
+    }),
+    getPeriodComputeWarnings: jest
+      .fn()
+      .mockResolvedValue({ rateVariance: null, carryForward: null }),
   };
   const placeOfSupply = placeOfSupplyStub(codeToName);
   return new Gstr8ReportService(tcs as any, placeOfSupply as any);

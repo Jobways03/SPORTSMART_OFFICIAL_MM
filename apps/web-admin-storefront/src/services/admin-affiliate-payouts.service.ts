@@ -101,6 +101,18 @@ export const adminAffiliatePayoutsService = {
       body: JSON.stringify({ ledgerIds, certificateNumber }),
     });
   },
+
+  // Phase 160 (§194-O affiliate audit #16) — correction flow. Reverse a
+  // single ledger row with a reason (gated on affiliates.tax.reverse).
+  reverseTds(
+    ledgerId: string,
+    reason: string,
+  ): Promise<ApiResponse<{ reversed: boolean; previousStatus: string; wasAlreadyReversed: boolean }>> {
+    return apiClient(`${BASE}/tds/${encodeURIComponent(ledgerId)}/reverse`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reason }),
+    });
+  },
 };
 
 export interface Tds194OLedgerRow {

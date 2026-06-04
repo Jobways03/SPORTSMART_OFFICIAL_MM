@@ -171,10 +171,22 @@ export interface ListReturnsParams {
   fromDate?: string;
   toDate?: string;
   search?: string;
-  [key: string]: string | number | undefined;
+  // Server-side intake-risk filtering (replaces the old client-side
+  // score bucketing the Risk Review page used to do over a truncated
+  // 100-row page). riskScoreMin/Max are inclusive integer bounds;
+  // hasRiskScore narrows to rows that have (true) / lack (false) a
+  // score regardless of value. All three are serialised to the query
+  // string by buildQuery — booleans stringify to 'true'/'false', which
+  // is exactly what the backend expects.
+  riskScoreMin?: number;
+  riskScoreMax?: number;
+  hasRiskScore?: boolean;
+  [key: string]: string | number | boolean | undefined;
 }
 
-function buildQuery(params: Record<string, string | number | undefined>): string {
+function buildQuery(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
   const q = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') q.set(k, String(v));

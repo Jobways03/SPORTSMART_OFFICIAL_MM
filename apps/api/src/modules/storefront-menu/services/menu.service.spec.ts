@@ -8,7 +8,7 @@
  *   - deleteMenu / deleteItem are soft-deletes (deletedAt stamp).
  *   - getPublicMenuByHandle returns a reduced shape (no linkType /
  *     linkRef) and filters out isActive=false items.
- *   - The Cloudinary-equivalent here: cache invalidation on every
+ *   - The media-equivalent here: cache invalidation on every
  *     write path.
  */
 

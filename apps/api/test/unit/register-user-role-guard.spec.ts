@@ -53,17 +53,21 @@ describe('PrismaUserRepository.createUserWithRole — role guard', () => {
     return { repo, tx, prisma };
   };
 
+  // Phase 21 — input gained optional `phone` (stored verbatim or null)
+  // and `consents` is now typed RegistrationConsentInput[], which
+  // requires `consentVersion` on every entry.
   const baseInput = {
     firstName: 'A',
     lastName: 'B',
     email: 'a@b.com',
+    phone: null,
     passwordHash: 'hash',
     otpHash: 'otphash',
     otpExpiresAt: new Date(Date.now() + 600_000),
     consents: [
-      { purpose: 'TERMS_OF_SERVICE', granted: true },
-      { purpose: 'PRIVACY_POLICY', granted: true },
-      { purpose: 'EMAIL_MARKETING', granted: false },
+      { purpose: 'TERMS_OF_SERVICE', granted: true, consentVersion: 'v1' },
+      { purpose: 'PRIVACY_POLICY', granted: true, consentVersion: 'v1' },
+      { purpose: 'EMAIL_MARKETING', granted: false, consentVersion: 'v1' },
     ],
   };
 

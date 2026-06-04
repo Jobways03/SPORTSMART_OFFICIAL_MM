@@ -30,8 +30,8 @@ import { StorefrontFilterValidatorService } from './application/services/storefr
 import { SellerAuthGuard, AdminAuthGuard } from '../../core/guards';
 
 // Integration adapters
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
-import { CloudinaryOrphanSweepCron } from './application/jobs/cloudinary-orphan-sweep.cron';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
+import { MediaOrphanSweepCron } from './application/jobs/media-orphan-sweep.cron';
 
 // ── Repository interfaces (Symbols) ─────────────────────────────────────
 import { PRODUCT_REPOSITORY } from './domain/repositories/product.repository.interface';
@@ -110,12 +110,20 @@ import { AuditModule } from '../audit/module';
 // Phase 4 Delhivery wiring (2026-06-02) — real courier serviceability in the
 // PDP check (ServiceabilityService injects LogisticsFacadeClient).
 import { LogisticsFacadeModule } from '../../integrations/logistics-facade/logistics-facade.module';
+// Phase 193 (#15) — back-in-stock notifier needs the notifications facade.
+import { NotificationsModule } from '../notifications/module';
+import { BackInStockNotifyCron } from './application/jobs/back-in-stock-notify.cron';
+// Phase 195 (#16) — invalidate the storefront list cache when a product
+// transitions out of stock so search/listing results don't show it as
+// available until the TTL lapses.
+import { StockCacheInvalidationHandler } from './application/event-handlers/stock-cache-invalidation.handler';
 
 @Module({
   imports: [
     forwardRef(() => CartModule),
     forwardRef(() => InventoryModule),
     AuditModule,
+    NotificationsModule,
     LogisticsFacadeModule,
   ],
   controllers: [
@@ -184,11 +192,13 @@ import { LogisticsFacadeModule } from '../../integrations/logistics-facade/logis
     // ── Guards & adapters ───────────────────────────────────────────────
     SellerAuthGuard,
     AdminAuthGuard,
-    CloudinaryAdapter,
-    // Phase 14 (2026-05-16) — Cloudinary orphan sweep cron. Daily
-    // 04:00 UTC; deletes Cloudinary assets whose owning Product has
+    MediaStorageAdapter,
+    // Phase 14 (2026-05-16) — media orphan sweep cron. Daily
+    // 04:00 UTC; deletes media assets whose owning Product has
     // been soft-deleted beyond the retention window.
-    CloudinaryOrphanSweepCron,
+    MediaOrphanSweepCron,
+    BackInStockNotifyCron,
+    StockCacheInvalidationHandler,
   ],
   // Phase 59 (2026-05-22) — CatalogCacheService exported so the
   // admin-control-tower bulk suspend/activate path can invalidate

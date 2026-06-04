@@ -103,6 +103,19 @@ model TaxDocument {
   sellerLegalName        String?              @map("seller_legal_name")
   sellerAddressJson      Json?                @map("seller_address_json")
   sellerStateCode        String?              @map("seller_state_code")
+  // Phase 161 (Platform GST Profile audit B3) — for OWN_BRAND / SPORTSMART
+  // supplies, the platform profile that minted this invoice. The supplier
+  // identity itself is already SNAPSHOTTED in the seller* columns above
+  // (no drift); this FK lets reports group "all invoices under profile X"
+  // without a GSTIN-string scan. Null for marketplace-seller / franchise rows.
+  platformGstProfileId   String?              @map("platform_gst_profile_id")
+  platformGstProfile     PlatformGstProfile?  @relation(fields: [platformGstProfileId], references: [id], onDelete: SetNull)
+  // Phase 161 (Customer Tax Profile audit B2) — the buyer profile this B2B
+  // invoice was issued to. Buyer identity is already SNAPSHOTTED in the
+  // buyer* columns below (no PDF drift); this FK lets the admin join graph
+  // resolve "which profile" without a GSTIN-string scan. Null for B2C.
+  customerTaxProfileId   String?              @map("customer_tax_profile_id")
+  customerTaxProfile     CustomerTaxProfile?  @relation(fields: [customerTaxProfileId], references: [id], onDelete: SetNull)
 
   // ─── Recipient ───────────────────────────────────────────────
   buyerGstin             String? @map("buyer_gstin")
@@ -132,6 +145,22 @@ model TaxDocument {
   originalDocumentId     String? @map("original_document_id")
   originalDocumentNumber String? @map("original_document_number")
   reason                 String?
+  // Phase 164 (Credit Note Generation audit #1/#2/#3) — first-class
+  // structured linkage to the originating Return. Replaces the brittle
+  // `reason CONTAINS returnNumber` idempotency lookup (which an admin
+  // reason override silently defeated) and is the column the
+  // partial-unique (original_document_id, return_id) duplicate-CN guard
+  // is built on. Nullable: only CREDIT_NOTE rows born from a return
+  // carry it; invoices and legacy CNs leave it null.
+  returnId               String? @map("return_id")
+  // Phase 164 (#14) — when SOME order-item snapshots were missing (legacy
+  // orders), the CN is issued covering only the lines that had snapshots.
+  // This records how many approved lines were skipped so finance can tell
+  // a partial-coverage CN from a complete one. 0 = full coverage.
+  partialCoverageLineCount Int   @default(0) @map("partial_coverage_line_count")
+  // Phase 164 (#20) — set when the customer-facing CN-issued notification
+  // fired successfully, so support can answer "did the customer get it?".
+  customerNotifiedAt     DateTime? @map("customer_notified_at")
 
   // ─── Status ──────────────────────────────────────────────────
   status TaxDocumentStatus @default(DRAFT)
@@ -167,7 +196,18 @@ model TaxDocument {
   einvoiceRetryCount               Int            @default(0) @map("einvoice_retry_count")
   einvoiceLastAttemptedAt          DateTime?      @map("einvoice_last_attempted_at")
   einvoiceFailureReason            String?        @map("einvoice_failure_reason")
+  // Phase 160 (e-invoice audit #8) — the NIC business error code (e.g.
+  // 2150 duplicate, 2253 mandatory-field-missing) split out from the
+  // free-text reason so admin queries can filter by code, not regex.
+  einvoiceErrorCode                String?        @map("einvoice_error_code")
   einvoiceProvider                 String?        @map("einvoice_provider")
+  // Phase 160 (e-invoice audit — schema gap "generatedBy/generatedAt").
+  // Who minted the IRN (admin id or 'system' for the retry cron) + WHEN
+  // we minted it (distinct from ackDate, which is NIC's ack timestamp,
+  // and from einvoiceLastAttemptedAt, which is the last attempt of any
+  // kind incl. failures).
+  einvoiceGeneratedBy              String?        @map("einvoice_generated_by")
+  einvoiceGeneratedAt              DateTime?      @map("einvoice_generated_at")
   // Phase 90 (2026-05-23) — Gap #19 cancel category + reason audit.
   // Pre-Phase-90 the cancel path only persisted the cancellation
   // envelope inside signedDocumentJson; the row-level columns let
@@ -225,6 +265,10 @@ model TaxDocument {
   @@index([posSaleId])
   @@index([sellerId])
   @@index([customerId])
+  // Phase 161 (Platform GST Profile audit B3) — "all invoices under profile X".
+  @@index([platformGstProfileId])
+  // Phase 161 (Customer Tax Profile audit B2) — "all invoices to buyer profile X".
+  @@index([customerTaxProfileId])
   @@index([documentType])
   @@index([status])
   @@index([financialYear])
@@ -236,6 +280,18 @@ model TaxDocument {
   // by IRN substring.
   @@index([irn])
   @@index([einvoiceStatus, einvoiceLastAttemptedAt])
+  // Phase 164 (Credit Note Generation audit #7) — the prior-CN lookup +
+  // cumulative-reversal scan filter by (originalDocumentId [, status]).
+  // Without this they are full-table scans on a growing tax_documents.
+  @@index([originalDocumentId, status])
+  // Phase 164 (#1/#2) — query "the CN(s) for this return" without a text scan.
+  @@index([returnId])
+  // Phase 163 (Tax Audit Readiness audit #7) — back the readiness scans
+  // that filter by (status, retryCount). The leading single-column status
+  // index can't serve `einvoiceStatus IN (...) AND einvoiceRetryCount >= N`
+  // without re-scanning; these composites do.
+  @@index([einvoiceStatus, einvoiceRetryCount])
+  @@index([status, pdfRetryCount])
   @@index([signedDocumentJsonRetentionUntil])
   @@map("tax_documents")
 }
@@ -354,4 +410,26 @@ model DocumentSequence {
 
   @@index([supplierGstin, financialYear, documentType])
   @@map("document_sequences")
+}
+
+// Phase 163 (Tax Audit Readiness audit #16) — point-in-time snapshots of
+// the readiness posture. Written by the 6-hourly readiness-snapshot cron
+// so the dashboard can answer "is readiness improving?" (trend) and a
+// forensic review can reconstruct "how many blockers existed on date X?".
+// Append-only; never updated. blockersJson holds the full BlockerSummary[]
+// for that snapshot (severity + per-code counts).
+model TaxReadinessSnapshot {
+  id              String   @id @default(uuid())
+  // Tax engine mode at snapshot time (OFF / AUDIT / STRICT).
+  currentMode     String   @map("current_mode")
+  ready           Boolean  @map("ready")
+  totalBlockers   Int      @map("total_blockers")
+  criticalBlockers Int     @default(0) @map("critical_blockers")
+  // Full BlockerSummary[] (code, severity, resourceType, count, sampleIds).
+  blockersJson    Json     @map("blockers_json")
+  generatedAt     DateTime @map("generated_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([generatedAt(sort: Desc)])
+  @@map("tax_readiness_snapshots")
 }

@@ -5,6 +5,7 @@ import { PrismaModule } from './bootstrap/database/prisma.module';
 import { RedisModule } from './bootstrap/cache/redis.module';
 import { LoggingModule } from './bootstrap/logging/logging.module';
 import { EventsModule } from './bootstrap/events/events.module';
+import { OutboxOpsModule } from './bootstrap/events/outbox/outbox-ops.module';
 import { SecurityModule } from './bootstrap/security/security.module';
 import { EmailModule } from './integrations/email/email.module';
 import { CaptchaModule } from './integrations/captcha/captcha.module';
@@ -22,6 +23,7 @@ import { SearchModule } from './modules/search/module';
 import { InventoryModule } from './modules/inventory/module';
 import { CartModule } from './modules/cart/module';
 import { WalletModule } from './modules/wallet/module';
+import { LoyaltyModule } from './modules/loyalty/module';
 import { WishlistModule } from './modules/wishlist/wishlist.module';
 import { SupportModule } from './modules/support/module';
 import { OwnBrandModule } from './modules/own-brand/module';
@@ -64,6 +66,7 @@ import { CaseDuplicateModule } from './core/case-duplicate/case-duplicate.module
 import { SlaModule } from './core/sla/sla.module';
 import { RiskModule } from './core/risk/risk.module';
 import { QueuesModule } from './core/queues/queues.module';
+import { R2Module } from './integrations/r2/r2.module';
 import { RetentionModule } from './core/retention/retention.module';
 import { FileIntegrityModule } from './core/file-integrity/file-integrity.module';
 import { ErasureModule } from './core/erasure/erasure.module';
@@ -90,6 +93,8 @@ import { LogisticsPartnerModule } from './modules/logistics-partner/logistics-pa
     PrismaModule,
     RedisModule,
     EventsModule,
+    // Phase 186 (#4/#8) — outbox retention sweeper + admin DLQ surface.
+    OutboxOpsModule,
     EmailModule,
     CaptchaModule,
     WhatsAppModule,
@@ -99,6 +104,7 @@ import { LogisticsPartnerModule } from './modules/logistics-partner/logistics-pa
     SlaModule,
     RiskModule,
     QueuesModule,
+    R2Module,
     RetentionModule,
     FileIntegrityModule,
     ErasureModule,
@@ -123,6 +129,7 @@ import { LogisticsPartnerModule } from './modules/logistics-partner/logistics-pa
     InventoryModule,
     CartModule,
     WalletModule,
+    LoyaltyModule,
     WishlistModule,
     SupportModule,
     OwnBrandModule,

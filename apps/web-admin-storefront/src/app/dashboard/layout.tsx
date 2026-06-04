@@ -88,6 +88,13 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Wallets', href: '/dashboard/wallets', icon: 'wallet', anyOf: ['wallets.read'], section: 'finance' },
   { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: 'shield', anyOf: ['paymentOps.read'], section: 'finance' },
   { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: 'recon', anyOf: ['recon.read'], section: 'finance' },
+  // Phase 175/177 — accounts overview + per-franchise finance dashboards.
+  { label: 'Accounts', href: '/dashboard/accounts', icon: 'banknote', anyOf: ['accounts.read'], section: 'finance' },
+  { label: 'Payables aging', href: '/dashboard/accounts/payables', icon: 'recon', anyOf: ['accounts.read'], section: 'finance' },
+  { label: 'Top performers', href: '/dashboard/accounts/top-performers', icon: 'percent', anyOf: ['accounts.read'], section: 'finance' },
+  { label: 'Finance reports', href: '/dashboard/accounts/reports', icon: 'recon', anyOf: ['settlements.read'], section: 'finance' },
+  { label: 'Penalty approvals', href: '/dashboard/accounts/penalty-approvals', icon: 'percent', anyOf: ['franchise.finance'], section: 'finance' },
+  { label: 'Franchise finances', href: '/dashboard/accounts/franchises', icon: 'percent', anyOf: ['accounts.read'], section: 'finance' },
   // Refund Saga Console — observability into the refund-execution state
   // machine. Surfaces stuck/failed sagas so finance ops can step in
   // before they breach SLA. Gated on the same permissions as Payment
@@ -103,7 +110,13 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Tax / GST', href: '/dashboard/tax', icon: 'receipt', anyOf: ['tax.reports.read', 'tax.tcs.read'], section: 'finance' },
 
   // Risk — fraud / abuse review, occasional but high-stakes.
-  { label: 'Risk Review', href: '/dashboard/risk-review', icon: 'alert-octagon', anyOf: ['risk.review'], section: 'risk' },
+  // The Risk Review page reads the returns risk queue, so its data
+  // endpoint (GET /admin/returns) is gated on `returns.read`, not
+  // `risk.review`. Show the entry to EITHER permission so a returns-ops
+  // admin sees a page that actually loads, and a risk.review-only admin
+  // isn't pointed at a page that 403s. (Deeper risk.review-specific API
+  // enforcement is a separate backend follow-up.)
+  { label: 'Risk Review', href: '/dashboard/risk-review', icon: 'alert-octagon', anyOf: ['risk.review', 'returns.read'], section: 'risk' },
 
   // Growth — campaigns and reporting, used less frequently.
   { label: 'Discounts', href: '/dashboard/discounts', icon: 'tag', anyOf: ['discounts.read'], section: 'growth' },

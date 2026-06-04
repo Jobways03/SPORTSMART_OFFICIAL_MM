@@ -19,6 +19,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
 import { requirePermissionOrSoak } from '../../../../core/authorization/require-permission';
+import { AuthzModeService } from '../../../../core/authorization/authz-mode.service';
 import { DisputeService } from '../../application/services/dispute.service';
 import {
   AdminReplyMessageDto,
@@ -37,6 +38,7 @@ export class AdminDisputesController {
     private readonly service: DisputeService,
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    private readonly authzMode: AuthzModeService,
   ) {}
 
   @Get()
@@ -101,7 +103,7 @@ export class AdminDisputesController {
       requirePermissionOrSoak({
         req,
         permission: 'disputes.internalNote',
-        env: this.env,
+        authzMode: this.authzMode,
         context: 'dispute.internalNote',
       });
     }
@@ -187,7 +189,7 @@ export class AdminDisputesController {
       requirePermissionOrSoak({
         req,
         permission: 'disputes.decide.high_value',
-        env: this.env,
+        authzMode: this.authzMode,
         context: 'dispute.decide.high_value',
       });
     }

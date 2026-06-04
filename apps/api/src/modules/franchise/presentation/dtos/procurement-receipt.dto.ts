@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsInt,
   IsNotEmpty,
@@ -65,7 +67,10 @@ export class ReceiptItemDto {
 }
 
 export class ProcurementReceiptDto {
+  // Phase 236 — bound the receipt array (was unbounded).
   @IsArray({ message: 'Items must be an array' })
+  @ArrayMinSize(1, { message: 'At least one item is required' })
+  @ArrayMaxSize(100, { message: 'A receipt may contain at most 100 items' })
   @ValidateNested({ each: true })
   @Type(() => ReceiptItemDto)
   items!: ReceiptItemDto[];

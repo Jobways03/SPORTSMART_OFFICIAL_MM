@@ -83,7 +83,16 @@ export class AdminReturnsController {
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
     @Query('search') search?: string,
+    // Phase 174 (audit #228) — server-side risk filter for the risk-review
+    // dashboard (replaces client-side bucketing over a truncated 100-row page).
+    @Query('riskScoreMin') riskScoreMin?: string,
+    @Query('riskScoreMax') riskScoreMax?: string,
+    @Query('hasRiskScore') hasRiskScore?: string,
   ) {
+    const toInt = (v?: string): number | undefined =>
+      v !== undefined && v !== '' && Number.isFinite(parseInt(v, 10))
+        ? parseInt(v, 10)
+        : undefined;
     const data = await this.returnService.listAllReturns({
       page: Math.max(1, parseInt(page || '1', 10) || 1),
       limit: Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20)),
@@ -94,6 +103,14 @@ export class AdminReturnsController {
       fromDate: fromDate ? new Date(fromDate) : undefined,
       toDate: toDate ? new Date(toDate) : undefined,
       search,
+      riskScoreMin: toInt(riskScoreMin),
+      riskScoreMax: toInt(riskScoreMax),
+      hasRiskScore:
+        hasRiskScore === 'true'
+          ? true
+          : hasRiskScore === 'false'
+            ? false
+            : undefined,
     });
     return { success: true, message: 'Returns retrieved', data };
   }

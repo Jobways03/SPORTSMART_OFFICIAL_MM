@@ -21,7 +21,7 @@ import { HealthController } from '../../src/core/health/health.controller';
 describe('HealthController — HTTP status reflects dep health', () => {
   const buildController = (opts: { db: boolean; redis: boolean }) => {
     const prisma: any = {
-      $queryRawUnsafe: opts.db
+      $queryRaw: opts.db
         ? jest.fn().mockResolvedValue(undefined)
         : jest.fn().mockRejectedValue(new Error('db down')),
     };
@@ -39,7 +39,12 @@ describe('HealthController — HTTP status reflects dep health', () => {
         return res;
       },
     };
-    const ctrl = new HealthController(prisma, redis);
+    // External probes default OFF — getString returns the supplied default
+    // ('false'), so the external probe is never invoked on these
+    // LB-readiness (DB/Redis only) assertions.
+    const env: any = { getString: (_k: string, d: string) => d };
+    const externalProbe: any = { probeAll: jest.fn() };
+    const ctrl = new HealthController(prisma, redis, env, externalProbe);
     return { ctrl, res, captured };
   };
 

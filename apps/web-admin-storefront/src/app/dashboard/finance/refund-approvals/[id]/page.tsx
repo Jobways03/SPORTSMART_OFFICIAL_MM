@@ -34,6 +34,8 @@ export default function RefundApprovalDetailPage() {
 
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  // Phase 171 (#6) — optional SAFE customer-facing message.
+  const [customerVisibleReason, setCustomerVisibleReason] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -80,7 +82,11 @@ export default function RefundApprovalDetailPage() {
     setNotice('');
     setBusy(true);
     try {
-      const res = await adminRefundApprovalsService.reject(id, rejectReason.trim());
+      const res = await adminRefundApprovalsService.reject(
+        id,
+        rejectReason.trim(),
+        customerVisibleReason.trim() || undefined,
+      );
       // Phase 127 — the reject reverses the dispute's liability attribution.
       // Surface what happened so finance knows whether ops follow-up is needed.
       const rev = res.data?.liabilityReversal;
@@ -97,6 +103,7 @@ export default function RefundApprovalDetailPage() {
       }
       setShowReject(false);
       setRejectReason('');
+      setCustomerVisibleReason('');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reject failed');
@@ -163,6 +170,31 @@ export default function RefundApprovalDetailPage() {
       {notice && (
         <div style={{ marginTop: 12, padding: 10, border: '1px solid #93c5fd', background: '#eff6ff', color: '#1e40af', borderRadius: 12, fontSize: 13 }}>
           {notice}
+        </div>
+      )}
+
+      {/* Phase 171 (#15) — routed-back-to-dispute / rejected banners. */}
+      {row.status === 'ROUTED_BACK_TO_DISPUTE' && (
+        <div style={{ marginTop: 12, padding: '10px 14px', border: '1px solid #ddd6fe', background: '#f5f3ff', color: '#5b21b6', borderRadius: 12, fontSize: 13 }}>
+          <strong>Routed back to the dispute team.</strong> Finance rejected this
+          refund; the linked dispute has been re-opened for re-decision.
+          {row.linkedDisputeId && (
+            <>
+              {' '}
+              <Link href={`/dashboard/disputes/${row.linkedDisputeId}`} style={{ color: '#6d28d9', fontWeight: 600 }}>
+                Open the dispute →
+              </Link>
+            </>
+          )}
+          {row.rejectionReason && (
+            <div style={{ marginTop: 6, color: '#7c3aed' }}>Reason (internal): {row.rejectionReason}</div>
+          )}
+        </div>
+      )}
+      {row.status === 'REJECTED' && (
+        <div style={{ marginTop: 12, padding: '10px 14px', border: '1px solid #fecaca', background: '#fef2f2', color: '#991b1b', borderRadius: 12, fontSize: 13 }}>
+          <strong>Rejected by finance.</strong>
+          {row.rejectionReason && <> Reason (internal): {row.rejectionReason}</>}
         </div>
       )}
 
@@ -423,11 +455,24 @@ export default function RefundApprovalDetailPage() {
             <textarea
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Reason (visible in audit log)"
+              placeholder="Internal reason (audit log only — never shown to the customer)"
               rows={3}
               disabled={busy}
               style={{
                 width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                borderRadius: 12, fontSize: 13, resize: 'vertical', boxSizing: 'border-box',
+                fontFamily: 'inherit',
+              }}
+            />
+            {/* Phase 171 (#6) — optional SAFE message the customer will see. */}
+            <textarea
+              value={customerVisibleReason}
+              onChange={(e) => setCustomerVisibleReason(e.target.value)}
+              placeholder="Optional: a safe message shown to the customer (leave blank for the standard hold message)"
+              rows={2}
+              disabled={busy}
+              style={{
+                width: '100%', marginTop: 8, padding: 10, border: '1px solid #D2D6DC',
                 borderRadius: 12, fontSize: 13, resize: 'vertical', boxSizing: 'border-box',
                 fontFamily: 'inherit',
               }}

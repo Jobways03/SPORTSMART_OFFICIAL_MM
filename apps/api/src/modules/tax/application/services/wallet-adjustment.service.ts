@@ -37,7 +37,7 @@
 //     referenceId, type) so even a hand-crafted double-approve can't
 //     post twice.
 
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type {
   Prisma,
   WalletAdjustment,
@@ -48,6 +48,22 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { calculateGstReversal } from '../../../discounts/domain/tax/calculate-gst';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { NotificationsPublicFacade } from '../../../notifications/application/facades/notifications-public.facade';
+
+// Phase 162 (Wallet Adjustments audit #5) — lifecycle events for downstream
+// consumers (notifications, accounting export, finance dashboards).
+export const WALLET_ADJUSTMENT_EVENTS = {
+  REQUESTED: 'wallet.adjustment.requested',
+  APPROVED: 'wallet.adjustment.approved',
+  REJECTED: 'wallet.adjustment.rejected',
+  REVERSED: 'wallet.adjustment.reversed',
+} as const;
+
+// Phase 162 (audit #4) — sentinel so an auto-approved row carries an explicit
+// non-human approver id (never null, never the requester).
+export const SYSTEM_AUTO_APPROVE = 'SYSTEM_AUTO_APPROVE';
 
 export class WalletAdjustmentNotFoundError extends Error {
   constructor(public readonly adjustmentId: string) {
@@ -151,6 +167,9 @@ export class WalletAdjustmentService {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly wallet: WalletPublicFacade,
+    private readonly audit: AuditPublicFacade,
+    @Optional() private readonly eventBus?: EventBusService,
+    @Optional() private readonly notifications?: NotificationsPublicFacade,
   ) {}
 
   private dualApprovalThreshold(): bigint {
@@ -443,6 +462,9 @@ export class WalletAdjustmentService {
           firstApprovedAt: new Date(),
         },
       });
+      // Phase 162 (#1/#11) — capture the first sign-off in history + audit.
+      await this.recordHistory(updated, 'FIRST_APPROVED', 'PENDING_APPROVAL', 'FIRST_APPROVED', args.approvedByAdminId, null);
+      await this.writeAudit(args.approvedByAdminId, 'wallet.adjustment.first_approved', updated, adj, updated);
       this.logger.log(
         `WalletAdjustment ${updated.id} FIRST_APPROVED by ${args.approvedByAdminId} ` +
           `— awaiting second approval`,
@@ -526,9 +548,14 @@ export class WalletAdjustmentService {
     }
 
     const rejectedAt = new Date();
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.walletAdjustment.update({
-        where: { id: args.adjustmentId },
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Phase 162 (#8) — CAS: guard the status transition so two concurrent
+      // rejects can't both "win" and race on the Return.financeReviewedAt clear.
+      const cas = await tx.walletAdjustment.updateMany({
+        where: {
+          id: args.adjustmentId,
+          status: { in: ['PENDING_APPROVAL', 'FIRST_APPROVED'] },
+        },
         data: {
           status: 'REJECTED',
           rejectedByAdminId: args.rejectedByAdminId,
@@ -537,6 +564,16 @@ export class WalletAdjustmentService {
           idempotencyKey: `${adj.idempotencyKey}:rejected-${rejectedAt.getTime()}`,
         },
       });
+      if (cas.count === 0) {
+        const fresh = await tx.walletAdjustment.findUniqueOrThrow({
+          where: { id: args.adjustmentId },
+        });
+        if (fresh.status === 'REJECTED') return fresh; // another rejecter won — idempotent
+        throw new WalletAdjustmentNotApprovableError(args.adjustmentId, fresh.status);
+      }
+      const updated = await tx.walletAdjustment.findUniqueOrThrow({
+        where: { id: args.adjustmentId },
+      });
 
       if (adj.kind === 'TIME_BARRED_CREDIT_NOTE' && adj.returnId) {
         await tx.return.update({
@@ -544,9 +581,114 @@ export class WalletAdjustmentService {
           data: { financeReviewedAt: null, financeReviewedBy: null },
         });
       }
-
+      await tx.walletAdjustmentHistory.create({
+        data: {
+          adjustmentId: adj.id,
+          customerId: adj.customerId,
+          action: 'REJECTED',
+          fromStatus: adj.status,
+          toStatus: 'REJECTED',
+          actorId: args.rejectedByAdminId,
+          reason: args.rejectionReason,
+          amountInPaise: adj.amountInPaise,
+        },
+      });
       return updated;
     });
+
+    await this.writeAudit(args.rejectedByAdminId, WALLET_ADJUSTMENT_EVENTS.REJECTED, result, adj, result, args.rejectionReason);
+    // Phase 162 (#5/#13) — the rejected event carries returnId so the returns/
+    // refund module can re-route a TIME_BARRED refund to the original payment
+    // path (a deliberate, non-auto decision to avoid double-refund); the
+    // financeReviewedAt clear above also resurfaces it in the timebar queue.
+    this.emit(WALLET_ADJUSTMENT_EVENTS.REJECTED, result);
+    return result;
+  }
+
+  /**
+   * Phase 162 (Wallet Adjustments audit #12) — reverse a POSTED adjustment by
+   * posting a compensating INVERSE ledger entry and flipping status → REVERSED.
+   * The original wallet_transaction stays (immutable ledger); the reversal is a
+   * new opposite entry, so the trail is auditor-clean. Idempotent on REVERSED.
+   */
+  async reverse(args: {
+    adjustmentId: string;
+    reversedByAdminId: string;
+    reason: string;
+  }): Promise<WalletAdjustment> {
+    const reason = (args.reason ?? '').trim();
+    if (reason.length < 8) {
+      throw new Error('A reason (min 8 chars) is required to reverse a wallet adjustment.');
+    }
+    const adj = await this.prisma.walletAdjustment.findUnique({
+      where: { id: args.adjustmentId },
+    });
+    if (!adj) throw new WalletAdjustmentNotFoundError(args.adjustmentId);
+    if (adj.status === 'REVERSED') return adj; // idempotent
+    if (adj.status !== 'APPROVED' || !adj.walletTransactionId) {
+      throw new WalletAdjustmentNotApprovableError(args.adjustmentId, adj.status);
+    }
+
+    // Post the inverse: a credit adjustment is reversed by a debit, a debit by
+    // a credit. Reuse the same idempotent wallet facade (a distinct reference
+    // id `${adj.id}:reverse` so it posts exactly once).
+    const reversingAmount = -adj.amountInPaise; // flip the sign
+    const safe = this.toSafeNumber.bind(this);
+    let reversingTxId: string;
+    if (reversingAmount > 0n) {
+      const r = await this.wallet.creditAdjustment({
+        userId: adj.customerId,
+        amountInPaise: safe(reversingAmount, adj.id),
+        adjustmentId: `${adj.id}:reverse`,
+        description: `Reversal of adjustment ${adj.id} — ${formatRupees(reversingAmount)}`,
+        internalNotes: reason,
+        createdByAdminId: args.reversedByAdminId,
+        bypassBlock: false,
+      });
+      reversingTxId = r.transaction.id;
+    } else {
+      const r = await this.wallet.debitAdjustment({
+        userId: adj.customerId,
+        amountInPaise: safe(-reversingAmount, adj.id),
+        adjustmentId: `${adj.id}:reverse`,
+        description: `Reversal of adjustment ${adj.id} — ${formatRupees(-reversingAmount)}`,
+        internalNotes: reason,
+        createdByAdminId: args.reversedByAdminId,
+      });
+      reversingTxId = r.transaction.id;
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.walletAdjustment.update({
+        where: { id: adj.id },
+        data: {
+          status: 'REVERSED',
+          reversedByAdminId: args.reversedByAdminId,
+          reversedAt: new Date(),
+          reverseReason: reason,
+          reversingTransactionId: reversingTxId,
+        },
+      });
+      await tx.walletAdjustmentHistory.create({
+        data: {
+          adjustmentId: adj.id,
+          customerId: adj.customerId,
+          action: 'REVERSED',
+          fromStatus: 'APPROVED',
+          toStatus: 'REVERSED',
+          actorId: args.reversedByAdminId,
+          reason,
+          amountInPaise: reversingAmount,
+        },
+      });
+      return row;
+    });
+
+    await this.writeAudit(args.reversedByAdminId, WALLET_ADJUSTMENT_EVENTS.REVERSED, updated, adj, updated, reason);
+    this.emit(WALLET_ADJUSTMENT_EVENTS.REVERSED, updated);
+    void this.notifyCustomer(updated, 'reversed');
+    this.logger.log(`WalletAdjustment ${adj.id} REVERSED by ${args.reversedByAdminId} (tx ${reversingTxId})`);
+    return updated;
   }
 
   // ── Internals ────────────────────────────────────────────────────
@@ -600,14 +742,22 @@ export class WalletAdjustmentService {
       },
     });
 
+    // Phase 162 (#1/#5/#11) — history + audit + event on request.
+    await this.recordHistory(created, 'REQUESTED', null, 'PENDING_APPROVAL', args.requestedByAdminId, created.reason);
+    await this.writeAudit(args.requestedByAdminId, WALLET_ADJUSTMENT_EVENTS.REQUESTED, created, null, created);
+    this.emit(WALLET_ADJUSTMENT_EVENTS.REQUESTED, created);
+
     // Auto-approve gate: only when (below threshold) + (flag on) +
     // (not force-dual-approval). MANUAL_DEBIT always force-dual.
+    // Phase 162 (#4) — auto-approve posts under the SYSTEM_AUTO_APPROVE
+    // sentinel, never null and never the requester, so the audit trail shows
+    // an explicit non-human approver.
     if (
       !requiresDualApproval &&
       this.autoApproveBelowThreshold() &&
       args.kind !== 'MANUAL_DEBIT'
     ) {
-      return this.postAdjustment(created, /* approvedByAdminId */ null);
+      return this.postAdjustment(created, SYSTEM_AUTO_APPROVE);
     }
 
     this.logger.log(
@@ -641,14 +791,22 @@ export class WalletAdjustmentService {
     // long-term fix is widening the wallet facade to accept BigInt
     // directly; until then this guard catches the loss-of-precision
     // edge case at the boundary.
-    const safe = (v: bigint): number => {
-      if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < -BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new Error(
-          `WalletAdjustment ${adj.id} amount ${v} exceeds Number.MAX_SAFE_INTEGER paise (~₹90T) — wallet facade cannot accept it without precision loss.`,
-        );
-      }
-      return Number(v);
-    };
+    // Phase 162 (#3) — boundary guard now audits + logs before throwing
+    // (was a silent throw); see toSafeNumber.
+    const safe = (v: bigint): number => this.toSafeNumber(v, adj.id);
+
+    // Phase 162 (#10) — bypassBlock=true overrides any active wallet block for
+    // TIME_BARRED refunds (platform owes the money). The block model is a
+    // single untyped flag (no KYC-specific type to honor selectively); the
+    // wallet layer already writes a WALLET_BLOCK_BYPASSED audit row when a
+    // block is actually consumed. We surface the intent at this layer too.
+    const bypassBlock = adj.kind === 'TIME_BARRED_CREDIT_NOTE';
+    if (bypassBlock) {
+      this.logger.warn(
+        `WalletAdjustment ${adj.id} posting with bypassBlock=true (TIME_BARRED) — ` +
+          `any active wallet block is overridden; wallet layer audits if consumed.`,
+      );
+    }
 
     let txId: string;
     if (isCredit) {
@@ -659,9 +817,7 @@ export class WalletAdjustmentService {
         description: this.buildLedgerDescription(adj),
         internalNotes: adj.reason,
         createdByAdminId: approvedByAdminId ?? undefined,
-        // TIME_BARRED refunds must land even if the customer's wallet
-        // is blocked — the platform owes the money.
-        bypassBlock: adj.kind === 'TIME_BARRED_CREDIT_NOTE',
+        bypassBlock,
       });
       txId = result.transaction.id;
     } else {
@@ -689,6 +845,13 @@ export class WalletAdjustmentService {
       `WalletAdjustment ${updated.id} APPROVED + posted as ` +
         `wallet_transaction ${txId}`,
     );
+
+    // Phase 162 (#1/#5/#6/#11) — history + audit + event + customer notify.
+    const action = approvedByAdminId === SYSTEM_AUTO_APPROVE ? 'AUTO_APPROVED' : 'APPROVED';
+    await this.recordHistory(updated, action, adj.status, 'APPROVED', approvedByAdminId, adj.reason);
+    await this.writeAudit(approvedByAdminId, WALLET_ADJUSTMENT_EVENTS.APPROVED, updated, adj, updated, adj.reason);
+    this.emit(WALLET_ADJUSTMENT_EVENTS.APPROVED, updated);
+    void this.notifyCustomer(updated, 'approved');
 
     // Phase 109 (2026-05-25) — complete the return lifecycle. For a time-barred
     // refund the wallet adjustment IS the customer refund, so once it posts we
@@ -751,15 +914,160 @@ export class WalletAdjustmentService {
   }
 
   private buildLedgerDescription(adj: WalletAdjustment): string {
+    // Phase 162 (#14) — BigInt-native paise→rupees (no Number coercion).
     switch (adj.kind) {
       case 'TIME_BARRED_CREDIT_NOTE':
-        return `Refund (GST credit note time-barred) — ₹${(Number(adj.amountInPaise) / 100).toFixed(2)}`;
+        return `Refund (GST credit note time-barred) — ${formatRupees(adj.amountInPaise)}`;
       case 'GOODWILL':
-        return `Goodwill credit — ₹${(Number(adj.amountInPaise) / 100).toFixed(2)}`;
+        return `Goodwill credit — ${formatRupees(adj.amountInPaise)}`;
       case 'MANUAL_DEBIT':
-        return `Manual debit — ₹${(Number(-adj.amountInPaise) / 100).toFixed(2)}`;
+        return `Manual debit — ${formatRupees(-adj.amountInPaise)}`;
       default:
-        return `Wallet adjustment — ₹${(Number(adj.amountInPaise) / 100).toFixed(2)}`;
+        return `Wallet adjustment — ${formatRupees(adj.amountInPaise)}`;
     }
   }
+
+  // ── audit / history / event / notify helpers (Phase 162) ──────────
+
+  /** #3 — boundary guard: audit + log the (impossible-but-defensive) overflow
+   *  before throwing, instead of the prior silent throw. */
+  private toSafeNumber(v: bigint, adjustmentId: string): number {
+    if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < -BigInt(Number.MAX_SAFE_INTEGER)) {
+      this.logger.error(
+        `WalletAdjustment ${adjustmentId} amount ${v} exceeds MAX_SAFE_INTEGER paise (~₹90T) — refusing to coerce.`,
+      );
+      void this.audit
+        .writeAuditLog({
+          action: 'wallet.adjustment.amount_overflow',
+          module: 'tax',
+          resource: 'wallet_adjustment',
+          resourceId: adjustmentId,
+          newValue: { amountInPaise: v.toString(), maxSafeInteger: Number.MAX_SAFE_INTEGER },
+        })
+        .catch(() => undefined);
+      throw new Error(
+        `WalletAdjustment ${adjustmentId} amount ${v} exceeds Number.MAX_SAFE_INTEGER paise (~₹90T) — wallet facade cannot accept it without precision loss.`,
+      );
+    }
+    return Number(v);
+  }
+
+  private async recordHistory(
+    adj: WalletAdjustment,
+    action: string,
+    fromStatus: WalletAdjustmentStatus | null,
+    toStatus: WalletAdjustmentStatus,
+    actorId: string | null | undefined,
+    reason: string | null,
+  ): Promise<void> {
+    await this.prisma.walletAdjustmentHistory
+      .create({
+        data: {
+          adjustmentId: adj.id,
+          customerId: adj.customerId,
+          action,
+          fromStatus,
+          toStatus,
+          actorId: actorId ?? null,
+          reason,
+          amountInPaise: adj.amountInPaise,
+        },
+      })
+      .catch((err: unknown) =>
+        this.logger.error(
+          `WalletAdjustment history write failed for ${adj.id}: ${(err as Error).message}`,
+        ),
+      );
+  }
+
+  private async writeAudit(
+    actorId: string | null | undefined,
+    action: string,
+    adj: WalletAdjustment,
+    before: WalletAdjustment | null,
+    after: WalletAdjustment | null,
+    reason?: string | null,
+  ): Promise<void> {
+    await this.audit
+      .writeAuditLog({
+        actorId: actorId ?? undefined,
+        action,
+        module: 'tax',
+        resource: 'wallet_adjustment',
+        resourceId: adj.id,
+        oldValue: before ? snapshot(before) : undefined,
+        newValue: after ? snapshot(after) : undefined,
+        metadata: reason ? { reason } : undefined,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `WalletAdjustment audit-log write failed for ${adj.id}: ${(err as Error).message}`,
+        ),
+      );
+  }
+
+  private emit(eventName: string, adj: WalletAdjustment): void {
+    if (!this.eventBus) return;
+    void this.eventBus
+      .publish({
+        eventName,
+        aggregate: 'WalletAdjustment',
+        aggregateId: adj.id,
+        occurredAt: new Date(),
+        payload: {
+          adjustmentId: adj.id,
+          customerId: adj.customerId,
+          kind: adj.kind,
+          status: adj.status,
+          amountInPaise: adj.amountInPaise.toString(),
+          returnId: adj.returnId,
+        },
+      })
+      .catch(() => undefined);
+  }
+
+  private async notifyCustomer(
+    adj: WalletAdjustment,
+    change: 'approved' | 'reversed',
+  ): Promise<void> {
+    if (!this.notifications) return;
+    await this.notifications
+      .sendNotification({
+        recipientId: adj.customerId,
+        channel: 'email',
+        templateKey:
+          change === 'approved'
+            ? 'wallet.adjustment.approved'
+            : 'wallet.adjustment.reversed',
+        data: {
+          amount: formatRupees(adj.amountInPaise < 0n ? -adj.amountInPaise : adj.amountInPaise),
+          reason: adj.reason,
+        },
+      })
+      .catch(() => undefined);
+  }
+}
+
+/** Phase 162 (#14) — BigInt-safe paise → "₹X.YY" (no float). */
+function formatRupees(paise: bigint): string {
+  const neg = paise < 0n;
+  const abs = neg ? -paise : paise;
+  const rupees = abs / 100n;
+  const frac = abs % 100n;
+  return `${neg ? '-' : ''}₹${rupees.toString()}.${frac.toString().padStart(2, '0')}`;
+}
+
+function snapshot(adj: WalletAdjustment): Record<string, unknown> {
+  return {
+    status: adj.status,
+    kind: adj.kind,
+    amountInPaise: adj.amountInPaise != null ? adj.amountInPaise.toString() : null,
+    requiresDualApproval: adj.requiresDualApproval,
+    requestedByAdminId: adj.requestedByAdminId,
+    firstApprovedByAdminId: adj.firstApprovedByAdminId,
+    approvedByAdminId: adj.approvedByAdminId,
+    rejectedByAdminId: adj.rejectedByAdminId,
+    reversedByAdminId: adj.reversedByAdminId,
+    walletTransactionId: adj.walletTransactionId,
+  };
 }

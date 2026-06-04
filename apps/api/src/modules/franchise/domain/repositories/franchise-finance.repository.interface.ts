@@ -13,6 +13,15 @@ export interface FranchiseFinanceRepository {
     computedAmount: number;
     platformEarning: number;
     franchiseEarning: number;
+    // Phase 181 — queryable actor (#5) + idempotency override (#4/#8) + optional
+    // transaction client to compose atomically (#6).
+    createdByAdminId?: string | null;
+    createdBySystem?: boolean;
+    idempotencyKey?: string | null;
+    // Compensating entries override the derived debit/credit (exactly one positive).
+    debitInPaise?: bigint;
+    creditInPaise?: bigint;
+    tx?: any;
   }): Promise<any>;
 
   findLedgerEntries(
@@ -44,7 +53,12 @@ export interface FranchiseFinanceRepository {
     id: string,
     status: string,
     settlementBatchId?: string,
+    opts?: { actorAdminId?: string | null; reason?: string | null; tx?: any },
   ): Promise<any>;
+
+  // Phase 181 — running-balance reads.
+  getFranchiseBalance(franchiseId: string): Promise<{ balanceInPaise: bigint; currency: string }>;
+  getFranchiseBalanceAsOf(franchiseId: string, asOf: Date): Promise<bigint>;
 
   bulkUpdateLedgerStatus(
     ids: string[],

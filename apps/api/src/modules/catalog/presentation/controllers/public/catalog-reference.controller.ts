@@ -7,6 +7,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Inject } from '@nestjs/common';
 import { RedisService } from '../../../../../bootstrap/cache/redis.service';
 import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/repositories/category.repository.interface';
@@ -42,6 +43,9 @@ const STOREFRONT_METAFIELDS_CACHE_TTL = 60;
 
 @ApiTags('Catalog')
 @Controller('catalog')
+// Phase 192 (#3) — public reference data (categories/brands/options) is
+// cache-fronted but still rate-limited to deter scraping.
+@Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class CatalogReferenceController {
   constructor(
     @Inject(CATEGORY_REPOSITORY) private readonly categoryRepo: ICategoryRepository,

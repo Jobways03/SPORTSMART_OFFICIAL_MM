@@ -5,11 +5,13 @@ import {
   Logger,
   Param,
   Patch,
+  Post,
   Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import {
   AdminAuthGuard,
   PermissionsGuard,
@@ -18,7 +20,16 @@ import {
 } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
-import { BadRequestAppException } from '../../../../core/exceptions';
+import {
+  BadRequestAppException,
+  ForbiddenAppException,
+} from '../../../../core/exceptions';
+import {
+  BulkApproveDto,
+  RejectRefundDto,
+  RequestInfoDto,
+  RevertRejectionDto,
+} from '../dtos/refund-approval.dto';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { RefundInstructionService } from '../../application/services/refund-instruction.service';
@@ -60,12 +71,25 @@ export class AdminRefundApprovalsController {
     @Query('status') status?: string,
     @Query('page') page = '1',
     @Query('limit') limit = '20',
+    // Phase 170 (#8) — finance triage filters.
+    @Query('sourceType') sourceType?: string,
+    @Query('refundMethod') refundMethod?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('minAmount') minAmount?: string,
+    @Query('maxAmount') maxAmount?: string,
+    // Phase 170 (#6) — overdue-only aging view.
+    @Query('overdue') overdue?: string,
+    // Phase 172 (#17) — "show goodwill only" finance filter.
+    @Query('goodwill') goodwill?: string,
   ) {
     const validStatuses = [
       'PENDING_APPROVAL',
+      'NEEDS_CLARIFICATION',
       'APPROVED',
       'PROCESSING',
       'SUCCESS',
+      'SETTLED',
       'FAILED',
       'RETRYING',
       'MANUAL_REQUIRED',
@@ -78,7 +102,36 @@ export class AdminRefundApprovalsController {
     }
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
     const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const where = status ? { status: status as any } : {};
+    const where: any = {};
+    if (status) where.status = status as any;
+    if (sourceType) where.sourceType = sourceType as any;
+    if (refundMethod) where.refundMethod = refundMethod as any;
+    if (fromDate || toDate) {
+      where.createdAt = {};
+      if (fromDate) where.createdAt.gte = new Date(fromDate);
+      if (toDate) where.createdAt.lte = new Date(toDate);
+    }
+    if (minAmount || maxAmount) {
+      // Phase 170 review (L2#3) — guard BigInt() against non-numeric input so a
+      // bad ?minAmount=abc returns a clean 400, not an unhandled 500.
+      const toPaise = (v: string, label: string): bigint => {
+        if (!/^\d+$/.test(v)) {
+          throw new BadRequestAppException(`${label} must be a non-negative integer (paise)`);
+        }
+        return BigInt(v);
+      };
+      where.amountInPaise = {};
+      if (minAmount) where.amountInPaise.gte = toPaise(minAmount, 'minAmount');
+      if (maxAmount) where.amountInPaise.lte = toPaise(maxAmount, 'maxAmount');
+    }
+    if (overdue === 'true') {
+      where.status = where.status
+        ? where.status
+        : { in: ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION'] };
+      where.approvalDueBy = { lt: new Date() };
+    }
+    // Phase 172 (#17) — goodwill-only filter for the finance queue.
+    if (goodwill === 'true') where.isGoodwill = true;
     const [items, total] = await Promise.all([
       this.prisma.refundInstruction.findMany({
         where,
@@ -240,10 +293,32 @@ export class AdminRefundApprovalsController {
   @Patch(':id/approve')
   @Idempotent()
   @Permissions('refunds.approve')
+  // Phase 170 (#12) — a compromised admin token could batch-approve the queue
+  // in seconds; cap approvals to 30/min.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   // Phase 26 — approval triggers the refund saga (gateway + wallet);
   // money moves. Tight 1-min window.
   @RequiresStepUp({ maxAgeMs: 60_000 })
   async approve(@Req() req: any, @Param('id') id: string) {
+    // Phase 172 (Goodwill Credit audit #7) — approving a GOODWILL credit (a
+    // non-recoverable platform expense) requires the dedicated, CRITICAL-tier
+    // wallet.goodwill.approve permission IN ADDITION to refunds.approve. A
+    // decorator can't express "conditional on the row", so enforce at runtime:
+    // load the marker; if goodwill, require the extra grant.
+    const target = await this.prisma.refundInstruction.findUnique({
+      where: { id },
+      select: { isGoodwill: true },
+    });
+    if (
+      target?.isGoodwill &&
+      !((req.adminPermissions ?? req.user?.permissions ?? []) as string[]).includes(
+        'wallet.goodwill.approve',
+      )
+    ) {
+      throw new ForbiddenAppException(
+        'Approving a goodwill credit requires the wallet.goodwill.approve permission.',
+      );
+    }
     const updated = await this.service.approveByFinance({
       instructionId: id,
       adminId: req.adminId,
@@ -287,13 +362,14 @@ export class AdminRefundApprovalsController {
   @Patch(':id/reject')
   @Idempotent()
   @Permissions('refunds.reject')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   // Phase 26 — rejection halts money movement; reversible only via
   // ops intervention. 5-min window.
   @RequiresStepUp()
   async reject(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { reason: string },
+    @Body() body: RejectRefundDto,
   ) {
     if (!body?.reason?.trim()) {
       throw new BadRequestAppException('reason is required');
@@ -302,7 +378,37 @@ export class AdminRefundApprovalsController {
       instructionId: id,
       adminId: req.adminId,
       reason: body.reason.trim(),
+      // Phase 171 (#6) — optional SAFE customer-facing message.
+      customerVisibleReason: body.customerVisibleReason?.trim() || undefined,
     });
+    // Phase 171 (#1) — dispute-sourced rejections route back to the dispute
+    // team (the headline rule). The service flips status to
+    // ROUTED_BACK_TO_DISPUTE; the actual dispute reopen + thread message +
+    // re-decision admin task run in the disputes module's
+    // RefundRejectedDisputeHandler, triggered by the event below (event-driven
+    // to avoid the refund-instructions → disputes circular import).
+    const routedBackToDispute = (updated as any).routedBackToDispute === true;
+
+    // Phase 171 review (#1 durability) — enqueue the re-decision ops task HERE,
+    // synchronously, not only in the event handler. The dispute reopen itself is
+    // event-driven (RefundRejectedDisputeHandler), but that event is best-effort;
+    // if it's lost, the instruction is durably ROUTED_BACK_TO_DISPUTE while the
+    // dispute stays RESOLVED. This task (idempotent on kind+source) is the
+    // durable backstop so ops always sees a rejected-refund dispute needs a
+    // re-decision, even if the reopen event never lands.
+    if (routedBackToDispute) {
+      await this.ledger
+        .enqueueAdminTask({
+          kind: 'DISPUTE_REFUND_REJECTED_NEEDS_REDECISION',
+          sourceType: 'DISPUTE',
+          sourceId: updated.sourceId,
+          reason:
+            `Finance rejected the refund for dispute ${updated.sourceId}. ` +
+            `The dispute needs re-decision. Reason: ${body.reason.trim()}`,
+          slaHours: 48,
+        })
+        .catch(() => undefined);
+    }
 
     // Phase 127 — reverse the dispute's liability-ledger attribution. The
     // decision booked a SellerDebit / LogisticsClaim / PlatformExpense at
@@ -382,6 +488,12 @@ export class AdminRefundApprovalsController {
           customerId: updated.customerId,
           amountInPaise: updated.amountInPaise.toString(),
           reason: body.reason.trim(),
+          // Phase 171 — drives the disputes-module route-back handler (#1) and
+          // lets the notification handler tailor the customer message (#5/#6).
+          routedBackToDispute,
+          disputeId: routedBackToDispute ? updated.sourceId : null,
+          actorId: req.adminId,
+          customerVisibleReason: body.customerVisibleReason?.trim() || null,
         },
       })
       .catch((err) =>
@@ -393,7 +505,9 @@ export class AdminRefundApprovalsController {
       );
     return {
       success: true,
-      message: 'Refund rejected',
+      message: routedBackToDispute
+        ? 'Refund rejected — routed back to the dispute team for re-decision'
+        : 'Refund rejected',
       data: {
         ...updated,
         amountInPaise: updated.amountInPaise.toString(),
@@ -413,10 +527,11 @@ export class AdminRefundApprovalsController {
    */
   @Patch(':id/request-info')
   @Permissions('refunds.approve')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async requestInfo(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { question: string },
+    @Body() body: RequestInfoDto,
   ) {
     if (!body?.question?.trim() || body.question.trim().length < 3) {
       throw new BadRequestAppException(
@@ -431,16 +546,15 @@ export class AdminRefundApprovalsController {
     });
     // Side effects (AdminTask + audit) outside the service so the
     // service stays free of cross-module deps.
-    // RefundSourceType (`DISPUTE` | `RETURN` | `GOODWILL`) is a strict
-    // subset of LedgerSourceType for our purposes. Cast keeps the
-    // call-site narrow without leaking enum-mapping plumbing into
-    // the LiabilityLedger facade.
+    // Phase 170 (#11) — dedicated REFUND_CLARIFICATION_REQUESTED kind (was the
+    // generic OTHER bucket) so ops can filter refund clarification requests.
     await this.ledger
       .enqueueAdminTask({
-        kind: 'OTHER' as any,
+        kind: 'REFUND_CLARIFICATION_REQUESTED' as any,
         sourceType: row.sourceType as any,
         sourceId: row.sourceId,
         reason: `Finance needs more info on RefundInstruction ${row.id} before approving: ${question}`,
+        slaHours: 48,
       })
       .catch(() => undefined);
     this.audit
@@ -451,13 +565,107 @@ export class AdminRefundApprovalsController {
         module: 'refund-instructions',
         resource: 'refund_instruction',
         resourceId: row.id,
-        newValue: { question, sourceType: row.sourceType, sourceId: row.sourceId },
+        newValue: { question, status: row.status, sourceType: row.sourceType, sourceId: row.sourceId },
       })
       .catch(() => undefined);
     return {
       success: true,
-      message: 'Clarification request sent to upstream admin',
+      message: 'Clarification requested — instruction moved to NEEDS_CLARIFICATION',
       data: { ...row, amountInPaise: row.amountInPaise.toString() },
+    };
+  }
+
+  /**
+   * Phase 170 (#9) — bulk approve. Each id is approved independently (own saga,
+   * audit row, history) so a partial failure doesn't strand the rest; returns a
+   * per-id outcome. Dual-approval still applies per row (a high-value refund in
+   * the batch only records the first approval). Throttled hard.
+   */
+  @Post('bulk-approve')
+  @Idempotent()
+  @Permissions('refunds.approve')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @RequiresStepUp({ maxAgeMs: 60_000 })
+  async bulkApprove(@Req() req: any, @Body() body: BulkApproveDto) {
+    const results: Array<{ id: string; ok: boolean; status?: string; reason?: string; pendingSecondApproval?: boolean }> = [];
+    let approved = 0;
+    let failed = 0;
+    for (const id of body.ids) {
+      try {
+        const updated = await this.service.approveByFinance({
+          instructionId: id,
+          adminId: req.adminId,
+        });
+        const pendingSecond = (updated as any).pendingSecondApproval === true;
+        this.audit
+          .writeAuditLog({
+            actorId: req.adminId,
+            actorRole: 'ADMIN',
+            action: pendingSecond ? 'refund.first_approval_recorded' : 'refund.approved',
+            module: 'refund-instructions',
+            resource: 'refund_instruction',
+            resourceId: id,
+            newValue: {
+              status: updated.status,
+              amountInPaise: updated.amountInPaise.toString(),
+              bulk: true,
+              pendingSecondApproval: pendingSecond,
+            },
+          })
+          .catch(() => undefined);
+        results.push({ id, ok: true, status: updated.status, pendingSecondApproval: pendingSecond });
+        approved++;
+      } catch (err) {
+        results.push({ id, ok: false, reason: (err as Error)?.message ?? 'failed' });
+        failed++;
+      }
+    }
+    return {
+      success: true,
+      message: `Bulk approve: ${approved} approved, ${failed} skipped`,
+      data: { approved, failed, results },
+    };
+  }
+
+  /**
+   * Phase 170 (#15) — undo a wrong rejection (CANCELLED → PENDING_APPROVAL).
+   * The original instruction (and its @unique idempotencyKey) is reused, so a
+   * fresh createForReturn/Dispute isn't needed.
+   */
+  @Patch(':id/revert-rejection')
+  @Idempotent()
+  @Permissions('refunds.approve')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @RequiresStepUp()
+  async revertRejection(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: RevertRejectionDto,
+  ) {
+    const reason = body?.reason?.trim();
+    if (!reason || reason.length < 3) {
+      throw new BadRequestAppException('reason (min 3 chars) is required');
+    }
+    const updated = await this.service.revertRejection({
+      instructionId: id,
+      adminId: req.adminId,
+      reason,
+    });
+    this.audit
+      .writeAuditLog({
+        actorId: req.adminId,
+        actorRole: 'ADMIN',
+        action: 'refund.rejection_reverted',
+        module: 'refund-instructions',
+        resource: 'refund_instruction',
+        resourceId: id,
+        newValue: { status: updated.status, reason },
+      })
+      .catch(() => undefined);
+    return {
+      success: true,
+      message: 'Rejection reverted — instruction back in the approval queue',
+      data: { ...updated, amountInPaise: updated.amountInPaise.toString() },
     };
   }
 }

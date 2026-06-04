@@ -39,6 +39,9 @@ const INSTRUMENTED_CRONS = [
   'src/bootstrap/scheduler/cron-jobs.service.ts',
   // Pre-Phase-5 baseline coverage:
   'src/modules/returns/application/jobs/seller-response-sweeper.cron.ts',
+  // Phase 174 — canonical low-stock detector (now the sole low-stock cron
+  // after the cron-jobs.service.ts hourly duplicate was removed, audit #218-#1).
+  'src/modules/inventory/application/jobs/low-stock-sweep.cron.ts',
 ];
 
 /**
@@ -49,7 +52,9 @@ const INSTRUMENTED_CRONS = [
  * heartbeat-target binding consistent with the lock-key naming.
  */
 const CRON_JOBS_SERVICE_JOB_NAMES = [
-  'hourly-low-stock-sweep',
+  // Phase 174 — 'hourly-low-stock-sweep' removed (it duplicated the canonical
+  // 15-min LowStockSweepCron, audit #218-#1). These three @Cron methods are
+  // the ones still hosted in cron-jobs.service.ts.
   'ticket-sla-breach',
   'daily-reconciliation',
   'cleanup-stale-pending-files',

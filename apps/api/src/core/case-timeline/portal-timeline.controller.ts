@@ -1,16 +1,18 @@
 import {
   Controller,
   Get,
+  Optional,
   Param,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import {
   AdminAuthGuard,
-  AnyAuthGuard,
   PermissionsGuard,
+  UserAuthGuard,
 } from '../guards';
 import { Permissions } from '../decorators/permissions.decorator';
 import {
@@ -19,6 +21,7 @@ import {
   type ViewerKind,
 } from './case-timeline.service';
 import { BadRequestAppException } from '../exceptions';
+import { AuditPublicFacade } from '../../modules/audit/application/facades/audit-public.facade';
 
 const ALLOWED: CaseKind[] = ['return', 'dispute', 'ticket'];
 
@@ -36,10 +39,14 @@ const ALLOWED: CaseKind[] = ['return', 'dispute', 'ticket'];
 @ApiTags('Case Timeline')
 @Controller()
 export class PortalTimelineController {
-  constructor(private readonly service: CaseTimelineService) {}
+  constructor(
+    private readonly service: CaseTimelineService,
+    @Optional() private readonly audit?: AuditPublicFacade,
+  ) {}
 
   @Get('portal/timeline/:caseKind/:caseId')
-  @UseGuards(AnyAuthGuard)
+  @UseGuards(UserAuthGuard)
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async customerTimeline(
     @Req() req: Request,
     @Param('caseKind') caseKind: string,
@@ -50,6 +57,13 @@ export class PortalTimelineController {
         `Unknown caseKind "${caseKind}". Allowed: ${ALLOWED.join(', ')}`,
       );
     }
+    // Was AnyAuthGuard, which sets `req.user`/`authActorId` but NOT
+    // `req.userId` — so reading `req.userId` (below) left customerId
+    // permanently undefined and every call 400'd. UserAuthGuard is the
+    // customer guard: it sets `req.userId`, validates the session against
+    // the DB (revoked/expired), and admits customer tokens only — so the
+    // ownership check in the service is no longer reachable by a
+    // seller/franchise persona. (Same fix as the portal SSE my-cases stream.)
     const customerId = (req as any).userId;
     if (!customerId) {
       throw new BadRequestAppException('User scope required');
@@ -66,6 +80,7 @@ export class PortalTimelineController {
   @Get('admin/timeline/:caseKind/:caseId')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
   @Permissions('audit.read')
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   async adminTimeline(
     @Req() req: Request,
     @Param('caseKind') caseKind: string,
@@ -83,6 +98,23 @@ export class PortalTimelineController {
       viewerKind: 'ADMIN' as ViewerKind,
       viewerId: adminId,
     });
+    // Access-log: an admin read a customer's cross-domain case history.
+    // module follows the caseKind so it lands in the right audit lane.
+    const moduleByKind: Record<CaseKind, string> = {
+      return: 'returns',
+      dispute: 'disputes',
+      ticket: 'support',
+    };
+    void this.audit
+      ?.writeAuditLog({
+        actorId: adminId,
+        actorType: 'ADMIN',
+        action: `${moduleByKind[caseKind as CaseKind]}.timeline.viewed`,
+        module: moduleByKind[caseKind as CaseKind],
+        resource: 'case_timeline',
+        resourceId: `${caseKind}:${caseId}`,
+      })
+      .catch(() => undefined);
     return { success: true, message: 'Timeline retrieved', data };
   }
 }

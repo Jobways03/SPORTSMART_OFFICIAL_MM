@@ -2,13 +2,18 @@ import { apiClient, ApiResponse } from '@/lib/api-client';
 
 export type RefundInstructionStatus =
   | 'PENDING_APPROVAL'
+  | 'NEEDS_CLARIFICATION'
   | 'APPROVED'
   | 'PROCESSING'
   | 'SUCCESS'
+  | 'SETTLED'
   | 'FAILED'
   | 'RETRYING'
   | 'MANUAL_REQUIRED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  // Phase 171 — finance-rejection terminal states.
+  | 'REJECTED'
+  | 'ROUTED_BACK_TO_DISPUTE';
 
 export type RefundMethod =
   | 'WALLET'
@@ -48,6 +53,20 @@ export interface RefundInstructionRow {
   attempts: number;
   walletTransactionId: string | null;
   gatewayRefundId: string | null;
+  // Phase 170 (#6/#10) — approval SLA + clarification context.
+  approvalDueBy: string | null;
+  clarificationNote: string | null;
+  clarificationBy: string | null;
+  clarificationAt: string | null;
+  // Phase 171 — finance route-back context.
+  linkedDisputeId: string | null;
+  customerVisibleReason: string | null;
+  routedBackAt: string | null;
+  routedBackBy: string | null;
+  // Phase 172 — goodwill markers.
+  isGoodwill: boolean;
+  customerRemedy: string | null;
+  customerVisibleMessage: string | null;
   createdAt: string;
   updatedAt: string;
   // Transient flags returned by the approve/reject mutations (NOT persisted):
@@ -118,11 +137,21 @@ export const adminRefundApprovalsService = {
     status?: RefundInstructionStatus;
     page?: number;
     limit?: number;
+    // Phase 170 (#8/#6) — triage filters + overdue view.
+    sourceType?: RefundSourceType | '';
+    refundMethod?: RefundMethod | '';
+    overdue?: boolean;
+    // Phase 172 (#17) — goodwill-only filter.
+    goodwill?: boolean;
   } = {}): Promise<ApiResponse<RefundInstructionListPage>> {
     const qs = new URLSearchParams();
     if (filters.status) qs.set('status', filters.status);
     qs.set('page', String(filters.page ?? 1));
     qs.set('limit', String(filters.limit ?? 20));
+    if (filters.sourceType) qs.set('sourceType', filters.sourceType);
+    if (filters.refundMethod) qs.set('refundMethod', filters.refundMethod);
+    if (filters.overdue) qs.set('overdue', 'true');
+    if (filters.goodwill) qs.set('goodwill', 'true');
     return apiClient<RefundInstructionListPage>(
       `/admin/refund-instructions?${qs.toString()}`,
     );
@@ -133,38 +162,75 @@ export const adminRefundApprovalsService = {
   approve(id: string): Promise<ApiResponse<RefundInstructionRow>> {
     return apiClient<RefundInstructionRow>(
       `/admin/refund-instructions/${id}/approve`,
-      { method: 'PATCH' },
+      { method: 'PATCH', headers: { 'X-Idempotency-Key': `refund-approve-${id}` } },
     );
   },
   reject(
     id: string,
     reason: string,
+    customerVisibleReason?: string,
   ): Promise<ApiResponse<RefundInstructionRow>> {
     return apiClient<RefundInstructionRow>(
       `/admin/refund-instructions/${id}/reject`,
-      { method: 'PATCH', body: JSON.stringify({ reason }) },
+      {
+        method: 'PATCH',
+        body: JSON.stringify(
+          customerVisibleReason ? { reason, customerVisibleReason } : { reason },
+        ),
+        headers: { 'X-Idempotency-Key': `refund-reject-${id}` },
+      },
+    );
+  },
+  // Phase 170 (#9) — bulk approve.
+  bulkApprove(ids: string[]): Promise<ApiResponse<{ approved: number; failed: number; results: Array<{ id: string; ok: boolean; reason?: string }> }>> {
+    return apiClient(`/admin/refund-instructions/bulk-approve`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+      headers: { 'X-Idempotency-Key': `refund-bulk-${ids.slice().sort().join(',').slice(0, 80)}` },
+    });
+  },
+  // Phase 170 (#15) — undo a wrong rejection.
+  revertRejection(id: string, reason: string): Promise<ApiResponse<RefundInstructionRow>> {
+    return apiClient<RefundInstructionRow>(
+      `/admin/refund-instructions/${id}/revert-rejection`,
+      { method: 'PATCH', body: JSON.stringify({ reason }), headers: { 'X-Idempotency-Key': `refund-revert-${id}` } },
+    );
+  },
+  // Phase 170 (#10) — request clarification.
+  requestInfo(id: string, question: string): Promise<ApiResponse<RefundInstructionRow>> {
+    return apiClient<RefundInstructionRow>(
+      `/admin/refund-instructions/${id}/request-info`,
+      { method: 'PATCH', body: JSON.stringify({ question }) },
     );
   },
 };
 
 export const STATUS_COLOR: Record<RefundInstructionStatus, string> = {
   PENDING_APPROVAL: '#d97706',
+  NEEDS_CLARIFICATION: '#9333ea',
   APPROVED: '#2A8595',
   PROCESSING: '#2A8595',
   SUCCESS: '#15803d',
+  SETTLED: '#15803d',
   FAILED: '#b91c1c',
   RETRYING: '#d97706',
   MANUAL_REQUIRED: '#b45309',
   CANCELLED: '#7A828F',
+  REJECTED: '#b91c1c',
+  ROUTED_BACK_TO_DISPUTE: '#7c3aed',
 };
 
 export const STATUS_LABEL: Record<RefundInstructionStatus, string> = {
   PENDING_APPROVAL: 'Pending approval',
+  NEEDS_CLARIFICATION: 'Needs clarification',
   APPROVED: 'Approved',
   PROCESSING: 'Processing',
   SUCCESS: 'Success',
+  SETTLED: 'Settled',
   FAILED: 'Failed',
   RETRYING: 'Retrying',
   MANUAL_REQUIRED: 'Manual required',
   CANCELLED: 'Cancelled',
+  REJECTED: 'Rejected by finance',
+  ROUTED_BACK_TO_DISPUTE: 'Routed back to dispute',
 };

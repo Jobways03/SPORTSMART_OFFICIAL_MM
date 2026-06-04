@@ -12,8 +12,8 @@ import * as path from 'path';
 //      prod (PR 9.1 covers this). 16 entries as of PR 7.1.
 //
 //   2. requiredInProd — string secrets that must be present + non-
-//      empty in prod (PR 9.2 covers this). 7 entries: Razorpay keys
-//      + S3 credentials.
+//      empty in prod (PR 9.2 covers this): Razorpay keys
+//      + Cloudflare R2 credentials.
 //
 // Both are boot-time forcing functions: prod refuses to start
 // unless each entry passes its check. The .env.example is the
@@ -64,7 +64,7 @@ function extractRequiredOnInProdFlags() {
 //
 //   const requiredInProd: Array<keyof typeof env> = [
 //     'RAZORPAY_KEY_ID',
-//     'S3_BUCKET',
+//     'R2_BUCKET',
 //     ...
 //   ];
 function extractRequiredInProdSecrets() {

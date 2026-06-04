@@ -17,6 +17,10 @@ import {
   WALLET_REPOSITORY,
 } from '../../domain/repositories/wallet.repository.interface';
 import { WalletVersionConflictError } from '../../infrastructure/repositories/prisma-wallet.repository';
+import {
+  computeGoodwillState,
+  GOODWILL_EXPIRY_REFERENCE_TYPE,
+} from './goodwill-ledger';
 
 const VERSION_CONFLICT_MAX_RETRIES = 5;
 
@@ -24,11 +28,32 @@ export interface CreditArgs {
   userId: string;
   amountInPaise: number;
   description: string;
-  type?: 'REFUND' | 'CREDIT_ADJUSTMENT';
+  // Phase 183 (#2) — audit-grade internal reason (distinct from description).
+  reason?: string;
+  type?:
+    | 'REFUND'
+    | 'CREDIT_ADJUSTMENT'
+    | 'LOYALTY_REBATE'
+    | 'MANUAL_CREDIT'
+    | 'GOODWILL_CREDIT'
+    | 'ORDER_REDEMPTION'
+    | 'REVERSAL';
   referenceType?: string;
   referenceId?: string;
+  // Phase 182 (#8) — human-readable source reference for customer display.
+  referenceNumber?: string;
   internalNotes?: string;
   createdByAdminId?: string;
+  // Phase 172 (#8/#9) — reconciliation discriminator + optional expiry,
+  // persisted onto the WalletTransaction ledger row.
+  creditType?:
+    | 'REFUND_ORIGINAL'
+    | 'GOODWILL'
+    | 'TIME_BARRED'
+    | 'PROMO'
+    | 'MANUAL'
+    | 'LOYALTY';
+  expiresAt?: Date;
   /**
    * Allow this credit to bypass the wallet-block check. ONLY refund
    * flows that must complete (regulatory) should set this. Default false.
@@ -40,9 +65,11 @@ export interface DebitArgs {
   userId: string;
   amountInPaise: number;
   description: string;
-  type?: 'DEBIT' | 'DEBIT_ADJUSTMENT';
+  reason?: string; // Phase 183 (#2)
+  type?: 'DEBIT' | 'DEBIT_ADJUSTMENT' | 'MANUAL_DEBIT' | 'REVERSAL' | 'ORDER_REDEMPTION';
   referenceType?: string;
   referenceId?: string;
+  referenceNumber?: string;
   internalNotes?: string;
   createdByAdminId?: string;
   /** Same semantics as CreditArgs.bypassBlock. */
@@ -78,6 +105,141 @@ export class WalletService {
       balanceInPaise: wallet?.balanceInPaise ?? 0,
       currency: wallet?.currency ?? 'INR',
     };
+  }
+
+  /**
+   * Phase 172 (#9) — SPENDABLE balance = total balance minus goodwill that has
+   * already expired but not yet been swept off the ledger. Checkout MUST use
+   * this (not getBalance) so a customer can't spend goodwill past its expiry in
+   * the window before the sweep cron runs. Read-only — moves no money.
+   *
+   * `expiredGoodwillInPaise` is clamped to the balance so a legacy backlog
+   * (expired goodwill that was already spent before this fix shipped) can never
+   * report a negative spendable amount.
+   */
+  async getSpendableBalance(userId: string): Promise<{
+    balanceInPaise: number;
+    spendableInPaise: number;
+    expiredGoodwillInPaise: number;
+    currency: string;
+  }> {
+    const wallet = await this.repo.findByUserId(userId);
+    if (!wallet) {
+      return {
+        balanceInPaise: 0,
+        spendableInPaise: 0,
+        expiredGoodwillInPaise: 0,
+        currency: 'INR',
+      };
+    }
+    const txns = await this.repo.findAllTransactionsForUser(userId);
+    const state = computeGoodwillState(txns, new Date());
+    const expired = Math.min(state.expiredUnspentPaise, wallet.balanceInPaise);
+    return {
+      balanceInPaise: wallet.balanceInPaise,
+      spendableInPaise: Math.max(0, wallet.balanceInPaise - expired),
+      expiredGoodwillInPaise: expired,
+      currency: wallet.currency,
+    };
+  }
+
+  /**
+   * Phase 172 (#9) — lapse a single user's expired, unspent goodwill credits by
+   * posting a compensating DEBIT_ADJUSTMENT per lot (referenceType=
+   * 'goodwill_expiry', referenceId=<lot id>). Idempotent: the wallet
+   * @@unique(referenceType, referenceId, type) guarantees one sweep row per
+   * lot, and we pre-check + swallow the unique-violation on a race. The lapse is
+   * clamped to the live balance so it can never drive the wallet negative.
+   */
+  async sweepExpiredGoodwillForUser(
+    userId: string,
+    now: Date = new Date(),
+  ): Promise<{ lapsedLots: number; lapsedPaise: number }> {
+    const txns = await this.repo.findAllTransactionsForUser(userId);
+    const state = computeGoodwillState(txns, now);
+    let lapsedLots = 0;
+    let lapsedPaise = 0;
+    for (const lot of state.lotsToLapse) {
+      const already = await this.repo.findTransactionByReference({
+        referenceType: GOODWILL_EXPIRY_REFERENCE_TYPE,
+        referenceId: lot.lotId,
+        type: 'DEBIT_ADJUSTMENT',
+      });
+      if (already) continue;
+      try {
+        const lapsed = await this.applyWithRetry(userId, async (wallet) => {
+          const lapse = Math.min(lot.amountInPaise, wallet.balanceInPaise);
+          if (lapse <= 0) return 0;
+          const newBalance = wallet.balanceInPaise - lapse;
+          await this.repo.applyMutation({
+            walletId: wallet.id,
+            expectedVersion: wallet.version,
+            newBalanceInPaise: newBalance,
+            transaction: {
+              walletId: wallet.id,
+              userId,
+              type: 'DEBIT_ADJUSTMENT',
+              amountInPaise: -lapse,
+              balanceAfterInPaise: newBalance,
+              referenceType: GOODWILL_EXPIRY_REFERENCE_TYPE,
+              referenceId: lot.lotId,
+              description: `Goodwill credit expired — ₹${(lapse / 100).toFixed(2)} lapsed`,
+              internalNotes: `Auto-lapse of expired goodwill lot ${lot.lotId} (expired ${lot.expiresAt.toISOString()})`,
+            },
+          });
+          return lapse;
+        });
+        if (lapsed > 0) {
+          lapsedLots += 1;
+          lapsedPaise += lapsed;
+        }
+      } catch (err) {
+        // A concurrent sweep won the unique index — already lapsed, fine.
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          continue;
+        }
+        this.logger.error(
+          `Goodwill expiry sweep failed for user ${userId} lot ${lot.lotId}: ${(err as Error).message}`,
+        );
+      }
+    }
+    // Stamp the processing marker on ALL of this user's expired goodwill lots
+    // (including any that were already fully spent and so had nothing to lapse)
+    // so the candidate query stops returning this user. Done last, only if we
+    // didn't abort mid-way on an unexpected error.
+    await this.repo.markGoodwillLotsLapsed({ userId, now });
+    return { lapsedLots, lapsedPaise };
+  }
+
+  /**
+   * Phase 172 (#9) — batch sweep driven by WalletGoodwillExpiryCron: find users
+   * holding expired, not-yet-lapsed goodwill and lapse each. Bounded per run by
+   * `limit`; the lapsedAt marker guarantees forward progress (no re-scan).
+   */
+  async sweepExpiredGoodwill(
+    limit = 1000,
+  ): Promise<{ usersProcessed: number; lotsLapsed: number; paiseLapsed: number }> {
+    const now = new Date();
+    const userIds = await this.repo.findUserIdsWithExpiredGoodwill({
+      now,
+      limit,
+    });
+    let lotsLapsed = 0;
+    let paiseLapsed = 0;
+    for (const userId of userIds) {
+      const r = await this.sweepExpiredGoodwillForUser(userId, now);
+      lotsLapsed += r.lapsedLots;
+      paiseLapsed += r.lapsedPaise;
+    }
+    if (userIds.length > 0) {
+      this.logger.log(
+        `Goodwill expiry sweep: processed ${userIds.length} user(s), lapsed ${lotsLapsed} lot(s) (₹${(paiseLapsed / 100).toFixed(2)})`,
+      );
+    }
+    return { usersProcessed: userIds.length, lotsLapsed, paiseLapsed };
   }
 
   async listTransactions(userId: string, page = 1, limit = 20) {
@@ -147,9 +309,14 @@ export class WalletService {
             balanceAfterInPaise: newBalance,
             referenceType: args.referenceType ?? null,
             referenceId: args.referenceId ?? null,
+            referenceNumber: args.referenceNumber ?? null, // #8
             description: args.description,
+            reason: args.reason ?? null, // Phase 183 (#2)
             internalNotes: args.internalNotes ?? null,
             createdByAdminId: args.createdByAdminId ?? null,
+            // Phase 172 (#8/#9) — persist the credit discriminator + expiry.
+            creditType: args.creditType ?? null,
+            expiresAt: args.expiresAt ?? null,
           },
         });
       });
@@ -193,10 +360,38 @@ export class WalletService {
           description: args.description,
           walletTransactionId: result.transaction.id,
           type: result.transaction.type,
+          // Phase 183 (#12) — let consumers tell admin-credit from system-credit.
+          createdByAdminId: args.createdByAdminId ?? null,
+          referenceType: args.referenceType ?? null,
         },
       });
     } catch {
       // events are best-effort
+    }
+
+    // Phase 182 (#15) — admin-initiated credits write an audit-grade row
+    // (wallets.adjust is CRITICAL). System credits (refund/goodwill/loyalty)
+    // carry their own upstream audit trail.
+    if (args.createdByAdminId) {
+      void this.audit
+        .writeAuditLog({
+          actorId: args.createdByAdminId,
+          actorRole: 'ADMIN',
+          action: 'wallet.credit.posted',
+          module: 'wallet',
+          resource: 'Wallet',
+          resourceId: args.userId,
+          newValue: {
+            amountInPaise: args.amountInPaise,
+            type: txType,
+            balanceAfterInPaise: String(result.wallet.balanceInPaise),
+            description: args.description,
+            reason: args.reason ?? null, // Phase 183 (#2/#8)
+            referenceType: args.referenceType ?? null,
+            referenceId: args.referenceId ?? null,
+          },
+        })
+        .catch(() => undefined);
     }
 
     return result;
@@ -204,41 +399,125 @@ export class WalletService {
 
   async debit(args: DebitArgs): Promise<ApplyMutationResult> {
     this.assertPositive(args.amountInPaise, 'amountInPaise');
-    return this.applyWithRetry(args.userId, async (wallet) => {
-      await this.assertNotBlocked(wallet, args.bypassBlock, {
-        actorId: args.createdByAdminId ?? undefined,
-        actorRole: args.createdByAdminId ? 'ADMIN' : 'SYSTEM',
-        reason:
-          args.bypassBlock && wallet.isBlocked
-            ? `Wallet debit while blocked — ${args.description}`
-            : undefined,
+    const debitType = args.type ?? 'DEBIT';
+
+    // Phase 183 (#3) — fast-path idempotency for referenced debits (manual
+    // adjustments now carry referenceType/referenceId, so the DB @@unique dedups
+    // them too — not just the 24h Redis @Idempotent). Return the existing row.
+    if (args.referenceType && args.referenceId) {
+      const existing = await this.repo.findTransactionByReference({
         referenceType: args.referenceType,
         referenceId: args.referenceId,
+        type: debitType,
       });
-      if (wallet.balanceInPaise < args.amountInPaise) {
-        throw new BadRequestAppException(
-          `Insufficient wallet balance. Available ₹${(wallet.balanceInPaise / 100).toFixed(2)}`,
-        );
+      if (existing) {
+        const wallet = await this.repo.getOrCreate(args.userId);
+        return { wallet, transaction: existing };
       }
-      const newBalance = wallet.balanceInPaise - args.amountInPaise;
-      return this.repo.applyMutation({
-        walletId: wallet.id,
-        expectedVersion: wallet.version,
-        newBalanceInPaise: newBalance,
-        transaction: {
+    }
+
+    let result: ApplyMutationResult;
+    try {
+      result = await this.applyWithRetry(args.userId, async (wallet) => {
+        await this.assertNotBlocked(wallet, args.bypassBlock, {
+          actorId: args.createdByAdminId ?? undefined,
+          actorRole: args.createdByAdminId ? 'ADMIN' : 'SYSTEM',
+          reason:
+            args.bypassBlock && wallet.isBlocked
+              ? `Wallet debit while blocked — ${args.description}`
+              : undefined,
+          referenceType: args.referenceType,
+          referenceId: args.referenceId,
+        });
+        if (wallet.balanceInPaise < args.amountInPaise) {
+          throw new BadRequestAppException(
+            `Insufficient wallet balance. Available ₹${(wallet.balanceInPaise / 100).toFixed(2)}`,
+          );
+        }
+        const newBalance = wallet.balanceInPaise - args.amountInPaise;
+        return this.repo.applyMutation({
           walletId: wallet.id,
-          userId: args.userId,
-          type: args.type ?? 'DEBIT',
-          amountInPaise: -args.amountInPaise,
-          balanceAfterInPaise: newBalance,
-          referenceType: args.referenceType ?? null,
-          referenceId: args.referenceId ?? null,
-          description: args.description,
-          internalNotes: args.internalNotes ?? null,
-          createdByAdminId: args.createdByAdminId ?? null,
-        },
+          expectedVersion: wallet.version,
+          newBalanceInPaise: newBalance,
+          transaction: {
+            walletId: wallet.id,
+            userId: args.userId,
+            type: args.type ?? 'DEBIT',
+            amountInPaise: -args.amountInPaise,
+            balanceAfterInPaise: newBalance,
+            referenceType: args.referenceType ?? null,
+            referenceId: args.referenceId ?? null,
+            referenceNumber: args.referenceNumber ?? null, // #8
+            description: args.description,
+            reason: args.reason ?? null, // Phase 183 (#2)
+            internalNotes: args.internalNotes ?? null,
+            createdByAdminId: args.createdByAdminId ?? null,
+          },
+        });
       });
-    });
+    } catch (err) {
+      // Lost the idempotency race — return the winning row (mirror credit).
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002' &&
+        args.referenceType &&
+        args.referenceId
+      ) {
+        const winner = await this.repo.findTransactionByReference({
+          referenceType: args.referenceType,
+          referenceId: args.referenceId,
+          type: debitType,
+        });
+        if (winner) {
+          const wallet = await this.repo.getOrCreate(args.userId);
+          return { wallet, transaction: winner };
+        }
+      }
+      // Phase 183 (#16) — observability on a failed debit (insufficient balance,
+      // version conflict exhaustion, block). Best-effort; never swallows the throw.
+      try {
+        await this.eventBus.publish({
+          eventName: 'wallet.debit.failed',
+          aggregate: 'Wallet',
+          aggregateId: args.userId,
+          occurredAt: new Date(),
+          payload: {
+            userId: args.userId,
+            amountInPaise: args.amountInPaise,
+            type: args.type ?? 'DEBIT',
+            referenceType: args.referenceType ?? null,
+            createdByAdminId: args.createdByAdminId ?? null,
+            error: (err as Error).message,
+          },
+        });
+      } catch {
+        // event publish is best-effort
+      }
+      throw err;
+    }
+    // Phase 182 (#15) — admin-initiated debits write an audit-grade row.
+    if (args.createdByAdminId) {
+      void this.audit
+        .writeAuditLog({
+          actorId: args.createdByAdminId,
+          actorRole: 'ADMIN',
+          action: 'wallet.debit.posted',
+          module: 'wallet',
+          resource: 'Wallet',
+          resourceId: args.userId,
+          newValue: {
+            amountInPaise: args.amountInPaise,
+            type: args.type ?? 'DEBIT',
+            balanceAfterInPaise: String(result.wallet.balanceInPaise),
+            description: args.description,
+            reason: args.reason ?? null, // Phase 183 (#2)
+            referenceType: args.referenceType ?? null,
+            referenceId: args.referenceId ?? null,
+          },
+        })
+        .catch(() => undefined);
+    }
+    return result;
   }
 
   // ─────────────────────────────────────────────────────────────────

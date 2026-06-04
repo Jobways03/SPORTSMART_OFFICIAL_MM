@@ -38,10 +38,19 @@ function build(initial: Record<string, any> = {}) {
       // Emulates a compare-and-swap: every WHERE field (besides id) must
       // match the current row, else count:0 and no mutation.
       updateMany: jest.fn(async ({ where, data }: any) => {
+        // Phase 170 — the CAS WHERE clauses now use `status: { in: [...] }`
+        // (PENDING_APPROVAL | NEEDS_CLARIFICATION). Emulate both scalar and
+        // `{ in }` forms.
+        const statusMatches =
+          where.status === undefined
+            ? true
+            : where.status?.in
+              ? where.status.in.includes(row?.status)
+              : row?.status === where.status;
         const matches =
           row &&
           row.id === where.id &&
-          (where.status === undefined || row.status === where.status) &&
+          statusMatches &&
           (where.firstApprovedBy === undefined ||
             row.firstApprovedBy === where.firstApprovedBy);
         if (!matches) return { count: 0 };
@@ -54,6 +63,7 @@ function build(initial: Record<string, any> = {}) {
       }),
     },
     return: { update: jest.fn(async () => ({})) },
+    refundInstructionStatusHistory: { create: jest.fn(async () => ({})) },
   };
   const env: any = {
     getNumber: jest.fn((key: string, dflt: number) =>

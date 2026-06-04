@@ -184,6 +184,31 @@ export class CustomerAddressService {
       );
     }
 
+    // Phase 197 (Checkout audit #7) — STATE mismatch guard. Pre-Phase-197
+    // the service silently trusted the customer's typed state even when
+    // it disagreed with the authoritative PostOffice record for the
+    // pincode. State is the GST place-of-supply driver, so a Delhi
+    // pincode saved with state "Maharashtra" would compute the wrong
+    // CGST/SGST-vs-IGST split on every invoice for that address. When we
+    // have a PostOffice record AND the customer typed a state, they MUST
+    // agree (case-insensitive) — otherwise reject and let them correct
+    // it. We deliberately do NOT reject on a CITY/district mismatch:
+    // India Post district names legitimately differ from common city
+    // names (Bengaluru/Bangalore, Gurugram/Gurgaon), and city is not a
+    // tax determinant — for those we normalise to the customer's value.
+    if (
+      postOffice?.state &&
+      input.state &&
+      input.state.trim().toLowerCase() !== postOffice.state.trim().toLowerCase()
+    ) {
+      this.logger.warn(
+        `State mismatch for pincode ${postalCode}: customer="${input.state}" vs PostOffice="${postOffice.state}" (customer ${customerId})`,
+      );
+      throw new BadRequestAppException(
+        `The state for PIN ${postalCode} is ${postOffice.state}, not "${input.state}". Please correct the state.`,
+      );
+    }
+
     // Use provided city/state if given, otherwise derive from PostOffice
     const resolvedCity = input.city || postOffice?.district || '';
     const resolvedState = input.state || postOffice?.state || '';
@@ -202,6 +227,14 @@ export class CustomerAddressService {
     // would otherwise persist as stateCode=null and the tax engine
     // would fall back to the legacy state-code-map drift surface.
     // Skip the gate when the dropdown supplied stateCode directly.
+    // Phase 229 (Pincode Lookup audit) — write the resolved CBIC code BACK
+    // instead of discarding it. Pre-229 the probe below validated that the typed
+    // state name resolves to a gstStateCode, then threw the code away and
+    // persisted `input.stateCode ?? null` — so an address created by typing a
+    // state name (no dropdown stateCode) saved stateCode=null even though the
+    // canonical code was in hand, forcing the tax engine onto the drift-prone
+    // legacy name→code map.
+    let resolvedStateCode: string | null = input.stateCode ?? null;
     if (input.stateCode == null) {
       const probe = await (this.prisma as any).indiaState.findFirst({
         where: {
@@ -215,6 +248,7 @@ export class CustomerAddressService {
           `State "${resolvedState}" is not in the GST state list. Please select from the dropdown.`,
         );
       }
+      resolvedStateCode = probe.gstStateCode ?? null;
     }
 
     // Phase 63 (audit Gap #1) — atomic clear+create. The repo wraps
@@ -230,7 +264,7 @@ export class CustomerAddressService {
       landmark: input.landmark || null,
       city: resolvedCity,
       state: resolvedState,
-      stateCode: input.stateCode ?? null,
+      stateCode: resolvedStateCode,
       postalCode,
       isDefault: input.isDefault || false,
       addressType: input.addressType ?? null,
@@ -304,6 +338,23 @@ export class CustomerAddressService {
           `PostOffice miss for pincode ${input.postalCode} on update — accepting with caller-supplied city/state for customer ${customerId}`,
         );
       } else {
+        // Phase 197 (Checkout audit #7) — STATE mismatch guard (see
+        // createAddress). When the pincode changes and the customer
+        // also supplied a state, it must match the PostOffice record
+        // for the new pincode (state drives GST place-of-supply).
+        if (
+          postOffice.state &&
+          input.state &&
+          input.state.trim().toLowerCase() !==
+            postOffice.state.trim().toLowerCase()
+        ) {
+          this.logger.warn(
+            `State mismatch on update for pincode ${input.postalCode}: customer="${input.state}" vs PostOffice="${postOffice.state}" (customer ${customerId})`,
+          );
+          throw new BadRequestAppException(
+            `The state for PIN ${input.postalCode} is ${postOffice.state}, not "${input.state}". Please correct the state.`,
+          );
+        }
         if (!input.city) input.city = postOffice.district || undefined;
         if (!input.state) input.state = postOffice.state || undefined;
         if (!input.locality) input.locality = postOffice.officeName || undefined;

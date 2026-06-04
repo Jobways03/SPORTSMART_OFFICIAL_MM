@@ -120,7 +120,7 @@ export class PrismaBrandRepository implements IBrandRepository {
   /**
    * Phase 35 (2026-05-21) — atomic logo+publicId write. The url and
    * the publicId always travel together so the next delete/replace
-   * call has the Cloudinary reference to clean up.
+   * call has the media reference to clean up.
    */
   async updateLogoFields(
     id: string,
@@ -137,7 +137,7 @@ export class PrismaBrandRepository implements IBrandRepository {
    * Phase 35 (2026-05-21) — transactional hard-delete. Race-safe
    * against a product being created between the controller's
    * pre-check and the delete itself. Returns logo fields so the
-   * controller can clean up the Cloudinary asset.
+   * controller can clean up the media asset.
    */
   async deleteTransactional(id: string): Promise<{
     logoUrl: string | null;

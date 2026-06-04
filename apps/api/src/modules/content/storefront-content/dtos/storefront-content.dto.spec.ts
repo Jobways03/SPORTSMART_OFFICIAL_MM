@@ -124,7 +124,7 @@ describe('UpsertStorefrontContentDto (Phase 47)', () => {
     expect(msgs.length).toBeGreaterThan(0);
   });
 
-  it('accepts a Cloudinary-style https imageUrl', async () => {
+  it('accepts a media-style https imageUrl', async () => {
     const msgs = await messages(UpsertStorefrontContentDto, {
       imageUrl: 'https://res.cloudinary.com/sportsmart/image/upload/v1/test.jpg',
     });

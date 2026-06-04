@@ -34,7 +34,9 @@ import { AdminEndImpersonationUseCase } from '../../application/use-cases/admin-
 import { AdminSendSellerMessageUseCase } from '../../application/use-cases/admin-send-seller-message.use-case';
 import { AdminChangeSellerPasswordUseCase } from '../../application/use-cases/admin-change-seller-password.use-case';
 import { AdminDeleteSellerUseCase } from '../../application/use-cases/admin-delete-seller.use-case';
+import { AdminSellerFulfillmentHoldUseCase } from '../../application/use-cases/admin-seller-fulfillment-hold.use-case';
 import { AdminListSellersDto } from '../dtos/admin-list-sellers.dto';
+import { AdminSetSellerFulfillmentHoldDto } from '../dtos/admin-set-seller-fulfillment-hold.dto';
 import { AdminUpdateSellerStatusDto } from '../dtos/admin-update-seller-status.dto';
 import { AdminUpdateSellerVerificationDto } from '../dtos/admin-update-seller-verification.dto';
 import { AdminSendMessageDto } from '../dtos/admin-send-message.dto';
@@ -58,6 +60,7 @@ export class AdminSellersController {
     private readonly sendMessageUseCase: AdminSendSellerMessageUseCase,
     private readonly changePasswordUseCase: AdminChangeSellerPasswordUseCase,
     private readonly deleteSellerUseCase: AdminDeleteSellerUseCase,
+    private readonly fulfillmentHoldUseCase: AdminSellerFulfillmentHoldUseCase,
   ) {}
 
   @Get()
@@ -140,6 +143,69 @@ export class AdminSellersController {
     return {
       success: true,
       message: `Seller status updated to ${dto.status}`,
+      data,
+    };
+  }
+
+  /**
+   * Phase 232 (eligible-node / allocation-preview audit) — place a risk/fraud
+   * FULFILLMENT HOLD on a seller. A held seller is excluded from the allocation
+   * engine (no auto-routing and no manual reassignment of new orders), so the
+   * reason is mandatory and the action is gated on the same 'sellers.suspend'
+   * management permission as the status change (both bench a seller). Stamps
+   * actor + timestamp and writes a hash-chained audit row.
+   */
+  @Post(':sellerId/fulfillment-hold')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.suspend')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async setFulfillmentHold(
+    @Param('sellerId') sellerId: string,
+    @Body() dto: AdminSetSellerFulfillmentHoldDto,
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.fulfillmentHoldUseCase.setHold({
+      adminId,
+      sellerId,
+      reason: dto.reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return {
+      success: true,
+      message: 'Seller fulfillment hold placed',
+      data,
+    };
+  }
+
+  /**
+   * Phase 232 — clear the fulfillment hold (re-enable the seller for
+   * allocation). Reason is optional here (the unblock is itself the record);
+   * same permission + throttle as the SET path.
+   */
+  @Delete(':sellerId/fulfillment-hold')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.suspend')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async clearFulfillmentHold(
+    @Param('sellerId') sellerId: string,
+    @Body() body: { reason?: string } = {},
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.fulfillmentHoldUseCase.clearHold({
+      adminId,
+      sellerId,
+      reason: body?.reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return {
+      success: true,
+      message: 'Seller fulfillment hold cleared',
       data,
     };
   }

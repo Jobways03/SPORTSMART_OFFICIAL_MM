@@ -1,4 +1,5 @@
 import { Controller, Get, Logger, Param, Res } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { resolve, sep } from 'path';
 
@@ -15,11 +16,12 @@ import { resolve, sep } from 'path';
  * TaxDocumentDownloadService before it ever reaches a client, so the
  * encoded path here acts as the access token — same model as a cloud
  * signed URL. In production TAX_PDF_STORAGE_PROVIDER points at
- * S3/Cloudinary (served by the cloud directly) and this route is unused.
+ * S3/media (served by the cloud directly) and this route is unused.
  *
  * The `:token` is the base64url-encoded storage path (avoids a wildcard
  * route, so it's resolver-version agnostic).
  */
+@ApiTags('Tax / Documents')
 @Controller('tax-pdfs')
 export class TaxPdfFileController {
   private readonly logger = new Logger(TaxPdfFileController.name);

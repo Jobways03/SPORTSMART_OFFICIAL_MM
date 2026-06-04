@@ -5,7 +5,8 @@ import {
   ForbiddenAppException,
 } from '../../../../core/exceptions';
 import { AppException } from '../../../../core/exceptions/app.exception';
-import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../files/application/services/file.service';
 import { computeProfileCompletion } from '../../../../core/utils';
 import {
   SellerRepository,
@@ -29,7 +30,8 @@ export class UploadSellerMediaUseCase {
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
+    private readonly fileService: FileService,
     private readonly logger: AppLoggerService,
   ) {
     this.logger.setContext('UploadSellerMediaUseCase');
@@ -97,24 +99,41 @@ export class UploadSellerMediaUseCase {
       | string
       | null;
 
-    // Upload to Cloudinary
+    // Upload to media
     const transformation = isProfileImage
       ? [{ width: 800, height: 800, crop: 'limit' }]
       : [{ width: 400, height: 400, crop: 'limit' }];
 
     let uploadResult;
     try {
-      uploadResult = await this.cloudinary.upload(file.buffer, {
+      uploadResult = await this.media.upload(file.buffer, {
         folder,
         transformation,
       });
     } catch (error: any) {
-      this.logger.error(`Cloudinary upload failed for seller ${sellerId}: ${error?.message}`);
+      this.logger.error(`media upload failed for seller ${sellerId}: ${error?.message}`);
       throw new AppException(
         'Image upload failed. Please try again.',
         'EXTERNAL_SERVICE_ERROR',
       );
     }
+
+    // Additive, best-effort: register a central FileMetadata row so
+    // integrity/audit/orphan-sweep can see this media asset. Never
+    // affects the upload/validation/DB flow above.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: uploadResult.publicId,
+        url: uploadResult.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'AVATAR',
+        uploadedBy: sellerId,
+        uploadedByType: 'SELLER',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
 
     // Update database
     const updateData: Record<string, unknown> = {
@@ -135,20 +154,20 @@ export class UploadSellerMediaUseCase {
     } catch (error: any) {
       // DB failed — try to clean up uploaded asset
       this.logger.error(
-        `DB update failed after Cloudinary upload for seller ${sellerId}: ${error?.message}`,
+        `DB update failed after media upload for seller ${sellerId}: ${error?.message}`,
       );
-      this.cloudinary.delete(uploadResult.publicId).catch(() => {});
+      this.media.delete(uploadResult.publicId).catch(() => {});
       throw new AppException(
         'Failed to save image. Please try again.',
         'INTERNAL_ERROR',
       );
     }
 
-    // Clean up old Cloudinary asset (best-effort)
+    // Clean up old media asset (best-effort)
     if (oldPublicId) {
-      this.cloudinary.delete(oldPublicId).catch((err) => {
+      this.media.delete(oldPublicId).catch((err) => {
         this.logger.warn(
-          `Failed to delete old Cloudinary asset ${oldPublicId}: ${err?.message}`,
+          `Failed to delete old media asset ${oldPublicId}: ${err?.message}`,
         );
       });
     }

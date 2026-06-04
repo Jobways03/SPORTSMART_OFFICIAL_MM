@@ -21,7 +21,7 @@ import {
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { CurrentAdmin } from '../../../../../core/decorators/current-actor.decorator';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
 import { RedisService } from '../../../../../bootstrap/cache/redis.service';
 import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/repositories/category.repository.interface';
 import { AdminCreateCategoryDto } from '../../dtos/admin-create-category.dto';
@@ -37,10 +37,10 @@ function toSlug(name: string): string {
 }
 
 /**
- * Phase 33 (2026-05-21) — try to extract a Cloudinary publicId from
+ * Phase 33 (2026-05-21) — try to extract a media publicId from
  * a URL. See category controller history for rationale.
  */
-function extractCloudinaryPublicId(url: string | null): string | null {
+function extractmediaPublicId(url: string | null): string | null {
   if (!url) return null;
   const match = url.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-zA-Z0-9]+$/);
   return match ? match[1]! : null;
@@ -62,7 +62,7 @@ export class AdminCategoriesController {
 
   constructor(
     @Inject(CATEGORY_REPOSITORY) private readonly categoryRepo: ICategoryRepository,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly redis: RedisService,
   ) {}
 
@@ -404,13 +404,13 @@ export class AdminCategoriesController {
 
     if (deleted) {
       const ids = [
-        extractCloudinaryPublicId(deleted.imageUrl),
-        extractCloudinaryPublicId(deleted.bannerUrl),
+        extractmediaPublicId(deleted.imageUrl),
+        extractmediaPublicId(deleted.bannerUrl),
       ].filter((v): v is string => v !== null);
       for (const publicId of ids) {
-        this.cloudinary.delete(publicId).catch((err) => {
+        this.media.delete(publicId).catch((err) => {
           this.logger.warn(
-            `Cloudinary cleanup failed for category asset ${publicId}: ${err?.message}`,
+            `media cleanup failed for category asset ${publicId}: ${err?.message}`,
           );
         });
       }

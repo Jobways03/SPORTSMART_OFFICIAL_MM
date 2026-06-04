@@ -56,7 +56,16 @@ function buildController(opts: {
     markOrderPaid: opts.markOrderPaid ?? jest.fn().mockResolvedValue(undefined),
     markOrderFailed: jest.fn().mockResolvedValue(undefined),
   };
-  return new PaymentWebhookController(paymentsFacade, env, redis);
+  const prisma: any = {
+    paymentWebhookEvent: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({}),
+    },
+    masterOrder: { findFirst: jest.fn().mockResolvedValue(null) },
+  };
+  return new PaymentWebhookController(paymentsFacade, env, redis, prisma);
 }
 
 function buildPayload(opts: {

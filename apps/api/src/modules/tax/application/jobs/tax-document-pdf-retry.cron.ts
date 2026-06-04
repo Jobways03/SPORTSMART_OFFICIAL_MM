@@ -20,6 +20,7 @@ import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { TaxDocumentPdfService } from '../services/tax-document-pdf.service';
 
 interface SweepCounts {
@@ -39,6 +40,10 @@ export class TaxDocumentPdfRetryCron {
     private readonly leader: LeaderElectedCron,
     private readonly instr: CronInstrumentationService,
     private readonly pdfService: TaxDocumentPdfService,
+    // Cluster E — one best-effort summary audit row per tick so the
+    // render/failed/escalated counts are queryable in the forensic
+    // trail (instrumentation captures duration; this captures outcome).
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   enabled(): boolean {
@@ -62,7 +67,28 @@ export class TaxDocumentPdfRetryCron {
     if (!this.enabled()) return;
     await this.leader.run('tax-document-pdf-retry', 10 * 60, async () => {
       try {
-        await this.instr.wrap('tax-document-pdf-retry', () => this.runOnce());
+        const counts = await this.instr.wrap('tax-document-pdf-retry', () =>
+          this.runOnce(),
+        );
+        // Best-effort summary audit row — OUTSIDE any per-doc work and
+        // unable to abort the sweep. Skip idle ticks (nothing to render)
+        // so the audit log isn't flooded every 5 minutes.
+        if (counts.rendered + counts.failed + counts.escalated > 0) {
+          await this.audit
+            .writeAuditLog({
+              actorType: 'SYSTEM',
+              action: 'tax.document.pdf_retry_swept',
+              module: 'tax',
+              resource: 'tax_document',
+              metadata: {
+                scanned: counts.scanned,
+                rendered: counts.rendered,
+                failed: counts.failed,
+                escalated: counts.escalated,
+              },
+            })
+            .catch(() => undefined);
+        }
       } catch {
         // already recorded as FAILED in cron_runs
       }

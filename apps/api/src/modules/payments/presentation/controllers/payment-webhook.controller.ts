@@ -6,11 +6,13 @@ import {
   HttpStatus,
   InternalServerErrorException,
   Logger,
+  Optional,
   Post,
   Req,
   RawBodyRequest,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import * as crypto from 'crypto';
 import type { Request } from 'express';
 import { PaymentsPublicFacade } from '../../application/facades/payments-public.facade';
@@ -20,6 +22,11 @@ import {
 } from '../../../../core/exceptions';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+// Phase 169 (Payment Ops audit #1/#2) — Razorpay dispute / chargeback ingestion.
+// PaymentOpsModule is @Global so this injects without a PaymentsModule import.
+import { ChargebackService } from '../../../payments-ops/application/services/chargeback.service';
 import { z } from 'zod';
 
 // Phase 69 (2026-05-22) — Phase 66 audit Gap #23. Defence-in-depth
@@ -47,6 +54,23 @@ const razorpayPaymentEntitySchema = z.object({
   // safe value.
   amount: z.number().int().nonnegative(),
   captured: z.boolean().optional(),
+  // Phase 165 (#5) — gateway-side failure detail on payment.failed.
+  error_code: z.string().optional(),
+  error_description: z.string().optional(),
+});
+
+// Phase 169 (Payment Ops audit #1/#2) — Razorpay dispute entity (chargeback).
+// Razorpay sends payment.dispute.* events whose payload carries a `dispute`
+// entity (not `payment`). amount is integer paise; respond_by is Unix seconds.
+const razorpayDisputeEntitySchema = z.object({
+  id: z.string().min(1, 'dispute.entity.id is required'),
+  payment_id: z.string().optional(),
+  amount: z.number().int().nonnegative().optional(),
+  currency: z.string().optional(),
+  reason_code: z.string().optional(),
+  status: z.string().optional(),
+  // Unix seconds — the contest deadline.
+  respond_by: z.number().int().positive().optional(),
 });
 
 const razorpayWebhookSchema = z.object({
@@ -57,6 +81,12 @@ const razorpayWebhookSchema = z.object({
     payment: z
       .object({
         entity: razorpayPaymentEntitySchema,
+      })
+      .optional(),
+    // Phase 169 — dispute payload (present on payment.dispute.* events).
+    dispute: z
+      .object({
+        entity: razorpayDisputeEntitySchema,
       })
       .optional(),
   }),
@@ -131,7 +161,150 @@ export class PaymentWebhookController {
     private readonly paymentsFacade: PaymentsPublicFacade,
     private readonly envService: EnvService,
     private readonly redis: RedisService,
+    // Phase 165 (#3/#16) — durable webhook ledger + defense-in-depth
+    // order resolution by gateway order_id.
+    private readonly prisma: PrismaService,
+    // Phase 165 (#15) — compliance audit trail. @Optional so unit specs
+    // can construct the controller without the audit DI (AuditModule is
+    // @Global in the running app, so it resolves in production).
+    @Optional() private readonly audit?: AuditPublicFacade,
+    // Phase 169 (#2) — dispute ingestion. @Optional for the same spec-harness
+    // reason; PaymentOpsModule is @Global so it resolves in production.
+    @Optional() private readonly chargebacks?: ChargebackService,
   ) {}
+
+  /**
+   * Phase 165 (#3) — durable idempotency claim. The Redis claim (above)
+   * is the fast concurrency gate; THIS is the backstop that survives a
+   * Redis flush/outage within the 24h TTL. Returns 'DROP' when the event
+   * was already terminally processed (PROCESSED / FAILED_PERMANENT) — that
+   * is exactly the Redis-flush replay the audit flagged — or when a
+   * concurrent worker just created the row (P2002). 'PROCEED' otherwise
+   * (first delivery, or a retry of a transiently-incomplete one).
+   */
+  private async durableClaim(meta: {
+    eventKey: string;
+    eventType: string;
+    providerEventId?: string | null;
+    providerPaymentId?: string | null;
+    masterOrderId?: string | null;
+    payloadSha256: string;
+    signature?: string | null;
+  }): Promise<'PROCEED' | 'DROP'> {
+    try {
+      const existing = await this.prisma.paymentWebhookEvent.findUnique({
+        where: { eventKey: meta.eventKey },
+      });
+      if (
+        existing &&
+        (existing.processingStatus === 'PROCESSED' ||
+          existing.processingStatus === 'FAILED_PERMANENT')
+      ) {
+        this.logger.log(
+          `Durable ledger: event ${meta.eventKey} already ${existing.processingStatus} — dropping replay.`,
+        );
+        return 'DROP';
+      }
+      if (!existing) {
+        await this.prisma.paymentWebhookEvent.create({
+          data: {
+            eventKey: meta.eventKey,
+            eventType: meta.eventType,
+            providerEventId: meta.providerEventId ?? null,
+            providerPaymentId: meta.providerPaymentId ?? null,
+            masterOrderId: meta.masterOrderId ?? null,
+            payloadSha256: meta.payloadSha256,
+            signature: meta.signature ?? null,
+            processingStatus: 'PROCESSING',
+          },
+        });
+      }
+      return 'PROCEED';
+    } catch (err: any) {
+      // P2002 unique violation = a concurrent delivery just claimed it.
+      if (err?.code === 'P2002') {
+        this.logger.log(
+          `Durable ledger: concurrent claim on ${meta.eventKey} — dropping.`,
+        );
+        return 'DROP';
+      }
+      // Any other DB error: do NOT silently proceed without a durable
+      // claim (that's the whole point). Surface as transient so the
+      // gateway retries.
+      throw err;
+    }
+  }
+
+  private async durableFinalize(
+    eventKey: string,
+    status: 'PROCESSED' | 'FAILED_PERMANENT' | 'IGNORED',
+    errorMessage?: string,
+  ): Promise<void> {
+    await this.prisma.paymentWebhookEvent
+      .update({
+        where: { eventKey },
+        data: {
+          processingStatus: status,
+          processedAt: new Date(),
+          errorMessage: errorMessage ?? null,
+        },
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Durable ledger finalize failed for ${eventKey}: ${(err as Error).message}`,
+        ),
+      );
+  }
+
+  /**
+   * Phase 165 (#16) — defense-in-depth. The webhook routes by
+   * payment.notes.masterOrderId, which a compromised merchant dashboard
+   * could in principle forge. The gateway's own order_id is the trusted
+   * routing key: resolve the order by razorpay_order_id and, if the note
+   * disagrees, trust the gateway and log the discrepancy. (The facade's
+   * amount + order_id guard is the ultimate backstop, but resolving by
+   * gateway-truth closes the routing hole earlier.)
+   */
+  private async resolveMasterOrderId(payment: {
+    order_id?: string;
+    notes?: { masterOrderId?: string };
+    id: string;
+  }): Promise<string | null> {
+    const noted = payment.notes?.masterOrderId ?? null;
+    if (!payment.order_id) return noted;
+    const byGateway = await this.prisma.masterOrder
+      .findFirst({
+        where: { razorpayOrderId: payment.order_id },
+        select: { id: true },
+      })
+      .catch(() => null);
+    if (byGateway && noted && byGateway.id !== noted) {
+      this.logger.warn(
+        `Webhook note masterOrderId (${noted}) disagrees with gateway order ` +
+          `${payment.order_id} → order ${byGateway.id}. Trusting the gateway order_id.`,
+      );
+    }
+    return byGateway?.id ?? noted;
+  }
+
+  private async auditWebhook(
+    action: string,
+    payment: { id: string },
+    extra: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.audit) return;
+    await this.audit
+      .writeAuditLog({
+        actorId: `razorpay:${payment.id}`,
+        actorRole: 'SYSTEM',
+        action,
+        module: 'payments',
+        resource: 'payment_webhook',
+        resourceId: payment.id,
+        metadata: extra,
+      })
+      .catch(() => undefined);
+  }
 
   /**
    * Idempotency check using Redis SET NX. Returns true if this is the first
@@ -245,14 +418,27 @@ export class PaymentWebhookController {
    * Validates the HMAC SHA256 signature against RAZORPAY_WEBHOOK_SECRET before
    * processing the event.
    */
+  // Phase 165 (#14) — bound the request rate. Generous: legitimate
+  // Razorpay retries are bursty but bounded; this stops a forged-signature
+  // flood (each request computes an HMAC) from burning CPU unbounded.
+  @Throttle({ default: { limit: 300, ttl: 60_000 } })
   @Post('razorpay')
   @HttpCode(HttpStatus.OK)
   async handleRazorpayWebhook(
     @Headers('x-razorpay-signature') signature: string,
     @Req() req: RawBodyRequest<Request>,
     @Body() rawPayload: unknown,
+    // Phase 165 — last + optional so existing 3-arg test calls still compile;
+    // NestJS injects by decorator regardless of parameter position.
+    @Headers('x-razorpay-event-id') eventIdHeader?: string,
   ) {
     this.verifySignature(req.rawBody, signature);
+
+    // Phase 165 (#3) — hash the exact bytes processed for the durable ledger
+    // (forensic proof without storing the PII-bearing full payload).
+    const payloadSha256 = req.rawBody
+      ? crypto.createHash('sha256').update(req.rawBody).digest('hex')
+      : 'no-raw-body';
 
     // Phase 69 (2026-05-22) — Phase 66 audit Gap #23. Zod-validate
     // the payload shape AFTER the HMAC pass. The signature has
@@ -286,11 +472,17 @@ export class PaymentWebhookController {
       if (!payment) {
         throw new BadRequestAppException('Missing payment entity in webhook');
       }
-      const masterOrderId = payment.notes?.masterOrderId;
+      // Phase 165 (#16) — route by gateway order_id (trusted), not the
+      // forgeable note, falling back to the note when order_id is absent.
+      const masterOrderId = await this.resolveMasterOrderId(payment);
       if (!masterOrderId) {
         this.logger.warn(
-          `Webhook received without masterOrderId in notes: ${payment.id}`,
+          `Webhook received without resolvable masterOrderId: ${payment.id}`,
         );
+        await this.auditWebhook('payments.webhook.unlinked', payment, {
+          event: payload.event,
+          order_id: payment.order_id ?? null,
+        });
         return {
           success: true,
           message: 'Webhook acknowledged but no order linked',
@@ -308,6 +500,25 @@ export class PaymentWebhookController {
         );
         return { success: true, message: 'Duplicate event ignored' };
       }
+      // Phase 165 (#3) — durable backstop (survives a Redis flush).
+      if (
+        (await this.durableClaim({
+          eventKey,
+          eventType: payload.event,
+          providerEventId: eventIdHeader ?? null,
+          providerPaymentId: payment.id,
+          masterOrderId,
+          payloadSha256,
+          signature,
+        })) === 'DROP'
+      ) {
+        return { success: true, message: 'Duplicate event ignored (durable)' };
+      }
+      await this.auditWebhook('payments.webhook.received', payment, {
+        event: payload.event,
+        masterOrderId,
+        amount: payment.amount,
+      });
 
       try {
         await this.paymentsFacade.markOrderPaid({
@@ -326,6 +537,12 @@ export class PaymentWebhookController {
             order_id: payment.order_id ?? '',
           },
         });
+        await this.durableFinalize(eventKey, 'PROCESSED');
+        await this.auditWebhook('payments.webhook.processed', payment, {
+          event: payload.event,
+          masterOrderId,
+          outcome: 'captured',
+        });
         return { success: true, message: 'Payment processed' };
       } catch (err: any) {
         // Phase 0 (PR 0.13) — branch on permanent vs transient.
@@ -341,6 +558,13 @@ export class PaymentWebhookController {
           this.logger.error(
             `Failed to process webhook payment ${payment.id} (permanent): ${err.message}${logSuffix}`,
           );
+          await this.durableFinalize(eventKey, 'FAILED_PERMANENT', err.message);
+          await this.auditWebhook('payments.webhook.failed_permanent', payment, {
+            event: payload.event,
+            masterOrderId,
+            code: err.code ?? null,
+            message: err.message,
+          });
           return { success: false, message: err.message, code: err.code };
         }
         // Transient — release the Redis claim so retry can re-run.
@@ -352,6 +576,10 @@ export class PaymentWebhookController {
             `Failed to release Redis claim for ${eventKey}: ${relErr?.message ?? relErr}`,
           ),
         );
+        // Delete the durable PROCESSING row so the retry can re-claim it.
+        await this.prisma.paymentWebhookEvent
+          .delete({ where: { eventKey } })
+          .catch(() => undefined);
         throw new InternalServerErrorException(
           `Webhook processing failed transiently: ${err.message}`,
         );
@@ -361,7 +589,8 @@ export class PaymentWebhookController {
     if (payload.event === 'payment.failed') {
       const payment = payload.payload.payment?.entity;
       if (payment) {
-        const masterOrderId = payment.notes?.masterOrderId;
+        // Phase 165 (#16) — resolve by gateway order_id, not just the note.
+        const masterOrderId = await this.resolveMasterOrderId(payment);
         if (masterOrderId) {
           // Idempotency for failed events too — same dedup key namespace.
           const eventKey = `payment.failed:${payment.id}`;
@@ -372,12 +601,43 @@ export class PaymentWebhookController {
             );
             return { success: true, message: 'Duplicate event ignored' };
           }
+          // Phase 165 (#3) — durable backstop.
+          if (
+            (await this.durableClaim({
+              eventKey,
+              eventType: payload.event,
+              providerEventId: eventIdHeader ?? null,
+              providerPaymentId: payment.id,
+              masterOrderId,
+              payloadSha256,
+              signature,
+            })) === 'DROP'
+          ) {
+            return { success: true, message: 'Duplicate event ignored (durable)' };
+          }
+          await this.auditWebhook('payments.webhook.received', payment, {
+            event: payload.event,
+            masterOrderId,
+            errorCode: payment.error_code ?? null,
+          });
 
           try {
             await this.paymentsFacade.markOrderPaymentFailed({
               masterOrderId,
-              reason: 'Payment failed at gateway',
+              // Phase 165 (#5) — surface the gateway's own reason instead of
+              // a generic string; #6 — persist the failed payment id.
+              reason: payment.error_description ?? 'Payment failed at gateway',
               actorType: 'WEBHOOK',
+              failedPaymentId: payment.id,
+              failureCode: payment.error_code ?? null,
+              failureReason: payment.error_description ?? null,
+            });
+            await this.durableFinalize(eventKey, 'PROCESSED');
+            await this.auditWebhook('payments.webhook.processed', payment, {
+              event: payload.event,
+              masterOrderId,
+              outcome: 'failed',
+              errorCode: payment.error_code ?? null,
             });
           } catch (err: any) {
             // Phase 0 (PR 0.13) — same permanent/transient split as
@@ -392,11 +652,15 @@ export class PaymentWebhookController {
                   (err.code ? ` [code=${err.code}]` : ''),
               );
               // Don't release the claim; don't retry.
+              await this.durableFinalize(eventKey, 'FAILED_PERMANENT', err.message);
             } else {
               this.logger.error(
                 `Failed to mark order as failed (transient): ${err.message} — releasing claim`,
               );
               await this.releaseClaim(eventKey).catch(() => undefined);
+              await this.prisma.paymentWebhookEvent
+                .delete({ where: { eventKey } })
+                .catch(() => undefined);
               throw new InternalServerErrorException(
                 `Webhook processing failed transiently: ${err.message}`,
               );
@@ -407,7 +671,169 @@ export class PaymentWebhookController {
       return { success: true, message: 'Payment failure recorded' };
     }
 
-    // Other events — acknowledge but don't act
+    // Phase 165 (#10) — payment.authorized arrives only when the Razorpay
+    // account is in MANUAL-capture mode (Sportsmart uses auto-capture, so a
+    // capture follows immediately). Previously this fell through to a silent
+    // generic ack and the order could sit in PENDING_PAYMENT forever. We now
+    // explicitly record it in the durable ledger + audit so ops can SEE that
+    // an authorized-but-uncaptured payment exists (the poller's orphan
+    // recovery + the capture webhook still drive the actual flip).
+    if (payload.event === 'payment.authorized') {
+      const payment = payload.payload.payment?.entity;
+      if (payment) {
+        // Informational, no money flip — never 500 on a DB blip here (it would
+        // make Razorpay retry a non-actionable event). Best-effort record + ack.
+        try {
+          const masterOrderId = await this.resolveMasterOrderId(payment);
+          const eventKey = `payment.authorized:${payment.id}`;
+          if (await this.claimEvent(eventKey)) {
+            await this.durableClaim({
+              eventKey,
+              eventType: payload.event,
+              providerEventId: eventIdHeader ?? null,
+              providerPaymentId: payment.id,
+              masterOrderId,
+              payloadSha256,
+              signature,
+            });
+            await this.durableFinalize(eventKey, 'IGNORED', 'authorized (auto-capture mode expects a follow-up capture)');
+            await this.auditWebhook('payments.webhook.authorized', payment, {
+              event: payload.event,
+              masterOrderId,
+              amount: payment.amount,
+            });
+            this.logger.warn(
+              `payment.authorized received for ${payment.id} (order ${masterOrderId ?? 'unlinked'}). ` +
+                `Auto-capture expected; if this order stalls, capture manually or it will expire.`,
+            );
+          }
+        } catch (err) {
+          this.logger.error(
+            `payment.authorized handling failed for ${payment.id} (acked anyway — informational event): ${(err as Error).message}`,
+          );
+        }
+      }
+      return { success: true, message: 'Payment authorization recorded' };
+    }
+
+    // Phase 169 (Payment Ops audit #1/#2) — payment.dispute.* (chargeback)
+    // ingestion. Pre-169 these were silently 200-ack'd and dropped, so the
+    // platform lost contestable disputes by default. Mirrors the captured
+    // branch's claim→ingest→finalize→audit structure.
+    if (payload.event.startsWith('payment.dispute.')) {
+      const dispute = payload.payload.dispute?.entity;
+      if (!dispute) {
+        // A dispute event with no dispute entity is malformed but not
+        // retryable — record nothing, ack so Razorpay stops.
+        this.logger.warn(
+          `${payload.event} received with no dispute entity — acknowledged, no action.`,
+        );
+        return { success: true, message: `Event ${payload.event} acknowledged (no dispute entity)` };
+      }
+
+      const eventKey = `${payload.event}:${dispute.id}`;
+      if (!(await this.claimEvent(eventKey))) {
+        return { success: true, message: 'Duplicate dispute event ignored' };
+      }
+      try {
+        // Resolve the order via the disputed payment id (gateway truth).
+        // Phase 169 review (L1#1/L1#3) — try the MasterOrder column first, then
+        // fall back to the Payment ledger (which records providerPaymentId at
+        // capture independently of the MasterOrder write) to shrink the window
+        // where a dispute lands before/around the capture write and would
+        // otherwise open unlinked. Still null-safe: an unlinked chargeback
+        // persists with its providerPaymentId for later reconciliation.
+        let masterOrder: { id: string; orderNumber: string; customerId: string } | null = null;
+        if (dispute.payment_id) {
+          masterOrder = await this.prisma.masterOrder
+            .findFirst({
+              where: { razorpayPaymentId: dispute.payment_id },
+              select: { id: true, orderNumber: true, customerId: true },
+            })
+            .catch(() => null);
+          if (!masterOrder) {
+            const pay = await this.prisma.payment
+              .findFirst({
+                where: { providerPaymentId: dispute.payment_id },
+                select: { masterOrderId: true },
+              })
+              .catch(() => null);
+            if (pay?.masterOrderId) {
+              masterOrder = await this.prisma.masterOrder
+                .findUnique({
+                  where: { id: pay.masterOrderId },
+                  select: { id: true, orderNumber: true, customerId: true },
+                })
+                .catch(() => null);
+            }
+          }
+        }
+
+        if (
+          (await this.durableClaim({
+            eventKey,
+            eventType: payload.event,
+            providerEventId: eventIdHeader ?? null,
+            providerPaymentId: dispute.payment_id ?? null,
+            masterOrderId: masterOrder?.id ?? null,
+            payloadSha256,
+            signature,
+          })) === 'DROP'
+        ) {
+          return { success: true, message: 'Duplicate dispute event ignored (durable)' };
+        }
+
+        if (!this.chargebacks) {
+          // Service not wired (shouldn't happen in prod — @Global). Keep the
+          // durable claim so a redelivery after wiring is fixed can reprocess.
+          await this.durableFinalize(eventKey, 'IGNORED', 'ChargebackService unavailable');
+          this.logger.error(
+            `payment.dispute received but ChargebackService is not injected — dispute ${dispute.id} NOT persisted.`,
+          );
+          return { success: true, message: 'Dispute acknowledged (service unavailable)' };
+        }
+
+        const result = await this.chargebacks.ingestDisputeEvent({
+          eventType: payload.event,
+          providerDisputeId: dispute.id,
+          providerPaymentId: dispute.payment_id ?? null,
+          masterOrderId: masterOrder?.id ?? null,
+          orderNumber: masterOrder?.orderNumber ?? null,
+          customerId: masterOrder?.customerId ?? null,
+          reasonCode: dispute.reason_code ?? null,
+          amountInPaise: BigInt(dispute.amount ?? 0),
+          currency: dispute.currency ?? 'INR',
+          dueDate: dispute.respond_by ? new Date(dispute.respond_by * 1000) : null,
+          entityStatus: dispute.status ?? null,
+          rawPayload: dispute,
+        });
+
+        await this.durableFinalize(eventKey, 'PROCESSED', `chargeback ${result.chargeback.id} ${result.opened ? 'opened' : 'updated'}`);
+        await this.auditWebhook('payments.webhook.dispute', { id: dispute.id }, {
+          event: payload.event,
+          chargebackId: result.chargeback.id,
+          masterOrderId: masterOrder?.id ?? null,
+          status: result.chargeback.status,
+          amount: dispute.amount,
+        });
+        return { success: true, message: `Dispute ${payload.event} processed` };
+      } catch (err) {
+        // Dispute ingestion is informational-but-important; never 500 on a DB
+        // blip (Razorpay would retry a non-money event). Release the claim so a
+        // retry can re-run, and ack.
+        await this.releaseClaim(eventKey);
+        await this.prisma.paymentWebhookEvent
+          .deleteMany({ where: { eventKey } })
+          .catch(() => undefined);
+        this.logger.error(
+          `payment.dispute ingestion failed for ${dispute.id} (acked; will reprocess on redelivery): ${(err as Error).message}`,
+        );
+        return { success: true, message: 'Dispute acknowledged (will reprocess)' };
+      }
+    }
+
+    // Other events — acknowledge but don't act. (refund.* events are handled
+    // by the dedicated RazorpayRefundWebhookController in the returns module.)
     return { success: true, message: `Event ${payload.event} acknowledged` };
   }
 }

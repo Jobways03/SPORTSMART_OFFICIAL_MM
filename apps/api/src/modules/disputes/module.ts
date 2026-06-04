@@ -9,6 +9,7 @@ import { WalletModule } from '../wallet/module';
 import { DisputeService } from './application/services/dispute.service';
 import { DisputeRefundRecoverySweepCron } from './application/jobs/dispute-refund-recovery-sweep.cron';
 import { DisputesPublicFacade } from './application/facades/disputes-public.facade';
+import { RefundRejectedDisputeHandler } from './application/event-handlers/refund-rejected-dispute.handler';
 // Phase 110 (2026-05-25) — customer self-service dispute endpoints removed.
 // The customer-facing dispute UI is deliberately retired (the /account/disputes
 // route redirects to /account/support); disputes now reach customers only via
@@ -47,6 +48,7 @@ import { SellerDisputesController } from './presentation/controllers/seller-disp
     DisputeService,
     DisputeRefundRecoverySweepCron,
     DisputesPublicFacade,
+    RefundRejectedDisputeHandler,
   ],
   exports: [DisputesPublicFacade],
 })

@@ -132,6 +132,10 @@ enum OrderRiskBand {
   GREEN
   YELLOW
   RED
+  // Phase 174 (audit #224/#227) — 4th band above RED for the highest-risk
+  // cohort; held to the bounded enforcement gate (mandatory approve reason,
+  // excluded from bulk-approve).
+  CRITICAL
 }
 
 // Phase 75 (2026-05-22) — Phase 73 reject audit Gap #10.
@@ -232,10 +236,18 @@ model Cart {
   customerId String   @unique @map("customer_id")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
+  // Phase 196 (#11) — explicit activity timestamp. Cart.updatedAt only
+  // bumps on a direct Cart-row write, NOT when a CartItem changes (Prisma
+  // @updatedAt is per-row), so it was an unreliable abandonment signal.
+  // lastActivityAt is stamped by the service on every cart mutation
+  // (add / update / remove / clear / merge) so the abandonment sweep and
+  // any future recovery flow have an accurate "last touched" time.
+  lastActivityAt DateTime @default(now()) @map("last_activity_at")
 
   customer User       @relation(fields: [customerId], references: [id], onDelete: Cascade)
   items    CartItem[]
 
+  @@index([lastActivityAt])
   @@map("carts")
 }
 
@@ -304,6 +316,21 @@ model CartItem {
   @@map("cart_items")
 }
 
+// Phase 234 (Allocation Exception Queue audit) — structured reason an order
+// could not be routed, persisted on MasterOrder at exception-entry time.
+// Pre-234 the reason existed only as a free-text string inside an unconsumed
+// event payload; an enum makes "30% NO_STOCK_AVAILABLE, 20% PINCODE_UNSERVICEABLE"
+// a GROUP BY instead of a guess.
+enum AllocationExceptionReason {
+  NO_PINCODE_ON_ORDER // shipping address has no pincode → cannot route
+  PINCODE_UNSERVICEABLE // no node serves the customer pincode
+  NO_STOCK_AVAILABLE // node(s) exist but none have stock
+  NO_NODE_MAPPED // product not mapped to any seller/franchise
+  SELLER_REJECTED // node rejected and no alternative was found
+  NODE_SUSPENDED // candidate node is inactive / on fulfillment hold
+  UNKNOWN // fallback when the specific cause can't be determined
+}
+
 model MasterOrder {
   id                      String              @id @default(uuid())
   orderNumber             String              @unique @map("order_number")
@@ -344,6 +371,27 @@ model MasterOrder {
   // have no snapshot (consumers fall back to live mode).
   gstModeSnapshot         GstMode?            @map("gst_mode_snapshot")
 
+  // Phase 168 (COD Mark-Paid audit #3/#4/#9/#14) — COD cash-collection
+  // provenance. Pre-168 the ONLY signal that an admin marked an order PAID was
+  // updatedAt; compliance/finance could not answer "who collected the cash,
+  // when, how much, against which receipt". These are the quick-answer columns
+  // on the order; the full per-event detail (variance, sub-order split, courier
+  // ref) lives in the CashCollection ledger below.
+  paidBy                  String?             @map("paid_by")
+  paidAt                  DateTime?           @map("paid_at")
+  paymentReference        String?             @map("payment_reference")
+  paymentNotes            String?             @map("payment_notes") @db.Text
+  // The actual cash collected (paise). Equals totalAmountInPaise on a clean
+  // full collection; differs when a variance/partial collection was recorded
+  // (the reason is captured on the CashCollection row).
+  collectedAmountInPaise  BigInt?             @map("collected_amount_in_paise")
+  // Phase 184 (Wallet@Checkout audit #2/#3) — authoritative snapshot of how much
+  // wallet balance paid for this order, and the linked redemption ledger row.
+  // Removes the COD / fully-wallet-paid reverse-lookup ambiguity; the refund
+  // split calculator reads this directly instead of scanning the wallet ledger.
+  walletAmountUsedInPaise BigInt              @default(0) @map("wallet_amount_used_in_paise")
+  walletTransactionId     String?             @map("wallet_transaction_id")
+
   // Verification queue claim (migration 20260504120000_add_verification_claim).
   // Ops verifier holds an exclusive claim on a PLACED order; auto-expires
   // after the env-driven VERIFICATION_CLAIM_TTL_MINUTES (default 15) so
@@ -382,6 +430,18 @@ model MasterOrder {
   verificationScoredBy     String?               @map("verification_scored_by")
   verificationScoreSource  OrderRiskScoreSource? @map("verification_score_source")
   verificationScoreVersion Int                   @default(1) @map("verification_score_version")
+
+  // Phase 234 (Allocation Exception Queue audit) — structured exception
+  // provenance. Pre-234 the ONLY signal an order was parked was
+  // orderStatus='EXCEPTION_QUEUE'; the reason lived solely in a fire-and-forget
+  // event payload that had no consumer, so neither admins nor analytics could
+  // answer "why is this in exception" or "what's our top failure reason".
+  // exceptionEnteredAt is the real time-in-queue clock — routing-health
+  // previously aged exceptions from createdAt, inflating the reported age of an
+  // order that sat normally for days before failing at verify.
+  exceptionReason       AllocationExceptionReason? @map("exception_reason")
+  exceptionReasonDetail String?                    @map("exception_reason_detail") @db.Text
+  exceptionEnteredAt    DateTime?                  @map("exception_entered_at")
 
   itemCount Int @map("item_count")
 
@@ -428,11 +488,32 @@ model MasterOrder {
   // legacy behaviour). No FK: profile rows may be deleted later, the
   // tax-document service tolerates a stale reference.
   selectedTaxProfileId String? @map("selected_tax_profile_id")
+  // Phase 200 (#11) — immutable snapshot of the customer tax profile
+  // (gstin/legalName/billingAddress/stateCode) captured at place-order so
+  // invoice generation survives the profile being deleted between order and
+  // invoice. DB column added by migration 20260602380000; the checkout
+  // place-order write-site populates it. tax-document.service reads it as a
+  // fail-safe fallback when the live profile row is gone.
+  customerTaxProfileSnapshot Json? @map("customer_tax_profile_snapshot")
 
   // Online payment tracking (Razorpay)
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
   paymentExpiresAt  DateTime? @map("payment_expires_at")
+  // Phase 165 (Razorpay Integration audit #5/#6) — gateway-side failure
+  // detail captured from the payment.failed webhook so support can see
+  // "card declined" / "insufficient funds" instead of a generic message,
+  // and so a failed payment id is correlatable later. Previously dropped.
+  lastFailedPaymentId     String?   @map("last_failed_payment_id")
+  lastPaymentFailureCode  String?   @map("last_payment_failure_code")
+  lastPaymentFailureReason String?  @map("last_payment_failure_reason") @db.Text
+  lastPaymentFailureAt    DateTime? @map("last_payment_failure_at")
+  // Phase 166 (Payment Status Poller audit #7) — per-order poll tracking so
+  // the orphan-recovery poller backs off (no 30× redundant gateway calls over
+  // the 30-min window) and a forensic review can see when/how-often we polled.
+  lastPolledAt            DateTime? @map("last_polled_at")
+  pollAttemptCount        Int       @default(0) @map("poll_attempt_count")
+  lastPollError           String?   @map("last_poll_error") @db.Text
   // Phase 66 (2026-05-22) — currency column (audit Gap #21).
   // Pre-Phase-66 currency was hard-coded as INR in code with no
   // schema record. The new column defaults to 'INR' so existing
@@ -536,6 +617,8 @@ model MasterOrder {
   // for OrderStatusHistory.masterOrderId; ON DELETE Cascade
   // matches the other history tables.
   statusHistory           OrderStatusHistory[]
+  // Phase 168 (COD Mark-Paid audit #4) — cash-collection ledger rows.
+  cashCollections         CashCollection[]
 
   @@index([customerId])
   @@index([orderNumber])
@@ -562,12 +645,58 @@ model MasterOrder {
   // the sweep scans every PLACED row even though most are
   // YELLOW/RED.
   @@index([orderStatus, verificationRiskBand, createdAt])
+  // Phase 168 (COD Mark-Paid audit #11) — cod-collection-pending recon cron:
+  // `WHERE payment_method = 'COD' AND order_status = 'DELIVERED' AND
+  // payment_status = 'PENDING'`. Without this the daily sweep scans every
+  // order to find delivered-but-uncollected COD cash.
+  @@index([paymentMethod, orderStatus, paymentStatus])
+  // Phase 184 (#3) — reverse lookup order ← wallet redemption.
+  @@index([walletTransactionId])
   // Verification queue indexes exist in DB (migrations 20260504120000 +
   // 20260504130000) but are not redeclared here because their original
   // names exceed Postgres's 63-byte identifier limit, which the Prisma
   // validator rejects even when the index already exists in the database.
   // Queries continue to use them; addressing this needs a rename migration.
   @@map("master_orders")
+}
+
+// Phase 168 (COD Mark-Paid audit #4/#9) — cash-collection ledger.
+//
+// Every COD "mark as paid" (whole-order OR per-sub-order) writes exactly one
+// immutable row here, so finance can reconstruct who collected how much cash,
+// against which receipt, and whether it matched what was payable. Pre-168 the
+// only trace was the order's `updatedAt`; cash variance (courier shortfall,
+// off-by-one, partial collection) was silently absorbed with nowhere to record
+// it. `varianceInPaise = collectedAmountInPaise - expectedAmountInPaise`
+// (negative = shortfall); a non-zero variance requires `varianceReason`.
+model CashCollection {
+  id                     String   @id @default(uuid())
+  masterOrderId          String   @map("master_order_id")
+  // Null for a whole-order collection; set when a single sub-order's cash was
+  // collected independently (multi-seller COD).
+  subOrderId             String?  @map("sub_order_id")
+  expectedAmountInPaise  BigInt   @map("expected_amount_in_paise")
+  collectedAmountInPaise BigInt   @map("collected_amount_in_paise")
+  // Persisted (not @computed — Prisma has no computed columns) so finance can
+  // index/aggregate variance without re-deriving it. Writers MUST set it to
+  // collected - expected; a CHECK constraint in the migration enforces that.
+  varianceInPaise        BigInt   @default(0) @map("variance_in_paise")
+  varianceReason         String?  @map("variance_reason")
+  // Cash receipt # / courier COD remittance reference (admin-supplied, charset-
+  // validated at the DTO).
+  collectionReference    String?  @map("collection_reference")
+  notes                  String?  @db.Text
+  collectedByAdminId     String?  @map("collected_by_admin_id")
+  collectedAt            DateTime @default(now()) @map("collected_at")
+  createdAt              DateTime @default(now()) @map("created_at")
+
+  masterOrder MasterOrder @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
+
+  @@index([masterOrderId])
+  @@index([subOrderId])
+  @@index([collectedByAdminId])
+  @@index([collectedAt])
+  @@map("cash_collections")
 }
 
 model SubOrder {
@@ -638,6 +767,12 @@ model SubOrder {
   deliveryProofUrl          String?                     @map("delivery_proof_url")
   deliveryOtpVerified       Boolean?                    @map("delivery_otp_verified")
   deliverySignatureUrl      String?                     @map("delivery_signature_url")
+  // Phase 168 (COD Mark-Paid audit #3/#10) — per-sub-order COD cash-collection
+  // provenance, so a multi-seller order can have one delivered sub-order's cash
+  // collected (and attributed) independently of the others.
+  paidAt                    DateTime?                   @map("paid_at")
+  paidBy                    String?                     @map("paid_by")
+  paymentReference          String?                     @map("payment_reference")
   // Phase 83 — Gap #2. Commission processor reads this column to
   // know when to lock commission. Set at delivery time to
   // `returnWindowEndsAt`. The 15s polling cron filters
@@ -766,8 +901,15 @@ model SubOrder {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   masterOrder       MasterOrder        @relation(fields: [masterOrderId], references: [id], onDelete: Cascade)
-  seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  franchise         FranchisePartner?  @relation(fields: [franchiseId], references: [id], onDelete: SetNull)
+  // Phase 231 (Eligible-node listing audit) — onDelete was asymmetric and
+  // dangerous: seller=Cascade meant deleting a Seller row silently
+  // cascade-deleted its historical SubOrders (irreversible financial data
+  // loss), while franchise=SetNull would orphan the node id (and, with the new
+  // exactly-one-node CHECK, leave the row violating it). Both are now Restrict:
+  // a node carrying historical orders cannot be hard-deleted — it must be
+  // soft-deleted (isDeleted), which is already the only path the app uses.
+  seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  franchise         FranchisePartner?  @relation(fields: [franchiseId], references: [id], onDelete: Restrict)
   items             OrderItem[]
   commissionRecords CommissionRecord[]
   returns           Return[]

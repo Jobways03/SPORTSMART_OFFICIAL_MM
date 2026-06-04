@@ -6,6 +6,7 @@ import { EnvService } from '../../bootstrap/env/env.service';
 import { LegalHoldService } from './legal-hold.service';
 import { LeaderElectedCron } from '../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../cron-observability/cron-instrumentation.service';
+import { R2Adapter } from '../../integrations/r2/adapters/r2.adapter';
 
 /**
  * Phase 7 (PR 7.2) — Daily retention enforcer.
@@ -41,6 +42,11 @@ export class RetentionEnforcerCron {
     // `{ acted, held, skipped, dryRun }` shape so ops can chart
     // retention-policy effect over time + spot a stuck enforcer.
     private readonly instr: CronInstrumentationService,
+    // Phase 253 (#9) — real storage erasure. DELETE/ARCHIVE/REDACT used to
+    // only mutate the DB row, leaving the bytes publicly served — a DPDP §6
+    // right-to-erasure breach for KYC/evidence. R2 erasure for objects
+    // stored in Cloudflare R2 (the only object-storage path now).
+    private readonly r2: R2Adapter,
   ) {}
 
   enabled(): boolean {
@@ -184,37 +190,59 @@ export class RetentionEnforcerCron {
     action: RetentionAction,
     fileId: string,
   ): Promise<void> {
+    // Phase 253 (#9) — destroy the storage bytes for EVERY action. Without
+    // this, "deleted"/"redacted" KYC/evidence stayed resolvable at its
+    // public media URL (the URL is reconstructable from providerFileId, which
+    // REDACT did not touch). Best-effort: a failed provider delete is logged
+    // but we still apply the DB mutation; the orphan sweep / next run retries.
+    await this.destroyStorage(action, fileId);
     switch (action) {
       case 'DELETE':
-        await this.prisma.fileMetadata.update({
-          where: { id: fileId },
-          data: { status: 'DELETED', deletedAt: new Date() },
-        });
-        return;
       case 'ARCHIVE':
-        // Storage-tier flip (S3 lifecycle / Cloudinary archived flag) is
-        // provider-specific; we mark the metadata so reads route through
-        // a different code path. The actual provider call lands in the
-        // S3 lifecycle PR (out of scope here).
+        // status 'ARCHIVED' isn't in the enum yet; soft-delete +
+        // RetentionExecution.action distinguishes them.
         await this.prisma.fileMetadata.update({
           where: { id: fileId },
           data: { status: 'DELETED', deletedAt: new Date() },
-          // status 'ARCHIVED' isn't in the enum yet; soft-delete +
-          // RetentionExecution.action='ARCHIVE' is the temporary
-          // compromise. Tracked in the ADR.
         });
         return;
       case 'REDACT':
-        // Strip PII — keep the row + hash + ID for audit, but blank
-        // file_name and provider URLs.
+        // Strip PII — keep the row + hash + ID for audit, but the bytes are
+        // now destroyed above and the URL fields are blanked.
         await this.prisma.fileMetadata.update({
           where: { id: fileId },
-          data: {
-            fileName: '[REDACTED]',
-            providerUrl: null,
-          },
+          data: { fileName: '[REDACTED]', providerUrl: null, deletedAt: new Date() },
         });
         return;
+    }
+  }
+
+  private async destroyStorage(action: RetentionAction, fileId: string): Promise<void> {
+    const file = await this.prisma.fileMetadata.findUnique({
+      where: { id: fileId },
+      select: { provider: true, providerFileId: true, storageKey: true, mimeType: true },
+    });
+    if (!file) return;
+    const key = file.providerFileId ?? file.storageKey;
+    if (!key) return;
+    if (file.provider === 'cloudinary') {
+      // Legacy Cloudinary asset. The Cloudinary backend has been removed
+      // (platform is now R2-only), so the bytes can't be erased remotely
+      // from here — log it for manual cleanup; the DB-side retention
+      // mutation still applies. No real Cloudinary data exists post-
+      // migration; this guard only covers any stray legacy rows.
+      this.logger.warn(
+        `Retention ${action}: file ${fileId} is a legacy Cloudinary asset — ` +
+          `Cloudinary backend removed, cannot erase remotely; DB mutation still applied`,
+      );
+    } else if (file.provider === 'r2') {
+      try {
+        await this.r2.deleteFile(file.storageKey);
+      } catch (e) {
+        this.logger.warn(
+          `Retention ${action}: R2 delete failed for file ${fileId} (${(e as Error).message}) — DB mutation still applied; will retry next run`,
+        );
+      }
     }
   }
 }

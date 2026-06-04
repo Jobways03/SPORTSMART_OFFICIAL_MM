@@ -33,11 +33,18 @@ const TYPE_ICON_NAME: Record<string, TypeIconName> = {
   FREE_SHIPPING: 'truck',
 };
 
-const STATUS: Record<string, { bg: string; fg: string; dot: string }> = {
+// Phase 243 — single source of truth for status → badge colors. Exported so
+// the create/edit form sidebar badge and the detail-page lifecycle controls
+// render identical colors (the form previously hardcoded green for every
+// status). Covers the operator-settable states plus the abuse-suspend state.
+export const STATUS: Record<string, { bg: string; fg: string; dot: string }> = {
   ACTIVE:    { bg: '#dcfce7', fg: '#15803d', dot: '#22c55e' },
   SCHEDULED: { bg: '#fef9c3', fg: '#854d0e', dot: '#eab308' },
   EXPIRED:   { bg: '#f3f4f6', fg: '#6b7280', dot: '#9ca3af' },
   DRAFT:     { bg: '#f3f4f6', fg: '#6b7280', dot: '#9ca3af' },
+  PAUSED:    { bg: '#fef3c7', fg: '#92400e', dot: '#f59e0b' },
+  ARCHIVED:  { bg: '#e5e7eb', fg: '#4b5563', dot: '#6b7280' },
+  SUSPENDED_FOR_ABUSE: { bg: '#fee2e2', fg: '#991b1b', dot: '#ef4444' },
 };
 
 const DISCOUNT_TYPES: { type: string; label: string; desc: string; icon: TypeIconName }[] = [
@@ -335,8 +342,11 @@ export default function DiscountsPage() {
 }
 
 /* ── Sub-components ── */
-// Inline line-icon set for the four discount types. Stroke uses
-// currentColor so the surrounding element's `color` drives the tint.
+// Phase 243 — restore the TypeIcon component referenced throughout this page
+// but defined nowhere (a pre-existing break at HEAD — every reference threw
+// "TypeIcon is not defined" at render). Minimal dependency-free inline SVGs
+// keyed by the four discount-type icon names. Stroke uses currentColor so the
+// surrounding element's `color` drives the tint.
 function TypeIcon({ name, size = 16 }: { name: TypeIconName; size?: number }) {
   const common = {
     width: size,
@@ -344,35 +354,31 @@ function TypeIcon({ name, size = 16 }: { name: TypeIconName; size?: number }) {
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: 'currentColor',
-    strokeWidth: 1.8,
+    strokeWidth: 2,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
-    'aria-hidden': true,
   };
   switch (name) {
     case 'bag':
       return (
-        <svg {...common}>
-          <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
-          <line x1="3" y1="6" x2="21" y2="6" />
+        <svg {...common} aria-hidden>
+          <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" />
+          <path d="M3 6h18" />
           <path d="M16 10a4 4 0 0 1-8 0" />
         </svg>
       );
     case 'gift':
       return (
-        <svg {...common}>
-          <polyline points="20 12 20 22 4 22 4 12" />
-          <rect x="2" y="7" width="20" height="5" />
-          <line x1="12" y1="22" x2="12" y2="7" />
-          <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
-          <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+        <svg {...common} aria-hidden>
+          <rect x="3" y="8" width="18" height="4" rx="1" />
+          <path d="M12 8v13M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
+          <path d="M12 8a3 3 0 1 0-3-3 3 3 0 0 0 3 3 3 3 0 1 0 3-3 3 3 0 0 0-3 3Z" />
         </svg>
       );
     case 'truck':
       return (
-        <svg {...common}>
-          <rect x="1" y="3" width="15" height="13" />
-          <polygon points="16 8 20 8 23 11 23 16 16 16 16 8" />
+        <svg {...common} aria-hidden>
+          <path d="M1 3h15v13H1zM16 8h4l3 3v5h-7z" />
           <circle cx="5.5" cy="18.5" r="2.5" />
           <circle cx="18.5" cy="18.5" r="2.5" />
         </svg>
@@ -380,9 +386,9 @@ function TypeIcon({ name, size = 16 }: { name: TypeIconName; size?: number }) {
     case 'tag':
     default:
       return (
-        <svg {...common}>
-          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-          <line x1="7" y1="7" x2="7.01" y2="7" />
+        <svg {...common} aria-hidden>
+          <path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82Z" />
+          <circle cx="7" cy="7" r="1.4" />
         </svg>
       );
   }

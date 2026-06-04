@@ -2,20 +2,37 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { UserAuthGuard } from '../../../../core/guards';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
+import { toCsv, csvFilenameSlug } from '../../../../core/utils';
 import { WalletService } from '../../application/services/wallet.service';
 import {
   InitiateTopupDto,
   VerifyTopupDto,
+  WalletTransactionsQueryDto,
 } from '../dtos/wallet.dtos';
+
+/**
+ * Phase 182 (#11) — the customer view of a wallet transaction NEVER includes
+ * `internalNotes` (admin-only) or `createdByAdminId` (who adjusted it). Strip
+ * them at the presentation boundary regardless of what the entity carries.
+ */
+function customerSafeTx(t: any) {
+  const {
+    internalNotes: _i, createdByAdminId: _a, walletId: _w, reason: _r, ...safe
+  } = t ?? {};
+  return safe;
+}
 
 @ApiTags('Wallet')
 @Controller('customer/wallet')
@@ -38,15 +55,38 @@ export class WalletController {
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async listTransactions(
     @Req() req: any,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
+    @Query() query: WalletTransactionsQueryDto, // #12 — validated page/limit
   ) {
     const data = await this.wallet.listTransactions(
       req.userId,
-      parseInt(page || '1', 10) || 1,
-      parseInt(limit || '20', 10) || 20,
+      query.page ?? 1,
+      query.limit ?? 20,
     );
-    return { success: true, message: 'Transactions retrieved', data };
+    // #11 — strip admin-only fields from each row.
+    return { success: true, message: 'Transactions retrieved', data: { ...data, items: data.items.map(customerSafeTx) } };
+  }
+
+  /* #10 — GET /customer/wallet/transactions/export.csv (statement of account). */
+  @Get('transactions/export.csv')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
+  async exportTransactionsCsv(@Req() req: any, @Res() res: Response) {
+    const { items } = await this.wallet.listTransactions(req.userId, 1, 10000);
+    const headers = ['date', 'type', 'direction', 'description', 'reference', 'amount', 'balanceAfter', 'status'];
+    const rupees = (n: number) => (n / 100).toFixed(2);
+    const rows = items.map((t: any) => ({
+      date: t.createdAt ? new Date(t.createdAt).toISOString() : '',
+      type: t.type,
+      direction: t.direction ?? (t.amountInPaise >= 0 ? 'CREDIT' : 'DEBIT'),
+      description: t.description,
+      reference: t.referenceNumber ?? '',
+      amount: rupees(t.amountInPaise),
+      balanceAfter: rupees(t.balanceAfterInPaise),
+      status: t.status,
+    }));
+    const csv = toCsv(rows, headers, { bom: true });
+    res.setHeader('Content-Disposition', `attachment; filename="${csvFilenameSlug(['wallet_statement', new Date().toISOString().slice(0, 10)])}.csv"`);
+    res.send(csv);
   }
 
   // Phase 1 (PR 1.3) — @Idempotent: a retried top-up POST must not
@@ -89,7 +129,7 @@ export class WalletController {
       message: 'Top-up completed',
       data: {
         balanceInPaise: result.wallet.balanceInPaise,
-        transaction: result.transaction,
+        transaction: customerSafeTx(result.transaction), // #11
       },
     };
   }

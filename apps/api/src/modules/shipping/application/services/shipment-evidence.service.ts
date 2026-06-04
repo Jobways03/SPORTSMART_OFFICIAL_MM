@@ -79,7 +79,7 @@ export class ShipmentEvidenceService {
    * Create a ShipmentEvidence row backed by an already-uploaded
    * FileMetadata. Two-phase commit (Gap #10): the row starts with
    * `pendingUpload=true` and the caller flips it to false once the
-   * underlying Cloudinary asset reports success.
+   * underlying media asset reports success.
    *
    * Idempotency (Gap #7): if a (subOrderId, contentSha256) pair
    * already exists undeleted, we no-op and return the existing row

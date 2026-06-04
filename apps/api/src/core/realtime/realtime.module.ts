@@ -1,7 +1,9 @@
 import { Global, Module } from '@nestjs/common';
 import {
   AdminAuthGuard,
+  AffiliateAuthGuard,
   AnyAuthGuard,
+  FranchiseAuthGuard,
   SellerAuthGuard,
   UserAuthGuard,
 } from '../guards';
@@ -21,7 +23,9 @@ import { PortalStreamsController } from './portal-streams.controller';
   providers: [
     PortalPushService,
     AdminAuthGuard,
+    AffiliateAuthGuard,
     AnyAuthGuard,
+    FranchiseAuthGuard,
     SellerAuthGuard,
     UserAuthGuard,
   ],

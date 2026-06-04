@@ -80,6 +80,17 @@ export default function VerificationDetailPage() {
   const [remarks, setRemarks] = useState('');
   const [submitting, setSubmitting] = useState<null | 'approve' | 'reject' | 'release'>(null);
   const [rescoring, setRescoring] = useState(false);
+  // Rescore reason capture (confirmDialog only returns a boolean, so we use a
+  // small inline reason field — the same shape the risk panel already uses).
+  const [rescoreOpen, setRescoreOpen] = useState(false);
+  const [rescoreReason, setRescoreReason] = useState('');
+  // Old→new band/score diff shown briefly after a successful rescore.
+  const [rescoreDiff, setRescoreDiff] = useState<{
+    oldBand: RiskInfo['band'];
+    oldScore: number | null;
+    newBand: RiskInfo['band'];
+    newScore: number | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -104,10 +115,18 @@ export default function VerificationDetailPage() {
 
   const handleApprove = async () => {
     if (submitting) return;
+    // RED/CRITICAL approvals require a written reason (>= 10 chars). The
+    // backend 400s otherwise; mirror the rule client-side for a clean message.
+    if (highRiskApproval && remarks.trim().length < 10) {
+      setError(
+        'Approving a RED/CRITICAL order requires a reason of at least 10 characters.',
+      );
+      return;
+    }
     setSubmitting('approve');
     setError(null);
     try {
-      await approveOrder(id, remarks || undefined);
+      await approveOrder(id, remarks.trim() || undefined);
       router.push('/dashboard/verification');
     } catch (err: any) {
       setError(err?.message || 'Approve failed');
@@ -149,6 +168,43 @@ export default function VerificationDetailPage() {
       setSubmitting(null);
     }
   };
+
+  const handleRescore = async () => {
+    if (!id || rescoring) return;
+    const trimmed = rescoreReason.trim();
+    // Reason is optional; the backend rejects a present-but-too-short reason
+    // (3..500), so guard before the round-trip.
+    if (trimmed && trimmed.length < 3) {
+      setError('Rescore reason must be at least 3 characters (or leave it blank)');
+      return;
+    }
+    setRescoring(true);
+    setError(null);
+    // Snapshot the current band/score BEFORE the call so we can show a diff.
+    const prev = risk;
+    try {
+      const res = await rescoreOrder(id, trimmed || undefined);
+      if (res.data) {
+        setRisk(res.data);
+        setRescoreDiff({
+          oldBand: prev?.band ?? null,
+          oldScore: prev?.score ?? null,
+          newBand: res.data.band,
+          newScore: res.data.score,
+        });
+        setRescoreOpen(false);
+        setRescoreReason('');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Rescore failed');
+    } finally {
+      setRescoring(false);
+    }
+  };
+
+  // RED/CRITICAL approvals are gated on a >= 10-char reason (backend enforced).
+  const highRiskApproval = risk?.band === 'RED' || risk?.band === 'CRITICAL';
+  const approveReasonMissing = highRiskApproval && remarks.trim().length < 10;
 
   if (loading) {
     return <div style={{ padding: 32 }}>Loading…</div>;
@@ -387,20 +443,9 @@ export default function VerificationDetailPage() {
               )}
               <button
                 type="button"
-                onClick={async () => {
-                  if (!id || rescoring) return;
-                  setRescoring(true);
-                  setError(null);
-                  try {
-                    const res = await rescoreOrder(id);
-                    if (res.data) setRisk(res.data);
-                  } catch (e) {
-                    setError(
-                      e instanceof Error ? e.message : 'Rescore failed',
-                    );
-                  } finally {
-                    setRescoring(false);
-                  }
+                onClick={() => {
+                  setRescoreOpen(o => !o);
+                  setRescoreDiff(null);
                 }}
                 disabled={rescoring}
                 style={{
@@ -419,6 +464,109 @@ export default function VerificationDetailPage() {
                 {rescoring ? 'Re-scoring…' : '↻ Re-score'}
               </button>
             </div>
+
+            {/* Inline reason capture for a manual rescore (reason is optional). */}
+            {rescoreOpen && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 12,
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 8,
+                  background: 'var(--color-bg-page)',
+                }}
+              >
+                <label
+                  htmlFor="rescore-reason"
+                  style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 6 }}
+                >
+                  Reason for rescoring (optional)
+                </label>
+                <input
+                  id="rescore-reason"
+                  type="text"
+                  value={rescoreReason}
+                  onChange={e => setRescoreReason(e.target.value)}
+                  maxLength={500}
+                  placeholder="e.g. fraud feed refreshed, AVS now available"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 6,
+                    fontSize: 13,
+                    fontFamily: 'inherit',
+                    marginBottom: 10,
+                  }}
+                />
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRescoreOpen(false);
+                      setRescoreReason('');
+                    }}
+                    disabled={rescoring}
+                    style={{
+                      padding: '8px 14px',
+                      fontSize: 13,
+                      fontWeight: 500,
+                      background: '#fff',
+                      border: '1px solid var(--color-border)',
+                      borderRadius: 6,
+                      cursor: rescoring ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRescore}
+                    disabled={rescoring}
+                    style={{
+                      padding: '8px 16px',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: '#fff',
+                      background: 'var(--color-primary)',
+                      border: 'none',
+                      borderRadius: 6,
+                      cursor: rescoring ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {rescoring ? 'Re-scoring…' : 'Re-score now'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Old→new diff after a successful rescore. */}
+            {rescoreDiff && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <span style={{ color: 'var(--color-text-secondary)' }}>Previous:</span>
+                <RiskBadge band={rescoreDiff.oldBand} score={rescoreDiff.oldScore} />
+                <span style={{ color: 'var(--color-text-secondary)' }}>
+                  ({rescoreDiff.oldScore ?? '—'}) →
+                </span>
+                <span style={{ color: 'var(--color-text-secondary)' }}>New:</span>
+                <RiskBadge band={rescoreDiff.newBand} score={rescoreDiff.newScore} />
+                <span style={{ color: 'var(--color-text-secondary)' }}>
+                  ({rescoreDiff.newScore ?? '—'})
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -437,7 +585,9 @@ export default function VerificationDetailPage() {
             htmlFor="remarks"
             style={{ display: 'block', fontSize: 13, fontWeight: 500, marginBottom: 6 }}
           >
-            Verification remarks (optional)
+            {highRiskApproval
+              ? `Verification remarks (required for ${risk?.band} — min 10 characters)`
+              : 'Verification remarks (optional)'}
           </label>
           <textarea
             id="remarks"
@@ -447,14 +597,24 @@ export default function VerificationDetailPage() {
             style={{
               width: '100%',
               padding: '8px 12px',
-              border: '1px solid var(--color-border)',
+              border: `1px solid ${approveReasonMissing ? 'var(--color-error)' : 'var(--color-border)'}`,
               borderRadius: 6,
               fontSize: 14,
               fontFamily: 'inherit',
               resize: 'vertical',
             }}
-            placeholder="Anything the rest of ops should know about this approval"
+            placeholder={
+              highRiskApproval
+                ? 'Why this high-risk order is safe to approve (min 10 characters)'
+                : 'Anything the rest of ops should know about this approval'
+            }
           />
+          {approveReasonMissing && (
+            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-error)' }}>
+              A {risk?.band} order can only be approved with a written reason of
+              at least 10 characters.
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
           <button
@@ -491,16 +651,23 @@ export default function VerificationDetailPage() {
           </button>
           <button
             onClick={handleApprove}
-            disabled={!!submitting}
+            disabled={!!submitting || approveReasonMissing}
+            title={
+              approveReasonMissing
+                ? `Add a reason (min 10 characters) to approve this ${risk?.band} order`
+                : undefined
+            }
             style={{
               padding: '10px 22px',
               fontSize: 14,
               fontWeight: 600,
               color: '#fff',
-              background: 'var(--color-success)',
+              background:
+                approveReasonMissing && !submitting ? '#9ca3af' : 'var(--color-success)',
               border: 'none',
               borderRadius: 6,
-              cursor: submitting ? 'not-allowed' : 'pointer',
+              cursor:
+                submitting || approveReasonMissing ? 'not-allowed' : 'pointer',
             }}
           >
             {submitting === 'approve' ? 'Approving…' : 'Approve'}

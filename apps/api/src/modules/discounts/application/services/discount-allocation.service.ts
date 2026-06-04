@@ -204,14 +204,24 @@ export class DiscountAllocationService {
     // load from the Discount row. Default PRE_SUPPLY_TRANSACTIONAL
     // preserves the legacy behaviour where discount reduces taxable
     // value (CGST §15).
+    //
+    // Phase 247 (liability audit #7) — also load the rule-version
+    // (`version`) and `commissionBasis` here so the OrderDiscount row
+    // can carry an immutable funding-config snapshot. These two fields
+    // are NOT part of the in-scope FundingConfig (which only carries
+    // the split percentages), so we read them straight off the
+    // Discount. Unconditional (independent of whether the caller passed
+    // ctx.taxTreatment) so the snapshot is always populated.
     let taxTreatment: DiscountTaxTreatment = ctx.taxTreatment ?? 'PRE_SUPPLY_TRANSACTIONAL';
-    if (!ctx.taxTreatment) {
-      const discountRow = await this.prisma.discount.findUnique({
-        where: { id: ctx.discountId },
-        select: { taxTreatment: true },
-      });
-      if (discountRow) taxTreatment = discountRow.taxTreatment;
+    const discountRow = await this.prisma.discount.findUnique({
+      where: { id: ctx.discountId },
+      select: { taxTreatment: true, version: true, commissionBasis: true },
+    });
+    if (!ctx.taxTreatment && discountRow) {
+      taxTreatment = discountRow.taxTreatment;
     }
+    const ruleVersion = discountRow?.version ?? 1;
+    const commissionBasis = discountRow?.commissionBasis ?? null;
 
     await this.prisma.$transaction(async (tx) => {
       // 1. Load canonical order + items + sub-orders. Phase 5 added
@@ -228,7 +238,9 @@ export class DiscountAllocationService {
           unitPriceInPaise: true,
           totalPriceInPaise: true,
           subOrder: {
-            select: { sellerId: true },
+            // Phase 247-FB — franchiseId so a FRANCHISE-funded discount's
+            // share attributes to the fulfilling franchise.
+            select: { sellerId: true, franchiseId: true },
           },
         },
       });
@@ -244,6 +256,7 @@ export class DiscountAllocationService {
         variantId: it.variantId,
         subOrderId: it.subOrderId,
         sellerId: it.subOrder.sellerId,
+        franchiseId: it.subOrder.franchiseId,
         grossInPaise: BigInt(it.totalPriceInPaise),
         unitPriceInPaise: BigInt(it.unitPriceInPaise),
         quantity: it.quantity,
@@ -276,6 +289,25 @@ export class DiscountAllocationService {
         });
       }
 
+      // Phase 247 (liability audit #7) — immutable funding-config
+      // snapshot. Frozen at allocation time so a later edit to the
+      // Discount's split (no longer allowed on a live discount — see
+      // #8) can never rewrite how a historical order was funded.
+      // Percentages come from the in-scope FundingConfig (the exact
+      // split used to produce this order's ledger rows); ruleVersion +
+      // commissionBasis come from the Discount row loaded above.
+      // capturedAt is an ISO string (a plain Date is fine in a service,
+      // but ISO keeps the JSON snapshot stable + comparable).
+      const fundingConfigJson = {
+        fundingType: ctx.funding.fundingType,
+        platformPct: ctx.funding.platformFundingPercent ?? null,
+        sellerPct: ctx.funding.sellerFundingPercent ?? null,
+        brandPct: ctx.funding.brandFundingPercent ?? null,
+        commissionBasis,
+        ruleVersion,
+        capturedAt: new Date().toISOString(),
+      };
+
       // 3. Write order_discounts (1 row).
       await tx.orderDiscount.create({
         data: {
@@ -289,6 +321,8 @@ export class DiscountAllocationService {
           source: ctx.source,
           discountAmountInPaise: result.totalAllocatedInPaise,
           fundingType: ctx.funding.fundingType as any,
+          // Phase 247 (#7) — funding-config snapshot (see above).
+          fundingConfigJson: fundingConfigJson as Prisma.InputJsonValue,
         },
       });
 
@@ -685,6 +719,18 @@ export class DiscountAllocationService {
           // discount + party. A retried allocation tx will hit the
           // unique constraint on this key and silently dedupe.
           const idemKey = `${ctx.masterOrderId}:${a.orderItemId}:${ctx.discountId}:${share.liabilityParty}`;
+          // Phase 247-FB — attribute the row to the party that bears it.
+          // FRANCHISE: the discount's pinned funding franchise, else the
+          // fulfilling franchise on this item's sub-order. BRAND: the
+          // discount's funded brand. Others: null.
+          const rowFranchiseId =
+            share.liabilityParty === 'FRANCHISE'
+              ? (ctx.funding.franchiseId ?? a.franchiseId ?? null)
+              : null;
+          const rowBrandId =
+            share.liabilityParty === 'BRAND'
+              ? (ctx.funding.brandId ?? null)
+              : null;
           await tx.discountLiabilityLedger.upsert({
             where: {
               // Composite uniqueness via the `idem_key` partial index;
@@ -699,6 +745,8 @@ export class DiscountAllocationService {
               subOrderId: a.subOrderId,
               orderItemId: a.orderItemId,
               sellerId: a.sellerId ?? null,
+              franchiseId: rowFranchiseId,
+              brandId: rowBrandId,
               discountId: ctx.discountId,
               discountCodeId: ctx.discountCodeId ?? null,
               discountCode: ctx.discountCode,
@@ -711,6 +759,8 @@ export class DiscountAllocationService {
             update: {
               amountInPaise: share.amountInPaise,
               status: 'APPLIED',
+              franchiseId: rowFranchiseId,
+              brandId: rowBrandId,
             },
           });
 
@@ -886,6 +936,11 @@ export class DiscountAllocationService {
           subOrderId: row.subOrderId,
           orderItemId: row.orderItemId,
           sellerId: row.sellerId,
+          // Phase 247-FB — carry the franchise/brand attribution onto the
+          // reversal row so a franchise/brand is credited back its share on
+          // a return, matching the original APPLIED row.
+          franchiseId: row.franchiseId,
+          brandId: row.brandId,
           discountId: row.discountId,
           discountCodeId: row.discountCodeId,
           discountCode: row.discountCode,

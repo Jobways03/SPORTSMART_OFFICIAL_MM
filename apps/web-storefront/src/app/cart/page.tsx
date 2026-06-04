@@ -252,20 +252,32 @@ export default function CartPage() {
       return;
     }
     let cancelled = false;
-    apiClient<CartTaxPreview>('/customer/tax-preview/cart', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    })
-      .then((res) => {
-        if (cancelled) return;
-        setCartTax(res.data ?? null);
+    // Phase 196 (#20) — debounce 400ms + abort the in-flight request. The
+    // tax preview resolves HSN / GSTIN / place-of-supply (expensive); rapid
+    // +/- clicks used to fan out one call per click. Now only the settled
+    // cart state triggers a single request (matching the coupon effect's
+    // AbortController pattern, which the tax effect previously lacked).
+    const controller =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      apiClient<CartTaxPreview>('/customer/tax-preview/cart', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        signal: controller?.signal,
       })
-      .catch(() => {
-        if (cancelled) return;
-        setCartTax(null);
-      });
+        .then((res) => {
+          if (cancelled) return;
+          setCartTax(res.data ?? null);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setCartTax(null);
+        });
+    }, 400);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
+      controller?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart?.totalAmount, cart?.itemCount]);

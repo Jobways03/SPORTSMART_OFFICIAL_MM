@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Optional } from '@nestjs/common';
 import {
   FranchisePosRepository,
   FRANCHISE_POS_REPOSITORY,
@@ -26,6 +26,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { toCsv } from '../../../../core/utils/csv.util';
 import { calculateLineTax } from '../../../tax/domain/tax-engine';
 import { TaxPublicFacade } from '../../../tax/application/facades/tax-public.facade';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 @Injectable()
 export class FranchisePosService {
@@ -43,8 +44,39 @@ export class FranchisePosService {
     private readonly prisma: PrismaService,
     private readonly taxFacade: TaxPublicFacade,
     private readonly env: EnvService,
+    // Phase 238/239/240 — hash-chained audit trail for POS money movements
+    // (sale / void / return). @Optional so the manual-construction unit specs
+    // keep working; AuditPublicFacade is @Global so the live app always injects.
+    @Optional() private readonly auditFacade?: AuditPublicFacade,
   ) {
     this.logger.setContext('FranchisePosService');
+  }
+
+  /**
+   * Phase 238/239/240 — best-effort hash-chained audit_logs row for a POS money
+   * movement. Pre-238 POS sale/void/return emitted only a domain event (mutable,
+   * best-effort) and never wrote to the tamper-evident audit chain. Never throws
+   * back into the caller.
+   */
+  private async writePosAudit(args: {
+    actorId: string | null;
+    staffId?: string | null;
+    action: string;
+    resourceId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<void> {
+    if (!this.auditFacade) return;
+    await this.auditFacade
+      .writeAuditLog({
+        actorId: args.staffId ?? args.actorId ?? 'SYSTEM',
+        actorRole: 'FRANCHISE',
+        action: args.action,
+        module: 'franchise',
+        resource: 'FranchisePosSale',
+        resourceId: args.resourceId,
+        newValue: args.metadata,
+      } as any)
+      .catch(() => undefined);
   }
 
   // ── Record a new POS sale ────────────────────────────────────
@@ -357,6 +389,21 @@ export class FranchisePosService {
       },
     });
 
+    // Phase 238 — hash-chained audit row (best-effort).
+    await this.writePosAudit({
+      actorId,
+      staffId,
+      action: 'POS_SALE_RECORDED',
+      resourceId: sale.id,
+      metadata: {
+        saleNumber: sale.saleNumber,
+        franchiseId,
+        netAmount,
+        itemCount: enrichedItems.length,
+        paymentMethod: (sale as any).paymentMethod ?? null,
+      },
+    });
+
     // Follow-up #133 — issue the §31 tax invoice for the POS sale. The
     // facade is best-effort and never throws, so a wedged tax-document
     // service can't roll back the sale; a missing invoice surfaces
@@ -456,6 +503,11 @@ export class FranchisePosService {
           voidedAt,
           voidReason: reason,
           voidedBy: staffId ?? null,
+          // Phase 239 — the §31 tax invoice for a voided sale is no longer live.
+          // Mark it CANCELLED so a voided sale doesn't carry a valid GST invoice;
+          // the actual NIC credit-note (CreditNoteService is marketplace-coupled)
+          // is the surfaced follow-on, driven off this status + the event below.
+          taxInvoiceStatus: 'CANCELLED' as any,
         },
         tx,
       );
@@ -514,6 +566,23 @@ export class FranchisePosService {
         franchiseId,
         reason,
         actorId,
+        // Phase 239 — signals the surfaced credit-note pipeline to issue the
+        // §31 reversal for the now-CANCELLED invoice.
+        taxInvoiceCancelled: true,
+      },
+    });
+
+    // Phase 239 — hash-chained audit row (best-effort).
+    await this.writePosAudit({
+      actorId,
+      staffId,
+      action: 'POS_SALE_VOIDED',
+      resourceId: saleId,
+      metadata: {
+        saleNumber: sale.saleNumber,
+        franchiseId,
+        netAmount: Number(sale.netAmount),
+        reason,
       },
     });
 
@@ -621,6 +690,12 @@ export class FranchisePosService {
           returnedBy,
           returnReason: opts?.returnReason ?? null,
           refundedAmount: { increment: roundedRefund },
+          // Phase 240 — a FULLY-returned sale's §31 invoice is no longer live;
+          // mark CANCELLED (partial returns keep the invoice + are reconciled via
+          // a credit-note for the returned portion — surfaced follow-on).
+          ...(newStatus === 'RETURNED'
+            ? { taxInvoiceStatus: 'CANCELLED' as any }
+            : {}),
         },
         tx,
       );
@@ -712,6 +787,27 @@ export class FranchisePosService {
         returnedItems: items,
         newStatus,
         actorId,
+        refundAmount: roundedRefund,
+        refundMethod,
+        // Phase 240 — partial returns need a credit-note for the returned
+        // portion; full returns cancel the invoice (above). Surfaced pipeline.
+        taxInvoiceCancelled: newStatus === 'RETURNED',
+      },
+    });
+
+    // Phase 240 — hash-chained audit row (best-effort).
+    await this.writePosAudit({
+      actorId,
+      staffId: returnedBy,
+      action: 'POS_SALE_RETURNED',
+      resourceId: saleId,
+      metadata: {
+        saleNumber: sale.saleNumber,
+        franchiseId,
+        newStatus,
+        refundAmount: roundedRefund,
+        refundMethod,
+        itemCount: items.length,
       },
     });
 
@@ -847,6 +943,17 @@ export class FranchisePosService {
     const totalItemsReturned = sumAbs('POS_RETURN');
     const totalItemsVoided = sumAbs('POS_VOID');
 
+    // Phase 242 — surface any persisted cash reconciliation for the day, plus the
+    // server-authoritative expected cash so the franchise UI can show
+    // expected-vs-counted before submitting.
+    const businessDate = new Date(`${dateStr}T00:00:00.000Z`);
+    const [cashReconciliation, expectedCashInPaise] = await Promise.all([
+      this.prisma.franchisePosReconciliation.findUnique({
+        where: { franchiseId_businessDate: { franchiseId, businessDate } },
+      }),
+      this.computeExpectedCashInPaise(franchiseId, range),
+    ]);
+
     return {
       ...report,
       inventoryReconciliation: {
@@ -855,11 +962,140 @@ export class FranchisePosService {
         totalItemsVoided,
         netItemsMovement: totalItemsSold - totalItemsReturned - totalItemsVoided,
       },
+      // Phase 242 — cash-vs-bank reconciliation (bounded core).
+      cashReconciliation: cashReconciliation
+        ? this.serializeReconciliation(cashReconciliation)
+        : null,
+      expectedCashInPaise: expectedCashInPaise.toString(),
       // Phase 159s (audit #12) — honest label. There is no day-closure state
       // machine yet (no frozen snapshot, no sales lock); this is a LIVE
       // recompute. A real FranchisePosDailyClosure is a surfaced follow-up.
       closureStatus: 'OPEN',
       generatedAt: new Date().toISOString(),
     };
+  }
+
+  // ── Phase 242 — Cash-vs-bank reconciliation (bounded core) ──────────────────
+
+  /**
+   * Server-AUTHORITATIVE expected cash for a business day (paise): the net of
+   * non-voided CASH-payment sales minus cash-method return refunds in the same
+   * IST window. The client NEVER supplies this — it's recomputed from the sale
+   * records so a forged "expected = actual" can't zero out a variance.
+   */
+  private async computeExpectedCashInPaise(
+    franchiseId: string,
+    range: { gte: Date; lte: Date },
+  ): Promise<bigint> {
+    const [cashSales, cashRefunds] = await Promise.all([
+      this.prisma.franchisePosSale.aggregate({
+        where: {
+          franchiseId,
+          paymentMethod: 'CASH',
+          status: { not: 'VOIDED' },
+          soldAt: { gte: range.gte, lte: range.lte },
+        },
+        _sum: { netAmount: true },
+      }),
+      this.prisma.franchisePosReturn.aggregate({
+        where: {
+          franchiseId,
+          refundMethod: 'CASH',
+          returnedAt: { gte: range.gte, lte: range.lte },
+        },
+        _sum: { refundAmount: true },
+      }),
+    ]);
+    const expectedRupees =
+      Number(cashSales._sum.netAmount ?? 0) -
+      Number(cashRefunds._sum.refundAmount ?? 0);
+    return BigInt(Math.round(expectedRupees * 100));
+  }
+
+  /** BigInt → string for JSON transport. */
+  private serializeReconciliation(r: any) {
+    return {
+      ...r,
+      expectedCashInPaise: r.expectedCashInPaise?.toString() ?? null,
+      actualCashInPaise: r.actualCashInPaise?.toString() ?? null,
+      bankDepositInPaise: r.bankDepositInPaise?.toString() ?? null,
+      varianceInPaise: r.varianceInPaise?.toString() ?? null,
+    };
+  }
+
+  /**
+   * Phase 242 — franchise submits the day's counted cash + bank deposit. The
+   * server recomputes expected cash, derives the variance, sets MATCHED/VARIANCE
+   * by tolerance, and upserts one row per (franchise, businessDate). Idempotent
+   * via the unique key (re-submit corrects the figures). Admin approve/reject/
+   * resolve + deposit-proof upload + ledger adjustment are the surfaced follow-on.
+   */
+  async submitReconciliation(
+    franchiseId: string,
+    input: {
+      businessDate: string;
+      actualCashInPaise: number;
+      bankDepositInPaise?: number;
+      bankDepositReference?: string | null;
+      notes?: string | null;
+      staffId?: string | null;
+    },
+  ) {
+    const range = this.posDayRangeUtc(input.businessDate); // validates not-future + IST
+    const expectedCashInPaise = await this.computeExpectedCashInPaise(
+      franchiseId,
+      range,
+    );
+    const actualCashInPaise = BigInt(Math.trunc(input.actualCashInPaise));
+    const bankDepositInPaise = BigInt(Math.trunc(input.bankDepositInPaise ?? 0));
+    const varianceInPaise = actualCashInPaise - expectedCashInPaise;
+    const tolerance = BigInt(
+      Math.max(0, this.env.getNumber('POS_RECON_MATCH_TOLERANCE_PAISE', 100)),
+    );
+    const absVar = varianceInPaise < 0n ? -varianceInPaise : varianceInPaise;
+    const status = absVar <= tolerance ? 'MATCHED' : 'VARIANCE';
+    const businessDate = new Date(`${input.businessDate}T00:00:00.000Z`);
+
+    const common = {
+      expectedCashInPaise,
+      actualCashInPaise,
+      bankDepositInPaise,
+      bankDepositReference: input.bankDepositReference ?? null,
+      varianceInPaise,
+      status: status as any,
+      notes: input.notes ?? null,
+      submittedByStaffId: input.staffId ?? null,
+    };
+    const row = await this.prisma.franchisePosReconciliation.upsert({
+      where: { franchiseId_businessDate: { franchiseId, businessDate } },
+      create: {
+        franchiseId,
+        businessDate,
+        ...common,
+        expectedSnapshotJson: {
+          windowStartUtc: range.gte.toISOString(),
+          windowEndUtc: range.lte.toISOString(),
+          tolerancePaise: tolerance.toString(),
+        } as any,
+      },
+      update: { ...common },
+    });
+
+    await this.writePosAudit({
+      actorId: franchiseId,
+      staffId: input.staffId,
+      action: 'POS_RECONCILIATION_SUBMITTED',
+      resourceId: row.id,
+      metadata: {
+        businessDate: input.businessDate,
+        expectedCashInPaise: expectedCashInPaise.toString(),
+        actualCashInPaise: actualCashInPaise.toString(),
+        bankDepositInPaise: bankDepositInPaise.toString(),
+        varianceInPaise: varianceInPaise.toString(),
+        status,
+      },
+    });
+
+    return this.serializeReconciliation(row);
   }
 }

@@ -96,6 +96,12 @@ export class SettlementTds194OHookService {
         if (result.skipped) {
           if (result.skipReason === 'EXEMPT') exempt++;
           else skipped++;
+          // Phase 161 (audit #17) — persist WHY no TDS row was written so
+          // finance reports can query exempt-vs-no-activity without re-deriving.
+          await this.prisma.sellerSettlement.update({
+            where: { id: s.id },
+            data: { tdsSkipReason: result.skipReason ?? 'NO_ACTIVITY' },
+          });
           continue;
         }
 

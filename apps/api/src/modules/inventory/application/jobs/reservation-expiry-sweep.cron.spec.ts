@@ -29,8 +29,10 @@ function makeCron() {
   const eventBus = { publish: jest.fn().mockResolvedValue(undefined) } as any;
   const leader = { run: jest.fn(async (_k: string, _ttl: number, fn: any) => fn()) } as any;
   const ledger = { record: jest.fn().mockResolvedValue(undefined) } as any;
-  const cron = new ReservationExpirySweepCron(prisma, env, eventBus, leader, ledger);
-  return { cron, prisma, sellerProductMapping, stockReservation, eventBus, ledger };
+  // Cluster C (#210-#8) — best-effort per-run audit summary row.
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
+  const cron = new ReservationExpirySweepCron(prisma, env, eventBus, leader, ledger, audit);
+  return { cron, prisma, sellerProductMapping, stockReservation, eventBus, ledger, audit };
 }
 
 describe('ReservationExpirySweepCron (Phase 52)', () => {
@@ -129,5 +131,48 @@ describe('ReservationExpirySweepCron (Phase 52)', () => {
       (c: any[]) => c[0]?.eventName === 'inventory.reservation.expired_batch',
     );
     expect(batchCalls).toHaveLength(0);
+  });
+
+  it('writes a best-effort audit summary row per run with totals (#210-#8)', async () => {
+    const { cron, audit, stockReservation, sellerProductMapping } = makeCron();
+    stockReservation.findMany
+      .mockResolvedValueOnce([{ id: 'r-1', mappingId: 'm-1', quantity: 1, orderId: 'o-1' }])
+      .mockResolvedValueOnce([]);
+    stockReservation.updateMany.mockResolvedValue({ count: 1 });
+    sellerProductMapping.findUnique.mockResolvedValue({ stockQty: 10, reservedQty: 5 });
+
+    await cron.sweepUntilEmpty();
+
+    expect(audit.writeAuditLog).toHaveBeenCalledTimes(1);
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'RESERVATION_EXPIRY_SWEEP',
+        module: 'inventory',
+        newValue: expect.objectContaining({ expired: 1, failed: 0 }),
+      }),
+    );
+  });
+
+  it('does NOT write an audit row when nothing was swept', async () => {
+    const { cron, audit, stockReservation } = makeCron();
+    stockReservation.findMany.mockResolvedValueOnce([]);
+
+    await cron.sweepUntilEmpty();
+
+    expect(audit.writeAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when the audit summary write fails (best-effort)', async () => {
+    const { cron, audit, stockReservation, sellerProductMapping } = makeCron();
+    stockReservation.findMany
+      .mockResolvedValueOnce([{ id: 'r-1', mappingId: 'm-1', quantity: 1, orderId: 'o-1' }])
+      .mockResolvedValueOnce([]);
+    stockReservation.updateMany.mockResolvedValue({ count: 1 });
+    sellerProductMapping.findUnique.mockResolvedValue({ stockQty: 10, reservedQty: 5 });
+    audit.writeAuditLog.mockRejectedValueOnce(new Error('audit DB down'));
+
+    await expect(cron.sweepUntilEmpty()).resolves.toEqual(
+      expect.objectContaining({ expired: 1 }),
+    );
   });
 });

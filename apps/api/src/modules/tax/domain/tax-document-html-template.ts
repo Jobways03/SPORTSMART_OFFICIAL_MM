@@ -355,9 +355,27 @@ function baseEnvelope(opts: EnvelopeOptions): string {
  * (B2C, sub-threshold sellers, BILL_OF_SUPPLY, LEGACY_RECEIPT).
  */
 function renderEinvoiceBlock(d: TemplateInput['document']): string {
-  // Only render the block when IRN was actually generated. einvoiceStatus
-  // values: NOT_APPLICABLE | PENDING | GENERATED | FAILED.
-  if (d.einvoiceStatus !== 'GENERATED' || !d.irn) return '';
+  // einvoiceStatus values: NOT_APPLICABLE | PENDING | GENERATED | FAILED |
+  // CANCELLED. The full IRN/QR block renders only on GENERATED; for the
+  // other in-scope states we render a small status badge (Phase 160 #21)
+  // so the customer/seller isn't left guessing why there's no IRN. A
+  // NOT_APPLICABLE document (B2C / below-threshold) shows nothing.
+  if (d.einvoiceStatus !== 'GENERATED' || !d.irn) {
+    const badge = (text: string, bg: string, fg: string): string => `
+  <div class="einvoice-badge" style="margin-top:18px; padding:8px 12px; border:1px solid ${fg}33; border-radius:6px; background:${bg}; color:${fg}; font-size:11px; font-weight:600;">
+    ${e(text)}
+  </div>`;
+    switch (d.einvoiceStatus) {
+      case 'PENDING':
+        return badge('e-Invoice: IRN registration pending with the IRP.', '#fffbeb', '#92400e');
+      case 'FAILED':
+        return badge('e-Invoice: IRN registration failed — automatic retry in progress.', '#fef2f2', '#b91c1c');
+      case 'CANCELLED':
+        return badge('e-Invoice: IRN was cancelled (revoked at the IRP).', '#f3f4f6', '#525a65');
+      default:
+        return ''; // NOT_APPLICABLE — no badge.
+    }
+  }
 
   const ackDateFmt = d.ackDate
     ? new Date(d.ackDate).toLocaleString('en-IN', {

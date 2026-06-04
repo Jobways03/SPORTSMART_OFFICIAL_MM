@@ -36,6 +36,15 @@ enum DiscountStatus {
   SCHEDULED
   EXPIRED
   DRAFT
+  // Phase 243 (campaign-creation audit) — explicit operator-driven
+  // lifecycle states distinct from the date-window-derived ones.
+  // PAUSED: temporarily disabled, resumable; ARCHIVED: soft-removed,
+  // hidden from lists, retained for history; SUSPENDED_FOR_ABUSE:
+  // killed by the abuse/risk surface (Phase 245) — both PAUSED and
+  // SUSPENDED_FOR_ABUSE reject at checkout.
+  PAUSED
+  ARCHIVED
+  SUSPENDED_FOR_ABUSE
 }
 
 enum BxgyGetDiscountType {
@@ -60,6 +69,10 @@ enum DiscountFundingType {
   PLATFORM
   SELLER
   BRAND
+  // Phase 247-FB (MVP) — a franchise funds its own promo (e.g. a store-
+  // opening discount); the cost is borne by the fulfilling/funding franchise
+  // via the franchise settlement, not silently absorbed by the platform.
+  FRANCHISE
   SHARED
   NONE
 }
@@ -150,6 +163,9 @@ enum DiscountLiabilityParty {
   PLATFORM
   SELLER
   BRAND
+  // Phase 247-FB (MVP) — per-row franchise liability. A SHARED discount can
+  // produce a FRANCHISE row + a PLATFORM row, etc.
+  FRANCHISE
   SHARED
 }
 
@@ -203,8 +219,22 @@ model Discount {
   platformFundingPercent Decimal                 @default(100) @map("platform_funding_percent") @db.Decimal(5, 2)
   sellerFundingPercent   Decimal                 @default(0) @map("seller_funding_percent") @db.Decimal(5, 2)
   brandFundingPercent    Decimal                 @default(0) @map("brand_funding_percent") @db.Decimal(5, 2)
+  // Phase 247-FB (MVP) — franchise share of a SHARED split (or 100 for a
+  // pure FRANCHISE-funded discount).
+  franchiseFundingPercent Decimal                @default(0) @map("franchise_funding_percent") @db.Decimal(5, 2)
   commissionBasis        DiscountCommissionBasis @default(GROSS) @map("commission_basis")
   fundingNotes           String?                 @map("funding_notes")
+
+  // Phase 247-FB (MVP) — which franchise / brand bears a FRANCHISE / BRAND
+  // funded discount. franchiseId NULL on a FRANCHISE discount means "the
+  // fulfilling franchise pays" (attributed per-item from the sub-order);
+  // when set, that specific franchise always bears it. brandId identifies
+  // the co-marketing brand so its cost is attributable/recoverable (was
+  // previously unbillable — BRAND rows had no brand id). No FK relations:
+  // FranchisePartner/Brand live in other schema files; we keep the cross-
+  // aggregate surface loose (string id), matching affiliateId above.
+  franchiseId String? @map("funding_franchise_id")
+  brandId     String? @map("funding_brand_id")
 
   // Phase B (P0) — distinguishes a transactional discount that
   // reduces the line total and tax base from a marketing-only
@@ -226,6 +256,28 @@ model Discount {
   // the cross-module surface to its public facade.
   affiliateId                String?  @map("affiliate_id")
   affiliateCommissionPercent Decimal? @map("affiliate_commission_percent") @db.Decimal(5, 2)
+
+  // Phase 243 (campaign-creation audit #4) — actor attribution.
+  // createdById/updatedById reference the AdminUser who created/last
+  // edited the campaign so a leak ("who shipped 90% OFF?") is
+  // answerable. No FK relation: AdminUser lives in admin.prisma and we
+  // keep the cross-aggregate surface loose (string id), mirroring how
+  // other modules attribute admin actors.
+  createdById String? @map("created_by_id")
+  updatedById String? @map("updated_by_id")
+
+  // Phase 243 (#8 / key-finding "edit while active") — optimistic
+  // concurrency token. Bumped on every update; lets the UI reject a
+  // stale-write collision between two admins editing the same campaign.
+  version Int @default(1)
+
+  // Phase 243 (key-findings #PERCENT-cap) — optional "X% off up to ₹Y"
+  // ceiling for PERCENTAGE discounts, in paise. NULL = uncapped.
+  maxDiscountAmountInPaise BigInt? @map("max_discount_amount_in_paise")
+
+  // Phase 243 (key-findings) — customer-facing marketing copy/subline
+  // surfaced on the storefront (distinct from the internal `title`).
+  descriptionLong String? @map("description_long")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -380,6 +432,12 @@ model OrderDiscount {
   source                DiscountSource      @default(CODE)
   discountAmountInPaise BigInt              @default(0) @map("discount_amount_in_paise")
   fundingType           DiscountFundingType @default(PLATFORM) @map("funding_type")
+  // Phase 247 (liability audit #7) — immutable snapshot of the funding
+  // config that produced this row's ledger amounts: { platformPct,
+  // sellerPct, brandPct, commissionBasis, ruleVersion, capturedAt }.
+  // A later edit to the Discount's split (no longer allowed on a live
+  // discount — see #8) can't rewrite how a historical order was funded.
+  fundingConfigJson     Json?               @map("funding_config_json")
   createdAt             DateTime            @default(now()) @map("created_at")
   updatedAt             DateTime            @updatedAt @map("updated_at")
 
@@ -443,6 +501,13 @@ model DiscountLiabilityLedger {
   subOrderId     String?                 @map("sub_order_id")
   orderItemId    String?                 @map("order_item_id")
   sellerId       String?                 @map("seller_id")
+  // Phase 247-FB (MVP) — the franchise / brand this liability row is
+  // attributed to. franchiseId is populated on FRANCHISE-party rows so the
+  // franchise settlement can deduct it (mirrors how sellerId drives the
+  // seller settlement); brandId on BRAND-party rows so finance can bill the
+  // right brand.
+  franchiseId    String?                 @map("franchise_id")
+  brandId        String?                 @map("brand_id")
   discountId     String                  @map("discount_id")
   discountCodeId String?                 @map("discount_code_id")
   discountCode   String?                 @map("discount_code")
@@ -457,6 +522,15 @@ model DiscountLiabilityLedger {
   // × party). Partial unique index enforces dedup; null keys allowed
   // for legacy/imported rows.
   idempotencyKey String?                 @map("idempotency_key")
+  // Phase 247 (liability audit #20) — forward-compat currency tag.
+  // All amounts are INR paise today; the column makes the assumption
+  // explicit and unblocks multi-currency without a data backfill.
+  currencyCode   String                  @default("INR") @map("currency_code") @db.Char(3)
+  // Phase 247 (liability audit #18) — the SETTLED lifecycle was dead:
+  // rows were written APPLIED and never advanced. settlementCycleId
+  // links a consumed row to the cycle that netted it; settlement marks
+  // it SETTLED in the same transaction. NULL until consumed.
+  settlementCycleId String?              @map("settlement_cycle_id")
   createdAt      DateTime                @default(now()) @map("created_at")
   updatedAt      DateTime                @updatedAt @map("updated_at")
 
@@ -467,9 +541,12 @@ model DiscountLiabilityLedger {
   @@index([subOrderId])
   @@index([orderItemId])
   @@index([sellerId])
+  @@index([franchiseId])
+  @@index([brandId])
   @@index([discountId])
   @@index([liabilityParty])
   @@index([status])
+  @@index([settlementCycleId])
   @@map("discount_liability_ledger")
 }
 

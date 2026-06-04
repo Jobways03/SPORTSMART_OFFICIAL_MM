@@ -16,9 +16,24 @@ enum AccessEventKind {
   LOGIN_SUCCESS
   LOGIN_FAILURE
   LOGOUT
+  // Phase 201 (#17) — "sign out everywhere" (revokes every active
+  // session) vs a single-session LOGOUT, so the customer can tell a
+  // global revoke from a per-device sign-out. metadata.revokedSessionCount
+  // carries how many sessions were killed.
+  LOGOUT_ALL_DEVICES
   TOKEN_REFRESH
   PASSWORD_RESET
   NEW_DEVICE_DETECTED
+  // Phase 207 (#3) — second-factor + reset-OTP verification outcomes.
+  // Pre-Phase-207 a failed TOTP / reset-OTP verify left NO row in
+  // access_logs (only an AuditLog row in a different table the
+  // brute-force spike detector never scans), so an MFA-/OTP-guessing
+  // attack was invisible to failedLoginSpike(). These kinds let the
+  // spike detectors + recent-failures stream see 2FA brute force too.
+  MFA_VERIFY_SUCCESS
+  MFA_VERIFY_FAILED
+  OTP_VERIFY_SUCCESS
+  OTP_VERIFY_FAILED
 }
 
 model AccessLog {
@@ -32,11 +47,30 @@ model AccessLog {
   // role is known, and non-admin actor types don't carry sub-roles today.
   actorRole  String?         @map("actor_role")
   kind       AccessEventKind
+  // ipAddress is whatever Express `req.ip` resolved to. Behind a reverse
+  // proxy that is only the REAL client IP when TRUST_PROXY_HOPS > 0
+  // (main.ts sets `trust proxy`). With the default 0 in a proxied deploy
+  // this stores the load-balancer IP, which makes device-hash / lockout
+  // IP-scoping (Phase 201 #5/#7) ineffective. Phase 201 #11: set
+  // TRUST_PROXY_HOPS to the real hop count in any proxied environment.
   ipAddress  String?         @map("ip_address")
   userAgent  String?         @map("user_agent")
   deviceHash String?         @map("device_hash") // sha256(userAgent + ip prefix)
   succeeded  Boolean         @default(true)
   reason     String?
+  // Phase 201 (#13) — GeoIP enrichment hook. Nullable, written only
+  // when a GeoIP provider is wired (deferred — see notes). NOT exposed
+  // to the customer surface today; powers a future "signed in from
+  // <city>, <country>" label and impossible-travel detection.
+  country    String?         @db.VarChar(2) // ISO-3166-1 alpha-2
+  city       String?
+  // Phase 207 (#16) / Phase 208 (#12) — correlation id threading the
+  // per-request id (from the request-context middleware) so an
+  // access-log row can be tied back to the full request in the unified
+  // audit/observability trail. Nullable: written only by callers that
+  // pass it (back-compat with the 7 existing record() call sites that
+  // don't yet). Indexed so "show me everything for request X" is O(log n).
+  requestId  String?         @map("request_id")
   metadata   Json?
   createdAt  DateTime        @default(now()) @map("created_at")
 
@@ -44,5 +78,12 @@ model AccessLog {
   @@index([actorType, actorRole, createdAt])
   @@index([kind])
   @@index([createdAt])
+  // Phase 207/208 — correlation-id lookup.
+  @@index([requestId])
+  // Phase 207 (#2/#6) — the brute-force spike detectors group
+  // LOGIN_FAILURE rows by (ipAddress) and by (actorId) within a recent
+  // window. This composite index makes those grouped scans index-only
+  // instead of a full table scan on the fastest-growing table.
+  @@index([kind, createdAt, ipAddress])
   @@map("access_logs")
 }

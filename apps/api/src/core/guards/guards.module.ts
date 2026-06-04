@@ -5,6 +5,7 @@ import { PolicyGuard } from './policy.guard';
 import { D2cOnlyGuard, RetailOnlyGuard } from './seller-type.guard';
 import { PolicyEvaluatorService } from '../authorization/policy-evaluator.service';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
+import { AuthzModeService } from '../authorization/authz-mode.service';
 import { AdminPermissionResolver } from '../authorization/admin-permission-resolver.service';
 import { RbacOrphanSweepCron } from '../authorization/rbac-orphan-sweep.cron';
 import { RbacOrphanEventHandler } from '../authorization/rbac-orphan-event.handler';
@@ -38,6 +39,7 @@ import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-i
     RetailOnlyGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
+    AuthzModeService,
     AdminPermissionResolver,
     RbacOrphanSweepCron,
     // Phase 24 (2026-05-20) — listens to rbac.orphan_permission_detected
@@ -58,6 +60,7 @@ import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-i
     RetailOnlyGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
+    AuthzModeService,
     AdminPermissionResolver,
     RbacOrphanSweepCron,
     BlockedWhileImpersonatingGuard,

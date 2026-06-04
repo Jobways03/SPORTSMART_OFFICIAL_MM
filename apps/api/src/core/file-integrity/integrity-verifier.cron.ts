@@ -20,7 +20,7 @@ import { hashesEqual } from './file-hash.util';
  *          hash, OR
  *        - if FileFetcher is wired, fetches inline and writes the hash.
  *      v1 ships the event-emit path; the inline fetcher arrives once
- *      the cloudinary/s3 adapters expose a `download(key)` method.
+ *      the media/r2 adapters expose a `download(key)` method.
  *   2. **Re-verify**: READY files whose `lastVerifiedAt` is older than
  *      `INTEGRITY_VERIFIER_REVERIFY_DAYS` are re-fetched and the
  *      computed hash is compared with the stored one. Mismatch ⇒
@@ -177,15 +177,15 @@ export class IntegrityVerifierCron {
    * Provider-specific download + hash. Returns null when the provider
    * isn't wired for downloading (the cron emits a backfill event instead
    * of failing). Implemented as a separate method so the storage
-   * integrations team can plug in CloudinaryAdapter.download() and
-   * S3Adapter.getObject() later without churning the cron logic.
+   * integrations team can plug in MediaStorageAdapter.download() and
+   * R2Adapter.getObject() later without churning the cron logic.
    */
   private async fetchAndHash(
     _provider: string,
     _storageKey: string,
   ): Promise<string | null> {
-    // v1: not wired. The follow-up PR will inject CloudinaryAdapter +
-    // S3Adapter and switch on `provider`. Returning null keeps the
+    // v1: not wired. The follow-up PR will inject MediaStorageAdapter +
+    // R2Adapter and switch on `provider`. Returning null keeps the
     // cron useful (event-emit path) without forcing the integrations
     // PR to land first.
     return null;

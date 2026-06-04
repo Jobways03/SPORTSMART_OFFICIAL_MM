@@ -22,7 +22,8 @@ import { AppException } from '../../../../../core/exceptions/app.exception';
 import { SellerAuthGuard } from '../../../../../core/guards';
 import { ProductOwnershipService } from '../../../application/services/product-ownership.service';
 import { ReApprovalService } from '../../../application/services/re-approval.service';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../../files/application/services/file.service';
 import { ReorderImagesDto } from '../../dtos/reorder-images.dto';
 import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
 import {
@@ -41,7 +42,8 @@ export class SellerProductImagesController {
     private readonly logger: AppLoggerService,
     private readonly ownershipService: ProductOwnershipService,
     private readonly reApprovalService: ReApprovalService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
+    private readonly fileService: FileService,
   ) {
     this.logger.setContext('SellerProductImagesController');
   }
@@ -66,18 +68,35 @@ export class SellerProductImagesController {
 
     let uploadResult;
     try {
-      uploadResult = await this.cloudinary.upload(file.buffer, {
+      uploadResult = await this.media.upload(file.buffer, {
         folder: `products/${productId}`,
         transformation: [{ width: 1200, height: 1200, crop: 'limit' }],
       });
     } catch (error: any) {
       this.logger.error(
-        `Cloudinary upload failed for product ${productId}: ${error?.message}`,
+        `media upload failed for product ${productId}: ${error?.message}`,
       );
       throw new AppException('Image upload failed. Please try again.', 'EXTERNAL_SERVICE_ERROR');
     }
 
-    // Phase 42 (2026-05-21) — Gap #7 fix. Cloudinary asset is in
+    // Additively register the media asset in the central
+    // FileMetadata table so the integrity-verifier, audit, and orphan
+    // sweep can see it. Best-effort — must never break the upload.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: uploadResult.publicId,
+        url: uploadResult.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'PRODUCT_IMAGE',
+        uploadedBy: sellerId,
+        uploadedByType: 'SELLER',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
+
+    // Phase 42 (2026-05-21) — Gap #7 fix. media asset is in
     // cloud; from here on, any throw orphans it. The catch block
     // does a best-effort delete and rethrows the original error.
     // Also handles the Phase 29 partial-unique retry for primary
@@ -109,11 +128,11 @@ export class SellerProductImagesController {
             altText,
           });
         } catch (retryErr: any) {
-          await this.cleanupCloudinary(uploadResult.publicId);
+          await this.cleanupmedia(uploadResult.publicId);
           throw retryErr;
         }
       } else {
-        await this.cleanupCloudinary(uploadResult.publicId);
+        await this.cleanupmedia(uploadResult.publicId);
         throw err;
       }
     }
@@ -124,16 +143,16 @@ export class SellerProductImagesController {
   }
 
   /**
-   * Phase 42 (2026-05-21) — best-effort Cloudinary cleanup on
+   * Phase 42 (2026-05-21) — best-effort media cleanup on
    * post-upload failure. Mirrors the admin product path's helper.
    */
-  private async cleanupCloudinary(publicId: string | null | undefined): Promise<void> {
+  private async cleanupmedia(publicId: string | null | undefined): Promise<void> {
     if (!publicId) return;
     try {
-      await this.cloudinary.delete(publicId);
+      await this.media.delete(publicId);
     } catch (err: any) {
       this.logger.error(
-        `Cloudinary cleanup failed for orphaned asset ${publicId}: ${err?.message}`,
+        `media cleanup failed for orphaned asset ${publicId}: ${err?.message}`,
       );
     }
   }
@@ -166,11 +185,11 @@ export class SellerProductImagesController {
       }
     }
 
-    // Delete from Cloudinary (best-effort)
+    // Delete from media (best-effort)
     if (image.publicId) {
-      this.cloudinary.delete(image.publicId).catch((err) => {
+      this.media.delete(image.publicId).catch((err) => {
         this.logger.warn(
-          `Failed to delete Cloudinary asset ${image.publicId}: ${err?.message}`,
+          `Failed to delete media asset ${image.publicId}: ${err?.message}`,
         );
       });
     }

@@ -21,6 +21,12 @@
 
 enum OutboxEventState {
   PENDING
+  // Phase 186 (#7) — a row that has failed at least once and is now in
+  // exponential backoff. Distinct from PENDING (never attempted) so ops can
+  // query "what's stuck in retry" with `WHERE state = 'RETRYING'` instead of
+  // inferring it from `attempts > 0`. The publisher claims BOTH PENDING and
+  // RETRYING rows whose next_attempt_at is due.
+  RETRYING
   PUBLISHED
 }
 
@@ -41,15 +47,39 @@ model OutboxEvent {
   attempts      Int              @default(0)
   lastError     String?          @map("last_error")
   nextAttemptAt DateTime         @default(now()) @map("next_attempt_at")
+
+  // Phase 186 (#1) — debounce. When a writer supplies a `dedupeKey`, a
+  // rapid burst of the same logical event (e.g. 10 order-status updates in
+  // 30s) collapses onto a single PENDING row whose payload is updated to the
+  // latest and whose `debounceUntil` holds the publisher off until the
+  // window closes. A partial UNIQUE index on (dedupe_key) WHERE
+  // state='PENDING' (see migration) makes the merge atomic via ON CONFLICT.
+  dedupeKey     String?          @map("dedupe_key")
+  debounceUntil DateTime?        @map("debounce_until")
+
+  // Phase 186 (#5) — future-dated delivery ("send reminder 7d after order").
+  // null = immediate. The publisher's claim predicate gates on this too.
+  scheduledAt   DateTime?        @map("scheduled_at")
+
+  // Phase 186 (#16) — distributed-trace correlation. correlationId groups
+  // every event/handler/notification spawned by one originating request;
+  // causationId points at the event/command that directly caused this one.
+  correlationId String?          @map("correlation_id")
+  causationId   String?          @map("causation_id")
+
   createdAt     DateTime         @default(now()) @map("created_at")
 
-  // Hot index for the publisher's "what's pending" query.
+  // Hot index for the publisher's "what's pending" query. Covers
+  // state-prefixed lookups (incl. WHERE state='RETRYING') too.
   @@index([state, nextAttemptAt])
   // Aggregate lookup index — useful for ops asking "did event X for
   // dispute Y publish?". Cheap; aggregate cardinality is bounded.
   @@index([aggregate, aggregateId])
   // Time-ordered index for retention sweepers and recent-publish dashboards.
   @@index([createdAt])
+  // Phase 186 (#1) — debounce-merge lookup + (#16) trace correlation.
+  @@index([dedupeKey])
+  @@index([correlationId])
   @@map("outbox_events")
 }
 

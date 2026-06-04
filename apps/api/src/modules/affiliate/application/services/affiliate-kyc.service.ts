@@ -4,6 +4,8 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { EnvService } from '../../../../bootstrap/env/env.service';
+import { resolveTrustedMediaHosts } from '../../../../core/util/trusted-media-hosts';
 import { AffiliateEncryptionService } from './affiliate-encryption.service';
 
 /**
@@ -24,6 +26,7 @@ export class AffiliateKycService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly encryption: AffiliateEncryptionService,
+    private readonly env: EnvService,
   ) {}
 
   /**
@@ -48,6 +51,13 @@ export class AffiliateKycService {
     if (aadhaar && !/^[0-9]{12}$/.test(aadhaar)) {
       throw new BadRequestAppException('Aadhaar must be exactly 12 digits.');
     }
+
+    // #252.9 (2026-06-03) — Defence in depth: re-validate the document URLs
+    // against the media host allowlist even for callers that bypass the
+    // DTO (internal / service-to-service), so a foreign or SSRF host can never
+    // be persisted onto a KYC record an admin will later open.
+    this.assertAllowedKycUrl(input.panDocumentUrl, 'panDocumentUrl');
+    this.assertAllowedKycUrl(input.aadhaarDocumentUrl, 'aadhaarDocumentUrl');
 
     const panEnc = this.encryption.encrypt(pan)!;
     const aadhaarEnc = aadhaar ? this.encryption.encrypt(aadhaar) : null;
@@ -168,6 +178,61 @@ export class AffiliateKycService {
       });
       return this.toPublic(updated);
     });
+  }
+
+  /**
+   * #252.9 — Allowlist guard for client-supplied KYC document URLs.
+   * Mirrors the returns evidence-URL validator: https-only, pinned to the
+   * platform's media delivery host (derived from R2_PUBLIC_BASE_URL at
+   * runtime, plus the dev-stub host), with explicit localhost / link-local /
+   * cloud-metadata SSRF blocks. The DTO enforces the format rules at the HTTP
+   * boundary; this runs the authoritative host check for every caller
+   * (including internal ones) right before persistence. No-ops on an absent
+   * (optional) URL.
+   */
+  private assertAllowedKycUrl(url: string | undefined, field: string): void {
+    if (url === undefined || url === null) return;
+    if (typeof url !== 'string' || url.trim().length === 0) {
+      throw new BadRequestAppException(`${field} must be a non-empty URL string.`);
+    }
+    const trimmed = url.trim();
+    if (trimmed.length > 500) {
+      throw new BadRequestAppException(
+        `${field} must be at most 500 characters.`,
+      );
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      throw new BadRequestAppException(`${field} is not a valid URL.`);
+    }
+    if (parsed.protocol !== 'https:') {
+      throw new BadRequestAppException(`${field} must use https.`);
+    }
+    const host = parsed.hostname;
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host.endsWith('.local') ||
+      host === '169.254.169.254' ||
+      host === 'metadata.google.internal'
+    ) {
+      throw new BadRequestAppException(
+        `${field} host is not an allowed document host.`,
+      );
+    }
+    const trusted = resolveTrustedMediaHosts(
+      this.env.getOptional('R2_PUBLIC_BASE_URL'),
+    );
+    const allowed = trusted.some((h) => host === h || host.endsWith(`.${h}`));
+    if (!allowed) {
+      throw new BadRequestAppException(
+        `${field} must be a URL from the platform's media host.`,
+      );
+    }
   }
 
   /**

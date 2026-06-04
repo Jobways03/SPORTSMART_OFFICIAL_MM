@@ -53,8 +53,61 @@ export interface AllocationAnalytics {
   totalReallocations: number;
   reallocationRate: number;
   topAllocatedSellers: { sellerId: string; sellerName: string; allocationCount: number }[];
+  // Phase 233 — symmetric to topAllocatedSellers but for franchise nodes.
+  topAllocatedFranchises: { franchiseId: string; franchiseName: string; allocationCount: number }[];
   avgDistanceKm: number;
   avgScore: number;
+  // Phase 233 — outcome counters (GROUP BY outcome over real-routing
+  // rows). Field names are the exact keys the admin dashboard's
+  // "Allocation health" cards read (web-admin-storefront dashboard
+  // page) — do NOT rename without the frontend.
+  primaryServiceableCount: number;
+  fallbackUsedCount: number;
+  unservicableCount: number; // intentional spelling: matches the FE card key
+  reassignedCount: number;
+  // Phase 233 — MasterOrders parked in EXCEPTION_QUEUE (the FE
+  // "Exception queue" card). Not derived from allocation_logs.
+  exceptionQueueCount: number;
+}
+
+/**
+ * Phase 233 — optional filters for the allocation dashboard. All
+ * aggregates additionally exclude non-real-routing rows
+ * (LISTING/PREVIEW/STOREFRONT) in the repository regardless of these.
+ */
+export interface AllocationAnalyticsFilterInput {
+  fromDate?: Date;
+  toDate?: Date;
+  nodeType?: string;
+}
+
+// Phase 233 — drill-down row at the format boundary: Decimal columns
+// are plain numbers (or null) and createdAt is an ISO string.
+export interface AllocationEventItem {
+  id: string;
+  productId: string;
+  variantId: string | null;
+  customerPincode: string;
+  allocatedNodeType: string | null;
+  allocatedSellerId: string | null;
+  allocatedFranchiseId: string | null;
+  allocationReason: string | null;
+  eventSource: string;
+  outcome: string | null;
+  reasonCode: string | null;
+  distanceKm: number | null;
+  score: number | null;
+  isReallocated: boolean;
+  orderId: string | null;
+  createdAt: string;
+}
+
+export interface AllocationEventsResult {
+  events: AllocationEventItem[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
@@ -164,20 +217,41 @@ export class AdminDashboardService {
 
   // ── T4: Allocation analytics ────────────────────────────────────────────
 
-  async getAllocationAnalytics(): Promise<AllocationAnalytics> {
-    const [totalAllocations, totalReallocations, avgMetrics] = await Promise.all([
-      this.repo.countAllocations(),
-      this.repo.countReallocations(),
-      this.repo.getAvgAllocationMetrics(),
+  async getAllocationAnalytics(
+    filters?: AllocationAnalyticsFilterInput,
+  ): Promise<AllocationAnalytics> {
+    const [
+      totalAllocations,
+      totalReallocations,
+      avgMetrics,
+      outcomeCounts,
+      topSellersRaw,
+      topFranchisesRaw,
+      exceptionQueueCount,
+    ] = await Promise.all([
+      this.repo.countAllocations(filters),
+      this.repo.countReallocations(filters),
+      this.repo.getAvgAllocationMetrics(filters),
+      this.repo.getOutcomeCounts(filters),
+      this.repo.getTopAllocatedSellers(10, filters),
+      this.repo.getTopAllocatedFranchises(10, filters),
+      this.repo.countExceptionQueueOrders(),
     ]);
 
     const reallocationRate = totalAllocations > 0
       ? Math.round((totalReallocations / totalAllocations) * 10000) / 100
       : 0;
 
-    // Top allocated sellers
-    const topSellersRaw = await this.repo.getTopAllocatedSellers(10);
+    // Fold the GROUP BY outcome rows into the four FE card counters.
+    // Rows whose outcome is NULL (pre-233 history) simply don't land in
+    // any bucket — they still count toward totalAllocations.
+    const outcomeMap = new Map<string, number>();
+    for (const row of outcomeCounts) {
+      if (row.outcome) outcomeMap.set(row.outcome, row.count);
+    }
 
+    // Top allocated sellers — name resolved via a second lookup (seller
+    // names live on a different table than the allocation log).
     const sellerIds = topSellersRaw.map(s => s.sellerId);
     const sellersMap = new Map<string, string>();
     if (sellerIds.length > 0) {
@@ -193,13 +267,70 @@ export class AdminDashboardService {
       allocationCount: s.allocationCount,
     }));
 
+    // Franchise names are resolved inside the repo query already.
+    const topAllocatedFranchises = topFranchisesRaw.map(f => ({
+      franchiseId: f.franchiseId,
+      franchiseName: f.franchiseName || 'Unknown',
+      allocationCount: f.allocationCount,
+    }));
+
     return {
       totalAllocations,
       totalReallocations,
       reallocationRate,
       topAllocatedSellers,
+      topAllocatedFranchises,
       avgDistanceKm: Math.round(avgMetrics.avgDistanceKm * 100) / 100,
       avgScore: Math.round(avgMetrics.avgScore * 10000) / 10000,
+      primaryServiceableCount: outcomeMap.get('PRIMARY_SERVICEABLE') ?? 0,
+      fallbackUsedCount: outcomeMap.get('FALLBACK_SERVICEABLE') ?? 0,
+      unservicableCount: outcomeMap.get('UNSERVICEABLE') ?? 0,
+      reassignedCount: outcomeMap.get('REASSIGNED') ?? 0,
+      exceptionQueueCount,
+    };
+  }
+
+  // ── T4b: Allocation events drill-down ───────────────────────────────────
+
+  async getAllocationEvents(input: {
+    outcome?: string;
+    eventSource?: string;
+    fromDate?: Date;
+    toDate?: Date;
+    nodeType?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<AllocationEventsResult> {
+    const page = input.page && input.page >= 1 ? Math.floor(input.page) : 1;
+    const limit = input.limit && input.limit >= 1
+      ? Math.min(100, Math.floor(input.limit))
+      : 20;
+
+    const result = await this.repo.getAllocationEvents({
+      outcome: input.outcome,
+      eventSource: input.eventSource,
+      fromDate: input.fromDate,
+      toDate: input.toDate,
+      nodeType: input.nodeType,
+      page,
+      limit,
+    });
+
+    return {
+      events: result.rows.map(r => ({
+        ...r,
+        // Decimal columns are surfaced as numbers (or null) at the
+        // format boundary, matching the dashboard's number contract.
+        distanceKm: r.distanceKm == null ? null : Number(r.distanceKm),
+        score: r.score == null ? null : Number(r.score),
+        // Normalise to an ISO string regardless of whether the raw
+        // driver handed back a Date or a string.
+        createdAt: new Date(r.createdAt).toISOString(),
+      })),
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      totalPages: result.limit > 0 ? Math.ceil(result.total / result.limit) : 0,
     };
   }
 

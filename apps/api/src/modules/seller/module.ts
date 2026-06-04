@@ -21,7 +21,7 @@ import { ApproveSellerUseCase } from './application/use-cases/approve-seller.use
 import { RejectSellerUseCase } from './application/use-cases/reject-seller.use-case';
 import { LogoutSellerUseCase } from './application/use-cases/logout-seller.use-case';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
 import { SellerAuthGuard, AdminAuthGuard, PermissionsGuard } from '../../core/guards';
 import { SellerRegisterController } from './presentation/controllers/seller-register.controller';
 import { SellerLoginController } from './presentation/controllers/seller-login.controller';
@@ -91,7 +91,7 @@ import { SellerAuditHandler } from './application/event-handlers/seller-audit.ha
     ApproveSellerUseCase,
     RejectSellerUseCase,
     EmailOtpAdapter,
-    CloudinaryAdapter,
+    MediaStorageAdapter,
     SellerAuthGuard,
     AdminAuthGuard,
     PermissionsGuard,

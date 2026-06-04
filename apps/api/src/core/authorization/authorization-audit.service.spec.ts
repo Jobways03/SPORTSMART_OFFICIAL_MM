@@ -26,7 +26,12 @@ describe('AuthorizationAuditService — flush failure observability', () => {
         k === 'AUTHZ_AUDIT_ENABLED' ? opts.auditEnabled : fb,
     } as any;
     const metrics = new MetricsRegistry();
-    const service = new AuthorizationAuditService(prisma, env, metrics);
+    const authzMode = {
+      isAuditEnabled: () => opts.auditEnabled,
+      isStrict: () => false,
+      isAbacEnabled: () => false,
+    } as any;
+    const service = new AuthorizationAuditService(prisma, env, metrics, authzMode);
     service.onModuleInit();
     return { service, prisma, metrics };
   }

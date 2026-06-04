@@ -223,3 +223,66 @@ export class CreateAdditionalCouponDto {
   @IsBoolean()
   isPrimary?: boolean;
 }
+
+/**
+ * Finding #13 — edit an existing affiliate coupon's config (the
+ * PATCH :affiliateId/coupons/:couponId editor). Mirrors
+ * CreateAdditionalCouponDto's bounds, but every field permits `null`
+ * so the editor can CLEAR a value (e.g. drop maxDiscountAmount); the
+ * service re-validates the cross-field rules. `revocationReason` is
+ * recorded on the row when this update flips isActive → false.
+ *
+ * Defined as a class (not an inline body type) so class-validator runs
+ * under the global whitelist/forbidNonWhitelisted pipe; every existing
+ * field is enumerated so previously-accepted requests keep working.
+ */
+export class UpdateCouponConfigDto {
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsIn(['PERCENT', 'FIXED', 'FREE_SHIPPING'])
+  customerDiscountType?: 'PERCENT' | 'FIXED' | 'FREE_SHIPPING' | null;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100000)
+  customerDiscountValue?: number | null;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  maxDiscountAmount?: number | null;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  minOrderValue?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  maxUses?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  perUserLimit?: number;
+
+  @IsOptional()
+  @IsDateString()
+  startsAt?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  expiresAt?: string | null;
+
+  // Finding #13 — optional human-readable reason recorded on the coupon
+  // row when this update DEACTIVATES (revokes) it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  revocationReason?: string;
+}

@@ -11,9 +11,16 @@ export type AccessEventKind =
   | 'LOGIN_SUCCESS'
   | 'LOGIN_FAILURE'
   | 'LOGOUT'
+  // Phase 201 (#17) — "sign out everywhere".
+  | 'LOGOUT_ALL_DEVICES'
   | 'TOKEN_REFRESH'
   | 'PASSWORD_RESET'
-  | 'NEW_DEVICE_DETECTED';
+  | 'NEW_DEVICE_DETECTED'
+  // Phase 207 (#3) — 2FA / reset-OTP verify outcomes.
+  | 'MFA_VERIFY_SUCCESS'
+  | 'MFA_VERIFY_FAILED'
+  | 'OTP_VERIFY_SUCCESS'
+  | 'OTP_VERIFY_FAILED';
 
 export interface AccessLogEntry {
   id: string;
@@ -131,6 +138,33 @@ export interface SpikeResponse {
   items: SpikeRow[];
 }
 
+// Phase 207 (#6) — distributed-attack views.
+export interface IpSpikeRow {
+  ipAddress: string | null;
+  failureCount: number;
+  distinctAccounts: number;
+  lastFailureAt: string;
+}
+export interface IpSpikeResponse {
+  since: string;
+  hours: number;
+  minFailures: number;
+  items: IpSpikeRow[];
+}
+export interface AccountSpikeRow {
+  actorType: AccessActorType;
+  actorId: string;
+  failureCount: number;
+  distinctIps: number;
+  lastFailureAt: string;
+}
+export interface AccountSpikeResponse {
+  since: string;
+  hours: number;
+  minFailures: number;
+  items: AccountSpikeRow[];
+}
+
 function buildQs(params: Record<string, string | number | undefined>): string {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -161,6 +195,24 @@ export const adminAccessLogsService = {
   ): Promise<ApiResponse<SpikeResponse>> {
     return apiClient<SpikeResponse>(
       `/admin/access-logs/spike/failed-logins${buildQs(args)}`,
+    );
+  },
+
+  // Phase 207 (#6) — one source IP across many accounts (spray / stuffing).
+  ipSpike(
+    args: { hours?: number; minFailures?: number } = {},
+  ): Promise<ApiResponse<IpSpikeResponse>> {
+    return apiClient<IpSpikeResponse>(
+      `/admin/access-logs/spike/by-ip${buildQs(args)}`,
+    );
+  },
+
+  // Phase 207 (#6) — one account across many IPs (distributed botnet).
+  accountSpike(
+    args: { hours?: number; minFailures?: number } = {},
+  ): Promise<ApiResponse<AccountSpikeResponse>> {
+    return apiClient<AccountSpikeResponse>(
+      `/admin/access-logs/spike/by-account${buildQs(args)}`,
     );
   },
 
@@ -208,18 +260,28 @@ export const KIND_LABEL: Record<AccessEventKind, string> = {
   LOGIN_SUCCESS: 'Sign in',
   LOGIN_FAILURE: 'Failed sign-in',
   LOGOUT: 'Sign out',
+  LOGOUT_ALL_DEVICES: 'Sign out (all devices)',
   TOKEN_REFRESH: 'Token refresh',
   PASSWORD_RESET: 'Password reset',
   NEW_DEVICE_DETECTED: 'New device',
+  MFA_VERIFY_SUCCESS: 'MFA verified',
+  MFA_VERIFY_FAILED: 'MFA failed',
+  OTP_VERIFY_SUCCESS: 'OTP verified',
+  OTP_VERIFY_FAILED: 'OTP failed',
 };
 
 export const KIND_COLOR: Record<AccessEventKind, string> = {
   LOGIN_SUCCESS: '#16a34a',
   LOGIN_FAILURE: '#dc2626',
   LOGOUT: '#6b7280',
+  LOGOUT_ALL_DEVICES: '#6b7280',
   TOKEN_REFRESH: '#0ea5e9',
   PASSWORD_RESET: '#f59e0b',
   NEW_DEVICE_DETECTED: '#dc2626',
+  MFA_VERIFY_SUCCESS: '#16a34a',
+  MFA_VERIFY_FAILED: '#dc2626',
+  OTP_VERIFY_SUCCESS: '#16a34a',
+  OTP_VERIFY_FAILED: '#dc2626',
 };
 
 export function browserOf(ua: string | null): string {

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { ResourcePolicy } from '@prisma/client';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { EnvService } from '../../bootstrap/env/env.service';
+import { AuthzModeService } from './authz-mode.service';
 import { matchesConditions, type Conditions } from './policy-condition.matcher';
 
 export interface PolicyActor {
@@ -62,6 +63,7 @@ export class PolicyEvaluatorService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    private readonly authzMode: AuthzModeService,
   ) {}
 
   invalidate(): void {
@@ -69,7 +71,8 @@ export class PolicyEvaluatorService {
   }
 
   isStrict(): boolean {
-    return this.env.getBoolean('ABAC_ENABLED', false);
+    // Effective ABAC flag (env OR tighten-only runtime override).
+    return this.authzMode.isAbacEnabled();
   }
 
   async evaluate(input: PolicyEvaluationInput): Promise<PolicyDecision> {

@@ -24,9 +24,21 @@ describe('OutboxPublisherService', () => {
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
-  let redis: { acquireLock: jest.Mock; releaseLock: jest.Mock };
+  // Phase 1 (PR 1.7) — tick() now uses the FENCED lock pair
+  // (acquireLockWithToken → { acquired, token } / releaseLockWithToken),
+  // not the unfenced acquireLock/releaseLock. getClient() backs the
+  // per-eventName failure-counter (incr/expire on failure, del on
+  // success).
+  let redis: {
+    acquireLockWithToken: jest.Mock;
+    releaseLockWithToken: jest.Mock;
+    getClient: jest.Mock;
+  };
   let env: { getBoolean: jest.Mock; getNumber: jest.Mock };
   let emitter: { emitAsync: jest.Mock };
+  // Phase 186 (#6) — productive ticks run inside instr.wrap(...). The
+  // stub just invokes the wrapped fn and returns its result.
+  let instr: { wrap: jest.Mock };
   let service: OutboxPublisherService;
 
   beforeEach(() => {
@@ -50,8 +62,15 @@ describe('OutboxPublisherService', () => {
       }),
     };
     redis = {
-      acquireLock: jest.fn().mockResolvedValue(true),
-      releaseLock: jest.fn().mockResolvedValue(undefined),
+      acquireLockWithToken: jest
+        .fn()
+        .mockResolvedValue({ acquired: true, token: 'tok-1' }),
+      releaseLockWithToken: jest.fn().mockResolvedValue(true),
+      getClient: jest.fn().mockReturnValue({
+        incr: jest.fn().mockResolvedValue(1),
+        expire: jest.fn().mockResolvedValue(1),
+        del: jest.fn().mockResolvedValue(1),
+      }),
     };
     env = {
       getBoolean: jest
@@ -67,12 +86,16 @@ describe('OutboxPublisherService', () => {
       }),
     };
     emitter = { emitAsync: jest.fn().mockResolvedValue(undefined) };
+    instr = {
+      wrap: jest.fn((_name: string, fn: () => Promise<unknown>) => fn()),
+    };
 
     service = new OutboxPublisherService(
       prisma as never,
       redis as never,
       env as never,
       emitter as never,
+      instr as never,
     );
   });
 
@@ -99,16 +122,19 @@ describe('OutboxPublisherService', () => {
   it('no-ops when OUTBOX_ENABLED is false', async () => {
     env.getBoolean.mockReturnValue(false);
     await service.tick();
-    expect(redis.acquireLock).not.toHaveBeenCalled();
+    expect(redis.acquireLockWithToken).not.toHaveBeenCalled();
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
   });
 
   it('skips the tick if the Redis lock is unavailable', async () => {
-    redis.acquireLock.mockResolvedValue(false);
+    redis.acquireLockWithToken.mockResolvedValue({
+      acquired: false,
+      token: null,
+    });
     await service.tick();
     expect(prisma.$queryRaw).not.toHaveBeenCalled();
     // Lock not held, don't try to release it.
-    expect(redis.releaseLock).not.toHaveBeenCalled();
+    expect(redis.releaseLockWithToken).not.toHaveBeenCalled();
   });
 
   // ─── happy path ───────────────────────────────────────────────────
@@ -129,7 +155,7 @@ describe('OutboxPublisherService', () => {
       where: { id: 'ev-1' },
       data: { state: 'PUBLISHED', publishedAt: expect.any(Date) },
     });
-    expect(redis.releaseLock).toHaveBeenCalledTimes(1);
+    expect(redis.releaseLockWithToken).toHaveBeenCalledTimes(1);
   });
 
   it('attaches eventId to the payload so handlers can dedupe on it', async () => {
@@ -217,6 +243,6 @@ describe('OutboxPublisherService', () => {
   it('releases the lock even if everything fails', async () => {
     prisma.$queryRaw.mockRejectedValue(new Error('db down'));
     await expect(service.tick()).rejects.toThrow('db down');
-    expect(redis.releaseLock).toHaveBeenCalledTimes(1);
+    expect(redis.releaseLockWithToken).toHaveBeenCalledTimes(1);
   });
 });
