@@ -107,9 +107,17 @@ import { InventoryModule } from '../inventory/module';
 // chain (pre-Phase-57 only logger.log was written, leaving no
 // queryable forensic trail of who approved what when).
 import { AuditModule } from '../audit/module';
+// Phase 4 Delhivery wiring (2026-06-02) — real courier serviceability in the
+// PDP check (ServiceabilityService injects LogisticsFacadeClient).
+import { LogisticsFacadeModule } from '../../integrations/logistics-facade/logistics-facade.module';
 
 @Module({
-  imports: [forwardRef(() => CartModule), InventoryModule, AuditModule],
+  imports: [
+    forwardRef(() => CartModule),
+    forwardRef(() => InventoryModule),
+    AuditModule,
+    LogisticsFacadeModule,
+  ],
   controllers: [
     CatalogReferenceController,
     StorefrontProductsController,

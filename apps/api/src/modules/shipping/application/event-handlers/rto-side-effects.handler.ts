@@ -114,11 +114,11 @@ export class RtoSideEffectsHandler {
         await this.refundInstructions.createSplitForRefund({
           sourceType: 'MANUAL' as any,
           sourceId: subOrderId,
-          sourceLabel: `rto-delivered:${subOrderId}`,
+          sourceLabel: `cancel-sub-order:${subOrderId}`,
           customerId: masterOrder.customerId,
           masterOrderId: sub.masterOrderId,
           amountInPaise: subTotal,
-          baseIdempotencyKey: `rto-delivered:${subOrderId}`,
+          baseIdempotencyKey: `cancel-sub-order:${subOrderId}`,
         });
         this.logger.log(
           `Refund initiated for RTO_DELIVERED sub-order ${subOrderId}`,

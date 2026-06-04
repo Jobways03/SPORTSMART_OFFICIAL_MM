@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AdminCommissionController } from './presentation/controllers/admin-commission.controller';
 import { SellerCommissionController } from './presentation/controllers/seller-commission.controller';
 import { CommissionProcessorService } from './application/services/commission-processor.service';
@@ -11,7 +11,7 @@ import { OrdersModule } from '../orders/module';
 import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
-  imports: [OrdersModule, MoneyModule],
+  imports: [forwardRef(() => OrdersModule), MoneyModule],
   controllers: [AdminCommissionController, SellerCommissionController],
   providers: [
     AdminAuthGuard,

@@ -132,6 +132,15 @@ export const envSchema = z.object({
   // through (HMAC + idempotency remain primary defense).
   SHIPROCKET_WEBHOOK_IP_ALLOWLIST: z.string().optional(),
 
+  // Delhivery webhook (Phase 3 Delhivery wiring, 2026-06-02). Same
+  // contract as the Shiprocket trio: HMAC secret preferred, legacy
+  // bearer token fallback, optional source-IP allowlist. All unset in
+  // dev → the Delhivery webhook passes through without verification
+  // (production must set the HMAC secret).
+  DELHIVERY_WEBHOOK_HMAC_SECRET: z.string().optional(),
+  DELHIVERY_WEBHOOK_TOKEN: z.string().optional(),
+  DELHIVERY_WEBHOOK_IP_ALLOWLIST: z.string().optional(),
+
   // OpenSearch - optional
   OPENSEARCH_NODE: z.string().optional(),
 
@@ -968,6 +977,25 @@ export const envSchema = z.object({
   // once partner endpoints are seeded.
   WEBHOOK_DELIVERY_ENABLED: z.string().default('false'),
   WEBHOOK_HMAC_SECRET: z.string().optional(),
+
+  // ─── Logistics partner registration (LogisticsPartnerModule) ──────
+  // Feature flag for the partner-agnostic pickup-location registration
+  // surface (apps/api → logistics-facade → Delhivery / future
+  // carriers). Default `'true'` so prod environments get the feature
+  // by default; set to literal `'false'` to roll back: the
+  // `LogisticsPartnerModule.forRoot({ enabled: false })` path returns
+  // an empty module so `/admin/logistics-partner/*` returns 404.
+  //
+  // Note: the facade URL + key vars below are only consumed when the
+  // flag is true; setting the flag false lets apps/api boot in
+  // environments where the facade is not deployed yet.
+  LOGISTICS_PARTNER_REGISTRATION_ENABLED: z.string().default('true'),
+  /** Base URL of the apps/logistics-facade service. */
+  LOGISTICS_FACADE_URL: z.string().optional(),
+  /** Shared secret rotated by ops — sent as `Authorization: ApiKey <key>`. */
+  LOGISTICS_FACADE_API_KEY: z.string().optional(),
+  /** Per-request timeout in milliseconds (default 30_000). */
+  LOGISTICS_FACADE_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
 }).superRefine((env, ctx) => {
   // Phase 3 (PR 3.3) — JWT TTL policy. Cross-field validation:
   //   - both TTLs parse to a positive duration

@@ -1,0 +1,99 @@
+// ─────────────────────────────────────────────────────────────────
+// LOGISTICS FACADE — Prisma schema entry point
+// ─────────────────────────────────────────────────────────────────
+// Multi-file mode: each domain concept lives in its own *.prisma
+// file in this directory. Prisma's `schema = "./prisma/schema"` in
+// prisma.config.ts picks them all up.
+//
+// Enums that are shared across more than one model live here so the
+// per-file relations don't need to import each other.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("LOGISTICS_DATABASE_URL")
+}
+
+// ─── Shared enums ────────────────────────────────────────────────
+
+/// Canonical partner identifier. Mirrors `PartnerCode` from
+/// `@sportsmart/logistics-contracts`. Every value here MUST have a
+/// matching entry in that Zod enum AND a registered adapter in
+/// `modules/shipments/application/factories/courier-gateway.resolver.ts`
+/// — see `packages/logistics-contracts/src/partner.ts` for the
+/// three-step add-a-partner playbook.
+///
+/// MIGRATION NOTE — bootstrapped DB only:
+///   On a fresh database the next `prisma migrate dev` emits a
+///   single `CREATE TYPE "Partner" AS ENUM ('DELHIVERY', 'SHADOWFAX')`
+///   and the schema is consistent.
+///
+///   On an environment that was already bootstrapped against the
+///   M0 placeholder enum (`Partner.UNSPECIFIED`), the rename is NOT
+///   a single migration: Postgres forbids dropping enum values in
+///   the same transaction that adds new ones. The migration is:
+///     1. `ALTER TYPE "Partner" ADD VALUE 'DELHIVERY';`
+///     2. `ALTER TYPE "Partner" ADD VALUE 'SHADOWFAX';`
+///     3. Backfill / hand-fix any rows that landed under
+///        `'UNSPECIFIED'` (there should be none — M0 had no
+///        partner-writing code path).
+///     4. Recreate the type without `'UNSPECIFIED'` and swap it in:
+///          CREATE TYPE "Partner_new" AS ENUM ('DELHIVERY', 'SHADOWFAX');
+///          ALTER TABLE … ALTER COLUMN partner TYPE "Partner_new"
+///            USING partner::text::"Partner_new";
+///          DROP TYPE "Partner";
+///          ALTER TYPE "Partner_new" RENAME TO "Partner";
+///   For greenfield / CI / local dev `prisma migrate reset` is the
+///   fast path — preferred until a real environment has data.
+enum Partner {
+  DELHIVERY
+  SHADOWFAX
+}
+
+/// Mirrors `ShipmentStatus` in `@sportsmart/logistics-contracts/shipment`.
+enum ShipmentStatus {
+  DRAFT
+  BOOKED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  NDR
+  RTO_INITIATED
+  RTO_IN_TRANSIT
+  RTO_DELIVERED
+  CANCELLED
+  LOST
+  DAMAGED
+}
+
+/// Mirrors `ReturnStatus` in `@sportsmart/logistics-contracts/return`.
+enum ReturnStatus {
+  REQUESTED
+  PICKUP_SCHEDULED
+  PICKED_UP
+  IN_TRANSIT
+  ARRIVED_AT_WAREHOUSE
+  QC_PASSED
+  QC_FAILED
+  CLOSED
+  CANCELLED
+}
+
+/// Mirrors `NdrAction` in `@sportsmart/logistics-contracts/ndr`.
+enum NdrAction {
+  REATTEMPT
+  RESCHEDULE
+  RETURN_TO_ORIGIN
+  HOLD_AT_HUB
+}
+
+/// Mirrors `QcOutcome` in `@sportsmart/logistics-contracts/qc`.
+enum QcOutcome {
+  PASS
+  FAIL
+  PARTIAL
+}

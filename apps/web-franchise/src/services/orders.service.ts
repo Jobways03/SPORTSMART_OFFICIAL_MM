@@ -31,6 +31,7 @@ export interface FranchiseOrder {
   trackingNumber: string | null;
   courierName: string | null;
   shippingLabelUrl: string | null;
+  deliveryMethod: string | null;
   createdAt: string;
   updatedAt: string;
   items?: FranchiseOrderItem[];
@@ -97,5 +98,33 @@ export const franchiseOrdersService = {
       method: 'PATCH',
       body: JSON.stringify({ status, trackingNumber, courierName }),
     });
+  },
+
+  /**
+   * Phase 92 — franchise self-service Delhivery pickup. Schedules the pickup
+   * for this sub-order's warehouse (idempotent per warehouse+day).
+   */
+  requestPickup(subOrderId: string) {
+    return apiClient<{ message?: string; success?: boolean }>(
+      `/franchise/sub-orders/${subOrderId}/request-pickup`,
+      {
+        method: 'POST',
+        headers: { 'X-Idempotency-Key': `pickup-${subOrderId}-${Date.now()}` },
+      },
+    );
+  },
+
+  /**
+   * Phase 92 — franchise self-service shipping label. Fetches the real
+   * Delhivery label PDF URL for this sub-order on demand (labelUrl may be null
+   * until the shipment is manifested). The franchise packs the box, so it needs
+   * the label to print + paste before pickup.
+   */
+  getShippingLabel(subOrderId: string) {
+    return apiClient<{
+      labelUrl?: string | null;
+      awb?: string | null;
+      courierName?: string | null;
+    }>(`/franchise/sub-orders/${subOrderId}/label`);
   },
 };

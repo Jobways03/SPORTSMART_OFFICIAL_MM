@@ -1,0 +1,30 @@
+// ─── Partner health ───────────────────────────────────────────────
+// Rolling per-zone partner performance snapshots, computed by a
+// cron (lands in M3) over the previous 24h/7d window. The partner-
+// selector queries the most recent row per (partner, zone) to bias
+// the resolver toward healthy carriers.
+
+model PartnerHealth {
+  id                   String   @id @default(uuid())
+  partner              String
+  /// India Post zone (A/B/C/D/E) OR a partner-specific zone label.
+  zone                 String
+  windowStart          DateTime @map("window_start")
+  windowEnd            DateTime @map("window_end")
+  /// Fraction in 0.0–1.0 of bookings the partner accepted on the
+  /// first attempt within the window.
+  bookingSuccessRate   Float    @map("booking_success_rate")
+  avgPickupHours       Float?   @map("avg_pickup_hours")
+  avgDeliveryDays      Float?   @map("avg_delivery_days")
+  rtoRate              Float?   @map("rto_rate")
+  ndrRate              Float?   @map("ndr_rate")
+  /// Number of shipments backing the metrics. Below ~30 the rates
+  /// are noisy; the resolver gives newer partners a Bayesian prior
+  /// rather than excluding them.
+  samples              Int
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  @@unique([partner, zone, windowStart])
+  @@index([partner, windowStart])
+  @@map("partner_health")
+}

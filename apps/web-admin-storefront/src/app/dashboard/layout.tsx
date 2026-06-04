@@ -69,6 +69,10 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   // Inventory has no dedicated permission key today — falls under products.
   { label: 'Inventory', href: '/dashboard/inventory', icon: 'inventory', anyOf: ['products.read'], section: 'operations' },
   { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: 'alert-triangle', anyOf: ['products.read'], section: 'operations' },
+  // Delhivery Tools console hidden (2026-06-02, product decision) — Delhivery
+  // actions live contextually (order Shipping panel), not a standalone console.
+  // Page kept at /dashboard/delhivery-tools; re-enable by uncommenting.
+  // { label: 'Delhivery Tools', href: '/dashboard/delhivery-tools', icon: 'package', anyOf: ['orders.read'], section: 'operations' },
 
   // Customer Care — escalations and people-facing queues.
   { label: 'Queues', href: '/dashboard/queues', icon: 'inbox', anyOf: ['audit.read'], section: 'care' },

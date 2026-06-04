@@ -88,7 +88,11 @@ export class IngestTrackingUpdateUseCase {
     awb: string,
     snapshot: TrackingSnapshot,
     opts?: {
-      source?: 'WEBHOOK_SHIPROCKET' | 'POLL_CRON' | 'MANUAL_ADMIN';
+      source?:
+        | 'WEBHOOK_SHIPROCKET'
+        | 'WEBHOOK_DELHIVERY'
+        | 'POLL_CRON'
+        | 'MANUAL_ADMIN';
       rawPayload?: unknown;
     },
   ): Promise<{
@@ -184,7 +188,11 @@ export class IngestTrackingUpdateUseCase {
     subOrderId: string,
     snapshot: TrackingSnapshot,
     opts?: {
-      source?: 'WEBHOOK_SHIPROCKET' | 'POLL_CRON' | 'MANUAL_ADMIN';
+      source?:
+        | 'WEBHOOK_SHIPROCKET'
+        | 'WEBHOOK_DELHIVERY'
+        | 'POLL_CRON'
+        | 'MANUAL_ADMIN';
       rawPayload?: unknown;
     },
   ): Promise<{

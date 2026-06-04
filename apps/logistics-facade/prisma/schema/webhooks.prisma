@@ -1,0 +1,32 @@
+// ─── Webhook events ───────────────────────────────────────────────
+// Inbound partner webhooks (tracking, NDR, COD remittance updates).
+// Distinct from apps/api's WebhookDelivery (outbound). Every event
+// is stored verbatim so a mapper bug can be retroactively patched
+// without losing fidelity.
+//
+// Dedup: every partner is required to supply (or be assigned) a
+// stable per-event dedupe key. We store it in `dedupKey` with a
+// unique index so a replay is rejected at INSERT time.
+
+model WebhookEvent {
+  id                String    @id @default(uuid())
+  partner           String
+  /// True only when the HMAC verifier accepted the body against the
+  /// partner's signing secret. Webhooks that fail signature are
+  /// stored too (for forensics) and processed = false.
+  signatureValid    Boolean   @map("signature_valid")
+  /// Per-partner stable dedupe key. Format is partner-specific;
+  /// most use `<event-id>:<awb>` or `<event-id>` alone.
+  dedupKey          String    @unique @map("dedup_key")
+  rawHeaders        Json      @map("raw_headers")
+  rawBody           Json      @map("raw_body")
+  /// When the dispatcher consumed this row. NULL while pending,
+  /// set on success OR on terminal failure (see processingError).
+  processedAt       DateTime? @map("processed_at")
+  processingError   String?   @map("processing_error")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  @@index([partner, createdAt])
+  @@index([processedAt])
+  @@map("webhook_events")
+}

@@ -30,6 +30,9 @@ export interface FranchiseProfile {
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
   createdAt: string;
+  /** True once registered with a logistics partner — pickup/warehouse
+   *  fields are frozen; the portal locks the form + shows a banner. */
+  logisticsLocked?: boolean;
 }
 
 export type UpdateFranchiseProfilePayload = Partial<Pick<

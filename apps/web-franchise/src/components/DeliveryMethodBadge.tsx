@@ -2,7 +2,7 @@
 
 import React from 'react';
 
-export type DeliveryMethod = 'SELF_DELIVERY' | null | undefined;
+export type DeliveryMethod = 'SELF_DELIVERY' | 'DELHIVERY' | null | undefined;
 
 export interface DeliveryMethodBadgeProps {
   method: DeliveryMethod;
@@ -77,6 +77,14 @@ function configFor(method: DeliveryMethod) {
         bg: '#f0fdf4',
         fg: '#166534',
         border: '#bbf7d0',
+      };
+    case 'DELHIVERY':
+      return {
+        label: 'Delhivery',
+        icon: '\u{1F69A}',
+        bg: '#eff6ff',
+        fg: '#1e40af',
+        border: '#bfdbfe',
       };
     default:
       return {

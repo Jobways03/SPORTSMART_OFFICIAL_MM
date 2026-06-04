@@ -1,0 +1,47 @@
+// ─── COD remittance ───────────────────────────────────────────────
+// Two tables:
+//   CodRemittance      — one row per UTR / settlement file from partner.
+//   CodRemittanceLine  — one row per AWB inside a remittance.
+//
+// The split lets us flag a single AWB as DISPUTED without locking
+// the whole remittance, and we can compute variance per AWB rather
+// than only at the top level.
+
+model CodRemittance {
+  id                   String   @id @default(uuid())
+  partner              String
+  utrNumber            String?  @map("utr_number")
+  remittedAt           DateTime @map("remitted_at")
+  /// What the partner actually deposited.
+  amountPaise          BigInt   @map("amount_paise")
+  /// What we computed from delivered COD shipments. Variance =
+  /// expected - actual; reconciliation flags non-zero values.
+  expectedAmountPaise  BigInt   @map("expected_amount_paise")
+  /// Optional ops note for variance. Partner-standard reasons:
+  /// "weight-dispute deduction", "RTO holdback", "TDS adjustment".
+  varianceReason       String?  @map("variance_reason")
+  awbCount             Int      @map("awb_count")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  lines CodRemittanceLine[]
+
+  @@index([partner, remittedAt])
+  @@index([utrNumber])
+  @@map("cod_remittances")
+}
+
+model CodRemittanceLine {
+  id            String        @id @default(uuid())
+  remittanceId  String        @map("remittance_id")
+  remittance    CodRemittance @relation(fields: [remittanceId], references: [id], onDelete: Cascade)
+
+  awb           String
+  amountPaise   BigInt        @map("amount_paise")
+  /// PENDING | REMITTED | DISPUTED | ADJUSTED — see CodRemittanceRow
+  /// in @sportsmart/logistics-contracts.
+  status        String
+
+  @@unique([remittanceId, awb])
+  @@index([awb])
+  @@map("cod_remittance_lines")
+}

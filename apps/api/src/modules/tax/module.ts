@@ -232,7 +232,10 @@ const taxPdfStorageProvider = {
     // SettlementsModule also imports TaxModule (for SettlementTcsHookService);
     // forwardRef on both sides resolves the circular dependency at bootstrap.
     forwardRef(() => SettlementsModule),
-    CartModule,
+    // forwardRef: Cart participates in the Tax import cycle (cart tax preview),
+    // like its Settlements/Checkout/Discounts siblings — defer or it resolves
+    // to undefined at bootstrap.
+    forwardRef(() => CartModule),
     forwardRef(() => CheckoutModule),
     // Phase 65 (2026-05-22) — DiscountsModule for server-side
     // coupon resolution in the tax preview (audit Gap #1).

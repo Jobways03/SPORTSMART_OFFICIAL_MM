@@ -61,7 +61,7 @@ import { ShipmentEvidenceService } from '../shipping/application/services/shipme
   // franchise-orders.service.ts now injects OrdersService for the
   // unified fulfillment writer.
   imports: [
-    CatalogModule,
+    forwardRef(() => CatalogModule),
     forwardRef(() => FranchiseModule),
     MoneyModule,
     forwardRef(() => TaxModule),
@@ -119,6 +119,9 @@ import { ShipmentEvidenceService } from '../shipping/application/services/shipme
     // Phase 88 (2026-05-23) — exported so ShippingModule's webhook
     // POD capture path can consume the typed-evidence orchestrator.
     ShipmentEvidenceService,
+    // Exported so ShippingModule's RtoSideEffectsHandler (and CheckoutModule)
+    // can inject the canonical stock-restore writer instead of owning a copy.
+    StockRestoreService,
   ],
 })
 export class OrdersModule {}

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { sellerProfileService, type SellerProfileData } from '@/services/profile.service';
+import { type SellerProfileData } from '@/services/profile.service';
 import { sellerAuthService } from '@/services/auth.service';
 import './dashboard.css';
 
@@ -78,30 +78,26 @@ export default function DashboardLayout({
 
   const refreshProfile = useCallback(async () => {
     try {
-      const token = sessionStorage.getItem('accessToken');
-      const sellerData = sessionStorage.getItem('seller');
-      if (!token || !sellerData) {
+      // Phase 21 — the access token lives in an httpOnly cookie, not
+      // sessionStorage. Validate the session via the cookie-authenticated
+      // /seller/auth/me endpoint; bounce to /login only if it fails.
+      const res = await sellerAuthService.me().catch(() => null);
+      if (!res?.data) {
         router.replace('/login');
         return;
       }
-      const cached: SellerInfo = JSON.parse(sellerData);
-      setSeller(cached);
-
-      const res = await sellerProfileService.getProfile(token).catch(() => null);
-      if (res?.data) {
-        const updated: SellerInfo = {
-          ...cached,
-          status: res.data.status,
-          isEmailVerified: res.data.isEmailVerified,
-          verificationStatus: res.data.verificationStatus,
-        };
-        setSeller(updated);
-        try {
-          sessionStorage.setItem('seller', JSON.stringify(updated));
-        } catch {
-          // storage unavailable
-        }
-      }
+      const me = res.data;
+      setSeller({
+        sellerId: me.sellerId,
+        sellerName: me.sellerName,
+        sellerShopName: me.sellerShopName,
+        email: me.email,
+        phoneNumber: me.phoneNumber,
+        status: me.status,
+        isEmailVerified: me.isEmailVerified,
+        verificationStatus:
+          me.verificationStatus as SellerProfileData['verificationStatus'],
+      });
     } catch {
       router.replace('/login');
     }

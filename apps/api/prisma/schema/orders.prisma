@@ -77,6 +77,9 @@ enum DeliveryConfirmationSource {
   MANUAL_ADMIN
   // Franchise-admin endpoint (admin-franchise-orders.controller).
   MANUAL_FRANCHISE
+  // Phase 3 Delhivery wiring (2026-06-02) — Delhivery tracking
+  // webhook (POST /shipping/webhooks/delhivery) confirmed delivery.
+  WEBHOOK_DELHIVERY
 }
 
 // Phase 85 (2026-05-23) — manual AWB attachment audit Gap #11.
@@ -94,6 +97,10 @@ enum AwbAttachmentSource {
   ADMIN_OVERRIDE
   // Future: programmatic Shiprocket booking (not yet implemented).
   SHIPROCKET_BOOKING
+  // Phase 3 Delhivery wiring (2026-06-02) — AWB obtained automatically
+  // by the Delhivery auto-book handler when a DELHIVERY sub-order is
+  // marked PACKED. System actor (no human in the loop).
+  DELHIVERY_BOOKING
 }
 
 // Phase 81 (2026-05-22) — cancel audit Gap #15/#21. Mirrors the

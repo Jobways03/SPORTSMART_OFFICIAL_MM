@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import { useModal } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { sanitizeRichHtml } from '@/lib/sanitize';
 import {
@@ -177,7 +178,9 @@ function isMediaRestricted(status: string): boolean {
 // --- Component ---
 export default function SellerProfilePage() {
   const router = useRouter();
+  const { confirmDialog } = useModal();
   const [token, setToken] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
 
   // Profile state
   const [profile, setProfile] = useState<SellerProfileData | null>(null);
@@ -293,15 +296,20 @@ export default function SellerProfilePage() {
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   // --- Auth check ---
+  // Auth is cookie-based (httpOnly) and already guarded by the dashboard
+  // layout via GET /seller/auth/me. The login flow no longer writes a
+  // sessionStorage token, so gating on one here was logging sellers out the
+  // moment they opened Profile. Use a legacy token if one happens to be
+  // present (Bearer fallback), otherwise rely on the cookie — and never
+  // redirect from here; the layout owns the session check.
   useEffect(() => {
     try {
-      const t = sessionStorage.getItem('accessToken');
-      if (!t) { router.replace('/login'); return; }
-      setToken(t);
+      setToken(sessionStorage.getItem('accessToken') ?? '');
     } catch {
-      router.replace('/login');
+      setToken('');
     }
-  }, [router]);
+    setAuthReady(true);
+  }, []);
 
   // --- Toasts ---
   const addToast = useCallback((type: Toast['type'], message: string) => {
@@ -320,7 +328,7 @@ export default function SellerProfilePage() {
 
   // --- Fetch profile ---
   const fetchProfile = useCallback(async () => {
-    if (!token) return;
+    if (!authReady) return;
     setIsLoading(true);
     setFetchError(null);
     try {
@@ -344,11 +352,11 @@ export default function SellerProfilePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [token, router]);
+  }, [token, authReady, router]);
 
   useEffect(() => {
-    if (token) fetchProfile();
-  }, [token, fetchProfile]);
+    if (authReady) fetchProfile();
+  }, [authReady, fetchProfile]);
 
   // No auto-lookup on load — only show dropdown when user changes pincode
 
@@ -365,7 +373,7 @@ export default function SellerProfilePage() {
   }, [otpCooldown]);
 
   const handleSendVerificationOtp = useCallback(async () => {
-    if (!token || sendingOtp || otpCooldown > 0) return;
+    if (!authReady || sendingOtp || otpCooldown > 0) return;
     setSendingOtp(true);
     setOtpError(null);
     try {
@@ -388,7 +396,7 @@ export default function SellerProfilePage() {
   }, [token, sendingOtp, otpCooldown, addToast, router]);
 
   const handleVerifyEmail = useCallback(async () => {
-    if (!token || verifyingOtp) return;
+    if (!authReady || verifyingOtp) return;
     const trimmed = otpValue.trim();
     if (trimmed.length !== 6 || !/^\d{6}$/.test(trimmed)) {
       setOtpError('Enter a valid 6-digit OTP');
@@ -461,7 +469,7 @@ export default function SellerProfilePage() {
   };
 
   const handleChangePassword = useCallback(async () => {
-    if (!token || pwSubmitting) return;
+    if (!authReady || pwSubmitting) return;
     if (!validatePasswordFields()) return;
 
     setPwSubmitting(true);
@@ -573,7 +581,9 @@ export default function SellerProfilePage() {
   // --- Validate all ---
   const validateAll = (): boolean => {
     const newErrors: FormErrors = {};
-    const readonly = profile ? isReadOnly(profile.status) : false;
+    const readonly =
+      (profile ? isReadOnly(profile.status) : false) ||
+      profile?.logisticsLocked === true;
     if (readonly) return true;
 
     const contentRestricted = profile ? isContentRestricted(profile.status) : false;
@@ -639,7 +649,7 @@ export default function SellerProfilePage() {
   // --- Save ---
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
-    if (!token || !profile || !initialFormData) return;
+    if (!authReady || !profile || !initialFormData) return;
     if (isReadOnly(profile.status)) return;
 
     if (!validateAll()) {
@@ -731,7 +741,7 @@ export default function SellerProfilePage() {
 
   // --- Media upload ---
   const handleImageUpload = async (file: File) => {
-    if (!token) return;
+    if (!authReady) return;
     const validationError = validateImageFile(file);
     if (validationError) { setImageError(validationError); return; }
 
@@ -759,7 +769,7 @@ export default function SellerProfilePage() {
   };
 
   const handleImageRemove = async () => {
-    if (!token) return;
+    if (!authReady) return;
     setImageError(null);
     setRemovingImage(true);
     try {
@@ -778,7 +788,7 @@ export default function SellerProfilePage() {
   };
 
   const handleLogoUpload = async (file: File) => {
-    if (!token) return;
+    if (!authReady) return;
     const validationError = validateImageFile(file);
     if (validationError) { setLogoError(validationError); return; }
 
@@ -806,7 +816,7 @@ export default function SellerProfilePage() {
   };
 
   const handleLogoRemove = async () => {
-    if (!token) return;
+    if (!authReady) return;
     setLogoError(null);
     setRemovingLogo(true);
     try {
@@ -825,9 +835,27 @@ export default function SellerProfilePage() {
   };
 
   // --- Derived state ---
-  const readonly = profile ? isReadOnly(profile.status) : false;
+  // Once registered with a logistics partner, the seller's pickup/identity
+  // fields are frozen (they feed the courier warehouse). Lock the whole form
+  // and show a banner; the seller contacts their admin to change anything.
+  const logisticsLocked = profile?.logisticsLocked === true;
+  const readonly =
+    (profile ? isReadOnly(profile.status) : false) || logisticsLocked;
   const contentRestricted = profile ? isContentRestricted(profile.status) : false;
   const mediaRestricted = profile ? isMediaRestricted(profile.status) : false;
+
+  // Locked once registered with a logistics partner — the seller can't edit
+  // here. Pop a modal pointing them to support so the seller admin makes the
+  // change. Shared by the header "Edit Profile" button and the banner link.
+  const openLockedModal = async () => {
+    const ok = await confirmDialog({
+      title: 'Profile locked',
+      message:
+        "Your business name, contact, and pickup address are registered with a logistics partner, so they can't be edited here. Please ask your seller admin to update them. Open a support request now?",
+      confirmText: 'Talk to Support',
+    });
+    if (ok) router.push('/dashboard/support/new');
+  };
 
   // --- Render: Loading ---
   if (isLoading) {
@@ -898,6 +926,29 @@ export default function SellerProfilePage() {
           <span className={getStatusBadgeClass(profile.status)}>
             {getStatusLabel(profile.status)}
           </span>
+          {logisticsLocked && (
+            <button
+              type="button"
+              onClick={openLockedModal}
+              style={{
+                marginLeft: 'auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                height: 36,
+                padding: '0 16px',
+                background: '#2563eb',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Edit Profile
+            </button>
+          )}
         </div>
         <p>Manage your seller account and store details</p>
       </div>
@@ -921,6 +972,29 @@ export default function SellerProfilePage() {
       {profile.status === 'PENDING_APPROVAL' && (
         <div className="status-banner banner-info">
           Your account is under review. You can still complete your profile.
+        </div>
+      )}
+      {logisticsLocked && (
+        <div className="status-banner banner-warning">
+          Your business name, contact, and pickup address are locked because
+          they&apos;re registered with a logistics partner. Contact your seller
+          admin to change them.{' '}
+          <button
+            type="button"
+            onClick={openLockedModal}
+            style={{
+              marginLeft: 4,
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              color: 'inherit',
+              fontWeight: 600,
+              textDecoration: 'underline',
+              cursor: 'pointer',
+            }}
+          >
+            Talk to Support
+          </button>
         </div>
       )}
 

@@ -17,12 +17,14 @@ import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 @Injectable()
 export class UpdateSellerProfileUseCase {
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
+    private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
   ) {
@@ -53,6 +55,41 @@ export class UpdateSellerProfileUseCase {
             'Content updates are not available while account is inactive',
           );
         }
+      }
+    }
+
+    // Logistics lock — once the seller is registered with a logistics
+    // partner, the fields that make up the courier pickup warehouse
+    // (name, shop name, contact, address, city, state, pin) are frozen.
+    // The seller can't change them directly; they contact the seller
+    // admin, who edits the profile and re-syncs via "Update address to
+    // Delhivery". Other fields (descriptions, policy) stay editable.
+    const LOGISTICS_LOCKED_FIELDS = [
+      'sellerName',
+      'sellerShopName',
+      'sellerContactCountryCode',
+      'sellerContactNumber',
+      'storeAddress',
+      'locality',
+      'city',
+      'state',
+      'country',
+      'sellerZipCode',
+    ];
+    const touchesLockedField = LOGISTICS_LOCKED_FIELDS.some(
+      (f) => (dto as Record<string, unknown>)[f] !== undefined,
+    );
+    if (touchesLockedField) {
+      const reg = await this.prisma.sellerPartnerRegistration.findFirst({
+        where: { sellerId, status: 'REGISTERED' },
+        select: { partner: true },
+      });
+      if (reg) {
+        throw new ForbiddenAppException(
+          `Your pickup details are locked because they're registered with ` +
+            `${reg.partner}. Contact your seller admin to update your address.`,
+          'LOGISTICS_ADDRESS_LOCKED',
+        );
       }
     }
 

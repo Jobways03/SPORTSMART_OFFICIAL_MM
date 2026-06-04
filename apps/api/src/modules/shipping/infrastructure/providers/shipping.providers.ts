@@ -3,6 +3,7 @@ import type { Provider } from '@nestjs/common';
 import { COURIER_GATEWAY_RESOLVER } from '../../application/ports/outbound/courier-gateway.port';
 
 import { SelfDeliveryCourierAdapter } from '../adapters/self-delivery-courier.adapter';
+import { DelhiveryCourierAdapter } from '../adapters/delhivery-courier.adapter';
 import { CourierGatewayResolverImpl } from '../factories/courier-gateway.resolver';
 
 /**
@@ -13,6 +14,7 @@ import { CourierGatewayResolverImpl } from '../factories/courier-gateway.resolve
  */
 export const shippingProviders: Provider[] = [
   SelfDeliveryCourierAdapter,
+  DelhiveryCourierAdapter,
   CourierGatewayResolverImpl,
   {
     provide: COURIER_GATEWAY_RESOLVER,

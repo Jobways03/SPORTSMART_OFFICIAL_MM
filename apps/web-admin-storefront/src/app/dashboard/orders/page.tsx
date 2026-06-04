@@ -436,9 +436,22 @@ export default function OrdersPage() {
                     const relevantSubOrders = activeSubOrders.length > 0 ? activeSubOrders : order.subOrders;
                     const fulfillmentStatuses = [...new Set(relevantSubOrders.map(s => s.fulfillmentStatus))];
                     const latestReturn = (order.returns ?? [])[0];
+                    // Phase 90 — show CANCELLED when every sub-order is
+                    // cancelled/rejected even if the master orderStatus didn't
+                    // roll up (pre-FSM-fix stuck orders), matching the customer
+                    // side + the fulfillment column.
+                    const allSubOrdersCancelled =
+                      order.subOrders.length > 0 &&
+                      order.subOrders.every(
+                        s => s.fulfillmentStatus === 'CANCELLED' || s.acceptStatus === 'REJECTED',
+                      );
+                    const baseStatus =
+                      allSubOrdersCancelled || order.orderStatus === 'CANCELLED'
+                        ? 'CANCELLED'
+                        : order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED');
                     const effectiveStatus = latestReturn
                       ? returnToOrderStatus(latestReturn.status)
-                      : (order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED'));
+                      : baseStatus;
                     const customerInitials =
                       `${order.customer.firstName?.[0] ?? ''}${order.customer.lastName?.[0] ?? ''}`.toUpperCase() ||
                       (order.customer.email?.[0]?.toUpperCase() ?? '?');

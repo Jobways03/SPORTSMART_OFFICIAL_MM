@@ -402,6 +402,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       // frontend show the "verify your email" CTA without parsing the
       // message string.
       EMAIL_NOT_VERIFIED: HttpStatus.FORBIDDEN,
+      // Seller pickup/identity fields are frozen once registered with a
+      // logistics partner (they feed the courier warehouse). 403 so the
+      // frontend shows the "contact your admin" lock message.
+      LOGISTICS_ADDRESS_LOCKED: HttpStatus.FORBIDDEN,
     };
     return map[code] || HttpStatus.INTERNAL_SERVER_ERROR;
   }

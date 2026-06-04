@@ -1,0 +1,23 @@
+// ─── Idempotency keys ─────────────────────────────────────────────
+// Same shape and semantics as apps/api/prisma/schema/idempotency.prisma
+// at a smaller scope (only the routes decorated with @Idempotent()
+// touch it). M0 ships the table without the live interceptor —
+// the decorator records intent so the interceptor in M1 can read
+// from a stable schema without a migration.
+
+model IdempotencyKey {
+  key             String   @id
+  /// sha256(method + path + serialized body). Replays with the same
+  /// key but a different body get rejected with 409.
+  requestHash     String   @map("request_hash")
+  responseBody    Json     @map("response_body")
+  responseStatus  Int      @map("response_status")
+  /// Rows expire 24h after completion; a sweeper deletes them on
+  /// a daily schedule. M0 has no sweeper — the rows pile up
+  /// harmlessly because no traffic writes them yet.
+  expiresAt       DateTime @map("expires_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}

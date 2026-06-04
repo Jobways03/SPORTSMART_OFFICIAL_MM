@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { SellerAllocationService } from './seller-allocation.service';
+import { LogisticsFacadeClient } from '../../../../integrations/logistics-facade/clients/logistics-facade.client';
 
 interface ServiceableSeller {
   sellerId: string;
@@ -52,7 +53,35 @@ interface ServiceabilityResult {
  */
 @Injectable()
 export class ServiceabilityService {
-  constructor(private readonly allocation: SellerAllocationService) {}
+  constructor(
+    private readonly allocation: SellerAllocationService,
+    // Phase 4 Delhivery wiring (2026-06-02) — real courier serviceability.
+    // @Optional so existing unit tests (which construct with allocation
+    // only) keep working; when unwired, the courier check is skipped.
+    @Optional() private readonly facade?: LogisticsFacadeClient,
+  ) {}
+
+  /**
+   * Best-effort real Delhivery drop-pincode serviceability. Returns true
+   * when we CAN'T determine it (facade unwired / error / non-boolean) so a
+   * carrier hiccup never wrongly blocks an otherwise-serviceable product.
+   * Only the explicit `serviceable: false` from Delhivery blocks.
+   */
+  private async delhiveryServiceable(pincode: string): Promise<boolean> {
+    if (!this.facade) return true;
+    try {
+      const res = await this.facade.get<any>(
+        `/api/v1/internal/delhivery/serviceability/${encodeURIComponent(pincode)}`,
+      );
+      const d = res?.body && (res.body.data ?? res.body);
+      if (res.status >= 200 && res.status < 300 && typeof d?.serviceable === 'boolean') {
+        return d.serviceable;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
 
   /**
    * Check if a product/variant can be delivered to a pincode.
@@ -70,6 +99,14 @@ export class ServiceabilityService {
       customerPincode,
       quantity: 1,
     });
+
+    // Phase 4 Delhivery wiring — a product is only deliverable if a node can
+    // fulfil it AND Delhivery actually services the drop pincode. Only query
+    // the carrier when there's a fulfilment node (saves a Delhivery call when
+    // the answer is already "no").
+    const serviceable = allocation.serviceable
+      ? await this.delhiveryServiceable(customerPincode)
+      : false;
 
     // Phase 64 — project from the allocator's AllocatedSeller[]
     // into the legacy ServiceableSeller / ServiceableFranchise
@@ -135,7 +172,7 @@ export class ServiceabilityService {
     }
 
     return {
-      serviceable: allocation.serviceable,
+      serviceable,
       sellers,
       franchises,
       deliveryEstimate,

@@ -56,17 +56,21 @@ export class VerifyEmailOtpUseCase {
       throw new UnauthorizedAppException('Invalid or expired verification code');
     }
 
-    if (user.status === 'ACTIVE' && user.emailVerified) {
+    if (user.emailVerified) {
       throw new BadRequestAppException(
         'This account is already verified. Please sign in.',
         'ALREADY_VERIFIED',
       );
     }
 
-    if (user.status !== 'PENDING_VERIFICATION') {
-      // SUSPENDED / BANNED / INACTIVE. We do not let a verify call
-      // un-suspend an account — that path is admin-only. Treat as
-      // generic "cannot verify."
+    // Email verification is tracked by `emailVerified`, independent of the
+    // account `status`. New customers are created ACTIVE (the intended
+    // PENDING_VERIFICATION state is never wired by register-user), so gating
+    // on PENDING_VERIFICATION blocked verification for every customer. Allow
+    // an unverified ACTIVE or PENDING_VERIFICATION account to verify; still
+    // refuse to let a verify call resurrect a disabled (SUSPENDED / INACTIVE /
+    // banned) account — that's admin-only.
+    if (user.status !== 'ACTIVE' && user.status !== 'PENDING_VERIFICATION') {
       throw new UnauthorizedAppException(
         'Invalid or expired verification code',
       );

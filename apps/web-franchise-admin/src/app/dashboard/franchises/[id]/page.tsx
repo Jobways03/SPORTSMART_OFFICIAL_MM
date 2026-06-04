@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
   adminFranchisesService,
@@ -13,6 +13,7 @@ import {
 import { useModal } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
 import FranchiseStatusModal from '../components/franchise-status-modal';
+import { ShipmentPanel } from './_components/ShipmentPanel';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
 import FranchiseCommissionModal from '../components/franchise-commission-modal';
 import ApproveCatalogMappingModal from '../components/approve-catalog-mapping-modal';
@@ -125,6 +126,14 @@ export default function AdminFranchiseDetailPage() {
   // Orders
   const [orders, setOrders] = useState<FranchiseOrderItem[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
+  // Cancel sub-order — parity with the other admin panels.
+  const [cancelOrderId, setCancelOrderId] = useState<string | null>(null);
+  const [cancelOrderStatus, setCancelOrderStatus] = useState<string>('');
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
+  // SHIPPED (in-transit) cancels need force=true server-side.
+  const [forceAck, setForceAck] = useState(false);
 
   // Finance ledger
   const [financeLedger, setFinanceLedger] = useState<any[]>([]);
@@ -322,15 +331,56 @@ export default function AdminFranchiseDetailPage() {
     setOrdersLoading(true);
     try {
       const res = await adminFranchisesService.listFranchiseOrders(franchiseId, { limit: 50 });
-      if (res.data?.orders) {
-        setOrders(res.data.orders);
-      }
+      // The API returns RAW sub-order rows under `subOrders` (nested
+      // masterOrder + items), NOT a flat `orders` array. Flatten to the
+      // FranchiseOrderItem shape the table renders. (This previously read
+      // res.data.orders — which never existed — so the Orders tab always
+      // showed "No orders yet.")
+      const rows = res.data?.subOrders ?? [];
+      setOrders(
+        rows.map((so): FranchiseOrderItem => ({
+          id: so.id,
+          orderNumber: so.masterOrder?.orderNumber ?? '—',
+          customerName:
+            so.masterOrder?.shippingAddressSnapshot?.fullName ??
+            so.masterOrder?.shippingAddressSnapshot?.name ??
+            '—',
+          status: so.fulfillmentStatus ?? '—',
+          totalAmount: Number(so.subTotal ?? 0),
+          itemsCount: Array.isArray(so.items) ? so.items.length : 0,
+          createdAt: so.createdAt,
+        })),
+      );
     } catch {
       // Non-critical
     } finally {
       setOrdersLoading(false);
     }
   }, [franchiseId]);
+
+  const submitCancel = async () => {
+    if (!cancelOrderId || cancelling) return;
+    const trimmed = cancelReason.trim();
+    if (trimmed.length < 10) {
+      setCancelError('Cancellation reason is required (minimum 10 characters)');
+      return;
+    }
+    setCancelError('');
+    setCancelling(true);
+    const needsForce = cancelOrderStatus === 'SHIPPED' || cancelOrderStatus === 'FULFILLED';
+    try {
+      await adminFranchisesService.cancelOrder(cancelOrderId, trimmed, needsForce);
+      setCancelOrderId(null);
+      setCancelOrderStatus('');
+      setForceAck(false);
+      setCancelReason('');
+      fetchOrders();
+    } catch (err: any) {
+      setCancelError(err?.body?.message || err?.message || 'Cancel failed');
+    } finally {
+      setCancelling(false);
+    }
+  };
 
   const fetchFinanceLedger = useCallback(async () => {
     if (!franchiseId) return;
@@ -482,6 +532,29 @@ export default function AdminFranchiseDetailPage() {
           >
             <span aria-hidden="true">🚚</span>
             Delivery Methods
+          </button>
+          {/* Logistics partners (courier registration). The Settings panel
+              reads the entity id from ?sellerId=, so we pass the franchise id. */}
+          <button
+            type="button"
+            onClick={() => router.push(`/dashboard/settings?sellerId=${franchise.id}`)}
+            style={{
+              marginLeft: 8,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#1e3a8a',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: 999,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span aria-hidden="true">📦</span>
+            Logistics Partners
           </button>
         </div>
         <p className="subtitle" style={{ marginTop: 6 }}>
@@ -1033,7 +1106,8 @@ export default function AdminFranchiseDetailPage() {
                     </thead>
                     <tbody>
                       {orders.map(o => (
-                        <tr key={o.id}>
+                        <Fragment key={o.id}>
+                        <tr>
                           <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>
                             {o.orderNumber}
                           </td>
@@ -1069,8 +1143,38 @@ export default function AdminFranchiseDetailPage() {
                                 Mark Delivered
                               </button>
                             )}
+                            {o.status !== 'DELIVERED' &&
+                              o.status !== 'CANCELLED' && (
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{
+                                    fontSize: 11, padding: '4px 10px', marginLeft: 6,
+                                    color: '#dc2626', borderColor: '#fecaca',
+                                  }}
+                                  onClick={() => {
+                                    setCancelOrderId(o.id);
+                                    setCancelOrderStatus(o.status);
+                                    setCancelReason('');
+                                    setCancelError('');
+                                    setForceAck(false);
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              )}
                           </td>
                         </tr>
+                        {o.status !== 'CANCELLED' && (
+                          <tr>
+                            <td colSpan={7} style={{ background: '#fafafa' }}>
+                              {/* Delhivery carrier-actions panel — track / re-attempt /
+                                  cancel shipment / force-RTO. Same component the Super
+                                  Admin uses; o.id is the SubOrder id. */}
+                              <ShipmentPanel subOrderId={o.id} onChange={fetchOrders} />
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>
@@ -1519,6 +1623,64 @@ export default function AdminFranchiseDetailPage() {
           onClose={closeModal}
           onSuccess={() => { router.push('/dashboard/franchises'); }}
         />
+      )}
+
+      {/* Cancel-sub-order reason modal */}
+      {cancelOrderId && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => !cancelling && setCancelOrderId(null)}
+        >
+          <div style={{ background: '#fff', borderRadius: 12, padding: 24, width: 440, maxWidth: '90vw' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700, color: '#111827' }}>Cancel sub-order</h3>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: '#6b7280' }}>
+              This releases stock holds and refunds the customer if the order was prepaid. Provide a reason (minimum 10 characters).
+            </p>
+            {(cancelOrderStatus === 'SHIPPED' || cancelOrderStatus === 'FULFILLED') && (
+              <div style={{ margin: '0 0 12px', padding: '10px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontSize: 12, lineHeight: 1.5 }}>
+                <strong>In-transit cancellation ({cancelOrderStatus}).</strong> Force-cancels the
+                sub-order: refunds a prepaid customer, releases stock and cancels the Delhivery AWB.
+                It does <strong>not</strong> physically stop a parcel already moving — coordinate the
+                courier/recall separately.
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontWeight: 600, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={forceAck} onChange={(e) => setForceAck(e.target.checked)} disabled={cancelling} />
+                  I understand — force-cancel this in-transit sub-order
+                </label>
+              </div>
+            )}
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Reason for cancellation…"
+              rows={3}
+              style={{ width: '100%', padding: 10, fontSize: 13, borderRadius: 8, border: `1px solid ${cancelReason.trim().length > 0 && cancelReason.trim().length < 10 ? '#dc2626' : '#d1d5db'}`, resize: 'vertical', boxSizing: 'border-box' }}
+            />
+            <div style={{ fontSize: 11, color: cancelReason.trim().length >= 10 ? '#059669' : '#6b7280', marginTop: 4 }}>
+              {cancelReason.trim().length}/10 characters minimum {cancelReason.trim().length >= 10 ? '✓' : ''}
+            </div>
+            {cancelError && (
+              <div style={{ marginTop: 8, padding: '6px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 12, color: '#991b1b' }}>
+                {cancelError}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                onClick={() => { setCancelOrderId(null); setCancelReason(''); setCancelError(''); }}
+                disabled={cancelling}
+                style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, border: '1px solid #d1d5db', background: '#fff', color: '#374151', borderRadius: 8, cursor: 'pointer' }}
+              >
+                Keep order
+              </button>
+              <button
+                onClick={submitCancel}
+                disabled={cancelling || cancelReason.trim().length < 10 || ((cancelOrderStatus === 'SHIPPED' || cancelOrderStatus === 'FULFILLED') && !forceAck)}
+                style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, border: 'none', background: cancelling || cancelReason.trim().length < 10 || ((cancelOrderStatus === 'SHIPPED' || cancelOrderStatus === 'FULFILLED') && !forceAck) ? '#fca5a5' : '#dc2626', color: '#fff', borderRadius: 8, cursor: cancelling || cancelReason.trim().length < 10 || ((cancelOrderStatus === 'SHIPPED' || cancelOrderStatus === 'FULFILLED') && !forceAck) ? 'not-allowed' : 'pointer' }}
+              >
+                {cancelling ? 'Cancelling…' : (cancelOrderStatus === 'SHIPPED' || cancelOrderStatus === 'FULFILLED') ? 'Force cancel (in transit)' : 'Cancel sub-order'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

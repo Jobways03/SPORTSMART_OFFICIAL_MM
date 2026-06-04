@@ -51,11 +51,11 @@ import { PaymentsModule } from '../payments/module';
 
 @Module({
   imports: [
-    CatalogModule,
+    forwardRef(() => CatalogModule),
     // Tax → Checkout → Franchise → Tax circular chain; forwardRef
     // mirrors the TaxModule side already declared below.
     forwardRef(() => FranchiseModule),
-    DiscountsModule,
+    forwardRef(() => DiscountsModule),
     ShippingOptionsModule,
     AffiliateModule,
     WalletModule,
@@ -64,8 +64,8 @@ import { PaymentsModule } from '../payments/module';
     forwardRef(() => TaxModule),
     CodModule,
     AuditModule,
-    CommissionModule,
-    PaymentsModule,
+    forwardRef(() => CommissionModule),
+    forwardRef(() => PaymentsModule),
   ],
   controllers: [
     CustomerAddressController,

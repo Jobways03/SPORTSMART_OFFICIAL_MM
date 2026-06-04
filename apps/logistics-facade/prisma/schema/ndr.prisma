@@ -1,0 +1,28 @@
+// ─── NDR attempts ─────────────────────────────────────────────────
+// One row per non-delivery report from the partner. `attemptNumber`
+// is 1-indexed; partners typically give us 3 attempts before forcing
+// RTO. `actionTaken` records OUR response (re-attempt, reschedule,
+// give up) so we can audit how the queue burned down.
+
+model NdrAttempt {
+  id             String    @id @default(uuid())
+  shipmentId     String    @map("shipment_id")
+  shipment       Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  attemptNumber  Int       @map("attempt_number")
+  /// Partner-supplied reason code (e.g. "Consignee not available").
+  /// Mapped to a domain-side dictionary in core/ndr-codes (M2).
+  reasonCode     String    @map("reason_code")
+  actionTaken    NdrAction @map("action_taken")
+  scheduledFor   DateTime? @map("scheduled_for")
+  /// Free-form outcome of the action ("delivered on 2nd attempt",
+  /// "customer unreachable", etc.). Captured when the next event
+  /// resolves the NDR.
+  outcome        String?
+  rawPayload    Json      @map("raw_payload")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([shipmentId, attemptNumber])
+  @@index([scheduledFor])
+  @@map("ndr_attempts")
+}

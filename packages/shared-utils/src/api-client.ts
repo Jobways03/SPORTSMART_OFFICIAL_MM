@@ -342,7 +342,27 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       // The Nest GlobalExceptionFilter always wraps `message` in an array,
       // but every caller expects a string. Flatten it here so consumers
       // don't silently render `[object Object]` or fall back to generic copy.
-      if (Array.isArray((body as { message?: unknown }).message)) {
+      //
+      // Validation failures are a special case: the filter puts a useless
+      // summary ("Validation failed (1 issue)") in `message`, and the
+      // actionable per-field detail in `errors[]` ({ field, message }).
+      // Prefer that detail so every consumer that shows `err.message` gets
+      // e.g. "GST number failed checksum validation (please re-check the
+      // GSTIN)" instead of a bare count. `body.errors` is left untouched for
+      // callers that want to highlight the individual fields.
+      const fieldErrors = (body as {
+        errors?: Array<{ field?: string; message?: string }>;
+      }).errors;
+      const fieldDetail = Array.isArray(fieldErrors)
+        ? fieldErrors
+            .map((e) =>
+              e && typeof e.message === 'string' ? e.message.trim() : '',
+            )
+            .filter((m) => m.length > 0)
+        : [];
+      if (fieldDetail.length > 0) {
+        (body as { message: string }).message = fieldDetail.join('\n');
+      } else if (Array.isArray((body as { message?: unknown }).message)) {
         const arr = (body as unknown as { message: unknown[] }).message;
         (body as { message: string }).message = arr
           .map((m) => (typeof m === 'string' ? m : JSON.stringify(m)))

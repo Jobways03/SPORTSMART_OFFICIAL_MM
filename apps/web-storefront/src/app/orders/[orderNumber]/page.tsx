@@ -65,7 +65,7 @@ function courierTrackingUrl(
   const c = (carrier ?? '').toLowerCase();
   const a = encodeURIComponent(awb);
   if (c.includes('bluedart')) return `https://www.bluedart.com/tracking?trackingNumber=${a}`;
-  if (c.includes('delhivery')) return `https://www.delhivery.com/tracking/package/${a}`;
+  if (c.includes('delhivery')) return `https://www.delhivery.com/track/package/${a}`;
   if (c.includes('dtdc')) return `https://www.dtdc.in/tracking.asp?strCnno=${a}`;
   if (c.includes('ekart')) return `https://ekartlogistics.com/shipmenttrack/${a}`;
   if (c.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${a}`;
@@ -543,10 +543,27 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const activeSubOrders = order.subOrders.filter((so: SubOrder) => so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED');
   const displaySubOrders = activeSubOrders.length > 0 ? activeSubOrders : order.subOrders;
 
+  // "Effectively cancelled" — same shortcut the orders LIST uses: when every
+  // sub-order is cancelled/rejected (or the master/payment is cancelled) the
+  // order IS cancelled, even if the master orderStatus didn't roll up (e.g. an
+  // order force-cancelled while DISPATCHED before the master-FSM fix). Without
+  // this the detail page read the raw master status and showed "Shipped" while
+  // the list correctly showed "Cancelled".
+  const allSubOrdersCancelled =
+    order.subOrders.length > 0 &&
+    order.subOrders.every(
+      (so: SubOrder) => so.fulfillmentStatus === 'CANCELLED' || so.acceptStatus === 'REJECTED',
+    );
+  const effectiveOrderStatus =
+    order.orderStatus === 'CANCELLED' ||
+    order.paymentStatus === 'CANCELLED' ||
+    allSubOrdersCancelled
+      ? 'CANCELLED'
+      : order.orderStatus || 'PLACED';
+
   // Determine if order can be cancelled
-  const canCancel = order.paymentStatus !== 'CANCELLED' &&
+  const canCancel = effectiveOrderStatus !== 'CANCELLED' &&
     order.paymentStatus !== 'PAID' &&
-    order.orderStatus !== 'CANCELLED' &&
     order.orderStatus !== 'DELIVERED' &&
     !displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED' || so.fulfillmentStatus === 'SHIPPED' || so.fulfillmentStatus === 'FULFILLED');
 
@@ -558,12 +575,11 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const canRetryPayment =
     order.paymentMethod !== 'COD' &&
     order.paymentStatus !== 'PAID' &&
-    order.paymentStatus !== 'CANCELLED' &&
-    order.orderStatus !== 'CANCELLED';
+    effectiveOrderStatus !== 'CANCELLED';
 
   // Use clean customer-friendly status labels
-  const displayStatusLabel = customerStatusLabel(order.orderStatus || 'PLACED', order.paymentStatus);
-  const displayStatusColor = orderStatusColor(order.orderStatus || 'PLACED', order.paymentStatus);
+  const displayStatusLabel = customerStatusLabel(effectiveOrderStatus, order.paymentStatus);
+  const displayStatusColor = orderStatusColor(effectiveOrderStatus, order.paymentStatus);
 
   return (
     <StorefrontShell>
@@ -605,7 +621,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
         {/* Order Progress Tracker */}
         <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 16px', marginBottom: 20, background: '#fafafa' }}>
           <OrderProgressTracker
-            orderStatus={order.orderStatus}
+            orderStatus={effectiveOrderStatus}
             paymentStatus={order.paymentStatus}
             fulfillmentStatus={
               displaySubOrders.length > 0

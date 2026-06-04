@@ -137,6 +137,8 @@ model FranchisePartner {
   pincodeMappingEvents  FranchisePincodeMappingEvent[]
   /// Phase 159n — catalog-mapping decision trail.
   catalogMappingEvents  FranchiseCatalogMappingEvent[]
+  /// Logistics-partner (e.g. Delhivery) pickup-warehouse registrations.
+  partnerRegistrations  FranchisePartnerRegistration[]
 
   @@index([status])
   @@index([isProfileCompleted])
@@ -151,6 +153,30 @@ model FranchisePartner {
   // does a seq scan on the whole franchise table.
   @@index([contractEndDate])
   @@map("franchise_partners")
+}
+
+/// Per-franchise logistics-partner (e.g. Delhivery) pickup-warehouse
+/// registration. Mirrors SellerPartnerRegistration but keyed to a
+/// FranchisePartner — a franchise registers its store as a courier
+/// pickup location the same way a seller does.
+model FranchisePartnerRegistration {
+  id            String    @id @default(uuid())
+  franchiseId   String    @map("franchise_id")
+  partner       String    @db.VarChar(32)
+  warehouseName String?   @map("warehouse_name") @db.VarChar(128)
+  status        String    @default("PENDING") @db.VarChar(16)
+  lastError     String?   @map("last_error")
+  registeredAt  DateTime? @map("registered_at")
+  registeredBy  String?   @map("registered_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  franchise FranchisePartner @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+
+  @@unique([franchiseId, partner])
+  @@index([franchiseId])
+  @@index([partner, status])
+  @@map("franchise_partner_registrations")
 }
 
 // Phase 159i — append-only franchise status-transition log. The dedicated

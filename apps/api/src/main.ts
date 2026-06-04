@@ -188,6 +188,7 @@ async function bootstrap() {
       'Authorization',
       'X-Requested-With',
       'X-Idempotency-Key',
+      'X-Seller-Type',
     ],
     // Content-Disposition + X-Export-* let browser download UIs read the
     // server filename and surface truncation; without exposing them the

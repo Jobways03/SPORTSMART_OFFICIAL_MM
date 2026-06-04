@@ -4,12 +4,14 @@ import {
   FranchisePartnerRepository,
   FRANCHISE_PARTNER_REPOSITORY,
 } from '../../domain/repositories/franchise.repository.interface';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 @Injectable()
 export class GetFranchiseProfileUseCase {
   constructor(
     @Inject(FRANCHISE_PARTNER_REPOSITORY)
     private readonly franchiseRepo: FranchisePartnerRepository,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(franchiseId: string) {
@@ -49,6 +51,16 @@ export class GetFranchiseProfileUseCase {
       throw new NotFoundAppException('Franchise profile not found');
     }
 
+    // Frozen once registered with a logistics partner — the franchise
+    // portal disables the pickup/warehouse fields and shows a banner.
+    const logisticsLocked = await this.prisma.franchisePartnerRegistration
+      .findFirst({
+        where: { franchiseId, status: 'REGISTERED' },
+        select: { id: true },
+      })
+      .then((r: { id: string } | null) => !!r)
+      .catch(() => false);
+
     return {
       franchiseId: franchise.id,
       franchiseCode: franchise.franchiseCode,
@@ -79,6 +91,7 @@ export class GetFranchiseProfileUseCase {
       profileCompletionPercentage: franchise.profileCompletionPercentage,
       isProfileCompleted: franchise.isProfileCompleted,
       createdAt: franchise.createdAt,
+      logisticsLocked,
     };
   }
 }

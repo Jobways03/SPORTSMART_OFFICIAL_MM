@@ -76,9 +76,15 @@ export class ApproveSellerUseCase {
       );
     }
 
-    if (seller.status !== 'PENDING_APPROVAL') {
+    // Approval finalises KYC (sets verificationStatus=VERIFIED) and ensures
+    // the account is ACTIVE. Normally the seller is PENDING_APPROVAL, but one
+    // who was activated early via a status-override and then completed KYC
+    // (status ACTIVE, verificationStatus UNDER_REVIEW) must still be
+    // approvable — accept ACTIVE too (the write below sets ACTIVE, so it's
+    // idempotent). Block only non-operational states.
+    if (seller.status !== 'PENDING_APPROVAL' && seller.status !== 'ACTIVE') {
       throw new BadRequestAppException(
-        `Seller is not pending approval. Current status: ${seller.status}.`,
+        `Seller cannot be approved from status ${seller.status}.`,
       );
     }
 

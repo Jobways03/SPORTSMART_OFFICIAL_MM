@@ -167,6 +167,115 @@ export function mapShiprocketStatus(status: string): string | null {
   return null;
 }
 
+/**
+ * Phase 3 Delhivery wiring (2026-06-02) — map Delhivery's scan/status
+ * vocabulary onto the same internal ShipmentStatusInternal labels
+ * mapShiprocketStatus returns. Ported from the logistics-facade's
+ * delhivery-status.mapper.ts (derived from Delhivery's developer
+ * portal), with the ordering corrected so "Undelivered" / NDR is
+ * matched BEFORE "Delivered" (substring trap) and "RTO Delivered"
+ * before bare "RTO".
+ *
+ * Delhivery forward vocabulary: Manifested / Not Picked / In Transit /
+ * Pending / Dispatched / Out for Delivery / Delivered. RTO adds RTO /
+ * RTO Delivered. Undelivered = NDR.
+ */
+export function mapDelhiveryStatus(status: string): string | null {
+  const norm = status.toLowerCase().replace(/[_\s]+/g, ' ').trim();
+  if (!norm) return null;
+  if (norm.includes('rto delivered')) return 'RTO_DELIVERED';
+  if (norm.includes('rto in transit')) return 'RTO_IN_TRANSIT';
+  if (norm.includes('rto')) return 'RTO_INITIATED';
+  // NDR / undelivered BEFORE delivered — "undelivered" contains "delivered".
+  if (
+    norm.includes('undelivered') ||
+    norm.includes('ndr') ||
+    norm.includes('not attempted') ||
+    norm.includes('not contactable')
+  ) {
+    return 'UNDELIVERED';
+  }
+  if (norm.includes('out for delivery')) return 'OUT_FOR_DELIVERY';
+  if (norm.includes('delivered')) return 'DELIVERED';
+  // "Not Picked" = pre-pickup; acknowledge without a misleading state.
+  if (norm.includes('not picked')) return null;
+  if (norm.includes('picked') || norm.includes('pickup')) return 'PICKED_UP';
+  if (
+    norm.includes('in transit') ||
+    norm.includes('dispatched') ||
+    norm.includes('manifested') ||
+    norm.includes('pending') ||
+    norm.includes('shipped')
+  ) {
+    return 'IN_TRANSIT';
+  }
+  if (norm.includes('lost')) return 'LOST';
+  if (norm.includes('damaged')) return 'DAMAGED';
+  if (norm.includes('cancel')) return 'CANCELLED';
+  return null;
+}
+
+/**
+ * Phase 3 Delhivery wiring — Delhivery scan-push payload. Shape mirrors
+ * the logistics-facade DelhiveryWebhookDto (Shipment envelope). Typed as
+ * an interface (erased at runtime) so the global ValidationPipe does not
+ * reject Delhivery's payload while the exact live shape is unverified.
+ * Top-level fallbacks accept flatter variants defensively.
+ */
+interface DelhiveryWebhookPayload {
+  Shipment?: {
+    AWB?: string;
+    Status?: string;
+    StatusCode?: string;
+    StatusType?: string;
+    StatusDateTime?: string;
+    StatusLocation?: string;
+    Instructions?: string;
+    Scan?: string;
+    ScanType?: string;
+  };
+  AWB?: string;
+  awb?: string;
+  waybill?: string;
+  Status?: string;
+  status?: string;
+  token?: string;
+}
+
+/** Read the AWB from a Delhivery payload across the known field paths. */
+function delhiveryAwb(p: DelhiveryWebhookPayload): string | undefined {
+  return (
+    p.Shipment?.AWB ?? p.AWB ?? p.awb ?? p.waybill ?? undefined
+  );
+}
+
+/** Read the status string from a Delhivery payload across known paths. */
+function delhiveryStatus(p: DelhiveryWebhookPayload): string {
+  return (
+    p.Shipment?.Status ??
+    p.Shipment?.Scan ??
+    p.Shipment?.ScanType ??
+    p.Status ??
+    p.status ??
+    ''
+  );
+}
+
+/**
+ * Delhivery emits StatusDateTime as IST local time with no offset
+ * ("YYYY-MM-DDTHH:mm:ss"). Append +05:30 so it parses to the correct
+ * instant, then clamp to the sanity window. Falls back to now().
+ */
+function parseDelhiveryTimestamp(p: DelhiveryWebhookPayload): Date {
+  const raw = p.Shipment?.StatusDateTime;
+  if (!raw || typeof raw !== 'string') return new Date();
+  const hasOffset = /[zZ]|[+-]\d{2}:?\d{2}$/.test(raw.trim());
+  const parsed = new Date(hasOffset ? raw : `${raw.trim()}+05:30`);
+  return Number.isNaN(parsed.getTime())
+    ? new Date()
+    : clampToSanityWindow(parsed);
+}
+
 @ApiTags('Shipping Webhooks')
 @Controller('shipping/webhooks')
 export class TrackingWebhookController {
@@ -176,6 +285,8 @@ export class TrackingWebhookController {
   // dev). Parse errors surface as construction failures so a
   // typo in env doesn't silently fail-open.
   private readonly shiprocketAllowlist: IpAllowlistEntry[];
+  // Phase 3 Delhivery wiring (2026-06-02) — Delhivery webhook allowlist.
+  private readonly delhiveryAllowlist: IpAllowlistEntry[];
 
   constructor(
     private readonly envService: EnvService,
@@ -192,6 +303,9 @@ export class TrackingWebhookController {
   ) {
     this.shiprocketAllowlist = parseAllowlist(
       this.envService.getOptional('SHIPROCKET_WEBHOOK_IP_ALLOWLIST'),
+    );
+    this.delhiveryAllowlist = parseAllowlist(
+      this.envService.getOptional('DELHIVERY_WEBHOOK_IP_ALLOWLIST'),
     );
   }
 
@@ -215,7 +329,7 @@ export class TrackingWebhookController {
   private requireAllowlistedIp(args: {
     req: Request;
     allowlist: IpAllowlistEntry[];
-    provider: 'shiprocket';
+    provider: 'shiprocket' | 'delhivery';
   }): void {
     if (args.allowlist.length === 0) return;
     const ip = (args.req.ip ?? args.req.socket?.remoteAddress ?? '').trim();
@@ -430,6 +544,88 @@ export class TrackingWebhookController {
   private async claimEvent(eventKey: string): Promise<boolean> {
     return this.redis.acquireLock(
       `webhook:shiprocket:${eventKey}`,
+      WEBHOOK_IDEMPOTENCY_TTL_SECONDS,
+    );
+  }
+
+  /**
+   * Phase 3 Delhivery wiring (2026-06-02) — Delhivery verification.
+   * Mirrors verifyRequest with Delhivery env keys. HMAC mode preferred
+   * (DELHIVERY_WEBHOOK_HMAC_SECRET, X-Delhivery-Signature); legacy
+   * bearer-token fallback (DELHIVERY_WEBHOOK_TOKEN) is blocked in
+   * production. With neither configured, dev/staging passes through so
+   * a local curl simulation works.
+   */
+  private verifyDelhiveryRequest(args: {
+    rawBody: Buffer | undefined;
+    signatureHeader: string | undefined;
+    bodyToken: string | undefined;
+  }): void {
+    const hmacSecret = this.envService.getOptional(
+      'DELHIVERY_WEBHOOK_HMAC_SECRET',
+    );
+    if (hmacSecret) {
+      if (!args.rawBody) {
+        throw new BadRequestAppException('Missing raw request body');
+      }
+      if (!args.signatureHeader) {
+        throw new UnauthorizedAppException(
+          'Missing X-Delhivery-Signature header',
+        );
+      }
+      const ok = verifyPayload(
+        args.rawBody.toString('utf8'),
+        args.signatureHeader,
+        hmacSecret,
+      );
+      if (!ok) {
+        throw new UnauthorizedAppException(
+          'Invalid Delhivery webhook signature',
+        );
+      }
+      return;
+    }
+
+    const expected = this.envService.getOptional('DELHIVERY_WEBHOOK_TOKEN');
+    if (!expected) {
+      // Neither HMAC nor token configured. Fail-closed in production;
+      // pass-through in dev/staging so local testing works.
+      if (
+        this.envService.getString('NODE_ENV', 'development') === 'production'
+      ) {
+        throw new UnauthorizedAppException(
+          'Delhivery webhook auth not configured for production — ' +
+            'DELHIVERY_WEBHOOK_HMAC_SECRET must be set',
+        );
+      }
+      this.logger.warn(
+        'Delhivery webhook accepted WITHOUT verification (no HMAC/token configured — dev/staging only)',
+      );
+      return;
+    }
+
+    // Legacy bearer-token path (deprecated; non-production only).
+    if (this.envService.getString('NODE_ENV', 'development') === 'production') {
+      throw new UnauthorizedAppException(
+        'Delhivery webhook auth not configured for production — ' +
+          'DELHIVERY_WEBHOOK_HMAC_SECRET must be set',
+      );
+    }
+    if (!args.bodyToken || args.bodyToken.length !== expected.length) {
+      throw new UnauthorizedAppException('Invalid Delhivery webhook token');
+    }
+    let mismatch = 0;
+    for (let i = 0; i < expected.length; i++) {
+      mismatch |= expected.charCodeAt(i) ^ args.bodyToken.charCodeAt(i);
+    }
+    if (mismatch !== 0) {
+      throw new UnauthorizedAppException('Invalid Delhivery webhook token');
+    }
+  }
+
+  private async claimEventDelhivery(eventKey: string): Promise<boolean> {
+    return this.redis.acquireLock(
+      `webhook:delhivery:${eventKey}`,
       WEBHOOK_IDEMPOTENCY_TTL_SECONDS,
     );
   }
@@ -706,6 +902,232 @@ export class TrackingWebhookController {
       this.logger.error(
         `Failed to mark sub-order delivered: ${err.message}`,
       );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'ERROR',
+        subOrderId: subOrder.id,
+        errorMessage: err.message,
+      });
+      return { success: false, message: err.message };
+    }
+  }
+
+  // ─── Phase 3 Delhivery wiring (2026-06-02) — Delhivery tracking webhook.
+  // Clone of handleShiprocketWebhook: IP allowlist → verify → extract
+  // awb/status from the Delhivery Shipment envelope → idempotency →
+  // non-DELIVERED scans through ingestSingleSnapshot, DELIVERED through
+  // markSubOrderDelivered. source=WEBHOOK_DELHIVERY throughout.
+  //
+  // NOTE: Delhivery (staging/prod) cannot reach a localhost dev server,
+  // so in dev this route is exercised with a manual curl that posts a
+  // Delhivery-shaped JSON body (see DELHIVERY_WIRING_STATUS.md).
+  @Post('delhivery')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  async handleDelhiveryWebhook(
+    @Headers('x-delhivery-signature') signatureHeader: string | undefined,
+    @Req() req: RawBodyRequest<Request>,
+    @Body() payload: DelhiveryWebhookPayload,
+  ) {
+    this.requireAllowlistedIp({
+      req,
+      allowlist: this.delhiveryAllowlist,
+      provider: 'delhivery',
+    });
+
+    let signatureValid = false;
+    try {
+      this.verifyDelhiveryRequest({
+        rawBody: req.rawBody,
+        signatureHeader,
+        bodyToken: payload?.token,
+      });
+      signatureValid = true;
+    } catch (err) {
+      await this.recordWebhookEvent({
+        provider: 'delhivery',
+        eventKey: `signature-fail:${Date.now()}:${Math.random()}`,
+        awb: delhiveryAwb(payload) ?? null,
+        status: delhiveryStatus(payload) || null,
+        rawPayload: payload,
+        signatureValid: false,
+      }).then((id) =>
+        this.recordWebhookOutcome({
+          id,
+          outcome: 'ERROR',
+          errorMessage: (err as Error).message,
+        }),
+      );
+      throw err;
+    }
+
+    const awb = delhiveryAwb(payload);
+    const status = delhiveryStatus(payload);
+
+    if (!awb) {
+      this.logger.warn('Delhivery webhook received without AWB');
+      await this.recordWebhookEvent({
+        provider: 'delhivery',
+        eventKey: `no-awb:${Date.now()}:${Math.random()}`,
+        awb: null,
+        status,
+        rawPayload: payload,
+        signatureValid,
+      }).then((id) => this.recordWebhookOutcome({ id, outcome: 'NO_MATCH' }));
+      return { success: true, message: 'Webhook acknowledged (no AWB)' };
+    }
+
+    this.logger.log(`Delhivery webhook: awb=${awb}, status=${status}`);
+
+    const eventTimestamp = parseDelhiveryTimestamp(payload);
+    const eventKey = `${awb}:${status.toLowerCase()}:${eventTimestamp.toISOString()}`;
+
+    const webhookEventId = await this.recordWebhookEvent({
+      provider: 'delhivery',
+      eventKey,
+      awb,
+      status,
+      rawPayload: payload,
+      signatureValid: true,
+    });
+
+    const isFirst = await this.claimEventDelhivery(eventKey);
+    if (!isFirst) {
+      this.logger.log(`Duplicate Delhivery event ${eventKey} ignored`);
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'DUPLICATE',
+      });
+      return { success: true, message: 'Duplicate event ignored' };
+    }
+
+    const isDelivered = DELIVERY_STATUS_PATTERNS.some((p) =>
+      status.toLowerCase().includes(p),
+    );
+    // "Undelivered" contains "delivered" — exclude it from the delivered
+    // branch so an NDR scan is not treated as a delivery confirmation.
+    const isUndelivered = status.toLowerCase().includes('undelivered');
+
+    if (!isDelivered || isUndelivered) {
+      const mapped = mapDelhiveryStatus(status);
+      if (!mapped) {
+        await this.recordWebhookOutcome({
+          id: webhookEventId,
+          outcome: 'UNKNOWN_STATUS',
+        });
+        return { success: true, message: `Status "${status}" acknowledged` };
+      }
+      const snapshot: TrackingSnapshot = {
+        awb,
+        carrier: 'Delhivery',
+        direction: mapped.startsWith('RTO_') ? 'reverse' : 'forward',
+        currentStatus: mapped,
+        rawCurrentStatus: status,
+        scans: [
+          {
+            status: mapped,
+            rawStatus: status,
+            rawStatusCode: String(payload.Shipment?.StatusCode ?? ''),
+            scanLocation: payload.Shipment?.StatusLocation ?? '',
+            remark: payload.Shipment?.Instructions ?? '',
+            scanAt: eventTimestamp,
+          },
+        ],
+      };
+      const result = await this.ingestTracking.ingestSingleSnapshot(
+        awb,
+        snapshot,
+        { source: 'WEBHOOK_DELHIVERY', rawPayload: payload },
+      );
+      if (!result.applied) {
+        const outcome = !result.subOrderId
+          ? 'NO_MATCH'
+          : result.reason === 'FSM_REJECTED'
+            ? 'FSM_REJECTED'
+            : result.reason === 'DUPLICATE_SCAN'
+              ? 'DUPLICATE'
+              : result.reason === 'REVERSE_LEG_SKIPPED'
+                ? 'REVERSE_LEG_SKIPPED'
+                : 'DROPPED_OOO';
+        await this.recordWebhookOutcome({
+          id: webhookEventId,
+          outcome,
+          subOrderId: result.subOrderId,
+        });
+        return {
+          success: outcome === 'NO_MATCH' ? false : true,
+          message:
+            outcome === 'NO_MATCH'
+              ? 'No matching sub-order for AWB'
+              : `Event acknowledged (${outcome.toLowerCase()})`,
+        };
+      }
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'APPLIED',
+        subOrderId: result.subOrderId,
+      });
+      return { success: true, message: 'Tracking update applied' };
+    }
+
+    // DELIVERED branch.
+    const subOrder = await this.ordersFacade.findSubOrderByTrackingNumber(awb);
+    if (!subOrder) {
+      this.logger.warn(
+        `Delhivery delivery for unknown AWB ${awb} — no matching sub-order`,
+      );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'NO_MATCH',
+      });
+      return { success: false, message: 'No matching sub-order for AWB' };
+    }
+
+    const claimed = await this.ordersFacade.claimTrackingEvent(
+      subOrder.id,
+      eventTimestamp,
+    );
+    if (!claimed) {
+      this.logger.warn(
+        `Delhivery out-of-order event for AWB ${awb} ` +
+          `(event_ts=${eventTimestamp.toISOString()}, status=${status}); dropped.`,
+      );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'DROPPED_OOO',
+        subOrderId: subOrder.id,
+      });
+      return { success: true, message: 'Out-of-order event dropped' };
+    }
+
+    try {
+      await this.ordersFacade.markSubOrderDelivered(subOrder.id, {
+        source: 'WEBHOOK_DELHIVERY',
+        deliveredBy: `delhivery:${awb}`,
+      });
+      this.logger.log(
+        `Sub-order ${subOrder.id} marked DELIVERED via Delhivery webhook (awb=${awb})`,
+      );
+      await this.recordWebhookOutcome({
+        id: webhookEventId,
+        outcome: 'APPLIED',
+        subOrderId: subOrder.id,
+      });
+      return { success: true, message: 'Delivery confirmed' };
+    } catch (err: any) {
+      if (err instanceof BadRequestAppException) {
+        this.logger.warn(
+          `Sub-order ${subOrder.id} delivery skipped (FSM): ${err.message}`,
+        );
+        await this.recordWebhookOutcome({
+          id: webhookEventId,
+          outcome: 'FSM_REJECTED',
+          subOrderId: subOrder.id,
+          errorMessage: err.message,
+        });
+        return { success: true, message: err.message };
+      }
+      this.logger.error(`Failed to mark sub-order delivered: ${err.message}`);
       await this.recordWebhookOutcome({
         id: webhookEventId,
         outcome: 'ERROR',

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import {
   BadRequestAppException,
@@ -96,6 +96,11 @@ export class OrdersService {
     private readonly orderRepo: OrderRepository,
     private readonly eventBus: EventBusService,
     private readonly catalogFacade: CatalogPublicFacade,
+    // Orders↔Franchise is a constructor-level circular provider dependency
+    // (FranchiseOrdersService injects OrdersService via the same param-level
+    // forwardRef). Mirror it here so this facade resolves regardless of
+    // module init order.
+    @Inject(forwardRef(() => FranchisePublicFacade))
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly prisma: PrismaService,
     // Phase 0 (PR 0.7) — inverse of `confirmReservation`. Replaces
@@ -1595,6 +1600,7 @@ export class OrdersService {
     opts?: {
       source?:
         | 'WEBHOOK_SHIPROCKET'
+        | 'WEBHOOK_DELHIVERY'
         | 'MANUAL_ADMIN'
         | 'MANUAL_FRANCHISE';
       deliveredBy?: string;
@@ -3715,9 +3721,14 @@ export class OrdersService {
     //   6. Outbox-aware event publish
     const updated = await this.orderRepo.executeTransaction(async (tx) => {
       const lockedRows = await tx.$queryRaw<
-        Array<{ id: string; fulfillment_status: string; accept_status: string }>
+        Array<{
+          id: string;
+          fulfillment_status: string;
+          accept_status: string;
+          delivery_method: string | null;
+        }>
       >`
-        SELECT id, fulfillment_status, accept_status
+        SELECT id, fulfillment_status, accept_status, delivery_method
         FROM sub_orders
         WHERE id = ${subOrderId}
         FOR UPDATE
@@ -3759,7 +3770,20 @@ export class OrdersService {
         }
       }
 
-      if (status === 'SHIPPED') {
+      // Shipment-evidence gate.
+      //   • Non-Delhivery: enforced at the manual SHIPPED step (the seller
+      //     clicks "Mark as Shipped").
+      //   • Delhivery (SELLER/RETAIL): there is NO manual ship — marking PACKED
+      //     auto-books + auto-ships the parcel — so the 4 photos are required at
+      //     PACKED instead, guaranteeing dispatch evidence exists BEFORE the
+      //     parcel leaves. Scoped to actorKind SELLER because only the seller
+      //     portal has the evidence-upload surface (the franchise portal has
+      //     none, so gating its PACK on photos would lock franchises out).
+      const isDelhiveryNode = locked.delivery_method === 'DELHIVERY';
+      const requiresEvidence =
+        status === 'SHIPPED' ||
+        (status === 'PACKED' && isDelhiveryNode && actorKind === 'SELLER');
+      if (requiresEvidence) {
         const evidenceRequired = this.env.getNumber(
           'SHIPMENT_EVIDENCE_REQUIRED_PHOTOS',
           SHIPMENT_EVIDENCE_REQUIRED_FALLBACK,
@@ -3781,7 +3805,9 @@ export class OrdersService {
             });
         if (evidenceCount < evidenceRequired) {
           throw new BadRequestAppException(
-            `At least ${evidenceRequired} shipment evidence photos must be uploaded before marking as SHIPPED. Current: ${evidenceCount}.`,
+            status === 'PACKED'
+              ? `At least ${evidenceRequired} shipment evidence photos must be uploaded before marking this Delhivery order as PACKED — it auto-ships on pack, so the dispatch photos are required first. Current: ${evidenceCount}.`
+              : `At least ${evidenceRequired} shipment evidence photos must be uploaded before marking as SHIPPED. Current: ${evidenceCount}.`,
           );
         }
       }
@@ -4280,6 +4306,12 @@ export class OrdersService {
         fulfilledBy: 'SPORTSMART',
         deliveryMethod: so.deliveryMethod,
         selfDeliveryStatus: so.selfDeliveryStatus,
+        // Shipment tracking — surfaced so the customer sees the AWB and can
+        // track the parcel from the order page (was omitted, so the AWB/track
+        // block never rendered).
+        trackingNumber: so.trackingNumber,
+        courierName: so.courierName,
+        trackingUrl: so.trackingUrl,
         items: so.items,
       })),
     };

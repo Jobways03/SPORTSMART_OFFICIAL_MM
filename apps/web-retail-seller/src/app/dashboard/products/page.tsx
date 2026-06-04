@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { sellerProductService, ProductListItem, ListProductsParams } from '@/services/product.service';
 import { ApiError } from '@/lib/api-client';
+import { sellerAuthService } from '@/services/auth.service';
 import ProductActionMenu from './components/action-menu';
 import DeleteProductModal from './components/delete-modal';
 import './products.css';
@@ -61,14 +62,22 @@ export default function ProductsPage() {
   }, [pagination.page, search, statusFilter, router]);
 
   useEffect(() => {
-    try {
-      const sellerData = sessionStorage.getItem('seller');
-      if (sellerData) {
-        const parsed = JSON.parse(sellerData);
-        if (parsed.status) setSellerStatus(parsed.status);
-        if (parsed.isEmailVerified !== undefined) setIsEmailVerified(parsed.isEmailVerified);
-      }
-    } catch {}
+    // Phase 21 — read live status from /seller/auth/me (cookie-auth), not
+    // sessionStorage, which login no longer writes. The dead read left
+    // sellerStatus='' so canAccessProducts was always false and the page
+    // showed "Account Approval Required" even for an approved seller.
+    let cancelled = false;
+    sellerAuthService
+      .me()
+      .then((res) => {
+        if (cancelled || !res?.data) return;
+        setSellerStatus(res.data.status);
+        setIsEmailVerified(res.data.isEmailVerified);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const canAccessProducts = sellerStatus === 'ACTIVE' && isEmailVerified;

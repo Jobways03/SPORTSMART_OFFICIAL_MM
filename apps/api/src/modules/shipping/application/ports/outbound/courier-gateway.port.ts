@@ -73,6 +73,26 @@ export interface DomainShipment {
   shippingCharges?: string;
   totalDiscount?: string;
   gstNumber?: string;
+  /**
+   * Merchant identity printed on the courier label's "Seller" box.
+   * Informational only — returns still route to the pickup warehouse, so this
+   * does NOT change the return/RTO address.
+   */
+  sellerName?: string;
+  sellerAddress?: string;
+  /**
+   * Seller GSTIN to print on the label — caller MUST only set this when the
+   * GST is verified (we never print an unconfirmed GST). Informational.
+   */
+  sellerGstin?: string;
+  /**
+   * The node's OWN registered courier pickup-warehouse name (exact match to a
+   * warehouse in the carrier panel). Used as the booking's pickup_location so
+   * the parcel ships from the seller's/franchise's own warehouse — and so it
+   * matches the warehouse "Request pickup" schedules. Falls back to the
+   * carrier's configured default warehouse when absent.
+   */
+  pickupWarehouseName?: string;
   ewayBillNumber?: string;
   direction?: 'forward' | 'reverse';
   /** Optional carrier preference slug (free-form). */

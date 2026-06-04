@@ -777,6 +777,11 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             paymentStatus: 'PENDING',
             fulfillmentStatus: 'UNFULFILLED',
             acceptStatus: 'OPEN',
+            // Phase 3 Delhivery wiring (2026-06-02) — default new sub-orders
+            // to DELHIVERY so the resolver picks the Delhivery adapter and
+            // the auto-book handler fires when the node marks PACKED. This is
+            // the intended end-state (Delhivery replaces self-delivery).
+            deliveryMethod: 'DELHIVERY',
             // Phase 67 (audit Gaps #6 + #22) — populated at create.
             acceptDeadlineAt,
             commissionRateSnapshot: group.commissionRateSnapshot ?? null,
@@ -1126,6 +1131,8 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             paymentStatus: 'PENDING',
             fulfillmentStatus: 'UNFULFILLED',
             acceptStatus: 'OPEN',
+            // Phase 3 Delhivery wiring (2026-06-02) — see modern path above.
+            deliveryMethod: 'DELHIVERY',
             items: {
               create: orderItemsData,
             },

@@ -124,6 +124,8 @@ export default function DashboardLayout({
     { href: '/dashboard/sellers', label: 'Sellers', icon: '&#128101;' },
     { href: '/dashboard/products', label: 'Products', icon: '&#128230;' },
     { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
+    // Delhivery Tools console hidden (2026-06-02) — page kept; re-enable by uncommenting.
+    // { href: '/dashboard/delhivery-tools', label: 'Delhivery Tools', icon: '&#128666;' },
     { href: '/dashboard/verification', label: 'Verification', icon: '&#10003;' },
     { href: '/dashboard/routing', label: 'Routing', icon: '&#128640;' },
     { href: '/dashboard/returns', label: 'Returns', icon: '&#8634;' },

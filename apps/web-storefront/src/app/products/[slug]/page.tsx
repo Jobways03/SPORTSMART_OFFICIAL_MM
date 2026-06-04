@@ -16,6 +16,7 @@ import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { PriceTag } from '@/components/ui/PriceTag';
 import { Badge } from '@/components/ui/Badge';
 import { apiClient } from '@/lib/api-client';
+import { useSession } from '@/lib/auth-context';
 import { sanitizeProductHtml } from '@/lib/sanitize';
 import { PricingTiersStrip } from './_components/PricingTiersStrip';
 
@@ -110,6 +111,7 @@ const getColorHex = (value: string): string | null => {
 export default function ProductDetailPage() {
   const router = useRouter();
   const { slug } = useParams<{ slug: string }>();
+  const { status: authStatus } = useSession();
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -176,12 +178,12 @@ export default function ProductDetailPage() {
   }, [product]);
 
   const handleAddToCart = async (buyNow = false) => {
-    try {
-      const token = sessionStorage.getItem('accessToken');
-      if (!token) return router.push('/login');
-    } catch {
-      return router.push('/login');
-    }
+    // Auth is cookie-based (Phase 21). The old check read a sessionStorage
+    // 'accessToken' that login never writes, so it ALWAYS pushed /login —
+    // which then bounced an already-signed-in shopper to /. Gate on the
+    // cookie-backed session instead; the cart API authenticates via the
+    // httpOnly cookie. ('loading' falls through and lets the API decide.)
+    if (authStatus === 'unauthed') return router.push('/login');
     if (!product) return;
     setAddingToCart(true);
     setCartMessage('');

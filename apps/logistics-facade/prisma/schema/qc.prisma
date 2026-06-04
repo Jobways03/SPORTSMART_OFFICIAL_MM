@@ -1,0 +1,22 @@
+// ─── QC records ───────────────────────────────────────────────────
+// Warehouse inspection performed on returned parcels. One row per
+// Return — the Return.qcRecordId points back here.
+
+model QcRecord {
+  id           String    @id @default(uuid())
+  returnId     String    @unique @map("return_id")
+  return       Return    @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  /// Inspector's employee id. Free-form String today; once apps/api
+  /// exposes a stable inspector directory we'll FK to it.
+  inspectorId  String    @map("inspector_id")
+  outcome      QcOutcome
+  notes        String?
+  /// JSON array of `{ url, caption?, takenAt }`. Photo URLs come
+  /// from the apps/api file-upload service (signed S3 paths).
+  photos       Json      @default("[]")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([outcome, createdAt])
+  @@map("qc_records")
+}

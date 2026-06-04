@@ -400,6 +400,16 @@ export const sellerProductService = {
     });
   },
 
+  // Seller-initiated pause (deactivate). Sets the mapping STOPPED +
+  // isActive=false and releases its reservations. Re-activation requires
+  // admin re-approval — the PATCH update endpoint forbids `isActive`.
+  pauseMapping(token: string, mappingId: string, reason: string): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/seller/catalog/mapping/${mappingId}/pause`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
   removeMapping(token: string, mappingId: string): Promise<ApiResponse<void>> {
     return apiClient<void>(`/seller/catalog/mapping/${mappingId}`, {
       method: 'DELETE',

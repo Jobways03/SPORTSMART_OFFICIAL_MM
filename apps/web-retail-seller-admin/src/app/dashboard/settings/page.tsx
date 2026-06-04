@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { PartnerRegistrationPanel } from '@/components/PartnerRegistrationPanel';
 
 interface SettingTile {
   title: string;
@@ -20,6 +22,14 @@ const SETTINGS_TILES: SettingTile[] = [
 ];
 
 export default function SettingsHubPage() {
+  // The PartnerRegistrationPanel needs a sellerId because the admin
+  // endpoints are scoped per-seller (the staff logs in as an admin and
+  // operates on a specific retail seller's behalf). We resolve it from
+  // a `?sellerId=` query param — staff lands here from the seller
+  // detail page's "Settings" link which preserves the id.
+  const searchParams = useSearchParams();
+  const sellerId = searchParams?.get('sellerId') ?? '';
+
   return (
     <div style={{ padding: '32px 40px', maxWidth: 1080, margin: '0 auto' }}>
       <header style={{ marginBottom: 28 }}>
@@ -43,6 +53,40 @@ export default function SettingsHubPage() {
           </Link>
         ))}
       </div>
+
+      {/* Logistics partners — admin registers the seller's pickup
+          location with each courier the facade can talk to. Calls go
+          through /admin/logistics-partner/* with the admin JWT; the
+          apiClient stamps X-Seller-Type: RETAIL on every call. */}
+      <section style={{ marginTop: 36 }}>
+        <header style={{ marginBottom: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: '#0f172a' }}>
+            Logistics partners
+          </h2>
+          <p style={{ marginTop: 4, fontSize: 13, color: '#64748b' }}>
+            Register the retail store as a pickup location with each courier
+            you want to use. Required before shipments can be booked.
+          </p>
+        </header>
+        {sellerId ? (
+          <PartnerRegistrationPanel sellerId={sellerId} />
+        ) : (
+          <div
+            style={{
+              padding: '16px 20px',
+              fontSize: 13,
+              color: '#92400e',
+              background: '#fef3c7',
+              border: '1px solid #fde68a',
+              borderRadius: 8,
+            }}
+          >
+            Open this page from a seller&apos;s detail view, or append
+            <code style={{ marginLeft: 4 }}>?sellerId=&lt;id&gt;</code> to the
+            URL, to manage that seller&apos;s partner registrations.
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -74,7 +74,29 @@ export interface VerifyResetOtpResponseData {
   resetToken: string;
 }
 
+/** Shape of GET /seller/auth/me (cookie-authenticated session check). */
+export interface SellerMeData {
+  sellerId: string;
+  email: string;
+  sellerName: string;
+  sellerShopName: string;
+  phoneNumber: string;
+  status: string;
+  verificationStatus: string;
+  isEmailVerified: boolean;
+  sellerType: string;
+}
+
 export const sellerAuthService = {
+  /**
+   * Cookie-authenticated session check. The access token now lives in an
+   * httpOnly cookie (Phase 21) — login no longer writes sessionStorage —
+   * so the dashboard validates the session via this endpoint on mount.
+   */
+  me(): Promise<ApiResponse<SellerMeData>> {
+    return apiClient<SellerMeData>('/seller/auth/me', { method: 'GET' });
+  },
+
   /**
    * Phase 18 (2026-05-20) — sellerType is NO LONGER sent in the body.
    * The api-client bakes `X-Seller-Type: D2C` (or RETAIL on the

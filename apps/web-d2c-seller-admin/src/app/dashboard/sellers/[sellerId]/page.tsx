@@ -22,6 +22,7 @@ import {
 } from '@/lib/profile-validators';
 import StatusModal from '../components/status-modal';
 import VerificationModal from '../components/verification-modal';
+import KycReviewModal from '../components/kyc-review-modal';
 import SendMessageModal from '../components/send-message-modal';
 import ChangePasswordModal from '../components/change-password-modal';
 import DeleteSellerModal from '../components/delete-seller-modal';
@@ -74,7 +75,7 @@ interface Toast {
 }
 
 type FormErrors = Partial<Record<keyof FormData | 'phone', string>>;
-type ModalType = 'status' | 'verification' | 'message' | 'password' | 'delete' | 'impersonate' | null;
+type ModalType = 'status' | 'verification' | 'kyc' | 'message' | 'password' | 'delete' | 'impersonate' | null;
 
 function detailToFormData(p: SellerDetail): FormData {
   return {
@@ -387,6 +388,11 @@ export default function AdminSellerDetailPage() {
 
   const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.status === 'ACTIVE';
   const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
+  // Proper KYC review: shown only when the seller has actually submitted
+  // onboarding (verificationStatus UNDER_REVIEW). Approve/Reject go through
+  // the real /approve + /reject endpoints (which require GSTIN+PAN), not the
+  // raw verification override.
+  const canReviewKyc = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.verificationStatus === 'UNDER_REVIEW';
 
   // ---- Product Mappings State ----
   interface SellerProductMappingItem {
@@ -466,6 +472,10 @@ export default function AdminSellerDetailPage() {
     profileImageUrl: seller.sellerProfileImageUrl,
     createdAt: seller.createdAt,
     lastLoginAt: seller.lastLoginAt,
+    legalBusinessName: seller.legalBusinessName,
+    gstin: seller.gstin,
+    gstStateCode: seller.gstStateCode,
+    panLast4: seller.panLast4,
   } : null;
 
   // Loading
@@ -537,6 +547,7 @@ export default function AdminSellerDetailPage() {
 
       {/* Admin Actions */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+        {canReviewKyc && <ActionBtn label="✓ Verify KYC" onClick={() => setActiveModal('kyc')} />}
         <ActionBtn label="Change Status" onClick={() => setActiveModal('status')} />
         <ActionBtn label="Send Message" onClick={() => setActiveModal('message')} />
         <ActionBtn label="Change Password" onClick={() => setActiveModal('password')} />
@@ -546,6 +557,15 @@ export default function AdminSellerDetailPage() {
           label="🚚 Delivery Methods"
           onClick={() =>
             router.push(`/dashboard/sellers/${seller.sellerId}/delivery-methods`)
+          }
+        />
+        {/* Logistics partners (courier registration). Carries the sellerId
+            so the Settings panel renders for this brand instead of the
+            "append ?sellerId=" placeholder. */}
+        <ActionBtn
+          label="📦 Logistics Partners"
+          onClick={() =>
+            router.push(`/dashboard/settings?sellerId=${seller.sellerId}`)
           }
         />
         {canImpersonate && <ActionBtn label="Impersonate" onClick={() => setActiveModal('impersonate')} />}
@@ -1018,6 +1038,9 @@ export default function AdminSellerDetailPage() {
       )}
       {activeModal === 'verification' && sellerListItem && (
         <VerificationModal seller={sellerListItem} onClose={closeModal} onSuccess={onActionComplete} />
+      )}
+      {activeModal === 'kyc' && sellerListItem && (
+        <KycReviewModal seller={sellerListItem} onClose={closeModal} onSuccess={onActionComplete} />
       )}
       {activeModal === 'message' && sellerListItem && (
         <SendMessageModal seller={sellerListItem} onClose={closeModal} onSuccess={onActionComplete} />

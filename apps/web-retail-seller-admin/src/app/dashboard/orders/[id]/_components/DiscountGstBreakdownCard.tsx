@@ -223,7 +223,7 @@ export function DiscountGstBreakdownCard({ breakdown, orderItems }: Props) {
                   <tr key={snap.orderItemId} style={{ borderBottom: '1px solid #f3f4f6' }}>
                     <td style={td}>
                       <div style={{ fontWeight: 600, color: '#111827' }}>
-                        {item?.productTitle ?? snap.orderItemId.slice(0, 8)}
+                        {item?.productTitle ?? snap.orderItemId?.slice(0, 8) ?? 'Order-level'}
                       </div>
                       {item?.sku && (
                         <div style={{ fontSize: 10, color: '#6b7280', fontFamily: 'monospace' }}>

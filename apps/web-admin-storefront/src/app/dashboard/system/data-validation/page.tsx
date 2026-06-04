@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
 
@@ -242,8 +242,8 @@ export default function DataValidationPage() {
                   const c = SEVERITY_COLOR[iss.severity];
                   const isExpanded = expanded.has(iss.check);
                   return (
-                    <>
-                      <tr key={iss.check} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <Fragment key={iss.check}>
+                      <tr style={{ borderTop: '1px solid #f1f5f9' }}>
                         <td style={td}>
                           <span style={{ fontWeight: 600, color: '#0f172a' }}>{labelOf(iss.check)}</span>
                           <div style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'ui-monospace, monospace', marginTop: 2 }}>
@@ -311,7 +311,7 @@ export default function DataValidationPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

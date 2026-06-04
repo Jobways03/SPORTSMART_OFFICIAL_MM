@@ -548,6 +548,15 @@ export default function AdminSellerDetailPage() {
             router.push(`/dashboard/sellers/${seller.sellerId}/delivery-methods`)
           }
         />
+        {/* Logistics partners (courier registration). Carries the sellerId
+            so the Settings panel renders for this brand instead of the
+            "append ?sellerId=" placeholder. */}
+        <ActionBtn
+          label="📦 Logistics Partners"
+          onClick={() =>
+            router.push(`/dashboard/settings?sellerId=${seller.sellerId}`)
+          }
+        />
         {canImpersonate && <ActionBtn label="Impersonate" onClick={() => setActiveModal('impersonate')} />}
         {canDelete && <ActionBtn label="Delete" onClick={() => setActiveModal('delete')} danger />}
       </div>

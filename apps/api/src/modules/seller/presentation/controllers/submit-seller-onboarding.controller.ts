@@ -32,11 +32,14 @@ export class SubmitSellerOnboardingController {
 
   @Post('submit')
   @HttpCode(HttpStatus.OK)
-  // Phase 19 (2026-05-20) — 3/min/IP throttle. A determined seller who
+  // Phase 19 (2026-05-20) — per-IP throttle. A determined seller who
   // hits "Submit" repeatedly (form spinner panic) or a rejected
   // seller who keeps resubmitting after rejection won't overrun the
-  // admin queue with redundant rows.
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  // admin queue with redundant rows. Raised 3→10/min so iterative
+  // testing/onboarding isn't blocked after a couple of validation
+  // retries; 10/min is still far below any abuse threshold (a real
+  // seller submits KYC once).
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @BlockedWhileImpersonating()
   async submit(
     @Req() req: Request,
